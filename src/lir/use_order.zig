@@ -593,7 +593,6 @@ pub const UseOrder = struct {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
@@ -827,7 +826,7 @@ pub const UseOrder = struct {
         const end = if (only_proc != null) first + 1 else store.procSpecCount();
         for (first..end) |proc_index| {
             const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-            const body = proc.body orelse continue;
+            const body = proc.arcBody() orelse continue;
             seen.clearRetainingCapacity();
             stack.clearRetainingCapacity();
             try stack.append(allocator, body);
@@ -1103,7 +1102,6 @@ pub const UseOrder = struct {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,

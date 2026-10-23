@@ -15,8 +15,9 @@ const none = std.math.maxInt(u32);
 const Self = @This();
 
 allocator: Allocator,
-/// Each local's index in `values`, by local id, or `none`.
-local_indices: std.ArrayList(u32) = .empty,
+/// Each local's index in `values`, by local id. Planning hands one map from
+/// plan to plan (see `Indexes`).
+local_indices: LocalIndices,
 values: std.ArrayList(Value) = .empty,
 nodes: std.ArrayList(Node) = .empty,
 edges: std.ArrayList(Edge) = .empty,
@@ -40,16 +41,20 @@ class_of_size: std.AutoHashMapUnmanaged(u32, u32) = .empty,
 reservations: std.ArrayList(Reservations) = .empty,
 reservation_nodes: std.ArrayList(Reservations.Node) = .empty,
 
+/// A local's index in a plan's `values`, by local id.
+pub const LocalIndices = collections.DenseMap(LocalId, u32);
+
 /// Indexes from store ids to a procedure's plan, which planning keeps empty
 /// between procedures. A procedure's statement, join, and local ids can be
 /// spread across their whole domains, so one set of indexes serves every
-/// procedure a worker plans, and each procedure costs only its own entries.
+/// procedure a worker plans. The maps are paged, so each procedure costs only
+/// the pages its own ids touch, never the whole id domain of the program.
 pub const Indexes = struct {
     allocator: Allocator,
     /// The plan storage handed from procedure to procedure (see `takePlan`).
     plan: Self,
-    /// Each planned statement's node, by statement id, or `none`.
-    node_of_stmt: std.ArrayList(u32) = .empty,
+    /// Each planned statement's node, by statement id.
+    node_of_stmt: collections.DenseMap(CFStmtId, u32),
     /// Each declared join's body.
     joins: collections.DenseMap(LIR.JoinPointId, CFStmtId),
 
@@ -57,13 +62,14 @@ pub const Indexes = struct {
         return .{
             .allocator = allocator,
             .plan = Self.init(allocator),
+            .node_of_stmt = collections.DenseMap(CFStmtId, u32).init(allocator),
             .joins = collections.DenseMap(LIR.JoinPointId, CFStmtId).init(allocator),
         };
     }
 
     pub fn deinit(self: *Indexes) void {
         self.plan.deinit();
-        self.node_of_stmt.deinit(self.allocator);
+        self.node_of_stmt.deinit();
         self.joins.deinit();
     }
 
@@ -84,26 +90,17 @@ pub const Indexes = struct {
 
     /// The node planned for `stmt`.
     pub fn nodeOf(self: *const Indexes, stmt: CFStmtId) ?u32 {
-        const raw = @backingInt(stmt);
-        if (raw >= self.node_of_stmt.items.len) return null;
-        const index = self.node_of_stmt.items[raw];
-        return if (index == none) null else index;
+        return self.node_of_stmt.get(stmt);
     }
 
     /// Record `stmt`'s node.
     pub fn setNode(self: *Indexes, stmt: CFStmtId, index: u32) Allocator.Error!void {
-        const raw = @backingInt(stmt);
-        if (raw >= self.node_of_stmt.items.len) {
-            const old_len = self.node_of_stmt.items.len;
-            try self.node_of_stmt.resize(self.allocator, @max(raw + 1, old_len * 2));
-            @memset(self.node_of_stmt.items[old_len..], none);
-        }
-        self.node_of_stmt.items[raw] = index;
+        try self.node_of_stmt.put(stmt, index);
     }
 
-    /// Empty the statement nodes `planned` recorded and the joins.
-    pub fn clear(self: *Indexes, planned: []const CFStmtId) void {
-        for (planned) |stmt| self.node_of_stmt.items[@backingInt(stmt)] = none;
+    /// Empty the statement nodes and the joins.
+    pub fn clear(self: *Indexes) void {
+        self.node_of_stmt.clearRetainingCapacity();
         self.joins.clearRetainingCapacity();
     }
 };
@@ -156,12 +153,12 @@ fn rangeOrder(a: Range, b: Range) std.math.Order {
 
 /// Start an empty procedure plan.
 pub fn init(allocator: Allocator) Self {
-    return .{ .allocator = allocator };
+    return .{ .allocator = allocator, .local_indices = LocalIndices.init(allocator) };
 }
 /// Release all storage.
 pub fn deinit(self: *Self) void {
     const a = self.allocator;
-    self.local_indices.deinit(a);
+    self.local_indices.deinit();
     self.values.deinit(a);
     self.nodes.deinit(a);
     self.edges.deinit(a);
@@ -182,7 +179,7 @@ pub fn deinit(self: *Self) void {
 }
 /// Empty the plan for another procedure, keeping its storage.
 pub fn clearRetainingCapacity(self: *Self) void {
-    for (self.values.items) |v| self.local_indices.items[@backingInt(v.local)] = none;
+    self.local_indices.clearRetainingCapacity();
     self.values.clearRetainingCapacity();
     self.nodes.clearRetainingCapacity();
     self.edges.clearRetainingCapacity();
@@ -195,24 +192,17 @@ pub fn clearRetainingCapacity(self: *Self) void {
 }
 /// Intern a local in the compact procedure domain.
 pub fn local(self: *Self, id: LocalId) Allocator.Error!u32 {
-    if (self.localIndex(id)) |index| return index;
-    const raw = @backingInt(id);
-    if (raw >= self.local_indices.items.len) {
-        const old_len = self.local_indices.items.len;
-        try self.local_indices.resize(self.allocator, @max(raw + 1, old_len * 2));
-        @memset(self.local_indices.items[old_len..], none);
-    }
+    const entry = try self.local_indices.getOrPut(id);
+    if (entry.found_existing) return entry.value_ptr.*;
     const index: u32 = @intCast(self.values.items.len);
+    errdefer _ = self.local_indices.remove(id);
     try self.values.append(self.allocator, .{ .local = id, .representative = index });
-    self.local_indices.items[raw] = index;
+    entry.value_ptr.* = index;
     return index;
 }
 /// The index of an interned local.
 pub fn localIndex(self: *const Self, id: LocalId) ?u32 {
-    const raw = @backingInt(id);
-    if (raw >= self.local_indices.items.len) return null;
-    const index = self.local_indices.items[raw];
-    return if (index == none) null else index;
+    return self.local_indices.get(id);
 }
 /// Add an instruction-selection region. Reads and writes in one region overlap.
 pub fn node(self: *Self) Allocator.Error!u32 {
@@ -338,7 +328,6 @@ pub fn addProcGraph(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -411,7 +400,6 @@ pub fn addProcGraph(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,

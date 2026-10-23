@@ -36,6 +36,8 @@ pub fn run(
         var types = owned.types;
         owned.types = @import("../monotype/type.zig").Store.init(allocator);
         var const_fn_evidence = owned.const_fn_evidence.takeArrayList();
+        var const_fn_evidence_targets = owned.const_fn_evidence_targets.takeArrayList();
+        var const_fn_evidence_structurals = owned.const_fn_evidence_structurals.takeArrayList();
         var const_fn_evidence_frames = owned.const_fn_evidence_frames.takeArrayList();
         var exprs = owned.exprs.takeArrayList();
         var pats = owned.pats.takeArrayList();
@@ -72,6 +74,8 @@ pub fn run(
             name_store,
             types,
             const_fn_evidence,
+            const_fn_evidence_targets,
+            const_fn_evidence_structurals,
             const_fn_evidence_frames,
             exprs,
             pats,
@@ -107,9 +111,13 @@ pub fn run(
         output.comptime_value_roots = Ast.ProgramList(Common.ComptimeValueRoot, "comptime_value_roots").fromArrayList(owned.comptime_value_roots.takeArrayList());
         output.lowering_modules = Ast.ProgramList(checked.ModuleId, "lowering_modules").fromArrayList(owned.lowering_modules.takeArrayList());
         output.platform_requirement_filling = owned.platform_requirement_filling;
+        output.local_name_table = owned.local_name_table;
+        owned.local_name_table = .{};
         name_store = undefined;
         types = undefined;
         const_fn_evidence = undefined;
+        const_fn_evidence_targets = undefined;
+        const_fn_evidence_structurals = undefined;
         const_fn_evidence_frames = undefined;
         exprs = undefined;
         pats = undefined;
@@ -173,6 +181,8 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .specs = source_view.specs,
         .fns = source_view.fns,
         .const_fn_evidence = moved_view.const_fn_evidence,
+        .const_fn_evidence_targets = moved_view.const_fn_evidence_targets,
+        .const_fn_evidence_structurals = moved_view.const_fn_evidence_structurals,
         .const_fn_evidence_frames = moved_view.const_fn_evidence_frames,
         .defs = source_view.defs,
         .nested_defs = source_view.nested_defs,
@@ -209,6 +219,7 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .stmt_locs = moved_view.stmt_locs,
         .stmt_regions = moved_view.stmt_regions,
         .local_names = moved_view.local_names,
+        .local_name_table = moved_view.local_name_table,
         .next_symbol = source.next_symbol,
     };
 }
@@ -746,7 +757,7 @@ const Lifter = struct {
                 try children.fields(update.fields);
             },
             .tag => |tag| try children.span(tag.payloads),
-            .static_data_candidate => |candidate| try children.child(candidate.runtime_expr),
+            .static_data_candidate => |candidate| if (candidate.value.subexpression()) |sub| try children.child(sub),
             .comptime_value => |candidate| try children.child(candidate.initializer),
             .typed_boundary => |boundary| try children.child(boundary.value),
             .row_widen => |widen| try children.child(widen.value),
@@ -757,7 +768,6 @@ const Lifter = struct {
             .return_ => |ret| try children.child(ret.value),
             .expect_err => |expect_err| try children.child(expect_err.msg),
             .literal_rejected => |rejected| try children.child(rejected.msg),
-            .comptime_branch_taken => |taken| try children.child(taken.body),
             .let_ => |let_| {
                 try children.child(let_.value);
                 try children.child(let_.rest);
@@ -918,6 +928,7 @@ const Lifter = struct {
             .iterator_procedure = call.iterator_procedure,
             .captures = rewritten.captures,
             .is_cold = call.is_cold,
+            .demand_shaped = call.demand_shaped,
         } });
     }
 
@@ -1542,6 +1553,7 @@ const CaptureSet = struct {
             .iterator_procedure = call.iterator_procedure,
             .captures = finalized,
             .is_cold = call.is_cold,
+            .demand_shaped = call.demand_shaped,
         } });
     }
 
@@ -1766,7 +1778,7 @@ fn CaptureWalk(comptime Visitor: type) type {
                     for (0..field_exprs.len) |index| try walk.child(GuardedList.at(field_exprs, index).value, ctx);
                 },
                 .tag => |tag| try walk.span(tag.payloads, ctx),
-                .static_data_candidate => |candidate| try walk.child(candidate.runtime_expr, ctx),
+                .static_data_candidate => |candidate| if (candidate.value.subexpression()) |sub| try walk.child(sub, ctx),
                 .comptime_value => |candidate| try walk.child(candidate.initializer, ctx),
                 .typed_boundary => |boundary| try walk.child(boundary.value, ctx),
                 .row_widen => |widen| try walk.child(widen.value, ctx),
@@ -1777,7 +1789,6 @@ fn CaptureWalk(comptime Visitor: type) type {
                 .return_ => |ret| try walk.child(ret.value, ctx),
                 .expect_err => |expect_err| try walk.child(expect_err.msg, ctx),
                 .literal_rejected => |rejected| try walk.child(rejected.msg, ctx),
-                .comptime_branch_taken => |taken| try walk.child(taken.body, ctx),
                 .let_ => |let_| {
                     try walk.child(let_.value, ctx);
                     try walk.push(.begin_scope);
@@ -2257,6 +2268,7 @@ const CaptureDependencyGraph = struct {
                         .iterator_procedure = call.iterator_procedure,
                         .captures = try self.finalizedSpan(edge_id, expr_id),
                         .is_cold = call.is_cold,
+                        .demand_shaped = call.demand_shaped,
                     } });
                 },
             }
@@ -2589,6 +2601,8 @@ fn initCaptureTestProgram(allocator: Allocator) Ast.Program {
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
         .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
@@ -2630,6 +2644,8 @@ test "checkCaptureInvariants accepts a well-formed capture and catches a corrupt
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
         .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
@@ -2706,6 +2722,8 @@ test "capture finalization supplies the caller's active binder local" {
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
         .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats

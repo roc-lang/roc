@@ -580,6 +580,9 @@ fn stepIdentity(ctx: *CopyContext, frame: *IdentityFrame) std.mem.Allocator.Erro
                 const source_constraint = frame.source_constraints[frame.idx];
                 frame.pending = source_constraint;
                 frame.pending.fn_name = try ctx.copyIdent(source_constraint.fn_name);
+                // Pool indexes name the source store's entries; the copy
+                // re-pools its own.
+                frame.pending.interpolation = .none;
                 frame.stage = .await_fn;
                 if (!try request(ctx, source_constraint.fn_var)) return false;
             },
@@ -594,20 +597,19 @@ fn stepIdentity(ctx: *CopyContext, frame: *IdentityFrame) std.mem.Allocator.Erro
                 frame.stage = .parts;
             },
             .parts => {
-                const source_parts = ctx.source_store.sliceInterpolationParts(
-                    frame.source_constraints[frame.idx].interpolation.interpolated_parts,
-                );
+                const metadata = ctx.source_store.getInterpolationMetadata(frame.source_constraints[frame.idx].interpolation);
+                const source_parts = ctx.source_store.sliceInterpolationParts(metadata.interpolated_parts);
                 if (frame.part_idx < source_parts.len) {
                     frame.stage = .await_part;
                     if (!try request(ctx, source_parts[frame.part_idx].var_)) return false;
                     continue;
                 }
                 frame.stage = .await_item;
-                if (!try request(ctx, frame.source_constraints[frame.idx].interpolation.item_var)) return false;
+                if (!try request(ctx, metadata.item_var)) return false;
             },
             .await_part => {
                 const source_parts = ctx.source_store.sliceInterpolationParts(
-                    frame.source_constraints[frame.idx].interpolation.interpolated_parts,
+                    ctx.source_store.getInterpolationMetadata(frame.source_constraints[frame.idx].interpolation).interpolated_parts,
                 );
                 try machine.pending_parts.append(ctx.allocator, .{
                     .var_ = machine.values.pop().?,
@@ -622,12 +624,12 @@ fn stepIdentity(ctx: *CopyContext, frame: *IdentityFrame) std.mem.Allocator.Erro
                     machine.pending_parts.items[frame.parts_base..],
                 );
                 machine.pending_parts.items.len = frame.parts_base;
-                frame.pending.interpolation = .{
-                    .expr_region = frame.source_constraints[frame.idx].interpolation.expr_region,
+                frame.pending.interpolation = try ctx.dest_store.appendInterpolationMetadata(.{
+                    .expr_region = ctx.source_store.getInterpolationMetadata(frame.source_constraints[frame.idx].interpolation).expr_region,
                     .item_var = dest_item_var,
                     .interpolated_parts = dest_parts_range,
                     .regions = .imported,
-                };
+                });
                 frame.stage = .finish_constraint;
             },
             .finish_constraint => {

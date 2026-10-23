@@ -3935,11 +3935,19 @@ fn mergeStaticDispatchConstraintMetadata(
     var merged = retained;
     if (retained.origin.literalKind() == .numeral) {
         // Same-class numeral relations each carry their literal's facts.
+        // Recorded facts are never mutated: copies of either constraint
+        // share them, so a merge whose facts neither side already holds
+        // records its own. Facts equal to the retained side's keep its row,
+        // so the merged constraint stays equal to the retained one and the
+        // receiver's list is kept whole.
         const other_info = store.constraintNumeralInfo(other).?;
         const retained_info = store.constraintNumeralInfo(retained).?;
         const merged_info = types_mod.NumeralInfo.merged(other_info, retained_info);
         if (!std.meta.eql(merged_info, retained_info)) {
-            merged.numeral = try store.appendNumeralInfo(merged_info);
+            merged.numeral = if (std.meta.eql(merged_info, other_info))
+                other.numeral
+            else
+                try store.appendNumeralInfo(merged_info);
         }
     }
 

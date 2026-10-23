@@ -1402,6 +1402,9 @@ const Pass = struct {
     /// Reachable statements and predecessors for the loop-cycle scans.
     loop_scan: LoopScan,
     query_best: collections.DenseMap(NodeId, QueryBest),
+    /// The slacks one operand's walk reached, kept while `relateSumsByOperands`
+    /// walks from the other operand.
+    operand_slack: collections.DenseMap(NodeId, QueryBest),
     /// Worklist of `relaxFrom`: roots whose best slack improved and whose
     /// edges are still to be relaxed.
     query_queue: std.ArrayList(NodeId),
@@ -1521,6 +1524,7 @@ const Pass = struct {
             .nesting_seen = collections.DenseMap(CFStmtId, void).init(allocator),
             .loop_scan = LoopScan.init(allocator),
             .query_best = collections.DenseMap(NodeId, QueryBest).init(allocator),
+            .operand_slack = collections.DenseMap(NodeId, QueryBest).init(allocator),
             .query_queue = .empty,
             .query_edges = .empty,
             .fact_links = .empty,
@@ -1669,6 +1673,7 @@ const Pass = struct {
         self.scratch.deinit(self.allocator);
         self.loop_scan.deinit(self.allocator);
         self.query_best.deinit();
+        self.operand_slack.deinit();
         self.query_queue.deinit(self.allocator);
         self.query_edges.deinit(self.allocator);
         self.fact_links.deinit(self.allocator);
@@ -2320,6 +2325,45 @@ const Pass = struct {
         return root < self.sum_heads.items.len and self.sum_heads.items[root] != no_sum;
     }
 
+    /// Relate the sum `root` of the roots `ra` and `rb` to every other sum
+    /// whose operands the path's facts bound one by one: from `a <= p + c1`
+    /// and `b <= q + c2`, `a + b <= p + q + c1 + c2`, and from `p <= a + c1`
+    /// and `q <= b + c2` the reverse. Every sum root stands for the exact
+    /// sum, so the facts hold of the mathematical values whatever the
+    /// operations computing them do. A read at `candidate + len` is thereby
+    /// bounded by a guard on `current + limit` when the candidate is at or
+    /// before the current position and the length below the limit, which a
+    /// shared operand alone cannot express.
+    fn relateSumsByOperands(self: *Pass, root: NodeId, ra: NodeId, rb: NodeId) ResourceError!void {
+        for ([_]Direction{ .forward, .backward }) |direction| {
+            try self.relaxFresh(ra, direction);
+            self.operand_slack.clearRetainingCapacity();
+            var reached = self.query_best.iterator();
+            while (reached.next()) |entry| try self.operand_slack.put(entry.key_ptr.*, .{ .c = entry.value_ptr.c, .assumed = entry.value_ptr.assumed });
+            try self.relaxFresh(rb, direction);
+            var from_a = self.operand_slack.iterator();
+            while (from_a.next()) |entry| {
+                const p = entry.key_ptr.*;
+                if (p >= self.sum_heads.items.len) continue;
+                var index = self.sum_heads.items[p];
+                while (index != no_sum) {
+                    const other = self.sums.items[index];
+                    index = other.prev[sumSlot(other, p)];
+                    // Under `p` as the sum's own root, not one of its operands.
+                    if (other.root == root or other.root == p) continue;
+                    const q = if (other.a == p) other.b else other.a;
+                    const to_b = self.query_best.get(q) orelse continue;
+                    const c = clampSlack(entry.value_ptr.c + to_b.c);
+                    const assumed = entry.value_ptr.assumed | to_b.assumed;
+                    _ = try self.addFactOnce(switch (direction) {
+                        .forward => .{ .a = root, .b = other.root, .c = c, .origin = .meet, .assumed = assumed },
+                        .backward => .{ .a = other.root, .b = root, .c = c, .origin = .meet, .assumed = assumed },
+                    });
+                }
+            }
+        }
+    }
+
     /// Node for the mathematical sum of two dynamic values, or null when they
     /// share a root. The operand roots identify one sum root per round; each
     /// use relates that root to both operands and, through the current
@@ -2369,6 +2413,7 @@ const Pass = struct {
                 }
             }
         }
+        try self.relateSumsByOperands(root, ra, rb);
         const off_lo = self.offLoOf(lhs) + self.offLoOf(rhs);
         const off_hi = self.offHiOf(lhs) + self.offHiOf(rhs);
         if (off_lo == 0 and off_hi == 0) return root;
@@ -2611,7 +2656,6 @@ const Pass = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -2773,7 +2817,6 @@ const Pass = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -2935,7 +2978,6 @@ const Pass = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -3093,7 +3135,6 @@ const Pass = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -4722,7 +4763,6 @@ const Pass = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -4775,7 +4815,6 @@ const Pass = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -4879,7 +4918,6 @@ const Pass = struct {
                     .expect_err,
                     .runtime_error,
                     .comptime_exhaustiveness_failed,
-                    .comptime_branch_taken,
                     .incref,
                     .decref,
                     .decref_if_initialized,
@@ -5181,7 +5219,7 @@ const Pass = struct {
                         try self.bindFresh(s.dest);
                         current = s.next;
                     },
-                    inline .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                    inline .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
                         try self.visited.put(current, {});
                         current = s.next;
                     },
@@ -6954,7 +6992,6 @@ const RangeProveCertify = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,

@@ -148,6 +148,98 @@ pub const PackedListLiteral = struct {
 /// Span into one of this IR's flat side tables.
 pub const Span = Common.Span;
 
+/// Source-level name of a local, interned in a `LocalNameTable`.
+pub const LocalNameId = enum(u32) {
+    /// A compiler-generated temporary with no source-level name.
+    none = std.math.maxInt(u32),
+    _,
+};
+
+/// Interned source-level local names. Monotype produces the table and later
+/// stages read it. Specialization gives many locals the same binder name, so
+/// each distinct name is stored once.
+pub const LocalNameTable = struct {
+    bytes: std.ArrayList(u8) = .empty,
+    spans: std.ArrayList(TextSpan) = .empty,
+    /// Every interned name by its `LocalNameId` backing index.
+    index: std.HashMapUnmanaged(u32, void, IdContext, std.hash_map.default_max_load_percentage) = .empty,
+
+    const TextSpan = struct { start: u32, len: u32 };
+
+    const IdContext = struct {
+        table: *const LocalNameTable,
+
+        pub fn hash(ctx: IdContext, id: u32) u64 {
+            return std.hash.Wyhash.hash(0, ctx.table.text(@fromBackingInt(id)));
+        }
+
+        pub fn eql(_: IdContext, a: u32, b: u32) bool {
+            return a == b;
+        }
+    };
+
+    const TextContext = struct {
+        table: *const LocalNameTable,
+
+        pub fn hash(_: TextContext, name: []const u8) u64 {
+            return std.hash.Wyhash.hash(0, name);
+        }
+
+        pub fn eql(ctx: TextContext, name: []const u8, id: u32) bool {
+            return std.mem.eql(u8, name, ctx.table.text(@fromBackingInt(id)));
+        }
+    };
+
+    /// The id of `name`, adding it when absent. An empty name is `none`.
+    pub fn intern(self: *LocalNameTable, allocator: std.mem.Allocator, name: []const u8) std.mem.Allocator.Error!LocalNameId {
+        if (name.len == 0) return .none;
+        const entry = try self.index.getOrPutContextAdapted(
+            allocator,
+            name,
+            TextContext{ .table = self },
+            IdContext{ .table = self },
+        );
+        if (entry.found_existing) return @fromBackingInt(entry.key_ptr.*);
+        errdefer self.index.removeByPtr(entry.key_ptr);
+        if (self.spans.items.len >= @backingInt(LocalNameId.none)) return error.OutOfMemory;
+        const start = std.math.cast(u32, self.bytes.items.len) orelse return error.OutOfMemory;
+        const len = std.math.cast(u32, name.len) orelse return error.OutOfMemory;
+        try self.spans.ensureUnusedCapacity(allocator, 1);
+        try self.bytes.appendSlice(allocator, name);
+        const id: LocalNameId = @fromBackingInt(@intCast(self.spans.items.len));
+        self.spans.appendAssumeCapacity(.{ .start = start, .len = len });
+        entry.key_ptr.* = @backingInt(id);
+        return id;
+    }
+
+    /// The text of `id`; empty for `none`.
+    pub fn text(self: *const LocalNameTable, id: LocalNameId) []const u8 {
+        if (id == .none) return "";
+        const span = self.spans.items[@backingInt(id)];
+        return self.bytes.items[span.start .. span.start + span.len];
+    }
+
+    pub fn clone(self: *const LocalNameTable, allocator: std.mem.Allocator) std.mem.Allocator.Error!LocalNameTable {
+        var bytes = try self.bytes.clone(allocator);
+        errdefer bytes.deinit(allocator);
+        var spans = try self.spans.clone(allocator);
+        errdefer spans.deinit(allocator);
+        var result: LocalNameTable = .{ .bytes = bytes, .spans = spans };
+        try result.index.ensureTotalCapacityContext(allocator, @intCast(spans.items.len), IdContext{ .table = &result });
+        for (0..spans.items.len) |index| {
+            result.index.putAssumeCapacityNoClobberContext(@intCast(index), {}, IdContext{ .table = &result });
+        }
+        return result;
+    }
+
+    pub fn deinit(self: *LocalNameTable, allocator: std.mem.Allocator) void {
+        self.index.deinit(allocator);
+        self.spans.deinit(allocator);
+        self.bytes.deinit(allocator);
+        self.* = .{};
+    }
+};
+
 /// Checked function definition used by a Monotype function template.
 pub const FnDef = union(enum(u8)) {
     local_template: names.ProcTemplate,
@@ -274,9 +366,13 @@ pub const FnTemplate = struct {
     /// so such a procedure never stands for, or is merged with, the procedure
     /// an evaluation lowers from the same template and types.
     discovery: bool = false,
+    /// The `spec_key` a procedure lowered only for discovery was reserved
+    /// under. Its discovery summary is recorded under this key (design.md
+    /// "Discovery Summaries"); the procedure itself has no object-cache key.
+    discovery_key: ?names.TypeDigest = null,
     /// Explicit dispatch selections captured when this specialization was
     /// created, retained for compile-time function values.
-    const_evidence: Span(check.ConstStore.ConstFnEvidence) = Span(check.ConstStore.ConstFnEvidence).empty(),
+    const_evidence: ConstEvidenceSpans = .{},
     const_evidence_frames: Span(check.ConstStore.ConstFnEvidenceFrame) = Span(check.ConstStore.ConstFnEvidenceFrame).empty(),
     const_evidence_frame_head: ?u32 = null,
 };
@@ -479,6 +575,20 @@ pub fn fnTemplateIdentityEql(lhs: FnTemplate, rhs: FnTemplate) bool {
         lhs.mono_fn_ty == rhs.mono_fn_ty;
 }
 
+/// Where a function template's stored evidence vector sits in its program's
+/// three evidence columns. Entry payload indexes are relative to the
+/// template's own `targets` and `structurals` spans.
+pub const ConstEvidenceSpans = struct {
+    nodes: Span(check.ConstStore.ConstFnEvidence) = Span(check.ConstStore.ConstFnEvidence).empty(),
+    targets: Span(check.ConstStore.ConstFnTargetEvidence) = Span(check.ConstStore.ConstFnTargetEvidence).empty(),
+    structurals: Span(check.ConstStore.ConstFnStructuralEvidence) = Span(check.ConstStore.ConstFnStructuralEvidence).empty(),
+
+    /// Whether the template retained no evidence entries.
+    pub fn isEmpty(self: ConstEvidenceSpans) bool {
+        return self.nodes.len == 0;
+    }
+};
+
 /// Compute a digest for a Monotype function template, over exactly the fields
 /// `fnTemplateIdentityEql` compares. Takes the type store mutable because type
 /// digests are computed through the store's cache.
@@ -500,7 +610,7 @@ pub fn fnTemplateDigest(template: FnTemplate, types: *Type.Store, name_store: *c
 /// Compute the stable specialization digest from durable evidence topology,
 /// checked callable type keys, and lexical frames carried by a function template.
 pub fn fnEvidenceDigest(
-    evidence: []const check.ConstStore.ConstFnEvidence,
+    evidence: check.ConstStore.ConstFnEvidenceVector,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
 ) EvidenceDigest {
@@ -528,7 +638,7 @@ const ContentEvidenceNames = struct {
 /// dispatches to an app method keeps its identity across edits that leave
 /// the method's declaration alone.
 pub fn fnEvidenceSiteDigest(
-    evidence: []const check.ConstStore.ConstFnEvidence,
+    evidence: check.ConstStore.ConstFnEvidenceVector,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
     site_names: anytype,
@@ -542,7 +652,7 @@ pub fn fnEvidenceSiteDigest(
 /// digest covers, for finding a stored conversion to compare with
 /// `fnEvidenceEql`; never an identity by itself.
 pub fn fnEvidenceBucket(
-    evidence: []const check.ConstStore.ConstFnEvidence,
+    evidence: check.ConstStore.ConstFnEvidenceVector,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
 ) u64 {
@@ -553,17 +663,18 @@ pub fn fnEvidenceBucket(
 
 fn writeFnEvidence(
     hasher: anytype,
-    evidence: []const check.ConstStore.ConstFnEvidence,
+    evidence: check.ConstStore.ConstFnEvidenceVector,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
     site_names: anytype,
 ) void {
     writeBytes(hasher, "roc.monotype.fn_evidence.v7");
-    writeU32(hasher, @intCast(evidence.len));
-    for (evidence) |entry| {
+    writeU32(hasher, @intCast(evidence.nodes.len));
+    for (evidence.nodes) |entry| {
         writeU8(hasher, @backingInt(entry));
         switch (entry) {
-            .target => |target| {
+            .target => |target_index| {
+                const target = evidence.target(target_index);
                 writeU32(hasher, target.callable_contracts);
                 writeEvidenceModule(hasher, &target.view.bytes, site_names);
                 writeMethodTarget(hasher, target.method, target.method_callable_key, site_names);
@@ -581,7 +692,8 @@ fn writeFnEvidence(
                     .from_callable => {},
                 }
             },
-            .structural => |structural| {
+            .structural => |structural_index| {
+                const structural = evidence.structural(structural_index);
                 writeU32(hasher, structural.callable_contracts);
                 writeStructuralDerivation(hasher, structural.derivation);
                 if (structural.checked) |checked_structural| {
@@ -622,25 +734,26 @@ fn writeFnEvidence(
 /// Exact checked-identity equality for retained function evidence. Checked
 /// callable ids are replay payload; their type keys are the durable identity.
 pub fn fnEvidenceEql(
-    left_evidence: []const check.ConstStore.ConstFnEvidence,
+    left_evidence: check.ConstStore.ConstFnEvidenceVector,
     left_frames: []const check.ConstStore.ConstFnEvidenceFrame,
     left_head: ?u32,
-    right_evidence: []const check.ConstStore.ConstFnEvidence,
+    right_evidence: check.ConstStore.ConstFnEvidenceVector,
     right_frames: []const check.ConstStore.ConstFnEvidenceFrame,
     right_head: ?u32,
 ) bool {
-    if (left_head != right_head or left_evidence.len != right_evidence.len or left_frames.len != right_frames.len) return false;
-    if (left_evidence.ptr == right_evidence.ptr and left_frames.ptr == right_frames.ptr) return true;
-    for (left_evidence, right_evidence) |left, right| {
+    if (left_head != right_head or left_evidence.nodes.len != right_evidence.nodes.len or left_frames.len != right_frames.len) return false;
+    if (left_evidence.nodes.ptr == right_evidence.nodes.ptr and left_evidence.targets.ptr == right_evidence.targets.ptr and
+        left_evidence.structurals.ptr == right_evidence.structurals.ptr and left_frames.ptr == right_frames.ptr) return true;
+    for (left_evidence.nodes, right_evidence.nodes) |left, right| {
         switch (left) {
             .target => |left_target| switch (right) {
                 .target => |right_target| {
-                    if (!fnEvidenceTargetEql(left_target, right_target)) return false;
+                    if (!fnEvidenceTargetEql(left_evidence.target(left_target).*, right_evidence.target(right_target).*)) return false;
                 },
                 .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => return false,
             },
             .structural => |left_structural| switch (right) {
-                .structural => |right_structural| if (!left_structural.identityEql(right_structural)) return false,
+                .structural => |right_structural| if (!left_evidence.structural(left_structural).identityEql(right_evidence.structural(right_structural).*)) return false,
                 .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => return false,
             },
             .from_callable => |left_use| switch (right) {
@@ -797,7 +910,8 @@ test "function evidence identity uses checked callable type keys" {
     const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
         check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
     };
-    const left = [_]check.ConstStore.ConstFnEvidence{.{ .target = .{
+    const nodes = [_]check.ConstStore.ConstFnEvidence{.{ .target = 0 }};
+    const left_targets = [_]check.ConstStore.ConstFnTargetEvidence{.{
         .view = .{},
         .method = .{
             .module_idx = 3,
@@ -812,46 +926,51 @@ test "function evidence identity uses checked callable type keys" {
             .callable_ty = @fromBackingInt(@intCast(6)),
         },
         .nested = .from_callable,
-    } }};
-    var right = left;
-    right[0].target.method.callable_ty = @fromBackingInt(@intCast(7));
-    right[0].target.instantiation.?.callable_ty = @fromBackingInt(@intCast(8));
+    }};
+    var right_targets = left_targets;
+    right_targets[0].method.callable_ty = @fromBackingInt(@intCast(7));
+    right_targets[0].instantiation.?.callable_ty = @fromBackingInt(@intCast(8));
+    const left: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &nodes, .targets = &left_targets };
+    const right: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &nodes, .targets = &right_targets };
 
-    try std.testing.expect(fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
-    try std.testing.expectEqual(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0));
+    try std.testing.expect(fnEvidenceEql(left, &frames, 0, right, &frames, 0));
+    try std.testing.expectEqual(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0));
 
-    right[0].target.method_callable_key.bytes[0] = 9;
-    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
-    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
+    right_targets[0].method_callable_key.bytes[0] = 9;
+    try std.testing.expect(!fnEvidenceEql(left, &frames, 0, right, &frames, 0));
+    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0)));
 
-    right[0].target.method_callable_key = method_key;
-    right[0].target.instantiation.?.callable_key.bytes[0] = 9;
-    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
-    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
+    right_targets[0].method_callable_key = method_key;
+    right_targets[0].instantiation.?.callable_key.bytes[0] = 9;
+    try std.testing.expect(!fnEvidenceEql(left, &frames, 0, right, &frames, 0));
+    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0)));
 
     const symbolic_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
         check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 2),
     };
-    const symbolic_left = [_]check.ConstStore.ConstFnEvidence{
+    const symbolic_left_nodes = [_]check.ConstStore.ConstFnEvidence{
         .{ .from_callable = .{ .independent_callable = false } },
         .unreachable_value,
     };
-    const symbolic_right = [_]check.ConstStore.ConstFnEvidence{
+    const symbolic_right_nodes = [_]check.ConstStore.ConstFnEvidence{
         .unreachable_value,
         .{ .from_callable = .{ .independent_callable = false } },
     };
+    const symbolic_left: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &symbolic_left_nodes };
+    const symbolic_right: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &symbolic_right_nodes };
     // The vector position owns the symbolic requirement's identity.
-    try std.testing.expect(!fnEvidenceEql(&symbolic_left, &symbolic_frames, 0, &symbolic_right, &symbolic_frames, 0));
+    try std.testing.expect(!fnEvidenceEql(symbolic_left, &symbolic_frames, 0, symbolic_right, &symbolic_frames, 0));
     try std.testing.expect(!std.meta.eql(
-        fnEvidenceDigest(&symbolic_left, &symbolic_frames, 0),
-        fnEvidenceDigest(&symbolic_right, &symbolic_frames, 0),
+        fnEvidenceDigest(symbolic_left, &symbolic_frames, 0),
+        fnEvidenceDigest(symbolic_right, &symbolic_frames, 0),
     ));
-    var independent = symbolic_left;
-    independent[0].from_callable.independent_callable = true;
-    try std.testing.expect(!fnEvidenceEql(&symbolic_left, &symbolic_frames, 0, &independent, &symbolic_frames, 0));
+    var independent_nodes = symbolic_left_nodes;
+    independent_nodes[0].from_callable.independent_callable = true;
+    const independent: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &independent_nodes };
+    try std.testing.expect(!fnEvidenceEql(symbolic_left, &symbolic_frames, 0, independent, &symbolic_frames, 0));
     try std.testing.expect(!std.meta.eql(
-        fnEvidenceDigest(&symbolic_left, &symbolic_frames, 0),
-        fnEvidenceDigest(&independent, &symbolic_frames, 0),
+        fnEvidenceDigest(symbolic_left, &symbolic_frames, 0),
+        fnEvidenceDigest(independent, &symbolic_frames, 0),
     ));
 }
 
@@ -1111,6 +1230,14 @@ pub const CallProc = struct {
     /// may use this to avoid inlining and to attach backend cold-call metadata;
     /// they must not infer coldness from callee names or source paths.
     is_cold: bool = false,
+    /// The callee is the specialization this call's request shaped by its
+    /// template's demand (design.md "Specialization By Demand"): the
+    /// arguments and result keep this call's own types, while the callee's
+    /// parameters and result carry demand holes and layout representatives
+    /// where the call's types do not. The callee's signature holds no function
+    /// type, so no lambda set crosses the call: later stages relate nothing
+    /// across it, and accept the call's layouts at the callee's holes.
+    demand_shaped: bool = false,
 };
 
 /// Low-level builtin call.
@@ -1236,7 +1363,6 @@ pub const JumpExpr = struct {
 pub const ComptimeSiteKind = enum(u8) {
     match,
     destructure,
-    if_,
 };
 
 /// Metadata for one compile-time-observed control-flow site.
@@ -1249,14 +1375,6 @@ pub const ComptimeSite = struct {
     owner: Common.LoweringModuleId,
     region: base.Region,
     checked_site: ?checked.CheckedExhaustivenessSiteId = null,
-    branch_regions: []const base.Region = &.{},
-};
-
-/// Expression wrapper that records a branch hit before evaluating `body`.
-pub const ComptimeBranchTaken = struct {
-    site: ComptimeSiteId,
-    branch_index: u32,
-    body: ExprId,
 };
 
 /// Typed Monotype expression.
@@ -1277,7 +1395,48 @@ pub const ComptimeValue = struct {
 pub const StaticDataCandidate = struct {
     storage: Common.StaticDataStorage,
     static_data: Common.StaticDataId,
-    runtime_expr: ExprId,
+    value: StaticDataCandidateValue,
+};
+
+/// What a static data candidate's value is built from.
+pub const StaticDataCandidateValue = union(enum) {
+    /// The value's construction: it lowers as runtime code where no target
+    /// storage holds the value, and the candidate's static initializer
+    /// freezes it.
+    runtime: ExprId,
+    /// A non-empty list stored in a checked module's `ConstStore` whose items
+    /// reach no function value, crash, or checked error. Static data freezes
+    /// it straight from its stored node, which the candidate's static data
+    /// request names, through the target const plan of the candidate's type,
+    /// so no expression builds it or any of its items.
+    stored: StoredStaticList,
+
+    /// The candidate's one subexpression: its construction, or the restored
+    /// item a stored list of one repeated value names. A stored list of
+    /// differing items has none.
+    pub fn subexpression(self: StaticDataCandidateValue) ?ExprId {
+        return switch (self) {
+            .runtime => |expr| expr,
+            .stored => |stored| stored.uniform_item,
+        };
+    }
+
+    /// Where the candidate's one subexpression is held, for a pass that
+    /// rewrites it in place; null when it has none.
+    pub fn subexpressionPtr(self: *StaticDataCandidateValue) ?*ExprId {
+        return switch (self.*) {
+            .runtime => |*expr| expr,
+            .stored => |*stored| if (stored.uniform_item) |*item| item else null,
+        };
+    }
+};
+
+/// A stored list that static data freezes from its `ConstStore` node.
+pub const StoredStaticList = struct {
+    item_count: u32,
+    /// The restored item of a list whose items are all one stored value,
+    /// which the list's fresh form repeats; null when they differ.
+    uniform_item: ?ExprId,
 };
 
 /// Explicit result relation between independently specialized Monotype graphs.
@@ -1387,7 +1546,6 @@ pub const ExprData = union(enum(u8)) {
     /// message; compile-time evaluation that reaches it discards the result
     /// instead of reporting the problem a second time.
     checked_error: StringLiteralId,
-    comptime_branch_taken: ComptimeBranchTaken,
     comptime_exhaustiveness_failed: ComptimeSiteId,
     dbg: ExprId,
     expect_err: ExpectErrExpr,
@@ -1684,6 +1842,8 @@ pub const ProgramView = struct {
     specs: []const SpecRecord,
     fns: []const Fn,
     const_fn_evidence: []const check.ConstStore.ConstFnEvidence,
+    const_fn_evidence_targets: []const check.ConstStore.ConstFnTargetEvidence,
+    const_fn_evidence_structurals: []const check.ConstStore.ConstFnStructuralEvidence,
     const_fn_evidence_frames: []const check.ConstStore.ConstFnEvidenceFrame,
     defs: []const Def,
     nested_defs: []const NestedDef,
@@ -1723,7 +1883,8 @@ pub const ProgramView = struct {
     expr_regions: []const base.Region,
     stmt_locs: []const base.SourceLoc,
     stmt_regions: []const base.Region,
-    local_names: []const StringLiteral,
+    local_names: []const LocalNameId,
+    local_name_table: *const LocalNameTable,
     next_symbol: u32,
 
     pub fn getComptimeValueRoot(self: ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
@@ -1742,8 +1903,12 @@ pub const ProgramView = struct {
         return self.fns[raw].signature_relation;
     }
 
-    pub fn constFnEvidence(self: ProgramView, span: Span(check.ConstStore.ConstFnEvidence)) []const check.ConstStore.ConstFnEvidence {
-        return self.const_fn_evidence[span.start..][0..span.len];
+    pub fn constFnEvidence(self: ProgramView, spans: ConstEvidenceSpans) check.ConstStore.ConstFnEvidenceVector {
+        return .{
+            .nodes = self.const_fn_evidence[spans.nodes.start..][0..spans.nodes.len],
+            .targets = self.const_fn_evidence_targets[spans.targets.start..][0..spans.targets.len],
+            .structurals = self.const_fn_evidence_structurals[spans.structurals.start..][0..spans.structurals.len],
+        };
     }
 
     pub fn constFnEvidenceFrames(self: ProgramView, span: Span(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
@@ -1859,6 +2024,8 @@ pub const ProgramBuilder = struct {
     specs: ProgramList(SpecRecord, "specs"),
     fns: ProgramList(Fn, "fns"),
     const_fn_evidence: ProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence"),
+    const_fn_evidence_targets: ProgramList(check.ConstStore.ConstFnTargetEvidence, "const_fn_evidence_targets"),
+    const_fn_evidence_structurals: ProgramList(check.ConstStore.ConstFnStructuralEvidence, "const_fn_evidence_structurals"),
     const_fn_evidence_frames: ProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames"),
     defs: ProgramList(Def, "defs"),
     nested_defs: ProgramList(NestedDef, "nested_defs"),
@@ -1916,10 +2083,11 @@ pub const ProgramBuilder = struct {
     stmt_locs: ProgramList(base.SourceLoc, "stmt_locs"),
     /// Checked source region per statement, parallel to `stmts`.
     stmt_regions: ProgramList(base.Region, "stmt_regions"),
-    /// Source-level name per local, parallel to `locals` (empty for
-    /// compiler-generated temporaries). A sealed body's names share one
-    /// backing, like its string literals.
-    local_names: ProgramList(StringLiteral, "local_names"),
+    /// Source-level name per local, parallel to `locals` (`none` for
+    /// compiler-generated temporaries).
+    local_names: ProgramList(LocalNameId, "local_names"),
+    /// Text of every `LocalNameId` in `local_names`.
+    local_name_table: LocalNameTable,
     /// Ambient location recorded by `addExpr`/`addStmt`. Lowering sets this on
     /// entry to each source node, so synthetic glue nodes inherit the location
     /// of the source node they were derived from.
@@ -1936,6 +2104,8 @@ pub const ProgramBuilder = struct {
             .specs = .empty,
             .fns = .empty,
             .const_fn_evidence = .empty,
+            .const_fn_evidence_targets = .empty,
+            .const_fn_evidence_structurals = .empty,
             .const_fn_evidence_frames = .empty,
             .defs = .empty,
             .nested_defs = .empty,
@@ -1971,6 +2141,7 @@ pub const ProgramBuilder = struct {
             .stmt_locs = .empty,
             .stmt_regions = .empty,
             .local_names = .empty,
+            .local_name_table = .{},
             .current_loc = base.SourceLoc.none,
             .current_region = base.Region.zero(),
         };
@@ -1986,7 +2157,7 @@ pub const ProgramBuilder = struct {
         result.names = try self.names.clone(allocator);
         result.types = try self.types.cloneFrozen(allocator);
         try result.comptime_value_roots.appendSlice(allocator, self.comptime_value_roots.unsafeRawItemsForView());
-        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "literal_roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
+        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "literal_roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
         try result.proc_debug_names.putAll(self.proc_debug_names.view());
@@ -2011,20 +2182,10 @@ pub const ProgramBuilder = struct {
             };
         }
         for (self.comptime_sites.unsafeRawItemsForView()) |site| {
-            var copied = site;
-            copied.branch_regions = try allocator.dupe(base.Region, site.branch_regions);
-            result.comptime_sites.append(allocator, copied) catch |err| {
-                allocator.free(copied.branch_regions);
-                return err;
-            };
+            try result.comptime_sites.append(allocator, site);
         }
-        for (self.local_names.unsafeRawItemsForView()) |name| {
-            const copied = try name.clone(allocator);
-            result.local_names.append(allocator, copied) catch |err| {
-                copied.deinit(allocator);
-                return err;
-            };
-        }
+        try result.local_names.appendSlice(allocator, self.local_names.unsafeRawItemsForView());
+        result.local_name_table = try self.local_name_table.clone(allocator);
         result.next_symbol = self.next_symbol;
         result.current_loc = self.current_loc;
         result.current_region = self.current_region;
@@ -2032,7 +2193,7 @@ pub const ProgramBuilder = struct {
     }
 
     pub fn deinit(self: *ProgramBuilder) void {
-        for (self.local_names.unsafeRawItemsForView()) |name| name.deinit(self.allocator);
+        self.local_name_table.deinit(self.allocator);
         self.local_names.deinit(self.allocator);
         self.stmt_regions.deinit(self.allocator);
         self.stmt_locs.deinit(self.allocator);
@@ -2043,9 +2204,6 @@ pub const ProgramBuilder = struct {
             self.allocator.free(file.qualified_name);
         }
         self.source_files.deinit(self.allocator);
-        for (self.comptime_sites.unsafeRawItemsForView()) |site| {
-            self.allocator.free(site.branch_regions);
-        }
         self.comptime_sites.deinit(self.allocator);
         self.lowering_modules.deinit(self.allocator);
         self.comptime_value_roots.deinit(self.allocator);
@@ -2082,6 +2240,8 @@ pub const ProgramBuilder = struct {
         self.defs.deinit(self.allocator);
         self.fns.deinit(self.allocator);
         self.const_fn_evidence.deinit(self.allocator);
+        self.const_fn_evidence_targets.deinit(self.allocator);
+        self.const_fn_evidence_structurals.deinit(self.allocator);
         self.const_fn_evidence_frames.deinit(self.allocator);
         self.specs.deinit(self.allocator);
         self.types.deinit();
@@ -2094,10 +2254,16 @@ pub const ProgramBuilder = struct {
         return id;
     }
 
-    pub fn addConstFnEvidence(self: *ProgramBuilder, values: []const check.ConstStore.ConstFnEvidence) std.mem.Allocator.Error!Span(check.ConstStore.ConstFnEvidence) {
-        const start: u32 = @intCast(self.const_fn_evidence.len());
-        try self.const_fn_evidence.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+    pub fn addConstFnEvidence(self: *ProgramBuilder, values: check.ConstStore.ConstFnEvidenceVector) std.mem.Allocator.Error!ConstEvidenceSpans {
+        const spans: ConstEvidenceSpans = .{
+            .nodes = .{ .start = @intCast(self.const_fn_evidence.len()), .len = @intCast(values.nodes.len) },
+            .targets = .{ .start = @intCast(self.const_fn_evidence_targets.len()), .len = @intCast(values.targets.len) },
+            .structurals = .{ .start = @intCast(self.const_fn_evidence_structurals.len()), .len = @intCast(values.structurals.len) },
+        };
+        try self.const_fn_evidence.appendSlice(self.allocator, values.nodes);
+        try self.const_fn_evidence_targets.appendSlice(self.allocator, values.targets);
+        try self.const_fn_evidence_structurals.appendSlice(self.allocator, values.structurals);
+        return spans;
     }
 
     pub fn addConstFnEvidenceFrames(self: *ProgramBuilder, values: []const check.ConstStore.ConstFnEvidenceFrame) std.mem.Allocator.Error!Span(check.ConstStore.ConstFnEvidenceFrame) {
@@ -2185,6 +2351,8 @@ pub const ProgramBuilder = struct {
             .specs = self.specs.unsafeRawItemsForView(),
             .fns = self.fns.unsafeRawItemsForView(),
             .const_fn_evidence = self.const_fn_evidence.unsafeRawItemsForView(),
+            .const_fn_evidence_targets = self.const_fn_evidence_targets.unsafeRawItemsForView(),
+            .const_fn_evidence_structurals = self.const_fn_evidence_structurals.unsafeRawItemsForView(),
             .const_fn_evidence_frames = self.const_fn_evidence_frames.unsafeRawItemsForView(),
             .defs = self.defs.unsafeRawItemsForView(),
             .nested_defs = self.nested_defs.unsafeRawItemsForView(),
@@ -2221,6 +2389,7 @@ pub const ProgramBuilder = struct {
             .stmt_locs = self.stmt_locs.unsafeRawItemsForView(),
             .stmt_regions = self.stmt_regions.unsafeRawItemsForView(),
             .local_names = self.local_names.unsafeRawItemsForView(),
+            .local_name_table = &self.local_name_table,
             .next_symbol = self.next_symbol,
         };
     }
@@ -2336,17 +2505,13 @@ pub const ProgramBuilder = struct {
         owner: Common.LoweringModuleId,
         region: base.Region,
         checked_site: ?checked.CheckedExhaustivenessSiteId,
-        branch_regions: []const base.Region,
     ) std.mem.Allocator.Error!ComptimeSiteId {
-        const owned_branch_regions = try self.allocator.dupe(base.Region, branch_regions);
-        errdefer self.allocator.free(owned_branch_regions);
         const id: ComptimeSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(self.comptime_sites.len()))));
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
             .owner = owner,
             .region = region,
             .checked_site = checked_site,
-            .branch_regions = owned_branch_regions,
         });
         return id;
     }
@@ -2436,7 +2601,7 @@ pub const ProgramBuilder = struct {
             // its binding, so any function that captures it joins by CaptureId.
             .identity = .init(binder, checked_capture_id, checked_capture_id),
         });
-        try self.local_names.append(self.allocator, .empty);
+        try self.local_names.append(self.allocator, .none);
         return id;
     }
 
@@ -2450,18 +2615,15 @@ pub const ProgramBuilder = struct {
         local.identity.setCheckedCaptureId(checked_id);
     }
 
-    /// Record the source-level name of a local (dupes; empty means none).
+    /// Record the source-level name of a local (empty means none).
     pub fn setLocalName(self: *ProgramBuilder, id: LocalId, name: []const u8) std.mem.Allocator.Error!void {
         if (name.len == 0) return;
-        const owned = try StringLiteral.initOwned(self.allocator, name);
-        const slot = self.local_names.getPtrImmediate(@backingInt(id));
-        slot.deinit(self.allocator);
-        slot.* = owned;
+        self.local_names.getPtrImmediate(@backingInt(id)).* = try self.local_name_table.intern(self.allocator, name);
     }
 
     /// Source-level name of a local; empty for compiler-generated temporaries.
     pub fn localName(self: *const ProgramBuilder, id: LocalId) []const u8 {
-        return self.local_names.unsafeRawItemsForView()[@backingInt(id)].text();
+        return self.local_name_table.text(self.local_names.unsafeRawItemsForView()[@backingInt(id)]);
     }
 
     pub fn localCount(self: *const ProgramBuilder) usize {
@@ -2739,7 +2901,7 @@ test "monotype program view exposes read-only side arrays" {
         .identity = .{
             .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 0, .template = 0 } },
             .method_scope = .{},
-            .evidence_digest = fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_digest = fnEvidenceDigest(.{}, &.{}, null),
             .codec_contract_digest = .{},
             .codec_contract = null,
             .request_fn_ty_digest = .{},
@@ -3105,7 +3267,8 @@ test "codec function evidence identity excludes per-use replay addresses" {
     const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
         check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
     };
-    const left = [_]Evidence{.{ .structural = .{
+    const nodes = [_]Evidence{.{ .structural = 0 }};
+    const left_structurals = [_]check.ConstStore.ConstFnStructuralEvidence{.{
         .derivation = .encoder,
         .checked = .{
             .view = .{ .bytes = @as([32]u8, @splat(1)) },
@@ -3116,21 +3279,23 @@ test "codec function evidence identity excludes per-use replay addresses" {
             .generated_codec_derivation = derivation_ids[0],
             .generated_codec_content = .{ .bytes = @as([32]u8, @splat(4)) },
         },
-    } }};
-    var right = left;
-    right[0].structural.checked.?.dispatcher_ty = replay_types[2];
-    right[0].structural.checked.?.callable_ty = replay_types[3];
-    right[0].structural.checked.?.generated_codec_derivation = derivation_ids[1];
-    try std.testing.expect(fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
-    try std.testing.expectEqual(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0));
+    }};
+    var right_structurals = left_structurals;
+    const left: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &nodes, .structurals = &left_structurals };
+    const right: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &nodes, .structurals = &right_structurals };
+    right_structurals[0].checked.?.dispatcher_ty = replay_types[2];
+    right_structurals[0].checked.?.callable_ty = replay_types[3];
+    right_structurals[0].checked.?.generated_codec_derivation = derivation_ids[1];
+    try std.testing.expect(fnEvidenceEql(left, &frames, 0, right, &frames, 0));
+    try std.testing.expectEqual(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0));
     // Equal contracts recorded by different modules are one identity.
-    right[0].structural.checked.?.view = .{ .bytes = @as([32]u8, @splat(5)) };
-    try std.testing.expect(fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
-    try std.testing.expectEqual(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0));
-    right[0].structural.checked.?.generated_codec_derivation = derivation_ids[2];
-    right[0].structural.checked.?.generated_codec_content = .{ .bytes = @as([32]u8, @splat(6)) };
-    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
-    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
+    right_structurals[0].checked.?.view = .{ .bytes = @as([32]u8, @splat(5)) };
+    try std.testing.expect(fnEvidenceEql(left, &frames, 0, right, &frames, 0));
+    try std.testing.expectEqual(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0));
+    right_structurals[0].checked.?.generated_codec_derivation = derivation_ids[2];
+    right_structurals[0].checked.?.generated_codec_content = .{ .bytes = @as([32]u8, @splat(6)) };
+    try std.testing.expect(!fnEvidenceEql(left, &frames, 0, right, &frames, 0));
+    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0)));
 }
 
 fn cloneFrozenForAllocationTest(allocator: std.mem.Allocator, source: *const Program) std.mem.Allocator.Error!void {
@@ -3159,7 +3324,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     var owner_key = std.mem.zeroes(check.CheckedModule.ModuleId);
     owner_key.bytes[0] = 9;
     const owner = try source.addLoweringModule(owner_key);
-    const site = try source.addComptimeSite(.if_, owner, .zero(), null, &.{.zero()});
+    const site = try source.addComptimeSite(.match, owner, .zero(), null);
     const name = try source.names.internExportName("entry");
     try source.proc_debug_names.put(@fromBackingInt(@intCast(1)), name);
     const root_a: Common.ComptimeValueRoot = .{
@@ -3195,7 +3360,6 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     try std.testing.expectEqualStrings("value", copy.stringLiteralText(literal));
     try std.testing.expectEqualStrings("value", copy.localName(local));
     try std.testing.expectEqualStrings("app/App.roc", copy.view().source_files[file].qualified_name);
-    try std.testing.expectEqual(@as(usize, 1), copy.comptimeSite(site).branch_regions.len);
     try std.testing.expectEqual(owner, copy.comptimeSite(site).owner);
     try std.testing.expectEqualDeep(owner_key, copy.view().lowering_modules[@backingInt(owner)]);
     try std.testing.expectEqual(name, copy.proc_debug_names.get(@fromBackingInt(@intCast(1))).?);
@@ -3207,16 +3371,18 @@ test "issue 11737: callable contract topology distinguishes specialization ident
     const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
         check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 2),
     };
-    const left = [_]check.ConstStore.ConstFnEvidence{
+    const left_nodes = [_]check.ConstStore.ConstFnEvidence{
         .{ .from_callable = .{ .callable_contracts = 1 } },
         .{ .from_callable = .{} },
         .checked_error,
     };
-    const right = [_]check.ConstStore.ConstFnEvidence{
+    const right_nodes = [_]check.ConstStore.ConstFnEvidence{
         .{ .from_callable = .{} },
         .{ .from_callable = .{ .callable_contracts = 1 } },
         .checked_error,
     };
-    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
-    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
+    const left: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &left_nodes };
+    const right: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &right_nodes };
+    try std.testing.expect(!fnEvidenceEql(left, &frames, 0, right, &frames, 0));
+    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0)));
 }

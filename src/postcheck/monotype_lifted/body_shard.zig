@@ -19,10 +19,9 @@ pub const body_fields = .{
 };
 
 const frozen_fields = .{
-    "fns",             "const_fn_evidence",       "const_fn_evidence_frames", "roots",
-    "layout_requests", "runtime_schema_requests", "static_data_values",       "comptime_sites",
-    "source_files",    "comptime_value_roots",    "comptime_value_reads",     "lowering_modules",
-    "literal_roots",
+    "fns",                  "const_fn_evidence",       "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames", "roots",
+    "layout_requests",      "runtime_schema_requests", "static_data_values",        "comptime_sites",                "source_files",             "comptime_value_roots",
+    "comptime_value_reads", "lowering_modules",        "literal_roots",
 };
 
 /// Every virtual-ID pool whose frozen boundary a shard must retain.
@@ -204,27 +203,19 @@ pub fn append(destination: *ast.Program, worker: *const ast.Program, symbol_star
     for (worker.string_literals.unsafeRawItemsForView()) |literal| {
         literals.appendAssumeCapacity(try literal.clone(allocator));
     }
-    var local_names: std.ArrayList(Mono.StringLiteral) = .empty;
-    defer local_names.deinit(allocator);
-    errdefer for (local_names.items) |name| name.deinit(allocator);
-    try local_names.ensureTotalCapacity(allocator, worker.local_names.len());
-    for (worker.local_names.unsafeRawItemsForView()) |name| {
-        local_names.appendAssumeCapacity(try name.clone(allocator));
-    }
     inline for (body_fields) |field| {
         try @field(destination, field).ensureUnusedCapacity(allocator, @field(worker, field).len());
     }
 
     // From this point onward no allocation, source borrowing, or failure occurs.
     inline for (body_fields) |field| {
-        if (comptime !std.mem.eql(u8, field, "string_literals") and !std.mem.eql(u8, field, "local_names")) {
+        if (comptime !std.mem.eql(u8, field, "string_literals")) {
             for (@field(worker, field).unsafeRawItemsForView()) |item| {
                 @field(destination, field).appendAssumeCapacity(relocation.value(item));
             }
         }
     }
     for (literals.items) |literal| destination.string_literals.appendAssumeCapacity(literal);
-    for (local_names.items) |name| destination.local_names.appendAssumeCapacity(name);
     destination.setFn(prefix.source_fn, patch);
     assertMetadataAligned(destination);
 }

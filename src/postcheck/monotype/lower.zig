@@ -15,6 +15,7 @@ const AnyAll = collections.AnyAll;
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const specialize = @import("specialize.zig");
+const LayoutKey = @import("layout_key.zig");
 const solve = @import("solve.zig");
 const WorkerInputs = @import("worker_inputs.zig");
 
@@ -325,6 +326,16 @@ pub const Options = struct {
     /// whose completed value the specialization reads. The consumer that
     /// asks for this evaluates every literal root the program registers.
     literal_roots: bool = false,
+    /// With `literal_roots`, the literal values an earlier compilation of the
+    /// program stored: a literal root whose value identity names one restores
+    /// it instead of running its conversion (design.md "Compile-Time Value
+    /// Reuse Across Edits"). Literal roots carry value identities exactly
+    /// when this is set.
+    literal_values: ?Common.LiteralValueLookup = null,
+    /// With `literal_values`, keep each restored literal root's conversion as
+    /// a literal root of its own, which evaluation runs to verify the stored
+    /// value.
+    verify_literal_values: bool = false,
     /// Whether an interface request may replay a completed summary instead of
     /// expanding its callee's relations. A replay is a faithful stand-in for a
     /// fresh expansion, so this never changes the lowered program. Always on
@@ -356,9 +367,26 @@ pub const ComptimeDemand = struct {
     /// How many compile-time roots the program declared; `root_reads.len`
     /// of them became program roots.
     declared_root_count: usize = 0,
+    /// Each literal root of the program, by id: the checked roots its
+    /// definition reads, directly or through the code it reaches, its value
+    /// identity, and how the program evaluates it.
+    literals: []LiteralRootDemand = &.{},
+
+    pub const LiteralRootDemand = struct {
+        reads: Common.Span(EntryRoot),
+        /// Names the root's value across compilations; null when nothing
+        /// can name it (design.md "Compile-Time Value Reuse Across Edits").
+        identity: ?[32]u8,
+        reuse: Common.LiteralRootReuse,
+    };
 
     pub fn rootReads(self: *const ComptimeDemand, index: usize) []const EntryRoot {
         const span = self.root_reads[index];
+        return self.reads[span.start..][0..span.len];
+    }
+
+    pub fn literalReads(self: *const ComptimeDemand, id: Common.LiteralRootId) []const EntryRoot {
+        const span = self.literals[@backingInt(id)].reads;
         return self.reads[span.start..][0..span.len];
     }
 
@@ -366,6 +394,7 @@ pub const ComptimeDemand = struct {
         self.allocator.free(self.root_reads);
         self.allocator.free(self.reads);
         self.allocator.free(self.stored);
+        self.allocator.free(self.literals);
         self.* = .{ .allocator = self.allocator };
     }
 };
@@ -391,7 +420,9 @@ const ComptimeDemandState = struct {
     /// `local` is set when the body evaluates a root in place: code that
     /// computes the root's value whenever it runs, which another program
     /// cannot link while it evaluates the root itself.
-    const Summary = struct { refs: Range, reads: Range, local: bool };
+    /// `literal` is set when the body reads a literal root's value, which
+    /// its reads do not name since the root's body is the reading body's code.
+    const Summary = struct { refs: Range, reads: Range, local: bool, literal: bool };
     const RootBytes = struct { module: [32]u8, root: u32 };
     const Visit = union(enum) { expr: Ast.ExprId, stmt: Ast.StmtId };
     /// Items number definitions first and nested definitions after them, in
@@ -430,6 +461,7 @@ const ComptimeDemandState = struct {
     generation: u32 = 0,
     visits: std.ArrayList(Visit) = .empty,
     summary_local: bool = false,
+    summary_literal: bool = false,
     closure_local: bool = false,
     items: std.ArrayList(u32) = .empty,
     closure: std.ArrayList(u32) = .empty,
@@ -592,6 +624,7 @@ const ComptimeDemandState = struct {
         const refs_start = self.summary_refs.items.len;
         const reads_start = self.summary_reads.items.len;
         self.summary_local = false;
+        self.summary_literal = false;
         self.visits.clearRetainingCapacity();
         if (body) |expr| try self.visits.append(allocator, .{ .expr = expr });
         if (item & nested_bit == 0) if (view.defs[item].fn_id) |fn_id| if (self.cached_fn_reads.get(fn_id)) |range| {
@@ -616,6 +649,7 @@ const ComptimeDemandState = struct {
             .refs = .{ .start = @intCast(refs_start), .len = @intCast(self.summary_refs.items.len - refs_start) },
             .reads = .{ .start = @intCast(reads_start), .len = @intCast(self.summary_reads.items.len - reads_start) },
             .local = self.summary_local,
+            .literal = self.summary_literal,
         };
         self.summarySlot(item).* = result;
         return result;
@@ -664,14 +698,17 @@ const ComptimeDemandState = struct {
             .checked_error,
             .comptime_exhaustiveness_failed,
             => {},
-            .static_data_candidate => |candidate| try self.pushExpr(allocator, candidate.runtime_expr),
+            .static_data_candidate => |candidate| if (candidate.value.subexpression()) |sub| try self.pushExpr(allocator, sub),
             .comptime_value => |read| {
                 const root = view.comptime_value_roots[@backingInt(read.root)];
                 switch (root.root) {
                     .checked => |id| try self.summary_reads.append(allocator, try self.intern(allocator, .{ .module = root.module, .root = id })),
                     // A literal root's definition runs wherever its read is
                     // lowered, so its body is this body's code.
-                    .literal => |id| try self.summary_refs.append(allocator, defItem(view.literal_roots[@backingInt(id)].def)),
+                    .literal => |id| {
+                        self.summary_literal = true;
+                        try self.summary_refs.append(allocator, defItem(view.literal_roots[@backingInt(id)].def));
+                    },
                 }
             },
             .typed_boundary => |boundary| try self.pushExpr(allocator, boundary.value),
@@ -770,7 +807,6 @@ const ComptimeDemandState = struct {
                 try self.pushExprs(allocator, view, jump.loop_values);
             },
             .return_ => |ret| try self.pushExpr(allocator, ret.value),
-            .comptime_branch_taken => |taken| try self.pushExpr(allocator, taken.body),
             .expect_err => |err| try self.pushExpr(allocator, err.msg),
             .literal_rejected => |rejected| try self.pushExpr(allocator, rejected.msg),
         }
@@ -872,8 +908,11 @@ const ComptimeDemandState = struct {
 /// evaluates no root in place, and records the roots it reads, which a
 /// program taking the entry demands. A key with no row reads nothing.
 pub const SpecComptimeReads = struct {
-    pub const Row = struct { start: u32, len: u32, local: bool };
-    pub const Lookup = struct { offerable: bool, reads: []const Common.ComptimeRootRead };
+    /// `evaluated`: the code reads a compile-time value through its
+    /// evaluation, a literal root's included, through every procedure it
+    /// reaches.
+    pub const Row = struct { start: u32, len: u32, local: bool, evaluated: bool };
+    pub const Lookup = struct { offerable: bool, reads: []const Common.ComptimeRootRead, evaluated: bool = false };
 
     allocator: Allocator,
     rows: std.AutoHashMapUnmanaged([32]u8, Row) = .empty,
@@ -884,13 +923,13 @@ pub const SpecComptimeReads = struct {
 
     pub fn get(self: *const SpecComptimeReads, key: [32]u8) Lookup {
         const row = self.rows.get(key) orelse return .{ .offerable = true, .reads = &.{} };
-        return .{ .offerable = !row.local, .reads = self.reads.items[row.start..][0..row.len] };
+        return .{ .offerable = !row.local, .reads = self.reads.items[row.start..][0..row.len], .evaluated = row.evaluated };
     }
 
     /// The summary of the function `fn_id` names.
     pub fn fnReads(self: *const SpecComptimeReads, fn_id: u32) Lookup {
         const row = self.fn_rows.get(fn_id) orelse return .{ .offerable = true, .reads = &.{} };
-        return .{ .offerable = !row.local, .reads = self.reads.items[row.start..][0..row.len] };
+        return .{ .offerable = !row.local, .reads = self.reads.items[row.start..][0..row.len], .evaluated = row.evaluated };
     }
 
     pub fn clone(self: *const SpecComptimeReads, allocator: Allocator) Allocator.Error!SpecComptimeReads {
@@ -962,6 +1001,18 @@ const DeclaredRoot = struct {
     /// read to reach and runs for its effects, so the program demands it
     /// outright.
     validation: bool,
+};
+
+/// A program literal root's value identity and how the program evaluates it.
+const LiteralReuseRow = struct {
+    identity: ?[32]u8 = null,
+    reuse: Common.LiteralRootReuse = .converted,
+};
+
+/// A compile-time root's site within the module whose checked key it holds.
+const LiteralReadSite = struct {
+    module: [32]u8,
+    site: [32]u8,
 };
 
 /// A committed expression that stands for a compile-time root's value
@@ -1531,6 +1582,7 @@ const ModuleViewData = struct {
     const_store: *const checked.ConstStore,
     interface_capabilities: *const checked.ModuleInterfaceCapabilities,
     compile_time_root_reads: *const checked.CompileTimeRootReadTable,
+    compile_time_root_identities: *const checked.CompileTimeRootIdentityTable,
     /// This module's dense id among the lowering input's modules, seeded
     /// once with the program's module tables.
     lowering_module: ?Common.LoweringModuleId = null,
@@ -2486,14 +2538,14 @@ fn appendMatchingRequestContainerOps(
                 try ops.append(gpa, .{ .pair = .{ .left = left_elem, .right = right_elem } });
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => {},
         },
         .box => |left_elem| switch (right_content) {
             .box => |right_elem| {
                 try ops.append(gpa, .{ .pair = .{ .left = left_elem, .right = right_elem } });
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => {},
         },
         .tuple => |left_items| switch (right_content) {
             .tuple => |right_items| {
@@ -2505,7 +2557,7 @@ fn appendMatchingRequestContainerOps(
                 }
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => {},
         },
         .func => |left_fn| switch (right_content) {
             .func => |right_fn| {
@@ -2518,21 +2570,21 @@ fn appendMatchingRequestContainerOps(
                 try ops.append(gpa, .{ .pair = .{ .left = left_fn.ret, .right = right_fn.ret } });
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => {},
         },
         .tag_union => switch (right_content) {
             .tag_union => {
                 try relateOpaqueRequestComponentAtWidth(graph, left_node, right_node, row_width);
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => {},
         },
         .record => switch (right_content) {
             .record => {
                 try relateOpaqueRequestComponentAtWidth(graph, left_node, right_node, row_width);
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => {},
         },
         .named => |left_named| switch (right_content) {
             .named => |right_named| {
@@ -2546,9 +2598,9 @@ fn appendMatchingRequestContainerOps(
                 } });
                 return .named;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
         },
-        .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+        .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
     }
     return null;
 }
@@ -2585,7 +2637,7 @@ fn transparentAliasBacking(graph: *InstGraph, content: anytype) ?NodeId {
             if (backing.authority == .generated_private) return null;
             return graph.rootNode(backing.node);
         },
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
     }
 }
 
@@ -2669,11 +2721,11 @@ fn deferredTemplateTypeArgumentsStep(
         .unresolved => return,
         .list => |checked_elem| switch (request_content) {
             .list => |request_elem| try pending.append(gpa, .{ .argument = .{ .checked_node = checked_elem, .request_node = request_elem } }),
-            .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return,
         },
         .box => |checked_elem| switch (request_content) {
             .box => |request_elem| try pending.append(gpa, .{ .argument = .{ .checked_node = checked_elem, .request_node = request_elem } }),
-            .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return,
         },
         .named => |checked_named| switch (request_content) {
             .named => |request_named| {
@@ -2691,7 +2743,7 @@ fn deferredTemplateTypeArgumentsStep(
                 }
                 try pending.append(gpa, .{ .relate_named = .{ .checked_node = checked_root, .request_node = request_root } });
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return,
         },
         .func => |checked_fn| switch (request_content) {
             .func => |request_fn| {
@@ -2703,7 +2755,7 @@ fn deferredTemplateTypeArgumentsStep(
                 }
                 try pending.append(gpa, .{ .at = .{ .checked_node = checked_fn.ret, .request_node = request_fn.ret } });
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return,
         },
         .tuple => |checked_items| switch (request_content) {
             .tuple => |request_items| {
@@ -2714,7 +2766,7 @@ fn deferredTemplateTypeArgumentsStep(
                     try pending.append(gpa, .{ .at = .{ .checked_node = checked_item, .request_node = request_item } });
                 }
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return,
         },
         .record => |checked_record| switch (request_content) {
             .record => |request_record| {
@@ -2735,7 +2787,7 @@ fn deferredTemplateTypeArgumentsStep(
                     try pending.append(gpa, .{ .argument = .{ .checked_node = checked_field.ty, .request_node = request_field.ty } });
                 }
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return,
         },
         .tag_union => |checked_union| switch (request_content) {
             .tag_union => |request_union| {
@@ -2760,9 +2812,9 @@ fn deferredTemplateTypeArgumentsStep(
                     }
                 }
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return,
         },
-        .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+        .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
         .redirect, .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns redirect or leaf content
     }
 }
@@ -2773,7 +2825,7 @@ fn isGeneratedPrivateRootNode(graph: *InstGraph, node: NodeId) Allocator.Error!b
             backing.authority == .generated_private
         else
             false,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => false,
     };
 }
 
@@ -2884,7 +2936,7 @@ const RequestNodePair = struct {
 fn isFunctionNode(graph: *InstGraph, node: NodeId) Allocator.Error!bool {
     return switch ((try graph.content(node))) {
         .func => true,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => false,
+        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => false,
     };
 }
 
@@ -2895,7 +2947,7 @@ fn isFunctionNode(graph: *InstGraph, node: NodeId) Allocator.Error!bool {
 fn isBareTagRowNode(graph: *InstGraph, node: NodeId) Allocator.Error!bool {
     return switch ((try graph.content(node))) {
         .tag_union, .empty_tag_union => true,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => false,
+        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst, .hole => false,
     };
 }
 
@@ -2930,7 +2982,7 @@ fn resultRowNodeOrNull(graph: *InstGraph, node: NodeId) Allocator.Error!?NodeId 
             if (!try isBareTagRowNode(graph, backing.node)) break :blk null;
             break :blk backing.node;
         },
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .erased, .zst => null,
+        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .erased, .zst, .hole => null,
     };
 }
 
@@ -3024,7 +3076,7 @@ fn widenClosedResultRow(
         .named => |named| for (named.args, 0..) |arg, index| {
             if (graph.sameClass(arg, pair.public)) try graph.replaceNamedArgNode(public_ret, index, pair.request);
         },
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
     }
 }
 
@@ -3240,7 +3292,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .named_instances = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => break :structural false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => break :structural false,
         },
         .list => |checked_elem| switch (request_content) {
             .list => |request_elem| {
@@ -3248,7 +3300,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :structural false,
         },
         .box => |checked_elem| switch (request_content) {
             .box => |request_elem| {
@@ -3256,7 +3308,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :structural false,
         },
         .tuple => |checked_items| switch (request_content) {
             .tuple => |request_items| {
@@ -3269,7 +3321,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :structural false,
         },
         .func => |checked_fn| switch (request_content) {
             .func => |request_fn| {
@@ -3283,7 +3335,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :structural false,
         },
         .record => |checked_row| switch (request_content) {
             .record => |request_row| {
@@ -3303,7 +3355,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :structural false,
         },
         .tag_union => switch (request_content) {
             .tag_union => {
@@ -3327,9 +3379,9 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :structural false,
         },
-        .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => break :structural false,
+        .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => break :structural false,
     };
     if (!structural) try ops.append(allocator, .{ .unify = roots });
     frames.appendAssumeCapacity(.{
@@ -3692,7 +3744,7 @@ fn shapeContent(types: *const Type.Store, ty: Type.TypeId) Type.Content {
             } else {
                 return types.get(current);
             },
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return types.get(current),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return types.get(current),
         }
     }
 }
@@ -3700,14 +3752,14 @@ fn shapeContent(types: *const Type.Store, ty: Type.TypeId) Type.Content {
 fn functionShape(types: *const Type.Store, ty: Type.TypeId, comptime message: []const u8) FunctionShape {
     return switch (shapeContent(types, ty)) {
         .func => |func| .{ .args = func.args, .ret = func.ret },
-        .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => Common.invariant(message),
+        .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst, .hole => Common.invariant(message),
     };
 }
 
 fn recordFieldsSpan(types: *const Type.Store, ty: Type.TypeId) Type.Span {
     return switch (shapeContent(types, ty)) {
         .record => |fields| fields,
-        .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("record operation had a non-record type"),
+        .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("record operation had a non-record type"),
     };
 }
 
@@ -3722,28 +3774,28 @@ fn tupleItemTypes(types: *const Type.Store, ty: Type.TypeId) Type.StoreSpanBorro
 fn tupleItemSpan(types: *const Type.Store, ty: Type.TypeId) Type.Span {
     return switch (shapeContent(types, ty)) {
         .tuple => |items| items,
-        .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("tuple operation had a non-tuple type"),
+        .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("tuple operation had a non-tuple type"),
     };
 }
 
 fn listElemType(types: *const Type.Store, ty: Type.TypeId) Type.TypeId {
     return switch (shapeContent(types, ty)) {
         .list => |elem| elem,
-        .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("list operation had a non-list type"),
+        .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => Common.invariant("list operation had a non-list type"),
     };
 }
 
 fn boxPayloadType(types: *const Type.Store, ty: Type.TypeId) Type.TypeId {
     return switch (shapeContent(types, ty)) {
         .box => |payload| payload,
-        .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst => Common.invariant("box operation had a non-box type"),
+        .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst, .hole => Common.invariant("box operation had a non-box type"),
     };
 }
 
 fn tagUnionTags(types: *const Type.Store, ty: Type.TypeId) Type.StoreSpanBorrow(Type.Tag, "tags") {
     return switch (shapeContent(types, ty)) {
         .tag_union => |tags| types.tagSpan(tags),
-        .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("tag operation had a non-tag-union type"),
+        .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => Common.invariant("tag operation had a non-tag-union type"),
     };
 }
 
@@ -3776,7 +3828,7 @@ fn tagPayloadSpan(types: *const Type.Store, name_store: *const names.NameStore, 
 fn namedBackingType(types: *const Type.Store, ty: Type.TypeId) ?Type.TypeId {
     return switch (types.get(ty)) {
         .named => |named| if (named.backing) |backing| backing.ty else null,
-        .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => null,
+        .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => null,
     };
 }
 
@@ -3788,7 +3840,7 @@ fn nominalExprBackingType(types: *const Type.Store, ty: Type.TypeId) ?Type.TypeI
             .alias => null,
             .nominal, .@"opaque" => if (named.backing) |backing| backing.ty else null,
         },
-        .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => null,
+        .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => null,
     };
 }
 
@@ -3817,7 +3869,7 @@ fn nominalConstructionLayer(types: *const Type.Store, ty: Type.TypeId) ?NominalC
                     .nominal, .@"opaque" => return .{ .named = current, .backing = backing.ty },
                 }
             },
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return null,
         }
     }
 }
@@ -4125,7 +4177,7 @@ const RestoredLocalProcScope = struct {
 };
 
 const StoredConstFnEvidence = struct {
-    nodes: []const check.ConstStore.ConstFnEvidence,
+    entries: check.ConstStore.ConstFnEvidenceVector,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
     /// `Ast.fnEvidenceDigest` of exactly these fields. It is computed once
@@ -4134,29 +4186,29 @@ const StoredConstFnEvidence = struct {
     digest: Ast.EvidenceDigest,
 
     fn init(
-        nodes: []const check.ConstStore.ConstFnEvidence,
+        entries: check.ConstStore.ConstFnEvidenceVector,
         frames: []const check.ConstStore.ConstFnEvidenceFrame,
         head: ?u32,
     ) StoredConstFnEvidence {
-        return .{ .nodes = nodes, .frames = frames, .head = head, .digest = Ast.fnEvidenceDigest(nodes, frames, head) };
+        return .{ .entries = entries, .frames = frames, .head = head, .digest = Ast.fnEvidenceDigest(entries, frames, head) };
     }
 
     fn empty() StoredConstFnEvidence {
-        return init(&.{}, &.{}, null);
+        return init(.{}, &.{}, null);
     }
 
     /// The evidence a function template recorded, with the digest it
     /// recorded for those same fields.
     fn recorded(
-        nodes: []const check.ConstStore.ConstFnEvidence,
+        entries: check.ConstStore.ConstFnEvidenceVector,
         frames: []const check.ConstStore.ConstFnEvidenceFrame,
         head: ?u32,
         digest: Ast.EvidenceDigest,
     ) StoredConstFnEvidence {
-        if (@import("builtin").mode == .debug and !std.meta.eql(digest, Ast.fnEvidenceDigest(nodes, frames, head))) {
+        if (@import("builtin").mode == .debug and !std.meta.eql(digest, Ast.fnEvidenceDigest(entries, frames, head))) {
             Common.invariant("function template evidence digest did not match its recorded topology");
         }
-        return .{ .nodes = nodes, .frames = frames, .head = head, .digest = digest };
+        return .{ .entries = entries, .frames = frames, .head = head, .digest = digest };
     }
 };
 
@@ -4183,13 +4235,24 @@ const StoredEvidenceSource = struct {
 const StoredEvidenceStorage = struct {
     nodes_ptr: usize,
     nodes_len: usize,
+    targets_ptr: usize,
+    structurals_ptr: usize,
     frames_ptr: usize,
     frames_len: usize,
 };
 
 const DraftEvidenceSpans = struct {
-    nodes: DraftSpan(check.ConstStore.ConstFnEvidence),
+    entries: DraftConstEvidence,
     frames: DraftSpan(check.ConstStore.ConstFnEvidenceFrame),
+};
+
+/// Where a draft function's stored evidence vector sits in its draft store's
+/// three evidence columns; payload indexes are relative to its own
+/// `targets` and `structurals` spans.
+const DraftConstEvidence = struct {
+    nodes: DraftSpan(check.ConstStore.ConstFnEvidence) = DraftSpan(check.ConstStore.ConstFnEvidence).empty(),
+    targets: DraftSpan(check.ConstStore.ConstFnTargetEvidence) = DraftSpan(check.ConstStore.ConstFnTargetEvidence).empty(),
+    structurals: DraftSpan(check.ConstStore.ConstFnStructuralEvidence) = DraftSpan(check.ConstStore.ConstFnStructuralEvidence).empty(),
 };
 
 const StoredEvidenceCacheEntry = struct {
@@ -4198,12 +4261,12 @@ const StoredEvidenceCacheEntry = struct {
 };
 
 fn specializationEvidenceView(evidence: StoredConstFnEvidence) specialize.EvidenceView {
-    return .{ .nodes = evidence.nodes, .frames = evidence.frames, .head = evidence.head, .digest = evidence.digest };
+    return .{ .entries = evidence.entries, .frames = evidence.frames, .head = evidence.head, .digest = evidence.digest };
 }
 
 fn storedConstFnEvidenceEql(left: StoredConstFnEvidence, right: StoredConstFnEvidence) bool {
     if (!std.meta.eql(left.digest, right.digest)) return false;
-    return Ast.fnEvidenceEql(left.nodes, left.frames, left.head, right.nodes, right.frames, right.head);
+    return Ast.fnEvidenceEql(left.entries, left.frames, left.head, right.entries, right.frames, right.head);
 }
 
 /// `Builder.site_evidence_memo`'s key: the site's checked evidence and
@@ -4272,8 +4335,8 @@ fn programViewFnEvidence(program: Ast.ProgramView, template: Ast.FnTemplate) Sto
 /// lists.
 fn programFnEvidenceSpan(template: Ast.FnTemplate) specialize.ProgramEvidenceSpan {
     return .{
-        .nodes_start = template.const_evidence.start,
-        .nodes_len = template.const_evidence.len,
+        .nodes_start = template.const_evidence.nodes.start,
+        .nodes_len = template.const_evidence.nodes.len,
         .frames_start = template.const_evidence_frames.start,
         .frames_len = template.const_evidence_frames.len,
         .head = template.const_evidence_frame_head,
@@ -4347,15 +4410,15 @@ pub const DemandCounters = struct {
     upgraded: u64 = 0,
     /// Parked specializations completed as never-run stubs.
     stubs: u64 = 0,
+    /// Parked requests whose specialization an earlier compilation settled
+    /// (design.md "Discovery Summaries"); each is counted in `parked` too.
+    summarized: u64 = 0,
 };
 
 /// Bound running plus completed-but-unaccepted jobs. Extra slots let free
 /// lanes continue working when an earlier dispatch delays ordered acceptance.
 pub const parallel_spec_jobs_per_lane: usize = 64;
 const SharedSummaries = WorkerInputs.AppendIndex(InterfaceReplayAddress, InterfaceSummaryEntry);
-
-const SpecJobRunId = enum(u32) { _ };
-var next_spec_job_run_id = std.atomic.Value(u32).init(0);
 
 /// One reserved specialization whose body has not lowered yet, in the
 /// deterministic scheduler FIFO. Every field is durable for the builder's
@@ -4590,10 +4653,11 @@ const SpecJobWorkspace = struct {
     }
 };
 
-/// Persistent state for one specialization execution lane. Executor-backed
-/// lanes retain it for the worker-pool lifetime; the serial path owns the same
-/// shape directly. Barriers end task-result ownership, while the workspace
-/// retains cumulative relocation state for later tasks.
+/// Persistent state for one specialization execution lane during one Monotype
+/// run. The run's `Builder` owns it for executor lanes (`spec_job_lanes`) and
+/// for the serial path alike, and frees it when the run ends. Barriers end
+/// task-result ownership, while the workspace retains cumulative relocation
+/// state for later tasks of the same run.
 pub const SpecJobWorkerState = struct {
     worker_id: SpecJobWorkerId,
     allocator: Allocator,
@@ -4697,7 +4761,7 @@ const SpecJobReleases = struct {
 /// The coordinator's read access to one worker's type/name domain: views of
 /// the latest absorbed epoch's stores, read in place, and the cumulative
 /// relocation from that domain into the program. Executor lanes own their
-/// domain for the pool lifetime; the serial path owns an equivalent directly.
+/// domain for one Monotype run; the serial path owns an equivalent directly.
 /// Only the coordinator absorbs epochs, in dispatch order, before any
 /// contained id is read.
 const SpecJobCommitDomain = struct {
@@ -4743,23 +4807,20 @@ const SpecJobCommitDomain = struct {
     }
 };
 
-/// Monotype state retained by one executor lane. Keeping the source
+/// Monotype state of one executor lane for one run. Keeping the source
 /// workspace and the coordinator's view of it together makes their cumulative
-/// relocation domains follow the worker rather than a particular coordinator
-/// `Builder`. A new Monotype run reinitializes the same retained entry because
-/// its stores belong to a different destination program.
+/// relocation domains follow the worker within the run. Nothing in it is
+/// meaningful to another run, whose stores belong to a different destination
+/// program, so the run's `Builder` frees it when the run ends.
 const SpecJobLaneState = struct {
-    run_id: SpecJobRunId,
     worker: SpecJobWorkerState,
     commit_domain: SpecJobCommitDomain,
 
     fn init(
         allocator: Allocator,
         worker_id: SpecJobWorkerId,
-        run_id: SpecJobRunId,
     ) SpecJobLaneState {
         return .{
-            .run_id = run_id,
             .worker = SpecJobWorkerState.init(allocator, worker_id),
             .commit_domain = SpecJobCommitDomain.init(allocator),
         };
@@ -4770,11 +4831,6 @@ const SpecJobLaneState = struct {
         self.worker.deinit();
         self.* = undefined;
     }
-};
-
-/// Address identity used to reserve this module's entry in an executor lane.
-const SpecJobLaneStateKey = struct {
-    var value: u8 = undefined;
 };
 
 /// One immutable graph-free result handed from ordinary body lowering to
@@ -4831,7 +4887,9 @@ const CompletedProcedureRootShard = struct {
 
 /// Captured immutable input for a root batch or one streaming specialization.
 const SpecJobWorkerInputs = struct {
-    run_id: SpecJobRunId,
+    /// The run's lane states, indexed by executor worker id. A task touches
+    /// only its own lane's slot, and lanes with one id never overlap.
+    lanes: []?*SpecJobLaneState,
     modules: Common.CheckedModules,
     module_views: []const ModuleViewData,
     source_file_ids: *const SourceFileIds,
@@ -5010,8 +5068,11 @@ const StaticDataUse = struct {
     ty: Type.TypeId,
 };
 
+/// A restored string lowers as its own bytes (see `finishConstAtNode`), so
+/// whether it needs target storage is a function of the string alone, as it
+/// is for a string read from a completed evaluation.
 fn constStringBackingLength(view: ModuleView, str: check.ConstStore.ConstStr) u64 {
-    return @max(view.const_store.strBytes(str).len, view.const_store.blobData(str.data).len);
+    return view.const_store.strBytes(str).len;
 }
 
 fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.StaticDataStorage {
@@ -5193,7 +5254,6 @@ const Builder = struct {
     /// `appModuleIdentity` of this lowering's modules.
     app_module_identity: ?[32]u8,
     allocator: Allocator,
-    spec_job_run_id: SpecJobRunId,
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
     /// Checked module key -> position in the lowering input; built lazily on
@@ -5256,6 +5316,11 @@ const Builder = struct {
     /// The object cache consulted for closed specializations, if any.
     spec_cache: ?Common.SpecCacheLookup,
     spec_cache_takes: Common.SpecCacheTakes,
+    /// The module identities of the checked modules this lowering reads, which
+    /// the object cache serves entries for (`Common.ProgramModules`); built
+    /// at the first lookup.
+    program_modules: ?Common.ProgramModules = null,
+    program_module_buffer: [][32]u8 = &.{},
     counters: ?*SpecializationCounters,
     diagnostics: ?*Diagnostics,
     /// Result-owned sink while one ordinary specialization shard is lowering or
@@ -5265,6 +5330,28 @@ const Builder = struct {
     static_data_literals: bool,
     comptime_value_reads: bool,
     literal_roots: bool,
+    /// See `Options.literal_values`. Coordinator-only.
+    literal_values: ?Common.LiteralValueLookup = null,
+    verify_literal_values: bool = false,
+    /// Each program literal root's value identity and reuse, by id, for the
+    /// literal roots `settleLiteralRoots` has seen.
+    literal_reuse: std.ArrayList(LiteralReuseRow) = .empty,
+    /// The program's literal value context, once computed; see
+    /// `literalProgramContext`.
+    literal_program_context: ??[32]u8 = null,
+    /// See `literalTopModules`; outer null until computed.
+    literal_top_modules: ??std.AutoHashMapUnmanaged([32]u8, [32]u8) = null,
+    /// Top-level statements of each top module whose types a literal value
+    /// identity named, by module key.
+    literal_top_statements: std.AutoHashMapUnmanaged([32]u8, collections.DenseMap(can.CIR.Statement.Idx, void)) = .empty,
+    /// Compile-time roots by module and site, for the modules whose roots a
+    /// stored literal value's reads were looked up in.
+    literal_read_sites: std.AutoHashMapUnmanaged(LiteralReadSite, u32) = .empty,
+    literal_read_site_modules: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
+    /// The view each restored literal value is read through: the literal
+    /// value store's const store, under a key naming it apart from every
+    /// module.
+    literal_store_view: ?*ModuleViewData = null,
     replay_interface_summaries: base.TestSwitch(true),
     declared_comptime_root_functions: DeclaredComptimeRootFunctions,
     borrowed_comptime_root_functions: ?*const DeclaredComptimeRootFunctions = null,
@@ -5334,6 +5421,9 @@ const Builder = struct {
     /// Serial execution uses the same worker-tagged ownership protocol as
     /// executor callbacks.
     spec_job_worker: ?SpecJobWorkerState = null,
+    /// Executor lanes' state for this run, indexed by worker id and created
+    /// on each lane's first task. Freed with the builder.
+    spec_job_lanes: []?*SpecJobLaneState = &.{},
     /// The coordinator's view of the serial worker's absorbed epochs. It is
     /// the source for cumulative workspace-to-program relocation.
     spec_job_commit_domain: ?SpecJobCommitDomain = null,
@@ -5388,6 +5478,8 @@ const Builder = struct {
     /// structural equality remains the reuse authority across instantiations.
     static_data_uses: std.ArrayList(StaticDataUse),
     static_data_eligibility: std.AutoHashMap(ConstNodeAddress, bool),
+    /// Whether each stored node's value is data alone (`constNodeIsStoredData`).
+    stored_data: std.AutoHashMap(ConstNodeAddress, bool),
     hosted_catalog: []HostedCatalogEntry = &.{},
     /// Exact `(owner, method)` -> target map over every reachable module's
     /// method registry, for compiler-generated component lookups (structural
@@ -5541,15 +5633,10 @@ const Builder = struct {
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
         const counters = options.specialization_counters orelse
             if (options.diagnostics) |diagnostics| &diagnostics.specialization else null;
-        const raw_spec_job_run_id = next_spec_job_run_id.fetchAdd(1, .monotonic);
-        if (raw_spec_job_run_id == std.math.maxInt(u32)) {
-            Common.compilerBug("Monotype specialization run identity overflow");
-        }
         var spec_store = specialize.SpecBuilder.init(allocator, &program.names, &program.types, &program.specs);
         spec_store.counters = counters;
         return .{
             .allocator = allocator,
-            .spec_job_run_id = @fromBackingInt(@intCast(raw_spec_job_run_id)),
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
             .app_module_identity = appModuleIdentity(modules),
@@ -5569,6 +5656,8 @@ const Builder = struct {
             .static_data_literals = options.static_data_literals,
             .comptime_value_reads = options.comptime_value_reads,
             .literal_roots = options.literal_roots,
+            .literal_values = if (options.literal_roots) options.literal_values else null,
+            .verify_literal_values = options.verify_literal_values,
             .replay_interface_summaries = options.replay_interface_summaries,
             .declared_comptime_root_functions = DeclaredComptimeRootFunctions.init(allocator),
             .demand_driven_comptime_roots = options.demand_driven_comptime_roots,
@@ -5588,6 +5677,7 @@ const Builder = struct {
             .static_data_ids = std.AutoHashMap(StaticDataUse, Common.StaticDataId).init(allocator),
             .static_data_uses = .empty,
             .static_data_eligibility = std.AutoHashMap(ConstNodeAddress, bool).init(allocator),
+            .stored_data = std.AutoHashMap(ConstNodeAddress, bool).init(allocator),
             .evidence_arena = base.SingleThreadArena.init(allocator),
             .const_evidence_memo = std.AutoHashMap(ConstEvidenceMemoKey, StoredConstFnEvidence).init(allocator),
             .const_evidence_by_content = std.AutoHashMap(u64, StoredConstFnEvidence).init(allocator),
@@ -5744,52 +5834,52 @@ const Builder = struct {
         return builder;
     }
 
-    fn deinitSpecJobLaneState(opaque_state: *anyopaque) void {
-        const state: *SpecJobLaneState = @ptrCast(@alignCast(opaque_state));
-        const allocator = state.worker.allocator;
-        state.deinit();
-        allocator.destroy(state);
+    /// This run's lane table, sized to the executor's lanes on first use.
+    fn specJobLanes(self: *Builder) Allocator.Error![]?*SpecJobLaneState {
+        if (self.spec_job_lanes.len == 0) {
+            const executor = self.post_check_executor orelse
+                Common.compilerBug("parallel Monotype specialization ran without an executor");
+            const lanes = try self.allocator.alloc(?*SpecJobLaneState, executor.worker_count);
+            @memset(lanes, null);
+            self.spec_job_lanes = lanes;
+        }
+        return self.spec_job_lanes;
     }
 
+    fn deinitSpecJobLanes(allocator: Allocator, lanes: []?*SpecJobLaneState) void {
+        for (lanes) |maybe_state| {
+            const state = maybe_state orelse continue;
+            // Each lane allocated its state with its own worker allocator.
+            const state_allocator = state.worker.allocator;
+            state.deinit();
+            state_allocator.destroy(state);
+        }
+        if (lanes.len != 0) allocator.free(lanes);
+    }
+
+    /// The calling lane's state for this run, created on the lane's first task.
     fn ensureSpecJobLaneState(
         executor_worker: base.post_check_task_executor.Worker,
         inputs: *const SpecJobWorkerInputs,
     ) Allocator.Error!*SpecJobLaneState {
-        const key: *const anyopaque = @ptrCast(&SpecJobLaneStateKey.value);
-        if (executor_worker.lane_state.get(key)) |opaque_state| {
-            const state: *SpecJobLaneState = @ptrCast(@alignCast(opaque_state));
-            if (@backingInt(state.worker.worker_id) != executor_worker.id) {
-                Common.compilerBug("Monotype lane state moved between executor workers");
-            }
-            if (state.run_id != inputs.run_id) {
-                state.deinit();
-                state.* = SpecJobLaneState.init(
-                    executor_worker.allocator,
-                    @fromBackingInt(@intCast(executor_worker.id)),
-                    inputs.run_id,
-                );
-            }
+        std.debug.assert(executor_worker.id < inputs.lanes.len);
+        const slot = &inputs.lanes[executor_worker.id];
+        if (slot.*) |state| {
+            std.debug.assert(@backingInt(state.worker.worker_id) == executor_worker.id);
             return state;
-        }
-
-        if (executor_worker.id >= std.math.maxInt(u32)) {
-            Common.compilerBug("post-check executor returned an invalid specialization worker id");
         }
         const state = try executor_worker.allocator.create(SpecJobLaneState);
         state.* = SpecJobLaneState.init(
             executor_worker.allocator,
             @fromBackingInt(@intCast(executor_worker.id)),
-            inputs.run_id,
         );
-        errdefer {
-            state.deinit();
-            executor_worker.allocator.destroy(state);
-        }
-        try executor_worker.lane_state.put(key, state, deinitSpecJobLaneState);
+        slot.* = state;
         return state;
     }
 
     fn deinit(self: *Builder) void {
+        self.allocator.free(self.program_module_buffer);
+        deinitSpecJobLanes(self.allocator, self.spec_job_lanes);
         for (self.lower_frame_pool.items) |*frames| frames.deinit(self.allocator);
         self.lower_frame_pool.deinit(self.allocator);
         for (self.decl_scope_pool.items) |scope| {
@@ -5827,6 +5917,14 @@ const Builder = struct {
         self.cached_fn_reads.deinit(self.allocator);
         self.spec_key_aliases.deinit(self.allocator);
         self.comptime_demand.deinit(self.allocator);
+        self.literal_reuse.deinit(self.allocator);
+        if (self.literal_top_modules) |*known| if (known.*) |*map| map.deinit(self.allocator);
+        var top_statements = self.literal_top_statements.valueIterator();
+        while (top_statements.next()) |statements| statements.deinit();
+        self.literal_top_statements.deinit(self.allocator);
+        self.literal_read_sites.deinit(self.allocator);
+        self.literal_read_site_modules.deinit(self.allocator);
+        if (self.literal_store_view) |view| self.allocator.destroy(view);
         self.module_index.deinit();
         self.spec_job_task_buffers.deinit(self.allocator);
         self.unshared_summary_domains.deinit(self.allocator);
@@ -5836,6 +5934,7 @@ const Builder = struct {
         self.scoped_inspect_overrides.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.static_data_eligibility.deinit();
+        self.stored_data.deinit();
         self.static_data_uses.deinit(self.allocator);
         self.static_data_ids.deinit();
         self.const_expr_cache.deinit();
@@ -6120,11 +6219,11 @@ const Builder = struct {
 
         try self.appendHostedCatalogFromView(&entries, self.rootModuleView());
         for (self.modules.imports, 0..) |imported, index| {
-            if (self.importModuleAlreadyScanned(imported.key, index)) continue;
+            if (self.importModuleAlreadyScanned(imported.key.digest(), index)) continue;
             try self.appendHostedCatalogFromView(&entries, self.importModuleView(index));
         }
         for (self.modules.root.relation_modules, 0..) |relation, index| {
-            if (self.relationModuleAlreadyScanned(relation.key, index)) continue;
+            if (self.relationModuleAlreadyScanned(relation.key.digest(), index)) continue;
             try self.appendHostedCatalogFromView(&entries, self.relationModuleView(index));
         }
 
@@ -6426,6 +6525,7 @@ const Builder = struct {
     /// it from every consumer.
     fn orderComptimeRoots(self: *Builder) Allocator.Error!void {
         if (!self.comptime_value_reads) return;
+        try self.settleLiteralRoots();
         const state = &self.comptime_demand;
         const view = self.program.view();
         try state.index(self.allocator, self, view);
@@ -6463,11 +6563,438 @@ const Builder = struct {
             }
             if (self.parked_root_jobs.count() != 0) Common.invariant("parked compile-time root body belonged to no declared root");
         }
+        const literal_view = self.program.view();
+        const literals = try self.allocator.alloc(ComptimeDemand.LiteralRootDemand, literal_view.literal_roots.len);
+        output.literals = literals;
+        for (literal_view.literal_roots, literals, 0..) |root, *literal, index| {
+            const start = reads.items.len;
+            for (try state.rootReads(self.allocator, literal_view, ComptimeDemandState.defItem(root.def))) |read| try reads.append(self.allocator, state.roots.items[read]);
+            const row: LiteralReuseRow = if (index < self.literal_reuse.items.len) self.literal_reuse.items[index] else .{};
+            literal.* = .{
+                .reads = .{ .start = @intCast(start), .len = @intCast(reads.items.len - start) },
+                .identity = row.identity,
+                .reuse = row.reuse,
+            };
+        }
         output.root_reads = try root_reads.toOwnedSlice(self.allocator);
         output.reads = try reads.toOwnedSlice(self.allocator);
         output.stored = try state.storedRoots(self.allocator);
         output.declared_root_count = self.declared_roots.items.len;
         if (self.comptime_demand_out) |out| out.* = output else output.deinit();
+    }
+
+    /// Give every literal root committed since the last call its value
+    /// identity, and restore the value of each one the literal value store
+    /// holds whose reads still have the value identities they had, so the
+    /// program runs no conversion for it (design.md "Compile-Time Value
+    /// Reuse Across Edits"). The restored root's definition becomes the
+    /// value's restore expression, under an identity naming the stored value,
+    /// so every read of the root and its representation evidence call it.
+    /// With `verify_literal_values`, the conversion stays the definition of a
+    /// literal root of its own that evaluation compares with the stored value.
+    fn settleLiteralRoots(self: *Builder) Allocator.Error!void {
+        const store = self.literal_values orelse return;
+        var index = self.literal_reuse.items.len;
+        while (index < self.program.literal_roots.len()) : (index += 1) {
+            if (index < self.literal_reuse.items.len) continue;
+            const id: Common.LiteralRootId = @fromBackingInt(@intCast(index));
+            const identity = try self.literalValueIdentity(id);
+            try self.literal_reuse.append(self.allocator, .{ .identity = identity });
+            const known = identity orelse continue;
+            const hit = store.lookup(known) orelse continue;
+            if (!try self.literalValueReadsApply(hit.reads)) continue;
+            try self.restoreLiteralRoot(id, known, hit);
+        }
+    }
+
+    fn restoreLiteralRoot(self: *Builder, id: Common.LiteralRootId, identity: [32]u8, hit: Common.LiteralValueHit) Allocator.Error!void {
+        const root = self.program.literal_roots.get(@backingInt(id));
+        const conversion = self.program.getDef(root.def);
+        if (self.verify_literal_values) {
+            var kept = conversion;
+            kept.symbol = self.symbols.fresh();
+            const kept_def = try self.program.addDef(kept);
+            const verifier = try self.program.addLiteralRoot(.{ .def = kept_def, .module = root.module, .site = root.site });
+            if (@backingInt(verifier) != self.literal_reuse.items.len) Common.invariant("literal root verifier was not the next literal root");
+            try self.literal_reuse.append(self.allocator, .{ .identity = identity, .reuse = .{ .verifies = id } });
+        }
+        const destination = ProgramTypeDestination.begin(self);
+        defer destination.end();
+        const saved_graph = self.active_graph;
+        const saved_draft = self.active_body_draft;
+        self.active_graph = null;
+        self.active_body_draft = null;
+        defer {
+            self.active_graph = saved_graph;
+            self.active_body_draft = saved_draft;
+        }
+        const owner = self.moduleForId(root.module);
+        const body = try runConstRestore(self, try self.literalStoreView(hit.store), owner, hit.root, conversion.ret, null);
+        for (hit.reads) |read| {
+            const current = self.literalValueReadRoot(read) orelse Common.invariant("an applied literal value read a root it no longer names");
+            try self.recordRestoredRootRead(body, current.module, current.root);
+        }
+        var restored = conversion;
+        restored.body = .{ .roc = body };
+        restored.root_identity = literalRestoreIdentity(identity);
+        self.program.setDef(root.def, restored);
+        self.literal_reuse.items[@backingInt(id)].reuse = .restored;
+    }
+
+    /// The view a stored literal value restores through: the literal value
+    /// store's const store under a key derived from it, so its blobs and
+    /// restore cache entries are named apart from every module's constants.
+    /// Restoring a value holding no function reads nothing else of a view.
+    fn literalStoreView(self: *Builder, store: *const check.ConstStore.ConstStore) Allocator.Error!ModuleView {
+        if (self.literal_store_view) |view| {
+            if (view.const_store != store) Common.invariant("one lowering restored literal values from two stores");
+            return view;
+        }
+        const view = try self.allocator.create(ModuleViewData);
+        view.* = self.rootModuleView().*;
+        view.const_store = store;
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.monotype.literal-value-store.v1");
+        hasher.update(&view.key.bytes);
+        view.key = .{ .bytes = hasher.finalResult() };
+        view.code_generation_key = null;
+        self.literal_store_view = view;
+        return view;
+    }
+
+    /// The identity of a definition restoring the stored value of a literal
+    /// root whose value identity is `identity`.
+    fn literalRestoreIdentity(identity: [32]u8) names.TypeDigest {
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.monotype.literal-value-restore.v1");
+        hasher.update(&identity);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    /// Whether every root a stored literal value read is still named by its
+    /// site and still has the value identity it had.
+    fn literalValueReadsApply(self: *Builder, reads: []const Common.LiteralValueRead) Allocator.Error!bool {
+        for (reads) |read| {
+            const view = self.literalValueReadModule(read) orelse return false;
+            try self.indexLiteralReadSites(view);
+            if (self.literalValueReadRoot(read) == null) return false;
+        }
+        return true;
+    }
+
+    fn literalValueReadModule(self: *Builder, read: Common.LiteralValueRead) ?ModuleView {
+        if (!read.in_top_module) return self.moduleForKeyBytes(read.module);
+        const top = self.literal_top_modules.?.?;
+        var it = top.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr, &read.module)) return self.moduleForKeyBytes(entry.key_ptr.*);
+        }
+        return null;
+    }
+
+    /// The current root a stored literal value's read names, once its
+    /// module's sites are indexed.
+    fn literalValueReadRoot(self: *Builder, read: Common.LiteralValueRead) ?EntryRoot {
+        const view = self.literalValueReadModule(read) orelse return null;
+        const raw = self.literal_read_sites.get(.{ .module = view.key.bytes, .site = read.site }) orelse return null;
+        const identity = view.compile_time_root_identities.rows[raw];
+        if (!std.mem.eql(u8, &identity.value, &read.value)) return null;
+        return .{ .module = view.key, .root = @fromBackingInt(raw) };
+    }
+
+    fn indexLiteralReadSites(self: *Builder, view: ModuleView) Allocator.Error!void {
+        const entry = try self.literal_read_site_modules.getOrPut(self.allocator, view.key.bytes);
+        if (entry.found_existing) return;
+        for (view.compile_time_root_identities.rows, 0..) |identity, raw| {
+            const site = try self.literal_read_sites.getOrPut(self.allocator, .{ .module = view.key.bytes, .site = identity.site });
+            if (!site.found_existing) site.value_ptr.* = @intCast(raw);
+        }
+    }
+
+    /// The modules of the lowering no other module of it imports, by key,
+    /// each with its value context. Their keys change with every edit of
+    /// their source, so literal value identities name them by value context;
+    /// every other module's key is named by an importer's value context too,
+    /// so its key names it. Null when a top module has no value context.
+    fn literalTopModules(self: *Builder) Allocator.Error!?*const std.AutoHashMapUnmanaged([32]u8, [32]u8) {
+        if (self.literal_top_modules) |*known| return if (known.*) |*map| map else null;
+        var imported = std.AutoHashMapUnmanaged([32]u8, void).empty;
+        defer imported.deinit(self.allocator);
+        for (self.root_view.direct_import_module_keys) |key| try imported.put(self.allocator, key.bytes, {});
+        for (self.modules.imports) |view| for (view.direct_import_module_keys) |key| try imported.put(self.allocator, key.bytes, {});
+        for (self.modules.root.relation_modules) |view| for (view.direct_import_module_keys) |key| try imported.put(self.allocator, key.bytes, {});
+        var top = std.AutoHashMapUnmanaged([32]u8, [32]u8).empty;
+        errdefer top.deinit(self.allocator);
+        for (self.moduleViews()) |*view| {
+            if (imported.contains(view.key.bytes)) continue;
+            const context = view.compile_time_root_identities.valueContext() orelse {
+                top.deinit(self.allocator);
+                self.literal_top_modules = @as(?std.AutoHashMapUnmanaged([32]u8, [32]u8), null);
+                return null;
+            };
+            try top.put(self.allocator, view.key.bytes, context);
+        }
+        self.literal_top_modules = top;
+        return &self.literal_top_modules.?.?;
+    }
+
+    /// Everything a per-program literal root's value can depend on beyond
+    /// the literal and its type: each module of the lowering, a top module
+    /// (`literalTopModules`) by its value context and every other module by
+    /// its checked key, and the identity of every definition a top module
+    /// exports for a platform requirement that code reachable from a
+    /// module's methods, or from an imported module's exports, looks up.
+    /// Null when a top module has no value context.
+    fn literalProgramContext(self: *Builder) Allocator.Error!?[32]u8 {
+        if (self.literal_program_context) |known| return known;
+        const top = (try self.literalTopModules()) orelse {
+            self.literal_program_context = @as(?[32]u8, null);
+            return null;
+        };
+        var names_list = std.ArrayList([33]u8).empty;
+        defer names_list.deinit(self.allocator);
+        for (self.program.view().lowering_modules) |module| {
+            var name: [33]u8 = undefined;
+            if (top.get(module.bytes)) |context| {
+                name[0] = 1;
+                name[1..].* = context;
+            } else {
+                name[0] = 0;
+                name[1..].* = module.bytes;
+            }
+            try names_list.append(self.allocator, name);
+        }
+        std.mem.sort([33]u8, names_list.items, {}, struct {
+            fn lessThan(_: void, a: [33]u8, b: [33]u8) bool {
+                return std.mem.order(u8, &a, &b) == .lt;
+            }
+        }.lessThan);
+        // Code reachable from a module's methods, or from an imported
+        // module's exports, can look up platform requirements, which run
+        // definitions a top module exports and no value context covers:
+        // those definitions' identities.
+        var required = std.ArrayList([64]u8).empty;
+        defer required.deinit(self.allocator);
+        for (self.moduleViews()) |*requirer| {
+            const identities = requirer.compile_time_root_identities;
+            const export_requires = if (top.contains(requirer.key.bytes)) &[_][32]u8{} else identities.export_requires;
+            for ([_][]const [32]u8{ identities.method_requires, export_requires }) |requirements| for (requirements) |name| {
+                var providers = top.keyIterator();
+                while (providers.next()) |provider_key| {
+                    const provider = self.moduleForKeyBytes(provider_key.*) orelse Common.invariant("a top module of the lowering had no view");
+                    for (provider.compile_time_root_identities.exports) |exported| {
+                        if (!std.mem.eql(u8, &exported.name, &name)) continue;
+                        var pair: [64]u8 = undefined;
+                        pair[0..32].* = exported.name;
+                        pair[32..].* = exported.value;
+                        try required.append(self.allocator, pair);
+                    }
+                }
+            };
+        }
+        std.mem.sort([64]u8, required.items, {}, struct {
+            fn lessThan(_: void, a: [64]u8, b: [64]u8) bool {
+                return std.mem.order(u8, &a, &b) == .lt;
+            }
+        }.lessThan);
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.literal-value.program-context.v1");
+        hashU32(&hasher, @intCast(names_list.items.len));
+        for (names_list.items) |name| hasher.update(&name);
+        hashU32(&hasher, @intCast(required.items.len));
+        for (required.items) |pair| hasher.update(&pair);
+        const digest = hasher.finalResult();
+        self.literal_program_context = @as(?[32]u8, digest);
+        return digest;
+    }
+
+    /// The value identity of a literal root: the program context, the
+    /// literal's module (a top module by its value context, any other by key
+    /// and expression), its kind and source bytes, and its type. Null when
+    /// its type holds a function or names something no edit-stable identity
+    /// covers.
+    fn literalValueIdentity(self: *Builder, id: Common.LiteralRootId) Allocator.Error!?[32]u8 {
+        const context = (try self.literalProgramContext()) orelse return null;
+        const top = (try self.literalTopModules()).?;
+        const root = self.program.literal_roots.get(@backingInt(id));
+        const def = self.program.getDef(root.def);
+        const type_digest = (try self.literalTypeDigest(def.ret)) orelse return null;
+        const view = self.moduleForId(root.module);
+        const region = view.bodies.expr(@fromBackingInt(root.site.checked_expr)).source_region;
+        const text = view.module_env.getSourceAll()[region.start.offset..region.end.offset];
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.literal-value.identity.v1");
+        hasher.update(&context);
+        if (top.get(root.module.bytes)) |module_context| {
+            hasher.update("top-module");
+            hasher.update(&module_context);
+        } else {
+            hasher.update("module");
+            hasher.update(&root.module.bytes);
+            hashU32(&hasher, root.site.checked_expr);
+        }
+        hasher.update(@tagName(root.site.kind));
+        hashU32(&hasher, @intCast(text.len));
+        hasher.update(text);
+        hasher.update(&type_digest);
+        return hasher.finalResult();
+    }
+
+    /// A digest of a literal root's type that every compilation of the
+    /// program with the same program context computes alike: the root
+    /// module's own types named by their top-level declaration, every other
+    /// type by its declaring module and declaration. Null for a type holding
+    /// a function or an erased value, or naming a root-module type or field
+    /// default that is not a top-level declaration.
+    fn literalTypeDigest(self: *Builder, root_ty: Type.TypeId) Allocator.Error!?[32]u8 {
+        const types = self.program.types.view();
+        const program_names = &self.program.names;
+        const top = (try self.literalTopModules()).?;
+        var visited = collections.DenseMap(Type.TypeId, u32).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(Type.TypeId).empty;
+        defer stack.deinit(self.allocator);
+        var children = std.ArrayList(Type.TypeId).empty;
+        defer children.deinit(self.allocator);
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.literal-value.type.v1");
+        try stack.append(self.allocator, root_ty);
+        var next_position: u32 = 0;
+        while (stack.pop()) |ty| {
+            if (visited.get(ty)) |position| {
+                hasher.update("seen");
+                hashU32(&hasher, position);
+                continue;
+            }
+            try visited.put(ty, next_position);
+            next_position += 1;
+            children.clearRetainingCapacity();
+            switch (types.get(ty)) {
+                .func, .erased => return null,
+                .zst => hasher.update("zst"),
+                .hole => Common.invariant("a demand hole reached a literal root's type"),
+                .primitive => |primitive| {
+                    hasher.update("primitive");
+                    hasher.update(@tagName(primitive));
+                },
+                .list => |elem| {
+                    hasher.update("list");
+                    try children.append(self.allocator, elem);
+                },
+                .box => |payload| {
+                    hasher.update("box");
+                    try children.append(self.allocator, payload);
+                },
+                .tuple => |items| {
+                    hasher.update("tuple");
+                    try children.appendSlice(self.allocator, types.span(items));
+                },
+                .record => |fields| {
+                    hasher.update("record");
+                    for (types.fieldSpan(fields)) |field| {
+                        if (field.kind_state != .resolved) return null;
+                        const label = program_names.recordFieldLabelText(field.name);
+                        hashU32(&hasher, @intCast(label.len));
+                        hasher.update(label);
+                        if (field.default) |default| {
+                            const module = program_names.moduleIdentityBytes(default.module);
+                            const declaring = self.moduleForIdentityHash(module) orelse return null;
+                            if (top.contains(declaring.key.bytes)) return null;
+                            hasher.update("default");
+                            hasher.update(module);
+                            hashU32(&hasher, default.expr_node);
+                        }
+                        try children.append(self.allocator, field.ty);
+                        if (field.value_ty.get()) |value_ty| {
+                            hasher.update("value-type");
+                            try children.append(self.allocator, value_ty);
+                        }
+                    }
+                },
+                .tag_union => |tags| {
+                    hasher.update("tag-union");
+                    for (types.tagSpan(tags)) |tag| {
+                        for ([_][]const u8{ program_names.tagLabelText(tag.name), program_names.tagLabelText(tag.checked_name) }) |label| {
+                            hashU32(&hasher, @intCast(label.len));
+                            hasher.update(label);
+                        }
+                        hashU32(&hasher, @intCast(types.span(tag.payloads).len));
+                        try children.appendSlice(self.allocator, types.span(tag.payloads));
+                    }
+                },
+                .named => |named| {
+                    hasher.update("named");
+                    const module = program_names.moduleIdentityBytes(named.def.module);
+                    const type_name = program_names.typeNameText(named.def.type_name);
+                    if (top.get(named.named_type.module.bytes)) |module_context| {
+                        const statement = named.def.source_decl orelse return null;
+                        const declaring = self.moduleForKeyBytes(named.named_type.module.bytes) orelse return null;
+                        const text = (try self.literalTopStatementText(declaring, statement)) orelse return null;
+                        hasher.update("top-module");
+                        hasher.update(&module_context);
+                        hashU32(&hasher, @intCast(text.len));
+                        hasher.update(text);
+                    } else {
+                        hasher.update(&named.named_type.module.bytes);
+                        hasher.update(module);
+                        hashU32(&hasher, named.def.source_decl orelse std.math.maxInt(u32));
+                    }
+                    hashU32(&hasher, @intCast(type_name.len));
+                    hasher.update(type_name);
+                    if (named.def.generated) |generated| {
+                        hasher.update("generated");
+                        hasher.update(&generated.bytes);
+                    }
+                    hasher.update(@tagName(named.def.iterator_representation));
+                    hasher.update(@tagName(named.def.iterator_kind));
+                    hashU32(&hasher, named.def.iterator_depth);
+                    hasher.update(@tagName(named.kind));
+                    if (named.builtin_owner) |owner| hasher.update(@tagName(owner));
+                    hashU32(&hasher, @intCast(types.span(named.args).len));
+                    try children.appendSlice(self.allocator, types.span(named.args));
+                    for (types.declaredFieldSpan(named.declared_order)) |declared| switch (declared) {
+                        .named => |label| {
+                            const text = program_names.recordFieldLabelText(label);
+                            hasher.update("declared");
+                            hashU32(&hasher, @intCast(text.len));
+                            hasher.update(text);
+                        },
+                        .padding => |padding| {
+                            hasher.update("padding");
+                            try children.append(self.allocator, padding);
+                        },
+                    };
+                    if (named.backing) |backing| {
+                        hasher.update("backing");
+                        hasher.update(@tagName(backing.use));
+                        hasher.update(@tagName(backing.authority));
+                        try children.append(self.allocator, backing.ty);
+                    }
+                },
+            }
+            hashU32(&hasher, @intCast(children.items.len));
+            var child_index = children.items.len;
+            while (child_index > 0) {
+                child_index -= 1;
+                try stack.append(self.allocator, children.items[child_index]);
+            }
+        }
+        return hasher.finalResult();
+    }
+
+    /// The source of a top-level statement of a top module, or null when
+    /// `statement` is not one.
+    fn literalTopStatementText(self: *Builder, view: ModuleView, statement: u32) Allocator.Error!?[]const u8 {
+        const env = view.module_env;
+        const entry = try self.literal_top_statements.getOrPut(self.allocator, view.key.bytes);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = collections.DenseMap(can.CIR.Statement.Idx, void).init(self.allocator);
+            for (env.store.sliceStatements(env.all_statements)) |idx| try entry.value_ptr.put(idx, {});
+        }
+        const statement_idx: can.CIR.Statement.Idx = @fromBackingInt(statement);
+        if (!entry.value_ptr.contains(statement_idx)) return null;
+        const region = env.store.getStatementRegion(statement_idx);
+        return env.getSourceAll()[region.start.offset..region.end.offset];
     }
 
     /// Every key of a request a record served through its solved view, when
@@ -6558,19 +7085,36 @@ const Builder = struct {
                 try pending.append(self.allocator, referrer);
             }
         }
+        // Code that reads a literal root's value, which no read names.
+        const reaches_literal = try self.allocator.alloc(bool, item_count);
+        defer self.allocator.free(reaches_literal);
+        @memset(reaches_literal, false);
+        for (0..item_count) |index| {
+            if (!state.summarySlot(Dense.item(index, def_count)).*.?.literal) continue;
+            reaches_literal[index] = true;
+            try pending.append(self.allocator, @intCast(index));
+        }
+        while (pending.pop()) |index| {
+            for (referrers[counts[index]..counts[index + 1]]) |referrer| {
+                if (reaches_literal[referrer]) continue;
+                reaches_literal[referrer] = true;
+                try pending.append(self.allocator, referrer);
+            }
+        }
 
         var result: SpecComptimeReads = .{ .allocator = self.allocator };
         errdefer result.deinit();
         for (view.fns, 0..) |fn_, raw| {
             const item = state.fn_items.items[raw] orelse continue;
-            if (!reaches_read[Dense.of(item, def_count)]) continue;
+            const dense = Dense.of(item, def_count);
+            if (!reaches_read[dense] and !reaches_literal[dense]) continue;
             const reads = try state.rootReads(self.allocator, view, item);
             const start = result.reads.items.len;
             for (reads) |read| {
                 const root = state.roots.items[read];
                 try result.reads.append(self.allocator, .{ .module = root.module.bytes, .root = @backingInt(root.root) });
             }
-            const row: SpecComptimeReads.Row = .{ .start = @intCast(start), .len = @intCast(result.reads.items.len - start), .local = state.closure_local };
+            const row: SpecComptimeReads.Row = .{ .start = @intCast(start), .len = @intCast(result.reads.items.len - start), .local = state.closure_local, .evaluated = true };
             try result.fn_rows.put(self.allocator, @intCast(raw), row);
             const key = fn_.source.spec_key orelse continue;
             const entry = try result.rows.getOrPut(self.allocator, key.bytes);
@@ -6757,7 +7301,7 @@ const Builder = struct {
         defer self.allocator.free(completions);
         const snapshot = try self.captureSpecJobInputs();
         const inputs = SpecJobWorkerInputs{
-            .run_id = self.spec_job_run_id,
+            .lanes = try self.specJobLanes(),
             .modules = self.modules,
             .module_views = self.moduleViews(),
             .source_file_ids = self.sourceFileIds(),
@@ -6950,7 +7494,7 @@ const Builder = struct {
     }
 
     fn rootSourceModule(self: *Builder, source_modules: []const checked.ModuleId, index: usize) checked.ModuleId {
-        return if (source_modules.len == 0) self.root_view.key else source_modules[index];
+        return if (source_modules.len == 0) self.root_view.key.digest() else source_modules[index];
     }
 
     /// Run a frozen root batch to completion before committing its first root,
@@ -6969,7 +7513,7 @@ const Builder = struct {
         defer self.allocator.free(completions);
         const snapshot = try self.captureSpecJobInputs();
         const inputs = SpecJobWorkerInputs{
-            .run_id = self.spec_job_run_id,
+            .lanes = try self.specJobLanes(),
             .modules = self.modules,
             .module_views = self.moduleViews(),
             .source_file_ids = self.sourceFileIds(),
@@ -7209,6 +7753,7 @@ const Builder = struct {
                 .primitive,
                 .erased,
                 .zst,
+                .hole,
                 => {},
             }
             std.mem.reverse(Step, pending.items[start..]);
@@ -7226,7 +7771,7 @@ const Builder = struct {
                 if (backing.use != .inspectable) return false;
                 current = backing.ty;
             },
-            .primitive, .tuple, .list, .box, .func, .erased, .zst => return false,
+            .primitive, .tuple, .list, .box, .func, .erased, .zst, .hole => return false,
         };
     }
 
@@ -7806,7 +8351,7 @@ const Builder = struct {
     /// compile-time function value can restore that vector without resolving
     /// its requirements again.
     fn constFnEvidence(self: *Builder, evidence: EvidenceChain) Allocator.Error!StoredConstFnEvidence {
-        var nodes = std.ArrayList(check.ConstStore.ConstFnEvidence).empty;
+        var nodes: check.ConstStore.ConstFnEvidenceBuilder = .{};
         defer nodes.deinit(self.allocator);
         var chain = std.ArrayList(*const EvidenceChain).empty;
         defer chain.deinit(self.allocator);
@@ -7821,7 +8366,7 @@ const Builder = struct {
         while (index > 0) {
             index -= 1;
             const frame = chain.items[index];
-            const roots_start: u32 = @intCast(nodes.items.len);
+            const roots_start: u32 = @intCast(nodes.nodes.items.len);
             try self.appendConstFnEvidence(&nodes, frame.vector);
             const scope: check.ConstStore.ConstFnEvidenceScope = switch (frame.scope.lexical) {
                 .root => .root,
@@ -7844,19 +8389,19 @@ const Builder = struct {
             .frames = frames.items.len,
         };
         if (self.const_evidence_memo.get(key)) |stored| {
-            if (Ast.fnEvidenceEql(stored.nodes, stored.frames, stored.head, nodes.items, frames.items, parent)) return stored;
+            if (Ast.fnEvidenceEql(stored.entries, stored.frames, stored.head, nodes.vector(), frames.items, parent)) return stored;
         }
         // Another request with equal evidence (uses checking replayed from
         // one source) already stored this conversion and its digest.
-        const bucket = Ast.fnEvidenceBucket(nodes.items, frames.items, parent);
+        const bucket = Ast.fnEvidenceBucket(nodes.vector(), frames.items, parent);
         if (self.const_evidence_by_content.get(bucket)) |stored| {
-            if (Ast.fnEvidenceEql(stored.nodes, stored.frames, stored.head, nodes.items, frames.items, parent)) {
+            if (Ast.fnEvidenceEql(stored.entries, stored.frames, stored.head, nodes.vector(), frames.items, parent)) {
                 try self.const_evidence_memo.put(key, stored);
                 return stored;
             }
         }
         const stored = StoredConstFnEvidence.init(
-            try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidence, nodes.items),
+            try nodes.dupe(self.evidence_arena.allocator()),
             try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidenceFrame, frames.items),
             parent,
         );
@@ -7869,7 +8414,7 @@ const Builder = struct {
     /// template can compare later requests against its exact topology.
     fn retainFnEvidence(self: *Builder, evidence: StoredConstFnEvidence) Allocator.Error!StoredConstFnEvidence {
         return .{
-            .nodes = try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidence, evidence.nodes),
+            .entries = try check.ConstStore.dupeVector(self.evidence_arena.allocator(), evidence.entries),
             .frames = try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidenceFrame, evidence.frames),
             .head = evidence.head,
             .digest = evidence.digest,
@@ -7891,7 +8436,7 @@ const Builder = struct {
     /// call.
     fn appendConstFnEvidence(
         self: *Builder,
-        nodes: *std.ArrayList(check.ConstStore.ConstFnEvidence),
+        nodes: *check.ConstStore.ConstFnEvidenceBuilder,
         evidence: []const SpecEvidence,
     ) Allocator.Error!void {
         var frames = std.ArrayList(ConstFnEvidenceFrame).empty;
@@ -7908,37 +8453,39 @@ const Builder = struct {
                 const entry = parent.evidence[parent.next];
                 switch (pending.stage) {
                     .nested => {
-                        setConstFnTargetNode(nodes, pending.root_index, entry.target, .{ .resolved = .{
+                        nodes.targets.items[nodes.nodes.items[pending.root_index].target].nested = .{ .resolved = .{
                             .count = @intCast(finished.evidence.len),
-                            .subtree_len = @intCast(nodes.items.len - pending.nested_start),
-                        } });
+                            .subtree_len = @intCast(nodes.nodes.items.len - pending.nested_start),
+                        } };
                         const contracts = evidenceCallableContracts(entry);
                         if (contracts.len != 0) {
-                            parent.pending = .{ .root_index = pending.root_index, .stage = .contracts, .nested_start = nodes.items.len };
+                            parent.pending = .{ .root_index = pending.root_index, .stage = .contracts, .nested_start = nodes.nodes.items.len };
                             try frames.append(self.allocator, .{ .evidence = contracts });
                             continue;
                         }
                     },
-                    .contracts => setConstFnCallableContractCount(nodes, pending.root_index, finished.evidence.len),
+                    .contracts => nodes.setCallableContracts(pending.root_index, @intCast(finished.evidence.len)),
                 }
                 parent.next += 1;
                 continue;
             }
             const entry = frame.evidence[frame.next];
-            const root_index = nodes.items.len;
+            const root_index = nodes.nodes.items.len;
             switch (entry) {
                 .target => |target| {
-                    try nodes.append(self.allocator, undefined);
+                    // A resolved target's nested bounds are known once its
+                    // child vector has been serialized after it.
+                    try nodes.appendTarget(self.allocator, constFnTargetPayload(target, .{ .resolved = .{ .count = 0, .subtree_len = 0 } }));
                     switch (target.nested) {
-                        .synthesize => setConstFnTargetNode(nodes, root_index, target, .from_callable),
+                        .synthesize => nodes.targets.items[nodes.targets.items.len - 1].nested = .from_callable,
                         .resolved => |resolved| {
-                            frame.pending = .{ .root_index = root_index, .stage = .nested, .nested_start = nodes.items.len };
+                            frame.pending = .{ .root_index = root_index, .stage = .nested, .nested_start = nodes.nodes.items.len };
                             try frames.append(self.allocator, .{ .evidence = resolved });
                             continue;
                         },
                     }
                 },
-                .structural => |structural| try nodes.append(self.allocator, .{ .structural = .{
+                .structural => |structural| try nodes.appendStructural(self.allocator, .{
                     .derivation = structural.derivation,
                     .checked = if (structural.checked) |checked_structural| .{
                         .view = .{ .bytes = checked_structural.view.key.bytes },
@@ -7949,19 +8496,19 @@ const Builder = struct {
                         .generated_codec_derivation = checked_structural.evidence.generated_codec_derivation,
                         .generated_codec_content = codecEvidenceContent(checked_structural),
                     } else null,
-                } }),
+                }),
                 .from_callable => |use| {
-                    try nodes.append(self.allocator, .{ .from_callable = .{
+                    try nodes.appendSmall(self.allocator, .{ .from_callable = .{
                         .independent_callable = use.independent_callable,
                     } });
                 },
-                .from_scheme => |index| try nodes.append(self.allocator, .{ .from_scheme = index }),
-                .unreachable_value => try nodes.append(self.allocator, .unreachable_value),
-                .checked_error => try nodes.append(self.allocator, .checked_error),
+                .from_scheme => |index| try nodes.appendSmall(self.allocator, .{ .from_scheme = index }),
+                .unreachable_value => try nodes.appendSmall(self.allocator, .unreachable_value),
+                .checked_error => try nodes.appendSmall(self.allocator, .checked_error),
             }
             const contracts = evidenceCallableContracts(entry);
             if (contracts.len != 0) {
-                frame.pending = .{ .root_index = root_index, .stage = .contracts, .nested_start = nodes.items.len };
+                frame.pending = .{ .root_index = root_index, .stage = .contracts, .nested_start = nodes.nodes.items.len };
                 try frames.append(self.allocator, .{ .evidence = contracts });
                 continue;
             }
@@ -7969,22 +8516,11 @@ const Builder = struct {
         }
     }
 
-    fn setConstFnCallableContractCount(nodes: *std.ArrayList(check.ConstStore.ConstFnEvidence), root_index: usize, contract_count: usize) void {
-        switch (nodes.items[root_index]) {
-            .target => |*target| target.callable_contracts = @intCast(contract_count),
-            .structural => |*structural| structural.callable_contracts = @intCast(contract_count),
-            .from_callable => |*use| use.callable_contracts = @intCast(contract_count),
-            .from_scheme, .unreachable_value, .checked_error => unreachable, // the contracts stage starts only for evidence with callable contracts, which these kinds never carry
-        }
-    }
-
-    fn setConstFnTargetNode(
-        nodes: *std.ArrayList(check.ConstStore.ConstFnEvidence),
-        target_index: usize,
+    fn constFnTargetPayload(
         target: *const SpecEvidenceTarget,
         nested: check.ConstStore.ConstFnNestedEvidence,
-    ) void {
-        nodes.items[target_index] = .{ .target = .{
+    ) check.ConstStore.ConstFnTargetEvidence {
+        return .{
             .view = .{ .bytes = target.view.key.bytes },
             .method = target.target,
             .method_callable_key = target.view.types.rootKey(target.target.callable_ty),
@@ -7994,7 +8530,7 @@ const Builder = struct {
                 .callable_ty = instantiation.callable_ty,
             } else null,
             .nested = nested,
-        } };
+        };
     }
 
     fn completeRootTemplateEvidence(
@@ -8158,6 +8694,24 @@ const Builder = struct {
         // independently of the callable set its value joins in the caller.
         // A hosted template has no procedure of its own to cache: callers
         // reach the host directly through its declared ABI.
+        if (dev_diagnostics.isSet(.spec_census) and template.target != .hosted and try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
+            const proc_base = view.names.procBase(template_ref.proc_base);
+            const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
+            const types = self.program.types.view();
+            var where: []const u8 = "ret";
+            var position: usize = 0;
+            switch (types.get(lower_fn_ty)) {
+                .func => |func| for (types.span(func.args), 0..) |arg, index| {
+                    if (try self.monoTypeMentionsFunction(arg)) {
+                        where = "arg";
+                        position = index;
+                        break;
+                    }
+                },
+                .primitive, .zst, .hole, .erased, .named, .record, .tuple, .tag_union, .list, .box => where = "self",
+            }
+            std.debug.print("CENSUS_UNKEYED\t{s}\t{s}{d}\t{s}\n", .{ name, where, position, @tagName(spec_identity.callable) });
+        }
         if (template.target != .hosted and !try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
             const key = Ast.specIdentityKey(spec_identity);
             fn_template.spec_key = key;
@@ -8167,16 +8721,21 @@ const Builder = struct {
                 const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
                 std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
             }
-            if (self.spec_cache) |cache| {
-                if (cache.lookup(key.bytes, self.spec_cache_takes)) |hit| {
+            // A queued discovery request whose outcome an earlier compilation
+            // settled is parked below with no body, so answering it consults
+            // no cached code, and a program whose every request is settled
+            // reads no code pack.
+            const settled_discovery = demand == .discovery and body_scheduling == .queued and !self.parking_root_job and self.discoverySettled(key.bytes);
+            if (!settled_discovery) if (self.spec_cache) |cache| {
+                if (cache.lookup(key.bytes, self.spec_cache_takes, try self.programModules())) |hit| {
                     fn_template.cached = hit;
                     self.count("spec_cache_hits");
                     if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
                 } else if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("lookup monotype key={x} miss\n", .{key.bytes[0..8]});
-            }
+            };
         }
         if (stored_source_topology) |stored_evidence| {
-            fn_template.const_evidence = try self.program.addConstFnEvidence(stored_evidence.nodes);
+            fn_template.const_evidence = try self.program.addConstFnEvidence(stored_evidence.entries);
             fn_template.const_evidence_frames = try self.program.addConstFnEvidenceFrames(stored_evidence.frames);
             fn_template.const_evidence_frame_head = stored_evidence.head;
         }
@@ -8273,6 +8832,22 @@ const Builder = struct {
                         self.traceDemand("park", reservation.fn_id);
                         return reservation.def;
                     }
+                    // An earlier compilation lowered this specialization's
+                    // closure, from modules this lowering has at the same
+                    // keys, and evaluated every literal root it registered
+                    // without an error or a message: the closure registers
+                    // the same roots with the same outcomes now, so it is
+                    // parked like a request the analysis proves reaches no
+                    // literal root.
+                    if (template.target != .hosted and fn_template.cached == null) if (fn_template.spec_key) |key| {
+                        if (self.discoverySettled(key.bytes)) {
+                            try self.parked_spec_jobs.put(self.allocator, reservation.fn_id, job);
+                            self.demand_counters.parked += 1;
+                            self.demand_counters.summarized += 1;
+                            self.traceDemand("summarized", reservation.fn_id);
+                            return reservation.def;
+                        }
+                    };
                     try self.beginDiscoverySpec(reservation.fn_id);
                 }
                 try self.enqueueSpecJob(job);
@@ -8322,7 +8897,7 @@ const Builder = struct {
                 for (types.span(func.args)) |arg| if (try self.monoTypeMentionsFunction(arg)) return true;
                 return try self.monoTypeMentionsFunction(func.ret);
             },
-            .primitive, .zst, .erased, .named, .record, .tuple, .tag_union, .list, .box => return try self.monoTypeMentionsFunction(fn_ty),
+            .primitive, .zst, .hole, .erased, .named, .record, .tuple, .tag_union, .list, .box => return try self.monoTypeMentionsFunction(fn_ty),
         }
     }
 
@@ -8424,7 +8999,7 @@ const Builder = struct {
     fn functionContent(content: Type.Content) bool {
         return switch (content) {
             .func => true,
-            .primitive, .zst, .erased, .named, .record, .tuple, .tag_union, .list, .box => false,
+            .primitive, .zst, .hole, .erased, .named, .record, .tuple, .tag_union, .list, .box => false,
         };
     }
 
@@ -8441,7 +9016,7 @@ const Builder = struct {
         const start = children.items.len;
         switch (types.get(ty)) {
             // Everything a box holds is erased.
-            .primitive, .zst, .erased, .func, .box => {},
+            .primitive, .zst, .hole, .erased, .func, .box => {},
             .named => |named| {
                 try children.appendSlice(self.allocator, types.span(named.args));
                 if (named.backing) |backing| try children.append(self.allocator, backing.ty);
@@ -8634,6 +9209,7 @@ const Builder = struct {
     /// drain.
     fn advanceComptimeDemand(self: *Builder) Allocator.Error!bool {
         if (!self.demand_driven_comptime_roots) return false;
+        try self.settleLiteralRoots();
         const state = &self.comptime_demand;
         const view = self.program.view();
         try state.index(self.allocator, self, view);
@@ -8700,6 +9276,7 @@ const Builder = struct {
     fn discoveryTemplate(template: Ast.FnTemplate) Ast.FnTemplate {
         var marked = template;
         marked.discovery = true;
+        marked.discovery_key = template.spec_key orelse template.discovery_key;
         marked.spec_key = null;
         marked.procedure_keyed_by_layout = false;
         return marked;
@@ -8764,6 +9341,20 @@ const Builder = struct {
     /// Why a specialization's body is lowered, as the coordinator knows it now.
     fn specDemand(self: *const Builder, fn_id: Ast.FnId) Demand {
         return if (self.discovery_specs.contains(fn_id)) .discovery else .evaluation;
+    }
+
+    /// Whether the object cache holds a discovery summary of the
+    /// specialization `key` names whose every recorded module is a module of
+    /// this lowering at the same key.
+    fn discoverySettled(self: *Builder, key: [32]u8) bool {
+        const cache = self.spec_cache orelse return false;
+        for (cache.discoverySettlements(key)) |settlement| {
+            const present = for (settlement.modules) |module| {
+                if (self.moduleForKeyBytes(module) == null) break false;
+            } else true;
+            if (present) return true;
+        }
+        return false;
     }
 
     fn beginDiscoverySpec(self: *Builder, fn_id: Ast.FnId) Allocator.Error!void {
@@ -8870,7 +9461,7 @@ const Builder = struct {
         while (pending.pop()) |ty| {
             if ((try seen.getOrPut(ty)).found_existing) continue;
             switch (types.get(ty)) {
-                .zst, .erased => {},
+                .zst, .erased, .hole => {},
                 .primitive => flags = flags.merge(demand.builtinFlags()),
                 .named => |named| {
                     // An alias is transparent: its backing carries its reach.
@@ -8921,7 +9512,10 @@ const Builder = struct {
             const fn_data = functionShape(&self.program.types, job.fn_ty, "parked procedure specialization type was not a function");
             const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
             const body = try self.program.addExpr(.{ .ty = fn_data.ret, .data = .{ .crash = message } });
-            const stub_template = discoveryTemplate(job.fn_template);
+            // A never-run stub is not its specialization's discovery body,
+            // so it settles nothing.
+            var stub_template = discoveryTemplate(job.fn_template);
+            stub_template.discovery_key = null;
             self.program.setDef(job.reservation.def, .{
                 .symbol = job.reservation.symbol,
                 .fn_def = stub_template,
@@ -9057,7 +9651,7 @@ const Builder = struct {
                     context.* = .{
                         .snapshot = snapshot,
                         .inputs = .{
-                            .run_id = self.spec_job_run_id,
+                            .lanes = try self.specJobLanes(),
                             .modules = self.modules,
                             .module_views = self.moduleViews(),
                             .source_file_ids = self.sourceFileIds(),
@@ -10114,7 +10708,7 @@ const Builder = struct {
                 .source_fn_key = source_fn_key,
                 .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
                 .evidence_digest = evidence_digest,
-                .const_evidence = try source_ctx.draft.addConstFnEvidence(stored_evidence.nodes),
+                .const_evidence = try source_ctx.draft.addConstFnEvidence(stored_evidence.entries),
                 .const_evidence_frames = try source_ctx.draft.addConstFnEvidenceFrames(stored_evidence.frames),
                 .const_evidence_frame_head = stored_evidence.head,
             },
@@ -11000,7 +11594,7 @@ const Builder = struct {
                 const def = try typeDef(self.activeNameStore(), self.app_module_identity, view, nominal.origin_module, nominal.name, nominal.source_decl);
                 self.noteBuiltinTryDef(nominal.builtin, self.activeNameStore(), def);
                 const named: @FieldType(Type.Content, "named") = .{
-                    .named_type = .{ .module = self.declaredModuleForNominal(view, nominal), .ty = frame.checked_ty },
+                    .named_type = .{ .module = self.declaredModuleForNominal(view, nominal), .ty = frame.checked_ty, .ty_module = moduleDigestFromId(view.key) },
                     .def = def,
                     .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
                     .builtin_owner = builtinOwner(nominal.builtin),
@@ -11147,7 +11741,7 @@ const Builder = struct {
                     const next = named.backing orelse return current;
                     current = next.ty;
                 },
-                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return current,
+                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return current,
             }
         }
     }
@@ -11291,8 +11885,8 @@ const Builder = struct {
     /// does not, or when the template recorded no evidence of its own.
     fn siteEvidenceDigest(self: *Builder, fn_template: Ast.FnTemplate) ?Ast.EvidenceDigest {
         const evidence = programViewFnEvidence(self.program.view(), fn_template);
-        if (evidence.nodes.len == 0) return null;
-        if (std.debug.runtime_safety and !std.meta.eql(Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head), fn_template.evidence_digest)) {
+        if (evidence.entries.nodes.len == 0) return null;
+        if (std.debug.runtime_safety and !std.meta.eql(Ast.fnEvidenceDigest(evidence.entries, evidence.frames, evidence.head), fn_template.evidence_digest)) {
             Common.invariant("a template's recorded evidence differs from the evidence its identity digests");
         }
         const SiteNames = struct {
@@ -11307,8 +11901,8 @@ const Builder = struct {
                 return names_.builder.templateSiteDigest(proc_template);
             }
         };
-        const site_digest = Ast.fnEvidenceSiteDigest(evidence.nodes, evidence.frames, evidence.head, SiteNames{ .builder = self });
-        if (std.meta.eql(site_digest, Ast.fnEvidenceSiteDigest(evidence.nodes, evidence.frames, evidence.head, NoSiteNames{}))) return null;
+        const site_digest = Ast.fnEvidenceSiteDigest(evidence.entries, evidence.frames, evidence.head, SiteNames{ .builder = self });
+        if (std.meta.eql(site_digest, Ast.fnEvidenceSiteDigest(evidence.entries, evidence.frames, evidence.head, NoSiteNames{}))) return null;
         return site_digest;
     }
 
@@ -11414,6 +12008,17 @@ const Builder = struct {
     }
 
     /// Every input module's view, built on first use.
+    fn programModules(self: *Builder) Allocator.Error!Common.ProgramModules {
+        if (self.program_modules) |modules| return modules;
+        const views = self.moduleViews();
+        const identities = try self.allocator.alloc([32]u8, views.len);
+        for (views, identities) |view, *identity| identity.* = view.module_identity.stable_hash;
+        self.program_module_buffer = identities;
+        const modules = Common.sortProgramModules(identities);
+        self.program_modules = modules;
+        return modules;
+    }
+
     fn moduleViews(self: *Builder) []const ModuleViewData {
         if (self.borrowed_module_views) |views| return views;
         if (self.module_views.len != 0) return self.module_views;
@@ -11782,37 +12387,58 @@ const Builder = struct {
         view: ModuleView,
         node: checked.ConstNodeId,
     ) Allocator.Error!bool {
-        var eligibility = StaticDataEligibility{ .builder = self, .view = view };
-        return try StaticDataEligibility.Eval.run(self.allocator, &eligibility, node);
+        var walk = ConstNodeProperty{ .builder = self, .view = view, .property = .stable_static_data };
+        return try ConstNodeProperty.Eval.run(self.allocator, &walk, node);
     }
 
-    const StaticDataEligibility = struct {
+    /// A property of a stored value that holds when it holds for every node
+    /// the value reaches, memoized per node over explicit `ConstStore` edges.
+    const ConstNodeProperty = struct {
         builder: *Builder,
         view: ModuleView,
+        property: Property,
 
-        const Eval = collections.AnyAll.Evaluation(checked.ConstNodeId, StaticDataEligibility);
+        const Property = enum {
+            /// The value has a static data representation that post-check
+            /// specialization cannot change (`constNodeHasStableStaticDataRepresentation`).
+            stable_static_data,
+            /// The value is data alone (`constNodeIsStoredData`).
+            stored_data,
+        };
 
-        pub fn enter(self: *StaticDataEligibility, items: Eval.Items, node: checked.ConstNodeId) Allocator.Error!Eval.Expansion {
+        const Eval = collections.AnyAll.Evaluation(checked.ConstNodeId, ConstNodeProperty);
+
+        fn memo(self: *const ConstNodeProperty) *std.AutoHashMap(ConstNodeAddress, bool) {
+            return switch (self.property) {
+                .stable_static_data => &self.builder.static_data_eligibility,
+                .stored_data => &self.builder.stored_data,
+            };
+        }
+
+        pub fn enter(self: *ConstNodeProperty, items: Eval.Items, node: checked.ConstNodeId) Allocator.Error!Eval.Expansion {
             const address = ConstNodeAddress{ .module = self.view.key, .node = node };
-            if (self.builder.static_data_eligibility.get(address)) |stable| return .{ .value = stable };
+            if (self.memo().get(address)) |holds| return .{ .value = holds };
             const leaf: ?bool = switch (self.view.const_store.get(node)) {
-                .pending => Common.invariant("pending ConstStore node reached static data eligibility"),
-                // Static data emits an erased callable as one allocation naming
-                // its procedure through a relocation, with its capture record
-                // written at the capture offset, so a function value is stable
-                // when each capture slot's stored value is.
-                .fn_value => |fn_id| blk: {
-                    for (self.view.const_store.getFn(fn_id).captures) |capture| {
-                        if (constCaptureFillsSlot(capture)) try items.add(capture.value);
-                    }
-                    break :blk null;
+                .pending => Common.invariant("pending ConstStore node reached a stored value property"),
+                .fn_value => |fn_id| switch (self.property) {
+                    // Static data emits an erased callable as one allocation
+                    // naming its procedure through a relocation, with its
+                    // capture record written at the capture offset, so a
+                    // function value is stable when each capture slot's
+                    // stored value is.
+                    .stable_static_data => blk: {
+                        for (self.view.const_store.getFn(fn_id).captures) |capture| {
+                            if (constCaptureFillsSlot(capture)) try items.add(capture.value);
+                        }
+                        break :blk null;
+                    },
+                    .stored_data => false,
                 },
-                .zst,
-                .scalar,
-                .str,
-                .crash,
-                .checked_error,
-                => true,
+                .crash, .checked_error => switch (self.property) {
+                    .stable_static_data => true,
+                    .stored_data => false,
+                },
+                .zst, .scalar, .str => true,
                 .box => |child| blk: {
                     try items.add(child);
                     break :blk null;
@@ -11820,7 +12446,15 @@ const Builder = struct {
                 .list => |list| switch (list) {
                     .packed_bytes, .empty => true,
                     .nodes => |children| blk: {
-                        for (children) |child| try items.add(child);
+                        // An item stored as the item before it adds nothing
+                        // to the conjunction: a list of copies of one value
+                        // names it once per item.
+                        var previous: ?checked.ConstNodeId = null;
+                        for (children) |child| {
+                            if (previous == child) continue;
+                            previous = child;
+                            try items.add(child);
+                        }
                         break :blk null;
                     },
                 },
@@ -11839,18 +12473,135 @@ const Builder = struct {
                     break :blk null;
                 },
             };
-            if (leaf) |stable| {
-                try self.builder.static_data_eligibility.put(address, stable);
-                return .{ .value = stable };
+            if (leaf) |holds| {
+                try self.memo().put(address, holds);
+                return .{ .value = holds };
             }
             return .{ .group = .all };
         }
 
-        pub fn exit(self: *StaticDataEligibility, node: checked.ConstNodeId, result: ?bool) Allocator.Error!void {
-            const stable = result orelse return;
-            try self.builder.static_data_eligibility.put(.{ .module = self.view.key, .node = node }, stable);
+        pub fn exit(self: *ConstNodeProperty, node: checked.ConstNodeId, result: ?bool) Allocator.Error!void {
+            const holds = result orelse return;
+            try self.memo().put(.{ .module = self.view.key, .node = node }, holds);
         }
     };
+
+    /// What a stored list static data freezes straight from its node
+    /// (`Ast.StoredStaticList`): how many items it has, and the one stored
+    /// item a list of one repeated value repeats.
+    const StoredListShape = struct {
+        item_count: u32,
+        uniform_item: ?checked.ConstNodeId,
+    };
+
+    /// The shape of `node`'s value when it is a non-empty list whose items
+    /// are data alone (`constNodeIsStoredData`); null for any other value.
+    fn storedListShape(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!?StoredListShape {
+        const items = switch (view.const_store.get(node)) {
+            .list => |list| switch (list) {
+                .nodes => |items| items,
+                .empty, .packed_bytes => return null,
+            },
+            .pending => Common.invariant("pending ConstStore node reached stored list selection"),
+            .zst, .scalar, .str, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => return null,
+        };
+        if (items.len == 0) return null;
+        if (!try self.constNodeIsStoredData(view, node)) return null;
+        return .{ .item_count = @intCast(items.len), .uniform_item = try self.uniformStoredItem(view, items) };
+    }
+
+    /// Whether everything `node`'s value reaches is data: no function value,
+    /// whose code a program must specialize, and no crash or checked error,
+    /// which a program must raise where the value is read. Such a value has
+    /// one target representation at a layout, which static data writes from
+    /// the stored nodes alone. Memoized per node over explicit `ConstStore`
+    /// edges.
+    fn constNodeIsStoredData(self: *Builder, view: ModuleView, node: checked.ConstNodeId) Allocator.Error!bool {
+        var walk = ConstNodeProperty{ .builder = self, .view = view, .property = .stored_data };
+        return try ConstNodeProperty.Eval.run(self.allocator, &walk, node);
+    }
+
+    /// The item a stored list repeats: its first item, when that item's value
+    /// could be a construction (scalars, the empty string, the empty list, and
+    /// records, tuples, tags, and nominals of those) and every other item
+    /// stores the same value. Lowering then decides from the restored item
+    /// whether it is one, as it does for each item of a restored list
+    /// literal.
+    fn uniformStoredItem(self: *Builder, view: ModuleView, items: []const checked.ConstNodeId) Allocator.Error!?checked.ConstNodeId {
+        const first = items[0];
+        if (!try self.constNodeMayBeConstruction(view, first)) return null;
+        for (items[1..]) |item| {
+            if (item != first and !try self.constNodesStoreSameValue(view, first, item)) return null;
+        }
+        return first;
+    }
+
+    fn constNodeMayBeConstruction(self: *Builder, view: ModuleView, root: checked.ConstNodeId) Allocator.Error!bool {
+        var pending: std.ArrayList(checked.ConstNodeId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |node| switch (view.const_store.get(node)) {
+            .pending => Common.invariant("pending ConstStore node reached stored list selection"),
+            .zst, .scalar => {},
+            .str => |str| if (str.len != 0) return false,
+            .list => |list| switch (list) {
+                .empty => {},
+                .nodes => |children| if (children.len != 0) return false,
+                .packed_bytes => |packed_list| if (packed_list.len != 0) return false,
+            },
+            .tuple, .record => |children| try pending.appendSlice(self.allocator, children),
+            .tag => |tag| try pending.appendSlice(self.allocator, tag.payloads),
+            .nominal => |nominal| try pending.append(self.allocator, nominal.backing),
+            .box, .crash, .checked_error, .fn_value => return false,
+        };
+        return true;
+    }
+
+    /// Whether two stored values of one type are the same value. Only values
+    /// `constNodeMayBeConstruction` admits are compared.
+    fn constNodesStoreSameValue(self: *Builder, view: ModuleView, left_root: checked.ConstNodeId, right_root: checked.ConstNodeId) Allocator.Error!bool {
+        const Pair = struct { left: checked.ConstNodeId, right: checked.ConstNodeId };
+        var pending: std.ArrayList(Pair) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .left = left_root, .right = right_root });
+        while (pending.pop()) |pair| {
+            if (pair.left == pair.right) continue;
+            const left = view.const_store.get(pair.left);
+            const right = view.const_store.get(pair.right);
+            if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+            switch (left) {
+                .pending => Common.invariant("pending ConstStore node reached stored list selection"),
+                .zst => {},
+                .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
+                .str => |str| if (!std.mem.eql(u8, view.const_store.strBytes(str), view.const_store.strBytes(right.str))) return false,
+                .list => |list| {
+                    // Admitted lists are empty; an evaluated capacity is part
+                    // of the value.
+                    if (std.meta.activeTag(list) != std.meta.activeTag(right.list)) return false;
+                    switch (list) {
+                        .empty => |capacity| if (capacity != right.list.empty) return false,
+                        .nodes => |children| if (children.len != 0 or right.list.nodes.len != 0) return false,
+                        .packed_bytes => |packed_list| if (packed_list.len != 0 or right.list.packed_bytes.len != 0) return false,
+                    }
+                },
+                .tuple, .record => |children| {
+                    const others = switch (right) {
+                        .tuple, .record => |items| items,
+                        .pending, .zst, .scalar, .str, .list, .box, .crash, .checked_error, .tag, .nominal, .fn_value => unreachable, // the active tags matched above
+                    };
+                    if (children.len != others.len) return false;
+                    for (children, others) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                },
+                .tag => |tag| {
+                    if (!std.mem.eql(u8, tag.tag_name, right.tag.tag_name) or tag.payloads.len != right.tag.payloads.len) return false;
+                    for (tag.payloads, right.tag.payloads) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                },
+                .nominal => |nominal| try pending.append(self.allocator, .{ .left = nominal.backing, .right = right.nominal.backing }),
+                .box, .crash, .checked_error, .fn_value => return false,
+            }
+        }
+        return true;
+    }
 
     fn constValueMayUseStaticDataCandidate(_: *Builder, view: ModuleView, value_in: checked.ConstValue, bare_fn_in: BareFnCandidate) bool {
         var value = value_in;
@@ -12746,7 +13497,7 @@ const Builder = struct {
             .source_fn_key = source_fn_key,
             .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
             .evidence_digest = evidence_digest,
-            .const_evidence = draft_evidence.nodes,
+            .const_evidence = draft_evidence.entries,
             .const_evidence_frames = draft_evidence.frames,
             .const_evidence_frame_head = stored_evidence.head,
         }, .signature_relation = signature_relation });
@@ -12950,6 +13701,7 @@ const Builder = struct {
                 allocator.destroy(maps);
             }
             allocator.free(self.ids.fn_slots);
+            allocator.free(self.ids.fn_demand_shaped);
             allocator.free(self.ids.def_ids);
             allocator.free(self.emit_fns);
             allocator.free(self.emit_defs);
@@ -13879,19 +14631,30 @@ const Builder = struct {
         body_scheduling: TemplateBodyScheduling,
         codec_contract: ?SealedCodecContractContext,
         demand: Demand,
-    ) Allocator.Error!Ast.FnSlot {
+    ) Allocator.Error!ResolvedTemplateSpec {
         const draft_fn = &body_draft.fns.items[@backingInt(spec.fn_id)];
         draft_fn.source.mono_fn_ty = .{ .sealed = draft_fn_ty };
         const signature_relation = draft_fn.signature_relation;
 
+        // Only a request every use of which is a direct call, and whose
+        // identity is its template, its evidence, and its types alone, is
+        // shaped by demand.
+        const shaped: ?ShapedRequest = if (!spec.value_used and !spec.requires_local and
+            !spec.local_context_dependent and codec_contract == null)
+            try self.demandShapedRequest(spec.template_ref, coordinator_fn_ty, coordinator_subst)
+        else
+            null;
+        const request_fn_ty = if (shaped) |request| request.fn_ty else coordinator_fn_ty;
+        const request_subst = if (shaped) |request| request.subst else coordinator_subst;
+
         const requested_evidence = draftFnEvidence(body_draft, draft_fn.source);
-        const request_digest = self.specializationTypeDigest(coordinator_fn_ty);
+        const request_digest = self.specializationTypeDigest(request_fn_ty);
         const identity = self.templateSpecIdentity(
             spec.template_ref,
             spec.method_scope,
             draft_fn.source.evidence_digest,
             self.codecContractIdentity(codec_contract),
-            coordinator_fn_ty,
+            request_fn_ty,
             request_digest,
         );
 
@@ -13911,9 +14674,9 @@ const Builder = struct {
                 self.moduleForId(spec.method_scope),
                 spec.source_fn_ty,
                 spec.source_fn_key,
-                coordinator_fn_ty,
+                request_fn_ty,
                 spec.evidence,
-                coordinator_subst,
+                request_subst,
                 signature_relation,
                 .already_counted,
                 request_digest,
@@ -13924,7 +14687,125 @@ const Builder = struct {
             );
             break :blk .{ .local = self.defFnId(def) };
         };
-        return resolved_slot;
+        return .{ .slot = resolved_slot, .demand_shaped = shaped != null };
+    }
+
+    /// Mark each sealed template request whose function the draft body uses
+    /// as a value: a function value or a reference to its definition.
+    fn markValueUsedTemplateSpecs(allocator: Allocator, body_draft: *BodyDraftStore) Allocator.Error!void {
+        if (body_draft.sealed_template_specs.items.len == 0) return;
+        var used = collections.DenseMap(DraftFnId, void).init(allocator);
+        defer used.deinit();
+        for (body_draft.exprs.items) |expr| {
+            const value_fn: ?DraftFnTarget = if (expr.data == .fn_def)
+                expr.data.fn_def.fn_id
+            else if (expr.data == .def_ref and expr.data.def_ref == .draft)
+                body_draft.defs.items[@backingInt(expr.data.def_ref.draft)].fn_id
+            else
+                null;
+            if (value_fn) |fn_id| if (fn_id == .draft) try used.put(fn_id.draft, {});
+        }
+        for (body_draft.sealed_template_specs.items) |*spec| spec.value_used = used.contains(spec.fn_id);
+    }
+
+    const ResolvedTemplateSpec = struct {
+        slot: Ast.FnSlot,
+        demand_shaped: bool,
+    };
+
+    /// A request shaped by its template's demand.
+    const ShapedRequest = struct {
+        fn_ty: Type.TypeId,
+        subst: SealedSubstitution,
+    };
+
+    /// The request a call to `template_ref` at `fn_ty` and `subst` makes once
+    /// shaped by the template's demand (design.md "Specialization By
+    /// Demand"), or null when shaping changes nothing or does not apply. A
+    /// variable the body demands nothing of becomes the hole, one whose layout
+    /// alone it demands becomes its layout representative, and the template's
+    /// checked root instantiated at that substitution is the request type. A
+    /// variable whose type has no layout representative keeps its type, and a
+    /// request whose shaped signature would hold a function or a tag row is
+    /// not shaped: Lambda Solved relates nothing across a shaped call, and it
+    /// would have to relate the function's lambda sets or join the row with
+    /// the rows the caller's value flows between (design.md "Row Joins").
+    fn demandShapedRequest(
+        self: *Builder,
+        template_ref: names.ProcTemplate,
+        fn_ty: Type.TypeId,
+        subst: SealedSubstitution,
+    ) Allocator.Error!?ShapedRequest {
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        const template = view.templates.get(template_ref.template);
+        const demands = view.templates.templateDemands(&template);
+        if (demands.len != subst.len) Common.invariant("specialization substitution length differed from its template's demand vector");
+        const types_ = &self.program.types;
+        const name_store = &self.program.names;
+        var changed = false;
+        const shaped = try self.evidence_arena.allocator().alloc(SealedSubstSlot, subst.len);
+        for (subst, demands, shaped) |slot, demand, *out| {
+            const ty = switch (slot) {
+                .checked_error => return null,
+                .ty => |ty| ty,
+            };
+            // A hole stands for sized items only (`LayoutKey.knownSized`); a
+            // type not known to be sized keeps its layout.
+            const shaped_ty = if (demand == .none and try LayoutKey.knownSized(self.allocator, types_, ty))
+                try types_.internHole(name_store)
+            else switch (demand) {
+                .full => ty,
+                .none, .layout => (try LayoutKey.layoutRepresentative(self.allocator, types_, name_store, ty)) orelse ty,
+            };
+            if (shaped_ty != ty) changed = true;
+            out.* = .{ .ty = shaped_ty };
+        }
+        if (!changed) return null;
+        const shaped_fn_ty = try self.instantiateTemplateRootAt(view, template_ref, &template, shaped);
+        const shaped_fn = functionShape(types_, shaped_fn_ty, "a demand-shaped request type was not a function");
+        const shaped_args = types_.span(shaped_fn.args);
+        for (0..shaped_args.len) |index| {
+            if (try LayoutKey.solvingCanChange(self.allocator, types_, GuardedList.at(shaped_args, index))) return null;
+        }
+        if (try LayoutKey.solvingCanChange(self.allocator, types_, shaped_fn.ret)) return null;
+        if (try types_.typeEql(name_store, shaped_fn_ty, fn_ty)) return null;
+        return .{ .fn_ty = shaped_fn_ty, .subst = shaped };
+    }
+
+    /// A template's checked root instantiated at a sealed substitution.
+    fn instantiateTemplateRootAt(
+        self: *Builder,
+        view: ModuleView,
+        template_ref: names.ProcTemplate,
+        template: *const checked.CheckedProcedureTemplate,
+        subst: SealedSubstitution,
+    ) Allocator.Error!Type.TypeId {
+        const types_ = &self.program.types;
+        const name_store = &self.program.names;
+        const graph = try self.createGraphForStores(types_, name_store);
+        defer graph.destroy();
+        const saved_graph = self.active_graph;
+        const saved_body_draft = self.active_body_draft;
+        self.active_graph = graph;
+        defer self.active_graph = saved_graph;
+        var body_draft = BodyDraftStore.init(self.allocator);
+        body_draft.mutable_graph_names = name_store;
+        self.active_body_draft = &body_draft;
+        defer self.active_body_draft = saved_body_draft;
+        defer body_draft.deinit();
+        var ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph, &body_draft);
+        defer ctx.deinit();
+        const live = try ctx.substitutionFromSealed(subst);
+        try ctx.seedSubstitution(templateSchemaIn(view, template), live);
+        const root = try ctx.instNode(template.checked_fn_root);
+        try graph.freezeRelations();
+        const finished = try self.allocator.alloc(Type.TypeId, subst.len);
+        defer self.allocator.free(finished);
+        for (subst, finished) |slot, *out| out.* = switch (slot) {
+            .ty => |ty| ty,
+            .checked_error => Common.invariant("a demand-shaped substitution kept a checked error"),
+        };
+        return try graph.sealNodeOverFinished(root, finished);
     }
 
     fn resolveSealedTemplateSpecAtType(
@@ -13943,7 +14824,7 @@ const Builder = struct {
         }
         const spec = body_draft.sealed_template_specs.items[spec_index];
         if (spec.state != .deferred) return;
-        const resolved_slot = try self.resolveDeferredTemplateSpecValueAtType(
+        const resolved = try self.resolveDeferredTemplateSpecValueAtType(
             body_draft,
             spec,
             draft_fn_ty,
@@ -13953,7 +14834,8 @@ const Builder = struct {
             codec_contract,
             demand,
         );
-        body_draft.sealed_template_specs.items[spec_index].resolved_slot = resolved_slot;
+        body_draft.sealed_template_specs.items[spec_index].resolved_slot = resolved.slot;
+        body_draft.sealed_template_specs.items[spec_index].demand_shaped = resolved.demand_shaped;
         body_draft.sealed_template_specs.items[spec_index].state = .resolved;
     }
 
@@ -13972,6 +14854,7 @@ const Builder = struct {
             if (body_draft.demand_owner) |owner| try self.upgradeDiscoverySpec(owner);
         }
         const draft_evaluates = self.draftEvaluates(body_draft);
+        try markValueUsedTemplateSpecs(self.allocator, body_draft);
         var spec_index: usize = 0;
         while (spec_index < body_draft.sealed_template_specs.items.len) : (spec_index += 1) {
             const state = body_draft.sealed_template_specs.items[spec_index].state;
@@ -14056,6 +14939,13 @@ const Builder = struct {
         const fn_slots = try self.allocator.alloc(?Ast.FnSlot, body_draft.fns.items.len);
         errdefer self.allocator.free(fn_slots);
         @memset(fn_slots, null);
+        var any_demand_shaped = false;
+        for (body_draft.sealed_template_specs.items) |spec| {
+            if (spec.state == .resolved and spec.demand_shaped) any_demand_shaped = true;
+        }
+        const fn_demand_shaped = try self.allocator.alloc(bool, if (any_demand_shaped) body_draft.fns.items.len else 0);
+        errdefer self.allocator.free(fn_demand_shaped);
+        @memset(fn_demand_shaped, false);
         const def_ids = try self.allocator.alloc(?Ast.DefId, body_draft.defs.items.len);
         errdefer self.allocator.free(def_ids);
         const emit_fns = try self.allocator.alloc(bool, body_draft.fns.items.len);
@@ -14123,13 +15013,14 @@ const Builder = struct {
                 if (spec.state == .resolved) {
                     fn_slots[raw_index] = spec.resolved_slot orelse
                         Common.invariant("resolved draft template demand had no specialization slot");
+                    if (any_demand_shaped) fn_demand_shaped[raw_index] = spec.demand_shaped;
                     emit_fns[raw_index] = false;
                     continue;
                 }
             }
 
             // Evidence does not participate in the specialization type digest.
-            const sealed_template = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, 0, 0);
+            const sealed_template = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, .{}, 0);
             const fn_ty = sealed_template.mono_fn_ty;
             solved_fn_tys[raw_index] = fn_ty;
             const requested_evidence = draftFnEvidence(body_draft, fn_.source);
@@ -14325,6 +15216,7 @@ const Builder = struct {
             self.allocator.destroy(core_maps);
         }
         ids.fn_slots = fn_slots;
+        ids.fn_demand_shaped = fn_demand_shaped;
         ids.def_ids = def_ids;
         ids.core_id_mode = .{ .remapped = core_maps };
         return .{
@@ -14619,8 +15511,10 @@ const Builder = struct {
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
         self.markDiscoveryFns(body_draft, commit_extent);
+        try self.settleLiteralRoots();
         var returned_ids = body_ids;
         returned_ids.fn_slots = &.{};
+        returned_ids.fn_demand_shaped = &.{};
         returned_ids.def_ids = &.{};
         const retained_core_maps = commit_map.core_maps orelse
             Common.invariant("body draft commit map lost its core remapping before handoff");
@@ -14679,8 +15573,10 @@ const Builder = struct {
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
         self.markDiscoveryFns(body_draft, commit_extent);
+        try self.settleLiteralRoots();
         var returned_ids = body_ids;
         returned_ids.fn_slots = &.{};
+        returned_ids.fn_demand_shaped = &.{};
         returned_ids.def_ids = &.{};
         const retained_core_maps = commit_map.core_maps orelse
             Common.invariant("sealed body draft commit map lost its core remapping before handoff");
@@ -14894,7 +15790,7 @@ const Builder = struct {
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = mono_fn_ty,
-            .const_evidence = if (retain_program_evidence) try self.program.addConstFnEvidence(fn_value.evidence) else .empty(),
+            .const_evidence = if (retain_program_evidence) try self.program.addConstFnEvidence(fn_value.evidence) else .{},
             .const_evidence_frames = if (retain_program_evidence) try self.program.addConstFnEvidenceFrames(fn_value.evidence_frames) else .empty(),
             .const_evidence_frame_head = if (retain_program_evidence) fn_value.evidence_frame_head else null,
         };
@@ -15415,7 +16311,7 @@ const Builder = struct {
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = ty,
-            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
         });
         const lambda_args = switch (kind) {
             .parser => try fn_ctx.addTypedLocalSpan(&.{
@@ -15576,7 +16472,7 @@ fn optionalFieldSlotForType(
 ) ?Builder.OptionalSlotInfo {
     const tags = switch (types_.get(slot_ty)) {
         .tag_union => |span_| types_.tagSpan(span_),
-        .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return null,
+        .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => return null,
     };
     if (tags.len != 2) return null;
     // Tag normalization gives #Missing index 0 and #Present index 1.
@@ -15728,7 +16624,7 @@ const DraftFnTemplate = struct {
     source_fn_key: names.TypeDigest,
     mono_fn_ty: DraftTypeCell,
     evidence_digest: Ast.EvidenceDigest = .{},
-    const_evidence: DraftSpan(check.ConstStore.ConstFnEvidence) = DraftSpan(check.ConstStore.ConstFnEvidence).empty(),
+    const_evidence: DraftConstEvidence = .{},
     const_evidence_frames: DraftSpan(check.ConstStore.ConstFnEvidenceFrame) = DraftSpan(check.ConstStore.ConstFnEvidenceFrame).empty(),
     const_evidence_frame_head: ?u32 = null,
 };
@@ -15963,12 +16859,6 @@ const DraftContinueExpr = struct {
     values: DraftSpan(DraftExprId),
 };
 
-const DraftComptimeBranchTaken = struct {
-    site: DraftComptimeSiteId,
-    branch_index: u32,
-    body: DraftExprId,
-};
-
 const DraftExpectErrExpr = struct {
     msg: DraftExprId,
     region: base.Region,
@@ -15987,7 +16877,26 @@ const DraftReturn = struct {
 const DraftStaticDataCandidate = struct {
     storage: Common.StaticDataStorage,
     static_data: DraftStaticDataId,
-    runtime_expr: DraftExprId,
+    value: DraftStaticDataCandidateValue,
+};
+
+/// A draft `Ast.StaticDataCandidateValue`.
+const DraftStaticDataCandidateValue = union(enum) {
+    runtime: DraftExprId,
+    stored: DraftStoredStaticList,
+
+    fn subexpression(self: DraftStaticDataCandidateValue) ?DraftExprId {
+        return switch (self) {
+            .runtime => |expr| expr,
+            .stored => |stored| stored.uniform_item,
+        };
+    }
+};
+
+/// A draft `Ast.StoredStaticList`.
+const DraftStoredStaticList = struct {
+    item_count: u32,
+    uniform_item: ?DraftExprId,
 };
 
 const DraftFieldAccessSegment = struct {
@@ -16090,7 +16999,6 @@ const DraftExprData = union(enum(u8)) {
     /// message; compile-time evaluation that reaches it discards the result
     /// instead of reporting the problem a second time.
     checked_error: DraftStringLiteralId,
-    comptime_branch_taken: DraftComptimeBranchTaken,
     comptime_exhaustiveness_failed: DraftComptimeSiteId,
     dbg: DraftExprId,
     expect_err: DraftExpectErrExpr,
@@ -16828,6 +17736,13 @@ const SealedTemplateSpec = struct {
     committed_request_fn_ty: ?Type.TypeId = null,
     committed_codec_contract: ?Ast.CodecContractIdentity = null,
     demand: Demand = .evaluation,
+    /// Whether the resolved specialization is this request shaped by its
+    /// template's demand, so every call to it is demand-shaped.
+    demand_shaped: bool = false,
+    /// Whether the draft body uses this request's function as a value rather
+    /// than only calling it. A value's type is the program's, so such a
+    /// request is never shaped.
+    value_used: bool = false,
 };
 
 /// Seal a draft request's substitution with the graph sealer that seals its
@@ -17891,7 +18806,6 @@ const DraftComptimeSite = struct {
     owner: Common.LoweringModuleId,
     region: base.Region,
     checked_site: ?checked.CheckedExhaustivenessSiteId = null,
-    branch_regions: DraftSpan(base.Region) = .empty(),
 };
 
 const DraftStringLiteral = struct {
@@ -17938,7 +18852,6 @@ fn draftOwnerRetained(owner: DraftOwner, emit_fns: []const bool) bool {
 const DraftCoreKind = enum(u8) {
     string_literals,
     comptime_sites,
-    branch_regions,
     expr_ids,
     pat_ids,
     stmt_ids,
@@ -18031,6 +18944,8 @@ const BodyDraftStore = struct {
     worker_local_symbol_count: u32,
     fns: std.ArrayList(DraftFn),
     const_fn_evidence: std.ArrayList(check.ConstStore.ConstFnEvidence),
+    const_fn_evidence_targets: std.ArrayList(check.ConstStore.ConstFnTargetEvidence),
+    const_fn_evidence_structurals: std.ArrayList(check.ConstStore.ConstFnStructuralEvidence),
     const_fn_evidence_frames: std.ArrayList(check.ConstStore.ConstFnEvidenceFrame),
     /// The spans already holding a stored evidence value, by the identity of
     /// its `Builder.evidence_arena` storage, so every function created from
@@ -18105,7 +19020,6 @@ const BodyDraftStore = struct {
     layout_requests: std.ArrayList(DraftLayoutRequest),
     runtime_schema_requests: std.ArrayList(DraftRuntimeSchemaRequest),
     comptime_sites: std.ArrayList(DraftComptimeSite),
-    branch_regions: std.ArrayList(base.Region),
     local_names: std.ArrayList(DraftSpan(u8)),
     source_text_bytes: std.ArrayList(u8),
     expr_locs: std.ArrayList(base.SourceLoc),
@@ -18219,6 +19133,8 @@ const BodyDraftStore = struct {
             .worker_local_symbol_count = 0,
             .fns = .empty,
             .const_fn_evidence = .empty,
+            .const_fn_evidence_targets = .empty,
+            .const_fn_evidence_structurals = .empty,
             .const_fn_evidence_frames = .empty,
             .defs = .empty,
             .def_owners = .empty,
@@ -18283,7 +19199,6 @@ const BodyDraftStore = struct {
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
             .comptime_sites = .empty,
-            .branch_regions = .empty,
             .local_names = .empty,
             .source_text_bytes = .empty,
             .expr_locs = .empty,
@@ -18463,7 +19378,6 @@ const BodyDraftStore = struct {
         self.expr_locs.deinit(self.allocator);
         self.source_text_bytes.deinit(self.allocator);
         self.local_names.deinit(self.allocator);
-        self.branch_regions.deinit(self.allocator);
         self.comptime_sites.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
@@ -18518,6 +19432,8 @@ const BodyDraftStore = struct {
         self.defs.deinit(self.allocator);
         self.const_fn_evidence_frames.deinit(self.allocator);
         self.const_fn_evidence.deinit(self.allocator);
+        self.const_fn_evidence_targets.deinit(self.allocator);
+        self.const_fn_evidence_structurals.deinit(self.allocator);
         self.stored_evidence_spans.deinit(self.allocator);
         self.fns.deinit(self.allocator);
     }
@@ -18575,7 +19491,6 @@ const BodyDraftStore = struct {
         var lengths: DraftCoreLengths = undefined;
         lengths[@backingInt(DraftCoreKind.string_literals)] = @intCast(self.string_literals.items.len);
         lengths[@backingInt(DraftCoreKind.comptime_sites)] = @intCast(self.comptime_sites.items.len);
-        lengths[@backingInt(DraftCoreKind.branch_regions)] = @intCast(self.branch_regions.items.len);
         lengths[@backingInt(DraftCoreKind.expr_ids)] = @intCast(self.expr_ids.items.len);
         lengths[@backingInt(DraftCoreKind.pat_ids)] = @intCast(self.pat_ids.items.len);
         lengths[@backingInt(DraftCoreKind.stmt_ids)] = @intCast(self.stmt_ids.items.len);
@@ -18927,8 +19842,10 @@ const BodyDraftStore = struct {
     /// lives, so that storage's identity names its contents.
     fn addStoredConstFnEvidence(self: *BodyDraftStore, stored: StoredConstFnEvidence) Allocator.Error!DraftEvidenceSpans {
         const key: StoredEvidenceStorage = .{
-            .nodes_ptr = @intFromPtr(stored.nodes.ptr),
-            .nodes_len = stored.nodes.len,
+            .nodes_ptr = @intFromPtr(stored.entries.nodes.ptr),
+            .nodes_len = stored.entries.nodes.len,
+            .targets_ptr = @intFromPtr(stored.entries.targets.ptr),
+            .structurals_ptr = @intFromPtr(stored.entries.structurals.ptr),
             .frames_ptr = @intFromPtr(stored.frames.ptr),
             .frames_len = stored.frames.len,
         };
@@ -18936,17 +19853,23 @@ const BodyDraftStore = struct {
         if (!entry.found_existing) {
             errdefer _ = self.stored_evidence_spans.remove(key);
             entry.value_ptr.* = .{
-                .nodes = try self.addConstFnEvidence(stored.nodes),
+                .entries = try self.addConstFnEvidence(stored.entries),
                 .frames = try self.addConstFnEvidenceFrames(stored.frames),
             };
         }
         return entry.value_ptr.*;
     }
 
-    fn addConstFnEvidence(self: *BodyDraftStore, values: []const check.ConstStore.ConstFnEvidence) Allocator.Error!DraftSpan(check.ConstStore.ConstFnEvidence) {
-        const start: u32 = @intCast(self.const_fn_evidence.items.len);
-        try self.const_fn_evidence.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+    fn addConstFnEvidence(self: *BodyDraftStore, values: check.ConstStore.ConstFnEvidenceVector) Allocator.Error!DraftConstEvidence {
+        const spans: DraftConstEvidence = .{
+            .nodes = .{ .start = @intCast(self.const_fn_evidence.items.len), .len = @intCast(values.nodes.len) },
+            .targets = .{ .start = @intCast(self.const_fn_evidence_targets.items.len), .len = @intCast(values.targets.len) },
+            .structurals = .{ .start = @intCast(self.const_fn_evidence_structurals.items.len), .len = @intCast(values.structurals.len) },
+        };
+        try self.const_fn_evidence.appendSlice(self.allocator, values.nodes);
+        try self.const_fn_evidence_targets.appendSlice(self.allocator, values.targets);
+        try self.const_fn_evidence_structurals.appendSlice(self.allocator, values.structurals);
+        return spans;
     }
 
     fn addConstFnEvidenceFrames(self: *BodyDraftStore, values: []const check.ConstStore.ConstFnEvidenceFrame) Allocator.Error!DraftSpan(check.ConstStore.ConstFnEvidenceFrame) {
@@ -18955,8 +19878,12 @@ const BodyDraftStore = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    fn constFnEvidence(self: *const BodyDraftStore, span: DraftSpan(check.ConstStore.ConstFnEvidence)) []const check.ConstStore.ConstFnEvidence {
-        return self.const_fn_evidence.items[span.start..][0..span.len];
+    fn constFnEvidence(self: *const BodyDraftStore, spans: DraftConstEvidence) check.ConstStore.ConstFnEvidenceVector {
+        return .{
+            .nodes = self.const_fn_evidence.items[spans.nodes.start..][0..spans.nodes.len],
+            .targets = self.const_fn_evidence_targets.items[spans.targets.start..][0..spans.targets.len],
+            .structurals = self.const_fn_evidence_structurals.items[spans.structurals.start..][0..spans.structurals.len],
+        };
     }
 
     fn constFnEvidenceFrames(self: *const BodyDraftStore, span: DraftSpan(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
@@ -19100,28 +20027,19 @@ const BodyDraftStore = struct {
         return id;
     }
 
-    fn addBranchRegionSpan(self: *BodyDraftStore, regions: []const base.Region) Allocator.Error!DraftSpan(base.Region) {
-        const start: u32 = @intCast(self.branch_regions.items.len);
-        try self.branch_regions.appendSlice(self.allocator, regions);
-        return .{ .start = start, .len = @intCast(regions.len) };
-    }
-
     fn addComptimeSite(
         self: *BodyDraftStore,
         kind: Ast.ComptimeSiteKind,
         owner: Common.LoweringModuleId,
         region: base.Region,
         checked_site: ?checked.CheckedExhaustivenessSiteId,
-        branch_regions: []const base.Region,
     ) Allocator.Error!DraftComptimeSiteId {
         const id: DraftComptimeSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(self.comptime_sites.items.len))));
-        const branch_region_span = try self.addBranchRegionSpan(branch_regions);
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
             .owner = owner,
             .region = region,
             .checked_site = checked_site,
-            .branch_regions = branch_region_span,
         });
         return id;
     }
@@ -19445,7 +20363,11 @@ const BodyDraftStore = struct {
         defer shared_literal_root_defs.deinit();
         var ids = draft_ids;
         ids.shared_literal_root_defs = &shared_literal_root_defs;
-        const evidence_span = try program.addConstFnEvidence(self.const_fn_evidence.items);
+        const evidence_span = try program.addConstFnEvidence(.{
+            .nodes = self.const_fn_evidence.items,
+            .targets = self.const_fn_evidence_targets.items,
+            .structurals = self.const_fn_evidence_structurals.items,
+        });
         const evidence_frames_span = try program.addConstFnEvidenceFrames(self.const_fn_evidence_frames.items);
 
         // The map belongs to this import, not the worker lane: independent
@@ -19488,7 +20410,7 @@ const BodyDraftStore = struct {
 
         for (self.comptime_sites.items, 0..) |site, index| {
             if (!ids.retained(.comptime_sites, index)) continue;
-            const id = try program.addComptimeSite(site.kind, site.owner, site.region, site.checked_site, self.branchRegions(site.branch_regions));
+            const id = try program.addComptimeSite(site.kind, site.owner, site.region, site.checked_site);
             if (@backingInt(id) != ids.core(.comptime_sites, @intCast(index), ids.comptime_site_start)) {
                 Common.invariant("Monotype body draft compile-time site id did not append contiguously");
             }
@@ -19564,15 +20486,6 @@ const BodyDraftStore = struct {
         // separate durable ids even when they instantiate the same binder.
         var durable_capture_ids = collections.DenseMap(checked.CaptureId, checked.CaptureId).init(program.allocator);
         defer durable_capture_ids.deinit();
-        // Every retained local's name goes into one shared backing.
-        var name_bytes_len: usize = 0;
-        for (self.local_names.items, 0..) |name, index| {
-            if (ids.retained(.locals, index)) name_bytes_len += name.len;
-        }
-        if (name_bytes_len > std.math.maxInt(u32)) return error.OutOfMemory;
-        const name_backing = if (name_bytes_len == 0) null else try Ast.SharedLiteralBacking.initUnfilled(program.allocator, name_bytes_len);
-        defer if (name_backing) |backing| backing.owner.release();
-        var name_cursor: u32 = 0;
         for (self.locals.items, 0..) |local, index| {
             if (!ids.retained(.locals, index)) continue;
             const expected = ids.local(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
@@ -19593,16 +20506,7 @@ const BodyDraftStore = struct {
                 .identity = .init(local.identity.binder(), durable_capture_id, local.identity.checkedCaptureId()),
                 .capture_kind = local.capture_kind,
             });
-            const local_name = self.sourceText(self.local_names.items[index]);
-            if (local_name.len == 0) {
-                program.local_names.appendAssumeCapacity(.empty);
-            } else {
-                const backing = name_backing.?;
-                @memcpy(backing.bytes[name_cursor..][0..local_name.len], local_name);
-                program.local_names.appendAssumeCapacity(.{ .backing = backing.bytes, .shared = backing.owner, .offset = name_cursor, .len = @intCast(local_name.len) });
-                backing.owner.retain();
-                name_cursor += @intCast(local_name.len);
-            }
+            program.local_names.appendAssumeCapacity(try program.local_name_table.intern(program.allocator, self.sourceText(self.local_names.items[index])));
         }
 
         try program.fn_def_captures.ensureUnusedCapacity(program.allocator, self.fn_def_captures.items.len);
@@ -19720,7 +20624,7 @@ const BodyDraftStore = struct {
         for (self.fns.items, 0..) |fn_, index| {
             if (emit_fns) |emit| if (!emit[index]) continue;
             program.fns.appendAssumeCapacity(.{
-                .source = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, evidence_span.start, evidence_frames_span.start),
+                .source = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, evidence_span, evidence_frames_span.start),
                 .signature_relation = fn_.signature_relation,
             });
         }
@@ -19728,7 +20632,7 @@ const BodyDraftStore = struct {
         try program.defs.ensureUnusedCapacity(program.allocator, self.defs.items.len);
         for (self.defs.items, 0..) |def, index| {
             if (emit_defs) |emit| if (!emit[index]) continue;
-            const sealed_fn_def = if (def.fn_def) |template| try BodyDraftStore.sealFnTemplate(committed_types, template, evidence_span.start, evidence_frames_span.start) else null;
+            const sealed_fn_def = if (def.fn_def) |template| try BodyDraftStore.sealFnTemplate(committed_types, template, evidence_span, evidence_frames_span.start) else null;
             const sealed_fn_id = if (def.fn_id) |fn_id| ids.fnTarget(fn_id) else null;
             if (sealed_fn_def) |template| {
                 if (sealed_fn_id) |fn_id| {
@@ -19755,7 +20659,7 @@ const BodyDraftStore = struct {
         try program.nested_defs.ensureUnusedCapacity(program.allocator, self.nested_defs.items.len);
         for (self.nested_defs.items, 0..) |def, index| {
             if (emit_nested_defs) |emit| if (!emit[index]) continue;
-            const sealed_fn_def = try BodyDraftStore.sealFnTemplate(committed_types, def.fn_def, evidence_span.start, evidence_frames_span.start);
+            const sealed_fn_def = try BodyDraftStore.sealFnTemplate(committed_types, def.fn_def, evidence_span, evidence_frames_span.start);
             const sealed_fn_id = ids.fnTarget(def.fn_id);
             program.setFnSource(sealed_fn_id, sealed_fn_def);
             program.nested_defs.appendAssumeCapacity(.{
@@ -19818,17 +20722,10 @@ const BodyDraftStore = struct {
         return self.string_bytes.items[span.start..][0..span.len];
     }
 
-    fn branchRegions(self: *const BodyDraftStore, span: DraftSpan(base.Region)) []const base.Region {
-        if (span.start > self.branch_regions.items.len or span.len > self.branch_regions.items.len - span.start) {
-            Common.invariant("Monotype body draft branch-region span was out of bounds");
-        }
-        return self.branch_regions.items[span.start..][0..span.len];
-    }
-
     fn sealFnTemplate(
         committed_types: *CommittedGraphTypes,
         template: DraftFnTemplate,
-        evidence_start: u32,
+        evidence_base: Ast.ConstEvidenceSpans,
         evidence_frames_start: u32,
     ) Allocator.Error!Ast.FnTemplate {
         return .{
@@ -19837,7 +20734,11 @@ const BodyDraftStore = struct {
             .source_fn_key = template.source_fn_key,
             .mono_fn_ty = try template.mono_fn_ty.sealCommitted(committed_types),
             .evidence_digest = template.evidence_digest,
-            .const_evidence = .{ .start = evidence_start + template.const_evidence.start, .len = template.const_evidence.len },
+            .const_evidence = .{
+                .nodes = .{ .start = evidence_base.nodes.start + template.const_evidence.nodes.start, .len = template.const_evidence.nodes.len },
+                .targets = .{ .start = evidence_base.targets.start + template.const_evidence.targets.start, .len = template.const_evidence.targets.len },
+                .structurals = .{ .start = evidence_base.structurals.start + template.const_evidence.structurals.start, .len = template.const_evidence.structurals.len },
+            },
             .const_evidence_frames = .{ .start = evidence_frames_start + template.const_evidence_frames.start, .len = template.const_evidence_frames.len },
             .const_evidence_frame_head = template.const_evidence_frame_head,
         };
@@ -19952,7 +20853,6 @@ const BodyDraftStore = struct {
             .return_,
             .crash,
             .checked_error,
-            .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
@@ -20058,7 +20958,6 @@ const BodyDraftStore = struct {
                 .return_,
                 .crash,
                 .checked_error,
-                .comptime_branch_taken,
                 .comptime_exhaustiveness_failed,
                 .dbg,
                 .expect_err,
@@ -20113,7 +21012,13 @@ const BodyDraftStore = struct {
                 break :blk .{ .static_data_candidate = .{
                     .static_data = static_data_ids[index],
                     .storage = candidate.storage,
-                    .runtime_expr = ids.expr(candidate.runtime_expr),
+                    .value = switch (candidate.value) {
+                        .runtime => |runtime| .{ .runtime = ids.expr(runtime) },
+                        .stored => |stored| .{ .stored = .{
+                            .item_count = stored.item_count,
+                            .uniform_item = if (stored.uniform_item) |item| ids.expr(item) else null,
+                        } },
+                    },
                 } };
             },
             .list => |span| .{ .list = ids.exprSpan(span) },
@@ -20155,6 +21060,7 @@ const BodyDraftStore = struct {
                 .iterator_procedure = call.iterator_procedure,
                 .captures = try self.sealCallCaptureOperandSpan(program, ids, call.captures),
                 .is_cold = call.is_cold,
+                .demand_shaped = ids.callDemandShaped(call.callee),
             } },
             .low_level => |call| .{ .low_level = .{
                 .op = call.op,
@@ -20248,11 +21154,6 @@ const BodyDraftStore = struct {
             .row_widen => |widen| .{ .row_widen = .{ .value = ids.expr(widen.value) } },
             .crash => |literal| .{ .crash = ids.stringLiteral(literal) },
             .checked_error => |literal| .{ .checked_error = ids.stringLiteral(literal) },
-            .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
-                .site = ids.comptimeSite(taken.site),
-                .branch_index = taken.branch_index,
-                .body = ids.expr(taken.body),
-            } },
             .comptime_exhaustiveness_failed => |site| .{ .comptime_exhaustiveness_failed = ids.comptimeSite(site) },
             .dbg => |expr| .{ .dbg = ids.expr(expr) },
             .expect_err => |expect_err| .{ .expect_err = .{
@@ -20350,6 +21251,10 @@ const FinalIdOffsets = struct {
     branch_start: u32,
     if_branch_start: u32,
     fn_slots: []const ?Ast.FnSlot = &.{},
+    /// Per draft function, whether its slot is a demand-shaped
+    /// specialization, so every call to it is demand-shaped. Empty when no
+    /// draft function resolved to one.
+    fn_demand_shaped: []const bool = &.{},
     def_ids: []const ?Ast.DefId = &.{},
     /// Literal root definitions this draft converts at a type an earlier
     /// commit already owns a root for, mapped to that root's definition.
@@ -20502,6 +21407,20 @@ const FinalIdOffsets = struct {
         return switch (body) {
             .roc => |body_expr| .{ .roc = self.expr(body_expr) },
             .hosted => .hosted,
+        };
+    }
+
+    /// Whether a call to `callee` is demand-shaped.
+    fn callDemandShaped(self: FinalIdOffsets, callee: DraftProcCallee) bool {
+        if (self.fn_demand_shaped.len == 0) return false;
+        return switch (callee) {
+            .func => |slot| switch (slot) {
+                .local => |fn_id| switch (fn_id) {
+                    .draft => |draft| self.fn_demand_shaped[@backingInt(draft)],
+                    .final => false,
+                },
+            },
+            .lifted => false,
         };
     }
 
@@ -20970,7 +21889,7 @@ const InterfaceSummaryCache = struct {
         const owned: InterfaceSummaryEntry = .{
             .address = source.address,
             .evidence = .{
-                .nodes = try arena.dupe(check.ConstStore.ConstFnEvidence, source.evidence.nodes),
+                .entries = try check.ConstStore.dupeVector(arena, source.evidence.entries),
                 .frames = try arena.dupe(check.ConstStore.ConstFnEvidenceFrame, source.evidence.frames),
                 .head = source.evidence.head,
                 .digest = source.evidence.digest,
@@ -21893,7 +22812,7 @@ const BodyContext = struct {
                     try self.appendSpanTypes(pending, tag.payloads);
                 }
             },
-            .primitive, .named, .func, .erased => {},
+            .primitive, .named, .func, .erased, .hole => {},
         }
     }
 
@@ -22491,7 +23410,12 @@ const BodyContext = struct {
             .uninitialized,
             .uninitialized_payload,
             => null,
-            .static_data_candidate => |candidate| self.exprImpossibilityProof(candidate.runtime_expr),
+            .static_data_candidate => |candidate| switch (candidate.value) {
+                .runtime => |runtime| self.exprImpossibilityProof(runtime),
+                // A stored list is a value; its repeated item is not evaluated
+                // where the list is read.
+                .stored => null,
+            },
             .comptime_value => |candidate| self.exprImpossibilityProof(candidate.initializer),
             .@"unreachable",
             .break_,
@@ -22615,7 +23539,6 @@ const BodyContext = struct {
             // nested jump. The generated control-flow producer owns that
             // reachability; this local proof builder does not approximate it.
             .join_point => null,
-            .comptime_branch_taken => |branch| self.exprImpossibilityProof(branch.body),
             .dbg => |child| self.exprImpossibilityProof(child),
             .row_widen => |widen| self.exprImpossibilityProof(widen.value),
             .expect_err => |expect_err| self.exprImpossibilityProof(expect_err.msg),
@@ -22721,7 +23644,7 @@ const BodyContext = struct {
                     try layers.append(self.allocator, representation_node);
                     current = backing.node;
                 },
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => break,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => break,
             }
         }
         var expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(current), data);
@@ -22998,7 +23921,7 @@ const BodyContext = struct {
     }
 
     fn addFn(self: *BodyContext, source: Ast.FnTemplate) Allocator.Error!DraftFnId {
-        if (source.const_evidence.len != 0 or source.const_evidence_frames.len != 0 or source.const_evidence_frame_head != null) {
+        if (!source.const_evidence.isEmpty() or source.const_evidence_frames.len != 0 or source.const_evidence_frame_head != null) {
             Common.invariant("body-local function source carried evidence outside its lexical lowering context");
         }
         const stored_evidence = try self.storedEvidence(self.evidence);
@@ -23010,7 +23933,7 @@ const BodyContext = struct {
                 .source_fn_ty = source.source_fn_ty,
                 .source_fn_key = source.source_fn_key,
                 .mono_fn_ty = try self.draftTypeCell(source.mono_fn_ty),
-                .const_evidence = draft_evidence.nodes,
+                .const_evidence = draft_evidence.entries,
                 .const_evidence_frames = draft_evidence.frames,
                 .const_evidence_frame_head = stored_evidence.head,
                 .evidence_digest = evidence_digest,
@@ -23815,6 +24738,7 @@ const BodyContext = struct {
             .list => |elem_ty| .{ .list = elem_ty },
             .func, .erased => .function,
             .zst => .empty_record,
+            .hole => Common.invariant("Str.inspect reached a demand hole"),
             .box => |elem_ty| .{ .box = elem_ty },
         };
     }
@@ -23934,6 +24858,7 @@ const BodyContext = struct {
                 .empty_record,
                 .erased,
                 .zst,
+                .hole,
                 => {},
             }
             std.mem.reverse(NodeId, pending.items[mark..]);
@@ -24720,7 +25645,6 @@ const BodyContext = struct {
                 .return_,
                 .crash,
                 .checked_error,
-                .comptime_branch_taken,
                 .comptime_exhaustiveness_failed,
                 .dbg,
                 .expect_err,
@@ -24939,7 +25863,7 @@ const BodyContext = struct {
                     for (ctx.fieldExprSpan(update.fields)) |field| try search.push(.{ .expr = field.value });
                 },
                 .tag => |tag| try search.pushExprs(ctx.exprSpan(tag.payloads)),
-                .static_data_candidate => |candidate| try search.push(.{ .expr = candidate.runtime_expr }),
+                .static_data_candidate => |candidate| if (candidate.value.subexpression()) |sub| try search.push(.{ .expr = sub }),
                 .comptime_value => |candidate| try search.push(.{ .expr = candidate.initializer }),
                 .nominal,
                 .dbg,
@@ -24949,7 +25873,6 @@ const BodyContext = struct {
                 .row_widen => |widen| try search.push(.{ .expr = widen.value }),
                 .expect_err => |expect_err| try search.push(.{ .expr = expect_err.msg }),
                 .literal_rejected => |rejected| try search.push(.{ .expr = rejected.msg }),
-                .comptime_branch_taken => |taken| try search.push(.{ .expr = taken.body }),
                 .let_ => |let_| {
                     try search.push(.{ .expr = let_.value });
                     try search.push(.{ .bind_pat = let_.bind });
@@ -25157,7 +26080,7 @@ const BodyContext = struct {
                 const backing = named.backing orelse break :blk null;
                 break :blk backing.ty;
             } else null,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => null,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => null,
         };
     }
 
@@ -26076,7 +26999,7 @@ const BodyContext = struct {
         const nominal = task.nominal;
         task.def = try typeDef(self.nameStoreMut(), self.builder.app_module_identity, self.view, nominal.origin_module, nominal.name, nominal.source_decl);
         self.builder.noteBuiltinTryDef(nominal.builtin, self.nameStore(), task.def);
-        task.named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = task.checked_ty };
+        task.named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = task.checked_ty, .ty_module = moduleDigestFromId(self.view.key) };
         frame.cursor = InstNominalCursor.declared_order;
         return .{ .call = .{ .declared_order = try self.boxInstTask(InstDeclaredOrderTask, .{ .nominal = nominal, .args = task.args }) } };
     }
@@ -27571,7 +28494,7 @@ const BodyContext = struct {
             // that signature graph-native so unresolved child cells survive
             // until the owning draft is sealed once.
             .func, .erased => try self.stringExpr(inspect_text.function, ret_ty),
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst => if (try self.graph.typeIsResolved(arg_node))
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst, .hole => if (try self.graph.typeIsResolved(arg_node))
                 try self.inspectCall(local_expr, try self.activeTypeFromNode(arg_node), ret_ty)
             else
                 try self.deferInspectAtNode(local_expr, arg_node, ret_ty),
@@ -27879,21 +28802,21 @@ const BodyContext = struct {
                         try ops.append(gpa, .{ .child = .{ .checked = checked_backing.node, .produced = produced_backing.node } });
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => break :matched false,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => break :matched false,
                 },
                 .list => |checked_elem| switch (produced_content) {
                     .list => |produced_elem| {
                         try ops.append(gpa, .{ .child = .{ .checked = checked_elem, .produced = produced_elem } });
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :matched false,
                 },
                 .box => |checked_elem| switch (produced_content) {
                     .box => |produced_elem| {
                         try ops.append(gpa, .{ .child = .{ .checked = checked_elem, .produced = produced_elem } });
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :matched false,
                 },
                 .tuple => |checked_items| switch (produced_content) {
                     .tuple => |produced_items| {
@@ -27903,14 +28826,14 @@ const BodyContext = struct {
                         }
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :matched false,
                 },
                 .func => |checked_fn| switch (produced_content) {
                     .func => |produced_fn| {
                         if (checked_fn.args.len != produced_fn.args.len) break :matched false;
                         return checked_node;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :matched false,
                 },
                 .record => |checked_row| switch (produced_content) {
                     .record => |produced_row| {
@@ -27922,7 +28845,7 @@ const BodyContext = struct {
                         }
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :matched false,
                 },
                 .tag_union => |checked_row| switch (produced_content) {
                     .tag_union => |produced_row| {
@@ -27945,9 +28868,9 @@ const BodyContext = struct {
                         }
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :matched false,
                 },
-                .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => break :matched false,
+                .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => break :matched false,
             }
         };
         if (!matched) {
@@ -28137,7 +29060,7 @@ const BodyContext = struct {
                     .ext = self.graph.rootNode(produced_row.ext),
                 } });
             },
-            .redirect, .leaf, .unresolved, .primitive, .func, .empty_tag_union, .empty_record, .erased, .zst => unreachable, // frames are pushed only for matched named, list, box, tuple, record, and tag union pairs
+            .redirect, .leaf, .unresolved, .primitive, .func, .empty_tag_union, .empty_record, .erased, .zst, .hole => unreachable, // frames are pushed only for matched named, list, box, tuple, record, and tag union pairs
         }
     }
 
@@ -28188,25 +29111,25 @@ const BodyContext = struct {
                         try items.add(.{ .request = checked_backing.node, .produced = produced_backing.node });
                         children += 1;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return .{ .value = false },
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return .{ .value = false },
                 },
                 .func => |checked_fn| switch (produced_content) {
                     .func => |produced_fn| return .{ .value = checked_fn.args.len == produced_fn.args.len },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return .{ .value = false },
                 },
                 .list => |checked_elem| switch (produced_content) {
                     .list => |produced_elem| {
                         try items.add(.{ .request = checked_elem, .produced = produced_elem });
                         children += 1;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return .{ .value = false },
                 },
                 .box => |checked_elem| switch (produced_content) {
                     .box => |produced_elem| {
                         try items.add(.{ .request = checked_elem, .produced = produced_elem });
                         children += 1;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return .{ .value = false },
                 },
                 .tuple => |checked_items| switch (produced_content) {
                     .tuple => |produced_items| {
@@ -28217,7 +29140,7 @@ const BodyContext = struct {
                             children += 1;
                         }
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return .{ .value = false },
                 },
                 .record => |checked_row| switch (produced_content) {
                     .record => |produced_row| {
@@ -28230,7 +29153,7 @@ const BodyContext = struct {
                             children += 1;
                         }
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return .{ .value = false },
                 },
                 .tag_union => |checked_row| switch (produced_content) {
                     .tag_union => |produced_row| {
@@ -28247,9 +29170,9 @@ const BodyContext = struct {
                             }
                         }
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return .{ .value = false },
                 },
-                .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => return .{ .value = false },
+                .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => return .{ .value = false },
             }
             if (children == 0) return .{ .value = false };
             try self.visiting.put(root_pair, {});
@@ -28271,7 +29194,7 @@ const BodyContext = struct {
         return switch ((try self.graph.content(checked_root))) {
             .empty_record => kind == .record and (try self.graph.content(produced_root)) == .empty_record,
             .empty_tag_union => kind == .tag_union and (try self.graph.content(produced_root)) == .empty_tag_union,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .named, .erased, .zst => false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .named, .erased, .zst, .hole => false,
         };
     }
 
@@ -28427,21 +29350,21 @@ const BodyContext = struct {
             break :relation switch ((try self.graph.content(request_root))) {
                 .primitive => |request_primitive| switch ((try self.graph.content(produced_root))) {
                     .primitive => |produced_primitive| if (request_primitive == produced_primitive) .unchanged else .mismatch,
-                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .list => |request_elem| switch ((try self.graph.content(produced_root))) {
                     .list => |produced_elem| blk: {
                         try ops.append(gpa, .{ .request = request_elem, .produced = produced_elem, .combine = .fold });
                         break :blk null;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .box => |request_elem| switch ((try self.graph.content(produced_root))) {
                     .box => |produced_elem| blk: {
                         try ops.append(gpa, .{ .request = request_elem, .produced = produced_elem, .combine = .fold });
                         break :blk null;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .tuple => |request_items| switch ((try self.graph.content(produced_root))) {
                     .tuple => |produced_items| blk: {
@@ -28451,7 +29374,7 @@ const BodyContext = struct {
                         }
                         break :blk null;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .func => |request_fn| switch ((try self.graph.content(produced_root))) {
                     .func => |produced_fn| blk: {
@@ -28462,7 +29385,7 @@ const BodyContext = struct {
                         try ops.append(gpa, .{ .request = request_fn.ret, .produced = produced_fn.ret, .combine = .fold });
                         break :blk null;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .tag_union => |request_row| switch ((try self.graph.content(produced_root))) {
                     .tag_union => |produced_row| blk: {
@@ -28477,7 +29400,7 @@ const BodyContext = struct {
                         }
                         break :blk null;
                     },
-                    .empty_tag_union, .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => .mismatch,
+                    .empty_tag_union, .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .record => |request_row| switch ((try self.graph.content(produced_root))) {
                     .record => |produced_row| blk: {
@@ -28489,23 +29412,27 @@ const BodyContext = struct {
                         }
                         break :blk null;
                     },
-                    .empty_record, .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .named, .erased, .zst => .mismatch,
+                    .empty_record, .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .empty_tag_union => switch ((try self.graph.content(produced_root))) {
                     .empty_tag_union => .unchanged,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_record, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .empty_record => switch ((try self.graph.content(produced_root))) {
                     .empty_record => .unchanged,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .named, .erased, .zst => .mismatch,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .erased => |request_digest| switch ((try self.graph.content(produced_root))) {
                     .erased => |produced_digest| if (std.mem.eql(u8, request_digest.bytes[0..], produced_digest.bytes[0..])) .unchanged else .mismatch,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst => .mismatch,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst, .hole => .mismatch,
                 },
                 .zst => switch ((try self.graph.content(produced_root))) {
                     .zst => .unchanged,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased => .mismatch,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .hole => .mismatch,
+                },
+                .hole => switch ((try self.graph.content(produced_root))) {
+                    .hole => .unchanged,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
                 },
                 .named,
                 .unresolved,
@@ -28525,7 +29452,7 @@ const BodyContext = struct {
     fn checkedPublicInspectableBacking(self: *BodyContext, node: NodeId) Allocator.Error!?InstBacking {
         const named = switch ((try self.graph.content(node))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
         };
         const backing = named.backing orelse return null;
         if (backing.authority != .checked_public or backing.use != .inspectable) return null;
@@ -29733,7 +30660,7 @@ const BodyContext = struct {
                         const representation_node = (try self.constructorRepresentationNode(request_node));
                         const named = switch ((try self.graph.content(representation_node))) {
                             .named => |value| value,
-                            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("nominal value evidence had no nominal graph representation"),
+                            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("nominal value evidence had no nominal graph representation"),
                         };
                         const backing = named.backing orelse
                             Common.invariant("nominal value evidence graph node had no backing");
@@ -29933,7 +30860,7 @@ const BodyContext = struct {
             task.call_ctx = null;
             return .{ .ret = .{ .node = switch ((try self.graph.content(callable_node))) {
                 .func => |function| function.ret,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function graph node"),
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => Common.invariant("checked dispatch plan had a non-function graph node"),
             } } };
         }
 
@@ -29990,7 +30917,7 @@ const BodyContext = struct {
                 task.call_ctx = null;
                 return .{ .ret = .{ .node = switch ((try self.graph.content(fn_node))) {
                     .func => |function| function.ret,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked indirect call instantiated a non-function graph node"),
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => Common.invariant("checked indirect call instantiated a non-function graph node"),
                 } } };
             },
             // A direct call's request interface.
@@ -30135,7 +31062,7 @@ const BodyContext = struct {
             task.fn_node = (try self.calleeValueInstance(task)) orelse try self.instNode(task.source_fn_ty);
             const fn_graph = switch ((try self.graph.content(task.fn_node))) {
                 .func => |func| func,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked direct call had a non-function instantiation node"),
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => Common.invariant("checked direct call had a non-function instantiation node"),
             };
             if (fn_graph.args.len != task.checked_args.len) {
                 Common.invariant("checked direct call graph arity differed from its argument span");
@@ -30248,7 +31175,7 @@ const BodyContext = struct {
             task.fn_node = try self.instNode(source_fn_ty);
             const fn_graph = switch ((try self.graph.content(task.fn_node))) {
                 .func => |func| func,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function instantiation node"),
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => Common.invariant("checked dispatch plan had a non-function instantiation node"),
             };
             if (fn_graph.args.len != operands.len) {
                 Common.invariant("checked dispatch plan graph arity differed from its operand span");
@@ -31279,7 +32206,6 @@ const BodyContext = struct {
         const if_ = task.if_;
         switch (task.stage) {
             .start => {
-                task.comptime_site = try self.ifComptimeSite(task.expr_id, if_);
                 if (task.output == null) {
                     task.output = try self.beginControlFlowValueOutput(
                         task.expr_id,
@@ -31332,15 +32258,14 @@ const BodyContext = struct {
     }
 
     fn finishIfBranch(self: *BodyContext, task: *IfTask, body: DraftExprId) Allocator.Error!void {
-        const branch_ctx = task.branch_ctx.?;
-        task.branches[task.index].body = try branch_ctx.wrapComptimeBranch(task.comptime_site, task.index, body);
+        task.branches[task.index].body = body;
         if (task.select) try self.includeControlFlowResult(&task.selection, task.branches[task.index].body);
         self.destroyBranchContext(&task.branch_ctx);
         task.index += 1;
     }
 
     fn finishIf(self: *BodyContext, task: *IfTask, else_body: DraftExprId) Allocator.Error!LowerStep {
-        const final_else = try task.branch_ctx.?.wrapComptimeBranch(task.comptime_site, task.if_.branches.len, else_body);
+        const final_else = else_body;
         if (task.select) {
             try self.includeControlFlowResult(&task.selection, final_else);
             for (task.branches) |branch| {
@@ -31610,11 +32535,7 @@ const BodyContext = struct {
                 .pat = pat,
                 .bindings = materialized.guard_bindings,
                 .guard = guard,
-                .body = try entry.ctx.wrapComptimeBranch(
-                    task.comptime_site,
-                    entry.source_index,
-                    materialized.body,
-                ),
+                .body = materialized.body,
             };
             index += 1;
         }
@@ -33760,7 +34681,7 @@ const BodyContext = struct {
                 // its own signature fixes it.
                 const item_node = switch (try self.graph.content(assembler_fn.args[0])) {
                     .list => |elem| elem,
-                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("interpolation assembler did not take a values list"),
+                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => Common.invariant("interpolation assembler did not take a values list"),
                 };
                 const interpolation = switch (self.view.bodies.expr(task.expr).data) {
                     .interpolation => |value| value,
@@ -34221,7 +35142,7 @@ const BodyContext = struct {
                     // A custom target converts through its checked conversion
                     // plan at this node; the target's own arguments may still
                     // resolve through later relations in this body.
-                    .named, .record, .tuple, .tag_union, .empty_tag_union, .empty_record, .list, .box, .func, .erased, .zst => return self.exprInnerDone(task, try self.lowerSpecializedLiteralConversion(expr_id, expr_node)),
+                    .named, .record, .tuple, .tag_union, .empty_tag_union, .empty_record, .list, .box, .func, .erased, .zst, .hole => return self.exprInnerDone(task, try self.lowerSpecializedLiteralConversion(expr_id, expr_node)),
                     .redirect, .leaf => Common.invariant("literal type node was not a class root"),
                 }
                 const expr_ty = try self.resolvedTypeViewForNode(expr_node);
@@ -34244,7 +35165,7 @@ const BodyContext = struct {
                             .{ .crash = try self.addStringLiteral("invalid string literal") },
                         ));
                     },
-                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => {},
                 }
                 try self.graph.unify(expr_node, try self.graph.importMono(try self.primitiveType(.str)));
                 frame.cursor = 1;
@@ -34776,7 +35697,7 @@ const BodyContext = struct {
         }
         const callable_graph = switch ((try self.graph.content(callable_node))) {
             .func => |function| function,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function graph node"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => Common.invariant("checked dispatch plan had a non-function graph node"),
         };
         task.callable_node = callable_node;
         task.callable_args = callable_graph.args;
@@ -35423,7 +36344,7 @@ const BodyContext = struct {
                 .at_nodes => if (exprs.len != task.nodes.len) Common.invariant("checked call argument count differed from graph function arity"),
                 .list_elements => task.elem_ty = switch (shapeContent(self.typeStore(), task.list_ty)) {
                     .list => |elem| elem,
-                    .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("list expression had a non-list monotype"),
+                    .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => Common.invariant("list expression had a non-list monotype"),
                 },
             }
             task.reserved = try self.reserveExprSpan(exprs.len);
@@ -37765,7 +38686,7 @@ const BodyContext = struct {
         const item_fields = switch (shapeContent(self.typeStore(), items_field.ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
             .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => return null,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .hole => return null,
         };
         return .{
             .items_field = items_field,
@@ -37799,11 +38720,11 @@ const BodyContext = struct {
         if (self.sameType(left_ty, right_ty)) return true;
         const left = switch (self.typeStore().get(left_ty)) {
             .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return false,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return false,
         };
         const right = switch (self.typeStore().get(right_ty)) {
             .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return false,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return false,
         };
         if (!sameTypeDef(left.def, right.def)) return false;
         const left_args = self.typeStore().span(left.args);
@@ -37843,7 +38764,7 @@ const BodyContext = struct {
         return switch (shapeContent(self.typeStore(), spec_backing_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
             .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("generated tag-union spec backing was not a record"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .hole => Common.invariant("generated tag-union spec backing was not a record"),
         };
     }
 
@@ -37856,14 +38777,14 @@ const BodyContext = struct {
                     false,
                 .none => false,
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => false,
         };
     }
 
     fn isForcedDynamicIteratorNode(self: *BodyContext, node: NodeId) Allocator.Error!bool {
         return switch ((try self.graph.content(node))) {
             .named => |named| named.def.iterator_representation == .forced_dynamic,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => false,
         };
     }
 
@@ -38142,7 +39063,7 @@ const BodyContext = struct {
     ) Allocator.Error![]const NodeId {
         const named = switch ((try self.graph.content(iterator))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator component nodes requested for a non-named type"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated iterator component nodes requested for a non-named type"),
         };
         if (named.args.len != expected_components + 1) {
             Common.invariant("generated iterator producer did not contain its component count");
@@ -38208,7 +39129,7 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const public_named = switch ((try self.graph.content(public_iterator))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator requested a non-named public type"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated iterator requested a non-named public type"),
         };
         if (public_named.args.len == 0) {
             Common.invariant("generated iterator requested a public type without an item argument");
@@ -38232,7 +39153,7 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const public_named = switch ((try self.graph.content(public_iterator))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator requested a non-named public type"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated iterator requested a non-named public type"),
         };
         const owner = public_named.builtin_owner orelse
             Common.invariant("generated iterator requested an Iter type without producer-owned builtin identity");
@@ -38296,7 +39217,7 @@ const BodyContext = struct {
         for (components) |component| {
             const named = switch ((try self.graph.content(component))) {
                 .named => |named| named,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => continue,
             };
             switch (named.def.iterator_representation) {
                 .forced_dynamic => return null,
@@ -39144,7 +40065,7 @@ const BodyContext = struct {
                 if (args.len != 1) Common.invariant("FieldNames nominal did not have one type argument");
                 break :blk GuardedList.at(args, 0);
             },
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("FieldNames value was not a named type"),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("FieldNames value was not a named type"),
         };
     }
 
@@ -39152,7 +40073,7 @@ const BodyContext = struct {
         return switch (shapeContent(self.typeStore(), shape_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
             .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("FieldNames metadata requested for a non-record shape"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .hole => Common.invariant("FieldNames metadata requested for a non-record shape"),
         };
     }
 
@@ -39249,7 +40170,7 @@ const BodyContext = struct {
                     for (0..tag.payloads.len) |index| pending.appendAssumeCapacity(.{ .ty = self.spanTypeAt(tag.payloads, index) });
                 }
             },
-            .primitive, .named, .func, .erased => {},
+            .primitive, .named, .func, .erased, .hole => {},
         }
         std.mem.reverse(CodecShapeStep, pending.items[start..]);
     }
@@ -39345,7 +40266,7 @@ const BodyContext = struct {
                         str_ty,
                     ),
                 },
-                .list, .box, .tuple, .tag_union, .primitive, .named, .func, .erased => {},
+                .list, .box, .tuple, .tag_union, .primitive, .named, .func, .erased, .hole => {},
             }
             try self.pushCodecShapeComponents(&pending, shape_ty, switch (kind) {
                 .parser => .ty,
@@ -39514,7 +40435,7 @@ const BodyContext = struct {
                 .record, .zst => if (plan == null or self.parserPlanContains(plan.?, shape_ty)) {
                     try shapes.append(self.allocator, shape_ty);
                 },
-                .list, .box, .tuple, .tag_union, .primitive, .named, .func, .erased => {},
+                .list, .box, .tuple, .tag_union, .primitive, .named, .func, .erased, .hole => {},
             }
             try self.pushCodecShapeComponents(&pending, shape_ty, .ty);
         }
@@ -39843,7 +40764,7 @@ const BodyContext = struct {
         const record_fields = try GuardedList.dupe(self.allocator, Type.Field, switch (shapeContent(self.typeStore(), shape_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
             .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("record parser requested for a non-record shape"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .hole => Common.invariant("record parser requested for a non-record shape"),
         });
         defer self.allocator.free(record_fields);
 
@@ -41035,7 +41956,7 @@ const BodyContext = struct {
                 return try self.lowerParseTupleFromState(item_tys, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
             },
             .box => |payload_ty| return try self.lowerParseBoxFromState(payload_ty, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan),
-            .primitive, .named, .record, .tag_union, .func, .erased, .zst => {},
+            .primitive, .named, .record, .tag_union, .func, .erased, .zst, .hole => {},
         }
         return try self.lowerParseShapeFromState(shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
     }
@@ -42292,7 +43213,7 @@ const BodyContext = struct {
         self.assertSameType(source_ret_info.ok_ty, target_ret_info.ok_ty, "custom parser result Ok type differed from derived parser result Ok type");
         const parse_ok_fields = switch (shapeContent(self.typeStore(), source_ret_info.ok_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("custom parser result Ok type was not a parse result record"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("custom parser result Ok type was not a parse result record"),
         };
         var found_value = false;
         for (0..GuardedList.borrowLen(parse_ok_fields)) |index| {
@@ -42594,7 +43515,7 @@ const BodyContext = struct {
         const record_fields = try GuardedList.dupe(self.allocator, Type.Field, switch (shapeContent(self.typeStore(), record_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
             .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("record finish Ok type was not a record"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .hole => Common.invariant("record finish Ok type was not a record"),
         });
         defer self.allocator.free(record_fields);
         if (record_fields.len != record_slots.fieldCount()) Common.invariant("record parse state arity did not match finish record field count");
@@ -42699,7 +43620,7 @@ const BodyContext = struct {
         return switch (shapeContent(self.typeStore(), shape_ty)) {
             .record, .zst => .{ .tag_text = "Record" },
             .tag_union => .{ .tag_text = "TagUnion" },
-            .primitive, .named, .tuple, .list, .box, .func, .erased => Common.invariant("parser shape was not supported"),
+            .primitive, .named, .tuple, .list, .box, .func, .erased, .hole => Common.invariant("parser shape was not supported"),
         };
     }
 
@@ -42717,7 +43638,7 @@ const BodyContext = struct {
         const value_ty = self.recordFieldType(ret_info.ok_ty, value_name);
         const tag_span = switch (shapeContent(self.typeStore(), value_ty)) {
             .tag_union => |span| span,
-            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("ParseTagUnionSpec.parse value type was not a tag union"),
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => Common.invariant("ParseTagUnionSpec.parse value type was not a tag union"),
         };
         const spec_ty = arg_tys[0];
         const spec_value = lowered_args[0];
@@ -44509,7 +45430,7 @@ const BodyContext = struct {
                 if (raw_pattern >= store_view.bodies.pattern_binder_by_pattern.len) {
                     Common.invariant("hoisted const result pattern was outside the binder index");
                 }
-                const binder = store_view.bodies.pattern_binder_by_pattern[raw_pattern] orelse return null;
+                const binder = store_view.bodies.pattern_binder_by_pattern[raw_pattern].get() orelse return null;
                 return .{ .binder = binder, .root = entry.root };
             },
         };
@@ -45916,14 +46837,18 @@ const BodyContext = struct {
             };
             if (self.draft.static_data_candidate_exprs.get(address)) |existing| return existing;
 
-            const previous_part_root = self.static_data_part_root;
-            self.static_data_part_root = staticDataPartRootFor(store_view, node, const_locator, checked_type);
-            defer self.static_data_part_root = previous_part_root;
-            const runtime_expr = try runConstRestore(self, store_view, type_view, node, ty, const_locator);
+            const value: DraftStaticDataCandidateValue = if (try self.builder.storedListShape(store_view, node)) |shape|
+                .{ .stored = try self.storedStaticList(store_view, type_view, shape, .{ .sealed = listElemType(self.typeStore(), ty) }, const_locator) }
+            else runtime: {
+                const previous_part_root = self.static_data_part_root;
+                self.static_data_part_root = staticDataPartRootFor(store_view, node, const_locator, checked_type);
+                defer self.static_data_part_root = previous_part_root;
+                break :runtime .{ .runtime = try runConstRestore(self, store_view, type_view, node, ty, const_locator) };
+            };
             const candidate_expr = try self.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
                 .static_data = id,
                 .storage = constStaticDataStorage(store_view, node),
-                .runtime_expr = runtime_expr,
+                .value = value,
             } } });
             try self.draft.static_data_candidate_exprs.put(address, candidate_expr);
             return candidate_expr;
@@ -45948,17 +46873,20 @@ const BodyContext = struct {
             self.builder.static_data_literals and
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
             self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn);
-        const previous_part_root = self.static_data_part_root;
-        self.static_data_part_root = if (candidate) staticDataPartRootFor(store_view, node, const_locator, checked_type) else null;
-        const runtime_expr = runtime: {
+        const stored_shape = if (candidate) try self.builder.storedListShape(store_view, node) else null;
+        const value: DraftStaticDataCandidateValue = if (stored_shape) |shape|
+            .{ .stored = try self.storedStaticList(store_view, type_view, shape, .{ .graph = try self.graph.listElementNode(request_node) }, const_locator) }
+        else runtime: {
+            const previous_part_root = self.static_data_part_root;
+            self.static_data_part_root = if (candidate) staticDataPartRootFor(store_view, node, const_locator, checked_type) else null;
             defer self.static_data_part_root = previous_part_root;
-            break :runtime try self.restoreConstNodeAtNodeWithStaticRoot(
+            break :runtime .{ .runtime = try self.restoreConstNodeAtNodeWithStaticRoot(
                 store_view,
                 type_view,
                 node,
                 request_node,
                 const_locator,
-            );
+            ) };
         };
         if (candidate) {
             const id = try self.draftStaticDataRequest(
@@ -45970,10 +46898,10 @@ const BodyContext = struct {
             return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(request_node), .{ .static_data_candidate = .{
                 .static_data = id,
                 .storage = constStaticDataStorage(store_view, node),
-                .runtime_expr = runtime_expr,
+                .value = value,
             } });
         }
-        return runtime_expr;
+        return value.runtime;
     }
 
     /// The part root a candidate's restore runs under: the candidate itself
@@ -46038,11 +46966,14 @@ const BodyContext = struct {
 
         self.static_data_part_root = null;
         defer self.static_data_part_root = root;
-        const runtime_expr = try runConstRestore(self, store_view, type_view, node, ty, root.const_locator);
+        const value: DraftStaticDataCandidateValue = if (try self.builder.storedListShape(store_view, node)) |shape|
+            .{ .stored = try self.storedStaticList(store_view, type_view, shape, .{ .sealed = listElemType(self.typeStore(), ty) }, root.const_locator) }
+        else
+            .{ .runtime = try runConstRestore(self, store_view, type_view, node, ty, root.const_locator) };
         const candidate_expr = try self.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
             .static_data = id,
             .storage = constStaticDataStorage(store_view, node),
-            .runtime_expr = runtime_expr,
+            .value = value,
         } } });
         try self.draft.static_data_candidate_exprs.put(address, candidate_expr);
         return candidate_expr;
@@ -46056,18 +46987,54 @@ const BodyContext = struct {
         request_node: NodeId,
     ) Allocator.Error!DraftExprId {
         const root = self.static_data_part_root.?;
-        const runtime_expr = runtime: {
+        const value: DraftStaticDataCandidateValue = value: {
             self.static_data_part_root = null;
             defer self.static_data_part_root = root;
-            break :runtime try self.restoreConstNodeAtNodeWithStaticRoot(store_view, store_view, node, request_node, root.const_locator);
+            if (try self.builder.storedListShape(store_view, node)) |shape| {
+                break :value .{ .stored = try self.storedStaticList(store_view, store_view, shape, .{ .graph = try self.graph.listElementNode(request_node) }, root.const_locator) };
+            }
+            break :value .{ .runtime = try self.restoreConstNodeAtNodeWithStaticRoot(store_view, store_view, node, request_node, root.const_locator) };
         };
         const cell = DraftTypeCell.fromGraphNode(request_node);
         const id = try self.draftStaticDataRequest(root.const_locator, node, root.checked_type, cell);
         return try self.addExprWithTypeCell(cell, .{ .static_data_candidate = .{
             .static_data = id,
             .storage = constStaticDataStorage(store_view, node),
-            .runtime_expr = runtime_expr,
+            .value = value,
         } });
+    }
+
+    /// Where a stored list's repeated item restores: at its element type, or
+    /// at its element's graph node.
+    const StoredItemTarget = union(enum) {
+        sealed: Type.TypeId,
+        graph: NodeId,
+    };
+
+    /// The stored list a candidate freezes from (`Ast.StoredStaticList`), with
+    /// its repeated item, when it has one, restored at `item_target`. The
+    /// item is not a part of any candidate.
+    fn storedStaticList(
+        self: *BodyContext,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        shape: Builder.StoredListShape,
+        item_target: StoredItemTarget,
+        const_locator: checked.ConstLocator,
+    ) Allocator.Error!DraftStoredStaticList {
+        const uniform_item: ?DraftExprId = if (shape.uniform_item) |item| item: {
+            const part_root = self.static_data_part_root;
+            self.static_data_part_root = null;
+            defer self.static_data_part_root = part_root;
+            break :item switch (item_target) {
+                .sealed => |item_ty| try runConstRestore(self, store_view, type_view, item, item_ty, const_locator),
+                .graph => |item_node| try self.restoreConstNodeAtNodeWithStaticRoot(store_view, type_view, item, item_node, const_locator),
+            };
+        } else null;
+        return .{
+            .item_count = shape.item_count,
+            .uniform_item = uniform_item,
+        };
     }
 
     fn restoreConstNodeAtNode(
@@ -46231,7 +47198,7 @@ const BodyContext = struct {
                 const record_node = switch ((try self.graph.content(request_node))) {
                     .named => |named| (named.backing orelse
                         Common.invariant("ConstStore record restored through a named graph node without a backing")).node,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => request_node,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => request_node,
                 };
                 const graph_fields = (try self.graph.recordNodes(record_node)).fields;
                 if (graph_fields.len != items.len) Common.invariant("ConstStore record length differs from checked graph type");
@@ -46289,8 +47256,8 @@ const BodyContext = struct {
                     .zst => .unit,
                     .scalar => |scalar| restoreScalar(BodyExprData, scalar),
                     .str => |str| .{ .str_lit = try self.addStringView(
-                        store_view.const_store.blobData(str.data),
-                        str.offset,
+                        store_view.const_store.strBytes(str),
+                        0,
                         str.len,
                     ) },
                     .crash => |str| .{ .crash = try self.addStringView(
@@ -46602,6 +47569,7 @@ const BodyContext = struct {
                     .named_type = .{
                         .module = named.named_type.module,
                         .ty = named.named_type.ty,
+                        .ty_module = named.named_type.ty_module,
                     },
                     .def = def,
                     .kind = monotypeNamedKind(named.kind),
@@ -47082,7 +48050,7 @@ const BodyContext = struct {
             .source_fn_ty = boundary.fn_value.source_fn_ty,
             .source_fn_key = boundary.fn_value.source_fn_key,
             .mono_fn_ty = request_cell,
-            .const_evidence = draft_evidence.nodes,
+            .const_evidence = draft_evidence.entries,
             .const_evidence_frames = draft_evidence.frames,
             .const_evidence_frame_head = stored_evidence.head,
             .evidence_digest = evidence_digest,
@@ -47598,7 +48566,7 @@ const BodyContext = struct {
     fn recordFieldByName(self: *BodyContext, ty: Type.TypeId, name: names.RecordFieldNameId) Type.Field {
         const fields = switch (shapeContent(self.typeStore(), ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("expected record field belonged to a non-record monotype type"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("expected record field belonged to a non-record monotype type"),
         };
         for (0..GuardedList.borrowLen(fields)) |index| {
             const field = GuardedList.at(fields, index);
@@ -47612,7 +48580,7 @@ const BodyContext = struct {
     fn recordFieldByTextOptional(self: *BodyContext, ty: Type.TypeId, text: []const u8) ?Type.Field {
         const fields = switch (shapeContent(self.typeStore(), ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return null,
         };
         for (0..GuardedList.borrowLen(fields)) |index| {
             const field = GuardedList.at(fields, index);
@@ -47628,7 +48596,7 @@ const BodyContext = struct {
                 if (args.len != 1) Common.invariant("Iter nominal did not have one type argument");
                 break :blk GuardedList.at(args, 0);
             },
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("generated interpolation iterator expected named Iter type"),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("generated interpolation iterator expected named Iter type"),
         };
     }
 
@@ -47916,6 +48884,7 @@ const BodyContext = struct {
                 },
                 .erased => |erased| return actual_content == .erased and std.mem.eql(u8, erased.bytes[0..], actual_content.erased.bytes[0..]),
                 .zst => return actual_content == .zst,
+                .hole => return actual_content == .hole,
             }
         }
     };
@@ -48040,7 +49009,7 @@ const BodyContext = struct {
     ) ?Type.FieldDefault {
         const span = switch (shapeContent(self.typeStore(), record_ty)) {
             .record => |span| span,
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return null,
         };
         const fields = self.typeStore().fieldSpan(span);
         for (0..GuardedList.borrowLen(fields)) |index| {
@@ -48633,7 +49602,7 @@ const BodyContext = struct {
         } else {
             const target_fields = switch (shapeContent(self.typeStore(), ty)) {
                 .record => |fields| fields,
-                .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("record expression had a non-record monotype"),
+                .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("record expression had a non-record monotype"),
             };
             var labels = try self.recordExprLabels(record);
             defer labels.deinit(self.allocator);
@@ -48760,7 +49729,7 @@ const BodyContext = struct {
 
         const target_fields = switch (shapeContent(self.typeStore(), ty)) {
             .record => |fields| fields,
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("record expression had a non-record monotype"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("record expression had a non-record monotype"),
         };
         const target_field_count: usize = @intCast(target_fields.len);
         const lowered = try self.allocator.alloc(DraftFieldExpr, target_field_count);
@@ -49238,7 +50207,6 @@ const BodyContext = struct {
                 .return_,
                 .crash,
                 .checked_error,
-                .comptime_branch_taken,
                 .comptime_exhaustiveness_failed,
                 .dbg,
                 .expect_err,
@@ -49889,7 +50857,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const primitive = switch (shapeContent(self.typeStore(), target_ty)) {
             .primitive => |p| p,
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(expr_id, try self.graph.importMono(target_ty)),
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return try self.lowerSpecializedLiteralConversion(expr_id, try self.graph.importMono(target_ty)),
         };
         const data = (try self.numeralBits(numeral.literal, primitive)) orelse blk: {
             // A value that does not fit its concrete integer or Dec target (a
@@ -49925,7 +50893,7 @@ const BodyContext = struct {
                 }
                 return try self.lowerQuoteValue(quote.literal, target_ty);
             },
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(expr_id, try self.graph.importMono(target_ty)),
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return try self.lowerSpecializedLiteralConversion(expr_id, try self.graph.importMono(target_ty)),
         }
     }
 
@@ -50057,7 +51025,7 @@ const BodyContext = struct {
         };
         const str_ty = switch (shapeContent(self.typeStore(), list_ty)) {
             .list => |elem| elem,
-            .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("interpolation segments operand had a non-list monotype"),
+            .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => Common.invariant("interpolation segments operand had a non-list monotype"),
         };
         const segments = try self.allocator.alloc(DraftExprId, interpolation.segments.len);
         defer self.allocator.free(segments);
@@ -50124,7 +51092,7 @@ const BodyContext = struct {
         }
         const field_span = switch (shapeContent(self.typeStore(), ty)) {
             .record => |span| span,
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("Numeral Literal payload was not a record"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("Numeral Literal payload was not a record"),
         };
         const field_count: usize = @intCast(field_span.len);
         const lowered = try self.allocator.alloc(DraftFieldExpr, field_count);
@@ -50160,7 +51128,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const elem_ty = switch (shapeContent(self.typeStore(), ty)) {
             .list => |elem| elem,
-            .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("Numeral digit field was not a List(U8)"),
+            .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => Common.invariant("Numeral digit field was not a List(U8)"),
         };
         const items = try self.allocator.alloc(DraftExprId, values.len);
         defer self.allocator.free(items);
@@ -50180,7 +51148,7 @@ const BodyContext = struct {
     fn monoTagByName(self: *BodyContext, ty: Type.TypeId, name: names.TagNameId) Type.Tag {
         const tags = switch (shapeContent(self.typeStore(), ty)) {
             .tag_union => |span| self.typeStore().tagSpan(span),
-            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("expected tag belonged to a non-union monotype type"),
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => Common.invariant("expected tag belonged to a non-union monotype type"),
         };
         for (0..GuardedList.borrowLen(tags)) |index| {
             const tag = GuardedList.at(tags, index);
@@ -50199,7 +51167,7 @@ const BodyContext = struct {
                 }
                 return null;
             },
-            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => null,
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => null,
         };
     }
 
@@ -50216,7 +51184,7 @@ const BodyContext = struct {
         if (!self.typeHasBuiltinOwner(ty, .set)) return null;
         const named = switch (self.typeStore().get(ty)) {
             .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("builtin Set type was not a named monotype"),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("builtin Set type was not a named monotype"),
         };
         const args = self.typeStore().span(named.args);
         if (args.len != 1) Common.invariant("builtin Set type had an unexpected arity");
@@ -50232,7 +51200,7 @@ const BodyContext = struct {
         if (!self.typeHasBuiltinOwner(ty, .dict)) return null;
         const named = switch (self.typeStore().get(ty)) {
             .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("builtin Dict type was not a named monotype"),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("builtin Dict type was not a named monotype"),
         };
         const args = self.typeStore().span(named.args);
         if (args.len != 2) Common.invariant("builtin Dict type had an unexpected arity");
@@ -50424,11 +51392,11 @@ const BodyContext = struct {
     fn dictKeyUnitTags(self: *BodyContext, ty: Type.TypeId) ?Type.Span {
         switch (self.typeStore().get(ty)) {
             .named => |named| if (named.kind != .alias) return null,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => {},
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => {},
         }
         const tags_span = switch (shapeContent(self.typeStore(), ty)) {
             .tag_union => |span| span,
-            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return null,
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => return null,
         };
         const tags = self.typeStore().tagSpan(tags_span);
         if (tags.len == 0) return null;
@@ -50626,7 +51594,7 @@ const BodyContext = struct {
                 .parent = &restored[index - 1],
             };
         }
-        if (cursor != fn_value.evidence.len) {
+        if (cursor != fn_value.evidence.nodes.len) {
             Common.invariant("stored function evidence contained unreferenced nodes");
         }
         const expected_head: LexicalDispatchScope = switch (fn_value.fn_def) {
@@ -50741,7 +51709,7 @@ const BodyContext = struct {
         pending: ?union(enum) {
             nested: struct {
                 materialized: *SpecEvidenceTarget,
-                stored: @FieldType(check.ConstStore.ConstFnEvidence, "target"),
+                stored: check.ConstStore.ConstFnTargetEvidence,
                 nested_start: usize,
                 subtree_len: usize,
             },
@@ -50756,7 +51724,7 @@ const BodyContext = struct {
     /// nesting, so each nested vector is a frame rather than a native call.
     fn materializeConstFnEvidenceVector(
         self: *BodyContext,
-        nodes: []const check.ConstStore.ConstFnEvidence,
+        evidence: check.ConstStore.ConstFnEvidenceVector,
         cursor: *usize,
         count: u32,
     ) Allocator.Error![]const SpecEvidence {
@@ -50790,12 +51758,13 @@ const BodyContext = struct {
                 parent.next += 1;
                 continue;
             }
-            if (cursor.* >= nodes.len) Common.invariant("stored function evidence ended before its declared vector length");
-            const stored = nodes[cursor.*];
+            if (cursor.* >= evidence.nodes.len) Common.invariant("stored function evidence ended before its declared vector length");
+            const stored = evidence.nodes[cursor.*];
             cursor.* += 1;
             var contracts_target: ?*SpecEvidenceTarget = null;
             frame.out[frame.next] = switch (stored) {
-                .target => |target| blk: {
+                .target => |target_index| blk: {
+                    const target = evidence.target(target_index).*;
                     const materialized = try arena.create(SpecEvidenceTarget);
                     switch (target.nested) {
                         .resolved => |resolved| {
@@ -50815,7 +51784,8 @@ const BodyContext = struct {
                         },
                     }
                 },
-                .structural => |stored_structural| blk: {
+                .structural => |structural_index| blk: {
+                    const stored_structural = evidence.structural(structural_index);
                     const restored_checked: ?CheckedSpecStructuralEvidence = if (stored_structural.checked) |stored_checked| restored: {
                         const view = self.builder.moduleForDigest(stored_checked.view);
                         if (!std.meta.eql(view.types.rootKey(stored_checked.dispatcher_ty), stored_checked.dispatcher_key) or
@@ -50851,12 +51821,7 @@ const BodyContext = struct {
                 .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
             };
-            const contract_count: u32 = switch (stored) {
-                .target => |target| target.callable_contracts,
-                .structural => |stored_structural| stored_structural.callable_contracts,
-                .from_callable => |use| use.callable_contracts,
-                .from_scheme, .unreachable_value, .checked_error => 0,
-            };
+            const contract_count = evidence.callableContracts(stored);
             if (contract_count != 0) {
                 frame.pending = .{ .contracts = contracts_target };
                 try frames.append(self.allocator, .{ .out = try arena.alloc(SpecEvidence, contract_count) });
@@ -50878,7 +51843,7 @@ const BodyContext = struct {
     fn finishStoredEvidenceTarget(
         self: *BodyContext,
         materialized: *SpecEvidenceTarget,
-        target: @FieldType(check.ConstStore.ConstFnEvidence, "target"),
+        target: check.ConstStore.ConstFnTargetEvidence,
         nested: NestedSpecEvidence,
     ) Allocator.Error!void {
         materialized.* = .{
@@ -50960,11 +51925,11 @@ const BodyContext = struct {
                     if (step.data >= function.args.len) return null;
                     return function.args[step.data];
                 },
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
             },
             .fn_ret => switch (content) {
                 .func => |function| return function.ret,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
             },
             .alias_arg, .nominal_arg => switch (content) {
                 .named => |named| {
@@ -50975,26 +51940,26 @@ const BodyContext = struct {
                     if (step.data != 0) return null;
                     return payload;
                 },
-                .redirect, .leaf, .unresolved, .primitive, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+                .redirect, .leaf, .unresolved, .primitive, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
             },
             .alias_backing, .nominal_backing => switch (content) {
                 .named => |named| return (named.backing orelse return null).node,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
             },
             .tuple_elem => switch (content) {
                 .tuple => |items| {
                     if (step.data >= items.len) return null;
                     return items[step.data];
                 },
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
             },
             .record_field => switch (content) {
                 .record => return try self.graph.recordFieldValueNode(node, try recordFieldName(self.nameStoreMut(), view, @fromBackingInt(step.data))),
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
             },
             .tag_payload_tag => switch (content) {
                 .tag_union => return node,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
             },
             .tag_payload_index => {
                 const tag_node = path_nodes[path_node].parent;
@@ -51007,7 +51972,7 @@ const BodyContext = struct {
                         try tagName(self.nameStoreMut(), view, @fromBackingInt(@intCast(tag_step.data))),
                         step.data,
                     ),
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => null,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => null,
                 };
             },
         }
@@ -51136,7 +52101,7 @@ const BodyContext = struct {
     fn useSiteSchema(self: *BodyContext, expr: checked.CheckedExprId) Allocator.Error!SchemeRequirements {
         const raw_expr = @backingInt(expr);
         if (raw_expr >= self.view.resolved_refs.by_checked_expr.len) return emptySchema(self.view);
-        const ref_id = self.view.resolved_refs.by_checked_expr[raw_expr] orelse return emptySchema(self.view);
+        const ref_id = self.view.resolved_refs.by_checked_expr[raw_expr].get() orelse return emptySchema(self.view);
         const record = self.view.resolved_refs.records[@backingInt(ref_id)];
         return switch (record.ref) {
             .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| self.procedureUseSchema(proc),
@@ -52356,7 +53321,7 @@ const BodyContext = struct {
         const default_phase: ?checked.NumericDefaultPhase = switch ((try self.graph.content(node))) {
             .redirect, .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns redirect or leaf content
             .unresolved => |variable| variable.numeric_default_phase,
-            .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => null,
+            .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => null,
         };
         if (default_phase) |phase| {
             if (checked.literal_defaulting.defaultTargetForPhase(phase)) |target| {
@@ -52809,7 +53774,7 @@ const BodyContext = struct {
             try self.replayStoredEvidenceRelations(self.evidence);
             return;
         }
-        if (fn_value.evidence.len != 0 or fn_value.evidence_frame_head != null) {
+        if (fn_value.evidence.nodes.len != 0 or fn_value.evidence_frame_head != null) {
             Common.invariant("stored generated runtime had malformed evidence topology");
         }
         switch (plan.resolution) {
@@ -53241,7 +54206,7 @@ const BodyContext = struct {
                     .row_extension, .placeholder => false,
                 };
             },
-            .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => false,
+            .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => false,
         };
     }
 
@@ -53275,6 +54240,7 @@ const BodyContext = struct {
             .empty_record,
             .erased,
             .zst,
+            .hole,
             => return null,
         };
     }
@@ -54187,7 +55153,7 @@ const BodyContext = struct {
                         break :blk;
                     },
                     .zst => {},
-                    .primitive, .named, .func, .erased => Common.invariant("structural parser dispatcher was not a supported structural type"),
+                    .primitive, .named, .func, .erased, .hole => Common.invariant("structural parser dispatcher was not a supported structural type"),
                 }
             }
         }
@@ -54234,7 +55200,7 @@ const BodyContext = struct {
             .source_fn_ty = plan.callable_ty,
             .source_fn_key = generatedCodecRuntimeKey("roc.generated_structural_parser_runtime", self.current_fn_key, plan.expr),
             .mono_fn_ty = ret_ty,
-            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
         });
         var parser_expr = try self.addExpr(.{ .ty = ret_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
@@ -54342,7 +55308,7 @@ const BodyContext = struct {
             .source_fn_ty = plan.callable_ty,
             .source_fn_key = runtime_source_fn_key,
             .mono_fn_ty = ret_ty,
-            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
         });
         var encoder_expr = try self.addExpr(.{ .ty = ret_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
@@ -55224,7 +56190,7 @@ const BodyContext = struct {
                 unboxed.value_expr = try self.lowLevelExpr(.box_unbox, &.{value.value_expr}, payload_ty);
                 return .{ .tail = .{ .shape = .{ .inputs = task.inputs, .value = unboxed } } };
             },
-            .primitive, .named, .record, .tag_union, .func, .erased, .zst => {},
+            .primitive, .named, .record, .tag_union, .func, .erased, .zst, .hole => {},
         }
         if (self.scalarCodecMethodName(shape_ty, "encode_")) |method_name| {
             return encodeExpr(try self.lowerEncodeFormatMethod(method_name, &.{ value.value_expr, value.state_expr }, &.{ shape_ty, value.state_ty }, shape_ty, value.ret_ty));
@@ -55244,7 +56210,7 @@ const BodyContext = struct {
         return switch (shapeContent(self.typeStore(), shape_ty)) {
             .record, .zst => .{ .tail = .{ .record = .{ .inputs = task.inputs, .value = value } } },
             .tag_union => |tags_span| .{ .tail = .{ .tag_union = .{ .inputs = task.inputs, .value = value, .tags_span = tags_span } } },
-            .primitive, .named, .tuple, .list, .box, .func, .erased => Common.invariant("encoder_for selected an unsupported shape"),
+            .primitive, .named, .tuple, .list, .box, .func, .erased, .hole => Common.invariant("encoder_for selected an unsupported shape"),
         };
     }
 
@@ -55408,7 +56374,7 @@ const BodyContext = struct {
             task.record_fields = try GuardedList.dupe(self.allocator, Type.Field, switch (shapeContent(self.typeStore(), value.shape_ty)) {
                 .record => |span| self.typeStore().fieldSpan(span),
                 .zst => self.typeStore().fieldSpan(.empty()),
-                .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("encoder_for record requested for a non-record shape"),
+                .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .hole => Common.invariant("encoder_for record requested for a non-record shape"),
             });
 
             const str_ty = try self.primitiveType(.str);
@@ -55794,7 +56760,7 @@ const BodyContext = struct {
             .source_fn_ty = source_fn_ty,
             .source_fn_key = generatedEncoderCallbackKey(self.current_fn_key, source_expr, lambda_index),
             .mono_fn_ty = lambda_ty,
-            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
         });
         return try self.addExpr(.{ .ty = lambda_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
@@ -55951,7 +56917,7 @@ const BodyContext = struct {
     ) Allocator.Error!Type.TypeId {
         const template = switch (self.typeStore().get(template_ty)) {
             .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("compiler helper expected a named template type"),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("compiler helper expected a named template type"),
         };
         return try self.cloneNamedTypeWithBackingAuthority(
             template_ty,
@@ -55970,7 +56936,7 @@ const BodyContext = struct {
     ) Allocator.Error!Type.TypeId {
         const template = switch (self.typeStore().get(template_ty)) {
             .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("compiler helper expected a named template type"),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("compiler helper expected a named template type"),
         };
         // The clone owns fresh declared-order rows rather than aliasing the
         // template's span: digests and equality are content-addressed either
@@ -56147,7 +57113,7 @@ const BodyContext = struct {
         const template_backing = namedBackingType(self.typeStore(), template_try_ty) orelse Common.invariant("Try template type had no backing");
         const template_tags = switch (shapeContent(self.typeStore(), template_backing)) {
             .tag_union => |span| try GuardedList.dupe(self.allocator, Type.Tag, self.typeStore().tagSpan(span)),
-            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("Try template backing type was not a tag union"),
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => Common.invariant("Try template backing type was not a tag union"),
         };
         defer self.allocator.free(template_tags);
         const tags = try self.allocator.alloc(Type.Store.TagInput, template_tags.len);
@@ -56352,7 +57318,7 @@ const BodyContext = struct {
                 current = backing.ty;
             },
             .tag_union => |span| return self.typeStore().tagSpan(span).len == 0,
-            .primitive, .record, .tuple, .list, .box, .func, .erased, .zst => return false,
+            .primitive, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => return false,
         };
     }
 
@@ -56435,7 +57401,7 @@ const BodyContext = struct {
                 }
                 Common.invariant("record field was absent from monotype record");
             },
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("record field operation expected a record type"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("record field operation expected a record type"),
         };
     }
 
@@ -56575,7 +57541,7 @@ const BodyContext = struct {
             },
             .tag_union => |tags_span| return try self.pushCodecSupportPayloads(pending, tags_span),
             .zst => {},
-            .primitive, .named, .func, .erased => return false,
+            .primitive, .named, .func, .erased, .hole => return false,
         }
         return true;
     }
@@ -56588,7 +57554,7 @@ const BodyContext = struct {
     fn graphTryPayloads(self: *BodyContext, try_node: NodeId) Allocator.Error!GraphTryPayloads {
         const named = switch ((try self.graph.content(try_node))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("codec method result was not a named Try type"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("codec method result was not a named Try type"),
         };
         const backing = named.backing orelse Common.invariant("codec Try type had no checked backing");
         const ok_name = try self.nameStoreMut().internTagLabel("Ok");
@@ -56981,7 +57947,7 @@ const BodyContext = struct {
         const body_shape_node = if (source_has_distinct_body_shape) blk: {
             const named = switch ((try self.graph.content(shape_node))) {
                 .named => |named| named,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated codec declared a distinct body shape for a non-nominal boundary"),
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated codec declared a distinct body shape for a non-nominal boundary"),
             };
             break :blk (named.backing orelse
                 Common.invariant("generated codec nominal boundary had no body-shape backing")).node;
@@ -57218,7 +58184,7 @@ const BodyContext = struct {
                 try self.isNestedCodecBoundary(root, nested_boundaries.items)) continue;
             switch (try self.graph.content(root)) {
                 .redirect, .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns redirect or leaf content
-                .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+                .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
                 .list, .box => |child| try pending.append(self.allocator, child),
                 .tuple => |items| try pending.appendSlice(self.allocator, items),
                 .func => |function| {
@@ -57253,7 +58219,7 @@ const BodyContext = struct {
                 // own identity (see `sameCodecSubject`).
                 switch (try self.graph.content(subject)) {
                     .primitive, .named => continue,
-                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
                 }
                 if (!read_roots.contains(self.graph.rootNode(subject))) {
                     base.invariant(
@@ -57457,10 +58423,10 @@ const BodyContext = struct {
         switch (checked_content) {
             .primitive => |checked_primitive| return switch (requested_content) {
                 .primitive => |requested_primitive| checked_primitive == requested_primitive,
-                .redirect, .leaf, .unresolved, .named, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+                .redirect, .leaf, .unresolved, .named, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => false,
             },
             .named => return (try self.graph.sameRelatedNamedInstance(checked_subject, requested_subject)),
-            .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return self.graph.sameClass(checked_subject, requested_subject),
+            .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return self.graph.sameClass(checked_subject, requested_subject),
         }
     }
 
@@ -57810,7 +58776,7 @@ const BodyContext = struct {
     fn graphBuiltinContainerShapeNodes(self: *BodyContext, node: NodeId, buf: *[2]NodeId) Allocator.Error![]const NodeId {
         const named = switch ((try self.graph.content(node))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return &.{},
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return &.{},
         };
         const owner = named.builtin_owner orelse return &.{};
         switch (owner) {
@@ -57847,14 +58813,14 @@ const BodyContext = struct {
                     .list, .box, .dict, .set, .fields, .field, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .parse_tag_union_spec, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher, .iter, .stream => false,
                 };
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return false,
         }
     }
 
     fn graphNodeIsBuiltinTry(self: *BodyContext, node: NodeId) Allocator.Error!bool {
         const named = switch ((try self.graph.content(node))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return false,
         };
         return self.builder.isBuiltinTryDef(self.nameStore(), named.def);
     }
@@ -57867,7 +58833,7 @@ const BodyContext = struct {
                     node = backing.node;
                     continue;
                 },
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
             }
             return node;
         }
@@ -57957,7 +58923,7 @@ const BodyContext = struct {
                     }
                 },
                 .redirect, .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns redirect or leaf content
-                .unresolved, .primitive, .empty_tag_union, .empty_record, .func, .erased, .zst => {},
+                .unresolved, .primitive, .empty_tag_union, .empty_record, .func, .erased, .zst, .hole => {},
             }
             std.mem.reverse(GraphParserShapeStep, pending.items[children_start..]);
         }
@@ -58004,7 +58970,7 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const template = switch ((try self.graph.content(template_node))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated codec protocol template was not a named graph node"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated codec protocol template was not a named graph node"),
         };
         return try self.graph.newNode(try self.graph.namedContent(.{
             .named_type = template.named_type,
@@ -58158,7 +59124,7 @@ const BodyContext = struct {
         const record_fields = switch ((try self.graph.content((try self.graphShapeNode(shape_node))))) {
             .zst, .empty_record => &.{},
             .record => (try self.graph.recordNodes((try self.graphShapeNode(shape_node)))).fields,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .named, .empty_tag_union, .erased => Common.invariant("generated parse tag-union specification shape was not a record"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .named, .empty_tag_union, .erased, .hole => Common.invariant("generated parse tag-union specification shape was not a record"),
         };
         const item_fields = try self.graph.arena().alloc(InstField, record_fields.len);
         for (item_fields, 0..) |*field, index| {
@@ -58287,7 +59253,7 @@ const BodyContext = struct {
     ) Allocator.Error!bool {
         switch ((try self.graph.content(node))) {
             .tag_union, .named => {},
-            .unresolved, .empty_tag_union, .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .erased, .zst => return false,
+            .unresolved, .empty_tag_union, .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .erased, .zst, .hole => return false,
         }
         if (!try self.graph.tagRowIsClosed(node)) return false;
         const tags = (try self.graph.tagRowNodes(node)).tags;
@@ -58311,7 +59277,7 @@ const BodyContext = struct {
     fn graphDerivedCodecLayerBackingNode(self: *BodyContext, node: NodeId, comptime prefix: []const u8) Allocator.Error!?NodeId {
         const backing = switch ((try self.graph.content(node))) {
             .named => |named| named.backing orelse return null,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
         };
         if ((try self.graphScalarCodecMethodName(backing.node, prefix)) != null) return backing.node;
         return switch ((try self.methodOwnerFromNode(backing.node)) orelse return null) {
@@ -58938,6 +59904,7 @@ const BodyContext = struct {
                 .func,
                 .erased,
                 .zst,
+                .hole,
                 => {},
             }
         }
@@ -58948,7 +59915,7 @@ const BodyContext = struct {
         const node = (try self.graphShapeNode(raw_node));
         switch ((try self.graph.content(node))) {
             .tag_union, .named => {},
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return false,
         }
         if (!try self.graph.tagRowIsClosed(node)) return false;
         const tags = (try self.graph.tagRowNodes(node)).tags;
@@ -59099,7 +60066,7 @@ const BodyContext = struct {
                 },
                 .list, .box, .fields, .field, .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .parse_tag_union_spec, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher, .iter, .stream => {},
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
         }
 
         // A dict's and a set's own backings are private representation that no
@@ -59167,10 +60134,10 @@ const BodyContext = struct {
                     added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, item, boundary_callable_node, seen) or added;
                 }
             },
-            .record, .zst, .empty_record => {
+            .record, .zst, .hole, .empty_record => {
                 const fields = switch ((try self.graph.content(structural_node))) {
                     .record => (try self.graph.recordNodes(structural_node)).fields,
-                    .zst, .empty_record => &.{},
+                    .zst, .hole, .empty_record => &.{},
                     .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .named, .empty_tag_union, .erased => Common.invariant("record codec preparation reached a non-record shape"),
                 };
                 if (kind == .encoder) {
@@ -59302,7 +60269,7 @@ const BodyContext = struct {
     fn typeIsExactUnitTagUnion(self: *BodyContext, ty: Type.TypeId, tag_text: []const u8) bool {
         const tags = switch (shapeContent(self.typeStore(), ty)) {
             .tag_union => |span| self.typeStore().tagSpan(span),
-            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return false,
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => return false,
         };
         if (tags.len != 1) return false;
         const tag = GuardedList.at(tags, 0);
@@ -59833,6 +60800,7 @@ const BodyContext = struct {
                 .box,
                 .erased,
                 .zst,
+                .hole,
                 => {},
             }
             std.mem.reverse(NodeId, pending.items[children_start..]);
@@ -59875,7 +60843,7 @@ const BodyContext = struct {
         return switch (shape) {
             .record, .tuple, .tag_union => true,
             .named => |named| named.backing != null,
-            .primitive, .list, .box, .func, .erased, .zst => false,
+            .primitive, .list, .box, .func, .erased, .zst, .hole => false,
         };
     }
 
@@ -60124,7 +61092,7 @@ const BodyContext = struct {
         return switch (self.typeStore().get(backing_ty)) {
             .record => |fields| .{ .aggregate = .{ .operand = operand, .fields = fields } },
             .tuple => |items| .{ .aggregate = .{ .operand = operand, .items = items } },
-            .primitive, .named, .tag_union, .list, .box, .func, .erased, .zst => .{ .named = .{
+            .primitive, .named, .tag_union, .list, .box, .func, .erased, .zst, .hole => .{ .named = .{
                 .named_ty = named_ty,
                 .backing_ty = backing_ty,
                 .operand = operand,
@@ -60175,7 +61143,7 @@ const BodyContext = struct {
                             }
                         }
                     },
-                    .primitive, .record, .tuple, .tag_union, .box, .func, .erased, .zst => {},
+                    .primitive, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => {},
                 }
                 return .{ .tail = .{ .expansion = .{ .ty = ty, .operand = derive.operand } } };
             },
@@ -60201,6 +61169,7 @@ const BodyContext = struct {
                     .tag_union => |tags| .{ .tag_union = .{ .ty = ty, .tags_span = tags, .operand = operand } },
                     .named => |named| if (named.backing) |backing| try self.derivationNamedTask(D, ty, backing.ty, operand) else null,
                     .primitive, .zst, .func, .erased, .box => null,
+                    .hole => Common.invariant("structural derivation reached a demand hole"),
                 };
                 if (body) |component| return .{ .child = component };
                 const leaf = try D.leaf(self, operand, ctx);
@@ -61487,23 +62456,8 @@ const BodyContext = struct {
         kind: Ast.ComptimeSiteKind,
         region: base.Region,
         checked_site: ?checked.CheckedExhaustivenessSiteId,
-        branch_regions: []const base.Region,
     ) Allocator.Error!DraftComptimeSiteId {
-        return try self.draft.addComptimeSite(kind, self.builder.loweringModuleId(self.view.key), region, checked_site, branch_regions);
-    }
-
-    fn wrapComptimeBranch(
-        self: *BodyContext,
-        site: ?DraftComptimeSiteId,
-        branch_index: usize,
-        body: DraftExprId,
-    ) Allocator.Error!DraftExprId {
-        const actual_site = site orelse return body;
-        return try self.addExprWithTypeCell(self.exprTypeCell(body), .{ .comptime_branch_taken = .{
-            .site = actual_site,
-            .branch_index = @intCast(branch_index),
-            .body = body,
-        } });
+        return try self.draft.addComptimeSite(kind, self.builder.loweringModuleId(self.view.key), region, checked_site);
     }
 
     fn matchComptimeSite(self: *BodyContext, expr_id: checked.CheckedExprId, match: anytype) Allocator.Error!?DraftComptimeSiteId {
@@ -61513,13 +62467,10 @@ const BodyContext = struct {
             .destructure => .destructure,
         };
         if (!self.shouldRecordComptimeSite(shared_site_kind)) return null;
-        const branch_regions = try self.matchBranchRegions(match.branches);
-        defer self.allocator.free(branch_regions);
         const expr = self.view.bodies.expr(expr_id);
         const site_kind: Ast.ComptimeSiteKind = switch (shared_site_kind) {
             .match => .match,
             .destructure => .destructure,
-            .if_ => Common.invariant("if site kind reached match comptime site lowering"),
         };
         const checked_site = if (ExhaustivenessContext.siteHasPendingStaticDiagnostic(shared_site_kind))
             switch (shared_site_kind) {
@@ -61530,41 +62481,10 @@ const BodyContext = struct {
                     if (patterns.len != 1) break :blk null;
                     break :blk self.view.exhaustiveness_sites.lookupByDestructurePattern(patterns[0].pattern);
                 },
-                .if_ => Common.invariant("if site kind reached checked match site lookup"),
             }
         else
             null;
-        return try self.addComptimeSite(site_kind, expr.source_region, checked_site, branch_regions);
-    }
-
-    fn matchBranchRegions(self: *BodyContext, branches: []const checked.CheckedMatchBranch) Allocator.Error![]base.Region {
-        const regions = try self.allocator.alloc(base.Region, branchCount(branches));
-        var index: usize = 0;
-        for (branches) |branch| {
-            for (branch.patternsSlice(self.view.bodies)) |pattern| {
-                regions[index] = self.view.bodies.pattern(pattern.pattern).source_region;
-                index += 1;
-            }
-        }
-        return regions;
-    }
-
-    fn ifComptimeSite(self: *BodyContext, expr_id: checked.CheckedExprId, if_: anytype) Allocator.Error!?DraftComptimeSiteId {
-        if (!if_.warn_unused_branches) return null;
-        if (!self.shouldRecordComptimeSite(.if_)) return null;
-        const branch_regions = try self.ifBranchRegions(if_);
-        defer self.allocator.free(branch_regions);
-        const expr = self.view.bodies.expr(expr_id);
-        return try self.addComptimeSite(.if_, expr.source_region, null, branch_regions);
-    }
-
-    fn ifBranchRegions(self: *BodyContext, if_: anytype) Allocator.Error![]base.Region {
-        const regions = try self.allocator.alloc(base.Region, if_.branches.len + 1);
-        for (if_.branches, 0..) |branch, index| {
-            regions[index] = self.view.bodies.expr(branch.cond).source_region;
-        }
-        regions[if_.branches.len] = self.view.bodies.expr(if_.final_else).source_region;
-        return regions;
+        return try self.addComptimeSite(site_kind, expr.source_region, checked_site);
     }
 
     fn matchScrutineeTypeNode(
@@ -62869,7 +63789,7 @@ const BodyContext = struct {
 
                 const source_expr = try self.addExprWithTypeCell(value_cell, .{ .local = source_local });
                 const comptime_site = if (self.shouldRecordComptimeSite(.destructure) and try self.patternCanMiss(pattern))
-                    try self.addComptimeSite(.destructure, statement.source_region, self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern), &.{})
+                    try self.addComptimeSite(.destructure, statement.source_region, self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern))
                 else
                     null;
                 try self.appendRecordRestPatternStatements(
@@ -62910,7 +63830,6 @@ const BodyContext = struct {
                         .destructure,
                         statement.source_region,
                         self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern),
-                        &.{},
                     )
                 else
                     null;
@@ -62926,8 +63845,7 @@ const BodyContext = struct {
                     } }));
                 } else {
                     const unit_ty = try self.unitType();
-                    var unit = try self.addExpr(.{ .ty = unit_ty, .data = .unit });
-                    unit = try self.wrapComptimeBranch(comptime_site, 0, unit);
+                    const unit = try self.addExpr(.{ .ty = unit_ty, .data = .unit });
                     const miss = if (comptime_site) |site|
                         try self.comptimeExhaustivenessFailedExpr(unit_ty, site)
                     else
@@ -63647,7 +64565,7 @@ const BodyContext = struct {
             },
         };
         const comptime_site = if (self.shouldRecordComptimeSite(.destructure) and try self.patternCanMiss(pattern))
-            try self.addComptimeSite(.destructure, source_region, self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern), &.{})
+            try self.addComptimeSite(.destructure, source_region, self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern))
         else
             null;
         if (!try self.patternNeedsExplicitBinding(pattern)) {
@@ -63663,8 +64581,7 @@ const BodyContext = struct {
         }
 
         const unit_ty = try self.unitType();
-        var unit = try self.addExpr(.{ .ty = unit_ty, .data = .unit });
-        unit = try self.wrapComptimeBranch(comptime_site, 0, unit);
+        const unit = try self.addExpr(.{ .ty = unit_ty, .data = .unit });
         const miss = if (comptime_site) |site|
             try self.comptimeExhaustivenessFailedExpr(unit_ty, site)
         else
@@ -65192,7 +66109,7 @@ const BodyContext = struct {
     ) Allocator.Error!BodyPatData {
         return switch (shapeContent(self.typeStore(), ty)) {
             .primitive => try self.numeralPatBits(numeral.literal, ty),
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => if (numeral.guard) |guard|
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => if (numeral.guard) |guard|
                 try self.bindLiteralGuardPattern(pattern_id, guard, ty)
             else
                 Common.invariant("custom numeral pattern had no checked conversion"),
@@ -65213,7 +66130,7 @@ const BodyContext = struct {
                 .{ .str_lit = try self.lowerStringLiteral(str.literal) }
             else
                 try self.bindNeverMatchPattern(ty),
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => if (str.guard) |guard|
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => if (str.guard) |guard|
                 try self.bindLiteralGuardPattern(pattern_id, guard, ty)
             else
                 Common.invariant("custom string pattern had no checked conversion"),
@@ -65324,7 +66241,7 @@ const BodyContext = struct {
     fn numeralPatBits(self: *BodyContext, literal: can.ModuleEnv.NumeralLiteral, ty: Type.TypeId) Allocator.Error!BodyPatData {
         const primitive = switch (shapeContent(self.typeStore(), ty)) {
             .primitive => |p| p,
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("numeric literal pattern at a non-primitive Monotype type without a conversion"),
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("numeric literal pattern at a non-primitive Monotype type without a conversion"),
         };
         const bits = (try self.numeralScalarBits(literal, primitive)) orelse
             return try self.bindNeverMatchPattern(ty);
@@ -66238,7 +67155,7 @@ test "shape queries cross alias layers for every aggregate a constant restores a
     const Aliased = struct {
         fn of(store: *Type.Store, store_names: *const names.NameStore, def: Type.TypeDef, backing: Type.TypeId) Allocator.Error!Type.TypeId {
             return try store.internNamed(store_names, .{
-                .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(@backingInt(backing))) },
+                .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(@backingInt(backing))), .ty_module = .{} },
                 .def = def,
                 .kind = .alias,
                 .backing = .{ .ty = backing, .use = .inspectable },
@@ -66299,14 +67216,14 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
     const i64_ty = try program.types.add(.{ .primitive = .i64 });
     const str_ty = try program.types.add(.{ .primitive = .str });
     const alias_i64 = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Type.Span.empty(),
         .backing = .{ .ty = i64_ty, .use = .inspectable },
     } });
     const alias_str = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Type.Span.empty(),
@@ -66475,7 +67392,7 @@ test "graph constructor representation follows aliases and preserves nominal lay
     const outer_alias_name = try name_store.internTypeName("OuterAlias");
     const structural = try graph.newNode(.empty_tag_union);
     const alias = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = alias_name },
         .kind = .alias,
         .builtin_owner = null,
@@ -66483,7 +67400,7 @@ test "graph constructor representation follows aliases and preserves nominal lay
         .backing = .{ .node = structural, .use = .inspectable },
     }));
     const nominal = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = nominal_name },
         .kind = .nominal,
         .builtin_owner = null,
@@ -66491,7 +67408,7 @@ test "graph constructor representation follows aliases and preserves nominal lay
         .backing = .{ .node = alias, .use = .inspectable },
     }));
     const outer_alias = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = outer_alias_name },
         .kind = .alias,
         .builtin_owner = null,
@@ -67186,8 +68103,8 @@ const HashDeriver = struct {
 
 fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
     return .{
-        .code_generation_key = view.code_generation_key,
-        .key = view.key,
+        .code_generation_key = if (view.code_generation_key) |key| key.digest() else null,
+        .key = view.key.digest(),
         .module_env = view.module_env,
         .module_identity = view.module_identity,
         .names = checked.importedNames(view),
@@ -67216,6 +68133,7 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .const_store = view.const_store,
         .interface_capabilities = view.interface_capabilities,
         .compile_time_root_reads = view.compile_time_root_reads,
+        .compile_time_root_identities = view.compile_time_root_identities,
     };
 }
 
@@ -67401,8 +68319,8 @@ fn constRestoreData(
         .zst => .unit,
         .scalar => |scalar| restoreScalar(@TypeOf(restorer.*).ConstExprData, scalar),
         .str => |str| .{ .str_lit = try emit.addStringView(
-            store_view.const_store.blobData(str.data),
-            str.offset,
+            store_view.const_store.strBytes(str),
+            0,
             str.len,
         ) },
         .crash => |str| .{ .crash = try emit.addStringView(
@@ -67671,7 +68589,7 @@ fn checkedBinderType(view: ModuleView, binder: checked.PatternBinderId) checked.
 fn checkedCaptureBinder(view: ModuleView, pattern: checked.CheckedPatternId) checked.PatternBinderId {
     const raw = @backingInt(pattern);
     if (raw >= view.bodies.pattern_binder_by_pattern.len) Common.invariant("checked closure capture pattern was outside the binder index");
-    return view.bodies.pattern_binder_by_pattern[raw] orelse
+    return view.bodies.pattern_binder_by_pattern[raw].get() orelse
         Common.invariant("checked closure capture pattern had no binder");
 }
 
@@ -67896,6 +68814,7 @@ const NodeUninhabitedScan = struct {
             .empty_record,
             .erased,
             .zst,
+            .hole,
             => .{ .value = false },
         };
         if (expansion == .group) {
@@ -68201,7 +69120,7 @@ test "hosted extern boundary admits only the declared host ABI type" {
         .module = module_identity,
         .type_name = try program.names.internTypeName("Try"),
     };
-    const try_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(4)) };
+    const try_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(4)), .ty_module = .{} };
     const str_ty = try program.types.add(.{ .primitive = .str });
     const i32_ty = try program.types.add(.{ .primitive = .i32 });
 
@@ -68336,8 +69255,8 @@ test "request component relation follows root authority before nested private ev
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xE1))));
     const type_name = try name_store.internTypeName("OuterEvidence");
     const inner_type_name = try name_store.internTypeName("InnerEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(8)) };
-    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(9)) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(8)), .ty_module = .{} };
+    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(9)), .ty_module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const inner_def: Type.TypeDef = .{ .module = module_identity, .type_name = inner_type_name };
     const private_arg = try graph.newNode(try graph.namedContent(.{
@@ -68395,8 +69314,8 @@ test "request component relation descends through matching private-bearing conta
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xE2))));
     const type_name = try name_store.internTypeName("ElementEvidence");
     const inner_type_name = try name_store.internTypeName("InnerEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(10)) };
-    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(11)) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(10)), .ty_module = .{} };
+    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(11)), .ty_module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const inner_def: Type.TypeDef = .{ .module = module_identity, .type_name = inner_type_name };
     const shared_private_arg = try graph.newNode(try graph.namedContent(.{
@@ -68460,7 +69379,7 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCE))));
     const type_name = try name_store.internTypeName("CompositeEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const checked_backing = try graph.newNode(.empty_record);
     const mono_backing = try graph.newNode(.empty_record);
@@ -68513,7 +69432,7 @@ test "checked-to-mono relation joins exact tag request roots without collapsing 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCF))));
     const type_name = try name_store.internTypeName("PayloadEvidence");
     const tag_name = try name_store.internTagLabel("One");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const checked_backing = try graph.newNode(.empty_record);
     const mono_backing = try graph.newNode(.empty_record);
@@ -68607,7 +69526,7 @@ test "direct call request preserves generated-private return provenance" {
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD3))));
     const type_name = try name_store.internTypeName("DirectReturnEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(4)) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(4)), .ty_module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
@@ -68654,7 +69573,7 @@ test "dispatch call target relation preserves generated-private return provenanc
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD4))));
     const type_name = try name_store.internTypeName("DispatchReturnEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(5)) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(5)), .ty_module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
@@ -68704,7 +69623,7 @@ test "iterator request nodes preserve generated-private operand and result prove
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD1))));
     const type_name = try name_store.internTypeName("IteratorEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
@@ -68758,7 +69677,7 @@ test "partial synthetic request nodes preserve generated-private argument and re
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD2))));
     const type_name = try name_store.internTypeName("PartialEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)), .ty_module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
@@ -68888,7 +69807,7 @@ test "body draft store appends draft-local ids spans and type cells" {
         .{ .named = field_name },
         .{ .padding = ty },
     });
-    const site = try draft.addComptimeSite(.if_, .first, base.Region.zero(), null, &.{base.Region.zero()});
+    const site = try draft.addComptimeSite(.match, .first, base.Region.zero(), null);
     const source_file = try program.addSourceFile(.{ .name = "module.roc", .qualified_name = "test.module.roc", .module_identity = @splat(0) });
     try draft.setLocalName(local, "value");
     const record_pat = try draft.addPat(.{ .ty = ty, .data = .{ .record = destruct_span } });
@@ -68983,8 +69902,7 @@ test "body draft store appends draft-local ids spans and type cells" {
     try std.testing.expectEqual(@as(usize, 1), program.branchCount());
     try std.testing.expectEqual(@as(usize, 1), program.ifBranchCount());
     try std.testing.expectEqualStrings("literal", program.stringLiteralText(sealed_literal));
-    try std.testing.expectEqual(Ast.ComptimeSiteKind.if_, program.comptimeSite(sealed_site).kind);
-    try std.testing.expectEqual(@as(usize, 1), program.comptimeSite(sealed_site).branch_regions.len);
+    try std.testing.expectEqual(Ast.ComptimeSiteKind.match, program.comptimeSite(sealed_site).kind);
     try std.testing.expectEqualStrings("value", program.localName(sealed_local));
     try std.testing.expectEqual(field_name, program.getFieldExprAt(0).name);
     try std.testing.expectEqual(sealed_expr, program.getFieldExprAt(0).value);
@@ -69094,7 +70012,7 @@ test "body draft static data candidates use ordered commit ids" {
         .{ .static_data_candidate = .{
             .storage = .{ .string_backing = 23 },
             .static_data = draft_static,
-            .runtime_expr = draft_runtime,
+            .value = .{ .runtime = draft_runtime },
         } },
     );
     if (sealed != .static_data_candidate) return error.TestExpectedEqual;
@@ -69102,7 +70020,7 @@ test "body draft static data candidates use ordered commit ids" {
     try std.testing.expectEqual(@as(u64, 23), sealed.static_data_candidate.storage.string_backing);
     try std.testing.expectEqual(
         @as(Ast.ExprId, @fromBackingInt(@intCast(@as(u32, @intCast(0))))),
-        sealed.static_data_candidate.runtime_expr,
+        sealed.static_data_candidate.value.runtime,
     );
 }
 
@@ -69175,7 +70093,7 @@ test "specialization workspace retains bidirectional type relocation across seri
             );
             const committed_workspace_fields = program.types.fieldSpan(switch (program.types.get(committed_record)) {
                 .record => |fields| fields,
-                .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst => return error.TestExpectedEqual,
+                .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
             });
             committed_workspace_field = GuardedList.at(committed_workspace_fields, 0).name;
 
@@ -69185,7 +70103,7 @@ test "specialization workspace retains bidirectional type relocation across seri
             committed_name_count_after_first_epoch = committed.namesRelocation().mappedCount();
             const workspace_program_fields = workspace.types.fieldSpan(switch (workspace.types.get(workspace_record)) {
                 .record => |fields| fields,
-                .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst => return error.TestExpectedEqual,
+                .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
             });
             const workspace_program_field = GuardedList.at(workspace_program_fields, 0).name;
             try std.testing.expectEqualStrings(
@@ -69239,16 +70157,16 @@ test "specialization workspace retains bidirectional type relocation across seri
     // Coordinator output remains self-contained after the persistent workspace dies.
     const committed_bool = switch (program.types.get(committed_list)) {
         .list => |element| element,
-        .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => return error.TestExpectedEqual,
+        .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
     };
     const committed_primitive = switch (program.types.get(committed_bool)) {
         .primitive => |primitive| primitive,
-        .named, .record, .tuple, .tag_union, .box, .list, .func, .erased, .zst => return error.TestExpectedEqual,
+        .named, .record, .tuple, .tag_union, .box, .list, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
     };
     try std.testing.expectEqual(.bool, committed_primitive);
     const committed_fields = program.types.fieldSpan(switch (program.types.get(committed_record)) {
         .record => |fields| fields,
-        .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst => return error.TestExpectedEqual,
+        .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
     });
     try std.testing.expectEqual(@as(usize, 1), GuardedList.borrowLen(committed_fields));
     try std.testing.expectEqual(committed_workspace_field, GuardedList.at(committed_fields, 0).name);
@@ -69316,7 +70234,7 @@ test "specialization store epochs are read in place while the workspace grows" {
     ));
     const private_fields = commit_domain.types.fieldSpan(switch (commit_domain.types.get(private_record)) {
         .record => |fields| fields,
-        .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst => return error.TestExpectedEqual,
+        .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
     });
     try std.testing.expectEqualStrings(
         "epoch_value",
@@ -69346,7 +70264,7 @@ test "specialization store epochs are read in place while the workspace grows" {
     ));
     const private_tags = commit_domain.types.tagSpan(switch (commit_domain.types.get(private_union)) {
         .tag_union => |tags| tags,
-        .primitive, .named, .record, .tuple, .box, .list, .func, .erased, .zst => return error.TestExpectedEqual,
+        .primitive, .named, .record, .tuple, .box, .list, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
     });
     const private_tag = GuardedList.at(private_tags, 0);
     try std.testing.expectEqualStrings(
@@ -69382,7 +70300,7 @@ test "specialization store epochs are read in place while the workspace grows" {
 
     const committed_tags = program.types.tagSpan(switch (program.types.get(committed_union)) {
         .tag_union => |tags| tags,
-        .primitive, .named, .record, .tuple, .box, .list, .func, .erased, .zst => return error.TestExpectedEqual,
+        .primitive, .named, .record, .tuple, .box, .list, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
     });
     const committed_tag = GuardedList.at(committed_tags, 0);
     try std.testing.expectEqualStrings(
@@ -69455,30 +70373,37 @@ test "specialization lanes release their own interface summaries once a task can
     try std.testing.expect(try Found.present(cache, entries[2], &workspace));
 }
 
-test "executor lane retains Monotype state within a run and resets it between runs" {
+test "Monotype lane state belongs to its run" {
     const allocator = std.testing.allocator;
     var lane_state = base.post_check_task_executor.LaneState.init(allocator);
     defer lane_state.deinit();
-    const executor_worker = base.post_check_task_executor.Worker{
+    const lanes = try allocator.alloc(?*SpecJobLaneState, 2);
+    @memset(lanes, null);
+    var inputs: SpecJobWorkerInputs = undefined;
+    inputs.lanes = lanes;
+    const first_worker = base.post_check_task_executor.Worker{
         .id = 0,
         .allocator = allocator,
         .scratch = allocator,
         .lane_state = &lane_state,
     };
-    var inputs: SpecJobWorkerInputs = undefined;
-    inputs.run_id = @fromBackingInt(@intCast(1));
+    var second_worker = first_worker;
+    second_worker.id = 1;
 
-    const first = try Builder.ensureSpecJobLaneState(executor_worker, &inputs);
+    const first = try Builder.ensureSpecJobLaneState(first_worker, &inputs);
     first.worker.tasks_started = 7;
-    const same_run = try Builder.ensureSpecJobLaneState(executor_worker, &inputs);
-    try std.testing.expectEqual(first, same_run);
-    try std.testing.expectEqual(@as(u64, 7), same_run.worker.tasks_started);
+    const same_lane = try Builder.ensureSpecJobLaneState(first_worker, &inputs);
+    try std.testing.expectEqual(first, same_lane);
+    try std.testing.expectEqual(@as(u64, 7), same_lane.worker.tasks_started);
 
-    inputs.run_id = @fromBackingInt(@intCast(2));
-    const next_run = try Builder.ensureSpecJobLaneState(executor_worker, &inputs);
-    try std.testing.expectEqual(first, next_run);
-    try std.testing.expectEqual(@as(u64, 0), next_run.worker.tasks_started);
-    try std.testing.expectEqual(inputs.run_id, next_run.run_id);
+    const other_lane = try Builder.ensureSpecJobLaneState(second_worker, &inputs);
+    try std.testing.expect(other_lane != first);
+    try std.testing.expectEqual(@as(u64, 0), other_lane.worker.tasks_started);
+
+    // The executor's own lane storage holds nothing of the run, so nothing
+    // of it outlives the run's builder.
+    try std.testing.expectEqual(@as(usize, 0), lane_state.entries.items.len);
+    Builder.deinitSpecJobLanes(allocator, lanes);
 }
 
 test "body draft comptime roots relocate independent shards and survive source destruction" {
@@ -69648,7 +70573,7 @@ test "body draft commit relocates core type and name fields out of private store
     // Program storage must remain self-contained after all private owners die.
     const sealed_unit = switch (program.types.get(sealed_list)) {
         .list => |element| element,
-        .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => return error.TestExpectedEqual,
+        .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
     };
     try std.testing.expectEqual(.zst, program.types.get(sealed_unit));
     try std.testing.expectEqual(sealed_list, program.getPatAt(0).ty);
@@ -70831,7 +71756,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     const alias_checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(2));
     const str = try stored_types.append(.{ .primitive = .str });
     const nominal = try stored_types.append(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = nominal_checked_ty },
+        .named_type = .{ .module = .{}, .ty = nominal_checked_ty, .ty_module = .{} },
         .def = .{ .module = origin, .type_name = type_name },
         .kind = .@"opaque",
         .args = .{},
@@ -70840,7 +71765,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     var alias = nominal;
     for (0..32) |_| {
         alias = try stored_types.append(.{ .named = .{
-            .named_type = .{ .module = .{}, .ty = alias_checked_ty },
+            .named_type = .{ .module = .{}, .ty = alias_checked_ty, .ty_module = .{} },
             .def = .{ .module = origin, .type_name = type_name },
             .kind = .alias,
             .args = .{},
@@ -70849,13 +71774,13 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     }
     const recursive = try stored_types.reserve();
     const recursive_alias = try stored_types.append(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
         .def = .{ .module = origin, .type_name = type_name },
         .kind = .alias,
         .args = .{},
         .backing = .{ .ty = recursive, .use = .inspectable },
     } });
-    stored_types.fill(recursive, .{ .tuple = try stored_types.appendTypeSpan(&.{recursive_alias}) });
+    try stored_types.fill(recursive, .{ .tuple = try stored_types.appendTypeSpan(&.{recursive_alias}) });
     const root = try stored_types.append(.{ .tuple = try stored_types.appendTypeSpan(&.{ alias, nominal, str, recursive_alias }) });
 
     var program = Ast.Program.init(gpa);

@@ -56,7 +56,10 @@ const StrBacking = struct {
 /// Stores interpreted compile-time roots into a checked ConstStore.
 pub const Writer = struct {
     allocator: Allocator,
-    module: *checked.CheckedModuleArtifact,
+    store: *const_store.ConstStore,
+    /// The names stored types are translated into; null for a writer that
+    /// stores values only (`storeLiteral`).
+    names: ?*check.CanonicalNames.CanonicalNameStore,
     program: *const LirProgram.Result,
     stored_values: std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId),
     visited_str_values: std.AutoHashMap(RuntimeValueAddress, void),
@@ -78,9 +81,20 @@ pub const Writer = struct {
         module: *checked.CheckedModuleArtifact,
         program: *const LirProgram.Result,
     ) Writer {
+        return initStore(allocator, &module.const_store, &module.canonical_names, program);
+    }
+
+    /// A writer into `store`, translating stored types into `names`.
+    pub fn initStore(
+        allocator: Allocator,
+        store: *const_store.ConstStore,
+        names: ?*check.CanonicalNames.CanonicalNameStore,
+        program: *const LirProgram.Result,
+    ) Writer {
         return .{
             .allocator = allocator,
-            .module = module,
+            .store = store,
+            .names = names,
             .program = program,
             .stored_values = std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId).init(allocator),
             .visited_str_values = std.AutoHashMap(RuntimeValueAddress, void).init(allocator),
@@ -152,16 +166,34 @@ pub const Writer = struct {
         };
     }
 
+    /// Store a literal root's value: one value graph, no stored type.
+    pub fn storeLiteral(
+        self: *Writer,
+        plan: LirProgram.ConstPlanId,
+        ret_layout: layout.Idx,
+        value: Value,
+    ) Error!checked.ConstNodeId {
+        self.stored_values.clearRetainingCapacity();
+        self.visited_str_values.clearRetainingCapacity();
+        self.str_backings.clearRetainingCapacity();
+        try self.collectStrBackings(plan, ret_layout, value);
+        return self.storeValue(plan, ret_layout, value);
+    }
+
+    fn typeNames(self: *const Writer) *check.CanonicalNames.CanonicalNameStore {
+        return self.names orelse writerInvariant("a value-only ConstStore writer stored a type");
+    }
+
     /// Preserve the exact producer-owned representation of a compile-time
     /// root in the checked module's durable ConstStore type table.
     pub fn storeRootType(
         self: *Writer,
         root: LirProgram.ConstRootPlan,
     ) Error!const_store.ConstTypeId {
-        return self.module.const_store.type_store.cloneTypeFromTranslated(
+        return self.store.type_store.cloneTypeFromTranslated(
             &self.program.const_types,
             &self.program.const_type_names,
-            &self.module.canonical_names,
+            self.typeNames(),
             root.ret_type,
         );
     }
@@ -279,12 +311,12 @@ pub const Writer = struct {
     fn startStore(self: *Writer, request: ValueRequest) Error!checked.ConstNodeId {
         if (self.memoAddress(request.plan, request.layout_idx, request.value, request.storage)) |address| {
             if (self.stored_values.get(address)) |existing| return existing;
-            const node = try self.module.const_store.reserve();
+            const node = try self.store.reserve();
             try self.stored_values.put(address, node);
             try self.beginFresh(node, request);
             return node;
         }
-        const node = try self.module.const_store.reserve();
+        const node = try self.store.reserve();
         try self.beginFresh(node, request);
         return node;
     }
@@ -313,9 +345,9 @@ pub const Writer = struct {
             .boxy_box => writerInvariant("Boxy-only box reached ConstStore writer"),
             .pending => writerInvariant("pending const plan reached ConstStore writer"),
             .layout_only => writerInvariant("layout-only const plan reached ConstStore writer"),
-            .zst => return self.module.const_store.fill(node, .zst),
-            .scalar => return self.module.const_store.fill(node, .{ .scalar = self.storeScalar(layout_idx, value) }),
-            .str => return self.module.const_store.fill(node, try self.storeStr(value)),
+            .zst => return self.store.fill(node, .zst),
+            .scalar => return self.store.fill(node, .{ .scalar = self.storeScalar(layout_idx, value) }),
+            .str => return self.store.fill(node, try self.storeStr(value)),
             .list => |elem_plan| blk: {
                 if (try self.storeListLeaf(node, elem_plan, layout_idx, value)) return;
                 try self.appendListRequests(children, elem_plan, layout_idx, value);
@@ -424,30 +456,30 @@ pub const Writer = struct {
         const nodes = self.store_nodes.items[frame.nodes_start..][0..frame.requests_len];
         const capture_types = self.store_capture_types.items[frame.capture_types_start..][0..frame.slots.len];
         switch (frame.finish) {
-            .list => |node| self.module.const_store.fill(node, .{ .list = .{ .nodes = nodes } }),
-            .box => |node| self.module.const_store.fill(node, .{ .box = nodes[0] }),
-            .tuple => |node| self.module.const_store.fill(node, .{ .tuple = nodes }),
-            .record => |node| self.module.const_store.fill(node, .{ .record = nodes }),
-            .nominal => |nominal| self.module.const_store.fill(nominal.node, .{ .nominal = .{
+            .list => |node| self.store.fill(node, .{ .list = .{ .nodes = nodes } }),
+            .box => |node| self.store.fill(node, .{ .box = nodes[0] }),
+            .tuple => |node| self.store.fill(node, .{ .tuple = nodes }),
+            .record => |node| self.store.fill(node, .{ .record = nodes }),
+            .nominal => |nominal| self.store.fill(nominal.node, .{ .nominal = .{
                 .named_type = nominal.named.named_type,
                 .backing = nodes[0],
             } }),
             .tag => |tag| {
-                const tag_name = try self.module.const_store.allocator.dupe(u8, tag.name);
-                defer self.module.const_store.allocator.free(tag_name);
-                self.module.const_store.fill(tag.node, .{ .tag = .{
+                const tag_name = try self.store.allocator.dupe(u8, tag.name);
+                defer self.store.allocator.free(tag_name);
+                self.store.fill(tag.node, .{ .tag = .{
                     .tag_name = tag_name,
                     .payloads = nodes,
                 } });
             },
             .fn_value => |fn_value| {
-                const captures = try self.module.const_store.allocator.alloc(const_store.ConstCapture, frame.slots.len);
-                defer self.module.const_store.allocator.free(captures);
+                const captures = try self.store.allocator.alloc(const_store.ConstCapture, frame.slots.len);
+                defer self.store.allocator.free(captures);
                 for (captures, frame.slots, capture_types, nodes) |*capture, slot, ty, node| {
                     capture.* = .{ .id = slot.id, .kind = slot.kind, .ty = ty, .value = node };
                 }
                 const template = fn_value.template;
-                const fn_id = try self.module.const_store.appendFn(.{
+                const fn_id = try self.store.appendFn(.{
                     .fn_def = template.fn_def,
                     .source_fn_ty = template.source_fn_ty,
                     .source_fn_key = template.source_fn_key,
@@ -457,7 +489,7 @@ pub const Writer = struct {
                     .evidence_frame_head = template.evidence_frame_head,
                 });
                 if (fn_value.node) |node| {
-                    self.module.const_store.fill(node, .{ .fn_value = fn_id });
+                    self.store.fill(node, .{ .fn_value = fn_id });
                     return null;
                 }
                 return fn_id;
@@ -482,7 +514,7 @@ pub const Writer = struct {
         }
         const roc_list: *const RocList = @ptrCast(@alignCast(value.ptr));
         if (roc_list.len() == 0) {
-            self.module.const_store.fill(target_node, .{ .list = .{ .empty = roc_list.getCapacity() } });
+            self.store.fill(target_node, .{ .list = .{ .empty = roc_list.getCapacity() } });
             return true;
         }
         if (self.planIsScalar(elem_plan)) {
@@ -531,6 +563,7 @@ pub const Writer = struct {
     ) Allocator.Error!void {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         try out.append(self.allocator, switch (layout_value.tag) {
+            .hole => writerInvariant("a demand hole reached a compile-time value"),
             .box_of_zst => .{ .plan = elem_plan, .layout_idx = .zst, .value = Value.zst },
             .box => .{
                 .plan = elem_plan,
@@ -699,7 +732,7 @@ pub const Writer = struct {
             }
         }
 
-        const data = try self.module.const_store.addBlobData(slice);
+        const data = try self.store.addBlobData(slice);
         return .{ .str = .{
             .data = data,
             .offset = 0,
@@ -776,12 +809,12 @@ pub const Writer = struct {
         const memory_len = std.math.mul(usize, list.len(), plan.memory_width) catch unreachable; // the list's elements occupy this many bytes of live memory
         const memory = if (memory_len == 0) &.{} else list.bytes.?[0..memory_len];
         const data = if (plan.isIdentity() and builtin.cpu.arch.endian() == .little)
-            try self.module.const_store.addBlobData(memory)
+            try self.store.addBlobData(memory)
         else blk: {
-            plan.encode(try self.module.const_store.reserveBlobData(byte_len), memory, list.len(), builtin.cpu.arch.endian());
-            break :blk try self.module.const_store.commitBlobData(byte_len);
+            plan.encode(try self.store.reserveBlobData(byte_len), memory, list.len(), builtin.cpu.arch.endian());
+            break :blk try self.store.commitBlobData(byte_len);
         };
-        self.module.const_store.fill(node, .{ .list = .{ .packed_bytes = .{
+        self.store.fill(node, .{ .list = .{ .packed_bytes = .{
             .bytes = .{ .data = data, .offset = 0, .len = checkedU32(byte_len, "packed product bytes exceed ConstStore limit") },
             .len = checkedU32(list.len(), "packed product length exceeds ConstStore limit"),
             .element = null,
@@ -865,7 +898,7 @@ pub const Writer = struct {
         if (roc_list.bytes == null and roc_list.len() != 0) {
             writerInvariant("non-empty packed list had null element pointer");
         }
-        const bytes = try self.module.const_store.reserveBlobData(byte_len);
+        const bytes = try self.store.reserveBlobData(byte_len);
         if (roc_list.bytes) |source| {
             const width: usize = element.byteWidth();
             for (0..roc_list.len()) |index| {
@@ -873,8 +906,8 @@ pub const Writer = struct {
                 writePackedScalar(bytes[index * width ..][0..width], element, scalar);
             }
         }
-        const data = try self.module.const_store.commitBlobData(byte_len);
-        self.module.const_store.fill(target_node, .{ .list = .{ .packed_bytes = .{
+        const data = try self.store.commitBlobData(byte_len);
+        self.store.fill(target_node, .{ .list = .{ .packed_bytes = .{
             .bytes = .{ .data = data, .offset = 0, .len = checkedU32(byte_len, "packed list byte length exceeds ConstStore limit") },
             .len = checkedU32(roc_list.len(), "packed list length exceeds ConstStore limit"),
             .element = element,
@@ -882,10 +915,10 @@ pub const Writer = struct {
     }
 
     fn cloneCaptureType(self: *Writer, ty: const_store.ConstTypeId) Error!const_store.ConstTypeId {
-        return self.module.const_store.type_store.cloneTypeFromTranslated(
+        return self.store.type_store.cloneTypeFromTranslated(
             &self.program.const_types,
             &self.program.const_type_names,
-            &self.module.canonical_names,
+            self.typeNames(),
             ty,
         );
     }
@@ -982,7 +1015,7 @@ pub const Writer = struct {
     }
 
     fn addStrBacking(self: *Writer, address: usize, bytes: []const u8) Error!StrBacking {
-        const data = try self.module.const_store.addBlobData(bytes);
+        const data = try self.store.addBlobData(bytes);
         const backing: StrBacking = .{
             .data = data,
             .len = bytes.len,
@@ -1021,6 +1054,7 @@ pub const Writer = struct {
     fn readTagDiscriminant(self: *Writer, layout_idx: layout.Idx, value: Value) u32 {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         return switch (layout_value.tag) {
+            .hole => writerInvariant("a demand hole reached a compile-time value"),
             .zst => 0,
             .tag_union => self.program.layouts.getTagUnionData(layout_value.getTagUnion().idx).readDiscriminant(value.ptr, self.program.layouts.targetUsize()),
             .scalar,
@@ -1057,6 +1091,7 @@ pub const Writer = struct {
     fn resolveTagBase(self: *Writer, layout_idx: layout.Idx, value: Value) TagBase {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         return switch (layout_value.tag) {
+            .hole => writerInvariant("a demand hole reached a compile-time value"),
             .zst, .tag_union => .{
                 .value = value,
                 .layout_idx = layout_idx,
@@ -1111,6 +1146,7 @@ pub const Writer = struct {
                 const roc_str: *const RocStr = @ptrCast(@alignCast(value.ptr));
                 break :blk @intFromPtr(roc_str.asSlice().ptr);
             } else null,
+            .hole => writerInvariant("a demand hole reached a compile-time value"),
             .box_of_zst,
             .erased_box,
             .list_of_zst,
@@ -1133,6 +1169,7 @@ pub const Writer = struct {
                     const roc_str: *const RocStr = @ptrCast(@alignCast(value.ptr));
                     break :blk roc_str.len();
                 } else 0,
+                .hole => writerInvariant("a demand hole reached a compile-time value"),
                 .box,
                 .box_of_zst,
                 .erased_box,

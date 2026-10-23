@@ -41,7 +41,7 @@ pub fn addBoolDeclaration(
     bool_ty: checked.CheckedTypeId,
 ) std.mem.Allocator.Error!void {
     const types = &module.checked_types;
-    const nominal = types.payloads.items[@backingInt(bool_ty)].nominal;
+    const nominal = types.nominal_row_pool.items[@backingInt(types.payloads.items[@backingInt(bool_ty)].nominal)];
     const empty: checked.CheckedTypeId = @fromBackingInt(@intCast(@as(u32, @intCast(types.payloads.items.len))));
     try types.payloads.append(allocator, .empty_tag_union);
     const tags_start: u32 = @intCast(types.tag_pool.items.len);
@@ -86,7 +86,7 @@ pub fn testModuleEnv() Allocator.Error!*can.ModuleEnv {
 pub fn minimalCheckedModule(allocator: Allocator) Allocator.Error!checked.CheckedModuleArtifact {
     const env = try testModuleEnv();
     return .{
-        .key = moduleKey(1),
+        .key = checkedModuleKey(1),
         .source_hash = @as([32]u8, @splat(0)),
         .canonical_names = names.CanonicalNameStore.init(allocator),
         .module_identity = testModuleIdentity(),
@@ -129,6 +129,13 @@ pub fn moduleKey(byte: u8) checked.ModuleId {
     return key;
 }
 
+/// The checked module key whose digest is `moduleKey(byte)`.
+pub fn checkedModuleKey(byte: u8) checked.CheckedModuleArtifactKey {
+    var key = checked.CheckedModuleArtifactKey{};
+    key.bytes[0] = byte;
+    return key;
+}
+
 /// A distinct checked type digest whose first byte is `byte`.
 pub fn typeKey(byte: u8) names.CanonicalTypeKey {
     var key = names.CanonicalTypeKey{};
@@ -144,9 +151,9 @@ pub fn typeSchemeKey(byte: u8) names.CanonicalTypeSchemeKey {
 }
 
 /// A procedure template reference into `key`'s checked module.
-pub fn procedureTemplateRef(key: checked.CheckedModuleArtifactKey, raw_template_id: u32) names.ProcedureTemplateRef {
+pub fn procedureTemplateRef(key: checked.ModuleId, raw_template_id: u32) names.ProcedureTemplateRef {
     return .{
-        .artifact = .{ .bytes = key.bytes },
+        .artifact = key,
         .proc_base = @fromBackingInt(@intCast(raw_template_id)),
         .template = @fromBackingInt(@intCast(raw_template_id)),
     };

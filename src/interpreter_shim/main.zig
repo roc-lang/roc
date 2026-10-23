@@ -198,7 +198,6 @@ fn reportEvalError(ops: *RocOps, interpreter: *const eval.LirInterpreter, err: e
         error.OutOfMemory => "Roc interpreter ran out of memory",
         error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
-        error.ComptimeExhaustiveness => "compile-time exhaustiveness failure reached runtime code",
         error.Crash => interpreter.getCrashMessage(),
         error.ExpectErr => unreachable, // expect_err statements only occur in top-level expect test roots, never in platform entrypoints
         error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable, // only inspected_run's hosted dependency lookup returns these; the LIR interpreter never does

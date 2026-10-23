@@ -11,10 +11,11 @@
 //! placed into another program's buffer with `append`, then resolved after
 //! all required producers have landed. `assemble` performs both steps.
 //! Source-file indices are in the set's own file domain: `Set.source_files`
-//! names each index by its module's content identity. Session appends keep
-//! them as they are, since a session reuses fragments only within one
-//! source-file table; `splice` binds them to the receiving program's table,
-//! omitting the lines of module versions that program does not have.
+//! names each index by its module's content identity. A session's fragments
+//! carry no table: they all index the session's one source-file table, and
+//! session appends keep their indices as they are. `splice` binds a set's
+//! indices to the receiving program's table, omitting the lines of module
+//! versions that program does not have.
 //!
 //! `verifyRoundTrip` is the gate for the format: a program assembled from its
 //! own artifacts must produce the same bytes, relocations, and unwind records
@@ -39,6 +40,14 @@ const IndexedRelocation = RelocationMod.IndexedRelocation;
 /// Producer-selected encoding: direct branch, inline address-plus-call, or address.
 pub const Form = enum { call, inline_call, addr };
 
+fn codeRefForm(form: Form) LirCodeGenMod.SymbolicRefForm {
+    return switch (form) {
+        .call => .call,
+        .inline_call => .inline_call,
+        .addr => .addr,
+    };
+}
+
 /// A producer-identified target whose code need not have been emitted yet.
 pub const SymbolicReference = struct {
     site: u32,
@@ -55,6 +64,9 @@ pub const SymbolicReference = struct {
 /// Region-relative offsets, preserving producer order even at equal offsets.
 /// SourceLoc.file belongs to the originating LIR source-file table.
 pub const LineEntry = LirCodeGenMod.LineEntry;
+
+/// Region-relative failure sites (`LirCodeGen.FailureSite`).
+pub const FailureSite = LirCodeGenMod.FailureSite;
 
 /// A reference from an artifact's bytes to a location inside another artifact.
 pub const Reference = struct {
@@ -149,8 +161,13 @@ pub const Artifact = struct {
     refs: []const Reference,
     symbolic_refs: []const SymbolicReference = &.{},
     lines: []const LineEntry = &.{},
+    failure_sites: []const FailureSite = &.{},
     relocations: []const NamedRelocation,
     data: []const DataItem,
+    /// The source location a procedure's debug entry names: its procedure's
+    /// location (`LirStore.procLoc`) in the set's source-file domain, the
+    /// same wherever the procedure lands. `none` for every other kind.
+    loc: base.SourceLoc = .none,
 };
 
 /// An ordered set of artifacts covering one code buffer. Order is emission
@@ -165,6 +182,20 @@ pub const Set = struct {
     pub fn deinit(self: *Set) void {
         self.arena.deinit();
     }
+
+    /// The index of the artifact defining `target`, a symbolic reference's
+    /// target, or null when this set does not define it.
+    pub fn definitionOf(self: *const Set, target: @FieldType(SymbolicReference, "target")) ?u32 {
+        for (self.artifacts, 0..) |candidate, candidate_index| {
+            const matches = switch (target) {
+                .proc => |identity| candidate.kind == .proc and std.meta.eql(identity, candidate.kind.proc),
+                .boxy_thunk => |identity| candidate.kind == .boxy_thunk and std.meta.eql(identity, candidate.kind.boxy_thunk),
+                .rc_helper => |name| candidate.kind == .rc_helper and std.mem.eql(u8, name, candidate.kind.rc_helper),
+            };
+            if (matches) return @intCast(candidate_index);
+        }
+        return null;
+    }
 };
 
 /// A fragment owns its requirement list in the same arena as its artifacts.
@@ -174,7 +205,7 @@ pub const Fragment = struct {
     context_dependencies: LirCodeGenMod.FragmentContextDependencies,
 
     pub fn clone(self: *const Fragment, allocator: Allocator) Allocator.Error!Fragment {
-        var set = try combine(allocator, &.{&self.set});
+        var set = try copySet(allocator, &self.set);
         errdefer set.deinit();
         const required_helpers = try set.arena.allocator().dupe(u64, self.required_helpers);
         return .{
@@ -267,7 +298,8 @@ fn captureFragmentPrepared(
 
 fn cloneData(a: Allocator, item: DataItem) Allocator.Error!DataItem {
     const relocations = try a.dupe(DataRelocation, item.relocations);
-    for (relocations) |*relocation| relocation.name = try a.dupe(u8, relocation.name);
+    var copier = NameCopier{};
+    for (relocations) |*relocation| relocation.name = try copier.copy(a, relocation.name);
     return .{
         .name = try a.dupe(u8, item.name),
         .bytes = try a.dupe(u8, item.bytes),
@@ -278,6 +310,21 @@ fn cloneData(a: Allocator, item: DataItem) Allocator.Error!DataItem {
     };
 }
 
+/// Copies relocation target names into an allocator, once for each run of
+/// relocations in a row that name the same symbol, which share the copy: a
+/// list of copies of one value names it once per item.
+const NameCopier = struct {
+    source: ?[]const u8 = null,
+    copied: []const u8 = &.{},
+
+    fn copy(self: *NameCopier, a: Allocator, name: []const u8) Allocator.Error![]const u8 {
+        if (self.source) |source| if (std.mem.eql(u8, source, name)) return self.copied;
+        self.copied = try a.dupe(u8, name);
+        self.source = name;
+        return self.copied;
+    }
+};
+
 /// Deep-copy sets into one ownership domain, rebasing only set-local references.
 /// Callers select cache entries using their full compilation provenance.
 pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!Set {
@@ -287,7 +334,6 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
     var artifacts = std.ArrayList(Artifact).empty;
     var source_files = std.ArrayList([32]u8).empty;
     for (sets) |set| {
-        const first: u32 = @intCast(artifacts.items.len);
         const file_map = try a.alloc(u32, set.source_files.len);
         for (set.source_files, file_map) |identity, *mapped| {
             mapped.* = for (source_files.items, 0..) |existing, index| {
@@ -297,36 +343,190 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
                 break :index @intCast(source_files.items.len - 1);
             };
         }
-        for (set.artifacts) |source| {
-            var artifact = source;
-            artifact.kind = switch (source.kind) {
-                .rc_helper => |name| .{ .rc_helper = try a.dupe(u8, name) },
-                .proc, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => source.kind,
-            };
-            artifact.code = try a.dupe(u8, source.code);
-            const refs = try a.dupe(Reference, source.refs);
-            for (refs) |*ref| ref.target += first;
-            artifact.refs = refs;
-            const symbolic_refs = try a.dupe(SymbolicReference, source.symbolic_refs);
-            for (symbolic_refs) |*ref| switch (ref.target) {
-                .rc_helper => |name| ref.target = .{ .rc_helper = try a.dupe(u8, name) },
-                .proc, .boxy_thunk => {},
-            };
-            artifact.symbolic_refs = symbolic_refs;
-            const lines = try a.dupe(LineEntry, source.lines);
-            for (lines) |*line| line.loc = rebindLoc(line.loc, file_map);
-            artifact.lines = lines;
-            const relocations = try a.dupe(NamedRelocation, source.relocations);
-            for (relocations) |*relocation| relocation.name = try a.dupe(u8, relocation.name);
-            artifact.relocations = relocations;
-            const data = try a.alloc(DataItem, source.data.len);
-            for (source.data, data) |item, *owned| owned.* = try cloneData(a, item);
-            artifact.data = data;
-            try artifacts.append(a, artifact);
-        }
+        try copyArtifacts(a, &artifacts, set, file_map);
     }
     const owned = try artifacts.toOwnedSlice(a);
-    return .{ .arena = arena, .artifacts = owned, .source_files = try source_files.toOwnedSlice(a) };
+    const owned_source_files = try source_files.toOwnedSlice(a);
+    return .{ .arena = arena, .artifacts = owned, .source_files = owned_source_files };
+}
+
+/// Deep-copy sets compiled from programs of one Solved program, which name a
+/// procedure, refcount helper, or Boxy thunk only by the code they hold, into
+/// one ownership domain with one copy of each: a later set's copy of one is
+/// dropped, and references to it resolve to the first copy. The sets share
+/// one source-file table, as programs of one Solved program do.
+pub fn combineDistinct(allocator: Allocator, sets: []const *const Set) Allocator.Error!Set {
+    const source_files: []const [32]u8 = if (sets.len == 0) &.{} else sets[0].source_files;
+    if (@import("builtin").mode == .debug) for (sets) |set| {
+        if (set.source_files.len != source_files.len) base.invariant("{s}", .{"combined artifact sets index different source-file tables"});
+        for (set.source_files, source_files) |left, right| {
+            if (!std.mem.eql(u8, &left, &right)) base.invariant("{s}", .{"combined artifact sets index different source-file tables"});
+        }
+    };
+    var arena = collections.SingleThreadArena.init(allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+    const Named = union(enum) { proc: lir.ProcIdentity, thunk: lir.ProcIdentity, helper: []const u8 };
+    const NamedContext = struct {
+        pub fn hash(_: @This(), key: Named) u64 {
+            var hasher = std.hash.Wyhash.init(0);
+            switch (key) {
+                .proc => |identity| {
+                    hasher.update("p");
+                    hasher.update(&identity.bytes);
+                },
+                .thunk => |identity| {
+                    hasher.update("t");
+                    hasher.update(&identity.bytes);
+                },
+                .helper => |name| {
+                    hasher.update("h");
+                    hasher.update(name);
+                },
+            }
+            return hasher.final();
+        }
+        pub fn eql(_: @This(), left: Named, right: Named) bool {
+            return switch (left) {
+                .proc => |identity| right == .proc and std.meta.eql(identity, right.proc),
+                .thunk => |identity| right == .thunk and std.meta.eql(identity, right.thunk),
+                .helper => |name| right == .helper and std.mem.eql(u8, name, right.helper),
+            };
+        }
+    };
+    var placed = std.HashMap(Named, u32, NamedContext, std.hash_map.default_max_load_percentage).init(allocator);
+    defer placed.deinit();
+    // Where each set's artifacts land, and which of them are copied.
+    const maps = try allocator.alloc([]u32, sets.len);
+    var mapped: usize = 0;
+    defer {
+        for (maps[0..mapped]) |map| allocator.free(map);
+        allocator.free(maps);
+    }
+    const kept = try allocator.alloc([]bool, sets.len);
+    var kept_count: usize = 0;
+    defer {
+        for (kept[0..kept_count]) |flags| allocator.free(flags);
+        allocator.free(kept);
+    }
+    var next: u32 = 0;
+    for (sets, maps, kept) |set, *map, *flags| {
+        map.* = try allocator.alloc(u32, set.artifacts.len);
+        mapped += 1;
+        flags.* = try allocator.alloc(bool, set.artifacts.len);
+        kept_count += 1;
+        for (set.artifacts, map.*, flags.*) |artifact, *index, *keep| {
+            const named: ?Named = switch (artifact.kind) {
+                .proc => |identity| .{ .proc = identity },
+                .boxy_thunk => |identity| .{ .thunk = identity },
+                .rc_helper => |name| .{ .helper = name },
+                .entrypoint, .message_pool_run, .branch_island => null,
+            };
+            if (named) |key| {
+                const gop = try placed.getOrPut(key);
+                if (gop.found_existing) {
+                    index.* = gop.value_ptr.*;
+                    keep.* = false;
+                    continue;
+                }
+                gop.value_ptr.* = next;
+            }
+            index.* = next;
+            keep.* = true;
+            next += 1;
+        }
+    }
+    var artifacts = try std.ArrayList(Artifact).initCapacity(a, next);
+    for (sets, maps, kept) |set, map, flags| {
+        // A constant's program-local name belongs to the program that made
+        // the set, and another set's program can give the same name to a
+        // different constant, so each set names its constants by content
+        // before the sets meet.
+        var names = try ContentNames.init(allocator, set);
+        defer names.deinit();
+        for (set.artifacts, flags) |source, keep| {
+            if (!keep) continue;
+            const first: u32 = @intCast(artifacts.items.len);
+            try copyArtifacts(a, &artifacts, &.{ .arena = undefined, .artifacts = &.{source} }, null);
+            const refs: []Reference = @constCast(artifacts.items[first].refs);
+            for (refs, source.refs) |*ref, original| ref.target = map[original.target];
+            try nameDataByContent(a, &artifacts.items[first], &names);
+        }
+    }
+    // Both slices come from the arena before it is copied into the set.
+    const owned_artifacts = try artifacts.toOwnedSlice(a);
+    const owned_source_files = try a.dupe([32]u8, source_files);
+    return .{ .arena = arena, .artifacts = owned_artifacts, .source_files = owned_source_files };
+}
+
+/// Replace every program-local constant name `artifact` carries or refers
+/// to with its content name (`ContentNames`), as a pack names it.
+fn nameDataByContent(a: Allocator, artifact: *Artifact, names: *const ContentNames) Allocator.Error!void {
+    for (@constCast(artifact.relocations)) |*relocation| {
+        if (!names.renames(relocation.name)) continue;
+        relocation.name = try a.dupe(u8, names.of(relocation.name));
+        relocation.scope = .shared;
+    }
+    for (@constCast(artifact.data)) |*item| {
+        if (names.renames(item.name)) {
+            item.name = try a.dupe(u8, names.of(item.name));
+            item.program_local_name = false;
+        }
+        for (@constCast(item.relocations)) |*relocation| {
+            if (relocation.external or !names.renames(relocation.name)) continue;
+            relocation.name = try a.dupe(u8, names.of(relocation.name));
+        }
+    }
+}
+
+/// Deep-copy a set whose lines index a source-file table it does not carry
+/// (`extractPrepared`), keeping its file indices.
+fn copySet(allocator: Allocator, set: *const Set) Allocator.Error!Set {
+    std.debug.assert(set.source_files.len == 0);
+    var arena = collections.SingleThreadArena.init(allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+    var artifacts = std.ArrayList(Artifact).empty;
+    try copyArtifacts(a, &artifacts, set, null);
+    const owned = try artifacts.toOwnedSlice(a);
+    return .{ .arena = arena, .artifacts = owned };
+}
+
+/// Append deep copies of `set`'s artifacts, rebasing set-local references
+/// and, given a `file_map`, carrying line file indices through it.
+fn copyArtifacts(a: Allocator, artifacts: *std.ArrayList(Artifact), set: *const Set, file_map: ?[]const u32) Allocator.Error!void {
+    const first: u32 = @intCast(artifacts.items.len);
+    for (set.artifacts) |source| {
+        var artifact = source;
+        artifact.kind = switch (source.kind) {
+            .rc_helper => |name| .{ .rc_helper = try a.dupe(u8, name) },
+            .proc, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => source.kind,
+        };
+        artifact.code = try a.dupe(u8, source.code);
+        const refs = try a.dupe(Reference, source.refs);
+        for (refs) |*ref| ref.target += first;
+        artifact.refs = refs;
+        const symbolic_refs = try a.dupe(SymbolicReference, source.symbolic_refs);
+        for (symbolic_refs) |*ref| switch (ref.target) {
+            .rc_helper => |name| ref.target = .{ .rc_helper = try a.dupe(u8, name) },
+            .proc, .boxy_thunk => {},
+        };
+        artifact.symbolic_refs = symbolic_refs;
+        const lines = try a.dupe(LineEntry, source.lines);
+        if (file_map) |map| for (lines) |*line| {
+            line.loc = rebindLoc(line.loc, map);
+        };
+        artifact.lines = lines;
+        if (file_map) |map| artifact.loc = rebindLoc(source.loc, map);
+        artifact.failure_sites = try a.dupe(FailureSite, source.failure_sites);
+        const relocations = try a.dupe(NamedRelocation, source.relocations);
+        for (relocations) |*relocation| relocation.name = try a.dupe(u8, relocation.name);
+        artifact.relocations = relocations;
+        const data = try a.alloc(DataItem, source.data.len);
+        for (source.data, data) |item, *owned| owned.* = try cloneData(a, item);
+        artifact.data = data;
+        try artifacts.append(a, artifact);
+    }
 }
 
 /// `loc` with its file index carried from one source-file domain to another
@@ -386,6 +586,16 @@ pub const ContentNames = struct {
         for (set.artifacts) |artifact| {
             for (artifact.data) |item| try self.nameItem(item);
         }
+        return self;
+    }
+
+    /// Content names for `items`, every one a carried constant together with
+    /// every constant it names.
+    pub fn initItems(allocator: Allocator, items: []const DataItem) Allocator.Error!ContentNames {
+        var self = ContentNames{ .allocator = allocator, .arena = collections.SingleThreadArena.init(allocator) };
+        errdefer self.deinit();
+        for (items) |item| try self.items.put(allocator, item.name, item);
+        for (items) |item| try self.nameItem(item);
         return self;
     }
 
@@ -462,16 +672,41 @@ pub const ContentNames = struct {
     /// Writes the digest of `item`'s rendering and returns the shallowest
     /// stack depth that rendering referred back to.
     fn write(self: *ContentNames, hasher: *Sha256, item: DataItem) Allocator.Error!u32 {
-        if (self.active.get(item.name)) |depth| {
-            hasher.update("cycle");
-            writeWord(hasher, self.depth - depth);
-            return depth;
+        const rendered = try self.render(item);
+        writeNaming(hasher, rendered.naming);
+        return rendered.low;
+    }
+
+    /// How a rendering names a program-local constant: by the stack depth it
+    /// is active at, or by its digest.
+    const Naming = union(enum) {
+        cycle: u32,
+        data: [32]u8,
+    };
+
+    const Rendered = struct {
+        naming: Naming,
+        /// The shallowest stack depth the rendering referred back to.
+        low: u32,
+    };
+
+    fn writeNaming(hasher: *Sha256, naming: Naming) void {
+        switch (naming) {
+            .cycle => |distance| {
+                hasher.update("cycle");
+                writeWord(hasher, distance);
+            },
+            .data => |digest| {
+                hasher.update("data");
+                hasher.update(&digest);
+            },
         }
-        if (self.digests.get(item.name)) |digest| {
-            hasher.update("data");
-            hasher.update(&digest);
-            return no_reference;
-        }
+    }
+
+    /// How `item` is named where a rendering refers to it.
+    fn render(self: *ContentNames, item: DataItem) Allocator.Error!Rendered {
+        if (self.active.get(item.name)) |depth| return .{ .naming = .{ .cycle = self.depth - depth }, .low = depth };
+        if (self.digests.get(item.name)) |digest| return .{ .naming = .{ .data = digest }, .low = no_reference };
         const depth = self.depth;
         try self.active.putNoClobber(self.allocator, item.name, depth);
         self.depth += 1;
@@ -487,17 +722,38 @@ pub const ContentNames = struct {
         writeWord(&sub, item.alignment);
         writeWord(&sub, item.symbol_offset);
         var low: u32 = no_reference;
-        const relocations = try self.allocator.dupe(DataRelocation, item.relocations);
-        defer self.allocator.free(relocations);
-        std.mem.sort(DataRelocation, relocations, {}, relocationOffsetBefore);
+        // Relocations are rendered in offset order; ones already in that
+        // order are read in place.
+        const in_order = std.sort.isSorted(DataRelocation, item.relocations, {}, relocationOffsetBefore);
+        const relocations = if (in_order) item.relocations else blk: {
+            const sorted = try self.allocator.dupe(DataRelocation, item.relocations);
+            std.mem.sort(DataRelocation, sorted, {}, relocationOffsetBefore);
+            break :blk sorted;
+        };
+        defer if (!in_order) self.allocator.free(relocations);
         writeWord(&sub, @intCast(relocations.len));
+        // A relocation naming the same symbol, the same way, as the one before
+        // it renders the same reference: rendering a target leaves the active
+        // stack as it found it, and one already rendered renders again as it
+        // did. A list of copies of one value names it once per item.
+        var previous: ?struct { name: []const u8, code: bool, target: ?Rendered } = null;
         for (relocations) |relocation| {
             writeWord(&sub, relocation.offset);
             writeWide(&sub, @bitCast(relocation.addend));
             sub.update(&.{ @intFromBool(relocation.function), @intFromBool(relocation.external) });
-            const target = if (relocation.function or relocation.external) null else self.items.get(relocation.name);
-            if (target != null and target.?.program_local_name) {
-                low = @min(low, try self.write(&sub, target.?));
+            const code = relocation.function or relocation.external;
+            const repeated = if (previous) |last| last.code == code and std.mem.eql(u8, last.name, relocation.name) else false;
+            if (!repeated) {
+                const target = if (code) null else self.items.get(relocation.name);
+                previous = .{
+                    .name = relocation.name,
+                    .code = code,
+                    .target = if (target != null and target.?.program_local_name) try self.render(target.?) else null,
+                };
+            }
+            if (previous.?.target) |rendered| {
+                writeNaming(&sub, rendered.naming);
+                low = @min(low, rendered.low);
             } else {
                 sub.update("named");
                 writeWord(&sub, @intCast(relocation.name.len));
@@ -505,13 +761,11 @@ pub const ContentNames = struct {
             }
         }
         const digest = sub.finalResult();
-        hasher.update("data");
-        hasher.update(&digest);
         if (low >= depth) {
             try self.digests.put(self.allocator, item.name, digest);
-            return no_reference;
+            return .{ .naming = .{ .data = digest }, .low = no_reference };
         }
-        return low;
+        return .{ .naming = .{ .data = digest }, .low = low };
     }
 
     fn relocationOffsetBefore(_: void, a: DataRelocation, b: DataRelocation) bool {
@@ -558,6 +812,7 @@ pub const PreparedData = struct {
         }
         for (constant_exports) |constant| {
             const relocations = try a.alloc(DataRelocation, constant.relocations.len);
+            var copier = NameCopier{};
             for (constant.relocations, relocations) |relocation, *out| {
                 const name = switch (relocation.target) {
                     .data_symbol => |target| constant_exports[@backingInt(target)].symbol_name,
@@ -565,7 +820,7 @@ pub const PreparedData = struct {
                 };
                 out.* = .{
                     .offset = @intCast(relocation.offset),
-                    .name = try a.dupe(u8, name),
+                    .name = try copier.copy(a, name),
                     .addend = relocation.addend,
                     .function = switch (relocation.kind) {
                         .address => false,
@@ -608,10 +863,29 @@ pub fn extract(
 ) ExtractError!Set {
     var prepared = try PreparedData.init(allocator, string_exports, constant_exports, spliced_data);
     defer prepared.deinit();
-    return extractPrepared(CG, allocator, codegen, proc_specs, layout_store, &prepared);
+    return try extractCataloged(CG, allocator, codegen, proc_specs, layout_store, &prepared);
+}
+
+/// `extract` against a data catalog the caller prepared and keeps.
+pub fn extractCataloged(
+    comptime CG: type,
+    allocator: Allocator,
+    codegen: *CG,
+    proc_specs: []const lir.LIR.LirProcSpec,
+    layout_store: *const layout.Store,
+    prepared: *const PreparedData,
+) ExtractError!Set {
+    var set = try extractPrepared(CG, allocator, codegen, proc_specs, layout_store, prepared);
+    errdefer set.deinit();
+    const source_files = try set.arena.allocator().alloc([32]u8, codegen.store.sourceFileCount());
+    for (source_files, 0..) |*identity, file| identity.* = codegen.store.sourceFileModuleIdentity(@intCast(file));
+    set.source_files = source_files;
+    return set;
 }
 
 /// Capture against a shared immutable catalog without scanning module exports.
+/// The set's lines index the code generator's own source-file table, which
+/// the set does not copy: a session's fragments all share that table.
 pub fn extractPrepared(
     comptime CG: type,
     allocator: Allocator,
@@ -623,29 +897,6 @@ pub fn extractPrepared(
     var arena = collections.SingleThreadArena.init(allocator);
     errdefer arena.deinit();
     const arena_allocator = arena.allocator();
-
-    // Only producer-local binding cells enter this overlay. Immutable data
-    // remains in the shared catalog until a relocation actually reaches it.
-    var data_by_name = std.StringHashMap(DataItem).init(allocator);
-    defer data_by_name.deinit();
-    for (codegen.bindingDataCells()) |cell| {
-        const name = try arena_allocator.dupe(u8, cell.name);
-        const cell_relocations = try arena_allocator.alloc(DataRelocation, 1);
-        cell_relocations[0] = .{
-            .offset = 0,
-            .name = try arena_allocator.dupe(u8, cell.target_name),
-            .addend = 0,
-            .function = false,
-            .external = true,
-        };
-        try data_by_name.put(name, .{
-            .name = name,
-            .bytes = try arena_allocator.dupe(u8, &(@as([8]u8, @splat(0)))),
-            .alignment = 8,
-            .symbol_offset = 0,
-            .relocations = cell_relocations,
-        });
-    }
 
     const code = codegen.getGeneratedCode();
     const all_regions = try allocator.dupe(CG.CodeRegion, codegen.codeRegions());
@@ -680,6 +931,10 @@ pub fn extractPrepared(
     defer allocator.free(owned_names);
     @memset(owned_names, null);
     const refs = codegen.codeRefs();
+    for (relocations) |relocation| switch (relocation) {
+        .local_data, .jmp_to_return => return error.UnsupportedRelocation,
+        .retired, .linked_function, .linked_data => {},
+    };
 
     // Standalone branch islands belong to this placement, not the artifact
     // set. Embedded reservations stay inside their owning bytes but every
@@ -691,6 +946,22 @@ pub fn extractPrepared(
         artifact_of_region[index] = if (regionHasArtifact(region.kind)) artifact_count else null;
         if (regionHasArtifact(region.kind)) artifact_count += 1;
     }
+
+    // Each reference and relocation belongs to the one region its offset
+    // falls in. Grouping them once keeps extraction linear in the program's
+    // size; within a region they keep their emission order.
+    var ref_groups = try RegionGroups.init(CG, allocator, regions, refs.len, refs, refSite);
+    defer ref_groups.deinit(allocator);
+    var relocation_groups = try RegionGroups.init(CG, allocator, regions, relocations.len, relocations, relocationOffset);
+    defer relocation_groups.deinit(allocator);
+    var frame_of_entry = std.AutoHashMap(usize, usize).init(allocator);
+    defer frame_of_entry.deinit();
+    for (unwind, 0..) |function, index| {
+        const entry = try frame_of_entry.getOrPut(function.start_offset);
+        if (!entry.found_existing) entry.value_ptr.* = index;
+    }
+    var message_runs = try MessageRuns.init(CG, allocator, regions);
+    defer message_runs.deinit(allocator);
 
     const artifacts = try arena_allocator.alloc(Artifact, artifact_count);
     for (regions, 0..) |region, region_index| {
@@ -707,10 +978,9 @@ pub fn extractPrepared(
             .spliced_helper => .{ .rc_helper = try arena_allocator.dupe(u8, codegen.splicedHelperName(region.start + region.entry) orelse return error.DanglingReference) },
         };
 
-        var frame: ?Frame = null;
-        for (unwind) |function| {
-            if (function.start_offset != region.start + region.entry) continue;
-            frame = .{
+        const frame: ?Frame = if (frame_of_entry.get(region.start + region.entry)) |function_index| frame: {
+            const function = unwind[function_index];
+            break :frame .{
                 .prologue_size = function.prologue_size,
                 .stack_alloc = function.stack_alloc,
                 .frame_size = function.frame_size,
@@ -718,8 +988,7 @@ pub fn extractPrepared(
                 .epilogue_offset = function.epilogue_offset,
                 .uses_frame_pointer = function.uses_frame_pointer,
             };
-            break;
-        }
+        } else null;
 
         // Code whose identity names it reaches a procedure whose identity
         // names its template by site (`LIR.LirProcSpec.code_key`) by that
@@ -731,8 +1000,8 @@ pub fn extractPrepared(
         };
         var region_refs = std.ArrayList(Reference).empty;
         var symbolic_refs = std.ArrayList(SymbolicReference).empty;
-        for (refs) |ref| {
-            if (ref.site < region.start or ref.site >= region.end) continue;
+        for (ref_groups.of(region_index)) |ref_index| {
+            const ref = refs[ref_index];
             const symbolic_target: ?@FieldType(SymbolicReference, "target") = switch (ref.target) {
                 .proc => |proc_id| if (codegen.compiledProcSymbol(proc_id) == null or
                     (region_names_code and proc_specs[@backingInt(proc_id)].code_key != null))
@@ -759,7 +1028,7 @@ pub fn extractPrepared(
             const target_offset: usize = switch (ref.target) {
                 .proc => |proc_id| (codegen.compiledProcSymbol(proc_id) orelse return error.DanglingReference).code_start,
                 .rc_helper => |key| codegen.compiledRcHelperOffset(key) orelse return error.DanglingReference,
-                .message => |message_offset| messageOffsetInCode(CG, regions, message_offset) orelse return error.DanglingReference,
+                .message => |message_offset| message_runs.codeOffset(regions, message_offset) orelse return error.DanglingReference,
                 .boxy_thunk => |proc_id| codegen.boxyThunkOffset(proc_id) orelse return error.DanglingReference,
                 .offset => |offset| offset,
             };
@@ -798,14 +1067,9 @@ pub fn extractPrepared(
         }
 
         var region_relocations = std.ArrayList(NamedRelocation).empty;
-        for (relocations) |relocation| {
-            switch (relocation) {
-                .retired => continue,
-                .local_data, .jmp_to_return => return error.UnsupportedRelocation,
-                .linked_function, .linked_data => {},
-            }
+        for (relocation_groups.of(region_index)) |relocation_index| {
+            const relocation = relocations[relocation_index];
             const offset = relocation.getOffset();
-            if (offset < region.start or offset >= region.end) continue;
             try region_relocations.append(arena_allocator, switch (relocation) {
                 .linked_function => |function| .{
                     .offset = @intCast(offset - region.start),
@@ -825,15 +1089,27 @@ pub fn extractPrepared(
 
         // Every data item the region names, then every item those name, so
         // an artifact carries the whole constant graph it points into.
-        const region_data = try captureData(allocator, arena_allocator, region_relocations.items, &data_by_name, prepared);
+        const region_data = try captureData(allocator, arena_allocator, region_relocations.items, prepared);
 
+        // Lines and failure sites are in code offset order, so each region's
+        // are one contiguous run found by search. A failing call's return
+        // address may be the region's end.
+        const all_lines = codegen.getLineEntries();
         var lines = std.ArrayList(LineEntry).empty;
-        for (codegen.getLineEntries()) |line| {
-            if (line.offset < region.start or line.offset >= region.end) continue;
-            try lines.append(arena_allocator, .{ .offset = @intCast(line.offset - region.start), .loc = line.loc });
+        for (all_lines[firstAtOrAfter(LineEntry, all_lines, region.start)..]) |line| {
+            if (line.offset >= region.end) break;
+            try lines.append(arena_allocator, .{ .offset = @intCast(line.offset - region.start), .loc = line.loc, .region = line.region });
+        }
+        const all_failure_sites = codegen.getFailureSites();
+        var failure_sites = std.ArrayList(FailureSite).empty;
+        for (all_failure_sites[firstAtOrAfter(FailureSite, all_failure_sites, region.start + 1)..]) |site| {
+            if (site.offset > region.end) break;
+            try failure_sites.append(arena_allocator, .{ .offset = @intCast(site.offset - region.start), .meaning = site.meaning });
         }
         const artifact_code = try arena_allocator.dupe(u8, code[region.start..region.end]);
         codegen.normalizeArtifactCode(region.start, artifact_code);
+        for (region_refs.items) |ref| CG.normalizeArtifactRefSite(artifact_code, ref.site, codeRefForm(ref.form), if (ref.veneer) |offset| offset else null);
+        for (symbolic_refs.items) |ref| CG.normalizeArtifactRefSite(artifact_code, ref.site, codeRefForm(ref.form), if (ref.veneer) |offset| offset else null);
         artifacts[index] = .{
             .kind = kind,
             .code = artifact_code,
@@ -842,14 +1118,152 @@ pub fn extractPrepared(
             .refs = try region_refs.toOwnedSlice(arena_allocator),
             .symbolic_refs = try symbolic_refs.toOwnedSlice(arena_allocator),
             .lines = try lines.toOwnedSlice(arena_allocator),
+            .failure_sites = try failure_sites.toOwnedSlice(arena_allocator),
             .relocations = try region_relocations.toOwnedSlice(arena_allocator),
             .data = region_data,
+            .loc = switch (region.kind) {
+                // A procedure placed from another set carries the location
+                // that set recorded; any other has its own.
+                .proc => |proc_id| codegen.assembledProcLoc(proc_specs[@backingInt(proc_id)].identity) orelse codegen.store.procLoc(proc_id),
+                .spliced_proc => |identity| codegen.assembledProcLoc(identity) orelse .none,
+                .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_boxy_thunk, .spliced_helper => .none,
+            },
         };
     }
 
-    const source_files = try arena_allocator.alloc([32]u8, codegen.store.sourceFileCount());
-    for (source_files, 0..) |*identity, file| identity.* = codegen.store.sourceFileModuleIdentity(@intCast(file));
-    return .{ .arena = arena, .artifacts = artifacts, .source_files = source_files };
+    return .{ .arena = arena, .artifacts = artifacts };
+}
+
+fn refSite(ref: anytype) ?usize {
+    return ref.site;
+}
+
+fn relocationOffset(relocation: anytype) ?usize {
+    return switch (relocation) {
+        .retired => null,
+        .linked_function, .linked_data => relocation.getOffset(),
+        .local_data, .jmp_to_return => unreachable, // extraction rejected these kinds before grouping relocations
+    };
+}
+
+/// The indices of a list's items grouped by the code region their offsets
+/// fall in, each group in list order.
+const RegionGroups = struct {
+    /// `items[starts[r]..starts[r + 1]]` are region `r`'s item indices.
+    starts: []u32,
+    items: []u32,
+
+    fn init(
+        comptime CG: type,
+        allocator: Allocator,
+        regions: []const CG.CodeRegion,
+        count: usize,
+        list: anytype,
+        comptime offsetOf: anytype,
+    ) Allocator.Error!RegionGroups {
+        const region_of = try allocator.alloc(?u32, count);
+        defer allocator.free(region_of);
+        const starts = try allocator.alloc(u32, regions.len + 1);
+        errdefer allocator.free(starts);
+        @memset(starts, 0);
+        var grouped: usize = 0;
+        for (list, region_of) |item, *region| {
+            region.* = if (offsetOf(item)) |offset|
+                if (regionContaining(CG, regions, offset)) |found| @intCast(found) else null
+            else
+                null;
+            if (region.*) |found| {
+                starts[found + 1] += 1;
+                grouped += 1;
+            }
+        }
+        for (1..starts.len) |index| starts[index] += starts[index - 1];
+        const items = try allocator.alloc(u32, grouped);
+        errdefer allocator.free(items);
+        const next = try allocator.dupe(u32, starts[0..regions.len]);
+        defer allocator.free(next);
+        for (region_of, 0..) |maybe_region, item_index| {
+            const region = maybe_region orelse continue;
+            items[next[region]] = @intCast(item_index);
+            next[region] += 1;
+        }
+        return .{ .starts = starts, .items = items };
+    }
+
+    fn of(self: *const RegionGroups, region: usize) []const u32 {
+        return self.items[self.starts[region]..self.starts[region + 1]];
+    }
+
+    fn deinit(self: *RegionGroups, allocator: Allocator) void {
+        allocator.free(self.starts);
+        allocator.free(self.items);
+    }
+};
+
+/// The message pool runs of a placement, for finding the run a message
+/// byte was placed in: the last run in placement order that starts at or
+/// before the message.
+const MessageRuns = struct {
+    /// Pool offset each run starts at, ascending.
+    pool_from: []u32,
+    /// For each entry of `pool_from`, the latest placement position among
+    /// the runs starting at or before it.
+    latest_region: []u32,
+
+    const Run = struct { pool_from: u32, region: u32 };
+
+    fn init(comptime CG: type, allocator: Allocator, regions: []const CG.CodeRegion) Allocator.Error!MessageRuns {
+        var runs = std.ArrayList(Run).empty;
+        defer runs.deinit(allocator);
+        for (regions, 0..) |region, index| switch (region.kind) {
+            .message_pool_run => |pool_from| try runs.append(allocator, .{ .pool_from = pool_from, .region = @intCast(index) }),
+            .proc, .rc_helper, .boxy_thunk, .entrypoint, .branch_island, .hosted_stub, .spliced_proc, .spliced_boxy_thunk, .spliced_helper => {},
+        };
+        std.mem.sort(Run, runs.items, {}, struct {
+            fn lessThan(_: void, lhs: Run, rhs: Run) bool {
+                return lhs.pool_from < rhs.pool_from;
+            }
+        }.lessThan);
+        const pool_from = try allocator.alloc(u32, runs.items.len);
+        errdefer allocator.free(pool_from);
+        const latest_region = try allocator.alloc(u32, runs.items.len);
+        var latest: u32 = 0;
+        for (runs.items, pool_from, latest_region) |run, *from, *region| {
+            latest = @max(latest, run.region);
+            from.* = run.pool_from;
+            region.* = latest;
+        }
+        return .{ .pool_from = pool_from, .latest_region = latest_region };
+    }
+
+    fn codeOffset(self: *const MessageRuns, regions: anytype, message_offset: u32) ?usize {
+        // The number of runs starting at or before the message.
+        var low: usize = 0;
+        var high: usize = self.pool_from.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (self.pool_from[mid] <= message_offset) low = mid + 1 else high = mid;
+        }
+        if (low == 0) return null;
+        const region = regions[self.latest_region[low - 1]];
+        return region.start + (message_offset - region.kind.message_pool_run);
+    }
+
+    fn deinit(self: *MessageRuns, allocator: Allocator) void {
+        allocator.free(self.pool_from);
+        allocator.free(self.latest_region);
+    }
+};
+
+/// Index of the first entry, in offset order, at or after `offset`.
+fn firstAtOrAfter(comptime T: type, items: []const T, offset: usize) usize {
+    var low: usize = 0;
+    var high: usize = items.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (items[mid].offset < offset) low = mid + 1 else high = mid;
+    }
+    return low;
 }
 
 /// `symbol`'s name, copied into the set's arena the first time it is asked for.
@@ -865,7 +1279,6 @@ fn captureData(
     allocator: Allocator,
     arena_allocator: Allocator,
     relocations: []const NamedRelocation,
-    local: *const std.StringHashMap(DataItem),
     prepared: *const PreparedData,
 ) ExtractError![]const DataItem {
     var data = std.ArrayList(DataItem).empty;
@@ -874,20 +1287,68 @@ fn captureData(
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
     for (relocations) |relocation| {
-        const item = local.get(relocation.name) orelse prepared.items.get(relocation.name) orelse continue;
+        const item = prepared.items.get(relocation.name) orelse continue;
         try pending.append(allocator, item.name);
     }
     while (pending.pop()) |name| {
         const visited = try seen.getOrPut(name);
         if (visited.found_existing) continue;
-        const item = local.get(name) orelse prepared.items.get(name) orelse return error.DanglingReference;
+        const item = prepared.items.get(name) orelse return error.DanglingReference;
         try data.append(arena_allocator, try cloneData(arena_allocator, item));
-        for (item.relocations) |relocation| {
-            if (relocation.function or relocation.external) continue;
-            try pending.append(allocator, relocation.name);
-        }
+        try appendDataTargets(allocator, &pending, item.relocations);
     }
     return try data.toOwnedSlice(arena_allocator);
+}
+
+/// Append to `out` the constants of `catalog` named `roots`, and every
+/// constant they name, transitively, each once. The items stay borrowed from
+/// the catalog.
+pub fn dataClosure(
+    allocator: Allocator,
+    catalog: *const PreparedData,
+    roots: []const []const u8,
+    out: *std.ArrayList(DataItem),
+) (Allocator.Error || error{DanglingReference})!void {
+    var pending = std.ArrayList([]const u8).empty;
+    defer pending.deinit(allocator);
+    var seen = std.StringHashMap(void).init(allocator);
+    defer seen.deinit();
+    var index = roots.len;
+    while (index > 0) {
+        index -= 1;
+        try pending.append(allocator, roots[index]);
+    }
+    while (pending.pop()) |name| {
+        if ((try seen.getOrPut(name)).found_existing) continue;
+        const item = catalog.items.get(name) orelse return error.DanglingReference;
+        try out.append(allocator, item);
+        try appendDataTargets(allocator, &pending, item.relocations);
+    }
+}
+
+/// Append to `pending` every symbol `relocations` name, code included, each
+/// once per run of relocations that name it in a row.
+fn appendRelocationTargets(allocator: Allocator, pending: *std.ArrayList([]const u8), relocations: []const DataRelocation) Allocator.Error!void {
+    var previous: ?[]const u8 = null;
+    for (relocations) |relocation| {
+        if (previous) |name| if (std.mem.eql(u8, name, relocation.name)) continue;
+        previous = relocation.name;
+        try pending.append(allocator, relocation.name);
+    }
+}
+
+/// Append to `pending` the constants `relocations` name, skipping code
+/// targets. A target the relocation before it also names is the same
+/// constant, already appended: a list of copies of one value names it once
+/// per item.
+fn appendDataTargets(allocator: Allocator, pending: *std.ArrayList([]const u8), relocations: []const DataRelocation) Allocator.Error!void {
+    var previous: ?[]const u8 = null;
+    for (relocations) |relocation| {
+        if (relocation.function or relocation.external) continue;
+        if (previous) |name| if (std.mem.eql(u8, name, relocation.name)) continue;
+        previous = relocation.name;
+        try pending.append(allocator, relocation.name);
+    }
 }
 
 /// Whether a region lifts into an artifact. Branch islands belong to one
@@ -925,19 +1386,415 @@ fn regionContaining(comptime CG: type, regions: []const CG.CodeRegion, offset: u
     return null;
 }
 
-/// Code offset of a message pool byte: the last pool run that starts at or
-/// before the message, plus the message's distance into that run.
-fn messageOffsetInCode(comptime CG: type, regions: []const CG.CodeRegion, message_offset: u32) ?usize {
-    var found: ?usize = null;
-    for (regions) |region| {
-        switch (region.kind) {
-            .message_pool_run => |pool_from| {
-                if (pool_from <= message_offset) found = region.start + (message_offset - pool_from);
-            },
-            .proc, .rc_helper, .boxy_thunk, .entrypoint, .branch_island, .hosted_stub, .spliced_proc, .spliced_boxy_thunk, .spliced_helper => {},
+/// What a linked program's code is reached from: the procedures the host
+/// calls through entry wrappers, and the constants the host binds by name.
+pub const ImageRoots = struct {
+    procs: []const lir.ProcIdentity,
+    data: []const []const u8,
+    /// Further names code and constants relocate to that name a helper
+    /// artifact, by the helper's artifact name.
+    helper_aliases: *const std.StringHashMap([]const u8),
+    /// Every Boxy thunk is reached, from the program's descriptor sidecar.
+    all_thunks: bool,
+};
+
+/// The artifacts of `set` that the image's roots reach: through
+/// references, through relocations to a procedure's or helper's symbol, and
+/// through the constants code names, whose relocations reach further code.
+/// Code a program declares but nothing reaches (a lambda-set member lowered
+/// only so a spliced entry could call it, which the entry never does) is
+/// left out, so the image holds the same code however its procedures were
+/// provided. The result keeps set order.
+pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const PreparedData, roots: ImageRoots) Allocator.Error!Set {
+    var by_name = std.StringHashMap(u32).init(allocator);
+    defer by_name.deinit();
+    var names_arena = collections.SingleThreadArena.init(allocator);
+    defer names_arena.deinit();
+    const names_allocator = names_arena.allocator();
+    var by_proc = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
+    defer by_proc.deinit();
+    var by_thunk = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
+    defer by_thunk.deinit();
+    for (set.artifacts, 0..) |artifact, index| switch (artifact.kind) {
+        .proc => |identity| {
+            try by_proc.put(identity, @intCast(index));
+            try by_name.put(try identity.symbolName(names_allocator), @intCast(index));
+        },
+        .boxy_thunk => |identity| try by_thunk.put(identity, @intCast(index)),
+        .rc_helper => |name| try by_name.put(name, @intCast(index)),
+        .entrypoint, .message_pool_run, .branch_island => {},
+    };
+    var aliases = roots.helper_aliases.iterator();
+    while (aliases.next()) |alias| {
+        if (by_name.get(alias.value_ptr.*)) |index| try by_name.put(alias.key_ptr.*, index);
+    }
+
+    const reached = try allocator.alloc(bool, set.artifacts.len);
+    defer allocator.free(reached);
+    @memset(reached, false);
+    var artifact_work = std.ArrayList(u32).empty;
+    defer artifact_work.deinit(allocator);
+    var data_work = std.ArrayList([]const u8).empty;
+    defer data_work.deinit(allocator);
+    var data_seen = std.StringHashMap(void).init(allocator);
+    defer data_seen.deinit();
+
+    for (roots.procs) |identity| if (by_proc.get(identity)) |index| try artifact_work.append(allocator, index);
+    for (roots.data) |name| try data_work.append(allocator, name);
+    if (roots.all_thunks) {
+        var thunks = by_thunk.valueIterator();
+        while (thunks.next()) |index| try artifact_work.append(allocator, index.*);
+    }
+    while (artifact_work.items.len != 0 or data_work.items.len != 0) {
+        while (artifact_work.pop()) |index| {
+            if (reached[index]) continue;
+            reached[index] = true;
+            const artifact = set.artifacts[index];
+            for (artifact.refs) |ref| try artifact_work.append(allocator, ref.target);
+            for (artifact.symbolic_refs) |ref| {
+                const target = switch (ref.target) {
+                    .proc => |identity| by_proc.get(identity),
+                    .boxy_thunk => |identity| by_thunk.get(identity),
+                    .rc_helper => |name| by_name.get(name),
+                };
+                if (target) |target_index| try artifact_work.append(allocator, target_index);
+            }
+            for (artifact.relocations) |relocation| try data_work.append(allocator, relocation.name);
+            for (artifact.data) |item| try data_work.append(allocator, item.name);
+        }
+        while (data_work.pop()) |name| {
+            if (by_name.get(name)) |index| {
+                try artifact_work.append(allocator, index);
+                continue;
+            }
+            if ((try data_seen.getOrPut(name)).found_existing) continue;
+            const item = catalog.items.get(name) orelse continue;
+            try appendRelocationTargets(allocator, &data_work, item.relocations);
         }
     }
-    return found;
+
+    const new_index = try allocator.alloc(u32, set.artifacts.len);
+    defer allocator.free(new_index);
+    var kept: u32 = 0;
+    for (reached, new_index) |is_reached, *index| {
+        index.* = kept;
+        if (is_reached) kept += 1;
+    }
+    var arena = collections.SingleThreadArena.init(allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+    const artifacts = try a.alloc(Artifact, kept);
+    var written: usize = 0;
+    for (set.artifacts, reached) |source, is_reached| {
+        if (!is_reached) continue;
+        var artifact = source;
+        artifact.kind = switch (source.kind) {
+            .rc_helper => |name| .{ .rc_helper = try a.dupe(u8, name) },
+            .proc, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => source.kind,
+        };
+        artifact.code = try a.dupe(u8, source.code);
+        const refs = try a.dupe(Reference, source.refs);
+        for (refs) |*ref| ref.target = new_index[ref.target];
+        artifact.refs = refs;
+        const symbolic_refs = try a.dupe(SymbolicReference, source.symbolic_refs);
+        for (symbolic_refs) |*ref| switch (ref.target) {
+            .rc_helper => |name| ref.target = .{ .rc_helper = try a.dupe(u8, name) },
+            .proc, .boxy_thunk => {},
+        };
+        artifact.symbolic_refs = symbolic_refs;
+        artifact.lines = try a.dupe(LineEntry, source.lines);
+        artifact.failure_sites = try a.dupe(FailureSite, source.failure_sites);
+        const relocations = try a.dupe(NamedRelocation, source.relocations);
+        for (relocations) |*relocation| relocation.name = try a.dupe(u8, relocation.name);
+        artifact.relocations = relocations;
+        const data = try a.alloc(DataItem, source.data.len);
+        for (source.data, data) |item, *owned| owned.* = try cloneData(a, item);
+        artifact.data = data;
+        artifacts[written] = artifact;
+        written += 1;
+    }
+    // Allocated before the arena is copied into the result, which must own
+    // every node.
+    const source_files = try a.dupe([32]u8, set.source_files);
+    return .{ .arena = arena, .artifacts = artifacts, .source_files = source_files };
+}
+
+/// A program's machine code in its one layout: every artifact of the code
+/// its procedures, helpers, and thunks are, compiled for this program or
+/// spliced from an object-cache entry, in an order and under names that
+/// depend only on what each artifact is (design.md "Canonical Dev Images").
+/// `data` holds every constant the code names, and every constant a
+/// host-visible constant names, under its content name, sorted by name.
+pub const CanonicalImage = struct {
+    set: Set,
+    data: []const CanonicalDatum,
+
+    pub fn deinit(self: *CanonicalImage) void {
+        self.set.deinit();
+    }
+};
+
+/// One constant of a canonical image, and whether the host sees it under its
+/// own name.
+pub const CanonicalDatum = struct {
+    item: DataItem,
+    host_visible: bool,
+};
+
+/// Lay `set` out canonically (`CanonicalImage`). `host_visible` are the
+/// constants the host binds by name, with every constant they name; their
+/// names are kept, and every other constant is renamed by content
+/// (`ContentNames`), so a constant this program named for itself and the
+/// same constant carried by a spliced entry are one symbol.
+///
+/// Artifacts are ordered by what they are: procedures by identity, then Boxy
+/// thunks by identity, then refcount helpers by name. A message pool run
+/// belongs to the one artifact whose code addresses it and follows that
+/// artifact, in the order the artifact first addresses its runs.
+pub fn canonicalize(allocator: Allocator, set: *const Set, host_visible: []const DataItem) Allocator.Error!CanonicalImage {
+    var all_items = std.ArrayList(DataItem).empty;
+    defer all_items.deinit(allocator);
+    var collected = std.StringHashMap(void).init(allocator);
+    defer collected.deinit();
+    var visible = std.StringHashMap(void).init(allocator);
+    defer visible.deinit();
+    for (host_visible) |item| {
+        // A constant the program named for itself is named by content, so
+        // no host can name it.
+        if (!item.program_local_name) try visible.put(item.name, {});
+        if ((try collected.getOrPut(item.name)).found_existing) continue;
+        try all_items.append(allocator, item);
+    }
+    for (set.artifacts) |artifact| for (artifact.data) |item| {
+        if ((try collected.getOrPut(item.name)).found_existing) continue;
+        try all_items.append(allocator, item);
+    };
+    var names = try ContentNames.initItems(allocator, all_items.items);
+    defer names.deinit();
+
+    // The owner of each message pool run: the first artifact whose code
+    // addresses it.
+    const owner_of = try allocator.alloc(?u32, set.artifacts.len);
+    defer allocator.free(owner_of);
+    @memset(owner_of, null);
+    for (set.artifacts, 0..) |artifact, index| for (artifact.refs) |ref| {
+        if (set.artifacts[ref.target].kind != .message_pool_run) continue;
+        if (owner_of[ref.target] == null) owner_of[ref.target] = @intCast(index);
+    };
+    var heads = std.ArrayList(u32).empty;
+    defer heads.deinit(allocator);
+    var unowned_runs = std.ArrayList(u32).empty;
+    defer unowned_runs.deinit(allocator);
+    for (set.artifacts, 0..) |artifact, index| switch (artifact.kind) {
+        .message_pool_run => if (owner_of[index] == null) try unowned_runs.append(allocator, @intCast(index)),
+        .proc, .boxy_thunk, .rc_helper, .entrypoint, .branch_island => try heads.append(allocator, @intCast(index)),
+    };
+    std.mem.sort(u32, heads.items, set, canonicalBefore);
+    std.mem.sort(u32, unowned_runs.items, set, struct {
+        fn lessThan(owner: *const Set, a: u32, b: u32) bool {
+            return std.mem.lessThan(u8, owner.artifacts[a].code, owner.artifacts[b].code);
+        }
+    }.lessThan);
+
+    // `order[new] = old`.
+    var order = std.ArrayList(u32).empty;
+    defer order.deinit(allocator);
+    const placed = try allocator.alloc(bool, set.artifacts.len);
+    defer allocator.free(placed);
+    @memset(placed, false);
+    for (heads.items) |head| {
+        try order.append(allocator, head);
+        for (set.artifacts[head].refs) |ref| {
+            if (set.artifacts[ref.target].kind != .message_pool_run or owner_of[ref.target] != head) continue;
+            if (placed[ref.target]) continue;
+            placed[ref.target] = true;
+            try order.append(allocator, ref.target);
+        }
+    }
+    try order.appendSlice(allocator, unowned_runs.items);
+    std.debug.assert(order.items.len == set.artifacts.len);
+    const position = try allocator.alloc(u32, set.artifacts.len);
+    defer allocator.free(position);
+    for (order.items, 0..) |old, new| position[old] = @intCast(new);
+
+    var arena = collections.SingleThreadArena.init(allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+    // Every constant under its content name, renamed once: a constant one
+    // name names is one constant, which each artifact carrying it and the
+    // image's data share.
+    var renamed_items = std.StringHashMap(DataItem).init(allocator);
+    defer renamed_items.deinit();
+    try renamed_items.ensureTotalCapacity(@intCast(all_items.items.len));
+    for (all_items.items) |item| renamed_items.putAssumeCapacityNoClobber(item.name, try renamedData(a, item, &names));
+    const artifacts = try a.alloc(Artifact, set.artifacts.len);
+    for (order.items, artifacts) |old, *out| {
+        const source = set.artifacts[old];
+        out.* = source;
+        out.kind = switch (source.kind) {
+            .rc_helper => |name| .{ .rc_helper = try a.dupe(u8, name) },
+            .proc, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => source.kind,
+        };
+        out.code = try a.dupe(u8, source.code);
+        const refs = try a.dupe(Reference, source.refs);
+        for (refs) |*ref| ref.target = position[ref.target];
+        out.refs = refs;
+        const symbolic_refs = try a.dupe(SymbolicReference, source.symbolic_refs);
+        for (symbolic_refs) |*ref| switch (ref.target) {
+            .rc_helper => |name| ref.target = .{ .rc_helper = try a.dupe(u8, name) },
+            .proc, .boxy_thunk => {},
+        };
+        out.symbolic_refs = symbolic_refs;
+        out.lines = try a.dupe(LineEntry, source.lines);
+        out.failure_sites = try a.dupe(FailureSite, source.failure_sites);
+        const relocations = try a.dupe(NamedRelocation, source.relocations);
+        for (relocations) |*relocation| {
+            const renamed = names.renames(relocation.name);
+            relocation.name = try a.dupe(u8, names.of(relocation.name));
+            if (renamed) relocation.scope = .shared;
+        }
+        out.relocations = relocations;
+        const data = try a.alloc(DataItem, source.data.len);
+        for (source.data, data) |item, *owned| owned.* = renamed_items.get(item.name) orelse unreachable; // `all_items` holds every artifact's data by name
+        out.data = data;
+    }
+
+    const data = try a.alloc(CanonicalDatum, all_items.items.len);
+    var data_len: usize = 0;
+    var seen = std.StringHashMap(void).init(allocator);
+    defer seen.deinit();
+    for (all_items.items) |item| {
+        const renamed = renamed_items.get(item.name) orelse unreachable; // every collected item was renamed above
+        // Distinct program constants with the same content are one symbol.
+        if ((try seen.getOrPut(renamed.name)).found_existing) continue;
+        data[data_len] = .{ .item = renamed, .host_visible = visible.contains(item.name) };
+        data_len += 1;
+    }
+    // The loop above keeps one datum per name, so ordering by name alone is
+    // total and an unstable sort orders them exactly as a stable one would.
+    std.mem.sortUnstable(CanonicalDatum, data[0..data_len], {}, struct {
+        fn lessThan(_: void, lhs: CanonicalDatum, rhs: CanonicalDatum) bool {
+            return std.mem.lessThan(u8, lhs.item.name, rhs.item.name);
+        }
+    }.lessThan);
+
+    const source_files = try a.dupe([32]u8, set.source_files);
+    return .{
+        .set = .{ .arena = arena, .artifacts = artifacts, .source_files = source_files },
+        .data = data[0..data_len],
+    };
+}
+
+fn renamedData(a: Allocator, item: DataItem, names: *const ContentNames) Allocator.Error!DataItem {
+    const relocations = try a.dupe(DataRelocation, item.relocations);
+    var copier = NameCopier{};
+    var previous: ?[]const u8 = null;
+    var renamed: []const u8 = &.{};
+    for (relocations) |*relocation| {
+        const same = if (previous) |name| std.mem.eql(u8, name, relocation.name) else false;
+        if (!same) {
+            previous = relocation.name;
+            renamed = names.of(relocation.name);
+        }
+        relocation.name = try copier.copy(a, renamed);
+    }
+    return .{
+        .name = try a.dupe(u8, names.of(item.name)),
+        .bytes = try a.dupe(u8, item.bytes),
+        .alignment = item.alignment,
+        .symbol_offset = item.symbol_offset,
+        .relocations = relocations,
+        .program_local_name = false,
+    };
+}
+
+/// The canonical order of two head artifacts: by kind, then by what names
+/// the artifact.
+fn canonicalBefore(set: *const Set, a: u32, b: u32) bool {
+    const lhs = set.artifacts[a].kind;
+    const rhs = set.artifacts[b].kind;
+    const lhs_rank = canonicalRank(lhs);
+    const rhs_rank = canonicalRank(rhs);
+    if (lhs_rank != rhs_rank) return lhs_rank < rhs_rank;
+    return switch (lhs) {
+        .proc => |identity| std.mem.lessThan(u8, &identity.bytes, &rhs.proc.bytes),
+        .boxy_thunk => |identity| std.mem.lessThan(u8, &identity.bytes, &rhs.boxy_thunk.bytes),
+        .rc_helper => |name| std.mem.lessThan(u8, name, rhs.rc_helper),
+        // Only one placement's own code has these kinds, which name nothing;
+        // the code bytes order them.
+        .entrypoint, .branch_island, .message_pool_run => std.mem.lessThan(u8, set.artifacts[a].code, set.artifacts[b].code),
+    };
+}
+
+fn canonicalRank(kind: Kind) u8 {
+    return switch (kind) {
+        .proc => 0,
+        .boxy_thunk => 1,
+        .rc_helper => 2,
+        .entrypoint => 3,
+        .branch_island => 4,
+        .message_pool_run => 5,
+    };
+}
+
+/// Place every artifact of a canonical image's set into an open code
+/// generator, in set order, and resolve every reference. A procedure or thunk
+/// the program declares lands as that procedure, and a helper whose key the
+/// program knows as that helper; any other lands as spliced code, as a
+/// splice places it. Returns each artifact's start; the caller owns it.
+pub fn assembleCanonical(
+    comptime CG: type,
+    allocator: Allocator,
+    codegen: *CG,
+    set: *const Set,
+    procs_by_identity: *const std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId),
+    helper_keys: *const HelperKeys,
+) Allocator.Error![]usize {
+    const starts = try allocator.alloc(usize, set.artifacts.len);
+    errdefer allocator.free(starts);
+    for (set.artifacts, starts) |artifact, *start| {
+        const kind: CG.CodeRegionKind = switch (artifact.kind) {
+            .proc => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .proc = proc_id } else .{ .spliced_proc = identity },
+            .boxy_thunk => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .boxy_thunk = proc_id } else .{ .spliced_boxy_thunk = identity },
+            .rc_helper => |name| if (helper_keys.get(name)) |key| .{ .rc_helper = key } else .spliced_helper,
+            .entrypoint => .entrypoint,
+            .message_pool_run => .{ .message_pool_run = 0 },
+            .branch_island => .branch_island,
+        };
+        start.* = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame);
+        try appendMetadata(CG, codegen, artifact, start.*, .same_domain);
+        for (artifact.relocations) |relocation| {
+            const symbol = try codegen.internSymbolName(relocation.name, relocation.scope);
+            const offset: u64 = start.* + relocation.offset;
+            try codegen.appendAssembledRelocation(switch (relocation.kind) {
+                .function => .{ .linked_function = .{ .offset = offset, .symbol = symbol } },
+                .data => |data_kind| .{ .linked_data = .{ .offset = offset, .symbol = symbol, .kind = data_kind } },
+            });
+        }
+    }
+    for (set.artifacts, starts) |artifact, start| {
+        for (artifact.refs) |ref| {
+            const target_start = starts[ref.target];
+            const target: CG.CodeRefTarget = switch (set.artifacts[ref.target].kind) {
+                .proc => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .proc = proc_id } else .{ .offset = target_start + ref.delta },
+                .boxy_thunk => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .boxy_thunk = proc_id } else .{ .offset = target_start + ref.delta },
+                .rc_helper => |name| if (helper_keys.get(name)) |key| .{ .rc_helper = key } else .{ .offset = target_start + ref.delta },
+                .entrypoint, .message_pool_run, .branch_island => .{ .offset = target_start + ref.delta },
+            };
+            try codegen.patchAssembledRef(
+                start + ref.site,
+                switch (ref.form) {
+                    .call => .call,
+                    .inline_call => .inline_call,
+                    .addr => .addr,
+                },
+                target,
+                target_start + ref.delta,
+            );
+        }
+    }
+    try codegen.resolveAssembledSymbolicRefs();
+    return starts;
 }
 
 /// Why an artifact set could not be placed into a program.
@@ -1056,7 +1913,19 @@ const LineBinding = union(enum) {
 
 fn appendMetadata(comptime CG: type, codegen: *CG, artifact: Artifact, start: usize, lines: LineBinding) Allocator.Error!void {
     switch (artifact.kind) {
-        .proc => |identity| try codegen.registerAssembledProc(identity, start + artifact.entry),
+        .proc => |identity| {
+            try codegen.registerAssembledProc(identity, start + artifact.entry);
+            try codegen.registerAssembledProcLoc(identity, switch (lines) {
+                .same_domain => artifact.loc,
+                .file_map => |file_map| loc: {
+                    if (!artifact.loc.hasLocation()) break :loc artifact.loc;
+                    var bound = artifact.loc;
+                    bound.file = file_map[artifact.loc.file] orelse
+                        base.invariant("a spliced procedure's location names a module the program lacks", .{});
+                    break :loc bound;
+                },
+            });
+        },
         .rc_helper => |name| try codegen.registerSplicedHelper(name, start + artifact.entry),
         .boxy_thunk => |identity| try codegen.registerAssembledThunk(identity, start + artifact.entry),
         .entrypoint, .message_pool_run, .branch_island => {},
@@ -1078,11 +1947,18 @@ fn appendMetadata(comptime CG: type, codegen: *CG, artifact: Artifact, start: us
             .file_map => |file_map| loc: {
                 if (!line.loc.hasLocation()) break :loc line.loc;
                 var bound = line.loc;
-                bound.file = file_map[line.loc.file] orelse continue;
+                // An entry whose lines name a module version the program
+                // lacks is never served (`LoadedPacks`), so its lines would
+                // differ from the procedure's own.
+                bound.file = file_map[line.loc.file] orelse
+                    base.invariant("a spliced line names a module the program lacks", .{});
                 break :loc bound;
             },
         };
-        try codegen.appendAssembledLineEntry(.{ .offset = @intCast(start + line.offset), .loc = loc });
+        try codegen.appendAssembledLineEntry(.{ .offset = @intCast(start + line.offset), .loc = loc, .region = line.region });
+    }
+    for (artifact.failure_sites) |site| {
+        try codegen.appendAssembledFailureSite(.{ .offset = @intCast(start + site.offset), .meaning = site.meaning });
     }
 }
 
@@ -1218,6 +2094,111 @@ fn unwindMatches(original: anytype, fresh: @TypeOf(original)) bool {
 /// only other spliced artifacts reach.
 pub const SpliceError = Allocator.Error;
 
+/// Which stable references to procedures `markReferrers` follows.
+pub const ProcSymbols = enum {
+    /// Every one: a stable reference to a procedure the receiving program
+    /// lowers itself is not followed by a splice, but whether a program
+    /// lowers it is not known before lowering, so it counts.
+    follow,
+    /// None: the marked artifacts are procedures named by site, which every
+    /// program that takes an entry referring to one lowers itself.
+    skip,
+};
+
+/// Mark every artifact of `set` whose splice would place a marked one:
+/// every artifact that reaches a marked artifact through references, or
+/// through a stable reference to an artifact of the set (to a procedure
+/// only as `proc_symbols` says), transitively.
+pub fn markReferrers(allocator: Allocator, set: *const Set, marked: []bool, proc_symbols: ProcSymbols) Allocator.Error!void {
+    std.debug.assert(marked.len == set.artifacts.len);
+    var by_proc = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
+    defer by_proc.deinit();
+    var by_thunk = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
+    defer by_thunk.deinit();
+    var by_helper = std.StringHashMap(u32).init(allocator);
+    defer by_helper.deinit();
+    for (set.artifacts, 0..) |artifact, index| switch (artifact.kind) {
+        .proc => |identity| _ = try by_proc.getOrPutValue(identity, @intCast(index)),
+        .boxy_thunk => |identity| _ = try by_thunk.getOrPutValue(identity, @intCast(index)),
+        .rc_helper => |name| _ = try by_helper.getOrPutValue(name, @intCast(index)),
+        .entrypoint, .message_pool_run, .branch_island => {},
+    };
+    // Reverse edges: who places whom.
+    var referrers = try allocator.alloc(std.ArrayList(u32), set.artifacts.len);
+    defer {
+        for (referrers) |*list| list.deinit(allocator);
+        allocator.free(referrers);
+    }
+    for (referrers) |*list| list.* = .empty;
+    for (set.artifacts, 0..) |artifact, index| {
+        for (artifact.refs) |ref| try referrers[ref.target].append(allocator, @intCast(index));
+        for (artifact.symbolic_refs) |ref| {
+            const target = switch (ref.target) {
+                .proc => |identity| switch (proc_symbols) {
+                    .follow => by_proc.get(identity),
+                    .skip => null,
+                },
+                .boxy_thunk => |identity| by_thunk.get(identity),
+                .rc_helper => |name| by_helper.get(name),
+            } orelse continue;
+            try referrers[target].append(allocator, @intCast(index));
+        }
+    }
+    var work = std.ArrayList(u32).empty;
+    defer work.deinit(allocator);
+    for (marked, 0..) |is_marked, index| if (is_marked) try work.append(allocator, @intCast(index));
+    while (work.pop()) |index| {
+        for (referrers[index].items) |referrer| {
+            if (marked[referrer]) continue;
+            marked[referrer] = true;
+            try work.append(allocator, referrer);
+        }
+    }
+}
+
+/// Per artifact of `set`, whether a splice of it would place code for a
+/// procedure in `identities`: one of the artifacts it places is such a
+/// procedure, or a stable reference of one names one. The caller owns the
+/// result.
+pub fn reachingIdentities(allocator: Allocator, set: *const Set, identities: anytype) Allocator.Error![]bool {
+    const marked = try allocator.alloc(bool, set.artifacts.len);
+    errdefer allocator.free(marked);
+    for (set.artifacts, marked) |artifact, *is_marked| {
+        is_marked.* = switch (artifact.kind) {
+            .proc => |identity| identities.contains(identity),
+            .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => false,
+        };
+        for (artifact.symbolic_refs) |ref| switch (ref.target) {
+            .proc => |identity| if (identities.contains(identity)) {
+                is_marked.* = true;
+            },
+            .boxy_thunk, .rc_helper => {},
+        };
+    }
+    try markReferrers(allocator, set, marked, .follow);
+    return marked;
+}
+
+/// Per artifact of `set`, whether a splice of it would place a line or a
+/// location in a source file `present` does not mark, by the set's file
+/// index. The caller owns the result. A procedure keeps its identity across
+/// an edit of its module only when its identity names it by site, so a
+/// procedure with lines in another version of a module is site-named code,
+/// which a program taking an entry that refers to it lowers itself and a
+/// splice never places through that reference.
+pub fn reachingAbsentFiles(allocator: Allocator, set: *const Set, present: []const bool) Allocator.Error![]bool {
+    const marked = try allocator.alloc(bool, set.artifacts.len);
+    errdefer allocator.free(marked);
+    for (set.artifacts, marked) |artifact, *is_marked| {
+        is_marked.* = artifact.loc.hasLocation() and !present[artifact.loc.file];
+        for (artifact.lines) |line| {
+            if (line.loc.hasLocation() and !present[line.loc.file]) is_marked.* = true;
+        }
+    }
+    try markReferrers(allocator, set, marked, .skip);
+    return marked;
+}
+
 /// Place the closure of `roots` (every artifact they reach through
 /// references, transitively) from `set` into an open code generator, before
 /// any of the program's own procedures compile. A procedure artifact whose
@@ -1293,17 +2274,7 @@ pub fn splice(
                 .proc => |identity| if (procs_by_identity.contains(identity)) continue,
                 .boxy_thunk, .rc_helper => {},
             }
-            for (set.artifacts, 0..) |candidate, candidate_index| {
-                const matches = switch (ref.target) {
-                    .proc => |identity| candidate.kind == .proc and std.meta.eql(identity, candidate.kind.proc),
-                    .boxy_thunk => |identity| candidate.kind == .boxy_thunk and std.meta.eql(identity, candidate.kind.boxy_thunk),
-                    .rc_helper => |name| candidate.kind == .rc_helper and std.mem.eql(u8, name, candidate.kind.rc_helper),
-                };
-                if (matches) {
-                    try stack.append(allocator, @intCast(candidate_index));
-                    break;
-                }
-            }
+            if (set.definitionOf(ref.target)) |definition| try stack.append(allocator, definition);
         }
     }
 
@@ -1450,7 +2421,7 @@ test "artifact combination owns all fields and rebases only local references" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testCombineOwnership, .{});
 }
 
-test "artifact prepared data captures only reached closure and preserves external bindings" {
+test "artifact prepared data captures only the reached closure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testPreparedData, .{});
 }
 
@@ -1466,29 +2437,17 @@ fn testPreparedData(allocator: Allocator) (ExtractError || error{ TestExpectedEq
     var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var local = std.StringHashMap(DataItem).init(allocator);
-    defer local.deinit();
-    try local.put("cell", .{
-        .name = "cell",
-        .bytes = &(@as([8]u8, @splat(0))),
-        .alignment = 8,
-        .symbol_offset = 0,
-        .relocations = &.{.{ .offset = 0, .name = "roc__d0", .addend = 0, .function = false, .external = true }},
-    });
+    // A slot the catalog does not carry is left for the image to bind.
     var refs = [_]NamedRelocation{
         .{ .offset = 0, .name = "literal", .scope = .shared, .kind = .{ .data = .rel32 } },
-        .{ .offset = 4, .name = "cell", .scope = .program, .kind = .{ .data = .rel32 } },
+        .{ .offset = 4, .name = "roc__d1", .scope = .program, .kind = .{ .data = .rel32 } },
     };
-    const items = try captureData(allocator, a, &refs, &local, &prepared);
+    const items = try captureData(allocator, a, &refs, &prepared);
     prepared.deinit();
     prepared_live = false;
-    try std.testing.expectEqual(@as(usize, 2), items.len);
-    try std.testing.expectEqualStrings("cell", items[0].name);
-    try std.testing.expectEqualSlices(u8, &(@as([8]u8, @splat(0))), items[0].bytes);
-    try std.testing.expect(items[0].relocations[0].external);
-    try std.testing.expectEqualStrings("roc__d0", items[0].relocations[0].name);
-    try std.testing.expectEqualStrings("literal", items[1].name);
-    try std.testing.expectEqualStrings("owned string", items[1].bytes);
+    try std.testing.expectEqual(@as(usize, 1), items.len);
+    try std.testing.expectEqualStrings("literal", items[0].name);
+    try std.testing.expectEqualStrings("owned string", items[0].bytes);
     try std.testing.expectEqualStrings("literal", refs[0].name);
 }
 
@@ -1506,6 +2465,7 @@ test "artifact metadata queues unresolved targets, preserves same-offset line or
         pub fn registerAssembledProc(self: *Self, _: lir.ProcIdentity, entry: usize) Allocator.Error!void {
             self.proc_entry = entry;
         }
+        pub fn registerAssembledProcLoc(_: *Self, _: lir.ProcIdentity, _: base.SourceLoc) Allocator.Error!void {}
         pub fn registerAssembledThunk(_: *Self, _: lir.ProcIdentity, _: usize) Allocator.Error!void {}
         pub fn registerSplicedHelper(_: *Self, _: []const u8, _: usize) Allocator.Error!void {}
         pub fn queueAssembledSymbolicRef(self: *Self, ref: SymbolicReference) Allocator.Error!void {
@@ -1520,6 +2480,7 @@ test "artifact metadata queues unresolved targets, preserves same-offset line or
             self.lines[self.lines_len] = line;
             self.lines_len += 1;
         }
+        pub fn appendAssembledFailureSite(_: *Self, _: FailureSite) Allocator.Error!void {}
     };
     var recorder = Recorder{};
     const artifact = Artifact{
@@ -1533,8 +2494,8 @@ test "artifact metadata queues unresolved targets, preserves same-offset line or
             .{ .site = 1, .form = .addr, .target = .{ .rc_helper = "unemitted" } },
         },
         .lines = &.{
-            .{ .offset = 0, .loc = .{ .file = 3, .line = 10, .column = 1 } },
-            .{ .offset = 0, .loc = .{ .file = 3, .line = 11, .column = 2 } },
+            .{ .offset = 0, .loc = .{ .file = 3, .line = 10, .column = 1 }, .region = base.Region.zero() },
+            .{ .offset = 0, .loc = .{ .file = 3, .line = 11, .column = 2 }, .region = base.Region.zero() },
         },
         .relocations = &.{},
         .data = &.{},
@@ -1561,11 +2522,6 @@ test "artifact metadata queues unresolved targets, preserves same-offset line or
         try std.testing.expectEqual(original.loc.column, rebound.loc.column);
     }
     try std.testing.expectEqual(@as(usize, 2), persistent.refs_len);
-    // A file the receiving program does not have contributes no lines.
-    var other_version = Recorder{};
-    try appendMetadata(Recorder, &other_version, artifact, 100, .{ .file_map = &.{ null, null, null, null } });
-    try std.testing.expectEqual(@as(usize, 0), other_version.lines_len);
-    try std.testing.expectEqual(@as(usize, 2), other_version.refs_len);
 }
 
 fn testCombineOwnership(allocator: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
@@ -1582,8 +2538,8 @@ fn testCombineOwnership(allocator: Allocator) (Allocator.Error || error{TestExpe
                 .{ .site = 2, .form = .addr, .target = .{ .proc = lir.ProcIdentity.forTest(4) } },
             },
             .lines = &.{
-                .{ .offset = 0, .loc = .{ .file = 0, .line = 3, .column = 2 } },
-                .{ .offset = 0, .loc = .{ .file = 0, .line = 4, .column = 5 } },
+                .{ .offset = 0, .loc = .{ .file = 0, .line = 3, .column = 2 }, .region = base.Region.zero() },
+                .{ .offset = 0, .loc = .{ .file = 0, .line = 4, .column = 5 }, .region = base.Region.zero() },
             },
             .relocations = &.{.{ .offset = 0, .name = "external", .scope = .shared, .kind = .function }},
             .data = &.{.{
@@ -1691,6 +2647,34 @@ test "constants are named by content across programs, through cycles, and never 
     try testing.expect(!std.mem.eql(u8, one_leaf, names_three.of("roc__d0_2")));
 }
 
+test "combined sets keep the program-local constants of each set apart" {
+    const allocator = std.testing.allocator;
+    // Two programs each named a different constant `roc__d0`, and each
+    // program's procedure reads its own.
+    var first_relocations = [_]NamedRelocation{.{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } }};
+    var second_relocations = [_]NamedRelocation{.{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } }};
+    const first_data = [_]DataItem{testItem("roc__d0", "first constant", &.{}, true)};
+    const second_data = [_]DataItem{testItem("roc__d0", "second constant", &.{}, true)};
+    const first = Set{
+        .arena = collections.SingleThreadArena.init(allocator),
+        .artifacts = &.{.{ .kind = .{ .proc = lir.ProcIdentity.forTest(1) }, .code = "\x00\x00\x00\x00", .entry = 0, .frame = null, .refs = &.{}, .relocations = &first_relocations, .data = &first_data }},
+    };
+    const second = Set{
+        .arena = collections.SingleThreadArena.init(allocator),
+        .artifacts = &.{.{ .kind = .{ .proc = lir.ProcIdentity.forTest(2) }, .code = "\x00\x00\x00\x00", .entry = 0, .frame = null, .refs = &.{}, .relocations = &second_relocations, .data = &second_data }},
+    };
+    var combined = try combineDistinct(allocator, &.{ &first, &second });
+    defer combined.deinit();
+    try std.testing.expectEqual(@as(usize, 2), combined.artifacts.len);
+    for (combined.artifacts, [_][]const u8{ "first constant", "second constant" }) |artifact, bytes| {
+        try std.testing.expectEqualStrings(bytes, artifact.data[0].bytes);
+        try std.testing.expect(!artifact.data[0].program_local_name);
+        try std.testing.expectEqualStrings(artifact.data[0].name, artifact.relocations[0].name);
+        try std.testing.expectEqual(SymbolScope.shared, artifact.relocations[0].scope);
+    }
+    try std.testing.expect(!std.mem.eql(u8, combined.artifacts[0].data[0].name, combined.artifacts[1].data[0].name));
+}
+
 test "an object pack names each constant as the datum anchored at its first byte" {
     const testing = std.testing;
     const Export = lir.Program.StaticDataExport;
@@ -1742,4 +2726,176 @@ test "an object pack names each constant as the datum anchored at its first byte
     var dev_names = try ContentNames.init(testing.allocator, &set);
     defer dev_names.deinit();
     try testing.expectEqualStrings(dev_names.of("roc__d5"), other_names.of("roc__d5"));
+}
+
+fn testProc(id: u8, code: []const u8, refs: []const Reference, symbolic_refs: []const SymbolicReference, relocations: []const NamedRelocation, data: []const DataItem) Artifact {
+    return .{
+        .kind = .{ .proc = lir.ProcIdentity.forTest(id) },
+        .code = code,
+        .entry = 0,
+        .frame = .{ .prologue_size = 1, .stack_alloc = 0, .frame_size = 0, .callee_saved_mask = 0, .epilogue_offset = 1, .uses_frame_pointer = true },
+        .refs = refs,
+        .symbolic_refs = symbolic_refs,
+        .relocations = relocations,
+        .data = data,
+    };
+}
+
+test "a canonical image does not depend on artifact order or on what a program named its constants" {
+    const allocator = std.testing.allocator;
+    // One program placed the pool run and helper first and named its
+    // constant `roc__d5`; another placed them last and named the same
+    // constant `roc__d9`.
+    const one_data = [_]DataItem{testItem("roc__d5", "constant", &.{}, true)};
+    const two_data = [_]DataItem{testItem("roc__d9", "constant", &.{}, true)};
+    const one_relocations = [_]NamedRelocation{.{ .offset = 1, .name = "roc__d5", .scope = .program, .kind = .{ .data = .rel32 } }};
+    const two_relocations = [_]NamedRelocation{.{ .offset = 1, .name = "roc__d9", .scope = .program, .kind = .{ .data = .rel32 } }};
+    const helper: Artifact = .{ .kind = .{ .rc_helper = "roc__rc_decref_x" }, .code = "\xeb\x00\xc3", .entry = 2, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} };
+    const pool: Artifact = .{ .kind = .message_pool_run, .code = "message", .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} };
+    const one = Set{
+        .arena = collections.SingleThreadArena.init(allocator),
+        .artifacts = &.{
+            pool,
+            helper,
+            testProc(2, "\x02\x02\x02\x02", &.{.{ .site = 0, .form = .addr, .target = 0, .delta = 3 }}, &.{}, &.{}, &.{}),
+            testProc(1, "\x01\x01\x01\x01", &.{.{ .site = 0, .form = .call, .target = 2, .delta = 0 }}, &.{.{ .site = 2, .form = .call, .target = .{ .rc_helper = "roc__rc_decref_x" } }}, &one_relocations, &one_data),
+        },
+    };
+    const two = Set{
+        .arena = collections.SingleThreadArena.init(allocator),
+        .artifacts = &.{
+            testProc(1, "\x01\x01\x01\x01", &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }}, &.{.{ .site = 2, .form = .call, .target = .{ .rc_helper = "roc__rc_decref_x" } }}, &two_relocations, &two_data),
+            testProc(2, "\x02\x02\x02\x02", &.{.{ .site = 0, .form = .addr, .target = 3, .delta = 3 }}, &.{}, &.{}, &.{}),
+            helper,
+            pool,
+        },
+    };
+    var first = try canonicalize(allocator, &one, &.{});
+    defer first.deinit();
+    var second = try canonicalize(allocator, &two, &.{});
+    defer second.deinit();
+    // Procedures by identity, the pool run right after the procedure
+    // addressing it, then helpers.
+    try std.testing.expectEqual(@as(usize, 4), first.set.artifacts.len);
+    const proc_one: usize = if (std.meta.eql(first.set.artifacts[0].kind, Kind{ .proc = lir.ProcIdentity.forTest(1) })) 0 else 2;
+    const proc_two: usize = if (proc_one == 0) 1 else 0;
+    try std.testing.expectEqual(lir.ProcIdentity.forTest(1), first.set.artifacts[proc_one].kind.proc);
+    try std.testing.expectEqual(lir.ProcIdentity.forTest(2), first.set.artifacts[proc_two].kind.proc);
+    try std.testing.expect(first.set.artifacts[proc_two + 1].kind == .message_pool_run);
+    try std.testing.expect(first.set.artifacts[3].kind == .rc_helper);
+    try std.testing.expect(std.mem.lessThan(u8, &first.set.artifacts[@min(proc_one, proc_two)].kind.proc.bytes, &first.set.artifacts[@max(proc_one, proc_two)].kind.proc.bytes));
+    for (first.set.artifacts, second.set.artifacts) |lhs, rhs| {
+        try std.testing.expectEqualDeep(lhs.kind, rhs.kind);
+        try std.testing.expectEqualSlices(u8, lhs.code, rhs.code);
+        try std.testing.expectEqualDeep(lhs.refs, rhs.refs);
+        try std.testing.expectEqual(lhs.relocations.len, rhs.relocations.len);
+        for (lhs.relocations, rhs.relocations) |l, r| {
+            try std.testing.expectEqualStrings(l.name, r.name);
+            try std.testing.expectEqual(l.scope, r.scope);
+        }
+    }
+    try std.testing.expectEqual(lir.ProcIdentity.forTest(2), first.set.artifacts[first.set.artifacts[proc_one].refs[0].target].kind.proc);
+    try std.testing.expect(first.set.artifacts[first.set.artifacts[proc_two].refs[0].target].kind == .message_pool_run);
+    // The constant is one symbol under its content name in both.
+    try std.testing.expectEqual(@as(usize, 1), first.data.len);
+    try std.testing.expectEqualStrings(first.data[0].item.name, second.data[0].item.name);
+    try std.testing.expect(std.mem.startsWith(u8, first.data[0].item.name, content_data_prefix));
+    try std.testing.expectEqualStrings(first.data[0].item.name, first.set.artifacts[proc_one].relocations[0].name);
+    try std.testing.expectEqual(SymbolScope.shared, first.set.artifacts[proc_one].relocations[0].scope);
+}
+
+test "a host-visible constant keeps its name in a canonical image while the constants it names are named by content" {
+    const allocator = std.testing.allocator;
+    const exported = [_]DataItem{
+        testItem("roc__answer", &@as([8]u8, @splat('\x00')), &.{testReloc(0, "roc__d3", 0)}, false),
+        testItem("roc__d3", "leaf", &.{}, true),
+    };
+    const set = Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &.{} };
+    var image = try canonicalize(allocator, &set, &exported);
+    defer image.deinit();
+    try std.testing.expectEqual(@as(usize, 2), image.data.len);
+    var answer: ?CanonicalDatum = null;
+    var leaf: ?CanonicalDatum = null;
+    for (image.data) |datum| {
+        if (std.mem.eql(u8, datum.item.name, "roc__answer")) answer = datum else leaf = datum;
+    }
+    try std.testing.expect(answer.?.host_visible);
+    try std.testing.expect(!leaf.?.host_visible);
+    try std.testing.expect(std.mem.startsWith(u8, leaf.?.item.name, content_data_prefix));
+    try std.testing.expectEqualStrings(leaf.?.item.name, answer.?.item.relocations[0].name);
+}
+
+test "an image keeps only the code its roots reach" {
+    const allocator = std.testing.allocator;
+    // The root calls a procedure, names a constant whose function pointer
+    // reaches another, and calls a helper by name; one procedure nothing
+    // reaches is a lambda-set member lowered only for a spliced entry.
+    const pointed = try lir.ProcIdentity.forTest(4).symbolName(allocator);
+    defer allocator.free(pointed);
+    const pointer = [_]DataRelocation{.{ .offset = 0, .name = pointed, .addend = 0, .function = true }};
+    const constant = [_]DataItem{.{ .name = "roc__d1", .bytes = &@as([8]u8, @splat('\x00')), .alignment = 8, .symbol_offset = 0, .relocations = &pointer, .program_local_name = true }};
+    const root_relocations = [_]NamedRelocation{.{ .offset = 1, .name = "roc__d1", .scope = .program, .kind = .{ .data = .rel32 } }};
+    var catalog = try PreparedData.init(allocator, &.{}, &.{}, &constant);
+    defer catalog.deinit();
+    const set = Set{
+        .arena = collections.SingleThreadArena.init(allocator),
+        .artifacts = &.{
+            testProc(1, "\x01\x01\x01\x01", &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }}, &.{.{ .site = 2, .form = .call, .target = .{ .rc_helper = "roc__rc_decref_x" } }}, &root_relocations, &constant),
+            testProc(2, "\x02\x02\x02\x02", &.{}, &.{}, &.{}, &.{}),
+            testProc(3, "\x03\x03\x03\x03", &.{}, &.{}, &.{}, &.{}),
+            testProc(4, "\x04\x04\x04\x04", &.{}, &.{}, &.{}, &.{}),
+            .{ .kind = .{ .rc_helper = "roc__rc_decref_x" }, .code = "\xeb\x00\xc3", .entry = 2, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} },
+        },
+        // The kept set owns its copy of the file table too.
+        .source_files = &.{@as([32]u8, @splat(1))},
+    };
+    var aliases = std.StringHashMap([]const u8).init(allocator);
+    defer aliases.deinit();
+    var kept = try retainReachable(allocator, &set, &catalog, .{
+        .procs = &.{lir.ProcIdentity.forTest(1)},
+        .data = &.{},
+        .helper_aliases = &aliases,
+        .all_thunks = false,
+    });
+    defer kept.deinit();
+    try std.testing.expectEqual(@as(usize, 4), kept.artifacts.len);
+    for (kept.artifacts) |artifact| switch (artifact.kind) {
+        .proc => |identity| try std.testing.expect(!std.meta.eql(identity, lir.ProcIdentity.forTest(3))),
+        .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
+    };
+    try std.testing.expectEqual(lir.ProcIdentity.forTest(2), kept.artifacts[kept.artifacts[0].refs[0].target].kind.proc);
+}
+
+test "a splice reaches a procedure through references and stable references" {
+    const allocator = std.testing.allocator;
+    const set = Set{
+        .arena = collections.SingleThreadArena.init(allocator),
+        .artifacts = &.{
+            testProc(1, "\x01\x01\x01\x01", &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }}, &.{}, &.{}, &.{}),
+            testProc(2, "\x02\x02\x02\x02", &.{}, &.{.{ .site = 0, .form = .call, .target = .{ .proc = lir.ProcIdentity.forTest(3) } }}, &.{}, &.{}),
+            testProc(3, "\x03\x03\x03\x03", &.{}, &.{}, &.{}, &.{}),
+            testProc(4, "\x04\x04\x04\x04", &.{}, &.{}, &.{}, &.{}),
+        },
+    };
+    var linked = std.AutoHashMapUnmanaged(lir.ProcIdentity, u32).empty;
+    defer linked.deinit(allocator);
+    try linked.put(allocator, lir.ProcIdentity.forTest(3), 0);
+    const reaching = try reachingIdentities(allocator, &set, &linked);
+    defer allocator.free(reaching);
+    try std.testing.expectEqualSlices(bool, &.{ true, true, true, false }, reaching);
+
+    // A procedure with lines in a file the program lacks is site-named code,
+    // which the program lowers itself, so a stable reference to it places
+    // nothing; a reference into the pack does.
+    var lined = [_]Artifact{ set.artifacts[0], set.artifacts[1], set.artifacts[2], set.artifacts[3] };
+    lined[2].lines = &.{.{ .offset = 0, .loc = .{ .file = 1, .line = 3, .column = 1 }, .region = base.Region.zero() }};
+    lined[3].loc = .{ .file = 0, .line = 1, .column = 1 };
+    const lined_set = Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &lined };
+    const absent = try reachingAbsentFiles(allocator, &lined_set, &.{ true, false });
+    defer allocator.free(absent);
+    try std.testing.expectEqualSlices(bool, &.{ false, false, true, false }, absent);
+    lined[1].lines = lined[2].lines;
+    const reached = try reachingAbsentFiles(allocator, &lined_set, &.{ true, false });
+    defer allocator.free(reached);
+    try std.testing.expectEqualSlices(bool, &.{ true, true, true, false }, reached);
 }

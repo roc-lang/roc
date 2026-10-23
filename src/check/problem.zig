@@ -68,7 +68,6 @@ pub const UnmatchablePattern = types.UnmatchablePattern;
 pub const MatchBranchPart = types.MatchBranchPart;
 pub const MatchAltBinderMissing = types.MatchAltBinderMissing;
 pub const DiscardedVarUpdate = types.DiscardedVarUpdate;
-pub const ComptimeUnusedBranch = types.ComptimeUnusedBranch;
 pub const ComptimeCondition = types.ComptimeCondition;
 
 // Type declaration errors

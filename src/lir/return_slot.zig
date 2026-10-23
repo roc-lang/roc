@@ -67,6 +67,7 @@ const Spec = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .ptr,
             => false,
         };

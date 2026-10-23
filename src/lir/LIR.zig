@@ -567,7 +567,6 @@ pub const ComptimeProducer = union(enum) {
 pub const ComptimeSiteKind = enum {
     match,
     destructure,
-    if_,
 };
 
 /// Metadata for one compile-time-observed control-flow site.
@@ -581,7 +580,6 @@ pub const ComptimeSite = struct {
     region: base.Region,
     checked_site: ?CheckedExhaustivenessSiteId = null,
     proc: LirProcSpecId,
-    branch_regions: []const base.Region = &.{},
 };
 
 /// Identifier of a join point targeted by `jump`.
@@ -1225,6 +1223,18 @@ pub const CallExtra = struct {
     returns_pending: ?PendingReturn = null,
 };
 
+/// The fields of `CFStmt.crash` that most crashes leave unset, stored out of
+/// line.
+pub const CrashExtra = struct {
+    /// Set when this crash is a literal conversion rejecting its literal:
+    /// compile-time evaluation reports the literal's own diagnostic with
+    /// `msg`, the conversion's error message.
+    literal_rejection: ?LiteralRejectionSite = null,
+    /// Set when this crash is the failure path of a read of a compile-time
+    /// value whose producer failed.
+    failed_value: ?ComptimeValueRef = null,
+};
+
 /// The ownership facts ARC stamps on a `CFStmt.assign_ref`, stored out of
 /// line.
 pub const RefExtra = struct {
@@ -1787,15 +1797,11 @@ pub const CFStmt = union(enum) {
     /// Compiler-generated impossible execution path. This is terminal.
     runtime_error: void,
     /// Pattern coverage failed during compile-time evaluation. This is
-    /// terminal and becomes a checking diagnostic while finalizing.
+    /// terminal: it crashes, and compile-time finalization reports the crash
+    /// as the empirical failure of `checked_site` in module `owner`.
     comptime_exhaustiveness_failed: struct {
-        site: ComptimeSiteId,
-    },
-    /// One compile-time-observed branch or match alternative was taken.
-    comptime_branch_taken: struct {
-        site: ComptimeSiteId,
-        branch_index: u32,
-        next: CFStmtId,
+        owner: LoweringModuleId,
+        checked_site: ?CheckedExhaustivenessSiteId,
     },
     incref: struct {
         value: LocalId,
@@ -1891,14 +1897,49 @@ pub const CFStmt = union(enum) {
     },
     crash: struct {
         msg: CrashMessage,
-        /// Set when this crash is a literal conversion rejecting its literal:
-        /// compile-time evaluation reports the literal's own diagnostic with
-        /// `msg`, the conversion's error message.
-        literal_rejection: ?LiteralRejectionSite = null,
         /// Set when this crash is code checking rejected and already
         /// reported: compile-time evaluation that reaches it discards the
         /// result instead of reporting the problem a second time.
         checked_error: bool = false,
+        /// What the crash reports beyond `msg`; `none` when it reports
+        /// nothing more.
+        extra: StmtRowId(CrashExtra) = .none,
+    },
+};
+
+/// The crash message of a `comptime_exhaustiveness_failed` statement. Every
+/// backend and the interpreter crash with it, so a compile-time evaluation
+/// and a build of the same code fail identically; compile-time finalization
+/// reports the failure by its checked site instead.
+pub const comptime_exhaustiveness_failure_message = "non-exhaustive pattern match";
+
+/// One compile-time value: its producer and the module owning it.
+pub const ComptimeValueRef = struct {
+    owner: LoweringModuleId,
+    producer: ComptimeProducer,
+};
+
+/// What it means for generated code to fail at one statement, beyond
+/// crashing there. Every identity but a literal producer's stays meaningful in
+/// every compilation of the program (`LirStore.failureMeaning`).
+pub const FailureMeaning = union(enum) {
+    /// Code checking rejected and already reported.
+    checked_error,
+    /// A literal conversion rejecting the literal at `checked_expr`.
+    literal_rejection: struct {
+        module: [32]u8,
+        checked_expr: u32,
+        kind: LiteralRejectionKind,
+    },
+    /// An exhaustiveness failure at a checked site.
+    exhaustiveness: struct {
+        module: [32]u8,
+        checked_site: ?CheckedExhaustivenessSiteId,
+    },
+    /// A read of a compile-time value whose producer failed.
+    failed_value: struct {
+        module: [32]u8,
+        producer: ComptimeProducer,
     },
 };
 
@@ -2104,6 +2145,14 @@ pub const LirProcSpec = struct {
     /// only the base signature and no body, so a proc with this bit set is
     /// never offered as one.
     rc_variant_demandable: bool = false,
+
+    /// The body ARC analyzes and places reference counts in. A static
+    /// initializer is construction-only LIR that the static data
+    /// materializer evaluates and no backend emits, so nothing calls it and a
+    /// reference count in it would never run: ARC sees it as having none.
+    pub fn arcBody(self: *const LirProcSpec) ?CFStmtId {
+        return if (self.is_static_initializer) null else self.body;
+    }
 };
 
 test "a statement occupies one 32-byte slot" {

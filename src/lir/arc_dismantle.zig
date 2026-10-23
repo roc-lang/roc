@@ -99,7 +99,7 @@ pub fn layoutMayContainBoxyDynamic(
         switch (layout_val.tag) {
             .erased_box => return true,
             .box, .list => try stack.append(allocator, layout_val.getIdx()),
-            .list_of_zst, .box_of_zst, .zst, .scalar, .erased_callable, .ptr => {},
+            .list_of_zst, .box_of_zst, .zst, .hole, .scalar, .erased_callable, .ptr => {},
             .struct_ => {
                 const info = layouts.getStructInfo(layout_val);
                 for (0..info.fields.len) |index| {
@@ -1134,7 +1134,6 @@ const FutureFields = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -1321,7 +1320,6 @@ fn fieldObservedAfter(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -1875,7 +1873,7 @@ const ComponentDominance = struct {
             for (successors.items) |next| try edges.append(gpa, .{ .from = @intCast(index), .to = self.dense[@backingInt(next)] });
         }
         for (procs) |proc| {
-            const body = store.getProcSpec(@fromBackingInt(@intCast(proc))).body orelse continue;
+            const body = store.getProcSpec(@fromBackingInt(@intCast(proc))).arcBody() orelse continue;
             try edges.append(gpa, .{ .from = entry, .to = self.dense[@backingInt(body)] });
         }
         return StatementDominance.initGraph(gpa, stmts.items.len + 1, entry, edges.items);
@@ -1953,7 +1951,7 @@ test "component dominance agrees with whole-store dominance across shared proced
     const rc = try gpa.alloc(bool, store.localCount());
     defer gpa.free(rc);
     @memset(rc, false);
-    var solution = try arc_solve.solve(gpa, &store, &layouts, rc, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(gpa, &store, &layouts, rc, .{}, &.{}, true);
     defer solution.deinit();
 
     const stmt_first_proc = try gpa.alloc(u32, store.cfStmtCount());
@@ -2250,7 +2248,6 @@ fn classifyStatement(
         },
         .expect_err => |stmt| try analysis.useWhole(current, stmt.message),
         .runtime_error, .comptime_exhaustiveness_failed, .jump => {},
-        .comptime_branch_taken => {},
         // The input contract is RC-free LIR; if RC statements ever appear
         // here, classifying their operands as whole uses stays sound.
         inline .incref, .decref, .free => |stmt| {
@@ -2397,7 +2394,6 @@ fn operandSiteUse(
         .expect_err,
         .runtime_error,
         .comptime_exhaustiveness_failed,
-        .comptime_branch_taken,
         .incref,
         .decref,
         .decref_if_initialized,
@@ -2630,7 +2626,6 @@ const StatementFacts = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -2821,7 +2816,7 @@ pub fn compute(
     @memset(direct_call_position_by_arg, std.math.maxInt(u8));
     for (0..store.procSpecCount()) |proc_index| {
         const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-        const body = proc.body orelse continue;
+        const body = proc.arcBody() orelse continue;
         const params = store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(params)) |position| {
             const param = GuardedList.at(params, position);
@@ -3078,7 +3073,7 @@ pub fn compute(
     defer gpa.free(straight_next);
     for (straight_next, 0..) |*next, stmt_index| {
         next.* = switch (store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt_index))).*) {
-            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| @backingInt(stmt.next),
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| @backingInt(stmt.next),
             .set_local,
             .join,
             .switch_stmt,
@@ -3486,7 +3481,6 @@ pub fn compute(
                         .expect_err,
                         .runtime_error,
                         .comptime_exhaustiveness_failed,
-                        .comptime_branch_taken,
                         .incref,
                         .decref,
                         .decref_if_initialized,
@@ -3797,7 +3791,7 @@ pub fn compute(
                                     continue :chain;
                                 }
                                 switch (store.getCFStmtImmediate(cursor).*) {
-                                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
                                     .set_local => |stmt| {
                                         // The value operand above still observes the old
                                         // definition. Only the explicit write starts a fresh

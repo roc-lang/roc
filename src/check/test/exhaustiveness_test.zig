@@ -1131,6 +1131,7 @@ test "non-exhaustive - longer prefix and suffix list patterns" {
         \\
         \\Missing patterns:
         \\        [False, True]
+        \\        [False, True, .., False, True]
         \\
         \\Hint: Add branches to handle these cases, or use `_` to match anything.
         \\

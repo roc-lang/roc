@@ -131,6 +131,10 @@ pub const Content = union(enum) {
         abi_fn: ?TypeVarId = null,
     },
     zst,
+    /// A demand-shaped specialization's stand-in for a quantified variable its
+    /// body demands none of (design.md "Specialization By Demand"). It holds
+    /// no callable, and unifies only with itself.
+    hole,
     /// Lazy leaf: this var's type is the referenced lifted Monotype, not yet
     /// materialized in this store. The solver expands a leaf one level the
     /// first time unification or a shape read touches it, and end-of-solve
@@ -172,6 +176,7 @@ pub const StoredNode = union(enum(u8)) {
     lambda_set: Span,
     erased: u32,
     zst,
+    hole,
     mono: @FieldType(Content, "mono"),
 };
 
@@ -192,6 +197,7 @@ fn contentOf(node: StoredNode, named_payloads: []const NamedContent, erased_payl
         .lambda_set => |span_| .{ .lambda_set = span_ },
         .erased => |index| .{ .erased = erased_payloads[index] },
         .zst => .zst,
+        .hole => .hole,
         .mono => |leaf| .{ .mono = leaf },
     };
 }
@@ -300,8 +306,14 @@ pub const Store = struct {
                 break :blk .{ .erased = index };
             },
             .zst => .zst,
+            .hole => .hole,
             .mono => |leaf| .{ .mono = leaf },
         };
+    }
+
+    /// The number of variables.
+    pub fn varCount(self: *const Store) usize {
+        return self.vars.items.len;
     }
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeVarId {
@@ -350,7 +362,7 @@ pub const Store = struct {
         while (true) {
             switch (self.vars.items[@backingInt(current)]) {
                 .link => |target| current = target,
-                .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .mono => return current,
+                .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .hole, .mono => return current,
             }
         }
     }
@@ -369,7 +381,7 @@ pub const Store = struct {
         while (current != root_id) {
             const next = switch (self.vars.items[@backingInt(current)]) {
                 .link => |target| target,
-                .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .mono => break,
+                .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .hole, .mono => break,
             };
             self.setLink(current, root_id);
             current = next;
@@ -505,7 +517,7 @@ pub const Store = struct {
             while (true) {
                 switch (self.vars[@backingInt(current)]) {
                     .link => |target| current = target,
-                    .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .mono => return current,
+                    .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .hole, .mono => return current,
                 }
             }
         }

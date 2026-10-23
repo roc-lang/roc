@@ -62,7 +62,6 @@ const HoistedConstantsTestError = std.mem.Allocator.Error ||
         PathOutsideWorkspace,
         RootDidNotStoreConstNode,
         StaticDataInitializerCountMismatch,
-        StaticDataInitializerPrecededRootBody,
         StaticDataInitializerRequestOrderMismatch,
         StaticDataLiteralNotFound,
         StaticDataSymbolNotFound,
@@ -535,13 +534,9 @@ test "hoisted list constants lower to internal static data in request order" {
     const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer.?);
     const first_body = first_initializer.body orelse return error.StaticDataLiteralNotFound;
     const second_body = second_initializer.body orelse return error.StaticDataLiteralNotFound;
-    // Reachable roots form a barrier before queued initializers, whose request
-    // order must then determine their body order.
+    // Queued initializers lower in request order. ARC leaves initializers as
+    // lowered, so their bodies' statement ids still show that order.
     if (@backingInt(first_body) >= @backingInt(second_body)) return error.StaticDataInitializerRequestOrderMismatch;
-    for (lowered.lir_result.root_procs.items) |root_proc| {
-        const root_body = lowered.lir_result.store.getProcSpecImmediate(root_proc).body orelse return error.StaticDataLiteralNotFound;
-        if (@backingInt(root_body) >= @backingInt(first_body)) return error.StaticDataInitializerPrecededRootBody;
-    }
     try expectStaticDataLiteralPresent(&lowered.lir_result);
 
     const exports = try static_data_exports.buildStaticData(
@@ -2072,7 +2067,7 @@ test "issue 10721: runtime-dependent callable use keeps one validating extractio
     try std.testing.expectEqual(@as(usize, 1), validating_extraction_roots);
 }
 
-test "hoisted match guard does not report unused branch warning" {
+test "a match on a constant with a guard selects a hoisted root" {
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -2124,13 +2119,6 @@ test "hoisted match guard does not report unused branch warning" {
     try coord.coordinatorLoop();
     try coord.finishCheckedProgram(.none);
     try std.testing.expect(!coord.hasUserErrors());
-
-    var found_unused_branch = false;
-    var report_iter = coord.iterReports();
-    while (report_iter.next()) |entry| {
-        if (std.mem.eql(u8, entry.report.title, "Unused Branch")) found_unused_branch = true;
-    }
-    try std.testing.expect(!found_unused_branch);
 
     const artifact = coord.appRootCheckedArtifact();
     var found_hoisted_root = false;
@@ -2759,7 +2747,6 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,

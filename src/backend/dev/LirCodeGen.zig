@@ -236,10 +236,24 @@ fn builtinInternalListAbi(ls: *const LayoutStore, comptime _: []const u8, list_l
 /// 1. In-process execution (dev evaluator): Direct function pointers work
 /// 2. Object file generation (roc build --opt=dev): Need symbol references
 /// One source line table entry: the code offset where a statement's machine
-/// code begins, paired with the statement's source location.
+/// code begins, paired with the statement's source location and checked
+/// source region. Any code offset maps to the statement whose entry is the
+/// last at or before it, which is how a failure's location is found from the
+/// program counter it left.
 pub const LineEntry = struct {
     offset: u32,
     loc: base.SourceLoc,
+    region: base.Region,
+};
+
+/// A call whose failure means more than a crash at its statement: the code
+/// offset of the instruction after the call, which is the return address the
+/// call leaves, and what failing there means. The meaning travels with the
+/// code, so cached code reports its failures exactly like freshly compiled
+/// code (design.md "Compile-Time Failure Sites").
+pub const FailureSite = struct {
+    offset: u32,
+    meaning: lir.LIR.FailureMeaning,
 };
 
 /// How generated code will be executed, which determines how calls to
@@ -265,59 +279,25 @@ pub const GenerationMode = enum {
     }
 };
 
-/// Compiler-internal callbacks emitted only for native compile-time evaluation.
-pub const ComptimeHooks = struct {
-    ensure_static_value: *const fn (u32) callconv(.c) void,
-    branch_taken: *const fn (u32, u32) callconv(.c) void,
-    exhaustiveness_failed: *const fn (u32) callconv(.c) void,
-    /// (region start, region end, source file, line, column, statement): the
-    /// statement's resolved location rides along with its region so the host
-    /// knows which module's source the byte offsets belong to.
-    failure_region: *const fn (u32, u32, u32, u32, u32, u32) callconv(.c) void,
-    call_enter: *const fn (u32, u32, u32, u32, u32) callconv(.c) void,
-    call_exit: *const fn () callconv(.c) void,
-};
-
-/// Compiler-private relocations; execution-image finalizers, never retained
-/// machine code, bind these names to the active compile-time host.
-pub const ComptimeHook = enum {
-    ensure_static_value,
-    branch_taken,
-    exhaustiveness_failed,
-    failure_region,
-    call_enter,
-    call_exit,
-
-    pub fn symbolName(self: ComptimeHook) []const u8 {
-        return switch (self) {
-            inline .ensure_static_value, .branch_taken, .exhaustiveness_failed, .failure_region, .call_enter, .call_exit => |hook| "roc__comptime_" ++ @tagName(hook),
-        };
-    }
-};
-
 /// Dependencies actually emitted by a fragment, not merely enabled options.
-/// Static-data and hook immediates are meaningful only in their producer LIR
-/// domain. A runtime entry also depends on who installs the Boxy runtime.
+/// Static-data immediates are meaningful only in their producer LIR domain. A
+/// runtime entry also depends on who installs the Boxy runtime.
 pub const FragmentContextDependencies = struct {
-    comptime_hooks: bool = false,
     static_data: bool = false,
     boxy_runtime_entry: bool = false,
     boxy_runtime: bool = false,
-    dict_seed: bool = false,
 };
 
 /// Non-LIR inputs to fragment emission. Reuse additionally requires producer
 /// domain/revision authority; the owner supplies that, not the code generator.
-/// Dependency flags permit ignoring hook/seed/Boxy-init policy differences only
-/// when the emitted artifact proves it does not depend on that policy.
+/// Dependency flags permit ignoring Boxy-init policy differences only when the
+/// emitted artifact proves it does not depend on that policy.
 pub const FragmentContract = struct {
     /// Platform/codegen identity; the selected instruction floor is separate.
     target: RocTarget,
     cpu_level: CpuLevel,
     hot_reload: bool,
     default_platform_runtime: bool,
-    dict_seed_mode: builtins.utils.DictSeedMode,
-    hooks_enabled: bool,
     initialize_boxy_runtime: bool,
     /// Execution roots retain mutable slot identity; object roots own constants.
     static_data_readonly: bool,
@@ -337,13 +317,6 @@ pub const SymbolicReference = struct {
     form: SymbolicRefForm,
     target: SymbolicRefTarget,
     veneer: ?u32 = null,
-};
-
-/// One same-image pointer cell. Its zero bytes and absolute symbolic target are
-/// carried by the artifact; only an execution-image finalizer binds an address.
-pub const BindingDataCell = struct {
-    name: []const u8,
-    target_name: []const u8,
 };
 
 /// How native execution finds a hosted function's address: the in-process
@@ -646,7 +619,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Resolved readonly values used only by in-process native execution.
         native_static_data: []const usize,
         /// Explicit execution-environment policy for shared compile-time LIR.
-        dict_seed_mode: builtins.utils.DictSeedMode = .runtime,
         /// Borrowed producer declarations and cached IDs for internal static roots.
         static_data_symbols: collections.DenseMap(lir.LIR.StaticDataId, StaticDataSymbol),
         literal_symbols: collections.DenseMap(u32, SymbolTable.Id),
@@ -687,6 +659,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// the statement's source location), consumed by DWARF line-table
         /// emission for object files.
         line_entries: std.ArrayList(LineEntry),
+
+        /// Failure sites in emission order (`FailureSite`).
+        failure_sites: std.ArrayList(FailureSite),
+
+        /// Code offset just past the most recent call instruction emitted
+        /// through `callBuiltin` or `callRuntimeSymbol`.
+        last_call_return_offset: usize,
 
         /// Registry of compiled procedures (proc-spec id -> CompiledProc)
         /// Used to find call targets during second pass
@@ -746,6 +725,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Region starts of procedures spliced from object-cache entries, by
         /// identity; a second pack holding the same procedure splices nothing.
         spliced_proc_starts: std.AutoHashMap(lir.ProcIdentity, usize),
+        /// The source location each procedure placed from an artifact set
+        /// carries (`ProcArtifact.Artifact.loc`), in this program's
+        /// source-file domain, by identity.
+        assembled_proc_locs: std.AutoHashMapUnmanaged(lir.ProcIdentity, base.SourceLoc) = .empty,
 
         /// Each declared join point's pending jumps, chained through
         /// `join_jump_records` in emission order.
@@ -881,9 +864,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Set by `finishImage`; the code and relocations are complete only after it.
         image_finished: bool = false,
 
-        /// Whether shim-executed host-callable functions and boxed callbacks
-        /// participate in the hot-reload code reference protocol.
-        enable_hot_reload: bool = false,
+        /// Bytes the program's erased callables reserve before their captures
+        /// (`LirProgram.Result.erased_capture_prefix`). Nonzero when the
+        /// program supports a hot-reload session: generated erased-callable
+        /// procedures skip the prefix, packed payloads and frozen values
+        /// reserve it, and shim-executed host callables and boxed callbacks
+        /// follow the hot-reload code reference protocol.
+        erased_capture_prefix: u32,
 
         /// Whether object-file entrypoints should use the synthetic default
         /// platform runtime contract.
@@ -907,8 +894,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         hosted_symbol_resolver: ?HostedSymbolResolver = null,
         /// Compiler-internal hooks enabled only for native compile-time
         /// evaluation. Normal dev backend output leaves these null.
-        comptime_hooks: ?ComptimeHooks = null,
-
         /// Independent emission borrows global LIR metadata but owns only the
         /// requested body's machine-code state. Helpers remain coordinator work.
         fragment_mode: bool = false,
@@ -917,7 +902,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         borrowed_static_data_symbols: ?*const Self = null,
         assembled_symbolic_refs: std.ArrayList(SymbolicReference) = .empty,
         assembled_thunks: std.AutoHashMapUnmanaged(lir.ProcIdentity, usize) = .{},
-        binding_data_cells: std.ArrayList(BindingDataCell) = .empty,
         owned_symbol_names: std.ArrayList([]u8) = .empty,
 
         /// Scratch buffer for argument locations during lambda body inlining
@@ -1313,7 +1297,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         };
 
         /// Errors that can occur during code generation
-        /// Initialize the code generator
+        /// Initialize the code generator for a program whose erased callables
+        /// reserve no capture prefix.
         /// Target is determined at compile time via the LirCodeGen(target) parameter
         pub fn init(
             allocator: Allocator,
@@ -1331,8 +1316,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 &.{},
                 &.{},
                 boxy_worker_procs,
+                0,
                 cpu_level,
             );
+        }
+
+        /// Whether the program supports a hot-reload session, which its
+        /// erased callables show by reserving the capture prefix.
+        fn hotReloadEnabled(self: *const Self) bool {
+            return self.erased_capture_prefix != 0;
         }
 
         pub fn initWithBoxyMetadata(
@@ -1343,8 +1335,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
             erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
             boxy_worker_procs: []const lir.LIR.LirProcSpecId,
+            erased_capture_prefix: u32,
             cpu_level: CpuLevel,
         ) Allocator.Error!Self {
+            if (builtin.mode == .debug and erased_capture_prefix != 0 and erased_capture_prefix != builtins.erased_callable.hot_reload_capture_prefix_size) {
+                base.invariant(
+                    "Dev/codegen invariant violated: erased capture prefix {d} is neither zero nor the hot-reload prefix {d}",
+                    .{ erased_capture_prefix, builtins.erased_callable.hot_reload_capture_prefix_size },
+                );
+            }
             var scratch_arg_locs = try base.Scratch(ValueLocation).init(allocator);
             errdefer scratch_arg_locs.deinit();
             var scratch_arg_infos = try base.Scratch(ArgInfo).init(allocator);
@@ -1369,6 +1368,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .erased_arg_desc_offsets = erased_arg_desc_offsets,
                 .erased_arg_desc_params = erased_arg_desc_params,
                 .boxy_worker_procs = boxy_worker_procs,
+                .erased_capture_prefix = erased_capture_prefix,
                 .boxy_runtime_used = boxy_worker_procs.len != 0,
                 .local_locations = collections.DenseMap(u32, ValueLocation).init(allocator),
                 .stack_alloca_slots = collections.DenseMap(LocalId, i32).init(allocator),
@@ -1378,6 +1378,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .stmt_locations = collections.DenseMap(u32, usize).init(allocator),
                 .precomputed_overflow_results = collections.DenseMap(u32, void).init(allocator),
                 .line_entries = .empty,
+                .failure_sites = .empty,
+                .last_call_return_offset = 0,
                 .proc_registry = collections.DenseMap(u32, CompiledProc).init(allocator),
                 .boxy_dict_thunks = std.AutoHashMap(u32, usize).init(allocator),
                 .compiled_rc_helpers = std.AutoHashMap(u64, usize).init(allocator),
@@ -1414,10 +1416,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Where native execution resolves hosted symbols.
         pub fn setHostedSymbolResolver(self: *Self, resolver: ?HostedSymbolResolver) void {
             self.hosted_symbol_resolver = resolver;
-        }
-
-        pub fn setComptimeHooks(self: *Self, hooks: ?ComptimeHooks) void {
-            self.comptime_hooks = hooks;
         }
 
         pub fn setNativeStaticData(self: *Self, addresses: []const usize) void {
@@ -1459,6 +1457,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.stmt_locations.deinit();
             self.precomputed_overflow_results.deinit();
             self.line_entries.deinit(self.allocator);
+            self.failure_sites.deinit(self.allocator);
             self.proc_registry.deinit();
             self.boxy_dict_thunks.deinit();
             self.compiled_rc_helpers.deinit();
@@ -1466,7 +1465,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.shifted_rc_helpers.deinit(self.allocator);
             self.assembled_symbolic_refs.deinit(self.allocator);
             self.assembled_thunks.deinit(self.allocator);
-            self.binding_data_cells.deinit(self.allocator);
             for (self.owned_symbol_names.items) |name| self.allocator.free(name);
             self.owned_symbol_names.deinit(self.allocator);
             self.unwind_functions.deinit(self.allocator);
@@ -1484,6 +1482,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.spliced_helper_offsets.deinit();
             }
             self.spliced_proc_starts.deinit();
+            self.assembled_proc_locs.deinit(self.allocator);
             self.pending_message_addrs.deinit(self.allocator);
             self.message_pool_runs.deinit(self.allocator);
             self.message_pool_index.deinit(self.allocator);
@@ -1522,12 +1521,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.compiled_rc_helpers.clearRetainingCapacity();
             self.compiled_rc_helper_log.clearRetainingCapacity();
             self.line_entries.clearRetainingCapacity();
+            self.failure_sites.clearRetainingCapacity();
             self.fragment_mode = false;
             self.fragment_source_mode = .native_execution;
             self.fragment_context = .{};
             self.assembled_symbolic_refs.clearRetainingCapacity();
             self.assembled_thunks.clearRetainingCapacity();
-            self.binding_data_cells.clearRetainingCapacity();
             for (self.owned_symbol_names.items) |name| self.allocator.free(name);
             self.owned_symbol_names.clearRetainingCapacity();
             self.unwind_functions.clearRetainingCapacity();
@@ -2170,6 +2169,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .closure,
                             .erased_callable,
                             .zst,
+                            .hole,
                             .tag_union,
                             .ptr,
                             => {
@@ -2191,6 +2191,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .closure,
                         .erased_callable,
                         .zst,
+                        .hole,
                         .tag_union,
                         .ptr,
                         => unreachable, // the ret_layout check above rejects every non-list layout
@@ -2329,6 +2330,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .closure,
                         .erased_callable,
                         .zst,
+                        .hole,
                         .tag_union,
                         .ptr,
                         => {
@@ -7425,8 +7427,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (narrowEnum(HasherOp, ll.op)) {
                 .dict_pseudo_seed => {
                     expectArgCount(ll.op, args, 0);
-                    self.fragment_context.dict_seed = true;
-                    if (self.dict_seed_mode == .comptime_zero) return .{ .immediate_i64 = 0 };
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     defer builder.deinit();
                     try self.callBuiltin(&builder, LowLevelBuiltins.hasherOp(.dict_pseudo_seed));
@@ -8448,7 +8448,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             reason: builtins.dev_wrappers.InvalidLocalReason,
             local: LocalId,
         ) Allocator.Error!void {
-            if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             const identity = self.current_proc_identity orelse
                 base.invariant("LIR/codegen invariant violated: Debug check on local {d} outside a proc", .{@backingInt(local)});
             const frame = self.store.getLocalSpan(self.current_proc_frame_locals);
@@ -8800,7 +8799,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .expect_err,
                     .runtime_error,
                     .comptime_exhaustiveness_failed,
-                    .comptime_branch_taken,
                     .switch_stmt,
                     .switch_initialized_payload,
                     .str_match,
@@ -8821,7 +8819,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Every planned statement is in `work`, so it empties the indexes.
             var work: std.ArrayList(CFStmtId) = .empty;
             defer {
-                indexes.clear(work.items);
+                indexes.clear();
                 work.deinit(plan.allocator);
             }
             try plan.addProcGraph(self.store, indexes, root, &work, StackPlanExtra{ .owner = self });
@@ -11724,6 +11722,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .box_of_zst => {
                     if (expected_layout == .zst) return .{ .immediate_i64 = 0 };
                 },
+                .hole => base.invariant("LIR/codegen invariant violated: a demand hole reached a value location", .{}),
                 .erased_box,
                 .scalar,
                 .list,
@@ -11738,6 +11737,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             return loc;
+        }
+
+        /// A call argument at its parameter's layout. A demand-shaped callee's
+        /// parameter accepts any list or box where its layout holds a hole
+        /// (design.md "Specialization By Demand"); every other argument must
+        /// match exactly.
+        fn requireArgumentLocationToLayout(
+            self: *Self,
+            loc: ValueLocation,
+            actual_layout: layout.Idx,
+            expected_layout: layout.Idx,
+            comptime site: []const u8,
+        ) Allocator.Error!ValueLocation {
+            if (actual_layout != expected_layout and try self.layout_store.acceptsAtHoles(self.allocator, actual_layout, expected_layout)) return loc;
+            return self.requireExactValueLocationToLayout(loc, actual_layout, expected_layout, site);
         }
 
         fn requireExactValueLocationToLayout(
@@ -12137,6 +12151,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             for (self.line_entries.items[firstEntryAtOrAfter(@TypeOf(self.line_entries.items[0]), self.line_entries.items, "offset", body_start)..]) |*line| {
                 if (line.offset >= body_start and line.offset < body_end) line.offset += @intCast(prologue_size);
+            }
+            // A failing call's return address may be the body's end.
+            for (self.failure_sites.items[firstEntryAtOrAfter(@TypeOf(self.failure_sites.items[0]), self.failure_sites.items, "offset", body_start)..]) |*site| {
+                if (site.offset >= body_start and site.offset <= body_end) site.offset += @intCast(prologue_size);
             }
             for (self.internal_call_patches.items[firstEntryAtOrAfter(@TypeOf(self.internal_call_patches.items[0]), self.internal_call_patches.items, "call_offset", body_start)..]) |*patch| {
                 // Only adjust patches that were within the shifted body range
@@ -13302,6 +13320,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .closure,
                 .erased_callable,
                 .zst,
+                .hole,
                 .tag_union,
                 .ptr,
                 => source_layout_idx,
@@ -13390,6 +13409,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .closure,
                 .erased_callable,
                 .zst,
+                .hole,
                 .ptr,
                 => tpa.target_layout,
             };
@@ -13412,6 +13432,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .closure,
                 .erased_callable,
                 .zst,
+                .hole,
                 .tag_union,
                 .ptr,
                 => blk: {
@@ -13506,6 +13527,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .closure,
                 .erased_callable,
                 .zst,
+                .hole,
                 .ptr,
                 => tps.target_layout,
             };
@@ -13698,6 +13720,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ls = self.layout_store;
             const target_layout = ls.getLayout(s.target_layout);
             switch (target_layout.tag) {
+                .hole => base.invariant("LIR/codegen invariant violated: a demand hole reached a value location", .{}),
                 .zst, .box_of_zst => return .{ .immediate_i64 = 0 },
                 .box => {
                     const box_abi = ls.builtinBoxAbi(s.target_layout);
@@ -13977,7 +14000,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const actual_layout = self.localLayout(arg_ref);
                 const expected_layout = self.localLayout(param_ref);
                 const raw_arg_loc = try self.emitValueLocal(arg_ref);
-                arg_locs[i] = self.requireExactValueLocationToLayout(raw_arg_loc, actual_layout, expected_layout, "direct_call.arg");
+                arg_locs[i] = try self.requireArgumentLocationToLayout(raw_arg_loc, actual_layout, expected_layout, "direct_call.arg");
                 arg_layouts[i] = expected_layout;
             }
 
@@ -14044,7 +14067,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const arg_ref = GuardedList.at(arg_refs, i);
                 const expected_layout = self.localLayout(GuardedList.at(param_refs, i));
                 const raw_arg_loc = try self.emitValueLocal(arg_ref);
-                const exact = self.requireExactValueLocationToLayout(raw_arg_loc, self.localLayout(arg_ref), expected_layout, "tail_call.arg");
+                const exact = try self.requireArgumentLocationToLayout(raw_arg_loc, self.localLayout(arg_ref), expected_layout, "tail_call.arg");
                 const arg_loc = self.coerceImmediateToLayout(exact, expected_layout);
                 try self.scratch_arg_infos.append(.{
                     .loc = arg_loc,
@@ -14388,11 +14411,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // then materializes the worker result into the expected layout.
             // Host-provided callables are unregistered and already implement
             // the call site's public ABI.
-            const comptime_call_entered = if (self.comptime_hooks) |hooks|
-                try self.emitComptimeCallEnter(hooks)
-            else
-                false;
-
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try builder.addMemArg(frame_ptr, fn_ptr_slot);
@@ -14436,9 +14454,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .{ .immediate_i64 = 0 }
             else
                 self.stackLocationForLayout(runtime_ret_layout, ret_buffer_offset);
-            if (comptime_call_entered) {
-                try self.emitComptimeCallExit(self.comptime_hooks.?);
-            }
             return result;
         }
 
@@ -14561,10 +14576,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 }
             }
-            const capture_prefix_size: u32 = if (self.enable_hot_reload)
-                builtins.erased_callable.hot_reload_capture_prefix_size
-            else
-                0;
+            const capture_prefix_size: u32 = self.erased_capture_prefix;
             const base_capture_size: u32 = capture_prefix_size + capture_size;
             const metadata_offset: u32 = @intCast(builtins.erased_callable.compilerMetadataOffset(base_capture_size));
             const result_desc_slot: ?i32 = if (result_desc) |desc| try self.boxyDescRefToSlot(desc) else null;
@@ -14583,7 +14595,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const total_capture_size: u32 = metadata_offset + @sizeOf(builtins.erased_callable.CompilerMetadata);
                 const capture_src_slot = self.codegen.allocStackSlot(total_capture_size);
 
-                if (self.enable_hot_reload) {
+                if (self.hotReloadEnabled()) {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     defer builder.deinit();
                     try self.callBuiltin(&builder, .hot_reload_retain_current);
@@ -14657,7 +14669,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // otherwise the statement's own drop callback.
                 const on_drop_slot = self.codegen.allocStackSlot(8);
                 {
-                    const on_drop_reg = if (self.enable_hot_reload) blk: {
+                    const on_drop_reg = if (self.hotReloadEnabled()) blk: {
                         const reg = try self.allocTempGeneral();
                         try self.emitBuiltinAddress(reg, .hot_reload_erased_callable_drop);
                         break :blk reg;
@@ -14706,7 +14718,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
-            const hot_reload_code_ref_slot: ?i32 = if (self.enable_hot_reload) blk: {
+            const hot_reload_code_ref_slot: ?i32 = if (self.hotReloadEnabled()) blk: {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 defer builder.deinit();
                 try self.callBuiltin(&builder, .hot_reload_retain_current);
@@ -14728,7 +14740,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitStore(.w64, heap_ptr, 0, proc_addr);
             self.codegen.freeGeneral(proc_addr);
 
-            if (self.enable_hot_reload) {
+            if (self.hotReloadEnabled()) {
                 const hot_drop_reg = try self.allocTempGeneral();
                 try self.emitBuiltinAddress(hot_drop_reg, .hot_reload_erased_callable_drop);
                 try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), hot_drop_reg);
@@ -14888,11 +14900,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            const comptime_call_entered = if (self.comptime_hooks) |hooks|
-                try self.emitComptimeCallEnter(hooks)
-            else
-                false;
-
             // A linked object-cache entry exists only in a linked object: an
             // object output links it, a `roc run` image's shim resolves it by
             // name in the host executable that links it, and a fragment
@@ -15026,16 +15033,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             if (ret_size == 0) {
-                if (comptime_call_entered) {
-                    try self.emitComptimeCallExit(self.comptime_hooks.?);
-                }
                 return .{ .immediate_i64 = 0 };
             }
 
             const result = self.stackLocationForLayout(ret_layout, ret_slot);
-            if (comptime_call_entered) {
-                try self.emitComptimeCallExit(self.comptime_hooks.?);
-            }
             return result;
         }
 
@@ -15238,7 +15239,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .needs_ret_ptr = needs_ret_ptr,
                 .ret_buffer_offset = ret_buffer_offset,
                 .pass_by_ptr = pbp_plan.slice,
-                .comptime_call_hooks = self.comptime_hooks,
                 .callee_owns_block = true,
             });
             if (proc.code_start == unresolved_proc_code_start) {
@@ -15257,9 +15257,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     desc_local,
                     self.stackLocationForLayout(.opaque_ptr, runtime_desc_result_slot.?),
                 );
-            }
-            if (placed_call.comptime_call_entered) {
-                try self.emitComptimeCallExit(self.comptime_hooks.?);
             }
             return result;
         }
@@ -15534,6 +15531,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .struct_,
                     .erased_callable,
                     .zst,
+                    .hole,
                     .tag_union,
                     .ptr,
                     => return current,
@@ -15594,7 +15592,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 switch (a_layout.tag) {
                     .scalar => if (!std.meta.eql(a_layout.getScalar(), b_layout.getScalar())) return false,
-                    .zst, .erased_box => {},
+                    .zst, .hole, .erased_box => {},
                     .box, .box_of_zst => try pending.append(self.allocator, .{
                         .a = ls.getBoxInfo(a_layout).elem_layout_idx,
                         .b = ls.getBoxInfo(b_layout).elem_layout_idx,
@@ -16277,19 +16275,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .native_execution => {
                     try builder.call(builtin_fn.wrapperAddress());
                 },
-                .shim_execution => {
-                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), &self.codegen);
-                },
-                .object_file => {
-                    if (builtin_fn.payload() == .jit_only) {
-                        base.invariant(
-                            "dev object-file codegen referenced JIT-only builtin {s}",
-                            .{builtin_fn.symbolName()},
-                        );
-                    }
+                .shim_execution, .object_file => {
                     try builder.callRelocatable(try self.builtinSymbol(builtin_fn), &self.codegen);
                 },
             }
+            self.last_call_return_offset = builder.return_offset.?;
         }
 
         /// Call a builtin whose native entry point is a file-local adapter rather than
@@ -16488,29 +16478,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const entry = self.static_data_symbols.getPtr(id) orelse {
                 base.invariant("Dev/codegen invariant violated: static value {d} has no producer declaration", .{@backingInt(id)});
             };
-            if (self.fragment_mode and self.fragment_source_mode != .object_file) {
-                if (entry.symbol == null) {
-                    const name = try std.fmt.allocPrint(self.allocator, "roc__b{d}", .{@backingInt(id)});
-                    defer self.allocator.free(name);
-                    const owned_cell_symbol = try self.internSymbolName(name, .program);
-                    const cell_symbol = try self.codegen.symbols.internInternal(self.allocator, self.symbolName(owned_cell_symbol), .program);
-                    const target_symbol = try self.internSymbolName(entry.name, .program);
-                    try self.binding_data_cells.append(self.allocator, .{
-                        .name = self.symbolName(cell_symbol),
-                        .target_name = self.symbolName(target_symbol),
-                    });
-                    entry.symbol = cell_symbol;
-                }
-                try self.codegen.emitLoadDataAddress(dst_reg, entry.symbol.?);
-                try self.emitLoad(.w64, dst_reg, dst_reg, 0);
-                return;
-            }
             if (entry.symbol == null) entry.symbol = try self.codegen.symbols.internInternal(self.allocator, entry.name, .program);
             try self.codegen.emitLoadDataAddress(dst_reg, entry.symbol.?);
-        }
-
-        pub fn bindingDataCells(self: *const Self) []const BindingDataCell {
-            return self.binding_data_cells.items;
         }
 
         fn builtinSymbol(self: *Self, function: BuiltinFn) Allocator.Error!SymbolTable.Id {
@@ -16535,7 +16504,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitHotReloadEnterForHostCallable(self: *Self) Allocator.Error!?i32 {
-            if (!self.enable_hot_reload) return null;
+            if (!self.hotReloadEnabled()) return null;
 
             const code_ref_slot = self.codegen.allocStackSlot(8);
             {
@@ -17124,6 +17093,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                             return;
                         },
+                        .hole => base.invariant("LIR/codegen invariant violated: a demand hole reached a value location", .{}),
                         .zst => {
                             // Zero-sized type—nothing to store.
                             return;
@@ -18046,10 +18016,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{
                 .target = target.defaultCpuTarget(),
                 .cpu_level = self.cpu_level,
-                .hot_reload = self.enable_hot_reload,
+                .hot_reload = self.hotReloadEnabled(),
                 .default_platform_runtime = self.enable_default_platform_runtime,
-                .dict_seed_mode = self.dict_seed_mode,
-                .hooks_enabled = self.comptime_hooks != null,
                 .initialize_boxy_runtime = mode == .object_file,
                 .static_data_readonly = mode == .object_file,
             };
@@ -18751,9 +18719,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             ret_buffer_offset: i32 = 0,
             /// Pre-computed per-argument pass-by-pointer flags (null = no pass-by-ptr).
             pass_by_ptr: ?[]const bool = null,
-            /// CTFE-only call-frame hooks. Emitted after argument values are
-            /// frozen to stack slots, before ABI argument registers are loaded.
-            comptime_call_hooks: ?ComptimeHooks = null,
             /// The callee is an internal Roc procedure: it owns its argument
             /// block and removes it when it returns.
             callee_owns_block: bool = false,
@@ -18762,7 +18727,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         const PlacedCall = struct {
             /// Bytes this caller must remove from the stack after the call.
             stack_spill_size: i32,
-            comptime_call_entered: bool,
         };
 
         /// The argument block of an internal Roc procedure call: the words
@@ -19111,11 +19075,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 frozen_args[i] = try self.freezeCallArg(info, pbp);
             }
 
-            const comptime_call_entered = if (config.comptime_call_hooks) |hooks|
-                try self.emitComptimeCallEnter(hooks)
-            else
-                false;
-
             // Allocate stack space for the callee's spilled arguments only after
             // CTFE hooks have run. The hook call has its own C ABI stack setup.
             if (stack_space_size > 0) {
@@ -19210,7 +19169,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             return .{
                 .stack_spill_size = stack_space_size - callee_block_size,
-                .comptime_call_entered = comptime_call_entered,
             };
         }
 
@@ -19365,8 +19323,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const capture_stack = self.codegen.allocStackSlot(8);
             const capture_arg_reg = try self.allocTempGeneral();
             try self.emitLoad(.w64, capture_arg_reg, frame_ptr, capture_ptr_slot);
-            if (self.enable_hot_reload) {
-                try self.emitAddPtrImmAny(capture_arg_reg, capture_arg_reg, builtins.erased_callable.hot_reload_capture_prefix_size);
+            if (self.erased_capture_prefix != 0) {
+                try self.emitAddPtrImmAny(capture_arg_reg, capture_arg_reg, @intCast(self.erased_capture_prefix));
             }
             try self.emitStore(.w64, frame_ptr, capture_stack, capture_arg_reg);
             self.codegen.freeGeneral(capture_arg_reg);
@@ -19898,6 +19856,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 },
                 // Zero-sized types: nothing to move
+                .hole => base.invariant("LIR/codegen invariant violated: a demand hole reached a value location", .{}),
                 .zst => {},
                 // Box: single pointer (1 register)
                 .box, .box_of_zst, .erased_box, .erased_callable, .ptr => try self.moveOneRegToReturn(loc),
@@ -20192,6 +20151,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.line_entries.append(self.allocator, .{
                             .offset = @intCast(self.codegen.currentOffset()),
                             .loc = stmt_loc,
+                            .region = self.store.stmtRegion(stmt_id),
                         });
                     }
 
@@ -20228,13 +20188,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .static_data => |read| blk: {
                                     const id = read.id;
                                     self.fragment_context.static_data = true;
-                                    if (self.comptime_hooks) |hooks| {
-                                        try self.spillAllVectorLocals();
-                                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                                        defer builder.deinit();
-                                        try builder.addImmArg(@intCast(@backingInt(id)));
-                                        try self.callComptimeHook(&builder, hooks, .ensure_static_value);
-                                    }
                                     break :blk try self.generateStaticDataLiteral(id, self.localLayout(assign.target));
                                 },
                                 .proc_ref => |proc_id| blk: {
@@ -20517,20 +20470,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.emitTrap();
                         },
 
-                        .comptime_exhaustiveness_failed => |marker| {
-                            if (self.comptime_hooks) |hooks| {
-                                try self.emitComptimeExhaustivenessFailed(hooks, marker.site);
-                            } else {
-                                try self.emitRocCrash("compile-time exhaustiveness failure reached runtime code");
-                            }
+                        .comptime_exhaustiveness_failed => {
+                            try self.emitRocCrash(lir.LIR.comptime_exhaustiveness_failure_message);
+                            try self.recordFailureSite();
                             try self.emitTrap();
-                        },
-
-                        .comptime_branch_taken => |marker| {
-                            if (self.comptime_hooks) |hooks| {
-                                try self.emitComptimeBranchTaken(hooks, marker.site, marker.branch_index);
-                            }
-                            try work.append(wa, .{ .node = marker.next });
                         },
 
                         .join => |j| {
@@ -20793,6 +20736,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         try self.emitRocCrashFromStackStr(msg_offset);
                                 },
                             }
+                            try self.recordFailureSite();
                             try self.emitTrap();
                         },
                     }
@@ -21572,6 +21516,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .native_execution => try builder.call(symbol.address()),
                 .shim_execution, .object_file => try builder.callRelocatable(try self.codegen.symbols.intern(self.allocator, symbol.name(), .shared), &self.codegen),
             }
+            self.last_call_return_offset = builder.return_offset.?;
+        }
+
+        /// Record what failing at the current statement means at the crash
+        /// call just emitted, when it means more than a crash there.
+        fn recordFailureSite(self: *Self) Allocator.Error!void {
+            const stmt_id = self.current_stmt_id orelse return;
+            const meaning = self.store.failureMeaning(stmt_id) orelse return;
+            try self.failure_sites.append(self.allocator, .{
+                .offset = @intCast(self.last_call_return_offset),
+                .meaning = meaning,
+            });
         }
 
         /// Pool offset of `msg`, appending it when the pool has no equal message.
@@ -21653,7 +21609,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitRocCrashFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
-            if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try builder.addLeaArg(frame_ptr, str_offset);
@@ -21661,7 +21616,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitCheckedErrorCrashFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
-            if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addLeaArg(frame_ptr, str_offset);
             try self.callBuiltin(&builder, .checked_error_crash_str);
@@ -21681,107 +21635,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // exactly as for crashes, so compile-time expect failures resolve
             // their declaring module (the host consumes the pending location
             // per expect event; see CompileTimeHost.rocExpectFailed).
-            if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             try self.emitRocStaticMessageCall(.roc_expect_failed, "expect failed");
-        }
-
-        fn callComptimeHook(self: *Self, builder: *Builder, hooks: ComptimeHooks, hook: ComptimeHook) Allocator.Error!void {
-            self.fragment_context.comptime_hooks = true;
-            if (self.generation_mode == .native_execution) {
-                const address = switch (hook) {
-                    inline .ensure_static_value, .branch_taken, .exhaustiveness_failed, .failure_region, .call_enter, .call_exit => |which| @intFromPtr(@field(hooks, @tagName(which))),
-                };
-                try builder.call(address);
-            } else {
-                try builder.callRelocatable(try self.internSymbolName(hook.symbolName(), .shared), &self.codegen);
-            }
-        }
-
-        fn emitComptimeBranchTaken(
-            self: *Self,
-            hooks: ComptimeHooks,
-            site: lir.LIR.ComptimeSiteId,
-            branch_index: u32,
-        ) Allocator.Error!void {
-            try self.spillAllVectorLocals();
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            defer builder.deinit();
-            try builder.addImmArg(@intCast(@backingInt(site)));
-            try builder.addImmArg(@intCast(branch_index));
-            try self.callComptimeHook(&builder, hooks, .branch_taken);
-        }
-
-        fn emitComptimeExhaustivenessFailed(
-            self: *Self,
-            hooks: ComptimeHooks,
-            site: lir.LIR.ComptimeSiteId,
-        ) Allocator.Error!void {
-            try self.spillAllVectorLocals();
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            defer builder.deinit();
-            try builder.addImmArg(@intCast(@backingInt(site)));
-            try self.callComptimeHook(&builder, hooks, .exhaustiveness_failed);
-        }
-
-        fn emitComptimeFailureRegion(
-            self: *Self,
-            hooks: ComptimeHooks,
-        ) Allocator.Error!void {
-            const stmt_id = self.current_stmt_id orelse return;
-            const region = self.store.stmtRegion(stmt_id);
-            const loc = self.store.stmtLoc(stmt_id);
-            try self.spillAllVectorLocals();
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            defer builder.deinit();
-            try builder.addImmArg(@intCast(region.start.offset));
-            try builder.addImmArg(@intCast(region.end.offset));
-            try builder.addImmArg(@intCast(loc.file));
-            try builder.addImmArg(@intCast(loc.line));
-            try builder.addImmArg(@intCast(loc.column));
-            try builder.addImmArg(@intCast(@backingInt(stmt_id)));
-            try self.callComptimeHook(&builder, hooks, .failure_region);
-        }
-
-        fn emitComptimeCallEnter(
-            self: *Self,
-            hooks: ComptimeHooks,
-        ) Allocator.Error!bool {
-            const stmt_id = self.current_stmt_id orelse return false;
-            const region = self.store.stmtRegion(stmt_id);
-            if (region.isEmpty()) return false;
-            const loc = self.store.stmtLoc(stmt_id);
-            try self.spillAllVectorLocals();
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            defer builder.deinit();
-            try builder.addImmArg(@intCast(region.start.offset));
-            try builder.addImmArg(@intCast(region.end.offset));
-            try builder.addImmArg(@intCast(loc.file));
-            try builder.addImmArg(@intCast(loc.line));
-            try builder.addImmArg(@intCast(loc.column));
-            try self.callComptimeHook(&builder, hooks, .call_enter);
-            return true;
-        }
-
-        fn emitComptimeCallExit(
-            self: *Self,
-            hooks: ComptimeHooks,
-        ) Allocator.Error!void {
-            try self.spillAllVectorLocals();
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            defer builder.deinit();
-            try self.callComptimeHook(&builder, hooks, .call_exit);
         }
 
         /// Emit a `roc_crashed` call with a static message.
         fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
-            if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             try self.emitRocStaticMessageCall(.roc_crashed, msg);
         }
 
         /// Crash at code checking rejected, through the builtin that records
         /// the fact before crashing.
         fn emitCheckedErrorCrash(self: *Self, msg: []const u8) Allocator.Error!void {
-            if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             try self.spillAllVectorLocals();
             const msg_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(msg_reg);
@@ -22379,10 +22243,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const capture_layout = proc_spec.static_erased_capture_layout orelse continue;
                 // A frozen value reserves the program's capture prefix, like
                 // one this code packs, before its captures and metadata.
-                const capture_prefix_size: u32 = if (self.enable_hot_reload)
-                    builtins.erased_callable.hot_reload_capture_prefix_size
-                else
-                    0;
+                const capture_prefix_size: u32 = self.erased_capture_prefix;
                 const capture_size = capture_prefix_size + self.getLayoutSize(capture_layout);
                 try self.emitErasedProcRegistration(@fromBackingInt(@intCast(index)), @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size)), capture_prefix_size);
             }
@@ -23001,6 +22862,38 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return self.line_entries.items;
         }
 
+        /// Failure sites recorded during code generation, in code offset
+        /// order.
+        pub fn getFailureSites(self: *const Self) []const FailureSite {
+            return self.failure_sites.items;
+        }
+
+        /// The line entry of the statement whose code holds `offset`: the
+        /// last entry at or before it inside the code region holding it.
+        pub fn lineEntryAt(self: *const Self, offset: usize) ?LineEntry {
+            const regions = self.code_regions.items;
+            var region_index = firstEntryAtOrAfter(CodeRegion, regions, "start", offset + 1);
+            if (region_index == 0) return null;
+            region_index -= 1;
+            const region = regions[region_index];
+            if (offset >= region.end) return null;
+            const lines = self.line_entries.items;
+            const line_index = firstEntryAtOrAfter(LineEntry, lines, "offset", offset + 1);
+            if (line_index == 0) return null;
+            const line = lines[line_index - 1];
+            if (line.offset < region.start) return null;
+            return line;
+        }
+
+        /// What failing at the call returning to `return_offset` means, when
+        /// it means more than a crash at its statement.
+        pub fn failureMeaningAt(self: *const Self, return_offset: usize) ?lir.LIR.FailureMeaning {
+            const sites = self.failure_sites.items;
+            const index = firstEntryAtOrAfter(FailureSite, sites, "offset", return_offset);
+            if (index < sites.len and sites[index].offset == return_offset) return sites[index].meaning;
+            return null;
+        }
+
         pub fn getGeneratedCode(self: *Self) []const u8 {
             self.assertImageFinished();
             return self.codegen.getCode();
@@ -23123,9 +23016,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.line_entries.append(self.allocator, line);
         }
 
+        pub fn appendAssembledFailureSite(self: *Self, site: FailureSite) Allocator.Error!void {
+            try self.failure_sites.append(self.allocator, site);
+        }
+
         pub fn registerAssembledProc(self: *Self, identity: lir.ProcIdentity, entry: usize) Allocator.Error!void {
             const gop = try self.spliced_proc_starts.getOrPut(identity);
             if (!gop.found_existing) gop.value_ptr.* = entry;
+        }
+
+        /// Remember the source location a procedure placed from an artifact
+        /// set carries; the first placement of an identity wins, as for its
+        /// code.
+        pub fn registerAssembledProcLoc(self: *Self, identity: lir.ProcIdentity, loc: base.SourceLoc) Allocator.Error!void {
+            const gop = try self.assembled_proc_locs.getOrPut(self.allocator, identity);
+            if (!gop.found_existing) gop.value_ptr.* = loc;
+        }
+
+        /// The source location a procedure placed from an artifact set
+        /// carries, when one was placed.
+        pub fn assembledProcLoc(self: *const Self, identity: lir.ProcIdentity) ?base.SourceLoc {
+            return self.assembled_proc_locs.get(identity);
         }
 
         pub fn registerAssembledThunk(self: *Self, identity: lir.ProcIdentity, entry: usize) Allocator.Error!void {
@@ -23348,6 +23259,47 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Remove placement-specific stub displacements using producer records.
+        /// Clear the placement-specific displacement of a reference at
+        /// `site` in an artifact's `bytes`, and of the in-body veneer it
+        /// goes through, as if it named itself. Placement patches every
+        /// reference again, so an artifact's bytes are then the same however
+        /// the buffer it was lifted from was laid out.
+        pub fn normalizeArtifactRefSite(bytes: []u8, site: usize, form: CodeRefForm, veneer: ?usize) void {
+            if (comptime target.toCpuArch() == .aarch64) {
+                const EmitT = aarch64.Emit(target);
+                switch (form) {
+                    .call, .inline_call => {
+                        const word = std.mem.readInt(u32, bytes[site..][0..4], .little);
+                        std.mem.writeInt(u32, bytes[site..][0..4], word & 0xFC000000, .little);
+                    },
+                    .addr => {
+                        const adr_existing = std.mem.readInt(u32, bytes[site..][0..4], .little);
+                        const movz_existing = std.mem.readInt(u32, bytes[site + 4 ..][0..4], .little);
+                        const dst: GeneralReg = @fromBackingInt(@intCast(@as(u5, @truncate(adr_existing & 0x1F))));
+                        const scratch: GeneralReg = @fromBackingInt(@intCast(@as(u5, @truncate(movz_existing & 0x1F))));
+                        writePcRelSelf(bytes, site, EmitT, dst, scratch);
+                    },
+                }
+                if (veneer) |offset| writePcRelSelf(bytes, offset, EmitT, .IP0, .IP1);
+            } else {
+                switch (form) {
+                    .call => @memset(bytes[site + 1 ..][0..4], 0),
+                    .addr => @memset(bytes[site + 3 ..][0..4], 0),
+                    .inline_call => unreachable, // only aarch64 direct calls record the inline-call form
+                }
+            }
+        }
+
+        fn writePcRelSelf(bytes: []u8, loc: usize, comptime EmitT: type, dst: GeneralReg, scratch: GeneralReg) void {
+            const words = [4]u32{
+                EmitT.encodeAdrZero(dst),
+                EmitT.encodeMovz64(scratch, 0, 0),
+                EmitT.encodeMovk64(scratch, 0, 1),
+                EmitT.encodeAddSubRegRegReg64(dst, dst, scratch, false),
+            };
+            for (words, 0..) |word, i| std.mem.writeInt(u32, bytes[loc + i * 4 ..][0..4], word, .little);
+        }
+
         pub fn normalizeArtifactCode(self: *const Self, start: usize, bytes: []u8) void {
             if (comptime target.toCpuArch() == .aarch64) {
                 for (self.codegen.extern_stubs.items) |stub| {
@@ -24245,6 +24197,7 @@ test "Boxy dictionary thunks are emitted only for producer-named workers" {
         &.{},
         &.{},
         &.{worker_proc},
+        0,
         roc_target_mod.host_cpu.level(),
     );
     defer codegen.deinit();
@@ -24274,6 +24227,7 @@ test "Boxy thunk artifact splice preserves worker namespace in both orders and a
         &.{},
         &.{},
         &.{worker},
+        0,
         roc_target_mod.host_cpu.level(),
     );
     defer producer.deinit();
@@ -24302,6 +24256,7 @@ test "Boxy thunk artifact splice preserves worker namespace in both orders and a
                 &.{},
                 &.{},
                 &.{worker},
+                0,
                 roc_target_mod.host_cpu.level(),
             );
             defer receiver.deinit();
@@ -25972,7 +25927,6 @@ test "independent fragment emits only requested procedure with unresolved self a
         try std.testing.expectEqual(@as(usize, 2), cg.codeRefs().len);
         try std.testing.expectEqual(other, cg.codeRefs()[0].target.proc);
         try std.testing.expectEqual(proc, cg.codeRefs()[1].target.proc);
-        try std.testing.expect(!cg.getFragmentContextDependencies().comptime_hooks);
         try std.testing.expectEqual(@as(usize, 1), cg.getUnwindFunctions().len);
         try std.testing.expect(cg.getLineEntries().len > 0);
         for (cg.getLineEntries()) |line| {
@@ -26011,7 +25965,6 @@ test "independent fragment defers shared RC helper demand" {
     defer helper_lane.deinit();
     try helper_lane.emitRcHelperFragment(keys[0]);
     try std.testing.expectEqual(@as(usize, 1), helper_lane.compiled_rc_helpers.count());
-    try std.testing.expect(!helper_lane.getFragmentContextDependencies().comptime_hooks);
     try std.testing.expect(helper_lane.getGeneratedCode().len > 0);
 }
 
@@ -26171,24 +26124,9 @@ test "independent fragment ownership survives allocation failure" {
     }.run, .{ &store, &layouts.layout_store, proc });
 }
 
-test "independent fragment symbolic hooks record actual context use" {
+test "independent fragments record their static data use" {
     if (comptime !host_lir_codegen_available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    const Hooks = struct {
-        fn one(_: u32) callconv(.c) void {}
-        fn two(_: u32, _: u32) callconv(.c) void {}
-        fn five(_: u32, _: u32, _: u32, _: u32, _: u32) callconv(.c) void {}
-        fn six(_: u32, _: u32, _: u32, _: u32, _: u32, _: u32) callconv(.c) void {}
-        fn zero() callconv(.c) void {}
-    };
-    const hooks = ComptimeHooks{
-        .ensure_static_value = Hooks.one,
-        .branch_taken = Hooks.two,
-        .exhaustiveness_failed = Hooks.one,
-        .failure_region = Hooks.six,
-        .call_enter = Hooks.five,
-        .call_exit = Hooks.zero,
-    };
     var store = LirStore.init(allocator);
     defer store.deinit();
     var layouts = try TestLayoutState.init(allocator);
@@ -26206,36 +26144,32 @@ test "independent fragment symbolic hooks record actual context use" {
     }});
     var cg = try HostLirCodeGen.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
     defer cg.deinit();
-    cg.setComptimeHooks(hooks);
     cg.borrowStaticDataSymbolsFrom(&source);
     try cg.emitProcFragment(pure);
-    try std.testing.expect(!cg.getFragmentContextDependencies().comptime_hooks);
+    try std.testing.expect(!cg.getFragmentContextDependencies().static_data);
     cg.reset();
     try cg.emitProcFragment(data_proc);
-    try std.testing.expect(cg.getFragmentContextDependencies().comptime_hooks);
     try std.testing.expect(cg.getFragmentContextDependencies().static_data);
     try std.testing.expectEqual(@as(usize, 0), source.getSymbolNames().len);
-    try std.testing.expectEqual(@as(usize, 1), cg.bindingDataCells().len);
-    try std.testing.expectEqualStrings("roc__b8", cg.bindingDataCells()[0].name);
-    try std.testing.expectEqualStrings("fragment_static_value", cg.bindingDataCells()[0].target_name);
-    var found_hook = false;
+    // The read names the value's own symbol.
+    var reads_value = false;
     for (cg.getRelocations()) |reloc| {
         switch (reloc) {
-            .linked_function => |function| {
-                if (std.mem.eql(u8, cg.symbolName(function.symbol), ComptimeHook.ensure_static_value.symbolName())) found_hook = true;
-            },
             .local_data => return error.NativePointerInFragment,
-            .linked_data, .jmp_to_return, .retired => {},
+            .linked_data => |data| {
+                if (std.mem.eql(u8, cg.getSymbolNames()[@backingInt(data.symbol)], "fragment_static_value")) reads_value = true;
+            },
+            .linked_function, .jmp_to_return, .retired => {},
         }
     }
-    try std.testing.expect(found_hook);
+    try std.testing.expect(reads_value);
     try std.testing.checkAllAllocationFailures(allocator, struct {
-        fn run(a: Allocator, owner: *const HostLirCodeGen, id: LIR.LirProcSpecId) (Allocator.Error || error{TestExpectedEqual})!void {
+        fn run(a: Allocator, owner: *const HostLirCodeGen, id: LIR.LirProcSpecId) (Allocator.Error || error{TestUnexpectedResult})!void {
             var lane = try HostLirCodeGen.init(a, owner.store, owner.layout_store, .{}, &.{}, .default);
             defer lane.deinit();
             lane.borrowStaticDataSymbolsFrom(owner);
             try lane.emitProcFragment(id);
-            try std.testing.expectEqual(@as(usize, 1), lane.bindingDataCells().len);
+            try std.testing.expect(lane.getFragmentContextDependencies().static_data);
         }
     }.run, .{ &source, data_proc });
 }

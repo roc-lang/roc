@@ -108,7 +108,7 @@ pub fn plan(self: *Self, store: *const LirStore, root: CFStmtId, params: anytype
     var stack_plan = self.indexes.takePlan();
     defer self.indexes.keepPlan(&stack_plan);
     self.planned.clearRetainingCapacity();
-    defer self.indexes.clear(self.planned.items);
+    defer self.indexes.clear();
     try stack_plan.addProcGraph(store, &self.indexes, root, &self.planned, Tracked(@TypeOf(calls)){ .candidates = &self.candidates, .calls = calls });
     // Views extend their owner's lifetime; their definitions do not write
     // the owner's bytes. StackPlan merges those accesses before solving.
@@ -194,7 +194,6 @@ fn collectCandidates(self: *Self, store: *const LirStore, root: CFStmtId, params
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,

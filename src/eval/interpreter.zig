@@ -349,7 +349,6 @@ pub const Interpreter = struct {
     store: *const LirStore,
     layout_store: *const layout_mod.Store,
     helper: LayoutHelper,
-    dict_seed_mode: builtins.utils.DictSeedMode = .runtime,
     /// Arena for runtime-created descriptors whose identities can escape in a
     /// retained callable or host result and must survive later evaluations.
     descriptor_arena: base.SingleThreadArena,
@@ -384,9 +383,6 @@ pub const Interpreter = struct {
     static_strings: backend.StaticStringData.View,
     /// Resolved immutable values indexed directly by compact `StaticDataId`.
     static_data: []const usize,
-    /// Explicit compile-time slot readiness callback; ordinary runtime images
-    /// are already complete and leave this unset.
-    static_data_demand: ?StaticDataDemand = null,
     /// Direct slot lookup per entered procedure: a frame local's slot is
     /// `slot_of[id - base]`, and ids outside the frame hold `FrameSlotIndex.none`.
     /// An index is built the first time a procedure is entered and is checked
@@ -426,7 +422,6 @@ pub const Interpreter = struct {
     /// region, and inline scope are read from the store when needed.
     active_stmt_id: ?CFStmtId = null,
     /// Source location captured when the current evaluation first failed.
-    failure_origins: ?*const collections.DenseMap(CFStmtId, LIR.ComptimeFailureOrigin) = null,
     failed_stmt_loc: base.SourceLoc = base.SourceLoc.none,
     /// Checked source region captured when the current evaluation first failed.
     failed_stmt_region: base.Region = base.Region.zero(),
@@ -434,18 +429,11 @@ pub const Interpreter = struct {
     failed_stmt_inline_scope: InlineScopeId = InlineScopeId.none,
     /// The crash statement that ended the current evaluation, if one did.
     failed_crash_stmt: ?LIR.CFStmtId = null,
-    comptime_branch_hits: std.ArrayList(ComptimeBranchHit),
-    comptime_failed_site: ?LIR.ComptimeSiteId = null,
     /// Heap-pinned owner used by host-facing integrations whose erased
     /// callables can outlive the evaluation that created them.
     retained_owner: ?*Retained = null,
 
     pub const Error = boxy_runtime.Error;
-
-    pub const StaticDataDemand = struct {
-        context: *anyopaque,
-        ensure: *const fn (*anyopaque, LIR.StaticDataId) Error!void,
-    };
 
     /// Explicit hosted-call data produced by LIR and the interpreter's ABI
     /// packing. Integrations consume this without reconstructing hosted
@@ -467,11 +455,6 @@ pub const Interpreter = struct {
     pub const HostedCallHandler = struct {
         context: *anyopaque,
         dispatch: *const fn (*anyopaque, HostedCall) Error!void,
-    };
-
-    pub const ComptimeBranchHit = struct {
-        site: LIR.ComptimeSiteId,
-        branch_index: u32,
     };
 
     /// Runs the static erased callables of one interpreter static-data image.
@@ -994,12 +977,10 @@ pub const Interpreter = struct {
             },
             .call_stack = .empty,
             .failed_call_stack = .empty,
-            .comptime_branch_hits = .empty,
         };
     }
 
     pub fn deinit(self: *LirInterpreter) void {
-        self.comptime_branch_hits.deinit(self.allocator);
         self.failed_call_stack.deinit(self.allocator);
         self.call_stack.deinit(self.allocator);
         self.pending_erased_storage.deinit(self.allocator);
@@ -1132,14 +1113,6 @@ pub const Interpreter = struct {
         return null;
     }
 
-    pub fn getComptimeFailedSite(self: *const LirInterpreter) ?LIR.ComptimeSiteId {
-        return self.comptime_failed_site;
-    }
-
-    pub fn getComptimeBranchHits(self: *const LirInterpreter) []const ComptimeBranchHit {
-        return self.comptime_branch_hits.items;
-    }
-
     fn recordFailedCallStackIfUnset(self: *LirInterpreter) Allocator.Error!void {
         if (self.failed_call_stack.items.len != 0) return;
         try self.failed_call_stack.appendSlice(self.allocator, self.call_stack.items);
@@ -1197,7 +1170,6 @@ pub const Interpreter = struct {
             error.RuntimeError,
             => self.recordCallerFailureLocForSourcelessCallee(call_loc, call_region, call_inline_scope),
             error.OutOfMemory,
-            error.ComptimeExhaustiveness,
             error.ExpectErr,
             error.UnsupportedHostedFunction,
             error.InvalidHostedFunctionSignature,
@@ -1217,11 +1189,6 @@ pub const Interpreter = struct {
         self.recordActiveFailureLocIfUnset();
         self.roc_env.runtime_error_message = message;
         return error.RuntimeError;
-    }
-
-    fn comptimeExhaustivenessFailed(self: *LirInterpreter, site: LIR.ComptimeSiteId) Error {
-        self.comptime_failed_site = site;
-        return error.ComptimeExhaustiveness;
     }
 
     fn triggerCrash(self: *LirInterpreter, message: []const u8) Error {
@@ -1269,7 +1236,6 @@ pub const Interpreter = struct {
     fn resetRetainedExecution(self: *LirInterpreter) void {
         self.call_stack.clearRetainingCapacity();
         self.failed_call_stack.clearRetainingCapacity();
-        self.comptime_branch_hits.clearRetainingCapacity();
         self.scratch.reset();
         self.frame_stack.reset();
 
@@ -1279,7 +1245,6 @@ pub const Interpreter = struct {
         self.failed_stmt_region = base.Region.zero();
         self.failed_stmt_inline_scope = InlineScopeId.none;
         self.failed_crash_stmt = null;
-        self.comptime_failed_site = null;
         if (builtin.mode == .debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
     }
 
@@ -1654,8 +1619,6 @@ pub const Interpreter = struct {
         self.failed_stmt_region = base.Region.zero();
         self.failed_stmt_inline_scope = InlineScopeId.none;
         self.failed_crash_stmt = null;
-        self.comptime_branch_hits.clearRetainingCapacity();
-        self.comptime_failed_site = null;
         if (builtin.mode == .debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
         // The result is copied to scratch before the root's frame ends, so
         // every frame this evaluation pushes is released when it returns,
@@ -1901,7 +1864,7 @@ pub const Interpreter = struct {
                     }
                 }
             },
-            .zst, .box_of_zst, .erased_box => return,
+            .zst, .hole, .box_of_zst, .erased_box => return,
             // Compiler-internal pointers (TRMC holes) are opaque here: the slot they
             // point at may be a not-yet-filled hole, so there is nothing to validate.
             .ptr => return,
@@ -3360,15 +3323,9 @@ pub const Interpreter = struct {
                     }
                     return self.runtimeError("RuntimeError");
                 },
-                .comptime_exhaustiveness_failed => |failed| {
-                    return self.comptimeExhaustivenessFailed(failed.site);
-                },
-                .comptime_branch_taken => |marker| {
-                    try self.comptime_branch_hits.append(self.allocator, .{
-                        .site = marker.site,
-                        .branch_index = marker.branch_index,
-                    });
-                    current = marker.next;
+                .comptime_exhaustiveness_failed => {
+                    self.failed_crash_stmt = current;
+                    return self.triggerCrash(LIR.comptime_exhaustiveness_failure_message);
                 },
                 .incref => |inc| {
                     if (builtin.mode == .debug and !frame.isAssigned(inc.value)) {
@@ -3564,12 +3521,6 @@ pub const Interpreter = struct {
                 .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
                 .crash => |crash_stmt| {
                     self.failed_crash_stmt = current;
-                    if (self.failure_origins) |origins| {
-                        if (origins.get(current)) |origin| {
-                            self.failed_stmt_loc = origin.loc orelse base.SourceLoc.none;
-                            self.failed_stmt_region = origin.region orelse base.Region.zero();
-                        }
-                    }
                     switch (crash_stmt.msg) {
                         .literal => |literal| return self.triggerCrash(self.store.getString(literal)),
                         .local => |message_local| {
@@ -3933,6 +3884,7 @@ pub const Interpreter = struct {
                     .closure,
                     .erased_callable,
                     .zst,
+                    .hole,
                     .tag_union,
                     .ptr,
                     => {
@@ -4026,14 +3978,6 @@ pub const Interpreter = struct {
         return val;
     }
 
-    pub fn failStaticDataDemand(self: *LirInterpreter, message: []const u8) Error {
-        const owned = self.allocator.dupe(u8, message) catch return error.OutOfMemory;
-        if (self.roc_env.crash_message) |old| self.allocator.free(old);
-        self.roc_env.crash_message = owned;
-        self.roc_env.crashed = true;
-        return error.Crash;
-    }
-
     fn evalStaticDataLiteral(self: *LirInterpreter, id: LIR.StaticDataId, target_layout: layout_mod.Idx) Error!Value {
         const index: usize = @backingInt(id);
         if (index >= self.static_data.len) {
@@ -4042,7 +3986,6 @@ pub const Interpreter = struct {
                 .{index},
             );
         }
-        if (self.static_data_demand) |demand| try demand.ensure(demand.context, id);
         const result = try self.alloc(target_layout);
         const size = self.helper.sizeOf(target_layout);
         if (size != 0) {
@@ -4135,7 +4078,6 @@ pub const Interpreter = struct {
             },
             error.OutOfMemory => prefix ++ "ran out of memory",
             error.RuntimeError => prefix ++ "hit runtime error",
-            error.ComptimeExhaustiveness => prefix ++ "hit compile-time exhaustiveness marker",
             error.DivisionByZero => prefix ++ "hit division by zero",
             error.UnsupportedHostedFunction => prefix ++ "reached an unsupported hosted function",
             error.InvalidHostedFunctionSignature => prefix ++ "reached an invalid hosted function signature",
@@ -4771,7 +4713,7 @@ pub const Interpreter = struct {
     fn allocStructValue(self: *LirInterpreter, struct_layout: layout_mod.Idx) Error!AllocatedStruct {
         const struct_layout_val = self.layout_store.getLayout(struct_layout);
         switch (struct_layout_val.tag) {
-            .zst => return .{
+            .zst, .hole => return .{
                 .outer = Value.zst,
                 .base = Value.zst,
                 .base_layout = .zst,
@@ -5500,6 +5442,7 @@ pub const Interpreter = struct {
         val: Value,
         layout_idx: layout_mod.Idx,
     ) ?rc_conformance.Allocation {
+        if (self.layout_store.layoutHoldsHole(layout_idx)) return self.conformanceHoleAllocation(val, layout_idx);
         return switch (self.conformanceRcPlan(layout_idx)) {
             .str_decref => blk: {
                 const rs = valueToRocStr(val);
@@ -5528,6 +5471,25 @@ pub const Interpreter = struct {
         return self.layout_store.rcHelperPlan(.{ .op = .decref, .layout_idx = layout_idx });
     }
 
+    /// The allocation a value holding a demand hole owns. Such a value is a
+    /// list or box header whose items no code reads (design.md
+    /// "Specialization By Demand"): it has no refcount plan, it owns exactly
+    /// its own allocation, and the observer cannot name anything behind it.
+    fn conformanceHoleAllocation(
+        self: *LirInterpreter,
+        val: Value,
+        layout_idx: layout_mod.Idx,
+    ) ?rc_conformance.Allocation {
+        return switch (self.layout_store.getLayout(layout_idx).tag) {
+            .list => rc_conformance.allocationAt(valueToRocList(val).getAllocationDataPtr(&self.roc_ops)),
+            .box => rc_conformance.allocationAt(val.read(?[*]u8)),
+            .hole, .scalar, .box_of_zst, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .erased_box => self.invariantFailed(
+                "LIR/interpreter invariant violated: a value holding a demand hole had layout {d} ({s}), not a list or box",
+                .{ @backingInt(layout_idx), @tagName(self.layout_store.getLayout(layout_idx).tag) },
+            ),
+        };
+    }
+
     /// Collect every refcounted allocation reachable from a value.
     fn conformanceCollectAllocations(
         self: *LirInterpreter,
@@ -5535,6 +5497,10 @@ pub const Interpreter = struct {
         layout_idx: layout_mod.Idx,
         sink: *rc_conformance.AllocationSet,
     ) void {
+        if (self.layout_store.layoutHoldsHole(layout_idx)) {
+            if (self.conformanceHoleAllocation(val, layout_idx)) |found| sink.add(found.rc_addr);
+            return;
+        }
         self.conformanceCollectPlan(self.conformanceRcPlan(layout_idx), val, sink, 0);
     }
 
@@ -6974,10 +6940,7 @@ pub const Interpreter = struct {
             },
 
             // ── Hasher ──
-            .dict_pseudo_seed => self.writeHasherValue(ll.ret_layout, switch (self.dict_seed_mode) {
-                .runtime => builtins.utils.dictPseudoSeed(),
-                .comptime_zero => 0,
-            }),
+            .dict_pseudo_seed => self.writeHasherValue(ll.ret_layout, builtins.utils.dictPseudoSeed()),
             .hasher_finish => self.writeHasherValue(ll.ret_layout, builtins.hash.hasher_finish(args[0].read(u64))),
             .hasher_write_bool => blk: {
                 const seed = args[0].read(u64);
@@ -7823,7 +7786,7 @@ pub const Interpreter = struct {
         const layout_val = self.layout_store.getLayout(arg_layout);
 
         if (op == .eq and switch (layout_val.tag) {
-            .zst, .struct_, .list, .list_of_zst, .tag_union => true,
+            .zst, .hole, .struct_, .list, .list_of_zst, .tag_union => true,
             .scalar => layout_val.getScalar().tag == .str,
             .box, .box_of_zst, .erased_box, .closure, .erased_callable, .ptr => false,
         }) {
@@ -8891,6 +8854,7 @@ pub const Interpreter = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .tag_union,
             .ptr,
             => self.invariantFailed(
@@ -9029,6 +8993,7 @@ pub const Interpreter = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .tag_union,
             .ptr,
             => return error.RuntimeError,

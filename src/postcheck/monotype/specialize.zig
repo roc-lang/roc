@@ -115,7 +115,7 @@ pub const LocalHit = struct {
 /// authority. `digest` is the topology's `Ast.fnEvidenceDigest`, computed
 /// once by whoever built the topology.
 pub const EvidenceView = struct {
-    nodes: []const check.ConstStore.ConstFnEvidence,
+    entries: check.ConstStore.ConstFnEvidenceVector,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
     digest: Ast.EvidenceDigest,
@@ -124,11 +124,11 @@ pub const EvidenceView = struct {
     program_span: ?ProgramEvidenceSpan = null,
 
     pub fn init(
-        nodes: []const check.ConstStore.ConstFnEvidence,
+        entries: check.ConstStore.ConstFnEvidenceVector,
         frames: []const check.ConstStore.ConstFnEvidenceFrame,
         head: ?u32,
     ) EvidenceView {
-        return .{ .nodes = nodes, .frames = frames, .head = head, .digest = Ast.fnEvidenceDigest(nodes, frames, head) };
+        return .{ .entries = entries, .frames = frames, .head = head, .digest = Ast.fnEvidenceDigest(entries, frames, head) };
     }
 };
 
@@ -144,16 +144,16 @@ pub const ProgramEvidenceSpan = struct {
 };
 
 const OwnedEvidence = struct {
-    nodes: []check.ConstStore.ConstFnEvidence,
+    entries: check.ConstStore.ConstFnEvidenceVector,
     frames: []check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
     digest: Ast.EvidenceDigest,
 
     fn init(allocator: std.mem.Allocator, source: EvidenceView) std.mem.Allocator.Error!OwnedEvidence {
-        const nodes = try allocator.dupe(check.ConstStore.ConstFnEvidence, source.nodes);
-        errdefer allocator.free(nodes);
+        const entries = try check.ConstStore.dupeVector(allocator, source.entries);
+        errdefer check.ConstStore.freeVector(allocator, entries);
         return .{
-            .nodes = nodes,
+            .entries = entries,
             .frames = try allocator.dupe(check.ConstStore.ConstFnEvidenceFrame, source.frames),
             .head = source.head,
             .digest = source.digest,
@@ -161,18 +161,18 @@ const OwnedEvidence = struct {
     }
 
     fn deinit(self: OwnedEvidence, allocator: std.mem.Allocator) void {
-        allocator.free(self.nodes);
+        check.ConstStore.freeVector(allocator, self.entries);
         allocator.free(self.frames);
     }
 
     fn view(self: OwnedEvidence) EvidenceView {
-        return .{ .nodes = self.nodes, .frames = self.frames, .head = self.head, .digest = self.digest };
+        return .{ .entries = self.entries, .frames = self.frames, .head = self.head, .digest = self.digest };
     }
 };
 
 fn evidenceEql(left: EvidenceView, right: EvidenceView) bool {
     if (!std.meta.eql(left.digest, right.digest)) return false;
-    return Ast.fnEvidenceEql(left.nodes, left.frames, left.head, right.nodes, right.frames, right.head);
+    return Ast.fnEvidenceEql(left.entries, left.frames, left.head, right.entries, right.frames, right.head);
 }
 
 /// The request's identity digest must be its evidence topology's digest.
@@ -180,7 +180,7 @@ fn evidenceEql(left: EvidenceView, right: EvidenceView) bool {
 fn evidenceDigestMatches(identity: Ast.SpecIdentity, evidence: EvidenceView) bool {
     if (!std.meta.eql(identity.evidence_digest, evidence.digest)) return false;
     if (builtin.mode == .debug) {
-        return std.meta.eql(evidence.digest, Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head));
+        return std.meta.eql(evidence.digest, Ast.fnEvidenceDigest(evidence.entries, evidence.frames, evidence.head));
     }
     return true;
 }
@@ -821,19 +821,19 @@ test "monotype spec builder shares equal nominal requests while preserving check
     const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const name = try name_store.internTypeName("Value");
     const first = try types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module, .type_name = name, .source_decl = 7 },
         .kind = .nominal,
         .args = Type.Span.empty(),
     } });
     const second = try types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
         .def = .{ .module = module, .type_name = name, .source_decl = 7 },
         .kind = .nominal,
         .args = Type.Span.empty(),
     } });
     const distinct = try types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)), .ty_module = .{} },
         .def = .{ .module = module, .type_name = name, .source_decl = 8 },
         .kind = .nominal,
         .args = Type.Span.empty(),
@@ -1157,14 +1157,14 @@ test "monotype spec builder uses exact type equality after digest match" {
     const second_name = try name_store.internTypeName("Second");
 
     const first_ty = try type_store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .args = Type.Span.empty(),
         .backing = null,
     } });
     const second_ty = try type_store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = second_name },
         .kind = .alias,
         .args = Type.Span.empty(),
@@ -1333,7 +1333,7 @@ fn testSpecIdentityWithModuleAndEvidence(
             .template = 1,
         } },
         .method_scope = .{},
-        .evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head),
+        .evidence_digest = Ast.fnEvidenceDigest(evidence.entries, evidence.frames, evidence.head),
         .codec_contract_digest = .{},
         .codec_contract = null,
         .request_fn_ty_digest = request_digest,
@@ -1346,7 +1346,7 @@ const test_evidence_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
 };
 
 fn testEvidenceView() EvidenceView {
-    return EvidenceView.init(&.{}, &test_evidence_frames, 0);
+    return EvidenceView.init(.{}, &test_evidence_frames, 0);
 }
 
 /// Distinct one-node evidence topologies: scheme parameter `index` supplies
@@ -1358,5 +1358,5 @@ const scheme_evidence_nodes = [_]check.ConstStore.ConstFnEvidence{
 };
 
 fn schemeEvidenceView(comptime index: usize) EvidenceView {
-    return EvidenceView.init(scheme_evidence_nodes[index .. index + 1], &test_evidence_frames, 0);
+    return EvidenceView.init(.{ .nodes = scheme_evidence_nodes[index .. index + 1] }, &test_evidence_frames, 0);
 }

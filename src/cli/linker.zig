@@ -15,6 +15,7 @@ const DwarfSplice = @import("macho/DwarfSplice.zig");
 const backend = @import("backend");
 const roc_target = @import("roc_target");
 const shim_symbols = @import("builtins").shim_symbols;
+const lir = @import("lir");
 const RocTarget = roc_target.RocTarget;
 const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
@@ -286,10 +287,81 @@ fn appendSharedLibraryExports(
 /// Errors that can occur during linking
 pub const LinkError = error{
     LinkFailed,
+    /// The link needed symbols in the compiler's own namespace that nothing
+    /// defined: a compiler bug, recorded as a CLI problem by `link` itself.
+    UndefinedCompilerSymbols,
     OutOfMemory,
     InvalidArguments,
     LLVMNotAvailable,
 };
+
+/// The text LLD's frontends put before the name of a symbol nothing defines.
+const undefined_symbol_marker = "undefined symbol: ";
+
+/// The names in the compiler's symbol namespace that `diagnostics` reports as
+/// undefined, in first-mention order without repeats. Mach-O names carry the
+/// platform's leading underscore, which is stripped so the report names the
+/// symbol the compiler spelled.
+fn undefinedCompilerSymbols(arena: std.mem.Allocator, diagnostics: []const u8) std.mem.Allocator.Error![]const []const u8 {
+    var symbols = std.array_list.Managed([]const u8).init(arena);
+    var lines = std.mem.splitScalar(u8, diagnostics, '\n');
+    while (lines.next()) |line| {
+        const marker_at = std.mem.find(u8, line, undefined_symbol_marker) orelse continue;
+        const rest = line[marker_at + undefined_symbol_marker.len ..];
+        const end = std.mem.findAny(u8, rest, " \t\r") orelse rest.len;
+        var name = rest[0..end];
+        if (std.mem.startsWith(u8, name, "_")) name = name[1..];
+        if (!std.mem.startsWith(u8, name, lir.Program.compiler_symbol_namespace)) continue;
+        var seen = false;
+        for (symbols.items) |existing| {
+            if (std.mem.eql(u8, existing, name)) seen = true;
+        }
+        if (!seen) try symbols.append(name);
+    }
+    return symbols.items;
+}
+
+test "undefined compiler symbols are read from every LLD frontend's wording and host symbols are not" {
+    const diagnostics =
+        "ld.lld: error: undefined symbol: roc__sv0a1b\n" ++
+        ">>> referenced by roc_app_x64musl.o:(roc__sv0a1b__address)\n" ++
+        "ld64.lld: error: undefined symbol: _roc__p9f8e\n" ++
+        ">>> referenced by _main\n" ++
+        "lld-link: error: undefined symbol: roc__h77\n" ++
+        "wasm-ld: error: roc_app.o: undefined symbol: roc__sv0a1b\n" ++
+        "ld.lld: error: undefined symbol: roc_alloc\n" ++
+        "ld.lld: error: undefined symbol: _roc_fx_stdout_line\n" ++
+        "ld.lld: warning: something else\n";
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const symbols = try undefinedCompilerSymbols(arena.allocator(), diagnostics);
+    try std.testing.expectEqual(@as(usize, 3), symbols.len);
+    try std.testing.expectEqualStrings("roc__sv0a1b", symbols[0]);
+    try std.testing.expectEqualStrings("roc__p9f8e", symbols[1]);
+    try std.testing.expectEqualStrings("roc__h77", symbols[2]);
+    try std.testing.expectEqual(@as(usize, 0), (try undefinedCompilerSymbols(arena.allocator(), "ld.lld: error: cannot open crt1.o\n")).len);
+}
+
+/// Prints the linker's diagnostics and classifies a failed link.
+///
+/// A compiler bug is normally caught by a debug-only assertion: release builds
+/// trust the compiler's invariants rather than pay to re-check them. An
+/// undefined symbol in the compiler's own namespace is such a bug too (nothing
+/// but the compiler defines a `roc__` name), but the linker has already done
+/// the work of finding and describing it, so one scan of its diagnostics per
+/// link is the entire cost of telling the user whose bug this is and where to
+/// report it. That is worth paying in release builds.
+fn finishLldLink(ctx: *CliCtx, target_format: TargetFormat, outcome: embedded_lld.Outcome) LinkError!void {
+    ctx.io.stderr().writeAll(outcome.diagnostics) catch {};
+    if (outcome.succeeded) return;
+    const symbols = try undefinedCompilerSymbols(ctx.arena, outcome.diagnostics);
+    if (symbols.len == 0) return LinkError.LinkFailed;
+    ctx.addProblemIgnoreError(.{ .undefined_compiler_symbols = .{
+        .symbols = symbols,
+        .target_format = @tagName(target_format),
+    } });
+    return LinkError.UndefinedCompilerSymbols;
+}
 
 const PatchMachoStackSizeError = std.Io.File.OpenError || std.Io.File.ReadPositionalError || std.Io.File.WritePositionalError || error{
     NotMacho64,
@@ -909,13 +981,12 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
         std.log.debug("  {s}", .{arg});
     }
 
-    embedded_lld.link(ctx.arena, config.target_format, args.items, .{
+    const outcome = try embedded_lld.link(ctx.gpa, config.target_format, args.items, .{
         .can_exit_early = config.can_exit_early,
         .disable_output = config.disable_output,
-    }) catch |err| switch (err) {
-        error.OutOfMemory => return LinkError.OutOfMemory,
-        error.LinkFailed => return LinkError.LinkFailed,
-    };
+    });
+    defer ctx.gpa.free(outcome.diagnostics);
+    try finishLldLink(ctx, config.target_format, outcome);
 
     if (config.target_format == .wasm and config.wasm_optimize != .none and !config.disable_output) {
         optimizeWasmOutput(ctx, config) catch |err| {
@@ -967,13 +1038,12 @@ pub fn linkWasmObjectsRelocatable(
     try args.append(output_path);
     try args.appendSlice(input_paths);
 
-    embedded_lld.link(ctx.arena, .wasm, args.items, .{
+    const outcome = try embedded_lld.link(ctx.gpa, .wasm, args.items, .{
         .can_exit_early = false,
         .disable_output = false,
-    }) catch |err| switch (err) {
-        error.OutOfMemory => return LinkError.OutOfMemory,
-        error.LinkFailed => return LinkError.LinkFailed,
-    };
+    });
+    defer ctx.gpa.free(outcome.diagnostics);
+    try finishLldLink(ctx, .wasm, outcome);
 }
 
 fn binaryenStatusName(status: c_int) []const u8 {

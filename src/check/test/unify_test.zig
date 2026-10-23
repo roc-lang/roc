@@ -2423,6 +2423,55 @@ test "unify - literal static dispatch representative survives repeated merges" {
     try std.testing.expect(retained[0].origin.literalKind() == .quote);
 }
 
+test "unify - numeral literal with unchanged facts keeps the receiver's requirement list" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+    const types = &env.module_env.types;
+
+    const from_numeral = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("from_numeral"));
+    const is_eq = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("is_eq"));
+    const argument = try types.fresh();
+    const result_var = try types.fresh();
+    const facts = types_mod.NumeralInfo.testOnlyInt(0, false, base.Region.zero());
+
+    const retained_numeral = types_mod.StaticDispatchConstraint{
+        .fn_name = from_numeral,
+        .fn_var = try types.freshFromContent(try env.mkFuncPure(&.{argument}, result_var)),
+        .origin = .{ .from_literal = .numeral },
+        .numeral = try types.appendNumeralInfo(facts),
+    };
+    const comparison = types_mod.StaticDispatchConstraint{
+        .fn_name = is_eq,
+        .fn_var = try types.freshFromContent(try env.mkFuncPure(&.{ argument, argument }, result_var)),
+        .origin = .{ .desugared_binop = .{ .negated = false } },
+    };
+    const later_numeral = types_mod.StaticDispatchConstraint{
+        .fn_name = from_numeral,
+        .fn_var = try types.freshFromContent(try env.mkFuncPure(&.{argument}, result_var)),
+        .origin = .{ .from_literal = .numeral },
+        .numeral = try types.appendNumeralInfo(facts),
+    };
+
+    const receiver_range = try types.appendStaticDispatchConstraints(&.{ retained_numeral, comparison });
+    const receiver = try types.freshFromContent(.{ .flex = .{ .name = null, .constraints = receiver_range } });
+    const literal = try types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = try types.appendStaticDispatchConstraints(&.{later_numeral}),
+    } });
+
+    const recorded_before = types.numeral_infos.len();
+    try std.testing.expectEqual(.unified, try env.unify(receiver, literal));
+
+    // Folding in a literal whose facts change nothing reuses the receiver's
+    // list as it is: no copy of the list and no newly recorded facts, so a
+    // receiver compared against many equal literals stays linear.
+    const resolved = types.resolveVar(receiver);
+    try std.testing.expect(resolved.desc.content == .flex);
+    try std.testing.expectEqual(receiver_range, resolved.desc.content.flex.constraints);
+    try std.testing.expectEqual(recorded_before, types.numeral_infos.len());
+}
+
 test "unify - operator and dot call requirements stay separate until generalization" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);

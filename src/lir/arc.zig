@@ -502,8 +502,8 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         .layouts = layouts,
         .options = options,
     };
-    const boxy_rc_descs = try computeBoxyRcDescs(store);
-    defer store.allocator.free(boxy_rc_descs);
+    const boxy_rc_descs = try store.snapshotLocalDescs(store.allocator);
+    defer boxy_rc_descs.deinit(store.allocator);
     var boxy_desc_users = try BoxyDescUsers.init(store.allocator, boxy_rc_descs);
     defer boxy_desc_users.deinit(store.allocator);
 
@@ -571,7 +571,9 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         source.* = .{
             .template = &inserter,
             .proc = proc,
-            .body = spec.body,
+            // ARC neither prepares nor emits a static initializer, and
+            // nothing calls one, so no variant inherits its body.
+            .body = spec.arcBody(),
             .frame = spec.frame_locals,
         };
     }
@@ -619,6 +621,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
                 break :blk queued;
             } else break;
             const spec = store.getProcSpecPtr(job.variant);
+            if (@import("builtin").mode == .debug) requireHoleParamsBorrowed(store, layouts, spec.args, job.sig);
             spec.rc_borrowed_params = job.sig.borrowed_params;
             spec.rc_ret_borrowed = job.sig.ret_mode == .borrowed;
             spec.rc_ret_lenders = job.sig.ret_lenders;
@@ -687,6 +690,18 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
 /// `callArgOwnership` consults before upgrading a borrowed position or
 /// seeding an owned one, and the outcome spans it can select). A body-less
 /// proc keeps the facts its cache entry supplied.
+/// A demand-shaped procedure never consumes a value holding a hole: its
+/// body demands nothing of the hole's type, so its signature borrows every
+/// such parameter (design.md "Specialization By Demand").
+fn requireHoleParamsBorrowed(store: *const LirStore, layouts: *const layout_mod.Store, args: LIR.LocalSpan, sig: arc_sig.RcSig) void {
+    const params = store.getLocalSpan(args);
+    for (0..params.len) |index| {
+        const param = GuardedList.at(params, index);
+        if (!layouts.layoutHoldsHole(store.getLocal(param).layout_idx)) continue;
+        if (sig.paramMode(index) != .borrowed) arcInvariant("a parameter holding a demand hole was not borrowed");
+    }
+}
+
 fn recordObjectCacheFacts(
     store: *LirStore,
     solution: *const arc_solve.Solution,
@@ -706,7 +721,7 @@ fn recordObjectCacheFacts(
     try recordTailGroups(store, solution);
     for (0..proc_count) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        if (store.getProcSpecImmediate(proc).body == null) continue;
+        if (store.getProcSpecImmediate(proc).arcBody() == null) continue;
         const sig = solution.sigOf(proc);
         const rows = solution.sigTable().retConditionsOf(sig);
         const words = try store.allocator.alloc(u32, rows.len);
@@ -1121,16 +1136,6 @@ const EmissionOwner = struct {
     }
 };
 
-fn computeBoxyRcDescs(store: *const LirStore) ResourceError![]?LIR.BoxyDescRef {
-    const local_count = store.localCount();
-    const descs = try store.allocator.alloc(?LIR.BoxyDescRef, local_count);
-    for (0..local_count) |index| {
-        const local_id: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        descs[index] = store.getLocal(local_id).boxy_desc;
-    }
-    return descs;
-}
-
 /// The locals whose Boxy descriptor is each descriptor local, in ascending
 /// local order, so a descriptor update visits only the values it invalidates.
 const BoxyDescUsers = struct {
@@ -1138,13 +1143,15 @@ const BoxyDescUsers = struct {
     starts: []u32 = &.{},
     locals: []LIR.LocalId = &.{},
 
-    fn init(allocator: Allocator, descs: []const ?LIR.BoxyDescRef) Allocator.Error!BoxyDescUsers {
-        const starts = try allocator.alloc(u32, descs.len + 1);
+    fn init(allocator: Allocator, descs: LirStore.LocalDescSnapshot) Allocator.Error!BoxyDescUsers {
+        if (descs.isEmpty()) return .{};
+        const local_count = descs.localCount();
+        const starts = try allocator.alloc(u32, local_count + 1);
         errdefer allocator.free(starts);
         @memset(starts, 0);
         var user_count: usize = 0;
-        for (descs) |maybe_desc| {
-            const desc = maybe_desc orelse continue;
+        for (0..local_count) |index| {
+            const desc = descs.get(@fromBackingInt(@intCast(index))) orelse continue;
             const desc_local = desc.localOrNull() orelse continue;
             starts[@backingInt(desc_local) + 1] += 1;
             user_count += 1;
@@ -1152,10 +1159,10 @@ const BoxyDescUsers = struct {
         for (1..starts.len) |index| starts[index] += starts[index - 1];
         const locals = try allocator.alloc(LIR.LocalId, user_count);
         errdefer allocator.free(locals);
-        const cursors = try allocator.dupe(u32, starts[0..descs.len]);
+        const cursors = try allocator.dupe(u32, starts[0..local_count]);
         defer allocator.free(cursors);
-        for (descs, 0..) |maybe_desc, index| {
-            const desc = maybe_desc orelse continue;
+        for (0..local_count) |index| {
+            const desc = descs.get(@fromBackingInt(@intCast(index))) orelse continue;
             const desc_local = desc.localOrNull() orelse continue;
             const cursor = &cursors[@backingInt(desc_local)];
             locals[cursor.*] = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
@@ -1176,10 +1183,8 @@ const BoxyDescUsers = struct {
     }
 };
 
-fn boxyDescForLocal(descs: []const ?LIR.BoxyDescRef, local: LIR.LocalId) ?LIR.BoxyDescRef {
-    const index = @backingInt(local);
-    if (index >= descs.len) return null;
-    return descs[index];
+fn boxyDescForLocal(descs: LirStore.LocalDescSnapshot, local: LIR.LocalId) ?LIR.BoxyDescRef {
+    return descs.get(local);
 }
 
 /// Emission shares the immutable solver table unless a capture view must be
@@ -1318,6 +1323,7 @@ const VariantTable = struct {
         const callee = request.source;
         const source_spec = store.getProcSpec(callee);
         if (source_spec.external) arcInvariant("ARC demanded a variant of an object-cache procedure, whose signature is fixed");
+        if (source_spec.is_static_initializer) arcInvariant("ARC demanded a variant of a static initializer, which nothing calls");
         const variant = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = variantIdentity(self.sig_table, source_spec.identity, request.demanded),
@@ -1849,7 +1855,7 @@ const Inserter = struct {
     layouts: *const layout_mod.Store,
     options: InsertOptions,
     local_contains_refcounted: []const bool = &.{},
-    boxy_rc_descs: []const ?LIR.BoxyDescRef = &.{},
+    boxy_rc_descs: LirStore.LocalDescSnapshot = .{},
     boxy_desc_users: BoxyDescUsers = .{},
     solution: *const arc_solve.Solution = undefined,
     /// Field takes solved against the ownership-neutral bodies; consulted by
@@ -2552,7 +2558,6 @@ const Inserter = struct {
             .assign_boxy_tag,
             .debug,
             .expect,
-            .comptime_branch_taken,
             => try self.addWithNext(stmt, next, origin),
             .decref_if_initialized => |rc_stmt| blk_rc: {
                 const rc = self.store.stmtRow(rc_stmt.data);
@@ -3336,7 +3341,6 @@ const Inserter = struct {
                     try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, null, retain_value);
                     return;
                 },
-                .comptime_branch_taken => _ = try self.nextArcPlanStep(segment.plan_index, segment.cursor),
             }
             // Every statement that does not end the segment continues on its
             // straight-line successor.
@@ -5792,7 +5796,6 @@ const Inserter = struct {
             .init_uninitialized,
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
-            .comptime_branch_taken,
             .join,
             .jump,
             .runtime_error,
@@ -5834,7 +5837,6 @@ const Inserter = struct {
             .set_local,
             .debug,
             .expect,
-            .comptime_branch_taken,
             .incref,
             => |payload| try out.append(gpa, payload.next),
             .switch_stmt => |switch_stmt| {
@@ -6905,7 +6907,6 @@ const Inserter = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -6960,7 +6961,6 @@ const Inserter = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -7137,7 +7137,6 @@ const Inserter = struct {
                 .init_uninitialized,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .join,
                 .jump,
                 => {},
@@ -7678,12 +7677,7 @@ const Inserter = struct {
     }
 
     fn rcHelperForLocal(self: *const Inserter, op: layout_mod.RcOp, local: LIR.LocalId) LIR.RcHelper {
-        const local_index = @backingInt(local);
-        if (local_index < self.boxy_rc_descs.len) {
-            if (self.boxy_rc_descs[local_index]) |desc| {
-                return .{ .boxy = desc };
-            }
-        }
+        if (self.boxy_rc_descs.get(local)) |desc| return .{ .boxy = desc };
 
         const local_layout = self.store.getLocal(local).layout_idx;
         const helper = self.rcHelperForLayout(op, local_layout);
@@ -7721,6 +7715,10 @@ const Inserter = struct {
     }
 
     fn rcHelperForLayout(self: *const Inserter, root_op: layout_mod.RcOp, root_layout: layout_mod.Idx) layout_mod.RcHelper {
+        // A demand-shaped procedure borrows every value holding a hole, so
+        // no refcount operation ever reaches one (design.md "Specialization
+        // By Demand").
+        if (self.layouts.layoutHoldsHole(root_layout)) arcInvariant("ARC requested a refcount operation on a value holding a demand hole");
         var op = root_op;
         var layout_idx = root_layout;
         while (true) {
@@ -8490,7 +8488,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -8562,7 +8559,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .switch_stmt,
                 .switch_initialized_payload,
                 .str_match,
@@ -8678,7 +8674,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -8746,7 +8741,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -8821,7 +8815,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .switch_stmt,
                 .switch_initialized_payload,
                 .str_match,
@@ -8875,7 +8868,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -8940,7 +8932,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .free,
@@ -8987,7 +8978,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -9048,7 +9038,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref_if_initialized,
                 .free,
@@ -9099,7 +9088,6 @@ const ArcTest = struct {
             .set_local,
             .debug,
             .expect,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -9171,7 +9159,7 @@ test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
     const capture_ptr = try f.local(.opaque_ptr);
     const capture_view = try f.local(capture_layout);
     const captured_value = try f.local(erased_box);
-    f.store.setLocalBoxyDesc(captured_value, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
+    try f.store.setLocalBoxyDesc(captured_value, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
 
     const result = try f.local(.i64);
     const ret = try f.ret(result);
@@ -9301,7 +9289,6 @@ test "ARC preserves erased callable repack reuse" {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
@@ -9456,7 +9443,6 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
@@ -9543,7 +9529,6 @@ test "ARC transfers erased call ownership from an explicit outer source" {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
@@ -9655,7 +9640,6 @@ test "ARC retains an erased call reuse source that is read after the call" {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
@@ -9749,7 +9733,6 @@ test "ARC retains an erased callable whose repack input is used later" {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
@@ -9856,7 +9839,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
     }, .none);
 
     const local_contains_refcounted = [_]bool{ true, false, true };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &local_contains_refcounted, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &local_contains_refcounted, .{}, &.{}, true);
     defer solution.deinit();
     var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
     defer global_local_index.deinit();
@@ -9931,7 +9914,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
     }, .none);
 
     const local_contains_refcounted = [_]bool{ true, true, true };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &local_contains_refcounted, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &local_contains_refcounted, .{}, &.{}, true);
     defer solution.deinit();
     try testing.expectEqual(leader, solution.leaderOf(local_alias));
 
@@ -9981,7 +9964,7 @@ test "ARC lender-death query sees a live solver-only borrow anchor" {
     const proc = try f.addProc(&.{anchor}, body, .i64);
 
     const solver_rc = [_]bool{ true, true, false };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &solver_rc, &.{}, &.{proc}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &solver_rc, .{}, &.{proc}, true);
     defer solution.deinit();
     try testing.expectEqual(anchor, solution.leaderOf(concrete));
 
@@ -10031,7 +10014,7 @@ test "ARC prepared source liveness survives transient domains and frozen reuse" 
     const body = try f.ret(local);
     const proc = try f.addProc(&.{local}, body, .str);
     const rc = [_]bool{true};
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{proc}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{proc}, true);
     defer solution.deinit();
     var durable = collections.SingleThreadArena.init(testing.allocator);
     defer durable.deinit();
@@ -10088,7 +10071,7 @@ test "ARC proc domain sparse high global IDs retain only a tiny frame" {
     defer testing.allocator.free(rc);
     @memset(rc, false);
     rc[@backingInt(local)] = true;
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{proc}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{proc}, true);
     defer solution.deinit();
     var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
@@ -10128,7 +10111,7 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
     const proc = try f.addProc(&.{}, body, .i64);
     var rc = @as([(locals.len + 1)]bool, @splat(true));
     rc[locals.len] = false;
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
     defer solution.deinit();
     for (locals, 0..) |local, i| try testing.expectEqual(locals[i % 3], solution.leaderOf(local));
     var indices = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
@@ -11913,7 +11896,7 @@ test "RC loop payload view preserves field units of a tag union defined outside 
 
     const rc = try arc_solve.computeLocalContainsRefcounted(testing.allocator, &f.store, &f.layouts);
     defer testing.allocator.free(rc);
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
     defer solution.deinit();
     var dismantles = try arc_dismantle.compute(testing.allocator, &f.store, &f.layouts, rc, &solution, .{});
     defer dismantles.deinit();
@@ -11976,7 +11959,7 @@ test "RC loop payload view takes fresh field units of a tag union rebuilt inside
 
     const rc = try arc_solve.computeLocalContainsRefcounted(testing.allocator, &f.store, &f.layouts);
     defer testing.allocator.free(rc);
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
     defer solution.deinit();
     var dismantles = try arc_dismantle.compute(testing.allocator, &f.store, &f.layouts, rc, &solution, .{});
     defer dismantles.deinit();
@@ -14477,7 +14460,6 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
@@ -14820,7 +14802,6 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .decref_if_initialized,
             .free,
             .switch_stmt,
@@ -14870,7 +14851,6 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .decref_if_initialized,
             .free,
             .switch_stmt,
@@ -15385,7 +15365,7 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
             break;
         }
         cursor = switch (stmt) {
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .comptime_branch_taken => |linear| linear.next,
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |linear| linear.next,
             .init_uninitialized,
             .assign_call,
             .assign_call_erased,
@@ -15580,7 +15560,7 @@ test "RC outcome restitution spends retained arguments through aliases only on s
             is_rc.* = f.layouts.layoutContainsRefcounted(f.layouts.getLayout(local.layout_idx));
         }
         {
-            var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{caller}, true);
+            var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{caller}, true);
             defer solution.deinit();
             const outcomes = solution.availableOutcomeSpanOf(callee);
             try testing.expectEqual(@as(u32, 2), outcomes.len);
@@ -15770,7 +15750,7 @@ test "RC outcome restitution releases every returned argument before a nested jo
         }
         cursor = switch (stmt) {
             .join => |join| join.remainder,
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .comptime_branch_taken => |linear| linear.next,
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |linear| linear.next,
             .init_uninitialized,
             .assign_call,
             .assign_call_erased,
@@ -15816,7 +15796,7 @@ test "RC outcome restitution releases every returned argument before a nested jo
         }
         cursor = switch (stmt) {
             .join => |join| join.remainder,
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .comptime_branch_taken => |linear| linear.next,
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |linear| linear.next,
             .init_uninitialized,
             .assign_call,
             .assign_call_erased,
@@ -15890,7 +15870,7 @@ test "ARC outcome capability rejects a stale discriminant after return-local reb
         &f.store,
         &f.layouts,
         &rc_local,
-        &.{},
+        .{},
         &.{},
         true,
     );
@@ -15963,7 +15943,7 @@ test "ARC outcome capability rejects stale witnesses across set-local and join r
         &f.store,
         &f.layouts,
         rc_local,
-        &.{},
+        .{},
         &.{},
         true,
     );
@@ -16313,7 +16293,7 @@ fn outcomeScratchWork(proc_count: usize) (Allocator.Error || error{TestExpectedE
     defer testing.allocator.free(rc);
     for (rc, 0..) |*value, i| value.* = i % 4 != 1;
     const before = arc_solve.outcome_scratch_entries;
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
     defer solution.deinit();
     for (0..proc_count) |i| {
         const span = solution.availableOutcomeSpanOf(@fromBackingInt(@intCast(@as(u32, @intCast(i)))));
@@ -16841,7 +16821,7 @@ test "RC field take restores the exact aggregate field on checked failure withou
                 break;
             }
             cursor = switch (stmt) {
-                inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .comptime_branch_taken => |linear| linear.next,
+                inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |linear| linear.next,
                 .init_uninitialized,
                 .assign_call,
                 .assign_call_erased,
@@ -17017,7 +16997,7 @@ test "RC specialization: caller body survives variant proc append" {
                 }
                 cursor = assign.next;
             },
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free, .comptime_branch_taken => |stmt| {
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |stmt| {
                 cursor = stmt.next;
             },
             .init_uninitialized,
@@ -17680,7 +17660,7 @@ test "RC recursive tail carrier stops at an owned alias" {
     const own = try f.assignRefLocal(owned_alias, original, store);
     f.store.setProcSpecBody(proc, try f.assignStr(original, "still live", own));
     const rc = [_]bool{ true, true, true, true, true, true, false };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
     defer solution.deinit();
     try testing.expect(!solution.isBorrowed(owned_alias));
     try testing.expect(solution.isBorrowed(borrowed_alias));
@@ -17717,7 +17697,7 @@ test "RC borrowed alias transfers its nearest owned carrier" {
     const body = try f.assignStr(original, "still live", own);
     _ = try f.addProc(&.{}, body, .str);
     const rc = [_]bool{ true, true, true, true, true, true, false };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
     defer solution.deinit();
     try testing.expect(!solution.isBorrowed(owned_alias));
     try testing.expect(solution.isBorrowed(borrowed_alias));
@@ -17797,7 +17777,7 @@ test "RC releases descriptor-backed old set_local value before immutable replace
     const desc = try f.local(.opaque_ptr);
     const current = try f.local(.str);
     const replacement = try f.local(.str);
-    f.store.setLocalBoxyDesc(current, .{ .local = desc });
+    try f.store.setLocalBoxyDesc(current, .{ .local = desc });
 
     const ret = try f.ret(current);
     const set_current = try f.setLocal(current, replacement, .replace_existing, ret);
@@ -17824,7 +17804,7 @@ test "RC descriptor updates scan only the current proc frame" {
     const desc = try f.local(.opaque_ptr);
     const current = try f.local(.str);
     const result = try f.local(.i64);
-    f.store.setLocalBoxyDesc(current, .{ .local = desc });
+    try f.store.setLocalBoxyDesc(current, .{ .local = desc });
 
     const unrelated_ret = try f.ret(unrelated);
     const unrelated_body = try f.assignStr(unrelated, "other proc", unrelated_ret);
@@ -17876,8 +17856,8 @@ test "RC descriptor snapshot owns an alias across source descriptor reuse" {
     const source = try f.local(.str);
     const alias = try f.local(.str);
     const result = try f.local(.i64);
-    f.store.setLocalBoxyDesc(source, .{ .local = source_desc });
-    f.store.setLocalBoxyDesc(alias, .{ .local = alias_desc });
+    try f.store.setLocalBoxyDesc(source, .{ .local = source_desc });
+    try f.store.setLocalBoxyDesc(alias, .{ .local = alias_desc });
 
     const ret = try f.ret(result);
     const assign_result = try f.assignI64(result, 1, ret);
@@ -17914,8 +17894,8 @@ test "RC preserves a surviving source before a consuming boxy adapter" {
     const adapted = try f.local(f.list_i64);
     const result = try f.local(.i64);
     const desc = LIR.BoxyDescRef{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) };
-    f.store.setLocalBoxyDesc(source, desc);
-    f.store.setLocalBoxyDesc(adapted, desc);
+    try f.store.setLocalBoxyDesc(source, desc);
+    try f.store.setLocalBoxyDesc(adapted, desc);
 
     const ret = try f.ret(result);
     const assign_result = try f.assignI64(result, 1, ret);
@@ -17984,8 +17964,8 @@ test "RC does not treat a descriptor-bearing scalar dictionary result as refcoun
     const desc = LIR.BoxyDescRef{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) };
     const result = try f.local(.u32);
     const adapted = try f.local(.u32);
-    f.store.setLocalBoxyDesc(result, desc);
-    f.store.setLocalBoxyDesc(adapted, desc);
+    try f.store.setLocalBoxyDesc(result, desc);
+    try f.store.setLocalBoxyDesc(adapted, desc);
 
     const ret = try f.ret(result);
     const adapt = try f.store.addCFStmt(.{ .assign_boxy_adapt = .{
@@ -18082,6 +18062,58 @@ test "RC alias of a parameter consumed in the body solves the parameter owned" {
     try f.expectRc(list, 0, 0, 0);
     try f.expectRc(appended, 0, 0, 0);
     try f.expectRc(call_result, 0, 0, 0);
+}
+
+test "RC pinned signature borrows a parameter holding a demand hole" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const hole = try f.layouts.insertLayout(layout_mod.Layout.hole());
+    const list_hole = try f.layouts.insertList(hole);
+
+    // A demand-shaped procedure whose list parameter holds a hole: its body
+    // reads the list header and nothing else. It carries a code key, so ARC
+    // pins it to the signature its types determine instead of solving it.
+    const param = try f.local(list_hole);
+    const view = try f.local(list_hole);
+    const len = try f.local(.u64);
+    const callee_ret = try f.ret(len);
+    const read_len = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = len,
+        .op = .list_len,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.RcEffect.none()),
+        .args = try f.span(&.{view}),
+        .next = callee_ret,
+    } }, .test_fixture);
+    const view_assign = try f.assignRefLocal(view, param, read_len);
+    const callee = try f.addProc(&.{param}, view_assign, .u64);
+    f.store.getProcSpecPtr(callee).code_key = @splat(1);
+
+    // The caller passes a dying list of strings where the hole is expected.
+    const list = try f.local(f.list_str);
+    const result = try f.local(.u64);
+    const caller_ret = try f.ret(result);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = callee,
+        .args = try f.span(&.{list}),
+        .next = caller_ret,
+    } }, .test_fixture);
+    const caller_body = try f.assignList(list, &.{}, call);
+    _ = try f.addProc(&.{}, caller_body, .u64);
+
+    try f.run();
+
+    // The pinned signature borrows the hole-holding position by its type, so
+    // the callee touches no refcount and the caller releases its own list
+    // after the call.
+    const pinned: arc_sig.RcSig = .{
+        .borrowed_params = @intCast(f.store.getProcSpecImmediate(callee).rc_borrowed_params),
+    };
+    try testing.expectEqual(arc_sig.Mode.borrowed, pinned.paramMode(0));
+    try f.expectRc(param, 0, 0, 0);
+    try f.expectRc(view, 0, 0, 0);
+    try f.expectRc(list, 0, 1, 0);
 }
 
 test "ARC ownership iteration skips absent resources and preserves release order" {

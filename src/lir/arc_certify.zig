@@ -264,7 +264,7 @@ fn certifyStoreWithWorkStats(
     for (0..store.procSpecCount()) |index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const proc = store.getProcSpecImmediate(proc_id);
-        const body = proc.body orelse continue;
+        const body = proc.arcBody() orelse continue;
         try certifier.certifyProc(proc_id, proc.*, body);
     }
 }
@@ -477,7 +477,7 @@ fn certifyUniqueArgs(
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         const proc = store.getProcSpec(proc_id);
-        const body = proc.body orelse continue;
+        const body = proc.arcBody() orelse continue;
         const sig = sigs.get(proc_id);
 
         for (dense_locals.items) |local| local_to_dense[@backingInt(local)] = no_dense;
@@ -888,7 +888,6 @@ fn writeFailureContext(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .crash,
             => {},
         }
@@ -2547,6 +2546,7 @@ const Certifier = struct {
                 .closure,
                 .erased_callable,
                 .zst,
+                .hole,
                 .ptr,
                 => break :walk false,
             };
@@ -2703,6 +2703,7 @@ const Certifier = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .ptr,
             => return null,
         };
@@ -4024,7 +4025,7 @@ const Certifier = struct {
                 },
                 .ret => |ret_stmt| try self.noteProcLocal(ret_stmt.value),
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteProcLocal(message),
-                .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken => {},
+                .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
             }
             // Every other statement's successors stay in its region.
             successors.clearRetainingCapacity();
@@ -4112,7 +4113,6 @@ const Certifier = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -4305,7 +4305,6 @@ const Certifier = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -4362,7 +4361,6 @@ const Certifier = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -5812,9 +5810,6 @@ const Certifier = struct {
                     _ = try self.requireLive(&state, expect_stmt.condition);
                     cursor = expect_stmt.next;
                 },
-                .comptime_branch_taken => |taken| {
-                    cursor = taken.next;
-                },
                 .incref => |rc| {
                     if (!self.isRc(rc.value)) {
                         return self.fail("incref of non-refcounted local {d}", .{@backingInt(rc.value)});
@@ -6243,6 +6238,7 @@ const Certifier = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .ptr,
             => false,
         };
@@ -7590,7 +7586,7 @@ test "certify accepts a retained Boxy field borrowed from implicit capture stora
     const result = try f.local(.i64);
     const desc_local = try f.local(.opaque_ptr);
     const desc = LIR.BoxyDescRef{ .local = desc_local };
-    f.store.setLocalBoxyDesc(field, desc);
+    try f.store.setLocalBoxyDesc(field, desc);
 
     const ret = try f.ret(result);
     const result_assign = try f.assignI64(result, ret);
