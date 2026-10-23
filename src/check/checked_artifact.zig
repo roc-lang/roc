@@ -6,7 +6,6 @@
 const std = @import("std");
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const base = @import("base");
 const can = @import("can");
 const collections = @import("collections");
@@ -164,7 +163,6 @@ pub const CheckedModuleArtifactKey = extern struct {
     ) CheckedModuleArtifactKey {
         return .{ .bytes = computeCheckedArtifactKeyBytes(
             source_hash,
-            build_options.compiler_artifact_hash,
             module_identity_hash,
             hashCheckingContextIdentity(checking_context_identity),
             hashDirectImportArtifactKeys(direct_import_module_keys),
@@ -177,42 +175,37 @@ pub const ModuleId = CheckedModuleDigest;
 
 fn computeCheckedArtifactKeyBytes(
     source_hash: [32]u8,
-    compiler_artifact_hash: [32]u8,
     module_identity_hash: [32]u8,
     checking_context_identity_hash: [32]u8,
     direct_import_module_keys_hash: [32]u8,
 ) [32]u8 {
     var hasher = base.Sha256.init(.{});
     hasher.update(&source_hash);
-    hasher.update(&compiler_artifact_hash);
     hasher.update(&module_identity_hash);
     hasher.update(&checking_context_identity_hash);
     hasher.update(&direct_import_module_keys_hash);
     return hasher.finalResult();
 }
 
-test "checked artifact key final bytes include compiler artifact hash" {
+test "checked artifact key is a function of the program alone" {
     const source_hash = @as([32]u8, @splat(1));
     const module_identity_hash = @as([32]u8, @splat(2));
-    const checking_context_identity_hash = @as([32]u8, @splat(3));
-    const direct_import_module_keys_hash = @as([32]u8, @splat(4));
+    const import_key = CheckedModuleArtifactKey{ .bytes = @as([32]u8, @splat(3)) };
+    const checking_context = CheckingContextIdentity{};
 
-    const first = computeCheckedArtifactKeyBytes(
-        source_hash,
-        @as([32]u8, @splat(5)),
-        module_identity_hash,
-        checking_context_identity_hash,
-        direct_import_module_keys_hash,
-    );
-    const second = computeCheckedArtifactKeyBytes(
-        source_hash,
-        @as([32]u8, @splat(6)),
-        module_identity_hash,
-        checking_context_identity_hash,
-        direct_import_module_keys_hash,
-    );
+    var expected = base.Sha256.init(.{});
+    expected.update(&source_hash);
+    expected.update(&module_identity_hash);
+    expected.update(&hashCheckingContextIdentity(checking_context));
+    expected.update(&hashDirectImportArtifactKeys(&.{import_key}));
 
-    try std.testing.expect(!std.meta.eql(first, second));
+    const key = CheckedModuleArtifactKey.computeFromIdentityHash(
+        source_hash,
+        module_identity_hash,
+        checking_context,
+        &.{import_key},
+    );
+    try std.testing.expectEqualSlices(u8, &expected.finalResult(), &key.bytes);
 }
 
 /// Public `ModuleIdentity` declaration.
@@ -37862,7 +37855,6 @@ pub fn publishFromTypedModule(
         .roots = compile_time_roots.roots,
         .top_level_values = &top_level_values,
         .context = .{
-            .compiler_artifact = build_options.compiler_artifact_hash,
             .checking_context = hashCheckingContextIdentity(checking_context_identity),
             .direct_import_keys = hashDirectImportArtifactKeys(direct_import_module_keys),
         },
