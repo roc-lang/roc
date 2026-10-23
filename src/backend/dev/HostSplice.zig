@@ -161,7 +161,7 @@ pub const HostSplice = struct {
                     if (self.static_data) |layout| if (layout.symbolOffset(name) != null) continue;
                     break :blk name;
                 },
-                .local_data, .jmp_to_return, .retired, .runtime_ref => continue,
+                .local_data, .retired, .runtime_ref => continue,
             };
             if (compilerFunction(name, boxy_native_fns) != null or code_symbols.contains(name) or self.data_names.contains(name) or self.hosted_stubs.contains(name)) continue;
             if (!containsName(needed.items, name)) try needed.append(self.allocator, name);
@@ -195,10 +195,9 @@ pub const HostSplice = struct {
             try relocations.append(self.allocator, switch (indexed) {
                 // The image keeps the program's own table numbers.
                 .retired, .runtime_ref => continue,
-                .linked_function => |function| .{ .linked_function = .{ .offset = function.offset, .name = names[@backingInt(function.symbol)] } },
+                .linked_function => |function| .{ .linked_function = .{ .offset = function.offset, .name = names[@backingInt(function.symbol)], .kind = function.kind } },
                 .linked_data => |data| .{ .linked_data = .{ .offset = data.offset, .name = names[@backingInt(data.symbol)], .kind = data.kind } },
                 .local_data => |data| .{ .local_data = data },
-                .jmp_to_return => |jump| .{ .jmp_to_return = jump },
             });
         }
 
@@ -225,7 +224,7 @@ pub const HostSplice = struct {
             const name = switch (relocation) {
                 .linked_function => |function| function.name,
                 .linked_data => |data| data.name,
-                .local_data, .jmp_to_return => continue,
+                .local_data => continue,
             };
             const binding = if (relocation == .linked_data) try binder.classifyData(name) else try binder.classify(name);
             if (binding == .unresolved) {

@@ -152,6 +152,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "hover shows documentation for method call via static dispatch", .run = hoverShowsDocumentationForMethodCallViaStaticDispatch },
     .{ .name = "hover on record field does not use same-name method documentation", .run = hoverOnRecordFieldDoesNotUseSameNameMethodDocumentation },
     .{ .name = "hover without documentation shows only type", .run = hoverWithoutDocumentationShowsOnlyType },
+    .{ .name = "hover renders zero-argument function types", .run = hoverRendersZeroArgumentFunctionTypes },
 };
 
 // Syntax Checker Tests
@@ -1069,6 +1070,42 @@ pub fn hoverWithoutDocumentationShowsOnlyType() integration_spec.SpecError!void 
         try std.testing.expect(std.mem.find(u8, text, "##") == null);
     } else {
         return error.TestUnexpectedResult;
+    }
+}
+
+/// Regression for #12517: definitions and calls retain their zero-argument types.
+fn hoverRendersZeroArgumentFunctionTypes() integration_spec.SpecError!void {
+    var h = try TestHarness.init();
+    defer h.deinit();
+
+    const source =
+        \\answer : () -> U64
+        \\answer = || 42
+        \\
+        \\answer! : () => U64
+        \\answer! = || {
+        \\    echo!("answer")
+        \\    answer()
+        \\}
+        \\
+        \\main! = |_args| {
+        \\    echo!(answer!().to_str())
+        \\    Ok({})
+        \\}
+    ;
+    try h.writeFile("main.roc", source);
+    try h.check(source);
+
+    const cases = .{
+        .{ 1, 0, "() -> U64" },
+        .{ 6, 4, "() -> U64" },
+        .{ 4, 0, "() => U64" },
+        .{ 10, 10, "() => U64" },
+    };
+    inline for (cases) |case| {
+        const text = try h.getHover(source, case[0], case[1]) orelse return error.TestUnexpectedResult;
+        defer h.allocator.free(text);
+        try std.testing.expectEqualStrings("```roc\n" ++ case[2] ++ "\n```", text);
     }
 }
 

@@ -3030,9 +3030,7 @@ pub const SyntaxChecker = struct {
         }
 
         // Without the renamed binding's own extent there is nothing to compare
-        // against. `ScopeMap` records a destructured field under the extent of
-        // the pattern that destructures it, for one, so not every binding is
-        // found by its own index. Refuse, but say which of the two happened:
+        // against. Refuse, but say which of the two happened:
         // "the name is taken" would be a claim about the code that has not
         // been established.
         const target = target_binding orelse return .scope_unavailable;

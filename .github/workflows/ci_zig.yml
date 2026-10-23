@@ -579,7 +579,7 @@ jobs:
       - name: build the fx platform host
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build build-test-hosts -Dplatform=fx
+          command: zig build update-test-fixtures -Dplatform=fx
           retry_count: 3
 
       - name: Test native instruction-cache publication

@@ -95,7 +95,7 @@ pub const NamedRelocation = struct {
     /// the code that made the reference.
     scope: SymbolScope,
     kind: union(enum) {
-        function,
+        function: RelocationMod.FunctionRelocationKind,
         data: RelocationMod.DataRelocationKind,
     },
 };
@@ -943,7 +943,7 @@ pub fn extractPrepared(
     @memset(owned_names, null);
     const refs = codegen.codeRefs();
     for (relocations) |relocation| switch (relocation) {
-        .local_data, .jmp_to_return => return error.UnsupportedRelocation,
+        .local_data => return error.UnsupportedRelocation,
         .retired, .linked_function, .linked_data, .runtime_ref => {},
     };
 
@@ -1091,7 +1091,7 @@ pub fn extractPrepared(
                     .offset = @intCast(offset - region.start),
                     .name = try ownedSymbolName(CG, arena_allocator, codegen, owned_names, function.symbol),
                     .scope = codegen.symbolScope(function.symbol),
-                    .kind = .function,
+                    .kind = .{ .function = function.kind },
                 },
                 .linked_data => |data| .{
                     .offset = @intCast(offset - region.start),
@@ -1099,7 +1099,7 @@ pub fn extractPrepared(
                     .scope = codegen.symbolScope(data.symbol),
                     .kind = .{ .data = data.kind },
                 },
-                .retired, .local_data, .jmp_to_return, .runtime_ref => unreachable, // the switch above skipped or rejected these kinds, and the loop took runtime references
+                .retired, .local_data, .runtime_ref => unreachable, // the switch above skipped or rejected these kinds, and the loop took runtime references
             });
         }
 
@@ -1158,8 +1158,8 @@ fn refSite(ref: anytype) ?usize {
 fn relocationOffset(relocation: anytype) ?usize {
     return switch (relocation) {
         .retired => null,
-        .linked_function, .linked_data, .runtime_ref => relocation.getOffset(),
-        .local_data, .jmp_to_return => unreachable, // extraction rejected these kinds before grouping relocations
+        .linked_function, .linked_data, .runtime_ref => @intCast(relocation.getOffset()),
+        .local_data => unreachable, // extraction rejected these kinds before grouping relocations
     };
 }
 
@@ -1787,7 +1787,7 @@ pub fn assembleCanonical(
             const symbol = try codegen.internSymbolName(relocation.name, relocation.scope);
             const offset: u64 = start.* + relocation.offset;
             try codegen.appendAssembledRelocation(switch (relocation.kind) {
-                .function => .{ .linked_function = .{ .offset = offset, .symbol = symbol } },
+                .function => |function_kind| .{ .linked_function = .{ .offset = offset, .symbol = symbol, .kind = function_kind } },
                 .data => |data_kind| .{ .linked_data = .{ .offset = offset, .symbol = symbol, .kind = data_kind } },
             });
         }
@@ -1893,7 +1893,7 @@ pub fn appendPrepared(
             const symbol = try codegen.internSymbolName(relocation.name, relocation.scope);
             const offset: u64 = starts[index] + relocation.offset;
             try codegen.appendAssembledRelocation(switch (relocation.kind) {
-                .function => .{ .linked_function = .{ .offset = offset, .symbol = symbol } },
+                .function => |function_kind| .{ .linked_function = .{ .offset = offset, .symbol = symbol, .kind = function_kind } },
                 .data => |data_kind| .{ .linked_data = .{ .offset = offset, .symbol = symbol, .kind = data_kind } },
             });
         }
@@ -2101,12 +2101,12 @@ fn relocationsMatch(comptime CG: type, original: *CG, fresh: *CG) bool {
 fn relocationEql(comptime CG: type, original: *CG, fresh: *CG, lhs: IndexedRelocation, rhs: IndexedRelocation) bool {
     if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs)) return false;
     return switch (lhs) {
-        .linked_function => |function| function.offset == rhs.linked_function.offset and
+        .linked_function => |function| function.offset == rhs.linked_function.offset and function.kind == rhs.linked_function.kind and
             std.mem.eql(u8, original.symbolName(function.symbol), fresh.symbolName(rhs.linked_function.symbol)),
         .linked_data => |data| data.offset == rhs.linked_data.offset and data.kind == rhs.linked_data.kind and
             std.mem.eql(u8, original.symbolName(data.symbol), fresh.symbolName(rhs.linked_data.symbol)),
         .runtime_ref => |ref| ref.offset == rhs.runtime_ref.offset and std.meta.eql(ref.ref, rhs.runtime_ref.ref),
-        .local_data, .jmp_to_return, .retired => false,
+        .local_data, .retired => false,
     };
 }
 
@@ -2334,7 +2334,7 @@ pub fn splice(
             const symbol = try codegen.internSymbolName(relocation.name, relocation.scope);
             const offset: u64 = start + relocation.offset;
             try codegen.appendAssembledRelocation(switch (relocation.kind) {
-                .function => .{ .linked_function = .{ .offset = offset, .symbol = symbol } },
+                .function => |function_kind| .{ .linked_function = .{ .offset = offset, .symbol = symbol, .kind = function_kind } },
                 .data => |data_kind| .{ .linked_data = .{ .offset = offset, .symbol = symbol, .kind = data_kind } },
             });
         }
@@ -2574,7 +2574,7 @@ fn testCombineOwnership(allocator: Allocator) (Allocator.Error || error{TestExpe
                 .{ .offset = 0, .loc = .{ .file = 0, .line = 3, .column = 2 }, .region = base.Region.zero() },
                 .{ .offset = 0, .loc = .{ .file = 0, .line = 4, .column = 5 }, .region = base.Region.zero() },
             },
-            .relocations = &.{.{ .offset = 0, .name = "external", .scope = .shared, .kind = .function }},
+            .relocations = &.{.{ .offset = 0, .name = "external", .scope = .shared, .kind = .{ .function = .x86_call_rel32 } }},
             .data = &.{.{
                 .name = "data",
                 .bytes = "contents",

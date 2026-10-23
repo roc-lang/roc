@@ -96,9 +96,9 @@ result = poly().to_i128()
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "({}) -> _ret"))
+		(patt (type "() -> _ret"))
 		(patt (type "_a")))
 	(expressions
-		(expr (type "({}) -> _ret"))
+		(expr (type "() -> _ret"))
 		(expr (type "_a"))))
 ~~~

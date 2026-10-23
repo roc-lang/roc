@@ -377,6 +377,14 @@ violates this invariant.
 
 ### Native relocation identity
 
+Every linked function relocation carries the exact call encoding selected by
+its emitter: x86-64 `call rel32` or AArch64 `BL` with an imm26. The encoding
+defines the relocation's byte offset, PC base, displacement units, and patched
+bits. Named/indexed conversions, procedure packs, run images, and object writers
+preserve and consume it. Consumers never infer an encoding from code bytes or
+instruction lengths. Early returns are resolved by the target code generator's
+local jump patching and do not cross the relocation boundary.
+
 Native code generators own an append-only symbol declaration table. Machine
 relocations carry its dense store-local symbol IDs, and the name column travels
 with the generated code. Builtin, hosted, literal, and static-value producers
@@ -6398,6 +6406,11 @@ consume those checked data; they must not name nested functions by allocation
 order, generated symbols, source display strings, body shape, capture shape,
 runtime layout, or LIR procedure ids.
 
+The nested-site table stores each site's checked expression, owner, lexical
+scope, evidence, and runtime captures. It does not retain a copy of the
+traversal path to each site: site identity is already explicit, and storing
+all ancestor paths costs quadratic space for deeply nested functions.
+
 Monotype body lowering tracks two function-context digests:
 
 - the owner function digest for local procedure sites output by the checked
@@ -11566,7 +11579,8 @@ Checking a module ends by thawing every frozen class, so no later stage,
 serialized store, or import sees the mark. Builds with runtime safety check
 the mechanism against what it replaces: every replay first relates a fresh
 copy of the method's scheme to the edge's callable on a savepoint and requires
-the result to equal the frozen instance exactly, comparing each record or tag
+the result to equal the frozen instance exactly, expanding transparent aliases
+at every depth (including row extensions) and comparing each record or tag
 union row as its fields or tags sorted by name, however many extensions store
 it (a scheme's ground parts are shared with every use, so a later relation
 through any of them can store an equal row split across extensions after the
@@ -17274,6 +17288,19 @@ agrees with itself. Solving a chain of nested lambdas therefore relates each
 lambda's function type to its body's in constant work, however deep the chain
 is.
 
+Tag-payload compatibility uses these same lazy-leaf identity proofs before
+materializing shapes. A query must not expand a clone that the following
+unification can join directly; doing so would discard the proof and duplicate
+large payload graphs merely to check that they can join.
+
+A positional leaf may inherit a named type’s argument scope without reaching
+any of its bindings. Its expansion is still unobservable in that case: the
+solver checks the immutable Monotype graph for scoped argument occurrences,
+stopping at nested named types that open their own scopes. Only reachable
+bindings require structural expansion. Non-generic named types do not open
+argument scopes. This preserves argument/backing row ties without expanding
+an entire state graph merely because it occurs inside a generic wrapper.
+
 Unification never splits a class. A pair's deferred link runs after the pair's
 children are unified, and in a cyclic type those children can bring either
 endpoint into another class first; for example, each generated interpolation
@@ -19752,6 +19779,13 @@ mechanically. The ARC algorithm is specified in ARC Borrow Inference below.
 
 ### Record Component Bindings
 
+SpecConstr's body-size admission accounts for implicit record-update expansion
+before cloning. Each update charges its complete result row in addition to its
+source children, covering the unchanged-field snapshots and constructor work
+that a compact source update otherwise hides. Explicit tuple, record, and tag
+constructors already expose their children to this traversal. The same measured
+body cost governs both per-callee admission and cumulative inline growth.
+
 The direct solved-to-LIR builder keeps by-value record bindings as persistent
 field-value trees while lowering a lexical block. Leaves are fresh LIR locals
 whose expressions execute at the original binding, including fields later
@@ -22096,6 +22130,12 @@ against the borrow typing rules:
   refinement is bounded by the name count; balance divergence across
   mode-identical entries is itself a finding—per-iteration accumulation),
   so certification of every procedure runs to completion
+- an intermediate aggregate projection needed to claim a selected field
+  keeps its carrier local across inner-join frames as well as join summaries.
+  Retaining only the anonymous value preserves a liveness proof but loses the
+  exact ownership path when the enclosing loop is summarized again. Copying
+  reachable frame values therefore also copies the carrier bindings of their
+  payload sources, including projections defined inside an exited region.
 - distinct borrow-lender and holder proofs remain separate at every join;
   a group-count threshold must never discard provenance and manufacture a
   borrowed entry with no owner. Valid incoming paths with different owners
@@ -22815,6 +22855,23 @@ all argument registers and introduce no new callee-save or frame requirements.
 
 ## LLVM Value Representation
 
+Aggregate transport preserves storage identity. Records, tuples, and inline tag
+payloads use the same memory-view plan: an immutable alias or projection names
+its ultimate storage owner and a committed byte offset. LLVM does not rebuild
+these aliases or projections field by field. The existing per-proc
+value planner uses the shared LIR access inventory and liveness solution to
+prove these views. Join parameters, explicit mutations, and uninitialized
+storage remain snapshots. A single static definition may execute repeatedly:
+a view may not remain live across its storage owner's next definition.
+View chains are resolved once, and all reads through them extend the owner's
+LLVM slot lifetime. A view's definition does not overwrite its owner's bytes.
+
+An ordinary indirect fast-call parameter with no body writes can use the
+caller's storage directly. Tail-group parameters keep their snapshots because
+frame-replacing calls overwrite shared argument storage. This changes neither
+the logical ownership of arguments nor explicit ARC operations. Heap-unboxing
+and dynamic descriptor adaptations are not inline-storage views.
+
 Immediately before emitting a procedure's body, the LLVM backend plans how each
 of the procedure's LIR locals is represented (`src/backend/llvm/ValuePlan.zig`).
 The plan is LLVM-specific preparation: it runs only inside the LLVM backend's
@@ -22829,9 +22886,9 @@ are reset from the procedure's own inventory when the body finishes, including
 on allocation failure, so specializations that reuse a `LocalId` never observe
 each other's plans.
 
-A local is either `memory`, one fixed-size entry-block slot with activation
-lifetime, or SSA, a sequence of LLVM values. Only a layout with a scalar
-carrier can be SSA: Bool as `i1`, an integer as `iN`, Dec as `i128`, F32 and F64,
+A local is either `memory`, an address in a borrowed parameter, an immutable
+view, or its own fixed-size entry-block slot, or SSA, a sequence of LLVM values.
+Only a layout with a scalar carrier can be SSA: Bool as `i1`, an integer as `iN`, Dec as `i128`, F32 and F64,
 and a SIMD vector as its LLVM vector type. Strings, lists, boxes, pointers,
 records, tag unions, and callables stay in memory, because their consumers (RC
 helpers, builtins, field projections, host boundaries) take addresses. The
@@ -22953,7 +23010,8 @@ into the target's slot.
 
 The attributes follow from these contracts. An indirect argument points at the
 caller's own slot for the argument local, not at a private copy, so it is
-`readonly` and `nocapture` (the callee copies it into its own frame on entry)
+`readonly` and `nocapture` (the callee borrows immutable storage or copies it
+into its own frame when its body requires a snapshot)
 but never `noalias`: one local can be passed twice. The `sret` result pointer is
 `noalias` because the caller passes the target's slot, which no argument of the
 same call names. The packed function's argument pack is a fresh caller buffer,
@@ -24102,6 +24160,11 @@ not allocate a type store, run an extra checking pass, or retain dependency ASTs
 Checking remains responsible for validating implementations and entrypoint types.
 
 ## Build Outputs And The Targets Header
+
+Build output preparation distinguishes a missing destination file from a missing
+parent directory. Missing parents are file-write errors that name the requested
+output path and explain the missing directory, before compilation or linking.
+User-selected output directories are not created implicitly.
 
 The `check`, `build`, `run`, and `test` command family resolves its final process
 status only after completing all requested independent work. Any check-phase

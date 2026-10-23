@@ -1868,8 +1868,10 @@ const Solver = struct {
         cloner.lazy_ctx = ctx;
         defer cloner.deinit();
         const mono_content = self.lifted.types.get(leaf.id);
+        // Only type arguments need ties to occurrences in the backing. A
+        // non-generic named type has no such ties to preserve.
         cloner.arg_scope = if (mono_content == .named and self.contains_tag_row.isSet(@backingInt(leaf.id)))
-            .{ .id = try self.newArgScope(), .registers = true }
+            if (mono_content.named.args.len == 0) null else .{ .id = try self.newArgScope(), .registers = true }
         else if (self.leaf_arg_scopes.get(root)) |scope|
             .{ .id = scope, .registers = false }
         else
@@ -2186,8 +2188,8 @@ const Solver = struct {
     /// two same-label tags whose payloads differ in shape become two variants
     /// of one joined row (`mergeTags`) rather than a failed relation. Anything
     /// unification can relate—unbound variables, callable slots, rows, named
-    /// types with their own relations—is compatible. Materializing lazy
-    /// leaves along the way is the ordinary expansion a relation performs.
+    /// types with their own relations—is compatible. Preserve lazy identity
+    /// proofs before materializing shapes that require a structural comparison.
     fn typesCompatible(self: *Solver, a: Type.TypeVarId, b: Type.TypeVarId) Allocator.Error!bool {
         var work = std.ArrayList(UnifyPair).empty;
         defer work.deinit(self.allocator);
@@ -2198,6 +2200,14 @@ const Solver = struct {
             const left = self.program.types.rootCompressed(pair.first);
             const right = self.program.types.rootCompressed(pair.second);
             if (left == right) continue;
+            const raw_left = self.program.types.get(left);
+            const raw_right = self.program.types.get(right);
+            // Keep the same lazy relations that processUnifyPair uses. A
+            // compatibility query must not expand these clones and thereby
+            // destroy the proof that unification can join them directly.
+            if (raw_left == .mono and raw_right == .mono and raw_left.mono.id == raw_right.mono.id) continue;
+            if (try self.canLinkUntouchedLeafToInstance(left, raw_left, pair.second, right)) continue;
+            if (try self.canLinkUntouchedLeafToInstance(right, raw_right, pair.first, left)) continue;
             if ((try visited.getOrPut(UnifyPair.init(left, right))).found_existing) continue;
             const left_content = try self.resolvedContentAt(left);
             const right_content = try self.resolvedContentAt(right);
@@ -2619,9 +2629,9 @@ const Solver = struct {
     /// A positional leaf (`LeafSharing.positional`) holds only fresh rows
     /// and no callable slot, so relating it to a class instantiated from its
     /// Monotype joins nothing the class does not already have; one in an
-    /// argument scope keeps the ordinary relation, which registers its
-    /// children in that scope.
-    fn linkUntouchedLeafToInstance(
+    /// argument scope keeps the ordinary relation only if its expansion
+    /// reads a binding from that scope.
+    fn canLinkUntouchedLeafToInstance(
         self: *Solver,
         leaf_root: Type.TypeVarId,
         leaf_content: Type.Content,
@@ -2631,18 +2641,62 @@ const Solver = struct {
         if (leaf_content != .mono) return false;
         const leaf = leaf_content.mono;
         const id = leaf.id;
+        if (!self.leafOriginIs(other, id) and !self.leafOriginIs(other_root, id)) return false;
         if (self.isCallableFree(id)) {
             if (self.leafSharing(id) != .positional) return false;
-            if (self.leaf_arg_scopes.get(leaf_root) != null) return false;
+            if (self.leaf_arg_scopes.get(leaf_root)) |scope| {
+                if (try self.expansionReadsArgScope(id, scope)) return false;
+            }
         }
         if (leaf.ctx != Type.no_leaf_context) {
             const shape = self.leaf_context_shapes.items[leaf.ctx];
             if (!shape.chain or shape.unexpanded != 1) return false;
         }
         if (self.reaches_cycle.isSet(@backingInt(id))) return false;
-        if (!self.leafOriginIs(other, id) and !self.leafOriginIs(other_root, id)) return false;
         if (try self.monoProvenUninhabited(id)) return false;
-        self.retireContextLeaf(leaf);
+        return true;
+    }
+
+    /// A positional leaf can inherit a scope whose bindings are ancestors or
+    /// unrelated arguments. Only bindings its expansion actually reads can
+    /// make that expansion observable. Named children start their own scope.
+    fn expansionReadsArgScope(self: *Solver, root: MonoType.TypeId, scope: u32) Allocator.Error!bool {
+        var seen = self.mono_set_pool.acquire();
+        defer self.mono_set_pool.release(&seen);
+        var pending = std.ArrayList(MonoType.TypeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        const types = self.lifted.types;
+        while (pending.pop()) |id| {
+            if (seen.contains(id)) continue;
+            try seen.put(id, {});
+            if (id != root and self.arg_scopes.items[scope].contains(id)) return true;
+            if (self.leafSharing(id) != .positional) continue;
+            switch (types.get(id)) {
+                .named, .primitive, .zst, .erased, .func, .hole => {},
+                .list, .box => |child| try pending.append(self.allocator, child),
+                .tuple => |items| try pending.appendSlice(self.allocator, types.span(items)),
+                .record => |fields| for (types.fieldSpan(fields)) |field| {
+                    try pending.append(self.allocator, field.ty);
+                    if (field.value_ty.get()) |value_ty| try pending.append(self.allocator, value_ty);
+                },
+                .tag_union => |tags| for (types.tagSpan(tags)) |tag| {
+                    try pending.appendSlice(self.allocator, types.span(tag.payloads));
+                },
+            }
+        }
+        return false;
+    }
+
+    fn linkUntouchedLeafToInstance(
+        self: *Solver,
+        leaf_root: Type.TypeVarId,
+        leaf_content: Type.Content,
+        other: Type.TypeVarId,
+        other_root: Type.TypeVarId,
+    ) Allocator.Error!bool {
+        if (!try self.canLinkUntouchedLeafToInstance(leaf_root, leaf_content, other, other_root)) return false;
+        self.retireContextLeaf(leaf_content.mono);
         self.program.types.setLink(leaf_root, other_root);
         return true;
     }
@@ -5795,4 +5849,110 @@ test "lambda solved row joins reach every row of a value" {
     // specializations relates both callers' rows to one result.
     try std.testing.expectEqual(program.types.rootCompressed(source_record_row), program.types.rootCompressed(target_record_row));
     try std.testing.expectEqual(@as(usize, 2), (try solver.shapeContent(source_record_row)).tag_union.count());
+}
+
+test "issue 12505 tag compatibility preserves lazy wide payloads for unification" {
+    const allocator = std.testing.allocator;
+    for ([_]bool{ false, true }) |materialize_left| {
+        var lifted = emptyLiftedProgramForTest(allocator);
+        var lifted_owned = true;
+        errdefer if (lifted_owned) lifted.deinit();
+        const u64_ty = try lifted.types.add(.{ .primitive = .u64 });
+        const callback = try lifted.types.add(.{ .func = .{ .args = .empty(), .ret = u64_ty } });
+        var fields: [64]MonoType.Field = undefined;
+        for (&fields, 0..) |*field, index| {
+            var buffer: [24]u8 = undefined;
+            field.* = .{
+                .name = try lifted.names.internRecordFieldLabel(try std.fmt.bufPrint(&buffer, "field{d:0>2}", .{index})),
+                .ty = callback,
+                .default = null,
+            };
+        }
+        const state = try lifted.types.add(.{ .record = try lifted.types.addRecordFields(&lifted.names, &fields) });
+        const tag_name = try lifted.names.internTagLabel("State");
+        var program = Ast.Program.init(allocator, lifted);
+        lifted_owned = false;
+        defer program.deinit();
+        var solver = try Solver.init(allocator, &program);
+        defer solver.deinit();
+        const left = try solver.lowerTypeFresh(state);
+        const right = try solver.lowerTypeFresh(state);
+        if (materialize_left) _ = try solver.resolvedContent(left);
+        const left_row = try program.types.add(.{ .tag_union = try program.types.addTags(&.{.{
+            .name = tag_name,
+            .checked_name = tag_name,
+            .payloads = try program.types.addSpan(&.{left}),
+        }}) });
+        const right_row = try program.types.add(.{ .tag_union = try program.types.addTags(&.{.{
+            .name = tag_name,
+            .checked_name = tag_name,
+            .payloads = try program.types.addSpan(&.{right}),
+        }}) });
+        const before = program.types.vars.items.len;
+        try std.testing.expect(try solver.typesCompatible(left, right));
+        try std.testing.expectEqual(before, program.types.vars.items.len);
+        try std.testing.expect(program.types.rootContent(right) == .mono);
+        try solver.unify(left_row, right_row);
+        try std.testing.expectEqual(program.types.rootCompressed(left), program.types.rootCompressed(right));
+        try std.testing.expectEqual(before, program.types.vars.items.len);
+        try std.testing.expectEqual(@as(std.meta.Tag(Type.Content), if (materialize_left) .record else .mono), std.meta.activeTag(program.types.rootContent(left)));
+    }
+}
+
+test "issue 12505 scoped positional payloads only expand for reachable argument bindings" {
+    const allocator = std.testing.allocator;
+    for ([_]bool{ false, true }) |reachable_binding| {
+        var lifted = emptyLiftedProgramForTest(allocator);
+        var lifted_owned = true;
+        errdefer if (lifted_owned) lifted.deinit();
+        const a = try lifted.names.internTagLabel("A");
+        const b = try lifted.names.internTagLabel("B");
+        const row = try lifted.types.add(.{ .tag_union = try lifted.types.addTags(&.{.{ .name = a, .checked_name = a, .payloads = .empty() }}) });
+        const tuple = try lifted.types.add(.{ .tuple = try lifted.types.addSpan(&.{row}) });
+        const payload_name = try lifted.names.internTagLabel("Payload");
+        const payload = try lifted.types.add(.{ .tag_union = try lifted.types.addTags(&.{.{ .name = payload_name, .checked_name = payload_name, .payloads = try lifted.types.addSpan(&.{tuple}) }}) });
+        var fields: [64]MonoType.Field = undefined;
+        for (&fields, 0..) |*field, index| {
+            var buffer: [24]u8 = undefined;
+            field.* = .{
+                .name = try lifted.names.internRecordFieldLabel(try std.fmt.bufPrint(&buffer, "field{d:0>2}", .{index})),
+                .ty = payload,
+                .default = null,
+            };
+        }
+        const state = try lifted.types.add(.{ .record = try lifted.types.addRecordFields(&lifted.names, &fields) });
+        const ancestor = try lifted.types.add(.{ .tuple = try lifted.types.addSpan(&.{state}) });
+        var program = Ast.Program.init(allocator, lifted);
+        lifted_owned = false;
+        defer program.deinit();
+        var solver = try Solver.init(allocator, &program);
+        defer solver.deinit();
+        const left = try solver.lowerTypeFresh(state);
+        const right = try solver.lowerTypeFresh(state);
+        _ = try solver.resolvedContent(right);
+        const scope = try solver.newArgScope();
+        const binding = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+            .{ .name = a, .checked_name = a, .payloads = .empty() },
+            .{ .name = b, .checked_name = b, .payloads = .empty() },
+        }) });
+        try solver.arg_scopes.items[scope].put(if (reachable_binding) row else ancestor, binding);
+        try solver.leaf_arg_scopes.put(left, scope);
+        const before = program.types.vars.items.len;
+        try std.testing.expectEqual(reachable_binding, try solver.expansionReadsArgScope(state, scope));
+        try solver.unify(left, right);
+        try std.testing.expectEqual(program.types.rootCompressed(left), program.types.rootCompressed(right));
+        if (reachable_binding) {
+            const record = (try solver.resolvedContent(right)).record;
+            const field = program.types.fieldItem(record, 0);
+            const tags = (try solver.resolvedContent(field.ty)).tag_union;
+            const tag = program.types.tagItem(tags, 0);
+            const tuple_ty = program.types.spanItem(tag.payloads, 0);
+            const items = (try solver.resolvedContent(tuple_ty)).tuple;
+            const inner = program.types.spanItem(items, 0);
+            try std.testing.expectEqual(program.types.rootCompressed(binding), program.types.rootCompressed(inner));
+            try std.testing.expectEqual(@as(usize, 2), (try solver.resolvedContent(binding)).tag_union.count());
+        } else {
+            try std.testing.expectEqual(before, program.types.vars.items.len);
+        }
+    }
 }
