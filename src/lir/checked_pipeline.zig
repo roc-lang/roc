@@ -21,6 +21,8 @@ const SingleUseInline = @import("single_use_inline.zig");
 
 /// Completed compile-time scalar roots a forked continuation lowers as literals.
 pub const CompletedScalarValues = postcheck.ComptimeScalarValues.CompletedScalarValues;
+/// The erased callables completed compile-time values hold, which a
+/// continuation compiles whether or not its own code creates them.
 pub const CompletedErasedMembers = postcheck.CompletedErasedMembers;
 /// Which runtime specializations compile-time evaluation must lower.
 pub const LiteralDemand = postcheck.LiteralDemand;
