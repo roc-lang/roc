@@ -1861,7 +1861,6 @@ fn initEvaluationProgram(
     options: Options,
 ) FinalizeError!EvaluationProgram(ProgramPtr) {
     if (ProgramPtr == *InterpreterProgram) return .{ .storage = try InterpreterProgram.init(allocator, lowering_modules, lowered, options) };
-    if (comptime !backend.host_lir_codegen_available) return error.UnsupportedPlatform;
     var native = try DevProgram.init(allocator, lowering_modules, lowered, code, options);
     native.codegen.static_strings = native.static_strings.view();
     return .{ .storage = native };
@@ -3178,7 +3177,6 @@ fn lowerEvalAndFinishRoots(
     }
 
     const use_interpreter = comptime compilerHostMustUseInterpreterForCtfe();
-    if (comptime !use_interpreter and !backend.host_lir_codegen_available) return error.UnsupportedPlatform;
 
     const lowering_modules: lir.CheckedPipeline.CheckedModuleSet = .{
         .root = checked.loweringViewWithRelations(module, relation_modules),
@@ -3868,9 +3866,13 @@ fn reportLiteralRootExpectFailure(
     }
 }
 
+/// Compile-time evaluation runs natively only where this compiler has a
+/// native code generator for its own host and can execute what it emits; on
+/// any other host (freestanding, wasm32, 32-bit ARM or x86) the interpreter
+/// evaluates at the host's width, and a target of another width receives the
+/// completed values re-encoded at its own layouts.
 fn compilerHostMustUseInterpreterForCtfe() bool {
-    return builtin.target.os.tag == .freestanding or
-        builtin.target.cpu.arch == .wasm32;
+    return builtin.target.os.tag == .freestanding or !backend.host_lir_codegen_available;
 }
 
 const DevRootProgressState = enum(u8) {

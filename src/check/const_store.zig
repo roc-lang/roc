@@ -1334,7 +1334,7 @@ pub const ConstStore = struct {
     }
 
     pub fn reserve(self: *ConstStore) Allocator.Error!ConstNodeId {
-        const id: ConstNodeId = @fromBackingInt(@intCast(@as(u32, @intCast(self.values.items.len))));
+        const id: ConstNodeId = @fromBackingInt(std.math.cast(u32, self.values.items.len) orelse return error.OutOfMemory);
         try self.values.append(self.allocator, .pending);
         return id;
     }
@@ -1385,7 +1385,7 @@ pub const ConstStore = struct {
     /// retains ownership of the input `captures` slice and frees it.
     pub fn appendFn(self: *ConstStore, fn_value: ConstFn) Allocator.Error!ConstFnId {
         try validateEvidenceFrames(self.allocator, fn_value);
-        const id: ConstFnId = @fromBackingInt(@intCast(@as(u32, @intCast(self.fns.items.len))));
+        const id: ConstFnId = @fromBackingInt(std.math.cast(u32, self.fns.items.len) orelse return error.OutOfMemory);
         const captures_range = try artifact_serialize.appendSpan(ConstRange, ConstCapture, &self.capture_pool, self.allocator, fn_value.captures);
         const evidence_range = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidence, &self.evidence_pool, self.allocator, fn_value.evidence.nodes);
         const evidence_targets = try artifact_serialize.appendSpan(ConstRange, ConstFnTargetEvidence, &self.evidence_target_pool, self.allocator, fn_value.evidence.targets);

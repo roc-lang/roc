@@ -180,7 +180,7 @@ const Builder = struct {
             .str => try self.string(job),
             .list => |element| try self.list(job, element),
             .box => |element| switch (physical.tag) {
-                .box_of_zst => self.graph.writeWord(job.dest, 0),
+                .box_of_zst => try self.graph.writeWord(job.dest, 0),
                 .box => try self.boxed(job, element, physical.getIdx()),
                 .erased_callable => try self.enqueue(element, job.layout_idx, job.source, job.dest, .value),
                 .hole => invariant("a demand hole reached a native root export"),
@@ -189,7 +189,7 @@ const Builder = struct {
             .tuple, .record => |child_plans| {
                 if (physical.tag == .box) return self.boxed(job, job.plan, physical.getIdx());
                 if (physical.tag == .box_of_zst) {
-                    self.graph.writeWord(job.dest, 0);
+                    try self.graph.writeWord(job.dest, 0);
                     return;
                 }
                 try self.children(child_plans, job.layout_idx, job.source, job.dest, false);
@@ -237,16 +237,16 @@ const Builder = struct {
         }, slice.len, 1, false, null);
         if (result.fresh) @memcpy(self.graph.bytes(result.dest, slice.len), slice);
         try self.graph.relocate(job.dest, result.dest);
-        self.graph.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "capacity_or_alloc_ptr")), builtins.str.RocStr.encodeCapacity(slice.len));
-        self.graph.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "length")), slice.len);
+        try self.graph.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "capacity_or_alloc_ptr")), builtins.str.RocStr.encodeCapacity(slice.len));
+        try self.graph.writeWord(job.dest.offsetBy(@offsetOf(builtins.str.RocStr, "length")), slice.len);
     }
 
     fn list(self: *Builder, job: Job, element: Program.ConstPlanId) Allocator.Error!void {
         const physical = self.graph.program.layouts.getLayout(job.layout_idx);
         if (physical.tag != .list and physical.tag != .list_of_zst) invariant("list export plan had non-list layout");
         const list_value = job.source.read(builtins.list.RocList);
-        self.graph.writeWord(job.dest.offsetBy(word_size), list_value.len());
-        self.graph.writeWord(job.dest.offsetBy(2 * word_size), builtins.list.RocList.encodeCapacity(list_value.len()));
+        try self.graph.writeWord(job.dest.offsetBy(word_size), list_value.len());
+        try self.graph.writeWord(job.dest.offsetBy(2 * word_size), builtins.list.RocList.encodeCapacity(list_value.len()));
         if (list_value.len() == 0) {
             // The descriptor cannot carry the capacity the value was
             // evaluated with; keep it on the root so the runtime can

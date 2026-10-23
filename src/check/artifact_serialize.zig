@@ -516,9 +516,11 @@ pub fn appendSpan(
     items: []const T,
 ) std.mem.Allocator.Error!RangeT {
     if (items.len == 0) return .{ .start = 0, .len = 0 };
-    const start: u32 = @intCast(pool.items.len);
+    const start = std.math.cast(u32, pool.items.len) orelse return error.OutOfMemory;
+    const len = std.math.cast(u32, items.len) orelse return error.OutOfMemory;
+    if (len > std.math.maxInt(u32) - start) return error.OutOfMemory;
     try pool.appendSlice(allocator, items);
-    return .{ .start = start, .len = @intCast(items.len) };
+    return .{ .start = start, .len = len };
 }
 
 /// Comptime byte-equality of two comptime strings. `std.mem.eql` is banned in

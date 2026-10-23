@@ -166,7 +166,7 @@ const Builder = struct {
                 try self.boxed(job, source_plan.boxy_box.payload, source_plan.boxy_box.layout_idx, box.payload, box.layout_idx);
             },
             .box => |element| switch (physical.tag) {
-                .box_of_zst => self.graph.writeWord(job.dest, 0),
+                .box_of_zst => try self.graph.writeWord(job.dest, 0),
                 .box => try self.boxed(job, source_plan.box, source_physical.getIdx(), element, physical.getIdx()),
                 .erased_callable => try self.enqueue(source_plan.box, job.source_layout, element, job.layout_idx, job.source, job.dest, .value, .value),
                 .hole => invariant("a demand hole reached a frozen root"),
@@ -226,19 +226,19 @@ const Builder = struct {
         const result = try self.graph.reserveAllocation(.{ .source = src, .plan = null, .layout_idx = .str, .count = count, .kind = .string }, count, 1, false, null);
         if (result.fresh) @memcpy(self.graph.bytes(result.dest, count), text);
         try self.graph.relocate(dest, result.dest);
-        self.graph.writeWord(dest.offsetBy(self.graph.word()), builtins.str.RocStr.encodeCapacityForWidth(count));
-        self.graph.writeWord(dest.offsetBy(2 * self.graph.word()), count);
+        try self.graph.writeWord(dest.offsetBy(self.graph.word()), builtins.str.RocStr.encodeCapacityForWidth(count));
+        try self.graph.writeWord(dest.offsetBy(2 * self.graph.word()), count);
     }
     fn list(self: *Builder, job: Job, sp: Program.ConstPlanId, tp: Program.ConstPlanId) Allocator.Error!void {
         const count = self.readWord(job.source.offsetBy(self.sourceWord()));
-        self.graph.writeWord(job.dest.offsetBy(self.graph.word()), count);
-        self.graph.writeWord(job.dest.offsetBy(2 * self.graph.word()), builtins.list.RocList.encodeCapacityForWidth(count));
+        try self.graph.writeWord(job.dest.offsetBy(self.graph.word()), count);
+        try self.graph.writeWord(job.dest.offsetBy(2 * self.graph.word()), builtins.list.RocList.encodeCapacityForWidth(count));
         const physical = self.graph.program.layouts.getLayout(job.layout_idx);
         if (count == 0 or physical.tag == .list_of_zst) return;
         const sl = self.source_program.layouts.getLayout(job.source_layout).getIdx();
         const tl = physical.getIdx();
         const src = try self.pointer(job.source);
-        const result = try self.graph.reserveAllocation(.{ .source = src, .plan = tp, .layout_idx = tl, .count = count, .kind = .list }, count * self.graph.size(tl), self.graph.alignment(tl), self.graph.program.layouts.layoutContainsRefcounted(self.graph.program.layouts.getLayout(tl)), count);
+        const result = try self.graph.reserveAllocation(.{ .source = src, .plan = tp, .layout_idx = tl, .count = count, .kind = .list }, std.math.mul(usize, count, self.graph.size(tl)) catch return error.OutOfMemory, self.graph.alignment(tl), self.graph.program.layouts.layoutContainsRefcounted(self.graph.program.layouts.getLayout(tl)), count);
         try self.graph.relocate(job.dest, result.dest);
         if (result.fresh) for (0..count) |i| try self.enqueue(sp, sl, tp, tl, src.offsetBy(i * self.sourceSize(sl)), result.dest.offsetBy(i * self.graph.size(tl)), .value, .value);
     }
@@ -412,6 +412,40 @@ test "frozen root transcode preserves shared list strings across pointer widths"
     try std.testing.expectEqual(list_export.relocations[0].target.data_symbol, list_export.relocations[1].target.data_symbol);
     const str_rel = list_export.relocations[0];
     try std.testing.expectEqualStrings(text, converted[@backingInt(str_rel.target.data_symbol)].bytes[@intCast(str_rel.addend)..]);
+}
+
+test "frozen root transcode rejects a list too long for a 32-bit target as out of memory" {
+    // A 64-bit evaluation can build a list of zero-sized elements longer
+    // than a 32-bit target's list capacity encodes, with nothing allocated.
+    if (@sizeOf(usize) < 8) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const TargetUsize = @import("base").target.TargetUsize;
+    var source = try Program.Result.init(allocator, TargetUsize.native);
+    defer source.deinit();
+    var target = try Program.Result.init(allocator, .u32);
+    defer target.deinit();
+    const zst_plan: Program.ConstPlanId = @fromBackingInt(@intCast(source.const_plans.items.len));
+    try source.const_plans.append(allocator, .zst);
+    const list_plan: Program.ConstPlanId = @fromBackingInt(@intCast(source.const_plans.items.len));
+    try source.const_plans.append(allocator, .{ .list = zst_plan });
+    try target.const_plans.append(allocator, .zst);
+    try target.const_plans.append(allocator, .{ .list = zst_plan });
+    const source_list = try source.layouts.insertLayout(layout.Layout.listOfZst());
+    const target_list = try target.layouts.insertLayout(layout.Layout.listOfZst());
+    // The longest list a 32-bit target holds converts; one more element does not.
+    for ([_]usize{ std.math.maxInt(u31), @as(usize, std.math.maxInt(u31)) + 1 }) |count| {
+        var list_value = builtins.list.RocList{ .bytes = null, .length = count, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(count) };
+        const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, source_list), testRoot(list_plan, source_list), .{ .ptr = @ptrCast(&list_value) }, .{});
+        defer static_data.deinitStaticData(allocator, native);
+        const converted = transcodeRoot(allocator, &source, testRoot(list_plan, source_list), native, try testRootSymbol(native), &target, testRoot(list_plan, target_list), try testSlot(&target, target_list));
+        if (count <= std.math.maxInt(u31)) {
+            const exports = try converted;
+            defer static_data.deinitStaticData(allocator, exports);
+            try std.testing.expectEqual(@as(u32, @intCast(count)), std.mem.readInt(u32, exports[0].bytes[4..8], .little));
+        } else {
+            try std.testing.expectError(error.OutOfMemory, converted);
+        }
+    }
 }
 
 test "frozen root transcode of a list of many string pointers stays proportional to the list" {
