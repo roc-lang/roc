@@ -5031,7 +5031,7 @@ const Lowerer = struct {
             if (walk.frames.items.len == 0) return built;
             try walk.results.append(self.allocator, built);
         }
-        unreachable;
+        unreachable; // The root frame returns its result before the frame stack becomes empty.
     }
 
     /// `pair`'s narrowed type when it needs no frame, or null after opening
@@ -5189,7 +5189,7 @@ const Lowerer = struct {
                 var narrowed = named;
                 narrowed.args = try self.types.addSpan(results[0..named.args.len]);
                 if (narrowed.backing) |*backing| backing.ty = results[named.args.len];
-                self.types.set(copy, .{ .named = narrowed });
+                try self.types.set(copy, .{ .named = narrowed });
                 return copy;
             },
             .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst => Common.invariant("a compile-time root's leaf type was widened"),
@@ -5271,7 +5271,7 @@ const Lowerer = struct {
             if (walk.frames.items.len == 0) return answer;
             self.takeFitAnswer(walk, answer);
         }
-        unreachable;
+        unreachable; // The root frame returns its answer before the frame stack becomes empty.
     }
 
     const FitStep = union(enum) { pair: DeclaredTypePair, done: bool };

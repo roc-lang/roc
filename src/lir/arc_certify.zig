@@ -5244,8 +5244,17 @@ const Certifier = struct {
 
     /// Copies every value reachable from `value_reach_stack` (through
     /// lenders, holders, and payload sources) with its ownership facts from
-    /// `source` into `target`.
+    /// `source` into `target`. Payload sources also retain a carrier binding:
+    /// later summaries encode ownership projections by carrier local, so an
+    /// anonymous source alone cannot preserve the path to its stored unit.
+    /// This applies even when the carrier was defined inside an exited region.
     fn copyReachedValues(self: *Certifier, source: *const State, target: *State) Allocator.Error!void {
+        self.repr_scratch.clearRetainingCapacity();
+        var bindings = source.local_value.iterator();
+        while (bindings.next()) |binding| {
+            const carrier = try self.repr_scratch.getOrPut(binding.value);
+            if (!carrier.found_existing) carrier.value_ptr.* = binding.index;
+        }
         while (self.value_reach_stack.pop()) |value| {
             if (value == no_value) continue;
             const seen = try self.value_reach_seen.getOrPut(value);
@@ -5261,7 +5270,12 @@ const Certifier = struct {
             if (source.knownVariant(value)) |known| try target.setKnownVariant(value, known);
             const info = self.values.items[value];
             try self.value_reach_stack.appendSlice(self.allocator, info.lenders);
-            try self.value_reach_stack.append(self.allocator, info.payload_source);
+            if (info.payload_source != no_value) {
+                if (self.repr_scratch.get(info.payload_source)) |carrier| {
+                    try target.bindValue(self.proc_locals.items[carrier], info.payload_source);
+                }
+                try self.value_reach_stack.append(self.allocator, info.payload_source);
+            }
             try self.value_reach_stack.append(self.allocator, holder);
         }
     }
@@ -10359,4 +10373,144 @@ test "certify rejects an inner loop returning while an outer value is still owne
     try buildFrameNest(&f, .inner_terminal_leak);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "leaked") != null);
+}
+
+/// One sibling of a nested record is carried while a loop rebuilds the other.
+/// The loop's inner join never names that sibling, so its frame must preserve
+/// the intermediate projection needed to claim the sibling on the next exit.
+fn buildNestedSiblingAcrossInnerJoin(f: *CertifyTest, overconsume: bool) Allocator.Error!void {
+    const chosen_layout = try f.layouts.insertList(.str);
+    const sibling_layout = try f.layouts.insertList(f.pair_str);
+    const pair = try f.layouts.putStructFields(&.{ .{ .index = 0, .layout = chosen_layout }, .{ .index = 1, .layout = sibling_layout } });
+    const root_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = pair },
+        .{ .index = 1, .layout = .str },
+    });
+    const root = try f.local(root_layout);
+    const cond = try f.local(.i64);
+    const inner = try f.local(pair);
+    const inner_again = try f.local(pair);
+    const sibling = try f.local(sibling_layout);
+    const chosen = try f.local(chosen_layout);
+    const outer_piece = try f.local(.str);
+    const loop_param = try f.local(chosen_layout);
+    const result_pair = try f.local(pair);
+    const result_root = try f.local(root_layout);
+    const outer_param = try f.local(pair);
+    const sibling_field = try f.local(sibling_layout);
+    const acc = try f.local(chosen_layout);
+    const next_acc = try f.local(chosen_layout);
+    const outer = f.freshJoinPointId();
+    const loop = f.freshJoinPointId();
+    const done = try f.store.addCFStmt(.{ .assign_struct = .{ .target = result_root, .fields = try f.store.addLocalSpan(&.{ outer_param, outer_piece }), .next = try f.ret(result_root) } }, .test_fixture);
+    var exit = try f.store.addCFStmt(.{ .jump = .{ .target = outer } }, .test_fixture);
+    exit = try f.store.addCFStmt(.{ .set_local = .{ .target = outer_param, .value = result_pair, .mode = .initialize_join_param, .next = exit } }, .test_fixture);
+    exit = try f.store.addCFStmt(.{ .assign_struct = .{ .target = result_pair, .fields = try f.store.addLocalSpan(&.{ acc, sibling }), .next = exit } }, .test_fixture);
+
+    if (overconsume) exit = try f.decrefStmt(sibling, sibling_layout, exit);
+    exit = try f.decrefStmt(loop_param, chosen_layout, exit);
+    var back = try f.store.addCFStmt(.{ .jump = .{ .target = loop } }, .test_fixture);
+    back = try f.store.addCFStmt(.{ .set_local = .{ .target = acc, .value = next_acc, .mode = .initialize_join_param, .next = back } }, .test_fixture);
+    back = try f.store.addCFStmt(.{ .assign_list = .{ .target = next_acc, .elems = .empty(), .next = back } }, .test_fixture);
+    back = try f.decrefStmt(acc, chosen_layout, back);
+    const nested = f.freshJoinPointId();
+    back = try f.store.addCFStmt(.{ .join = .{ .id = nested, .params = .empty(), .body = back, .remainder = try f.store.addCFStmt(.{ .jump = .{ .target = nested } }, .test_fixture) } }, .test_fixture);
+    exit = try f.store.addCFStmt(.{ .switch_stmt = .{ .cond = cond, .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = exit }}), .default_branch = back } }, .test_fixture);
+    var enter = try f.store.addCFStmt(.{ .jump = .{ .target = loop } }, .test_fixture);
+    enter = try f.store.addCFStmt(.{ .assign_list = .{ .target = acc, .elems = .empty(), .next = enter } }, .test_fixture);
+    enter = try f.store.addCFStmt(.{ .set_local = .{ .target = loop_param, .value = chosen, .mode = .initialize_join_param, .next = enter } }, .test_fixture);
+    enter = try f.store.addCFStmt(.{ .assign_ref = .{ .target = chosen, .op = .field(inner_again, 0), .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{ .take_kind = .take }), .next = enter } }, .test_fixture);
+    enter = try f.store.addCFStmt(.{ .assign_ref = .{ .target = inner_again, .op = .field(root, 0), .next = enter } }, .test_fixture);
+    var remainder = try f.store.addCFStmt(.{ .join = .{ .id = loop, .params = try f.store.addLocalSpan(&.{ loop_param, acc }), .body = exit, .remainder = enter } }, .test_fixture);
+    remainder = try f.store.addCFStmt(.{ .assign_ref = .{ .target = sibling, .op = .local(sibling_field), .next = remainder } }, .test_fixture);
+    remainder = try f.store.addCFStmt(.{ .assign_ref = .{ .target = sibling_field, .op = .field(inner, 1), .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{ .take_kind = .take }), .next = remainder } }, .test_fixture);
+    remainder = try f.store.addCFStmt(.{ .assign_ref = .{ .target = inner, .op = .field(root, 0), .next = remainder } }, .test_fixture);
+    var body = try f.store.addCFStmt(.{ .join = .{ .id = outer, .params = try f.store.addLocalSpan(&.{outer_param}), .body = done, .remainder = remainder } }, .test_fixture);
+    body = try takeFieldStmt(f, outer_piece, root, 1, body);
+    _ = try f.addProc(&.{ root, cond }, body, root_layout);
+}
+
+test "issue 12505 taken nested sibling survives inner join" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildNestedSiblingAcrossInnerJoin(&f, false);
+    try f.certify();
+}
+
+test "issue 12505 nested sibling cannot be consumed twice across inner join" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildNestedSiblingAcrossInnerJoin(&f, true);
+    try testing.expectError(error.Certification, f.certify());
+}
+
+test "issue 12505 taken tag record list crosses nested result joins" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const list_layout = try f.layouts.insertList(.str);
+    const payload_layout = try f.layouts.putStructFields(&.{ .{ .index = 0, .layout = .i64 }, .{ .index = 1, .layout = .i64 }, .{ .index = 2, .layout = list_layout } });
+    const tag_layout = try f.layouts.putTagUnion(&.{ payload_layout, try f.layouts.ensureZstLayout() });
+    const tag = try f.local(tag_layout);
+    const payload = try f.local(payload_layout);
+    const selected = try f.local(list_layout);
+    const result = try f.local(.i64);
+    const outer = f.freshJoinPointId();
+    const inner = f.freshJoinPointId();
+    const done = try f.decrefStmt(selected, list_layout, try f.assignI64(result, try f.ret(result)));
+    const jump_outer = try f.store.addCFStmt(.{ .jump = .{ .target = outer } }, .test_fixture);
+    var enter = try f.store.addCFStmt(.{ .jump = .{ .target = inner } }, .test_fixture);
+    enter = try takeFieldStmt(&f, selected, payload, 2, enter);
+    enter = try f.store.addCFStmt(.{ .assign_ref = .{ .target = payload, .op = .tagPayloadStruct(tag, 0, 0), .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{ .take_kind = .take }), .next = enter } }, .test_fixture);
+    const inner_join = try f.store.addCFStmt(.{ .join = .{ .id = inner, .params = try f.store.addLocalSpan(&.{selected}), .body = jump_outer, .remainder = enter } }, .test_fixture);
+    const middle = f.freshJoinPointId();
+    const middle_join = try f.store.addCFStmt(.{ .join = .{ .id = middle, .params = .empty(), .body = inner_join, .remainder = try f.store.addCFStmt(.{ .jump = .{ .target = middle } }, .test_fixture) } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .join = .{ .id = outer, .params = try f.store.addLocalSpan(&.{selected}), .body = done, .remainder = middle_join } }, .test_fixture);
+    _ = try f.addProc(&.{tag}, body, .i64);
+    try f.certify();
+}
+
+/// The selected field escapes a region that owns its intermediate projection,
+/// while the outer record remains live to supply the other fields.
+fn buildEscapingProjectionWithLiveRoot(f: *CertifyTest, overconsume: bool) Allocator.Error!void {
+    const root_layout = try f.layouts.putStructFields(&.{ .{ .index = 0, .layout = f.pair_str }, .{ .index = 1, .layout = .str } });
+    const root = try f.local(root_layout);
+    const inner_view = try f.local(f.pair_str);
+    const selected = try f.local(.str);
+    const remaining_view = try f.local(f.pair_str);
+    const sibling = try f.local(.str);
+    const outer_field = try f.local(.str);
+    const result = try f.local(.i64);
+    const outer = f.freshJoinPointId();
+    const middle = f.freshJoinPointId();
+    const inner = f.freshJoinPointId();
+    var done = try f.assignI64(result, try f.ret(result));
+    done = try f.decrefStmt(outer_field, .str, done);
+    done = try f.decrefStmt(sibling, .str, done);
+    done = try f.decrefStmt(selected, .str, done);
+    if (overconsume) done = try f.decrefStmt(selected, .str, done);
+    done = try takeFieldStmt(f, outer_field, root, 1, done);
+    done = try takeFieldStmt(f, sibling, remaining_view, 1, done);
+    done = try f.store.addCFStmt(.{ .assign_ref = .{ .target = remaining_view, .op = .field(root, 0), .next = done } }, .test_fixture);
+    const jump_outer = try f.store.addCFStmt(.{ .jump = .{ .target = outer } }, .test_fixture);
+    var enter = try f.store.addCFStmt(.{ .jump = .{ .target = inner } }, .test_fixture);
+    enter = try takeFieldStmt(f, selected, inner_view, 0, enter);
+    enter = try f.store.addCFStmt(.{ .assign_ref = .{ .target = inner_view, .op = .field(root, 0), .next = enter } }, .test_fixture);
+    const inner_join = try f.store.addCFStmt(.{ .join = .{ .id = inner, .params = try f.store.addLocalSpan(&.{selected}), .body = jump_outer, .remainder = enter } }, .test_fixture);
+    const middle_join = try f.store.addCFStmt(.{ .join = .{ .id = middle, .params = .empty(), .body = inner_join, .remainder = try f.store.addCFStmt(.{ .jump = .{ .target = middle } }, .test_fixture) } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .join = .{ .id = outer, .params = try f.store.addLocalSpan(&.{selected}), .body = done, .remainder = middle_join } }, .test_fixture);
+    _ = try f.addProc(&.{root}, body, .i64);
+}
+
+test "issue 12505 escaping nested projection preserves its independently live root" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildEscapingProjectionWithLiveRoot(&f, false);
+    try f.certify();
+}
+
+test "issue 12505 escaping nested projection cannot spend its field twice" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildEscapingProjectionWithLiveRoot(&f, true);
+    try testing.expectError(error.Certification, f.certify());
 }
