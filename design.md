@@ -7515,6 +7515,24 @@ identity. Boxy and Monotype consume the identity directly; they must not find a
 derivation by comparing runtime types or resolve one of its calls by looking up
 the method name in a registry.
 
+A contract's types are a snapshot copy of the checker's relation, and the copy
+renames every type that holds a variable. A definition's own quantified
+variable (the implicitly open tail of `dec : Str -> Try([A, B], [InvalidJson(Str)])`)
+is therefore a fresh, unquantified variable inside the contract, which reads
+at its default. A generated call's dispatch-target record was written against
+the originals, so the contract publishes its renaming (`generated_codec_renamings`)
+and the call's evidence-edge substitution names the renamed copies. The
+substitution then describes the same types as the call's callable; it never
+names a variable of the defining scheme that the contract's own types do not
+mention.
+
+A `ParseTagUnionSpec` describes exactly one union. A payload that is itself a
+tag union is parsed with that union's own spec, never with the enclosing
+union's. Inside a payload parser the record field names come from the
+enclosing union's spec, which carries them for every record type its contract
+parses, including the records of a nested union and the values of record
+fields within the payload.
+
 The evidence schema of a binding includes its explicitly captured codec
 requirements as well as constraints attached to variables in its callable.
 CheckedModule construction enumerates that complete schema once per owning scheme and reuses

@@ -23,6 +23,17 @@ encode_light_counts = |d| Json.to_str(d)
 parse_light_counts : Str -> Parsed(Dict(Light([]), U64))
 parse_light_counts = |s| Json.parse(s)
 
+## A function signature's error row left to inference is the parser's own row.
+parse_light_inferred : Str -> Try(Light([]), _)
+parse_light_inferred = |s| Json.parse(s)
+
+## A tag payload that is itself a tag union is parsed with that union's own
+## tags, including the field names of its record payloads.
+Nested : [Wrap([Inner({ i : U64 }), Bare]), Plain({ p : [Left, Right] })]
+
+parse_nested : Str -> Parsed(Nested)
+parse_nested = |s| Json.parse(s)
+
 ## An unannotated parsed tag union stays open until equality constrains and
 ## identifies its known tag. Derived parser dispatch closes that inferred row.
 expect Ok(Friendly) == Json.parse("\"Friendly\"")
@@ -160,3 +171,14 @@ expect {
 		Err(_) => False
 	}
 }
+
+expect parse_light_inferred("\"Green\"") == Ok(Green)
+
+expect parse_nested("{\"Wrap\":{\"Inner\":{\"i\":3}}}") == Ok(Wrap(Inner({ i: 3 })))
+
+expect parse_nested("{\"Wrap\":\"Bare\"}") == Ok(Wrap(Bare))
+
+expect parse_nested("{\"Plain\":{\"p\":\"Right\"}}") == Ok(Plain({ p: Right }))
+
+## The payload's tags are not the enclosing union's tags.
+expect parse_nested("{\"Wrap\":\"Plain\"}") == Err(InvalidJson("Invalid JSON"))
