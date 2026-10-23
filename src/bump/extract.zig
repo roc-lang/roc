@@ -123,33 +123,29 @@ pub fn extractPackageApi(
     var api = PackageApi.init(gpa);
     errdefer api.deinit();
 
-    var public_input_order = std.ArrayList(usize).empty;
-    defer public_input_order.deinit(gpa);
-    for (inputs, 0..) |_, input_index| {
-        try public_input_order.append(gpa, input_index);
-    }
-    std.mem.sort(usize, public_input_order.items, inputs, struct {
-        fn lessThan(all_inputs: []const ModuleInput, a_index: usize, b_index: usize) bool {
-            const a = all_inputs[a_index];
-            const b = all_inputs[b_index];
-            const owner_order = std.mem.order(u8, &a.artifact.key.bytes, &b.artifact.key.bytes);
-            if (owner_order != .eq) return owner_order == .lt;
-            return a_index < b_index;
-        }
-    }.lessThan);
-
     var extractor = Extractor{
         .gpa = gpa,
         .api = &api,
         .origins = origins,
         .failure = failure,
-        .inputs = inputs,
-        .public_input_order = public_input_order.items,
     };
+    defer extractor.deinit();
 
-    for (inputs[0..api_input_count], 0..) |input, input_index| {
+    try extractor.inputs.appendSlice(gpa, inputs);
+    for (inputs, 0..) |input, input_index| {
+        const module_index = if (input_index < api_input_count)
+            try api.addModule(try api.allocator().dupe(u8, input.exposed_name))
+        else
+            null;
+        try extractor.input_modules.append(gpa, module_index);
+    }
+    try extractor.sortPublicInputs();
+    try extractor.adoptRenamedNominals(api_input_count);
+
+    for (extractor.input_modules.items, 0..) |module_index, input_index| {
+        const api_module = module_index orelse continue;
         extractor.current_input = input_index;
-        try extractor.extractModule(input);
+        try extractor.extractModule(input_index, api_module);
     }
 
     try api.normalize();
@@ -163,9 +159,17 @@ const Extractor = struct {
     api: *PackageApi,
     origins: *const OriginMap,
     failure: *?Failure,
-    inputs: []const ModuleInput,
+    /// Public namespaces: the caller's inputs followed by the namespaces of
+    /// nominal types that a public alias renames (see `adoptRenamedNominals`).
+    inputs: std.ArrayList(ModuleInput) = .empty,
+    /// The PackageApi module that receives each namespace's items, parallel
+    /// to `inputs`; null for namespaces used only to route references.
+    input_modules: std.ArrayList(?usize) = .empty,
     /// Public namespaces sorted by owning checked artifact for binary routing.
-    public_input_order: []const usize,
+    public_input_order: std.ArrayList(usize) = .empty,
+    /// Public alias declarations whose nominal type is extracted in their
+    /// place, under the alias's path.
+    renaming_aliases: std.AutoHashMapUnmanaged(RenamingAlias, void) = .empty,
     current_input: usize = 0,
     /// Current module context for failure reporting.
     current_module: []const u8 = "",
@@ -173,6 +177,188 @@ const Extractor = struct {
     /// All `.self` named-reference paths seen in public signatures, for the
     /// closure check. Slices are arena-owned.
     self_refs: std.StringArrayHashMapUnmanaged(void) = .empty,
+
+    const RenamingAlias = struct {
+        input: usize,
+        statement: can.CIR.Statement.Idx,
+    };
+
+    const NominalDecl = struct {
+        owner_module: [32]u8,
+        source_decl: u32,
+    };
+
+    const Rename = struct {
+        nominal: CheckedArtifact.CheckedNominalType,
+        /// The checked artifact recorded for the nominal's declaring module.
+        artifact: ?*const CheckedModuleArtifact,
+        alias: RenamingAlias,
+        path: []const u8,
+    };
+
+    fn deinit(self: *Extractor) void {
+        self.renaming_aliases.deinit(self.gpa);
+        self.public_input_order.deinit(self.gpa);
+        self.input_modules.deinit(self.gpa);
+        self.inputs.deinit(self.gpa);
+    }
+
+    fn sortPublicInputs(self: *Extractor) Allocator.Error!void {
+        self.public_input_order.clearRetainingCapacity();
+        for (self.inputs.items, 0..) |_, input_index| {
+            try self.public_input_order.append(self.gpa, input_index);
+        }
+        std.mem.sort(usize, self.public_input_order.items, self.inputs.items, struct {
+            fn lessThan(all_inputs: []const ModuleInput, a_index: usize, b_index: usize) bool {
+                const a = all_inputs[a_index];
+                const b = all_inputs[b_index];
+                const owner_order = std.mem.order(u8, &a.artifact.key.bytes, &b.artifact.key.bytes);
+                if (owner_order != .eq) return owner_order == .lt;
+                return a_index < b_index;
+            }
+        }.lessThan);
+    }
+
+    /// A public alias that applies a nominal type with no public name of its
+    /// own to exactly the alias's parameters makes the alias that nominal's
+    /// public name: users reach the nominal's methods and associated items
+    /// through the alias. Each such nominal becomes a public namespace whose
+    /// items land in the alias's module under the alias's path, so the
+    /// nominal and its associated items are extracted as if declared there.
+    ///
+    /// Adopted namespaces can rename further nominals, so this runs in rounds.
+    /// A nominal named by several aliases takes the name from the earliest
+    /// round, and within a round the lexicographically smallest path.
+    fn adoptRenamedNominals(self: *Extractor, api_input_count: usize) ExtractError!void {
+        var renames = std.AutoArrayHashMapUnmanaged(NominalDecl, Rename).empty;
+        defer renames.deinit(self.gpa);
+
+        var round_start: usize = 0;
+        var round_end = api_input_count;
+        while (round_start < round_end) {
+            renames.clearRetainingCapacity();
+            for (round_start..round_end) |input_index| {
+                try self.collectRenames(input_index, &renames);
+            }
+            for (renames.values()) |rename| {
+                const artifact = rename.artifact orelse {
+                    self.current_item = rename.path;
+                    return self.fail(.unpublished_public_type, "renamed nominal type's declaring module has no checked artifact");
+                };
+                std.debug.assert(std.mem.eql(u8, &artifact.key.bytes, &rename.nominal.owner_module.bytes));
+                try self.renaming_aliases.put(self.gpa, rename.alias, {});
+                try self.inputs.append(self.gpa, .{
+                    .exposed_name = rename.path,
+                    .module_env = artifact.moduleEnvConst(),
+                    .artifact = artifact,
+                    .public_type_decl = @fromBackingInt(@intCast(rename.nominal.source_decl)),
+                });
+                try self.input_modules.append(self.gpa, self.input_modules.items[rename.alias.input]);
+            }
+            try self.sortPublicInputs();
+            round_start = round_end;
+            round_end = self.inputs.items.len;
+        }
+    }
+
+    fn collectRenames(
+        self: *Extractor,
+        input_index: usize,
+        renames: *std.AutoArrayHashMapUnmanaged(NominalDecl, Rename),
+    ) ExtractError!void {
+        const input = self.inputs.items[input_index];
+        const module_env = input.module_env;
+        const view = input.artifact.checked_types.view();
+        const names = &input.artifact.canonical_names;
+        self.current_input = input_index;
+        self.current_module = input.exposed_name;
+
+        var exposed_names = try exposedNameSet(self.gpa, input);
+        defer exposed_names.deinit(self.gpa);
+
+        const stmts_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (stmts_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            if (stmt != .s_alias_decl) continue;
+            const header = module_env.store.getTypeHeader(stmt.s_alias_decl.header);
+            const name = module_env.getIdentText(header.relative_name);
+            if (!inputIncludesName(input, &exposed_names, module_env.module_kind, name)) continue;
+
+            const path = try publicItemPath(self.api.allocator(), input, name);
+            self.current_item = path;
+            const key = try canonical_type_keys.fromVar(
+                self.gpa,
+                &module_env.types,
+                module_env,
+                ModuleEnv.varFrom(stmt_idx),
+            );
+            const root = view.rootForKey(key) orelse
+                return self.fail(.unpublished_public_type, "exposed type declaration has no published checked root");
+            const payload = view.payload(root);
+            if (payload != .alias) continue;
+            const alias = payload.alias;
+            const nominal = self.unnamedNominalBehind(view, names, alias.backing) orelse continue;
+            if (!std.mem.eql(CheckedTypeId, nominal.args, alias.args)) continue;
+
+            const gop = try renames.getOrPut(self.gpa, .{
+                .owner_module = nominal.owner_module.bytes,
+                .source_decl = nominal.source_decl,
+            });
+            if (gop.found_existing and std.mem.order(u8, gop.value_ptr.path, path) != .gt) continue;
+            const origin_hash = names.moduleIdentityBytes(nominal.origin_module);
+            gop.value_ptr.* = .{
+                .nominal = nominal,
+                .artifact = self.origins.identity_map.get(origin_hash.*).?.artifact,
+                .alias = .{ .input = input_index, .statement = stmt_idx },
+                .path = path,
+            };
+        }
+    }
+
+    /// The nominal type of this package that a checked type names once
+    /// private aliases are seen through, if no public namespace names it.
+    fn unnamedNominalBehind(
+        self: *Extractor,
+        view: CheckedTypeStoreView,
+        names: *const check.CanonicalNames.CanonicalNameStore,
+        id: CheckedTypeId,
+    ) ?CheckedArtifact.CheckedNominalType {
+        var current = id;
+        while (true) {
+            switch (view.payload(current)) {
+                .alias => |alias| {
+                    if (alias.builtin_origin or !self.isSelfOrigin(names, alias.origin_module)) return null;
+                    if (self.publicOwner(alias.owner_module.*, alias.source_decl) != null) return null;
+                    current = alias.backing;
+                },
+                .nominal => |nominal| {
+                    if (nominal.builtin != null or !self.isSelfOrigin(names, nominal.origin_module)) return null;
+                    if (self.publicOwner(nominal.owner_module.*, nominal.source_decl) != null) return null;
+                    return nominal;
+                },
+                .pending,
+                .err,
+                .flex,
+                .rigid,
+                .record,
+                .tuple,
+                .function,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => return null,
+            }
+        }
+    }
+
+    fn isSelfOrigin(
+        self: *const Extractor,
+        names: *const check.CanonicalNames.CanonicalNameStore,
+        origin_module: check.CanonicalNames.ModuleIdentityId,
+    ) bool {
+        const origin = self.origins.identity_map.get(names.moduleIdentityBytes(origin_module).*) orelse return false;
+        return origin.kind == .self;
+    }
 
     fn fail(self: *Extractor, kind: Failure.Kind, detail: []const u8) ExtractError {
         // The failure outlives the PackageApi arena (which errdefer-frees on
@@ -186,24 +372,17 @@ const Extractor = struct {
         return error.ExtractFailed;
     }
 
-    fn extractModule(self: *Extractor, input: ModuleInput) ExtractError!void {
+    fn extractModule(self: *Extractor, input_index: usize, module_index: usize) ExtractError!void {
+        const input = self.inputs.items[input_index];
         const module_env = input.module_env;
-        self.current_module = input.exposed_name;
+        self.current_module = self.api.modules.items[module_index].name;
         self.current_item = "";
 
-        const module_index = try self.api.addModule(try self.api.allocator().dupe(u8, input.exposed_name));
         const view = input.artifact.checked_types.view();
         const names = &input.artifact.canonical_names;
 
-        // In a type module, only the type matching the module name and its
-        // associated items (dotted names under it) are public. Platform roots
-        // instead supply their exact source-declared public names.
-        var exposed_names: std.StringHashMapUnmanaged(void) = .empty;
+        var exposed_names = try exposedNameSet(self.gpa, input);
         defer exposed_names.deinit(self.gpa);
-        if (input.exposed_names) |names_to_expose| {
-            try exposed_names.ensureTotalCapacity(self.gpa, @intCast(names_to_expose.len));
-            for (names_to_expose) |name| exposed_names.putAssumeCapacity(name, {});
-        }
 
         var seen_paths = std.StringHashMapUnmanaged(void).empty;
         defer seen_paths.deinit(self.gpa);
@@ -219,6 +398,7 @@ const Extractor = struct {
                 stmt.s_nominal_decl.header
             else
                 continue;
+            if (self.renaming_aliases.contains(.{ .input = input_index, .statement = stmt_idx })) continue;
             const header = module_env.store.getTypeHeader(header_idx);
             const name = module_env.getIdentText(header.relative_name);
             if (!inputIncludesName(input, &exposed_names, module_env.module_kind, name)) continue;
@@ -597,29 +777,38 @@ const Extractor = struct {
         owner_module: CheckedArtifact.ModuleId,
         source_decl: ?u32,
     ) Allocator.Error!?[]const u8 {
+        const input = self.publicOwner(owner_module, source_decl) orelse return null;
+        const statement: can.CIR.Statement.Idx = @fromBackingInt(@intCast(source_decl.?));
+        const source_name = typeDeclName(input.module_env, statement) orelse return null;
+        return try publicItemPath(self.api.allocator(), input, source_name);
+    }
+
+    /// The public namespace that names a type declaration, if any.
+    fn publicOwner(
+        self: *const Extractor,
+        owner_module: CheckedArtifact.ModuleId,
+        source_decl: ?u32,
+    ) ?ModuleInput {
         const raw_statement = source_decl orelse return null;
         const statement: can.CIR.Statement.Idx = @fromBackingInt(@intCast(raw_statement));
 
-        const current = self.inputs[self.current_input];
-        if (publicInputOwnsType(current, owner_module, statement)) {
-            const source_name = typeDeclName(current.module_env, statement) orelse return null;
-            return try publicItemPath(self.api.allocator(), current, source_name);
-        }
+        const current = self.inputs.items[self.current_input];
+        if (publicInputOwnsType(current, owner_module, statement)) return current;
 
         var selected: ?ModuleInput = null;
         var selected_root_len: usize = 0;
         var low: usize = 0;
-        var high = self.public_input_order.len;
+        var high = self.public_input_order.items.len;
         while (low < high) {
             const mid = low + (high - low) / 2;
-            const input = self.inputs[self.public_input_order[mid]];
+            const input = self.inputs.items[self.public_input_order.items[mid]];
             if (std.mem.order(u8, &input.artifact.key.bytes, &owner_module.bytes) == .lt)
                 low = mid + 1
             else
                 high = mid;
         }
-        for (self.public_input_order[low..]) |input_index| {
-            const input = self.inputs[input_index];
+        for (self.public_input_order.items[low..]) |input_index| {
+            const input = self.inputs.items[input_index];
             if (!std.mem.eql(u8, &input.artifact.key.bytes, &owner_module.bytes)) break;
             if (!publicInputOwnsType(input, owner_module, statement)) continue;
             const root_len = if (input.public_type_decl) |root_statement|
@@ -633,11 +822,7 @@ const Extractor = struct {
                 selected_root_len = root_len;
             }
         }
-        if (selected) |input| {
-            const source_name = typeDeclName(input.module_env, statement) orelse return null;
-            return try publicItemPath(self.api.allocator(), input, source_name);
-        }
-        return null;
+        return selected;
     }
 
     /// Every `.self` named reference in a public signature must resolve to an
@@ -722,6 +907,18 @@ fn publicItemPath(alloc: Allocator, input: ModuleInput, source_name: []const u8)
         try alloc.dupe(u8, input.exposed_name)
     else
         try std.fmt.allocPrint(alloc, "{s}{s}", .{ input.exposed_name, source_name[root_name.len..] });
+}
+
+/// In a type module, only the type matching the module name and its
+/// associated items (dotted names under it) are public. Platform roots
+/// instead supply their exact source-declared public names.
+fn exposedNameSet(gpa: Allocator, input: ModuleInput) Allocator.Error!std.StringHashMapUnmanaged(void) {
+    var exposed_names: std.StringHashMapUnmanaged(void) = .empty;
+    if (input.exposed_names) |names_to_expose| {
+        try exposed_names.ensureTotalCapacity(gpa, @intCast(names_to_expose.len));
+        for (names_to_expose) |name| exposed_names.putAssumeCapacity(name, {});
+    }
+    return exposed_names;
 }
 
 fn inputIncludesName(
