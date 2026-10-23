@@ -27,6 +27,19 @@ parse_light_counts = |s| Json.parse(s)
 parse_light_inferred : Str -> Try(Light([]), _)
 parse_light_inferred = |s| Json.parse(s)
 
+## A union parsed inside the body keeps its shape local while the parser's
+## error row reaches the signature.
+light_is_red : Str -> Try(Bool, _)
+light_is_red = |s| {
+	parsed : Try(Light([]), _)
+	parsed = Json.parse(s)
+	parsed.map_ok(|light|
+		match light {
+			Red => True
+			Green => False
+		})
+}
+
 ## A tag payload that is itself a tag union is parsed with that union's own
 ## tags, including the field names of its record payloads.
 Nested : [Wrap([Inner({ i : U64 }), Bare]), Plain({ p : [Left, Right] })]
@@ -182,3 +195,5 @@ expect parse_nested("{\"Plain\":{\"p\":\"Right\"}}") == Ok(Plain({ p: Right }))
 
 ## The payload's tags are not the enclosing union's tags.
 expect parse_nested("{\"Wrap\":\"Plain\"}") == Err(InvalidJson("Invalid JSON"))
+
+expect light_is_red("\"Red\"") == Ok(True)
