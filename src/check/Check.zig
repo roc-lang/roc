@@ -40680,20 +40680,19 @@ fn refinableVarsIntersect(self: *Self, a: *const collections.DenseMap(Var, void)
 }
 
 /// A codec's output error row is a constraint result, not an input to shape
-/// selection. Settled local inputs can produce those constraints before the
-/// result generalizes, while the exact calls wait for final row settlement.
-fn codecInputsAreBoundaryLocal(
+/// selection. Settled inputs can produce those constraints before the result
+/// generalizes, while the exact calls wait for final row settlement. Adds the
+/// relation's inputs to `inputs`.
+fn codecInputsAreSettledAtBoundary(
     self: *Self,
     constraint: StaticDispatchConstraint,
     inputs: *collections.DenseMap(Var, void),
-    interface: *const collections.DenseMap(Var, void),
     rank: Rank,
 ) Allocator.Error!bool {
     const factory = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
     for (self.types.sliceVars(factory.args)) |arg| try self.collectReachableVars(arg, inputs);
     const runtime = self.types.resolveThroughAliases(factory.ret).desc.content.unwrapFunc() orelse return false;
     for (self.types.sliceVars(runtime.args)) |arg| try self.collectReachableVars(arg, inputs);
-    if (self.refinableVarsIntersect(inputs, interface)) return false;
 
     var iter = inputs.keyIterator();
     while (iter.next()) |var_| {
@@ -40781,12 +40780,13 @@ fn captureSchemeDispatchRequirements(
                 codec_relation_vars.clearRetainingCapacity();
                 try self.collectReachableVars(candidate.receiver_var, &codec_relation_vars);
                 if (boundary_codecs) |ready| {
-                    if (final_codec and try self.codecInputsAreBoundaryLocal(
+                    if (final_codec and try self.codecInputsAreSettledAtBoundary(
                         candidate.constraint,
                         &codec_relation_vars,
-                        &interface_vars,
                         rank,
                     )) {
+                        // The definition's own relation produces its
+                        // constraints here, before its variables generalize.
                         try ready.append(self.gpa, .{
                             .dispatcher_var = candidate.receiver_var,
                             .constraint = candidate.constraint,
@@ -40796,7 +40796,10 @@ fn captureSchemeDispatchRequirements(
                         // The exact relation has transferred to this boundary;
                         // duplicate candidates cannot schedule it again.
                         self.final_codec_dispatch_constraint_fns.getPtr(candidate.constraint.fn_var).?.* = .boundary;
-                        break :blk false;
+                        // A use can still refine an input that escapes through
+                        // the interface, so such a relation also belongs to the
+                        // scheme, for each use to validate at its own types.
+                        if (!self.refinableVarsIntersect(&codec_relation_vars, &interface_vars)) break :blk false;
                     }
                 }
                 // Unsettled codec inputs need the complete relation, including
