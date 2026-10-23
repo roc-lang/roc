@@ -6260,8 +6260,11 @@ const ProcedureBuilder = struct {
             } else if (rep.kind == .nominal) {
                 switch (rep.kind.nominal) {
                     .transparent => {
-                        if (rep.declared_fields.len != 0 or
-                            rep.nominal_backing_arg_substitutions.len != 0) return current;
+                        if (rep.declared_fields.len != 0) return current;
+                        if (rep.nominal_backing_arg_substitutions.len != 0) {
+                            current = self.nominalStoredArgument(current) orelse return current;
+                            continue;
+                        }
                         current = self.singleChildRepForDesc(current, .nominal_backing) orelse
                             boxyLowerInvariant("transparent nominal descriptor representation had no backing child");
                     },
@@ -6276,6 +6279,29 @@ const ProcedureBuilder = struct {
                 return current;
             }
         }
+    }
+
+    /// The type argument a transparent nominal use stores unchanged, when its
+    /// declaration's backing is that bare formal (`W(a) := a`): the use is
+    /// stored as the argument, so one descriptor describes both. Any other
+    /// nominal use with type arguments stores its declaration's shared
+    /// backing template.
+    fn nominalStoredArgument(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
+        const rep = self.plan.representations.items[@backingInt(rep_id)];
+        if (rep.kind != .nominal or rep.declared_fields.len != 0) return null;
+        switch (rep.kind.nominal) {
+            .transparent => {},
+            .opaque_nominal, .builtin_other => return null,
+        }
+        const backing = self.singleChildRepForDesc(rep_id, .nominal_backing) orelse return null;
+        var substitutions = self.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+        while (substitutions.next()) |substitution| {
+            if (substitution.actual_rep != backing and substitution.formal_rep != backing) continue;
+            if (self.layout_plan.rep_layouts[@backingInt(rep_id)].worker.layoutIdx() !=
+                self.layout_plan.rep_layouts[@backingInt(substitution.actual_rep)].worker.layoutIdx()) return null;
+            return substitution.actual_rep;
+        }
+        return null;
     }
 
     fn descriptorIdentityRep(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
@@ -8969,15 +8995,25 @@ const ProcedureBuilder = struct {
         }
         const body_shape = self.plan.generatedEncoderRuntimeBody(proc.worker_layout.worker) orelse
             boxyLowerInvariant("generated encoder runtime had no planned body shape");
-        return try self.lowerGeneratedEncoderShapeInto(
-            proc,
-            source,
-            body_shape,
-            proc.arg_locals.items[0],
-            proc.arg_locals.items[1],
-            target,
-            next,
-        );
+        const value = proc.arg_locals.items[0];
+        const body_rep = proc.repForTypeRef(body_shape);
+        if (proc.localUsesWorkerLayoutForRep(value, body_rep)) {
+            return try self.lowerGeneratedEncoderShapeInto(proc, source, body_shape, value, proc.arg_locals.items[1], target, next);
+        }
+        // A nominal use whose arguments are not all closed stores its
+        // declaration's shared backing template, while the body walks the
+        // use's own backing, so the value crosses into that representation.
+        // The template's formals describe the stored value by the actuals
+        // this use supplies.
+        const children = self.plan.childSlice(self.plan.representations.items[@backingInt(function.rep)].children);
+        const value_rep = children[function.args_start].rep;
+        const body_value = try proc.addFrameLocalForRep(body_rep);
+        const body = try self.lowerGeneratedEncoderShapeInto(proc, source, body_shape, body_value, proc.arg_locals.items[1], target, next);
+        const scope = proc.beginNominalBackingFormalScope();
+        errdefer proc.dropNominalBackingFormalScope(scope);
+        try proc.bindNominalWrapperFormalsInScope(value_rep);
+        const converted = try proc.assignRepresentationBoundary(body_value, value, body_rep, value_rep, body);
+        return try proc.leaveNominalBackingFormalScope(scope, converted);
     }
 
     fn lowerGeneratedEncoderValueThunkInto(
@@ -11084,8 +11120,17 @@ const ProcedureBuilder = struct {
         }
         const children = self.plan.childSlice(self.plan.representations.items[@backingInt(function.rep)].children);
         const args = children[function.args_start..][0..function.arg_count];
-        const variants = try self.generatedEncoderTagVariants(proc, source.shape, false);
-        defer self.allocator.free(variants);
+        const all_variants = try self.generatedEncoderTagVariants(proc, source.shape, false);
+        defer self.allocator.free(all_variants);
+        // No value has a tag whose payload seals uninhabited, so the plan
+        // gave it no payload encoder and the dispatch needs no branch for it.
+        var inhabited_count: usize = 0;
+        for (all_variants) |variant| {
+            if (self.plan.tagVariantSealsUninhabited(variant.variant)) continue;
+            all_variants[inhabited_count] = variant;
+            inhabited_count += 1;
+        }
+        const variants = all_variants[0..inhabited_count];
         const bodies = try self.allocator.alloc(LIR.CFStmtId, variants.len);
         defer self.allocator.free(bodies);
         for (variants, bodies) |variant, *body| {
@@ -16382,6 +16427,8 @@ const ProcBodyBuilder = struct {
             var bindings = std.ArrayList(LocalDescriptorEnvironmentBinding).empty;
             defer bindings.deinit(self.parent.allocator);
             try self.collectHiddenDescriptorParamsForRep(.all, arg.rep, &params, &seen_reps, &seen_descs);
+            const param_locals_by_index = try self.parent.allocator.alloc(LIR.LocalId, params.items.len);
+            defer self.parent.allocator.free(param_locals_by_index);
             for (params.items, 0..) |param, param_index| {
                 if (arg_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy erased argument descriptor parameter key exceeded its index range");
@@ -16391,6 +16438,15 @@ const ProcBodyBuilder = struct {
                 }
                 const descriptor_index: u32 = @intCast(param_index);
                 const descriptor_source = try self.erasedArgumentDescriptorParamSource(params.items, param_index);
+                if (descriptor_source.read == .parent) {
+                    const parent_local = param_locals_by_index[descriptor_source.descriptor_index];
+                    param_locals_by_index[param_index] = parent_local;
+                    try self.bindDescriptorRequirementLocalForRep(param.desc, param.rep, parent_local, true);
+                    if (self.repOwnsDescriptor(param.rep, param.desc)) {
+                        try self.bindDescriptorIdentityLocalForRep(param.rep, parent_local, true);
+                    }
+                    continue;
+                }
                 const is_root_descriptor = self.repOwnsShapeDescriptor(param.rep, param.desc) and
                     arg_identity_rep == self.descriptorShapeIdentityRep(param.rep);
                 const governs_arg_storage = if (governing_rep) |field_rep|
@@ -16403,6 +16459,7 @@ const ProcBodyBuilder = struct {
                 else
                     null;
                 const local = existing_root_local orelse try self.addFrameLocal(.opaque_ptr);
+                param_locals_by_index[param_index] = local;
                 try self.markReadOnlyDescriptorInput(local);
                 try self.bindDescriptorRequirementLocalForRep(param.desc, param.rep, local, true);
                 if (self.repOwnsDescriptor(param.rep, param.desc)) {
@@ -16417,7 +16474,7 @@ const ProcBodyBuilder = struct {
                     .source_descriptor_index = descriptor_source.descriptor_index,
                     .source_nested_index = descriptor_source.nested_index,
                     .source_tag_name = descriptor_source.tag_name,
-                    .read = descriptor_source.read,
+                    .read = descriptor_source.read.lir(),
                 });
             }
 
@@ -16472,6 +16529,18 @@ const ProcBodyBuilder = struct {
                     try overrides.append(self.parent.allocator, .{ .rep = identity_rep, .local = local });
                 }
             }
+            // A descriptor the root holds unchanged is the root's own, not one
+            // of the parts the root is rebuilt from.
+            if (root_param_index) |root_index| {
+                const root_local = param_locals.items[root_index];
+                var kept: usize = 0;
+                for (overrides.items) |override| {
+                    if (override.local == root_local) continue;
+                    overrides.items[kept] = override;
+                    kept += 1;
+                }
+                overrides.shrinkRetainingCapacity(kept);
+            }
 
             var body_root_local = governing_param_local;
             if (root_param_index != null and overrides.items.len != 0 and
@@ -16521,7 +16590,27 @@ const ProcBodyBuilder = struct {
         descriptor_index: u32,
         nested_index: u32,
         tag_name: LIR.BoxyNameId,
-        read: LIR.ErasedArgDescRead,
+        read: Read,
+
+        const Read = enum {
+            call_key,
+            nested,
+            tag_payload,
+            tag_ext,
+            /// The parent stores this representation's value unchanged, so
+            /// its own descriptor is this one: no read and no key.
+            parent,
+
+            fn lir(self: Read) LIR.ErasedArgDescRead {
+                return switch (self) {
+                    .call_key => .call_key,
+                    .nested => .nested,
+                    .tag_payload => .tag_payload,
+                    .tag_ext => .tag_ext,
+                    .parent => unreachable, // a parent-held descriptor is bound to the parent's local, never emitted as a parameter
+                };
+            }
+        };
     };
 
     /// Every descriptor of an erased argument that an earlier parameter holds
@@ -16547,6 +16636,14 @@ const ProcBodyBuilder = struct {
         var source: ?ErasedArgumentDescriptorParamSource = null;
         for (params[0..param_index], 0..) |candidate, candidate_index| {
             const parent_rep = self.parent.descriptorStorageRep(candidate.rep);
+            // One storage has one descriptor: a parent stored as exactly the
+            // target (a nominal whose backing is that type argument) is it.
+            if (parent_rep == target_rep) return .{
+                .descriptor_index = @intCast(candidate_index),
+                .nested_index = std.math.maxInt(u32),
+                .tag_name = no_tag_payload_read,
+                .read = .parent,
+            };
             const projected: ErasedArgumentDescriptorParamSource = if (try self.immediateNestedDescriptorIndexForRep(parent_rep, target_rep)) |nested_index| nested: {
                 if (nested_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy erased argument nested descriptor index exceeded its ABI range");
@@ -32505,10 +32602,13 @@ const ProcBodyBuilder = struct {
                             field_layout,
                             true,
                         ) orelse continue;
+                        // A nominal stored as its declaration's shared
+                        // template describes a formal's payload by the actual
+                        // its use substitutes.
                         return .{ .step = .{ .tag_payload = .{
                             .tag_name = try self.lirTagNameForVariant(variant),
                             .payload_index = @intCast(payload_index),
-                        } }, .rep = payload_rep };
+                        } }, .rep = self.nominalFormalActual(frame.rep_id, payload_rep) orelse payload_rep };
                     }
                     tag.variant += 1;
                     tag.payload = 0;
@@ -32540,6 +32640,17 @@ const ProcBodyBuilder = struct {
                 return .{ .step = .{ .nested = @intCast(position) }, .rep = self.parent.nestedDescriptorSlotDescRep(nested.slots[position]) };
             },
         }
+    }
+
+    /// The actual `nominal_rep_id`'s use substitutes for `formal_rep`, when
+    /// it is one of that nominal's formals.
+    fn nominalFormalActual(self: *const ProcBodyBuilder, nominal_rep_id: Plan.TypeRepId, formal_rep: Plan.TypeRepId) ?Plan.TypeRepId {
+        const rep = self.parent.plan.representations.items[@backingInt(nominal_rep_id)];
+        var substitutions = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
+        while (substitutions.next()) |substitution| {
+            if (substitution.formal_rep == formal_rep) return substitution.actual_rep;
+        }
+        return null;
     }
 
     fn immediateNestedDescriptorIndexForRep(
