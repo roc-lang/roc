@@ -796,10 +796,12 @@ that receives one of its functions as a value, unchanged. Such a
 procedure's own code is named by its code key (`LIR.LirProcSpec.code_key`:
 its identity with the module's content key), under which a pack offers it and
 Direct LIR looks it up. Code whose identity names it never holds a copy of
-site-identified code: an entry whose body inlined one
-(`LIR.InlineScope.copies_site_code`) is not offered by identity, and its
-calls to one are extracted as symbolic references by identity rather than as
-references into the pack. A program that takes an entry lowers every
+site-identified code: its calls to one are extracted as symbolic references
+by identity rather than as references into the pack, and an entry is not
+offered by identity when its body inlined one
+(`LIR.InlineScope.copies_site_code`) or when a procedure without a code key
+that it calls, whose code the pack carries with the entry, holds such a copy
+(`PackProgram.siteCodeCarriers`). A program that takes an entry lowers every
 lambda-set member the entry's signature mentions and records each as a
 served callee of that entry (`Result.served_callees`). The entry's procedure
 is body-less, so these are its outgoing edges: every reachability walk,
