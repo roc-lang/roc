@@ -97,22 +97,28 @@ test "issue 10842: where-clause method arity that no target satisfies reports ty
     try std.testing.expect(coord.hasUserErrors());
     // `b` is reached only through the callback `|n| n + 1`, so nothing pins it
     // and it takes its specialization default. Its other requirements then fail
-    // on that default, which is one undetermined type rather than a mismatch
-    // or missing method against a type the program never wrote.
-    var undetermined_count: usize = 0;
+    // on that default, which is one type that never resolved to a concrete type
+    // rather than a mismatch or missing method against a type the program never
+    // wrote.
+    var unresolved_count: usize = 0;
     var type_mismatch_count: usize = 0;
     var missing_method_count: usize = 0;
     var reports = coord.iterReports();
     while (reports.next()) |entry| {
-        if (std.mem.eql(u8, entry.report.title, "Type Not Determined")) {
-            undetermined_count += 1;
-        } else if (std.mem.eql(u8, entry.report.title, "Type Mismatch")) {
+        if (std.mem.eql(u8, entry.report.title, "Type Mismatch")) {
             type_mismatch_count += 1;
         } else if (std.mem.eql(u8, entry.report.title, "Missing Method")) {
             missing_method_count += 1;
+            var rendered: std.Io.Writer.Allocating = .init(gpa);
+            defer rendered.deinit();
+            try entry.report.render(&rendered.writer, .markdown);
+            const message = rendered.written();
+            errdefer std.debug.print("{s}\n", .{message});
+            if (std.mem.find(u8, message, "never resolved to a concrete type") != null) unresolved_count += 1;
+            try std.testing.expect(std.mem.find(u8, message, "Dec") == null);
         }
     }
-    try std.testing.expectEqual(@as(usize, 1), undetermined_count);
+    try std.testing.expectEqual(@as(usize, 1), unresolved_count);
     try std.testing.expectEqual(@as(usize, 0), type_mismatch_count);
-    try std.testing.expectEqual(@as(usize, 0), missing_method_count);
+    try std.testing.expectEqual(@as(usize, 1), missing_method_count);
 }

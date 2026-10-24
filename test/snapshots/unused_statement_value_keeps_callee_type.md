@@ -60,7 +60,18 @@ TYPE MISMATCH - unused_statement_value_keeps_callee_type.md:5:14:5:15
 			(annotation-start code-block)
 			(indent 1)
 			(text "Str")
-			(annotation-end))))
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Write the number in quotes to make it a")
+			(reflow " ")
+			(annotated code "Str")
+			(reflow ", or convert it with")
+			(reflow " ")
+			(annotated code ".to_str()")
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig

@@ -56,7 +56,19 @@ TYPE MISMATCH - issue_9075.md:6:11:6:12
 			(annotation-start code-block)
 			(indent 1)
 			(text "Str")
-			(annotation-end))))
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Convert it to a")
+			(reflow " ")
+			(annotated code "Str")
+			(reflow " ")
+			(reflow "with")
+			(reflow " ")
+			(annotated code ".to_str()")
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig

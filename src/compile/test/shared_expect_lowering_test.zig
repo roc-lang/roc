@@ -123,12 +123,14 @@ fn preparedCopy(
     var program = try prepared.program.cloneFrozen(allocator);
     errdefer program.deinit();
     const metadata = try allocator.dupe(lir.CheckedPipeline.RootTestPlanMetadata, prepared.test_plan_metadata);
+    errdefer allocator.free(metadata);
     return .{
         .allocator = allocator,
         .program = program,
         .target = prepared.target,
         .root_count = prepared.root_count,
         .test_plan_metadata = metadata,
+        .spec_key_aliases = try prepared.spec_key_aliases.clone(allocator),
     };
 }
 

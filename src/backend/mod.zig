@@ -33,6 +33,7 @@ pub const StaticDataExport = dev.StaticDataExport;
 pub const StaticDataRelocation = dev.StaticDataRelocation;
 pub const StaticDataImage = dev.StaticDataImage;
 pub const StaticDataImageFunctionResolver = dev.StaticDataImageFunctionResolver;
+pub const StaticDataImageError = dev.StaticDataImageError;
 pub const StaticStringData = dev.StaticStringData;
 pub const RunImage = dev.RunImage;
 pub const procSymbolName = dev.procSymbolName;
@@ -305,7 +306,7 @@ test "x86_64 Windows U128 entrypoint return loads all 16 bytes into XMM0" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_literal = .{
         .target = result,
-        .value = .{ .i128_literal = .{ .value = 0x11111111111111112222222222222222, .layout_idx = .u128 } },
+        .value = .{ .i128_literal = try store.addStmtRow(lir.LIR.I128Literal, .{ .value = 0x11111111111111112222222222222222, .layout_idx = .u128 }) },
         .next = ret,
     } }, .test_fixture);
     const proc = try store.addProcSpec(.{

@@ -39,27 +39,55 @@ pub const Set = struct {
         } else {
             const word = field / 64;
             var high: High = if (self.high) |previous| previous.* else .{
-                .words = Words.init(allocator, @as(usize, word) + 1),
+                .words = Words.init(@as(usize, word) + 1),
                 .last_word = 0,
                 .count = 0,
             };
-            high.words.allocator = allocator;
             // A snapshot's depth covers its highest word, so a set sized for
             // its narrower fields is rebuilt deep enough for this one. Equal
             // sets share their highest word and so their depth.
-            const needed = Words.init(allocator, @as(usize, word) + 1);
+            const needed = Words.init(@as(usize, word) + 1);
             if (needed.depth > high.words.depth) {
                 var grown = needed;
                 var entries = high.words.iterator();
-                while (entries.next()) |entry| try grown.put(entry.index, entry.value);
+                while (entries.next()) |entry| try grown.put(allocator, entry.index, entry.value);
                 high.words = grown;
             }
-            try high.words.put(word, high.words.get(word) | bit);
+            try high.words.put(allocator, word, high.words.get(word) | bit);
             high.last_word = @max(high.last_word, word);
             high.count += 1;
             const stored = try allocator.create(High);
             stored.* = high;
             result.high = stored;
+        }
+        return result;
+    }
+
+    /// Whether the two sets share a field.
+    pub fn intersects(self: Set, other: Set) bool {
+        if (self.low & other.low != 0) return true;
+        const left = self.high orelse return false;
+        const right = other.high orelse return false;
+        var entries = right.words.iterator();
+        while (entries.next()) |entry| {
+            if (left.words.get(entry.index) & entry.value != 0) return true;
+        }
+        return false;
+    }
+
+    /// The union of both sets. Use an arena that outlives every snapshot
+    /// sharing the result.
+    pub fn withAll(self: Set, allocator: std.mem.Allocator, other: Set) std.mem.Allocator.Error!Set {
+        var result = self;
+        result.low |= other.low;
+        if (other.high) |high| {
+            var entries = high.words.iterator();
+            while (entries.next()) |entry| {
+                var bits = entry.value;
+                while (bits != 0) : (bits &= bits - 1) {
+                    result = try result.withField(allocator, @intCast(@as(u64, entry.index) * 64 + @ctz(bits)));
+                }
+            }
         }
         return result;
     }

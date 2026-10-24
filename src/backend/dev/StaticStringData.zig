@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const builtins = @import("builtins");
 const lir = @import("lir");
 const RocTarget = @import("roc_target").RocTarget;
 
@@ -86,7 +87,12 @@ pub fn literalSymbolName(allocator: Allocator, bytes: []const u8, alignment: u32
     hasher.update(&alignment_bytes);
     hasher.update(bytes);
     const digest = hasher.finalResult();
-    return std.fmt.allocPrint(allocator, lir.Program.content_data_symbol_prefix ++ "{s}", .{&std.fmt.bytesToHex(digest[0..16].*, .lower)});
+    const prefix = lir.Program.content_data_symbol_prefix;
+    const hex = std.fmt.bytesToHex(digest[0..16].*, .lower);
+    const name = try allocator.alloc(u8, prefix.len + hex.len);
+    @memcpy(name[0..prefix.len], prefix);
+    @memcpy(name[prefix.len..], &hex);
+    return name;
 }
 
 /// Build readonly data exports from the exact LIR procedure backing demand.
@@ -145,7 +151,8 @@ pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget
         var bytes_owned = true;
         errdefer if (bytes_owned) allocator.rawFree(bytes, allocation_alignment, @returnAddress());
         @memset(bytes, 0);
-        writeSignedWord(word_size, bytes, data_offset - word_size, 0);
+        const refcount_offset: u32 = @intCast(@as(i64, data_offset) + builtins.utils.targetRefcountOffset(word_size));
+        writeSignedWord(word_size, bytes, refcount_offset, builtins.utils.REFCOUNT_STATIC_DATA);
         @memcpy(bytes[data_offset..][0..entry.bytes.len], entry.bytes);
 
         const relocations = try allocator.alloc(StaticDataRelocation, 0);
@@ -206,7 +213,7 @@ fn writeSignedWord(word_size: u32, bytes: []u8, offset: u32, value: isize) void 
     switch (word_size) {
         4 => std.mem.writeInt(i32, bytes[offset..][0..4], @intCast(value), .little),
         8 => std.mem.writeInt(i64, bytes[offset..][0..8], @intCast(value), .little),
-        else => unreachable,
+        else => unreachable, // build derives word_size from RocTarget.ptrBitWidth, which is 32 or 64
     }
 }
 

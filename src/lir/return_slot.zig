@@ -67,6 +67,7 @@ const Spec = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .ptr,
             => false,
         };
@@ -79,8 +80,8 @@ const Spec = struct {
         result_layout: layout_mod.Idx,
         stored: body_clone.ForwardedAlias,
     ) ?body_clone.CallResultFusion(Spec).Match {
-        const store_stmt_node = store.getCFStmt(stored.next);
-        if (store_stmt_node != .assign_low_level) return null;
+        const store_stmt_node = store.getCFStmtImmediate(stored.next);
+        if (store_stmt_node.* != .assign_low_level) return null;
         const store_stmt = store_stmt_node.assign_low_level;
         if (store_stmt.op != .ptr_store) return null;
         if (store.getLocal(store_stmt.target).layout_idx != .zst) return null;
@@ -108,6 +109,7 @@ const Spec = struct {
         return try body_clone.cloneCallVariant(
             ReturnSlotRewriter,
             store,
+            layouts,
             key.source,
             .{ .out_ptr = out_ptr, .store_unit = store_unit },
             .{
@@ -181,7 +183,7 @@ fn testLowLevel(store: *LirStore, target: LocalId, op: LowLevelOp, args: []const
     return try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = op,
-        .rc_effect = op.rcEffect(),
+        .rc_effect = try store.addRcEffect(op.rcEffect()),
         .args = try store.addLocalSpan(args),
         .next = next,
     } }, .test_fixture);
@@ -259,7 +261,7 @@ test "return slot creates an explicit ptr-result variant for aggregate call stor
     const ptr_store = try testLowLevel(&store, store_unit, .ptr_store, &.{ destination, temporary_alias }, ret);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = temporary_alias,
-        .op = .{ .local = temporary },
+        .op = .local(temporary),
         .next = ptr_store,
     } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{

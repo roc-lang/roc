@@ -15,8 +15,8 @@ const RocStr = abi.RocStr;
 pub const AllocFn = *const fn (usize, usize) callconv(.c) *anyopaque;
 
 const replacement = "\xef\xbf\xbd";
-const small_str_flag: u8 = 0b1000_0000;
-const capacity_shift = 1;
+const small_str_flag = abi.small_str_flag;
+const capacity_shift = abi.capacity_shift;
 
 /// Replace every invalid UTF-8 byte with U+FFFD. Valid input is returned
 /// unchanged; invalid input is returned in an allocation owned by `allocator`.

@@ -53,6 +53,8 @@ pub const Options = struct {
     compiler_version: ?[]const u8 = null,
     /// Borrowed, invocation-owned builtin facts. Never shared between threads.
     builtin_facts: ?*BuiltinFacts = null,
+    /// Absolute working directory that messages show paths relative to.
+    working_dir: ?[]const u8 = null,
 };
 
 /// Report of the result of formatting Roc files including the count of successes, failures, and any files that need to be reformatted
@@ -98,7 +100,7 @@ fn formatFilePathReportingFailure(
     options: Options,
     io: std.Io,
     stderr: *std.Io.Writer,
-) std.Io.Writer.Error!enum { formatted, failed, not_roc_file } {
+) (Allocator.Error || std.Io.Writer.Error)!enum { formatted, failed, not_roc_file } {
     if (formatFilePath(gpa, base_dir, path, unformatted_files, options, io, stderr)) |_| {
         return .formatted;
     } else |err| switch (err) {
@@ -138,7 +140,9 @@ fn formatFilePathReportingFailure(
         error.WouldBlock,
         error.WriteFailed,
         => {
-            try stderr.print("Failed to format {f}: {any}\n", .{ base.bidi.Display{ .bytes = display_path }, err });
+            const shown_path = try @import("reporting").displayPath(gpa, display_path, options.working_dir);
+            defer gpa.free(shown_path);
+            try stderr.print("Failed to format {f}: {any}\n", .{ base.bidi.Display{ .bytes = shown_path }, err });
             return .failed;
         },
     }
@@ -173,7 +177,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
                 if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".roc")) continue;
                 const file_path = try std.fs.path.join(gpa, &.{ path, entry.path });
                 defer gpa.free(file_path);
-                switch (try formatFilePathReportingFailure(gpa, base_dir, file_path, entry.path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) {
+                switch (try formatFilePathReportingFailure(gpa, base_dir, file_path, file_path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) {
                     .formatted => success_count += 1,
                     .failed => failed_count += 1,
                     .not_roc_file => {},
@@ -378,20 +382,16 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, 
     {
         const expected_idx = line_offsets.items.items.len;
         const idx = try line_offsets.append(gpa, 0);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
+        if (@backingInt(idx) != expected_idx) {
+            base.invariant("fmt invariant violated: line offset appended at index {d}, expected {d}", .{ @backingInt(idx), expected_idx });
         }
     }
     for (source, 0..) |c, i| {
         if (c == '\n') {
             const expected_idx = line_offsets.items.items.len;
             const idx = try line_offsets.append(gpa, @intCast(i));
-            if (comptime builtin.mode == .debug) {
-                std.debug.assert(@backingInt(idx) == expected_idx);
-            } else if (@backingInt(idx) != expected_idx) {
-                unreachable;
+            if (@backingInt(idx) != expected_idx) {
+                base.invariant("fmt invariant violated: line offset appended at index {d}, expected {d}", .{ @backingInt(idx), expected_idx });
             }
         }
     }
@@ -404,7 +404,7 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, 
     try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
         const region = parse_ast.tokens.resolve(@intCast(err.region.start));
-        const line = binarySearch(line_offsets.items.items, region.start.offset) orelse unreachable;
+        const line = binarySearch(line_offsets.items.items, region.start.offset) orelse unreachable; // line_offsets starts with offset 0, which is at most every needle
         const column = region.start.offset - line_offsets.items.items[line];
         const token = parse_ast.tokens.tokens.items(.tag)[err.region.start];
         // TODO: pretty print the parse failures.
@@ -511,6 +511,7 @@ const Formatter = struct {
     /// Suspended emission workers.
     frames: std.ArrayList(Frame) = .empty,
     /// Grouped predictions normalize source-only newlines independently.
+    /// Shares one allocation with `node_layouts`, directly after it.
     grouped_layouts: []TypeLayout,
     /// Prefix counts of comments in inter-token gaps.
     comment_prefix: []u32,
@@ -541,12 +542,12 @@ const Formatter = struct {
     /// Creates a new Formatter for the given parse IR.
     fn init(ast: AST, writer: *std.Io.Writer, options: Options) FormatAstError!Formatter {
         if (!tokenizationPermitsFormatting(ast)) return error.ParsingFailed;
-        const node_layouts = try ast.gpa.alloc(TypeLayout, ast.store.nodeCount());
-        errdefer ast.gpa.free(node_layouts);
-        @memset(node_layouts, .unknown);
-        const grouped_layouts = try ast.gpa.alloc(TypeLayout, ast.store.nodeCount());
-        errdefer ast.gpa.free(grouped_layouts);
-        @memset(grouped_layouts, .unknown);
+        const node_count = ast.store.nodeCount();
+        const layouts = try ast.gpa.alloc(TypeLayout, 2 * node_count);
+        errdefer ast.gpa.free(layouts);
+        @memset(layouts, .unknown);
+        const node_layouts = layouts[0..node_count];
+        const grouped_layouts = layouts[node_count..];
         const comment_prefix = try ast.gpa.alloc(u32, ast.tokens.tokens.len + 1);
         errdefer ast.gpa.free(comment_prefix);
         comment_prefix[0] = 0;
@@ -570,10 +571,9 @@ const Formatter = struct {
     }
 
     fn deinit(fmt: *Formatter) void {
-        fmt.ast.gpa.free(fmt.node_layouts);
+        fmt.ast.gpa.free(fmt.node_layouts.ptr[0 .. 2 * fmt.node_layouts.len]);
         fmt.layout_scratch.deinit(fmt.ast.gpa);
         fmt.frames.deinit(fmt.ast.gpa);
-        fmt.ast.gpa.free(fmt.grouped_layouts);
         fmt.ast.gpa.free(fmt.comment_prefix);
     }
 
@@ -1371,19 +1371,36 @@ const Formatter = struct {
         };
     }
 
-    fn orderedName(fmt: *Formatter, comptime T: type, idx: T) FormatAstError![]const u8 {
-        var name: std.Io.Writer.Allocating = .init(fmt.ast.gpa);
-        defer name.deinit();
+    /// Where an ordered entry's name is: in the source, or in the
+    /// collection's name buffer when it is pieced together from several tokens.
+    const OrderedName = union(enum) {
+        source: []const u8,
+        pooled: struct { start: usize, end: usize },
+
+        fn resolve(name: OrderedName, pool: []const u8) []const u8 {
+            return switch (name) {
+                .source => |text| text,
+                .pooled => |span| pool[span.start..span.end],
+            };
+        }
+    };
+
+    fn orderedName(fmt: *Formatter, comptime T: type, idx: T, pool: *std.ArrayList(u8)) FormatAstError!OrderedName {
         if (T == AST.ExposedItem.Idx) {
             const item = fmt.ast.store.getExposedItem(idx);
             switch (item) {
                 inline .lower_ident, .upper_ident, .upper_ident_star => |ident, tag| {
-                    for (fmt.ast.store.tokenSlice(ident.qualifiers)) |qualifier| {
-                        try name.writer.writeAll(std.mem.trimStart(u8, fmt.ast.resolve(qualifier), "."));
-                        try name.writer.writeByte('.');
+                    const qualifiers = fmt.ast.store.tokenSlice(ident.qualifiers);
+                    const base_name = std.mem.trimStart(u8, fmt.ast.resolve(ident.ident), ".");
+                    if (qualifiers.len == 0 and tag != .upper_ident_star) return .{ .source = base_name };
+                    const start = pool.items.len;
+                    for (qualifiers) |qualifier| {
+                        try pool.appendSlice(fmt.ast.gpa, std.mem.trimStart(u8, fmt.ast.resolve(qualifier), "."));
+                        try pool.append(fmt.ast.gpa, '.');
                     }
-                    try name.writer.writeAll(std.mem.trimStart(u8, fmt.ast.resolve(ident.ident), "."));
-                    if (tag == .upper_ident_star) try name.writer.writeAll(".*");
+                    try pool.appendSlice(fmt.ast.gpa, base_name);
+                    if (tag == .upper_ident_star) try pool.appendSlice(fmt.ast.gpa, ".*");
+                    return .{ .pooled = .{ .start = start, .end = pool.items.len } };
                 },
                 .malformed => return error.ParsingFailed,
             }
@@ -1396,9 +1413,8 @@ const Formatter = struct {
                 fmt.ast.store.getSymbolMapEntry(idx).symbol
             else
                 @compileError("unsupported ordered header item");
-            try name.writer.writeAll(fmt.ast.resolve(token));
+            return .{ .source = fmt.ast.resolve(token) };
         }
-        return try name.toOwnedSlice();
     }
 
     fn flushSourceGap(fmt: *Formatter, gap: SourceGap, spacing: CommentSpacing) error{WriteFailed}!void {
@@ -1433,11 +1449,13 @@ const Formatter = struct {
 
         const Entry = OrderedEntry(T);
         var entries = std.ArrayList(Entry).empty;
-        defer {
-            for (entries.items) |entry| fmt.ast.gpa.free(entry.name);
-            entries.deinit(fmt.ast.gpa);
-        }
+        defer entries.deinit(fmt.ast.gpa);
         try entries.ensureTotalCapacity(fmt.ast.gpa, items.len);
+        var names = std.ArrayList(OrderedName).empty;
+        defer names.deinit(fmt.ast.gpa);
+        try names.ensureTotalCapacity(fmt.ast.gpa, items.len);
+        var name_pool = std.ArrayList(u8).empty;
+        defer name_pool.deinit(fmt.ast.gpa);
         const opening_end: usize = fmt.ast.tokens.resolve(region.start).end.offset;
         const first_start = fmt.ast.tokens.resolve(fmt.nodeRegion(@backingInt(items[0])).start).start.offset;
         const opening_text = fmt.ast.env.source[opening_end..first_start];
@@ -1462,9 +1480,10 @@ const Formatter = struct {
             const gap = fmt.ast.env.source[gap_start..gap_end];
             const line_end = std.mem.findScalar(u8, gap, '\n') orelse gap.len;
             const inline_end = if (std.mem.findScalar(u8, gap[0..line_end], '#') != null) gap_start + line_end else gap_start;
+            names.appendAssumeCapacity(try fmt.orderedName(T, idx, &name_pool));
             entries.appendAssumeCapacity(.{
                 .idx = idx,
-                .name = try fmt.orderedName(T, idx),
+                .name = undefined,
                 .leading = .{ .start = leading_start, .end = item_start },
                 .before_separator = .{ .start = item_end, .end = if (has_comma) comma.start.offset else item_end },
                 .trailing = .{ .start = gap_start, .end = inline_end },
@@ -1472,6 +1491,7 @@ const Formatter = struct {
             leading_start = inline_end;
         }
         const closing_gap = SourceGap{ .start = leading_start, .end = closing_start };
+        for (entries.items, names.items) |*entry, name| entry.name = name.resolve(name_pool.items);
         std.mem.sort(Entry, entries.items, {}, Entry.lessThan);
 
         if (multiline) fmt.curr_indent += 1 else if (braces == .curly) try fmt.push(' ');
@@ -1485,10 +1505,8 @@ const Formatter = struct {
             Formatter.discardRegion(try formatter(fmt, entry.idx));
             fmt.curr_indent = item_indent;
             if (multiline) {
-                if (fmt.has_multiline_string) {
-                    try fmt.newlineIndent();
-                }
-                if (trailing_comma or i + 1 < entries.items.len) try fmt.push(',');
+                const last = i + 1 == entries.items.len;
+                if (trailing_comma or !last) try fmt.pushMultilineItemComma(fmt.has_multiline_string, last);
                 if (std.mem.findScalar(u8, fmt.ast.env.source[entry.before_separator.start..entry.before_separator.end], '#') != null) {
                     // The separator moves before these comments, so blank lines
                     // after them would not survive the next formatting.
@@ -1540,12 +1558,20 @@ const Formatter = struct {
         }
     }
 
+    /// Ends an item of a multiline collection. A `\\` line runs to the end of
+    /// the line, so a comma after one goes on the next line; the last item
+    /// needs no comma there, so it gets none.
+    fn pushMultilineItemComma(fmt: *Formatter, ends_with_multiline_string_line: bool, last: bool) error{WriteFailed}!void {
+        if (ends_with_multiline_string_line) {
+            if (last) return;
+            try fmt.newlineIndent();
+        }
+        try fmt.push(',');
+    }
+
     fn endCollectionItem(fmt: *Formatter, state: CollectionFormatting, last: bool) FormatAstError!void {
         if (state.multiline) {
-            if (fmt.has_multiline_string) {
-                try fmt.newlineIndent();
-            }
-            try fmt.push(',');
+            try fmt.pushMultilineItemComma(fmt.has_multiline_string, last);
         } else if (!last) {
             try fmt.pushAll(", ");
         }
@@ -1841,10 +1867,8 @@ const Formatter = struct {
     }
 
     fn discardRegion(region: AST.TokenizedRegion) void {
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(region.start <= region.end);
-        } else if (region.start > region.end) {
-            unreachable;
+        if (region.start > region.end) {
+            base.invariant("fmt invariant violated: discarded region starts at token {d} after it ends at token {d}", .{ region.start, region.end });
         }
     }
 
@@ -2002,6 +2026,51 @@ const Formatter = struct {
         block: struct { next: usize, group_single_ident: bool },
         nominal_record: struct { parenthesize_mapper: bool },
     };
+
+    /// How an `if` writes its condition. A `then` block's `{` already marks
+    /// where the condition ends, so its condition goes without grouping
+    /// parentheses; every other `then` branch gets a parenthesized condition.
+    /// A malformed condition prints no source to delimit, so it stays as written.
+    const IfCondition = union(enum) {
+        as_written,
+        parenthesized,
+        unwrapped: AST.Expr.Idx,
+    };
+
+    fn ifCondition(fmt: *Formatter, condition: AST.Expr.Idx, then: AST.Expr.Idx) IfCondition {
+        if (fmt.ast.store.getExpr(condition) == .malformed) return .as_written;
+        if (fmt.ast.store.getExpr(then) != .block) {
+            return if (fmt.groupedInner(condition) == null) .parenthesized else .as_written;
+        }
+        var inner = fmt.groupedInner(condition) orelse return .as_written;
+        while (fmt.groupedInner(inner)) |next| inner = next;
+        if (fmt.ast.store.getExpr(inner) == .malformed) return .as_written;
+        return .{ .unwrapped = inner };
+    }
+
+    /// The expression inside grouping parentheses that hold no comments.
+    fn groupedInner(fmt: *Formatter, expr_idx: AST.Expr.Idx) ?AST.Expr.Idx {
+        const expr = fmt.ast.store.getExpr(expr_idx);
+        if (expr != .tuple) return null;
+        const items = fmt.ast.store.exprSlice(expr.tuple.items);
+        if (items.len != 1 or fmt.ast.store.getCollectionLayout(expr_idx) != .compact) return null;
+        if (fmt.regionHasInteriorComment(expr.tuple.region)) return null;
+        return items[0];
+    }
+
+    fn ifConditionLayout(
+        fmt: *Formatter,
+        sink: LayoutSink,
+        comptime child: fn (*Formatter, LayoutSink, AST.Expr.Idx) Allocator.Error!bool,
+        condition: AST.Expr.Idx,
+        then: AST.Expr.Idx,
+    ) Allocator.Error!bool {
+        return switch (fmt.ifCondition(condition, then)) {
+            .as_written => child(fmt, sink, condition),
+            .parenthesized => fmt.groupedExprChild(sink, condition),
+            .unwrapped => |inner| child(fmt, sink, inner),
+        };
+    }
 
     fn removedReturnHasLeadingComment(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
         const expr = fmt.ast.store.getExpr(expr_idx);
@@ -2197,7 +2266,6 @@ const Formatter = struct {
                 try fmt.flushCommentsBeforeDiscard(if (qualifiers.len > 0) qualifiers[0] else suffix_path.final_token);
                 try fmt.newlineIndent();
                 try fmt.formatLiteralTypeSuffix(s.type_suffix);
-                fmt.has_multiline_string = true;
                 return fmt.finishExpr(f);
             },
             .single_quote => |s| {
@@ -2592,10 +2660,7 @@ const Formatter = struct {
                         const i = state.next;
                         const formatted_field = result;
                         if (state.multiline) {
-                            if (formatted_field.ends_with_multiline_string_line or fmt.has_multiline_string) {
-                                try fmt.newlineIndent();
-                            }
-                            try fmt.push(',');
+                            try fmt.pushMultilineItemComma(formatted_field.ends_with_multiline_string_line or fmt.has_multiline_string, i == fields.len - 1);
                             try fmt.flushItemComments(formatted_field.region.end);
                             if (i == fields.len - 1) {
                                 fmt.curr_indent -= 1;
@@ -2607,7 +2672,7 @@ const Formatter = struct {
                         state.next += 1;
                         continue :sw 3;
                     },
-                    else => unreachable,
+                    else => unreachable, // this frame sets its phase only to the values handled above
                 }
             },
             .lambda => |l| {
@@ -2757,40 +2822,42 @@ const Formatter = struct {
             },
             inline .if_then_else, .if_without_else => |i, tag| {
                 const else_expr: ?AST.Expr.Idx = if (tag == .if_then_else) i.@"else" else null;
-                // Check if then/else are blocks - blocks use original behavior,
-                // non-blocks use base_indent to keep else at the same level as if
-                const then_is_block = fmt.ast.store.getExpr(i.then) == .block;
-                const else_is_block = if (else_expr) |else_idx| fmt.ast.store.getExpr(else_idx) == .block else false;
-                const has_blocks = then_is_block or else_is_block;
                 const then_region = fmt.nodeRegion(@backingInt(i.then));
                 switch (f.phase) {
                     0 => {
                         try fmt.pushAll(kw(.KwIf));
                         f.locals = .{ .conditional = .{ .base_indent = fmt.curr_indent } };
-                        const cond_region = fmt.nodeRegion(@backingInt(i.condition));
+                        const condition = fmt.ifCondition(i.condition, i.then);
+                        const cond_region = fmt.nodeRegion(@backingInt(switch (condition) {
+                            .as_written, .parenthesized => i.condition,
+                            .unwrapped => |inner| inner,
+                        }));
                         try fmt.indentedBeforeOrSpace(cond_region.start);
                         f.phase = 1;
-                        return call(exprFrame(i.condition, .{}));
+                        return call(switch (condition) {
+                            .as_written => exprFrame(i.condition, .{}),
+                            .parenthesized => parenthesizedFrame(null, i.condition, try fmt.groupedExprWillBeMultiline(i.condition)),
+                            .unwrapped => |inner| exprFrame(inner, .{}),
+                        });
                     },
                     1 => {
-                        const base_indent = f.locals.conditional.base_indent;
-                        if (!has_blocks) fmt.curr_indent = base_indent;
+                        // The then branch continues the condition's line, so a block
+                        // opened there indents relative to that line.
                         try fmt.indentedBeforeOrSpace(then_region.start);
                         f.phase = 2;
                         return call(exprFrame(i.then, .{}));
                     },
                     2 => {
                         const else_idx = else_expr orelse return fmt.finishExpr(f);
-                        const base_indent = f.locals.conditional.base_indent;
-                        if (!has_blocks) fmt.curr_indent = base_indent;
+                        // `else` on its own line aligns with `if`, and its branch
+                        // indents relative to `else`.
+                        fmt.curr_indent = f.locals.conditional.base_indent;
                         if (try fmt.flushCommentsBefore(then_region.end)) {
-                            if (has_blocks) fmt.curr_indent += 1;
                             try fmt.pushIndent();
                         } else {
                             try fmt.push(' ');
                         }
                         try fmt.pushAll(kw(.KwElse));
-                        if (!has_blocks) fmt.curr_indent = base_indent;
                         const else_region = fmt.nodeRegion(@backingInt(else_idx));
                         try fmt.indentedBeforeOrSpace(else_region.start);
                         f.phase = 3;
@@ -2875,7 +2942,7 @@ const Formatter = struct {
                         f.locals.match.next += 1;
                         continue :sw 2;
                     },
-                    else => unreachable,
+                    else => unreachable, // this frame sets its phase only to the values handled above
                 }
             },
             .dbg => |d| switch (f.phase) {
@@ -2962,7 +3029,7 @@ const Formatter = struct {
                         state.next += 1;
                         continue :sw 1;
                     },
-                    else => unreachable,
+                    else => unreachable, // this frame sets its phase only to the values handled above
                 }
             },
             .for_expr => |fe| switch (f.phase) {
@@ -3117,19 +3184,13 @@ const Formatter = struct {
                         const ends_with_multiline_string_line = formatted_field.ends_with_multiline_string_line or fmt.has_multiline_string;
 
                         if (i < fields.len - 1) {
-                            if (ends_with_multiline_string_line) {
-                                try fmt.newlineIndent();
-                            }
-                            try fmt.push(',');
+                            try fmt.pushMultilineItemComma(ends_with_multiline_string_line, false);
                             if (state.multiline) {
                                 try fmt.flushItemComments(formatted_field.region.end);
                                 try fmt.newlineIndent();
                             }
                         } else if (state.multiline) {
-                            if (ends_with_multiline_string_line) {
-                                try fmt.newlineIndent();
-                            }
-                            try fmt.push(',');
+                            try fmt.pushMultilineItemComma(ends_with_multiline_string_line, true);
                             try fmt.flushItemComments(formatted_field.region.end);
                             fmt.curr_indent -= 1;
                             try fmt.newlineIndent();
@@ -3242,7 +3303,8 @@ const Formatter = struct {
                 try fmt.pushTokenText(name_tok);
             }
         } else {
-            const name_tok = field.name orelse unreachable;
+            const name_tok = field.name orelse
+                base.invariant("fmt invariant violated: a non-rest record pattern field has no name", .{});
             try fmt.pushTokenText(name_tok);
             if (field.value) |v| {
                 if (multiline and try fmt.flushCommentsAfter(name_tok)) {
@@ -4222,7 +4284,7 @@ const Formatter = struct {
                                 try fmt.pushAll("..");
                                 continue :sw 3;
                             },
-                            .closed => unreachable,
+                            .closed => unreachable, // phase 0 sends closed records straight to phase 4
                         }
                     },
                     2 => {
@@ -4315,7 +4377,7 @@ const Formatter = struct {
                                     return call(typeAnnoFrame(named.anno));
                                 },
                                 .open => {},
-                                .closed => unreachable,
+                                .closed => unreachable, // the enclosing if excludes closed extensions
                             }
                             continue :sw 3;
                         }
@@ -4359,7 +4421,7 @@ const Formatter = struct {
                         fmt.curr_indent = f.indent;
                         return done;
                     },
-                    else => unreachable,
+                    else => unreachable, // this frame sets its phase only to the values handled above
                 }
             },
             .@"fn" => |fn_anno| {
@@ -4859,9 +4921,9 @@ const Formatter = struct {
         switch (suffix) {
             .path => |path| {
                 for (fmt.ast.store.tokenSlice(path.qualifiers)) |qualifier| {
-                    try fmt.pushLiteralTypeSuffixSegment(fmt.ast.tokens.resolveIdentifier(@intCast(qualifier)) orelse unreachable);
+                    try fmt.pushLiteralTypeSuffixSegment(fmt.ast.tokens.resolveIdentifier(@intCast(qualifier)) orelse unreachable); // parseLiteralTypeSuffix collects only interned DotUpperIdent and NoSpaceDotUpperIdent tokens
                 }
-                try fmt.pushLiteralTypeSuffixSegment(fmt.ast.tokens.resolveIdentifier(path.final_token) orelse unreachable);
+                try fmt.pushLiteralTypeSuffixSegment(fmt.ast.tokens.resolveIdentifier(path.final_token) orelse unreachable); // parseLiteralTypeSuffix collects only interned DotUpperIdent and NoSpaceDotUpperIdent tokens
             },
             .deprecated_builtin => |type_name| try fmt.pushLiteralTypeSuffixSegment(type_name),
         }
@@ -5267,10 +5329,10 @@ const Formatter = struct {
             .lambda => |l| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
                 try child(fmt, sink, l.body) or
                 try fmt.itemsLayout(sink, AST.Pattern.Idx, fmt.ast.store.patternSlice(l.args)),
-            .if_then_else => |i| try child(fmt, sink, i.condition) or
+            .if_then_else => |i| try fmt.ifConditionLayout(sink, child, i.condition, i.then) or
                 try child(fmt, sink, i.then) or
                 try child(fmt, sink, i.@"else"),
-            .if_without_else => |i| try child(fmt, sink, i.condition) or try child(fmt, sink, i.then),
+            .if_without_else => |i| try fmt.ifConditionLayout(sink, child, i.condition, i.then) or try child(fmt, sink, i.then),
             .arrow_call => |a| if (grouped) fmt.exprChild(sink, expr_idx) else try child(fmt, sink, a.left) or try child(fmt, sink, a.right),
             .dbg => |d| child(fmt, sink, d.expr),
             .crash => |c| child(fmt, sink, c.expr),
@@ -6490,7 +6552,7 @@ test "issue 11160: pipe method receivers preserve expression grouping" {
         .{ .input = "t=x|>(a+b).y()", .expected = "t = x |> (a + b).y()\n" },
         .{ .input = "t=x|>(-a).y()", .expected = "t = x |> (-a).y()\n" },
         .{ .input = "t=x|>(|v|v).y()", .expected = "t = x |> (|v| v).y()\n" },
-        .{ .input = "t=x|>(if a b else c).y()", .expected = "t = x |> (if a b else c).y()\n" },
+        .{ .input = "t=x|>(if a b else c).y()", .expected = "t = x |> (if (a) b else c).y()\n" },
         .{ .input = "t=x|>(dbg a).y()", .expected = "t = x |> (dbg a).y()\n" },
         .{ .input = "t=x|>(crash \"failed\").y()", .expected = "t = x |> (crash \"failed\").y()\n" },
         .{ .input = "t=x|>((a+b).y())", .expected = "t = x |> ((a + b).y())\n" },
@@ -8038,6 +8100,12 @@ test "comment prefix matches inter-token scans for every region" {
     }
 }
 
+/// The native stack the nesting tests format on. It holds the module
+/// environment's setup with room to spare, and is far below what formatting
+/// even the shallowest of their cases would take if each nesting level cost a
+/// native call.
+const small_native_stack_bytes = 512 * 1024;
+
 test "nested lists and tuples format on a small native stack" {
     const StackTestError = FormatTestError || std.mem.Allocator.Error || error{TestExpectedEqual};
     const Worker = struct {
@@ -8080,7 +8148,7 @@ test "nested lists and tuples format on a small native stack" {
         }
     };
     var result: StackTestError!void = {};
-    const thread = try std.Thread.spawn(.{ .stack_size = 256 * 1024 }, Worker.run, .{&result});
+    const thread = try std.Thread.spawn(.{ .stack_size = small_native_stack_bytes }, Worker.run, .{&result});
     thread.join();
     try result;
 }
@@ -8259,7 +8327,7 @@ test "issue 11926: multiline string separator whitespace is emitted once" {
     const source = "r = {\n\tx: \\\\value\n\t,\n}\n";
     const result = try moduleFmtsStable(std.testing.allocator, source, false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings(source, result);
+    try std.testing.expectEqualStrings("r = {\n\tx: \\\\value\n}\n", result);
 }
 
 test "nested expressions, patterns, types, and statements format on a small native stack" {
@@ -8283,7 +8351,7 @@ test "nested expressions, patterns, types, and statements format on a small nati
         .{ .head = "x = ", .open = "1 + (", .core = "1", .close = ")" },
         .{ .head = "x = 1", .open = "", .core = "", .close = " + 1" },
         .{ .head = "x = ", .open = "|a| ", .core = "a", .close = "" },
-        .{ .head = "x = ", .open = "if a b else ", .core = "c", .close = "" },
+        .{ .head = "x = ", .open = "if (a) b else ", .core = "c", .close = "" },
         .{ .head = "x = a", .open = "", .core = "", .close = " |> f" },
         .{ .head = "x = a |> f", .open = "", .core = "", .close = "()" },
         .{ .head = "x = ", .open = "f(", .core = "a", .close = "?)" },
@@ -8337,7 +8405,7 @@ test "nested expressions, patterns, types, and statements format on a small nati
         }
     };
     var result: StackTestError!void = {};
-    const thread = try std.Thread.spawn(.{ .stack_size = 256 * 1024 }, Worker.run, .{&result});
+    const thread = try std.Thread.spawn(.{ .stack_size = small_native_stack_bytes }, Worker.run, .{&result});
     thread.join();
     try result;
 }
@@ -9598,4 +9666,188 @@ test "multiline field access pipe target keeps its parentheses" {
     const result = try moduleFmtsStable(std.testing.allocator, "x = y |> (rec\n.func1)", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("x = y\n\t|> (rec\n\t.func1)\n", result);
+}
+
+test "issue 12302: no lone comma after a multiline string as the last call argument" {
+    // Repro for https://github.com/roc-lang/roc/issues/12302
+    const input =
+        "main! = |_| {\n" ++
+        "\techo!(\n" ++
+        "\t\t\\\\Hello, World!\n" ++
+        "\t\t\\\\\n" ++
+        "\t)\n" ++
+        "\tOk({})\n" ++
+        "}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "issue 12302: last collection item ending on a multiline string line gets no comma" {
+    const Case = struct {
+        input: []const u8,
+        expected: []const u8,
+    };
+    const cases = [_]Case{
+        .{
+            .input = "x = [\n\t1,\n\t\\\\a\n]\n",
+            .expected = "x = [\n\t1,\n\t\\\\a\n]\n",
+        },
+        .{
+            .input = "x = f(\n\t\\\\a\n\t,\n\t1,\n)\n",
+            .expected = "x = f(\n\t\\\\a\n\t,\n\t1,\n)\n",
+        },
+        .{
+            .input = "x = f(\n\tg(\n\t\t\\\\a\n\t),\n)\n",
+            .expected = "x = f(\n\tg(\n\t\t\\\\a\n\t),\n)\n",
+        },
+        .{
+            .input = "x = A(\n\t\\\\a\n\t,\n)\n",
+            .expected = "x = A(\n\t\\\\a\n)\n",
+        },
+        .{
+            .input = "x = (1,\n\t\\\\a\n)\n",
+            .expected = "x = (\n\t1,\n\t\\\\a\n)\n",
+        },
+        .{
+            .input = "x = (\n\t\\\\a\n\t,\n)\n",
+            .expected = "x = (\n\t\\\\a\n)\n",
+        },
+        .{
+            .input = "x = { a: 1, b:\n\t\\\\a\n}\n",
+            .expected = "x = {\n\ta: 1,\n\tb: \\\\a\n}\n",
+        },
+        .{
+            .input = "x = { ..r, a:\n\t\\\\a\n}\n",
+            .expected = "x = {\n\t..r,\n\ta: \\\\a\n}\n",
+        },
+        .{
+            .input = "x = f(\n\t\\\\a\n\t# c\n)\n",
+            .expected = "x = f(\n\t\\\\a\n\t# c\n)\n",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+    }
+}
+
+test "issue 12302: code after a typed multiline string's suffix continues on the suffix line" {
+    const Case = struct {
+        input: []const u8,
+        expected: []const u8,
+    };
+    const cases = [_]Case{
+        .{
+            .input = "x = f(\n\t\\\\a\n\t.U8, 1,\n)\n",
+            .expected = "x = f(\n\t\\\\a\n\t.U8,\n\t1,\n)\n",
+        },
+        .{
+            .input = "x = f(\n\t\\\\a\n\t.U8,\n)\n",
+            .expected = "x = f(\n\t\\\\a\n\t.U8,\n)\n",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+    }
+}
+
+test "if condition is parenthesized unless the then branch is a block" {
+    const input =
+        \\abs = |n| if n < 0 -n else n
+        \\max = |a, b| if a > b a else b
+        \\rec = |c| if c { x: 1 } else { x: 2 }
+        \\kept = |n| if (n < 0) -n else n
+        \\run! = |c| if c log!("yes")
+        \\multi = |n|
+        \\    if n < 0
+        \\        -n
+        \\    else
+        \\        n
+        \\blk = |n| if (n < 0) {
+        \\    -n
+        \\} else n
+        \\nested = |n| if ((n < 0)) {
+        \\    -n
+        \\} else n
+        \\chain = |n| if n < 0 -1 else if (n == 0) {
+        \\    0
+        \\} else 1
+        \\commented = |n| if (n < 0 # why
+        \\) {
+        \\    -n
+        \\} else n
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "abs = |n| if (n < 0) -n else n\n\n" ++
+            "max = |a, b| if (a > b) a else b\n\n" ++
+            "rec = |c| if (c) { x: 1 } else { x: 2 }\n\n" ++
+            "kept = |n| if (n < 0) -n else n\n\n" ++
+            "run! = |c| if (c) log!(\"yes\")\n\n" ++
+            "multi = |n|\n\tif (n < 0)\n\t\t-n\n\telse\n\t\tn\n\n" ++
+            "blk = |n| if n < 0 {\n\t-n\n} else n\n\n" ++
+            "nested = |n| if n < 0 {\n\t-n\n} else n\n\n" ++
+            "chain = |n| if (n < 0) -1 else if n == 0 {\n\t0\n} else 1\n\n" ++
+            "commented = |n| if (\n\tn < 0 # why\n) {\n\t-n\n} else n\n",
+        result,
+    );
+}
+
+test "else block aligns with if when only the else branch has braces" {
+    const input =
+        "value =\n" ++
+        "\tif (True) 1\n" ++
+        "\telse { # comment\n" ++
+        "\t\t2\n" ++
+        "\t}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "else on its own line aligns with if when the then branch is a block" {
+    const input =
+        "value =\n" ++
+        "\tif True {\n" ++
+        "\t\t1\n" ++
+        "\t}\n" ++
+        "\telse {\n" ++
+        "\t\t2\n" ++
+        "\t}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "else chain with a final block stays aligned with if" {
+    const input =
+        "value =\n" ++
+        "\tif (True) 1\n" ++
+        "\telse if (False) 3\n" ++
+        "\telse {\n" ++
+        "\t\t2\n" ++
+        "\t}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "block then branch after a comment-broken condition indents under the condition" {
+    const input =
+        "value =\n" ++
+        "\tif # c\n" ++
+        "\t\tTrue {\n" ++
+        "\t\t\t1\n" ++
+        "\t\t}\n" ++
+        "\telse 2\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
 }

@@ -50,7 +50,6 @@ pub const Error = Allocator.Error || lir.CheckedPipeline.LowerResourceError || s
     Crash,
     RuntimeError,
     DivisionByZero,
-    ComptimeExhaustiveness,
     ExpectErr,
     EvaluationFailed,
     EntrypointNotFound,
@@ -369,10 +368,7 @@ pub const LirImageProgram = struct {
     /// rediscover roots from compiler data.
     pub fn mainProc(self: *const LirImageProgram) LirProcSpecId {
         if (self.view.root_procs.len == 0) {
-            if (builtin.mode == .debug) {
-                base.invariant("eval LIR image invariant violated: no root procedures", .{});
-            }
-            unreachable;
+            base.invariant("eval LIR image invariant violated: no root procedures", .{});
         }
         return self.view.root_procs[0];
     }
@@ -405,6 +401,9 @@ pub const BoolRootModule = struct {
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
     tables: boxy_runtime.BoxyTables,
+    /// Bytes the program's erased callables reserve before their captures
+    /// (`LirProgram.Result.erased_capture_prefix`).
+    erased_capture_prefix: u32,
     roots: []const BoolRoot,
     expect_site_count: usize = 0,
     static_data: RuntimeStaticData = .{},
@@ -713,10 +712,11 @@ fn checkProgram(
         extra_modules.deinit(allocator);
     }
 
+    // Each module sees the modules checked before it, so one list grows as
+    // modules are checked.
+    var available_imports = try std.ArrayList(AvailableImport).initCapacity(allocator, imports.len);
+    defer available_imports.deinit(allocator);
     for (imports) |import_module| {
-        const available_imports = try availableImports(allocator, extra_modules.items);
-        defer allocator.free(available_imports);
-
         const checked = try parseCheckModule(
             allocator,
             import_module.name,
@@ -728,14 +728,14 @@ fn checkProgram(
             &.{},
             builtin_env,
             builtin_indices,
-            available_imports,
+            available_imports.items,
             roc_ctx,
         );
         try extra_modules.append(allocator, checked);
+        available_imports.appendAssumeCapacity(availableImport(checked));
     }
 
-    const main_imports = try availableImports(allocator, extra_modules.items);
-    defer allocator.free(main_imports);
+    const main_imports = available_imports.items;
 
     var executable_root_storage: [1]ExecutableRootInput = undefined;
     var executable_roots: []const ExecutableRootInput = &.{};
@@ -785,16 +785,12 @@ fn checkProgram(
     };
 }
 
-fn availableImports(allocator: Allocator, modules: []const CheckedModule) Error![]AvailableImport {
-    const available = try allocator.alloc(AvailableImport, modules.len);
-    for (modules, available) |module, *import| {
-        import.* = .{
-            .name = module.module_env.module_name,
-            .env = module.module_env,
-            .statement_idx = importStatementIdx(module.module_env, module.module_env.module_name),
-        };
-    }
-    return available;
+fn availableImport(module: CheckedModule) AvailableImport {
+    return .{
+        .name = module.module_env.module_name,
+        .env = module.module_env,
+        .statement_idx = importStatementIdx(module.module_env, module.module_env.module_name),
+    };
 }
 
 /// Lowering options the allocation-counting eval tests compile with.
@@ -1189,10 +1185,7 @@ pub fn devEvalTopLevelExpects(
         regions[index] = switch (request.source) {
             .statement => |statement| resources.module_env.store.getStatementRegion(statement),
             .def, .expr, .required_binding, .hoisted => {
-                if (builtin.mode == .debug) {
-                    base.invariant("eval helper invariant violated: test root was not published from an expect statement", .{});
-                }
-                unreachable;
+                base.invariant("eval helper invariant violated: test root was not published from an expect statement", .{});
             },
         };
         const arg_layouts = try InspectedRun.mainProcArgLayouts(allocator, &lowered.lir_result.store, root_proc);
@@ -1211,6 +1204,7 @@ pub fn devEvalTopLevelExpects(
         .store = &lowered.lir_result.store,
         .layouts = &lowered.lir_result.layouts,
         .tables = boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
+        .erased_capture_prefix = lowered.lir_result.erased_capture_prefix,
         .roots = roots,
         .expect_site_count = lowered.lir_result.expect_sites.items.len,
         .static_data = .{
@@ -1346,12 +1340,7 @@ pub fn parseProgram(
     switch (options.roots) {
         .eval, .inspected => {
             const root_name = evalRootName(source_kind, options.roots.inspectWrap());
-            const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant("eval helper invariant violated: explicit eval root `{s}` was not found", .{root_name});
-                }
-                unreachable;
-            };
+            const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse base.invariant("eval helper invariant violated: explicit eval root `{s}` was not found", .{root_name});
             explicit_root_storage[0] = .{
                 .kind = .dev_expr,
                 .source = .{ .def = root_def_idx },
@@ -1362,20 +1351,10 @@ pub fn parseProgram(
         },
         .comptime_repl => {
             const root_name = evalRootName(source_kind, false);
-            const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant("eval helper invariant violated: compile-time REPL root `{s}` was not found", .{root_name});
-                }
-                unreachable;
-            };
+            const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse base.invariant("eval helper invariant violated: compile-time REPL root `{s}` was not found", .{root_name});
             const root_def = main_checked.module_env.store.getDef(root_def_idx);
             if (main_checked.module_env.store.getExpr(root_def.expr) != .e_runtime_error) {
-                const body_expr = main_checked.checker.compileTimeExecutableRootBody(root_def_idx) orelse {
-                    if (@import("builtin").mode == .debug) {
-                        base.invariant("eval helper invariant violated: compile-time REPL root body was not recorded", .{});
-                    }
-                    unreachable;
-                };
+                const body_expr = main_checked.checker.compileTimeExecutableRootBody(root_def_idx) orelse base.invariant("eval helper invariant violated: compile-time REPL root body was not recorded", .{});
                 explicit_root_storage[0] = .{
                     .kind = .repl_expr,
                     .source = .{ .expr = body_expr },
@@ -1571,12 +1550,7 @@ pub fn parseCheckModule(
     );
     checker.fixupTypeWriter();
     for (executable_roots) |root| {
-        const root_def_idx = czer.explicitRootDefByName(root.name) orelse {
-            if (@import("builtin").mode == .debug) {
-                base.invariant("eval helper invariant violated: explicit executable root `{s}` was not found", .{root.name});
-            }
-            unreachable;
-        };
+        const root_def_idx = czer.explicitRootDefByName(root.name) orelse base.invariant("eval helper invariant violated: explicit executable root `{s}` was not found", .{root.name});
         switch (root.evaluation) {
             .runtime => try checker.addExecutableRootDef(root_def_idx),
             .compile_time => {
@@ -1691,15 +1665,16 @@ fn lowerCheckedRootWithViews(
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(LirImage.Header);
 
-    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
-        allocator,
-        .{
-            .root = check.CheckedArtifact.loweringView(root_module),
-            .imports = import_views,
-        },
-        .{ .requests = options.root_requests orelse root_module.root_requests.runtime_requests },
-        lowerToLirTarget(target_usize, options),
-    );
+    const modules: lir.CheckedPipeline.CheckedModuleSet = .{
+        .root = check.CheckedArtifact.loweringView(root_module),
+        .imports = import_views,
+    };
+    const roots: lir.CheckedPipeline.RootRequestSet = .{ .requests = options.root_requests orelse root_module.root_requests.runtime_requests };
+    const target = lowerToLirTarget(target_usize, options);
+    var lowered = switch (target.specialization_strategy) {
+        .lss => try lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, modules, roots, target),
+        .boxy => try CompileTimeFinalization.lowerBoxyRuntime(allocator, modules, roots, target),
+    };
     defer lowered.deinit();
 
     const image_data = try @import("static_data").buildStaticDataForWidth(allocator, .{
@@ -1741,10 +1716,7 @@ const ZeroArgRootBody = struct {
 };
 
 fn zeroArgRootInvariant(message: []const u8) noreturn {
-    if (builtin.mode == .debug) {
-        base.invariant("eval helper invariant violated: {s}", .{message});
-    }
-    unreachable;
+    base.invariant("eval helper invariant violated: {s}", .{message});
 }
 
 fn zeroArgRootBody(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ZeroArgRootBody {
@@ -1874,10 +1846,7 @@ fn zeroArgRootBody(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ZeroArgRo
         .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
     if (lambda.args.span.len != 0) {
-        if (@import("builtin").mode == .debug) {
-            base.invariant("eval helper invariant violated: compile-time REPL root had parameters", .{});
-        }
-        unreachable;
+        base.invariant("eval helper invariant violated: compile-time REPL root had parameters", .{});
     }
     return .{ .lambda = lambda_idx, .body = lambda.body };
 }
@@ -1989,10 +1958,7 @@ fn publishImportArtifacts(
         }
 
         if (!made_progress) {
-            if (@import("builtin").mode == .debug) {
-                base.invariant("eval helper invariant violated: import artifact publication graph is cyclic or incomplete", .{});
-            }
-            unreachable;
+            base.invariant("eval helper invariant violated: import artifact publication graph is cyclic or incomplete", .{});
         }
     }
 
@@ -2321,7 +2287,7 @@ fn copyRuntimeHostEvents(allocator: Allocator, runtime_env: *const RuntimeHostEn
             .dbg => |message| .{ .dbg = try allocator.dupe(u8, message) },
             .expect_failed => |message| .{ .expect_failed = try allocator.dupe(u8, message) },
             .crashed => |message| .{ .crashed = try allocator.dupe(u8, message) },
-            .effect => unreachable,
+            .effect => base.invariant("eval helper invariant violated: a bool root recorded a hosted effect event", .{}),
         };
         events_len += 1;
     }
@@ -2396,6 +2362,7 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
             tables.erased_arg_desc_offsets,
             tables.erased_arg_desc_params,
             tables.worker_procs,
+            module.erased_capture_prefix,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
@@ -2802,6 +2769,7 @@ pub fn llvmEvalBoolRootsWithExpectSites(
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
     tables: boxy_runtime.BoxyTables,
+    erased_capture_prefix: u32,
     roots: []const BoolRoot,
     expect_site_count: usize,
     opt: LlvmTestOpt,
@@ -2810,6 +2778,7 @@ pub fn llvmEvalBoolRootsWithExpectSites(
         .store = store,
         .layouts = layouts,
         .tables = tables,
+        .erased_capture_prefix = erased_capture_prefix,
         .roots = roots,
         .expect_site_count = expect_site_count,
     }};
@@ -2839,7 +2808,8 @@ fn validateSharedBoolRootModules(modules: []const BoolRootModule) Error!void {
     const program = modules[0];
     for (modules[1..]) |module| {
         if (module.store != program.store or module.layouts != program.layouts or
-            !std.meta.eql(module.tables, program.tables) or !std.meta.eql(module.static_data, program.static_data))
+            !std.meta.eql(module.tables, program.tables) or module.erased_capture_prefix != program.erased_capture_prefix or
+            !std.meta.eql(module.static_data, program.static_data))
             return error.Internal;
     }
 }
@@ -3027,19 +2997,7 @@ pub fn llvmEvalBoolRootModules(
 }
 
 fn legacyInspectedRun(allocator: Allocator, comptime backend_kind: InspectedRun.Backend, lowered: *const LoweredProgram) Error!EvalRunResult {
-    const result = try InspectedRun.run(allocator, backend_kind, .{
-        .store = &lowered.view.store,
-        .layouts = &lowered.view.layouts,
-        .boxy_tables = boxy_runtime.BoxyTables.fromImageView(&lowered.view),
-        .boxy_sidecar_blob = lowered.shm.base_ptr[0..lowered.shm.getUsedSize()],
-        .boxy_sidecar_desc = LirImage.BoxySidecar.fromHeader(lowered.image_header),
-        .main_proc = lowered.mainProc(),
-        .static_data = lowered.view.static_data,
-        .static_data_value_count = lowered.view.static_data_value_count,
-    }, switch (backend_kind) {
-        .interpreter => .reject,
-        .dev, .wasm, .llvm => {},
-    });
+    const result = try inspectedRunResult(allocator, backend_kind, lowered);
     result.deinitEvents(allocator);
     return switch (result.outcome) {
         .returned => |output| .{
@@ -3051,6 +3009,27 @@ fn legacyInspectedRun(allocator: Allocator, comptime backend_kind: InspectedRun.
             return error.Crash;
         },
     };
+}
+
+/// Execute an inspect-wrapped program, returning its semantic outcome and the
+/// host events it produced in order.
+pub fn inspectedRunResult(allocator: Allocator, comptime backend_kind: InspectedRun.Backend, lowered: *const LoweredProgram) Error!InspectedRun.Result {
+    return try InspectedRun.run(allocator, backend_kind, .{
+        .store = &lowered.view.store,
+        .layouts = &lowered.view.layouts,
+        .boxy_tables = boxy_runtime.BoxyTables.fromImageView(&lowered.view),
+        // An image's program reserves no capture prefix; writing the image
+        // checks that.
+        .erased_capture_prefix = 0,
+        .boxy_sidecar_blob = lowered.shm.base_ptr[0..lowered.shm.getUsedSize()],
+        .boxy_sidecar_desc = LirImage.BoxySidecar.fromHeader(lowered.image_header),
+        .main_proc = lowered.mainProc(),
+        .static_data = lowered.view.static_data,
+        .static_data_value_count = lowered.view.static_data_value_count,
+    }, switch (backend_kind) {
+        .interpreter => .reject,
+        .dev, .wasm, .llvm => {},
+    });
 }
 
 /// Evaluate a lowered program via the LIR interpreter and return the output string.
@@ -3065,7 +3044,7 @@ pub fn lirInterpreterStrWithStats(allocator: Allocator, lowered: *const LoweredP
 }
 
 /// Abort classification for a differential interpreter run.
-pub const InterpreterAbortKind = enum { crash, runtime_error, comptime_exhaustiveness, expect_err };
+pub const InterpreterAbortKind = enum { crash, runtime_error, expect_err };
 
 /// Abort record for a differential interpreter run.
 pub const InterpreterAbort = struct {
@@ -3145,7 +3124,6 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
         error.Crash => outcome = .{ .aborted = .{ .kind = .crash, .message = try allocator.dupe(u8, interp.getCrashMessage()) } },
         error.DivisionByZero => outcome = .{ .aborted = .{ .kind = .crash, .message = null } },
         error.RuntimeError => outcome = .{ .aborted = .{ .kind = .runtime_error, .message = null } },
-        error.ComptimeExhaustiveness => outcome = .{ .aborted = .{ .kind = .comptime_exhaustiveness, .message = null } },
         error.ExpectErr => {
             const message: ?[]u8 = if (interp.getExpectErrMessage()) |msg|
                 try allocator.dupe(u8, msg)
@@ -3153,7 +3131,7 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
                 null;
             outcome = .{ .aborted = .{ .kind = .expect_err, .message = message } };
         },
-        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => base.invariant("eval helper invariant violated: interpreter transcript evaluation reported {s}", .{@errorName(err)}),
     }
 
     var dbg_list = std.ArrayList([]u8).empty;
@@ -3170,7 +3148,7 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
         .dbg => |bytes| try dbg_list.append(allocator, try allocator.dupe(u8, bytes)),
         .expect_failed => |bytes| try expect_list.append(allocator, try allocator.dupe(u8, bytes)),
         .crashed => {},
-        .effect => unreachable,
+        .effect => base.invariant("eval helper invariant violated: interpreter transcript recorded a hosted effect event", .{}),
     };
 
     const dbg_events = try dbg_list.toOwnedSlice(allocator);
@@ -3213,4 +3191,48 @@ pub fn wasmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
 /// Evaluate via the wasm backend, returning output string and allocation count.
 pub fn wasmEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) Error!EvalRunResult {
     return legacyInspectedRun(allocator, .wasm, lowered);
+}
+
+/// The wasm module the wasm backend runs for `lowered`, with its bodies
+/// generated on `executor`. The caller owns the returned bytes.
+pub fn wasmModuleBytes(allocator: Allocator, lowered: *const LoweredProgram, executor: ?base.post_check_task_executor.Executor) Error![]u8 {
+    var program = wasmProgram(lowered);
+    program.post_check_executor = executor;
+    const result = InspectedRun.generateWasmModule(allocator, program, .default) catch |err| return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.Internal, error.WasmExecFailed => error.Internal,
+    };
+    return result.wasm_bytes;
+}
+
+fn wasmProgram(lowered: *const LoweredProgram) InspectedRun.Program {
+    return .{
+        .store = &lowered.view.store,
+        .layouts = &lowered.view.layouts,
+        .boxy_tables = boxy_runtime.BoxyTables.fromImageView(&lowered.view),
+        // An image's program reserves no capture prefix; writing the image
+        // checks that.
+        .erased_capture_prefix = 0,
+        .boxy_sidecar_blob = lowered.shm.base_ptr[0..lowered.shm.getUsedSize()],
+        .boxy_sidecar_desc = LirImage.BoxySidecar.fromHeader(lowered.image_header),
+        .main_proc = lowered.mainProc(),
+        .static_data = lowered.view.static_data,
+        .static_data_value_count = lowered.view.static_data_value_count,
+    };
+}
+
+/// Evaluate via the wasm backend at `cpu_level`.
+pub fn wasmRunAt(allocator: Allocator, lowered: *const LoweredProgram, cpu_level: roc_target.CpuLevel) Error!EvalRunResult {
+    const result = try InspectedRun.runWasmAt(allocator, wasmProgram(lowered), cpu_level);
+    result.deinitEvents(allocator);
+    return switch (result.outcome) {
+        .returned => |output| .{
+            .output = output,
+            .allocation_count = result.allocation_count,
+        },
+        .crashed => |message| {
+            allocator.free(message);
+            return error.Crash;
+        },
+    };
 }

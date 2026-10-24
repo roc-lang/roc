@@ -13,8 +13,14 @@
 import gdb
 import gdb.printing
 
-DEC_ONE = 10**18
-SEAMLESS_SLICE_TAG = 1
+# Runtime representation constants. A test in
+# src/backend/llvm/debugger_constants.zig renders this block from the
+# canonical definitions in src/builtins and requires it verbatim.
+DEC_FRACTION_DIGITS = 18
+DEC_ONE = 10**DEC_FRACTION_DIGITS
+STR_WORD_COUNT = 3
+SMALL_STR_FLAG = 0x80
+SMALL_STR_LEN_MASK = 0x7F
 
 
 def _type_name(val):
@@ -33,13 +39,13 @@ class RocStrPrinter:
     def to_string(self):
         word = _word_bytes(self.val)
         length = int(self.val["length"])
-        small_bit = 1 << (word * 8 - 1)
+        small_bit = SMALL_STR_FLAG << (word * 8 - 8)
         if length & small_bit:
-            # Small string: all three words are inline UTF-8; the final
+            # Small string: every word is inline UTF-8; the final
             # byte holds the length with its high bit set.
-            size = word * 3
+            size = word * STR_WORD_COUNT
             raw = bytes(self.val.bytes)[:size]
-            n = raw[size - 1] & 0x7F
+            n = raw[size - 1] & SMALL_STR_LEN_MASK
             return '"' + raw[:n].decode("utf-8", "replace") + '"'
         if length == 0:
             return '""'
@@ -81,7 +87,7 @@ class RocDecPrinter:
         v = int(self.val)
         sign = "-" if v < 0 else ""
         whole, frac = divmod(abs(v), DEC_ONE)
-        digits = ("%018d" % frac).rstrip("0")
+        digits = ("%0*d" % (DEC_FRACTION_DIGITS, frac)).rstrip("0")
         if digits:
             return "%s%d.%s" % (sign, whole, digits)
         return "%s%d" % (sign, whole)

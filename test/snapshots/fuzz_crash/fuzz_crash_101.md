@@ -51,7 +51,7 @@ TYPE MISMATCH - fuzz_crash_101.md:2:3:2:7
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "(), (({}) -> c), (({}) -> d) -> c")
+			(text "(), (() -> c), (() -> d) -> c")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -137,9 +137,9 @@ a = {}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(), (({}) -> c), (({}) -> d) -> c"))
+		(patt (type "(), (() -> c), (() -> d) -> c"))
 		(patt (type "{}")))
 	(expressions
-		(expr (type "(), (({}) -> c), (({}) -> d) -> c"))
+		(expr (type "(), (() -> c), (() -> d) -> c"))
 		(expr (type "{}"))))
 ~~~

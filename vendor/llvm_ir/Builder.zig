@@ -50,6 +50,7 @@ next_unique_global_id: std.AutoHashMapUnmanaged(StrtabString, u32),
 aliases: std.ArrayList(Alias),
 variables: std.ArrayList(Variable),
 functions: std.ArrayList(Function),
+comdats: std.ArrayList(Comdat),
 
 strtab_string_map: std.array_hash_map.Auto(void, void),
 strtab_string_indices: std.ArrayList(u32),
@@ -3136,6 +3137,7 @@ pub const Variable = struct {
     mutability: Mutability = .global,
     init: Constant = .no_init,
     section: String = .none,
+    comdat: Comdat.Index = .none,
     alignment: Alignment = .default,
 
     pub const Index = enum(u32) {
@@ -3179,6 +3181,34 @@ pub const Variable = struct {
         pub fn setAlignment(self: Index, alignment: Alignment, builder: *Builder) void {
             self.ptr(builder).alignment = alignment;
         }
+
+        pub fn setComdat(self: Index, comdat: Comdat.Index, builder: *Builder) void {
+            self.ptr(builder).comdat = comdat;
+        }
+    };
+};
+
+/// A COMDAT group: the linker keeps one group per name across all objects and
+/// discards the sections of every other group with that name.
+pub const Comdat = struct {
+    name: StrtabString,
+    selection_kind: SelectionKind,
+
+    pub const SelectionKind = enum(u3) {
+        any = 1,
+        exactmatch = 2,
+        largest = 3,
+        nodeduplicate = 4,
+        samesize = 5,
+    };
+
+    pub const Index = enum(u32) {
+        none = maxInt(u32),
+        _,
+
+        pub fn ptrConst(self: Index, builder: *const Builder) *const Comdat {
+            return &builder.comdats.items[@backingInt(self)];
+        }
     };
 };
 
@@ -3210,6 +3240,8 @@ pub const Intrinsic = enum {
     memmove,
     memset,
     @"memset.inline",
+    @"lifetime.start",
+    @"lifetime.end",
     sqrt,
     powi,
     sin,
@@ -3578,6 +3610,20 @@ pub const Intrinsic = enum {
                 .{ .kind = .{ .type = .i1 }, .attrs = &.{.immarg} },
             },
             .attrs = &.{ .nocallback, .nofree, .nounwind, .willreturn, .{ .memory = .{ .argmem = .write } } },
+        },
+        .@"lifetime.start" = .{
+            .ret_len = 0,
+            .params = &.{
+                .{ .kind = .overloaded, .attrs = &.{.nocapture} },
+            },
+            .attrs = &.{ .nocallback, .nofree, .nosync, .nounwind, .willreturn, .{ .memory = .{ .argmem = .readwrite } } },
+        },
+        .@"lifetime.end" = .{
+            .ret_len = 0,
+            .params = &.{
+                .{ .kind = .overloaded, .attrs = &.{.nocapture} },
+            },
+            .attrs = &.{ .nocallback, .nofree, .nosync, .nounwind, .willreturn, .{ .memory = .{ .argmem = .readwrite } } },
         },
         .sqrt = .{
             .ret_len = 1,
@@ -4762,6 +4808,7 @@ pub const Function = struct {
     call_conv: CallConv = CallConv.default,
     attributes: FunctionAttributes = .none,
     section: String = .none,
+    comdat: Comdat.Index = .none,
     alignment: Alignment = .default,
     blocks: []const Block = &.{},
     instructions: std.MultiArrayList(Instruction) = .empty,
@@ -4806,6 +4853,10 @@ pub const Function = struct {
 
         pub fn setCallConv(self: Index, call_conv: CallConv, builder: *Builder) void {
             self.ptr(builder).call_conv = call_conv;
+        }
+
+        pub fn setComdat(self: Index, comdat: Comdat.Index, builder: *Builder) void {
+            self.ptr(builder).comdat = comdat;
         }
 
         pub fn setAttributes(
@@ -5883,6 +5934,9 @@ pub const WipFunction = struct {
     /// Fixed entry allocations in creation order. Materialized as a single
     /// reversed prefix so repeated prepend operations do not move the body.
     entry_allocas: std.ArrayList(Instruction.Index) = .empty,
+    /// Words of `extra` that no instruction refers to any more: the
+    /// placeholder records of open phis that `WipPhi.finishOpen` replaced.
+    abandoned_extra_len: u32 = 0,
 
     pub const Cursor = struct { block: Block.Index, instruction: u32 = 0 };
 
@@ -6614,10 +6668,47 @@ pub const WipFunction = struct {
             @memcpy(extra.trail.nextMut(incoming_len, Value, wip), vals);
             @memcpy(extra.trail.nextMut(incoming_len, Block.Index, wip), blocks);
         }
+
+        /// Finish a phi made by `openPhi`: its block's final incoming count
+        /// becomes the number of edges given, which must equal the branches
+        /// into it.
+        pub fn finishOpen(
+            self: WipPhi,
+            vals: []const Value,
+            blocks: []const Block.Index,
+            wip: *WipFunction,
+        ) Allocator.Error!void {
+            assert(vals.len == blocks.len);
+            const block_ptr = self.block.ptr(wip);
+            assert(vals.len == block_ptr.branches);
+            block_ptr.incoming = @intCast(vals.len);
+            const ty = wip.extraData(Instruction.Phi, wip.instructions.get(@backingInt(self.instruction)).data).type;
+            for (vals) |val| assert(val.typeOfWip(wip) == ty);
+            try wip.ensureUnusedExtraCapacity(1, Instruction.Phi, vals.len * 2);
+            const data = wip.addExtraAssumeCapacity(Instruction.Phi{ .type = ty });
+            for (vals) |val| wip.extra.appendAssumeCapacity(@backingInt(val));
+            for (blocks) |block_index| wip.extra.appendAssumeCapacity(@backingInt(block_index));
+            wip.instructions.items(.data)[@backingInt(self.instruction)] = data;
+            wip.abandoned_extra_len += @typeInfo(Instruction.Phi).@"struct".field_names.len;
+        }
     };
 
     pub fn phi(self: *WipFunction, ty: Type, name: []const u8) Allocator.Error!WipPhi {
         return self.phiTag(.phi, ty, name);
+    }
+
+    /// A phi for a block whose predecessors are not all known yet. Its
+    /// incoming edges are supplied by `WipPhi.finishOpen` once every branch
+    /// into the block has been emitted, and the block's declared incoming
+    /// count is not consulted until then.
+    pub fn openPhi(self: *WipFunction, ty: Type, name: []const u8) Allocator.Error!WipPhi {
+        assert(try ty.isSized(self.builder));
+        try self.ensureUnusedExtraCapacity(1, Instruction.Phi, 0);
+        const instruction = try self.addInst(name, .{
+            .tag = .phi,
+            .data = self.addExtraAssumeCapacity(Instruction.Phi{ .type = ty }),
+        });
+        return .{ .block = self.cursor.block, .instruction = instruction };
     }
 
     pub fn select(
@@ -6808,8 +6899,135 @@ pub const WipFunction = struct {
         return metadata.toOptional();
     }
 
+    /// The successor `index` of `block`'s terminator, or null past the last.
+    fn blockSuccessor(self: *const WipFunction, from: Block.Index, index: u32) ?Block.Index {
+        const instructions = from.ptrConst(self).instructions.items;
+        if (instructions.len == 0) return null;
+        const terminator = self.instructions.get(@backingInt(instructions[instructions.len - 1]));
+        switch (terminator.tag) {
+            .br => return if (index == 0) @fromBackingInt(terminator.data) else null,
+            .br_cond => {
+                const extra = self.extraData(Instruction.BrCond, terminator.data);
+                return switch (index) {
+                    0 => extra.then,
+                    1 => extra.@"else",
+                    else => null,
+                };
+            },
+            .@"switch" => {
+                var extra = self.extraDataTrail(Instruction.Switch, terminator.data);
+                if (index == 0) return extra.data.default;
+                if (index > extra.data.cases_len) return null;
+                _ = extra.trail.next(extra.data.cases_len, Constant, self);
+                return extra.trail.next(extra.data.cases_len, Block.Index, self)[index - 1];
+            },
+            .indirectbr => {
+                var extra = self.extraDataTrail(Instruction.IndirectBr, terminator.data);
+                if (index >= extra.data.targets_len) return null;
+                return extra.trail.next(extra.data.targets_len, Block.Index, self)[index];
+            },
+            else => return null,
+        }
+    }
+
+    /// Order the blocks so each follows every block that dominates it: the
+    /// reverse postorder from the entry, then each block no path from the
+    /// entry reaches, from its own depth-first walk. The bitcode writer
+    /// encodes an operand by its distance back from its use, which needs an
+    /// instruction's operands, apart from a phi's, defined before it in
+    /// layout order, and a definition dominates its uses.
+    fn layoutBlocksInReversePostorder(self: *WipFunction) Allocator.Error!void {
+        const gpa = self.builder.gpa;
+        const len = self.blocks.items.len;
+        if (len <= 1) return;
+        const order = try gpa.alloc(Block.Index, len);
+        defer gpa.free(order);
+        const new_index = try gpa.alloc(u32, len);
+        defer gpa.free(new_index);
+        const visited = try gpa.alloc(bool, len);
+        defer gpa.free(visited);
+        @memset(visited, false);
+        const Frame = struct { block: Block.Index, next: u32 };
+        var stack: std.ArrayList(Frame) = .empty;
+        defer stack.deinit(gpa);
+        var postorder: std.ArrayList(Block.Index) = .empty;
+        defer postorder.deinit(gpa);
+
+        var placed: usize = 0;
+        for (0..len) |root_index| {
+            if (visited[root_index]) continue;
+            postorder.clearRetainingCapacity();
+            visited[root_index] = true;
+            try stack.append(gpa, .{ .block = @fromBackingInt(@intCast(root_index)), .next = 0 });
+            while (stack.items.len > 0) {
+                const top = &stack.items[stack.items.len - 1];
+                if (self.blockSuccessor(top.block, top.next)) |successor| {
+                    top.next += 1;
+                    if (visited[@backingInt(successor)]) continue;
+                    visited[@backingInt(successor)] = true;
+                    try stack.append(gpa, .{ .block = successor, .next = 0 });
+                } else {
+                    try postorder.append(gpa, top.block);
+                    stack.items.len -= 1;
+                }
+            }
+            var i = postorder.items.len;
+            while (i > 0) {
+                i -= 1;
+                order[placed] = postorder.items[i];
+                placed += 1;
+            }
+        }
+        assert(placed == len);
+
+        var identity = true;
+        for (order, 0..) |old_block, position| {
+            new_index[@backingInt(old_block)] = @intCast(position);
+            if (@backingInt(old_block) != position) identity = false;
+        }
+        if (identity) return;
+
+        const tags = self.instructions.items(.tag);
+        const datas = self.instructions.items(.data);
+        for (self.blocks.items) |current_block| {
+            for (current_block.instructions.items) |instruction| {
+                const index = @backingInt(instruction);
+                switch (tags[index]) {
+                    .br => datas[index] = new_index[datas[index]],
+                    .br_cond => {
+                        const fields = self.extra.items[datas[index]..];
+                        fields[1] = new_index[fields[1]];
+                        fields[2] = new_index[fields[2]];
+                    },
+                    .@"switch" => {
+                        const fields = self.extra.items[datas[index]..];
+                        fields[1] = new_index[fields[1]];
+                        const cases_len = fields[2];
+                        for (fields[4 + cases_len ..][0..cases_len]) |*target| target.* = new_index[target.*];
+                    },
+                    .indirectbr => {
+                        const fields = self.extra.items[datas[index]..];
+                        const targets_len = fields[1];
+                        for (fields[2..][0..targets_len]) |*target| target.* = new_index[target.*];
+                    },
+                    .phi, .@"phi fast" => {
+                        const fields = self.extra.items[datas[index]..];
+                        const incoming = current_block.incoming;
+                        for (fields[1 + incoming ..][0..incoming]) |*source| source.* = new_index[source.*];
+                    },
+                    else => {},
+                }
+            }
+        }
+        const reordered = try gpa.alloc(Block, len);
+        defer gpa.free(reordered);
+        for (order, reordered) |old, *slot| slot.* = self.blocks.items[@backingInt(old)];
+        @memcpy(self.blocks.items, reordered);
+    }
+
     pub fn finish(self: *WipFunction) Allocator.Error!void {
         try self.flushEntryAllocas();
+        try self.layoutBlocksInReversePostorder();
         const gpa = self.builder.gpa;
         const function = self.function.ptr(self.builder);
         const params_len = self.function.typeOf(self.builder).functionParameters(self.builder).len;
@@ -6895,7 +7113,7 @@ pub const WipFunction = struct {
                 assert(wip_extra.index == wip_extra.items.len);
                 return wip_extra.items;
             }
-        } = .{ .items = try gpa.alloc(u32, self.extra.items.len) };
+        } = .{ .items = try gpa.alloc(u32, self.extra.items.len - self.abandoned_extra_len) };
         errdefer gpa.free(wip_extra.items);
 
         gpa.free(function.blocks);
@@ -9238,6 +9456,7 @@ pub fn init(options: Options) Allocator.Error!Builder {
         .aliases = .empty,
         .variables = .empty,
         .functions = .empty,
+        .comdats = .empty,
 
         .strtab_string_map = .empty,
         .strtab_string_indices = .empty,
@@ -9353,6 +9572,7 @@ pub fn deinit(self: *Builder) void {
     self.variables.deinit(gpa);
     for (self.functions.items) |*function| function.deinit(gpa);
     self.functions.deinit(gpa);
+    self.comdats.deinit(gpa);
 
     self.strtab_string_map.deinit(gpa);
     self.strtab_string_indices.deinit(gpa);
@@ -9622,6 +9842,18 @@ pub fn addFunctionAssumeCapacity(
         .strip = undefined,
     });
     return function_index;
+}
+
+/// Adds a COMDAT group to the module.
+pub fn addComdat(
+    self: *Builder,
+    name: StrtabString,
+    selection_kind: Comdat.SelectionKind,
+) Allocator.Error!Comdat.Index {
+    assert(!name.isAnon());
+    const comdat_index: Comdat.Index = @fromBackingInt(@intCast(self.comdats.items.len));
+    try self.comdats.append(self.gpa, .{ .name = name, .selection_kind = selection_kind });
+    return comdat_index;
 }
 
 /// Gets or creates an LLVM intrinsic function with the given overloaded types.
@@ -9945,6 +10177,14 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
         , .{ id.fmt(self), ty.fmt(self, .default) });
     }
 
+    if (self.comdats.items.len > 0) {
+        if (need_newline) try w.writeByte('\n') else need_newline = true;
+        for (self.comdats.items) |comdat| try w.print(
+            \\${f} = comdat {s}
+            \\
+        , .{ comdat.name.fmt(self, .quote_unless_valid_identifier), @tagName(comdat.selection_kind) });
+    }
+
     if (self.variables.items.len > 0) {
         if (need_newline) try w.writeByte('\n') else need_newline = true;
         for (self.variables.items, 0..) |variable, variable_i| {
@@ -9977,6 +10217,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
             if (variable.section != .none) {
                 try w.print(", section {f}", .{variable.section.fmtQ(self)});
             }
+            try self.printComdat(variable.comdat, variable.global, ", ", w);
             try w.print(
                 \\{f}{f}
                 \\
@@ -10077,6 +10318,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
             if (function.section != .none) {
                 try w.print(" section {f}", .{function.section.fmtQ(self)});
             }
+            try self.printComdat(function.comdat, function.global, " ", w);
             try w.print("{f}{f}", .{
                 function.alignment.fmt(" "),
                 try metadata_formatter.fmt(" !dbg ", global.dbg, null),
@@ -10976,6 +11218,15 @@ fn isValidIdentifier(id: []const u8) bool {
         else => return false,
     };
     return true;
+}
+
+fn printComdat(self: *const Builder, comdat: Comdat.Index, global: Global.Index, prefix: []const u8, w: *Writer) Writer.Error!void {
+    if (comdat == .none) return;
+    const comdat_name = comdat.ptrConst(self).name;
+    try w.print("{s}comdat", .{prefix});
+    if (comdat_name != global.name(self)) {
+        try w.print("(${f})", .{comdat_name.fmt(self, .quote_unless_valid_identifier)});
+    }
 }
 
 const QuoteBehavior = enum { always_quote, quote_unless_valid_identifier };
@@ -12926,6 +13177,11 @@ pub const Producer = struct {
 };
 
 /// Serializes the LLVM IR to bitcode format.
+/// A global's bitcode COMDAT field: the group's 1-based id, or 0 for none.
+fn comdatId(comdat: Comdat.Index) u32 {
+    return if (comdat == .none) 0 else @backingInt(comdat) + 1;
+}
+
 pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitcode_writer.Error![]const u32 {
     const BitcodeWriter = bitcode_writer.BitcodeWriter(&.{ Type, FunctionAttributes });
     var bitcode = BitcodeWriter.init(allocator, .{
@@ -13417,6 +13673,17 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
         };
         const constant_adapter: ConstantAdapter = .{ .builder = self, .globals = &globals };
 
+        // Comdats
+        for (self.comdats.items) |comdat| {
+            const name_index = comdat.name.toIndex().?;
+            try module_block.writeAbbrev(ModuleBlock.Comdat{
+                .strtab_offset = self.strtab_string_indices.items[name_index],
+                .strtab_size = self.strtab_string_indices.items[name_index + 1] -
+                    self.strtab_string_indices.items[name_index],
+                .selection_kind = comdat.selection_kind,
+            });
+        }
+
         // Globals
         {
             var section_map: std.array_hash_map.Auto(String, void) = .empty;
@@ -13470,6 +13737,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                     .unnamed_addr = global.unnamed_addr,
                     .externally_initialized = global.externally_initialized,
                     .dllstorageclass = global.dll_storage_class,
+                    .comdat = comdatId(variable.comdat),
                     .preemption = global.preemption,
                 });
             }
@@ -13514,6 +13782,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                     .visibility = global.visibility,
                     .unnamed_addr = global.unnamed_addr,
                     .dllstorageclass = global.dll_storage_class,
+                    .comdat = comdatId(func.comdat),
                     .preemption = global.preemption,
                     .addr_space = global.addr_space,
                 });
@@ -14836,7 +15105,9 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                             for (vals, blocks) |val, block| {
                                 const offset_value = adapter.getOffsetValueSignedIndex(val);
                                 const abs_value: u32 = @intCast(@abs(offset_value));
-                                const signed_vbr = if (offset_value > 0) abs_value << 1 else ((abs_value << 1) | 1);
+                                // A phi naming itself has offset zero, which sign rotation encodes
+                                // as 0: the encoding 1 means the most negative value.
+                                const signed_vbr = if (offset_value >= 0) abs_value << 1 else ((abs_value << 1) | 1);
                                 record.appendAssumeCapacity(signed_vbr);
                                 record.appendAssumeCapacity(@backingInt(block));
                             }

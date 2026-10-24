@@ -220,8 +220,11 @@ const ProblemEntry = struct {
     start_col: u32,
     end_line: u32,
     end_col: u32,
+    /// The report is about `file` as a whole and has no position in it.
+    file_level: bool,
 
     fn format(self: ProblemEntry, writer: anytype) (Allocator.Error || error{WriteFailed})!void {
+        if (self.file_level) return writer.print("{s} - {s}", .{ self.problem_type, self.file });
         try writer.print("{s} - {s}:{d}:{d}:{d}:{d}", .{
             self.problem_type,
             self.file,
@@ -400,9 +403,10 @@ fn shoutedDupe(allocator: std.mem.Allocator, s: []const u8) Allocator.Error![]u8
     return try shouted.toOwnedSlice();
 }
 
-const RegionLoc = struct { file: []const u8, sl: u32, sc: u32, el: u32, ec: u32 };
+const RegionLoc = struct { file: []const u8, sl: u32, sc: u32, el: u32, ec: u32, file_level: bool = false };
 
-/// Pull the first source region out of a report for the EXPECTED location.
+/// Pull the first source region out of a report for the EXPECTED location, or
+/// the file a report without one is about.
 fn reportRegionLoc(report: *const reporting.Report) RegionLoc {
     for (report.document.elements.items) |el| {
         switch (el) {
@@ -441,6 +445,7 @@ fn reportRegionLoc(report: *const reporting.Report) RegionLoc {
             => {},
         }
     }
+    if (report.file) |file| return .{ .file = sanitiseSnapshotPath(file), .sl = 0, .sc = 0, .el = 0, .ec = 0, .file_level = true };
     return .{ .file = "", .sl = 0, .sc = 0, .el = 0, .ec = 0 };
 }
 
@@ -470,6 +475,7 @@ fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const 
             .start_col = loc.sc,
             .end_line = loc.el,
             .end_col = loc.ec,
+            .file_level = loc.file_level,
         });
     }
 
@@ -1073,7 +1079,7 @@ fn processSnapshotContent(
                 .dev_object,
                 .docs,
                 .reporting,
-                => unreachable,
+                => unreachable, // the enclosing prong handles only expr and statement snapshots
             }
             if (content.meta.include_canonicalize_diagnostics) {
                 try can_ir.publishScratchDiagnostics();
@@ -1084,36 +1090,6 @@ fn processSnapshotContent(
 
     // Assert that everything is in-sync
     can_ir.debugAssertArraysInSync();
-
-    // Compute dependency-based evaluation order if not already set
-    // Skip for .file/.package/.platform/.app tests because canonicalizeAndTypeCheckModule
-    // will call canonicalizeFile which sets it. Only do this for .expr/.statement which
-    // don't call canonicalizeFile.
-    const needs_evaluation_order = switch (content.meta.node_type) {
-        .expr, .statement, .mono => true,
-        .file, .package, .platform, .app, .snippet, .repl, .header, .dev_object, .docs, .reporting => false,
-    };
-
-    if (needs_evaluation_order and can_ir.evaluation_order == null) {
-        const DependencyGraph = @import("can").DependencyGraph;
-        var graph = try DependencyGraph.buildDependencyGraph(
-            can_ir,
-            can_ir.all_defs,
-            allocator,
-        );
-        defer graph.deinit();
-
-        var demand_dependencies = try DependencyGraph.collectDependencies(&graph, can_ir.gpa);
-        errdefer demand_dependencies.deinit(can_ir.gpa);
-        const eval_order = try DependencyGraph.computeSCCs(&graph, allocator);
-        // IMPORTANT: Use can_ir.gpa here, not allocator, because ModuleEnv.deinit()
-        // will free this with self.gpa. They must match to avoid memory leaks.
-        const eval_order_ptr = try can_ir.gpa.create(DependencyGraph.EvaluationOrder);
-        eval_order_ptr.* = eval_order;
-        can_ir.setTopLevelDemandDependencies(demand_dependencies);
-        demand_dependencies = .{};
-        can_ir.evaluation_order = eval_order_ptr;
-    }
 
     // Types - include Set, Dict, Bool, Try, and Str modules in the order they appear in imports
     // The order MUST match the import order in can_ir.imports because module_idx in external
@@ -1152,7 +1128,7 @@ fn processSnapshotContent(
             // For file tests, canonicalization happens INSIDE canonicalizeAndTypeCheckModule,
             // so can_ir.imports is still empty at this point. We can't use builtin_modules
             // (which is built from can_ir.imports). Instead, just pass builtin_env directly.
-            const builtin_env = config.builtin_module orelse unreachable;
+            const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
             // Cast from *const ModuleEnv to *ModuleEnv (function signature requires non-const pointer)
             const builtin_env_nonconst: *ModuleEnv = @constCast(builtin_env);
             const imported_envs_for_file: []const *ModuleEnv = &[_]*ModuleEnv{builtin_env_nonconst};
@@ -3449,6 +3425,22 @@ fn processDocsSnapshot(
         return false;
     };
 
+    // Documentation is generated only for builds without errors, as in `roc docs`.
+    const drained = try build_env.drainReports();
+    defer build_env.freeDrainedReports(drained);
+    var error_count: usize = 0;
+    for (drained) |module| {
+        for (module.reports) |report| {
+            if (!report.severity.isError()) continue;
+            error_count += 1;
+            std.log.err("{s}: {s}", .{ module.abs_path, report.title });
+        }
+    }
+    if (error_count > 0) {
+        std.log.err("Docs snapshot {s} has {d} compile error(s)", .{ output_path, error_count });
+        return false;
+    }
+
     // 2. Get documentable modules and extract docs
     const modules = build_env.getDocumentationModules(allocator) catch |err| {
         std.log.err("Failed to get documentable modules: {}", .{err});
@@ -3475,12 +3467,11 @@ fn processDocsSnapshot(
         defer allocator.free(routing_modules);
         for (routing_modules) |mod| {
             const source_decl = mod.public_type_decl orelse continue;
-            const artifact = mod.semantic.checked_artifact orelse unreachable;
             try public_type_projections.append(allocator, .{
                 .public_name = mod.name,
                 .package_name = build_env.displayNameForPackage(mod.package_name),
-                .source_env = mod.semantic.env,
-                .source_identity = &artifact.key.module_identity_hash,
+                .source_env = mod.checked.env,
+                .source_identity = &mod.checked.checked_artifact.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = mod.public_order,
             });
@@ -3492,18 +3483,17 @@ fn processDocsSnapshot(
         // Docs show display names (root alias, or "app"/"module" for the
         // root itself), never internal identity keys (URLs, absolute paths).
         const display_pkg_name = build_env.displayNameForPackage(mod.package_name);
-        var mod_docs = docs_mod.extract.extractModuleDocsWithOptions(allocator, mod.semantic.env, display_pkg_name, mod.path, .{
+        var mod_docs = docs_mod.extract.extractModuleDocsWithOptions(allocator, mod.checked.env, display_pkg_name, mod.path, .{
             .exposed_names = mod.docs_exposed_names,
             .public_type = if (mod.public_type_decl) |source_decl| .{
                 .public_name = mod.name,
                 .package_name = display_pkg_name,
-                .source_env = mod.semantic.env,
-                .source_identity = &(mod.semantic.checked_artifact orelse unreachable).key.module_identity_hash,
+                .source_env = mod.checked.env,
+                .source_identity = &mod.checked.checked_artifact.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = mod.public_order,
             } else null,
             .public_types = public_type_projections.items,
-            .checked_artifact = mod.semantic.checked_artifact,
         }) catch |err| {
             std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
             continue;
@@ -3733,10 +3723,7 @@ fn snapshotRootRequestByOrder(
     for (root_artifact.root_requests.requests) |request| {
         if (request.order == order) return request;
     }
-    if (@import("builtin").mode == .debug) {
-        std.debug.panic("snapshot invariant violated: missing root request order {d}", .{order});
-    }
-    unreachable;
+    base.invariant("snapshot invariant violated: missing root request order {d}", .{order});
 }
 
 fn snapshotProvidedEntrypointName(
@@ -3746,17 +3733,11 @@ fn snapshotProvidedEntrypointName(
     const def_idx = switch (root.source) {
         .def => |def| def,
         .expr, .statement, .required_binding, .hoisted => {
-            if (@import("builtin").mode == .debug) {
-                std.debug.panic("snapshot invariant violated: exported platform root is not a definition", .{});
-            }
-            unreachable;
+            base.invariant("snapshot invariant violated: exported platform root is not a definition", .{});
         },
     };
     const top_level = root_artifact.top_level_values.lookupByDef(def_idx) orelse {
-        if (@import("builtin").mode == .debug) {
-            std.debug.panic("snapshot invariant violated: exported platform root has no published top-level value", .{});
-        }
-        unreachable;
+        base.invariant("snapshot invariant violated: exported platform root has no published top-level value", .{});
     };
 
     for (root_artifact.provides_requires.provides) |entry| {
@@ -3765,13 +3746,10 @@ fn snapshotProvidedEntrypointName(
         }
     }
 
-    if (@import("builtin").mode == .debug) {
-        std.debug.panic(
-            "snapshot invariant violated: exported platform root has no published FFI symbol",
-            .{},
-        );
-    }
-    unreachable;
+    base.invariant(
+        "snapshot invariant violated: exported platform root has no published FFI symbol",
+        .{},
+    );
 }
 
 fn snapshotNativeEntrypoints(
@@ -3782,13 +3760,10 @@ fn snapshotNativeEntrypoints(
     const root_procs = lowered.lir_result.root_procs.items;
     const root_metadata = lowered.lir_result.root_metadata.items;
     if (root_procs.len != root_metadata.len) {
-        if (@import("builtin").mode == .debug) {
-            std.debug.panic(
-                "snapshot invariant violated: root metadata mismatch roots={d} metadata={d}",
-                .{ root_procs.len, root_metadata.len },
-            );
-        }
-        unreachable;
+        base.invariant(
+            "snapshot invariant violated: root metadata mismatch roots={d} metadata={d}",
+            .{ root_procs.len, root_metadata.len },
+        );
     }
 
     var entrypoints = std.ArrayList(backend.Entrypoint).empty;
@@ -4456,7 +4431,6 @@ fn snapshotReplProblemIsError(problem: check.problem.Problem) bool {
         tag != .redundant_pattern and
         tag != .redundant_open_tag_union and
         tag != .unmatchable_pattern and
-        tag != .comptime_unused_branch and
         tag != .comptime_condition and
         tag != .discarded_var_update and
         tag != .literal_defaulted;
@@ -4503,7 +4477,6 @@ fn isTypeCheckError(err: SnapshotError) bool {
         error.CacheVersionHashMismatch,
         error.Canceled,
         error.CompilationFailed,
-        error.ComptimeExhaustiveness,
         error.ConnectionResetByPeer,
         error.CorruptArtifact,
         error.CorruptBuiltinArtifact,

@@ -111,7 +111,7 @@ pub fn classifyType(allocator: std.mem.Allocator, store: *const Store, start: Id
         // Closures and erased callables carry pointers and are not homogeneous
         // aggregates, so classify them purely by size.
         .closure, .erased_callable => return classifyBySize(store, lay),
-        .zst => unreachable, // filtered out by the assert above; ZSTs are never passed
+        .zst, .hole => unreachable, // filtered out by the assert above; ZSTs are never passed
     }
 }
 
@@ -157,7 +157,7 @@ fn countVectors(allocator: std.mem.Allocator, store: *const Store, idx: Idx, may
                 if (info.variants.len != 1 or info.data.discriminant_size != 0) return invalid_float_count;
                 try pending.append(pending_allocator, info.variants.get(0).payload_layout);
             },
-            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => return invalid_float_count,
+            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .zst, .hole, .ptr => return invalid_float_count,
         }
     }
     return count;
@@ -230,7 +230,7 @@ fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, mayb
             },
             // Anything else (pointer, list, box, non-transparent tag union, …)
             // makes the aggregate non-homogeneous.
-            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => return invalid_float_count,
+            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .zst, .hole, .ptr => return invalid_float_count,
         }
     }
     return count;

@@ -121,7 +121,7 @@ pub const Renderer = struct {
         writeBytes(&hasher, return_reuse);
         const signature = switch (self.types.get(self.renderedRoot(solved_fn_ty))) {
             .func => |func| func,
-            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .mono => Common.invariant("procedure identity requires a solved function signature"),
+            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .hole, .mono => Common.invariant("procedure identity requires a solved function signature"),
         };
         writeBytes(&hasher, "args");
         const args = self.types.span(signature.args);
@@ -202,6 +202,15 @@ const Engine = struct {
     bytes: std.ArrayList(u8) = .empty,
     /// Nodes discovered but not yet encoded.
     pending: std.ArrayList(u32) = .empty,
+    /// Scratch `resolveCyclicComponent` keeps across the components of one
+    /// run. `position_of_node` covers every node and holds `no_position`
+    /// except at the members of the component being resolved.
+    position_of_node: std.ArrayList(u32) = .empty,
+    label_scratch: std.ArrayList(Identity) = .empty,
+    distinct_labels: std.AutoHashMapUnmanaged(Identity, u32) = .empty,
+    sorted_labels: std.ArrayList(Identity) = .empty,
+    rank_of_member: std.ArrayList(u32) = .empty,
+    block_rep: std.ArrayList(u32) = .empty,
 
     fn init(renderer: *const Renderer) Engine {
         return .{
@@ -218,6 +227,12 @@ const Engine = struct {
         self.children.deinit(self.gpa);
         self.bytes.deinit(self.gpa);
         self.pending.deinit(self.gpa);
+        self.position_of_node.deinit(self.gpa);
+        self.label_scratch.deinit(self.gpa);
+        self.distinct_labels.deinit(self.gpa);
+        self.sorted_labels.deinit(self.gpa);
+        self.rank_of_member.deinit(self.gpa);
+        self.block_rep.deinit(self.gpa);
     }
 
     fn run(self: *Engine, root: SolvedType.TypeVarId) Allocator.Error!Identity {
@@ -301,10 +316,15 @@ const Engine = struct {
                 try self.putBytes(@tagName(primitive));
             },
             .zst => try self.putBytes("zst"),
+            .hole => try self.putBytes("hole"),
+            // An erased callable is one pointer-sized value called through
+            // the convention of its source function type, whichever closures
+            // the program puts in it, so its members are not part of the
+            // code of a procedure that holds one. A procedure that packs a
+            // function into it names that function in its own body.
             .erased => |erased| {
                 try self.putBytes("erased");
                 try self.putBytes(&erased.source_fn_ty.bytes);
-                try self.putMembers(erased.members);
             },
             .func => |func| {
                 try self.putBytes("func");
@@ -353,8 +373,14 @@ const Engine = struct {
             },
             .named => |named| {
                 try self.putBytes("named");
-                try self.putBytes(&named.named_type.module.bytes);
-                try self.putBytes(renderer.names.moduleIdentityBytes(named.def.module));
+                // A root app module type is named by its declaration; its
+                // backing, rendered below, names its structure.
+                if (named.def.site) {
+                    try self.putBytes("site");
+                } else {
+                    try self.putBytes(&named.named_type.module.bytes);
+                    try self.putBytes(renderer.names.moduleIdentityBytes(named.def.module));
+                }
                 if (named.def.source_decl) |decl| {
                     try self.putBytes("source-decl");
                     try self.putU32(decl);
@@ -526,10 +552,15 @@ const Engine = struct {
     /// every member as its position in that one group rendering.
     fn resolveCyclicComponent(self: *Engine, members: []const u32) Allocator.Error!void {
         const member_count = members.len;
-        const position_of_node = try self.gpa.alloc(u32, self.nodes.items.len);
-        defer self.gpa.free(position_of_node);
-        @memset(position_of_node, no_position);
+        const known_nodes = self.position_of_node.items.len;
+        if (known_nodes < self.nodes.items.len) {
+            try self.position_of_node.appendNTimes(self.gpa, no_position, self.nodes.items.len - known_nodes);
+        }
+        const position_of_node = self.position_of_node.items;
         for (members, 0..) |node, pos| position_of_node[node] = @intCast(pos);
+        defer for (members) |node| {
+            position_of_node[node] = no_position;
+        };
 
         // Refine to the stable bisimulation partition. Every member starts
         // from its content label: its encoding with every out-of-component
@@ -541,12 +572,11 @@ const Engine = struct {
         // equal labels exactly when they are bisimilar, and the labels are
         // identical for bisimilar positions of any two knots regardless of
         // how many nodes either knot uses.
-        var labels = try self.gpa.alloc(Identity, member_count);
-        defer self.gpa.free(labels);
-        var next_labels = try self.gpa.alloc(Identity, member_count);
-        defer self.gpa.free(next_labels);
-        var distinct_labels = std.AutoHashMap(Identity, u32).init(self.gpa);
-        defer distinct_labels.deinit();
+        try self.label_scratch.resize(self.gpa, 2 * member_count);
+        var labels = self.label_scratch.items[0..member_count];
+        var next_labels = self.label_scratch.items[member_count..];
+        const distinct_labels = &self.distinct_labels;
+        distinct_labels.clearRetainingCapacity();
         for (members, 0..) |node, pos| {
             var hasher = TypeDigestHasher.init();
             writeBytes(&hasher, "label");
@@ -566,7 +596,7 @@ const Engine = struct {
                 },
             };
             labels[pos] = hasher.finalResult();
-            try distinct_labels.put(labels[pos], no_position);
+            try distinct_labels.put(self.gpa, labels[pos], no_position);
         }
         var label_count: u32 = distinct_labels.count();
         while (true) {
@@ -584,7 +614,7 @@ const Engine = struct {
                     hasher.update(&labels[target_pos]);
                 }
                 next_labels[pos] = hasher.finalResult();
-                try distinct_labels.put(next_labels[pos], no_position);
+                try distinct_labels.put(self.gpa, next_labels[pos], no_position);
             }
             const next_count: u32 = distinct_labels.count();
             const stable = next_count == label_count;
@@ -596,8 +626,8 @@ const Engine = struct {
         // Group order: the reduced positions sorted by label. Labels are
         // intrinsic to the infinite type, so the order is too.
         const block_count = label_count;
-        const sorted_labels = try self.gpa.alloc(Identity, block_count);
-        defer self.gpa.free(sorted_labels);
+        try self.sorted_labels.resize(self.gpa, block_count);
+        const sorted_labels = self.sorted_labels.items;
         {
             var it = distinct_labels.keyIterator();
             var next: usize = 0;
@@ -610,16 +640,16 @@ const Engine = struct {
             }
         }.lessThan);
         for (sorted_labels, 0..) |label, rank| {
-            const slot = distinct_labels.getPtr(label) orelse unreachable;
+            const slot = distinct_labels.getPtr(label) orelse unreachable; // sorted_labels holds exactly the keys of distinct_labels
             slot.* = @intCast(rank);
         }
-        const rank_of_member = try self.gpa.alloc(u32, member_count);
-        defer self.gpa.free(rank_of_member);
-        const block_rep = try self.gpa.alloc(u32, block_count);
-        defer self.gpa.free(block_rep);
+        try self.rank_of_member.resize(self.gpa, member_count);
+        const rank_of_member = self.rank_of_member.items;
+        try self.block_rep.resize(self.gpa, block_count);
+        const block_rep = self.block_rep.items;
         @memset(block_rep, no_position);
         for (members, 0..) |node, pos| {
-            const rank = distinct_labels.get(labels[pos]) orelse unreachable;
+            const rank = distinct_labels.get(labels[pos]) orelse unreachable; // distinct_labels holds every label of the final stable round
             rank_of_member[pos] = rank;
             // The partition is stable, so any member represents its position.
             if (block_rep[rank] == no_position) block_rep[rank] = node;
@@ -661,7 +691,7 @@ const Engine = struct {
         // A rolled-out copy of any position unfolds to the same one-step
         // encoding, so it folds to that position's digest.
         for (members) |node| {
-            const digest = self.nodes.items[node].digest orelse unreachable;
+            const digest = self.nodes.items[node].digest orelse unreachable; // the loop above finalized every member's digest
             try self.renderer.memo.unfoldings.put(self.unfoldingKey(node), digest);
         }
     }
@@ -752,4 +782,41 @@ test "procedure identity excludes outer callable sets but retains nested callabl
     try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(second_fn, alone, &.{}, "finite", "none")));
     try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(first_fn, alone, &.{}, "erased", "none")));
     try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(first_fn, alone, &.{}, "finite", "reuse")));
+
+    // An erased callable's members are whatever closures the program puts
+    // in it; a procedure that takes one is the same code whichever they are.
+    const erased_digest: names.TypeDigest = .{ .bytes = @splat(9) };
+    const erased_first = try types.add(.{ .erased = .{ .source_fn_ty = erased_digest, .members = try types.addMembers(&.{
+        .{ .lambda = first, .captures = .empty() },
+    }), .abi_fn = alone } });
+    const erased_both = try types.add(.{ .erased = .{ .source_fn_ty = erased_digest, .members = try types.addMembers(&.{
+        .{ .lambda = first, .captures = .empty() },
+        .{ .lambda = second, .captures = .empty() },
+    }), .abi_fn = alone } });
+    const boxed_first = try types.add(.{ .box = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = erased_first } }) });
+    const boxed_both = try types.add(.{ .box = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = erased_both } }) });
+    const takes_boxed_first = try types.add(.{ .func = .{ .args = try types.addSpan(&.{boxed_first}), .ret = scalar, .callable = singleton } });
+    const takes_boxed_both = try types.add(.{ .func = .{ .args = try types.addSpan(&.{boxed_both}), .ret = scalar, .callable = singleton } });
+    const other_erased = try types.add(.{ .erased = .{ .source_fn_ty = .{ .bytes = @splat(8) }, .abi_fn = alone } });
+    const boxed_other = try types.add(.{ .box = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = other_erased } }) });
+    const takes_boxed_other = try types.add(.{ .func = .{ .args = try types.addSpan(&.{boxed_other}), .ret = scalar, .callable = singleton } });
+    const erased_renderer = Renderer{
+        .allocator = allocator,
+        .types = types.view(),
+        .names = &name_store,
+        .fn_tys = &.{ alone, beside_lambda },
+        .source_digests = &.{ @splat(1), @splat(2) },
+        .fn_by_symbol = &fn_by_symbol,
+        .memo = &memo,
+    };
+    try std.testing.expectEqual(
+        try erased_renderer.specIdentity(first_fn, takes_boxed_first, &.{}, "finite", "none"),
+        try erased_renderer.specIdentity(first_fn, takes_boxed_both, &.{}, "finite", "none"),
+    );
+    // The erased function type is still part of the identity.
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        &try erased_renderer.specIdentity(first_fn, takes_boxed_first, &.{}, "finite", "none"),
+        &try erased_renderer.specIdentity(first_fn, takes_boxed_other, &.{}, "finite", "none"),
+    ));
 }

@@ -233,7 +233,7 @@ pub fn createValidationReport(
             var report = try Report.init(allocator, "Missing Targets Section", "Platform headers must include a targets section that specifies which targets this platform supports and what files to link.", .runtime_error);
 
             try report.document.addText("In ");
-            try report.document.addAnnotated(info.platform_path, .emphasized);
+            try report.document.addAnnotated(info.platform_path, .path);
             try report.document.addText(", add a targets section like:");
             try report.document.addLineBreaks(2);
 
@@ -274,7 +274,7 @@ pub fn createValidationReport(
             var report = try Report.init(allocator, "Missing Target File", headline, .runtime_error);
 
             try report.document.addText("Expected file at: ");
-            try report.document.addAnnotated(info.expected_full_path, .emphasized);
+            try report.document.addAnnotated(info.expected_full_path, .path);
             try report.document.addLineBreaks(2);
 
             try report.document.addText("Either add the missing file or remove it from the targets section.");
@@ -297,9 +297,7 @@ pub fn createValidationReport(
         },
 
         .empty_targets => |info| {
-            const headline = try std.fmt.allocPrint(allocator, "The targets section in {s} is empty, so this platform does not declare any compiler-built targets.", .{info.platform_path});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "Empty Targets Section", headline, .runtime_error);
+            var report = try Report.initWithPath(allocator, "Empty Targets Section", "The targets section in ", info.platform_path, " is empty, so this platform does not declare any compiler-built targets.", .runtime_error);
 
             try report.document.addText("An empty targets section is only valid for tools that supply their own host, such as `roc glue`.");
             try report.document.addLineBreak();
@@ -310,9 +308,9 @@ pub fn createValidationReport(
         },
 
         .unsupported_target => |info| {
-            const headline = try std.fmt.allocPrint(allocator, "The platform at {s} does not support the {s} target.", .{ info.platform_path, @tagName(info.requested_target) });
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "Unsupported Target", headline, .runtime_error);
+            const after = try std.fmt.allocPrint(allocator, " does not support the {s} target.", .{@tagName(info.requested_target)});
+            defer allocator.free(after);
+            var report = try Report.initWithPath(allocator, "Unsupported Target", "The platform at ", info.platform_path, after, .runtime_error);
 
             if (info.supported_targets.len > 0) {
                 try report.document.addText("Supported targets:");
@@ -384,7 +382,7 @@ pub fn createValidationReport(
             try report.document.addText("Expected host library at:");
             try report.document.addLineBreak();
             try report.document.addText("  ");
-            try report.document.addAnnotated(info.expected_path, .emphasized);
+            try report.document.addAnnotated(info.expected_path, .path);
             try report.document.addLineBreaks(2);
 
             try report.document.addText("Platform authors: build your host for this target and place it at:");
@@ -423,9 +421,7 @@ pub fn createValidationReport(
         },
 
         .no_platform_found => |info| {
-            const headline = try std.fmt.allocPrint(allocator, "The file {s} doesn't have a platform.", .{info.app_path});
-            defer allocator.free(headline);
-            var report = try Report.init(allocator, "No Platform Found", headline, .runtime_error);
+            var report = try Report.initWithPath(allocator, "No Platform Found", "The file ", info.app_path, " doesn't have a platform.", .runtime_error);
 
             try report.document.addText("Every Roc application needs a platform. Add a platform declaration:");
             try report.document.addLineBreaks(2);

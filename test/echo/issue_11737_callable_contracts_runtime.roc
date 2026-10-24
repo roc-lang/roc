@@ -1,5 +1,6 @@
 import Issue11737Db
 
+demo : Issue11737Db({ fetch : {} -> Str }) -> ((Str, Str), (Str, U64))
 demo = |db| (db.run(|{}| "a"), db.run(|{}| 42.U64))
 
 forward = |db| demo(db)

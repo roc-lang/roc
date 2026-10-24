@@ -160,6 +160,25 @@ fn contentHash(text: []const u8) [32]u8 {
     return hash;
 }
 
+fn dupeDiagnostics(allocator: Allocator, diagnostics: []const Diagnostics.Diagnostic) Allocator.Error![]Diagnostics.Diagnostic {
+    const copy = try allocator.dupe(Diagnostics.Diagnostic, diagnostics);
+    var copied: usize = 0;
+    errdefer {
+        for (copy[0..copied]) |diag| allocator.free(diag.message);
+        allocator.free(copy);
+    }
+    for (copy) |*diag| {
+        diag.message = try allocator.dupe(u8, diag.message);
+        copied += 1;
+    }
+    return copy;
+}
+
+fn freeDiagnostics(allocator: Allocator, diagnostics: []Diagnostics.Diagnostic) void {
+    for (diagnostics) |diag| allocator.free(diag.message);
+    allocator.free(diagnostics);
+}
+
 fn noteOom(oom: *?Allocator.Error, result: anytype) ?@typeInfo(@TypeOf(result)).error_union.payload {
     return result catch |err| {
         oom.* = err;
@@ -190,6 +209,15 @@ pub const SyntaxChecker = struct {
     /// URIs for which we last published a non-empty diagnostic set. Used to
     /// emit empty clears when those diagnostics are no longer valid.
     published_diagnostic_uris: std.StringHashMapUnmanaged(void) = .{},
+    /// Each checked URI of an open document, exactly as the client spelled it,
+    /// mapped to the absolute path the build knows that document's module by.
+    /// Diagnostics and locations for a path go to the client under these URIs:
+    /// a URI rebuilt from the path can spell the same file differently (percent
+    /// encoding, drive-letter case, a symlinked directory), and the client keys
+    /// its documents by the exact string. Kept in check order, so the URI a
+    /// location query picks for a file open under several URIs is deterministic.
+    /// Keys and values are owned.
+    client_document_paths: std.StringArrayHashMapUnmanaged([]u8) = .empty,
     cache_config: CacheConfig,
     log_file: ?std.Io.File = null,
     debug: DebugFlags,
@@ -215,6 +243,7 @@ pub const SyntaxChecker = struct {
         checker: *SyntaxChecker,
         identity: ?DocumentIdentity,
         session: ?BuildSession,
+        handle: *BuildEnvHandle,
         env: *BuildEnv,
         absolute_path: []const u8,
         build_succeeded: bool,
@@ -293,6 +322,12 @@ pub const SyntaxChecker = struct {
         self.clearPublishedDiagnosticUris();
         self.published_diagnostic_uris.deinit(self.allocator);
 
+        for (self.client_document_paths.keys(), self.client_document_paths.values()) |uri, path| {
+            self.allocator.free(uri);
+            self.allocator.free(path);
+        }
+        self.client_document_paths.deinit(self.allocator);
+
         if (self.builtin_modules) |builtin_modules| {
             builtin_modules.deinit();
             self.allocator.destroy(builtin_modules);
@@ -328,6 +363,77 @@ pub const SyntaxChecker = struct {
     /// See `seedPublishedDiagnosticUriForTesting` for why this isn't gated on `builtin.is_test`.
     pub fn hasPublishedDiagnosticUriForTesting(self: *SyntaxChecker, uri: []const u8) bool {
         return self.published_diagnostic_uris.contains(uri);
+    }
+
+    /// Forget a document the client closed. Its URI no longer names its file, so
+    /// diagnostics and locations for that file go to a URI built from the path.
+    pub fn closeDocument(self: *SyntaxChecker, uri: []const u8) void {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+
+        const removed = self.client_document_paths.fetchOrderedRemove(uri) orelse return;
+        self.allocator.free(removed.key);
+        self.allocator.free(removed.value);
+    }
+
+    /// Record that the client names the document at `absolute_path` by `uri`.
+    fn recordClientDocument(self: *SyntaxChecker, uri: []const u8, absolute_path: []const u8) Allocator.Error!void {
+        if (self.client_document_paths.getPtr(uri)) |path| {
+            if (std.mem.eql(u8, path.*, absolute_path)) return;
+            const owned_path = try self.allocator.dupe(u8, absolute_path);
+            self.allocator.free(path.*);
+            path.* = owned_path;
+            return;
+        }
+
+        const owned_uri = try self.allocator.dupe(u8, uri);
+        errdefer self.allocator.free(owned_uri);
+        const owned_path = try self.allocator.dupe(u8, absolute_path);
+        errdefer self.allocator.free(owned_path);
+        try self.client_document_paths.put(self.allocator, owned_uri, owned_path);
+    }
+
+    /// The URI to give the client for the file at `absolute_path`: the first URI
+    /// the client opened it under, or one built from the path when it isn't open.
+    fn uriForPath(self: *const SyntaxChecker, absolute_path: []const u8) Allocator.Error![]u8 {
+        for (self.client_document_paths.keys(), self.client_document_paths.values()) |uri, path| {
+            if (std.mem.eql(u8, path, absolute_path)) return self.allocator.dupe(u8, uri);
+        }
+        return uri_util.pathToUri(self.allocator, absolute_path);
+    }
+
+    /// Append a publish of `diagnostics` for every URI the client opened the
+    /// file at `absolute_path` under, or for a URI built from the path when it
+    /// isn't open. Takes ownership of `diagnostics`.
+    fn appendPathPublishes(
+        self: *SyntaxChecker,
+        publish_list: *std.ArrayList(Diagnostics.PublishDiagnostics),
+        absolute_path: []const u8,
+        diagnostics: []Diagnostics.Diagnostic,
+    ) Allocator.Error!void {
+        errdefer freeDiagnostics(self.allocator, diagnostics);
+
+        // `diagnostics` itself goes to the first URI; every later URI gets a copy.
+        var first_uri: ?[]const u8 = null;
+        for (self.client_document_paths.keys(), self.client_document_paths.values()) |uri, path| {
+            if (!std.mem.eql(u8, path, absolute_path)) continue;
+            if (first_uri == null) {
+                first_uri = uri;
+                continue;
+            }
+            const copy = try dupeDiagnostics(self.allocator, diagnostics);
+            errdefer freeDiagnostics(self.allocator, copy);
+            const owned_uri = try self.allocator.dupe(u8, uri);
+            errdefer self.allocator.free(owned_uri);
+            try publish_list.append(self.allocator, .{ .uri = owned_uri, .diagnostics = copy });
+        }
+
+        const uri = if (first_uri) |client_uri|
+            try self.allocator.dupe(u8, client_uri)
+        else
+            try uri_util.pathToUri(self.allocator, absolute_path);
+        errdefer self.allocator.free(uri);
+        try publish_list.append(self.allocator, .{ .uri = uri, .diagnostics = diagnostics });
     }
 
     fn updateWorkspaceRoot(self: *SyntaxChecker, workspace_root: ?[]const u8) Allocator.Error!void {
@@ -400,6 +506,7 @@ pub const SyntaxChecker = struct {
                     .checker = self,
                     .identity = identity,
                     .session = null,
+                    .handle = handle,
                     .env = env,
                     .absolute_path = abs_path,
                     .build_succeeded = documentParsedCleanly(env, document.absolute_path),
@@ -420,6 +527,7 @@ pub const SyntaxChecker = struct {
                 .checker = self,
                 .identity = identity,
                 .session = null,
+                .handle = env_handle,
                 .env = env,
                 .absolute_path = abs_path,
                 .build_succeeded = false,
@@ -447,6 +555,7 @@ pub const SyntaxChecker = struct {
             .checker = self,
             .identity = identity,
             .session = session,
+            .handle = env_handle,
             .env = env,
             .absolute_path = abs_path,
             .build_succeeded = session.build_succeeded and documentParsedCleanly(env, session.absolute_path),
@@ -456,6 +565,60 @@ pub const SyntaxChecker = struct {
     }
 
     /// Check the file referenced by the URI and return diagnostics grouped by URI.
+    /// The absolute path of an existing file, or null when it cannot be
+    /// resolved.
+    fn realAbsolutePath(self: *SyntaxChecker, path: []const u8) std.mem.Allocator.Error!?[:0]u8 {
+        return std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.Canceled,
+            error.DeviceBusy,
+            error.FileBusy,
+            error.FileNotFound,
+            error.FileSystem,
+            error.FileTooBig,
+            error.InputOutput,
+            error.IsDir,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.OperationUnsupported,
+            error.PathAlreadyExists,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.Unexpected,
+            error.UnrecognizedVolume,
+            => null,
+        };
+    }
+
+    /// Drop what was kept for a document the client closed: its last-built
+    /// content hash and its completion snapshot, which holds a whole build.
+    pub fn forget(self: *SyntaxChecker, uri: []const u8) std.mem.Allocator.Error!void {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+
+        const path = try uri_util.uriToPath(self.allocator, uri);
+        defer self.allocator.free(path);
+        const abs_path = try self.realAbsolutePath(path);
+        defer if (abs_path) |a| self.allocator.free(a);
+        const key: []const u8 = abs_path orelse path;
+
+        if (self.content_hashes.fetchRemove(key)) |removed| self.allocator.free(removed.key);
+        if (self.snapshot_envs.fetchRemove(key)) |removed| {
+            removed.value.release(owner_snapshot);
+            self.allocator.free(removed.key);
+        }
+    }
+
     pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) CheckError![]Diagnostics.PublishDiagnostics {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
@@ -475,36 +638,7 @@ pub const SyntaxChecker = struct {
             const path = try uri_util.uriToPath(self.allocator, uri);
             defer self.allocator.free(path);
 
-            const abs_path: ?[:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.AccessDenied,
-                error.AntivirusInterference,
-                error.BadPathName,
-                error.Canceled,
-                error.DeviceBusy,
-                error.FileBusy,
-                error.FileNotFound,
-                error.FileSystem,
-                error.FileTooBig,
-                error.InputOutput,
-                error.IsDir,
-                error.NameTooLong,
-                error.NetworkNotFound,
-                error.NoDevice,
-                error.NoSpaceLeft,
-                error.NotDir,
-                error.OperationUnsupported,
-                error.PathAlreadyExists,
-                error.PermissionDenied,
-                error.PipeBusy,
-                error.ProcessFdQuotaExceeded,
-                error.SymLinkLoop,
-                error.SystemFdQuotaExceeded,
-                error.SystemResources,
-                error.Unexpected,
-                error.UnrecognizedVolume,
-                => null,
-            };
+            const abs_path: ?[:0]u8 = try self.realAbsolutePath(path);
             defer if (abs_path) |a| self.allocator.free(a);
 
             if (abs_path) |ap| {
@@ -512,7 +646,9 @@ pub const SyntaxChecker = struct {
                 const old_hash = self.content_hashes.get(ap);
 
                 if (old_hash) |existing| {
-                    if (std.mem.eql(u8, &existing, &new_hash)) {
+                    // A URI not yet checked has never been sent this document's
+                    // diagnostics, so it needs a build even for unchanged text.
+                    if (std.mem.eql(u8, &existing, &new_hash) and self.client_document_paths.contains(uri)) {
                         self.logDebug(.build, "[INCREMENTAL] SKIP rebuild for {s}: content hash unchanged ({x}...)", .{
                             ap,
                             new_hash[0..4].*,
@@ -549,6 +685,7 @@ pub const SyntaxChecker = struct {
         defer session.deinit();
 
         const absolute_path = session.absolute_path;
+        try self.recordClientDocument(uri, absolute_path);
 
         if (override_text) |text| {
             env_handle.setDocumentContent(absolute_path, contentHash(text), self.documentHasReports(absolute_path, session.drained_reports)) catch |err| {
@@ -568,7 +705,6 @@ pub const SyntaxChecker = struct {
             }
             for (drained_reports) |entry| {
                 const mapped_path = if (entry.abs_path.len == 0) session.absolute_path else entry.abs_path;
-                const module_uri = try uri_util.pathToUri(self.allocator, mapped_path);
 
                 var diags: std.ArrayList(Diagnostics.Diagnostic) = .empty;
                 errdefer {
@@ -590,11 +726,7 @@ pub const SyntaxChecker = struct {
                 //we also don't don't deinit the entries because buildSession will free them
                 //self.allocator.free(entry.reports);
 
-                try publish_list.append(self.allocator, .{
-                    .uri = module_uri,
-                    .diagnostics = try diags.toOwnedSlice(self.allocator),
-                });
-                diags.deinit(self.allocator);
+                try self.appendPathPublishes(&publish_list, mapped_path, try diags.toOwnedSlice(self.allocator));
             }
 
             if (publish_list.items.len == 0) {
@@ -634,6 +766,13 @@ pub const SyntaxChecker = struct {
         return false;
     }
 
+    fn publishListHasDiagnostics(publish_list: *const std.ArrayList(Diagnostics.PublishDiagnostics), uri: []const u8) bool {
+        for (publish_list.items) |set| {
+            if (set.diagnostics.len > 0 and std.mem.eql(u8, set.uri, uri)) return true;
+        }
+        return false;
+    }
+
     /// Ensure the checked URI is published, clear stale URIs from prior publishes,
     /// and refresh the set of URIs that currently have non-empty diagnostics.
     fn finishDiagnosticPublishes(
@@ -648,35 +787,37 @@ pub const SyntaxChecker = struct {
             });
         }
 
-        var stale_uris: std.ArrayList([]const u8) = .empty;
-        defer {
-            for (stale_uris.items) |stale_uri| self.allocator.free(stale_uri);
-            stale_uris.deinit(self.allocator);
-        }
-
+        // Every URI that had diagnostics last time and is not published now
+        // gets an empty set, which clears it in the editor.
         var it = self.published_diagnostic_uris.keyIterator();
         while (it.next()) |prev| {
             if (!publishListContainsUri(publish_list, prev.*)) {
-                try stale_uris.append(self.allocator, try self.allocator.dupe(u8, prev.*));
+                const stale_uri = try self.allocator.dupe(u8, prev.*);
+                errdefer self.allocator.free(stale_uri);
+                try publish_list.append(self.allocator, .{
+                    .uri = stale_uri,
+                    .diagnostics = &.{},
+                });
             }
-        }
-        for (stale_uris.items) |stale_uri| {
-            try publish_list.append(self.allocator, .{
-                .uri = try self.allocator.dupe(u8, stale_uri),
-                .diagnostics = &.{},
-            });
         }
 
-        self.clearPublishedDiagnosticUris();
+        // Keep the URIs that still have diagnostics, so a document whose
+        // errors persist across edits keeps its owned key.
+        var keys = self.published_diagnostic_uris.keyIterator();
+        while (keys.next()) |key| {
+            if (publishListHasDiagnostics(publish_list, key.*)) continue;
+            const owned = key.*;
+            self.published_diagnostic_uris.removeByPtr(key);
+            self.allocator.free(owned);
+        }
         for (publish_list.items) |set| {
             if (set.diagnostics.len == 0) continue;
-            const owned = try self.allocator.dupe(u8, set.uri);
-            const gop = try self.published_diagnostic_uris.getOrPut(self.allocator, owned);
-            if (gop.found_existing) {
-                self.allocator.free(owned);
-            } else {
-                gop.key_ptr.* = owned;
-            }
+            const gop = try self.published_diagnostic_uris.getOrPut(self.allocator, set.uri);
+            if (gop.found_existing) continue;
+            gop.key_ptr.* = self.allocator.dupe(u8, set.uri) catch |err| {
+                self.published_diagnostic_uris.removeByPtr(gop.key_ptr);
+                return err;
+            };
         }
     }
 
@@ -829,16 +970,20 @@ pub const SyntaxChecker = struct {
     /// Get the BuildEnv that should be used for module lookups (semantic tokens, etc.).
     /// Prefers the current build_env if it has modules, otherwise falls back to previous_build_env.
     pub fn getModuleLookupEnv(self: *SyntaxChecker) ?*BuildEnv {
+        const handle = self.getModuleLookupHandle() orelse return null;
+        return handle.envPtr();
+    }
+
+    /// The handle owning `getModuleLookupEnv`'s env.
+    fn getModuleLookupHandle(self: *SyntaxChecker) ?*BuildEnvHandle {
         // Prefer current build_env if it exists and has modules
         if (self.build_env) |handle| {
-            const env = handle.envPtr();
-            if (env.hasCompiledModules()) {
-                return env;
+            if (handle.envPtr().hasCompiledModules()) {
+                return handle;
             }
         }
         // Fall back to previous_build_env
-        if (self.previous_build_env) |handle| return handle.envPtr();
-        return null;
+        return self.previous_build_env;
     }
 
     /// Get the cached snapshot BuildEnv for completions.
@@ -1146,7 +1291,7 @@ pub const SyntaxChecker = struct {
         const documentation = if (lookup_result_opt) |lookup_result|
             try self.resolveDocForLookup(env, module_env, build.absolute_path, lookup_result)
         else
-            try self.findDocumentationForRegion(env, module_env, build.absolute_path, result.region, target_offset);
+            try self.findDocumentationForDeclarationName(module_env, target_offset);
 
         defer if (documentation) |doc| self.allocator.free(doc);
 
@@ -1165,64 +1310,47 @@ pub const SyntaxChecker = struct {
         };
     }
 
-    /// Find documentation comments for the symbol at the given region/offset.
-    /// First checks if the cursor is on a lookup expression and resolves it to
-    /// the actual definition. Otherwise searches defs and statements by region.
-    fn findDocumentationForRegion(
-        self: *SyntaxChecker,
-        env: *BuildEnv,
-        module_env: *ModuleEnv,
-        doc_path: []const u8,
-        region: Region,
-        target_offset: u32,
-    ) Allocator.Error!?[]const u8 {
+    /// Documentation of the declaration whose name is at `offset`: a def's
+    /// pattern, a declaration statement's pattern, or a type declaration's
+    /// header.
+    fn findDocumentationForDeclarationName(self: *SyntaxChecker, module_env: *ModuleEnv, offset: u32) Allocator.Error!?[]const u8 {
         const source = module_env.common.source;
         const store = &module_env.store;
 
-        // First, check if this is a lookup expression (e.g., a function call)
-        // If so, resolve it to the definition and extract docs from there
-        if (cir_queries.findLookupAtOffset(module_env, target_offset)) |lookup_result| {
-            if (try self.resolveDocForLookup(env, module_env, doc_path, lookup_result)) |doc| return doc;
-        }
-
-        // Hover positions can land on delimiters around the symbol (e.g. `(` in
-        // `foo(...)`) depending on UTF-16 cursor conversion. As a fallback, try
-        // the start of the selected type region as an anchor for lookup-based
-        // documentation resolution.
-        if (region.start.offset != target_offset) {
-            if (cir_queries.findLookupAtOffset(module_env, region.start.offset)) |lookup_result| {
-                if (try self.resolveDocForLookup(env, module_env, doc_path, lookup_result)) |doc| return doc;
-            }
-        }
-
-        // Not a lookup, or lookup resolution failed - fall back to region-based search
-
-        // Check top-level definitions
-        const defs_slice = store.sliceDefs(module_env.all_defs);
-        for (defs_slice) |def_idx| {
+        for (store.sliceDefs(module_env.all_defs)) |def_idx| {
             const def = store.getDef(def_idx);
-            const pattern_region = store.getPatternRegion(def.pattern);
-
-            if (cir_queries.regionContainsOffset(pattern_region, region.start.offset) or
-                pattern_region.start.offset == region.start.offset)
-            {
-                return try doc_comments.extractDocForDef(self.allocator, source, store, def);
-            }
-
-            // Also check if the expression region matches (for hovering over expressions)
-            const expr_region = store.getExprRegion(def.expr);
-            if (cir_queries.regionContainsOffset(expr_region, region.start.offset)) {
+            if (cir_queries.regionContainsOffset(store.getPatternRegion(def.pattern), offset)) {
                 return try doc_comments.extractDocForDef(self.allocator, source, store, def);
             }
         }
 
-        // Check statements
-        const statements_slice = store.sliceStatements(module_env.all_statements);
-        for (statements_slice) |stmt_idx| {
+        for (store.sliceStatements(module_env.all_statements)) |stmt_idx| {
             const stmt = store.getSourceStatement(stmt_idx);
-            const stmt_region = store.getStatementRegion(stmt_idx);
-
-            if (cir_queries.regionContainsOffset(stmt_region, region.start.offset)) {
+            const name_region = switch (stmt) {
+                .s_decl => |decl| store.getPatternRegion(decl.pattern),
+                .s_var => |var_stmt| store.getPatternRegion(var_stmt.pattern_idx),
+                .s_var_uninitialized => |var_stmt| store.getPatternRegion(var_stmt.pattern_idx),
+                .s_alias_decl => |alias| store.getRegionAt(@fromBackingInt(@backingInt(alias.header))),
+                .s_nominal_decl => |nominal| store.getRegionAt(@fromBackingInt(@backingInt(nominal.header))),
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_expr,
+                .s_expect,
+                .s_for,
+                .s_while,
+                .s_infinite_loop,
+                .s_breakable_loop,
+                .s_break,
+                .s_return,
+                .s_import,
+                .s_where_alias_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_runtime_error,
+                => continue,
+            };
+            if (cir_queries.regionContainsOffset(name_region, offset)) {
                 return try doc_comments.extractDocForStatement(self.allocator, source, store, stmt, stmt_idx);
             }
         }
@@ -1245,7 +1373,6 @@ pub const SyntaxChecker = struct {
             .field_access => return null,
         };
         const expr = store.getSourceExpr(expr_idx);
-        const importing_pkg = env.findPackageForModulePath(doc_path);
 
         const expr_tag = std.meta.activeTag(expr);
         if (expr_tag == .e_lookup_local) {
@@ -1269,37 +1396,21 @@ pub const SyntaxChecker = struct {
         }
         if (expr_tag == .e_lookup_external) {
             const lookup = expr.e_lookup_external;
-            // External lookup - parse "Module.function" and find docs in that module
-            const region_text = module_env.getSource(lookup.region);
-            if (std.mem.find(u8, region_text, ".")) |dot_pos| {
-                const module_name = region_text[0..dot_pos];
-                const function_name = region_text[dot_pos + 1 ..];
-
-                if (findExternalModuleEnv(env, importing_pkg, module_name)) |external_env| {
-                    return try findDocInModule(self.allocator, external_env, function_name);
-                }
-            }
+            const target_env = importedEnvForImport(env, module_env, doc_path, lookup.module_idx) orelse return null;
+            return try findDocForValueNode(self.allocator, target_env, lookup.target_node_idx);
+        }
+        if (expr_tag == .e_lookup_associated_resolved) {
+            const resolved = expr.e_lookup_associated_resolved;
+            const target_env = moduleEnvForIdentity(env, module_env, resolved.module_identity) orelse return null;
+            return try doc_comments.extractDocForDef(self.allocator, target_env.common.source, &target_env.store, target_env.store.getDef(resolved.target_def_idx));
         }
         if (expr_tag == .e_dispatch_call) {
             const method_call = expr.e_dispatch_call;
-            const method_name = module_env.getIdentText(method_call.method_name);
-            const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
-            if (resolveMethodOwnerForLookup(module_env, receiver_type_var)) |method_owner| {
-                if (try findMethodDocForOwnerAndName(self.allocator, module_env, method_owner.owner, method_name)) |local_doc| {
-                    return local_doc;
-                }
-
-                const type_name = module_env.getIdentText(method_owner.type_ident);
-                if (findExternalModuleEnvForMethodOwner(env, importing_pkg, method_owner, type_name)) |external_env| {
-                    const qualified_name = try std.fmt.allocPrint(
-                        self.allocator,
-                        "{s}.{s}",
-                        .{ type_name, method_name },
-                    );
-                    defer self.allocator.free(qualified_name);
-                    return try findDocInModule(self.allocator, external_env, qualified_name);
-                }
-            }
+            return try self.findMethodDoc(env, module_env, method_call.receiver, method_call.method_name);
+        }
+        if (expr_tag == .e_method_call) {
+            const method_call = expr.e_method_call;
+            return try self.findMethodDoc(env, module_env, method_call.receiver, method_call.method_name);
         }
         return null;
     }
@@ -1371,91 +1482,64 @@ pub const SyntaxChecker = struct {
         return null;
     }
 
-    /// Find local method documentation by `(owner statement, method_name)`.
-    fn findMethodDocForOwnerAndName(
-        allocator: Allocator,
+    /// Documentation of the method `method_name` (an ident in `module_env`)
+    /// that a call on `receiver` dispatches to, read from the declaration of
+    /// the receiver's checked nominal type.
+    fn findMethodDoc(
+        self: *SyntaxChecker,
+        env: *BuildEnv,
         module_env: *ModuleEnv,
-        owner: CIR.Statement.Idx,
-        method_name: []const u8,
+        receiver: CIR.Expr.Idx,
+        method_name: base.Ident.Idx,
     ) Allocator.Error!?[]const u8 {
-        const entries = module_env.method_idents.entries.items;
-        for (entries) |entry| {
-            if (entry.key.owner != owner) continue;
-
-            const entry_method_name = module_env.getIdentText(entry.key.methodIdent());
-            if (!std.mem.eql(u8, entry_method_name, method_name)) continue;
-
-            return try findDocForQualifiedIdent(allocator, module_env, entry.value);
-        }
-
-        return null;
+        const method_owner = resolveMethodOwnerForLookup(module_env, ModuleEnv.varFrom(receiver)) orelse return null;
+        const owner_env = methodOwnerModuleEnv(env, module_env, method_owner) orelse return null;
+        const owner_method_name = owner_env.common.findIdentFrom(&module_env.common, method_name) orelse return null;
+        const qualified_ident = owner_env.lookupMethodIdentForOwnerConst(method_owner.owner, owner_method_name) orelse return null;
+        return try findDocForQualifiedIdent(self.allocator, owner_env, qualified_ident);
     }
 
-    fn findExternalModuleEnvForMethodOwner(
-        env: *BuildEnv,
-        importing_pkg: ?*compile.coordinator.PackageState,
-        method_owner: MethodOwnerLookup,
-        module_name: []const u8,
-    ) ?*ModuleEnv {
-        if (method_owner.builtin_origin) {
-            const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
-                module_name[dot_pos + 1 ..]
-            else
-                module_name;
-            if (completion_builtins.isBuiltinType(base_name)) {
-                return env.builtin_modules.builtin_module.env;
-            }
-        }
-        if (env.findModuleByQualifiedNameInPackage(importing_pkg, module_name)) |mod_state| {
-            return mod_state.moduleEnv();
-        }
-        return null;
+    /// The checked environment of the module declaring a method owner.
+    fn methodOwnerModuleEnv(env: *BuildEnv, module_env: *ModuleEnv, method_owner: MethodOwnerLookup) ?*ModuleEnv {
+        if (method_owner.builtin_origin) return env.builtin_modules.builtin_module.env;
+        return moduleEnvForIdentity(env, module_env, method_owner.origin_module);
     }
 
-    /// Find a module environment by name (handles builtins and regular modules).
-    fn findExternalModuleEnv(
-        env: *BuildEnv,
-        importing_pkg: ?*compile.coordinator.PackageState,
-        module_name: []const u8,
-    ) ?*ModuleEnv {
-        const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
-            module_name[dot_pos + 1 ..]
-        else
-            module_name;
-
-        // Check builtins first
-        if (completion_builtins.isBuiltinType(base_name)) {
-            return env.builtin_modules.builtin_module.env;
+    /// The checked environment of the module `module_env` names by `identity`.
+    fn moduleEnvForIdentity(env: *BuildEnv, module_env: *ModuleEnv, identity: base.ModuleIdentity.Idx) ?*ModuleEnv {
+        if (identity == module_env.selfModuleIdentity()) return module_env;
+        const target_hash = module_env.moduleIdentityHash(identity);
+        const builtin_env = env.builtin_modules.builtin_module.env;
+        if (builtin_env.contentIdentityHash()) |builtin_hash| {
+            if (std.mem.eql(u8, builtin_hash, target_hash)) return builtin_env;
         }
-
-        if (env.findModuleByQualifiedNameInPackage(importing_pkg, module_name)) |mod_state| {
-            return mod_state.moduleEnv();
-        }
-        return null;
+        const mod_state = findModuleByContentIdentity(env, target_hash) orelse return null;
+        return mod_state.moduleEnv();
     }
 
-    /// Find documentation for a definition by name in a module.
-    /// Uses module_lookup infrastructure for the search, with qualified-name fallback.
-    fn findDocInModule(allocator: Allocator, module_env: *ModuleEnv, name: []const u8) Allocator.Error!?[]const u8 {
+    /// Documentation of the value an exposed-value node names: a def, or a
+    /// name bound by destructuring in a def's pattern.
+    fn findDocForValueNode(allocator: Allocator, module_env: *ModuleEnv, value_node: u32) Allocator.Error!?[]const u8 {
         const source = module_env.common.source;
         const store = &module_env.store;
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(value_node));
+        if (store.nodes.get(node_idx).tag == .def) {
+            const def_idx: CIR.Def.Idx = @fromBackingInt(value_node);
+            return try doc_comments.extractDocForDef(allocator, source, store, store.getDef(def_idx));
+        }
 
-        // Use module_lookup to find by exact or unqualified name
-        if (module_lookup.findDefinitionByUnqualifiedName(module_env, name)) |def_info| {
-            // Try to find the full Def for annotation-aware offset
-            if (module_lookup.findDefOwningPattern(module_env, def_info.pattern_idx)) |def| {
+        const binder: CIR.Pattern.Idx = @fromBackingInt(value_node);
+        var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+        defer binders.deinit(allocator);
+        var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+        defer binder_scratch.deinit(allocator);
+        for (store.sliceDefs(module_env.all_defs)) |def_idx| {
+            const def = store.getDef(def_idx);
+            binders.clearRetainingCapacity();
+            try can.DependencyGraph.appendPatternBinders(module_env, def.pattern, &binders, &binder_scratch, allocator);
+            if (std.mem.findScalar(CIR.Pattern.Idx, binders.items, binder) != null) {
                 return try doc_comments.extractDocForDef(allocator, source, store, def);
             }
-            // Fall back to statement-based extraction
-            if (module_lookup.findStatementOwningPattern(module_env, def_info.pattern_idx)) |result| {
-                return try doc_comments.extractDocForStatement(allocator, source, store, result.stmt, result.idx);
-            }
-            // Last resort: use pattern region directly
-            return try doc_comments.extractDocCommentBefore(
-                allocator,
-                source,
-                store.getPatternRegion(def_info.pattern_idx).start.offset,
-            );
         }
         return null;
     }
@@ -1552,15 +1636,7 @@ pub const SyntaxChecker = struct {
             // Check type annotation on this definition
             if (def.annotation) |anno_idx| {
                 const annotation = module_env.store.getAnnotation(anno_idx);
-                if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, annotation.anno, target_offset, oom)) |result| {
-                    // If URI is empty, it's a local type - use current file
-                    if (result.uri.len == 0) {
-                        const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
-                        return DefinitionResult{
-                            .uri = uri_copy,
-                            .range = result.range,
-                        };
-                    }
+                if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, current_uri, annotation.anno, target_offset, oom)) |result| {
                     return result;
                 }
             }
@@ -1589,7 +1665,7 @@ pub const SyntaxChecker = struct {
                 const target_path = noteOom(oom, std.fs.path.resolve(self.allocator, &.{ doc_dir, path_text })) orelse return null;
                 defer self.allocator.free(target_path);
 
-                const target_uri = noteOom(oom, uri_util.pathToUri(self.allocator, target_path)) orelse return null;
+                const target_uri = noteOom(oom, self.uriForPath(target_path)) orelse return null;
 
                 const origin_range = cir_queries.regionToRange(module_env, dep.region());
 
@@ -1618,34 +1694,20 @@ pub const SyntaxChecker = struct {
                 const import_region = module_env.store.getRegionAt(import_node_idx);
 
                 if (cir_queries.regionContainsOffset(import_region, target_offset)) {
-                    // Get the module name from the import, including package qualifier if present
-                    const raw_module_name = module_env.common.idents.getText(import_stmt.module_name_tok);
-                    const qualified_module_name = if (import_stmt.qualifier_tok) |pkg_tok|
-                        std.fmt.allocPrint(self.allocator, "{s}.{s}", .{
-                            module_env.common.idents.getText(pkg_tok),
-                            raw_module_name,
-                        }) catch null
-                    else
-                        null;
-                    defer if (qualified_module_name) |q_name| self.allocator.free(q_name);
-                    const module_name = qualified_module_name orelse raw_module_name;
+                    const import_name = module_env.getIdentText(import_stmt.module_name_tok);
+                    const target_env = build_env.importedModuleEnv(doc_path, import_name) orelse return null;
 
-                    // Check if the click is on one of the exposed items
-                    const exposed_slice = module_env.store.sliceExposedItems(import_stmt.exposes);
-                    for (exposed_slice) |exposed_item_idx| {
+                    // On an exposed item, go to the declaration import
+                    // resolution selected for it.
+                    for (module_env.store.sliceExposedItems(import_stmt.exposes)) |exposed_item_idx| {
                         const exposed_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(exposed_item_idx)));
-                        const item_region = module_env.store.getRegionAt(exposed_node_idx);
-                        if (cir_queries.regionContainsOffset(item_region, target_offset)) {
-                            const exposed_item = module_env.store.getExposedItem(exposed_item_idx);
-                            const member_name = module_env.getIdentText(exposed_item.name);
-                            return self.findDefinitionInModule(build_env, doc_path, module_name, member_name, oom);
+                        if (cir_queries.regionContainsOffset(module_env.store.getRegionAt(exposed_node_idx), target_offset)) {
+                            const target_node = module_env.store.getExposedItem(exposed_item_idx).target orelse return null;
+                            return self.declarationLocation(build_env, module_env, current_uri, target_env, declarationNodeRegion(target_env, target_node), oom);
                         }
                     }
 
-                    // Try to find the module in the coordinator state.
-                    if (self.findDefinitionInModule(build_env, doc_path, module_name, null, oom)) |result| {
-                        return result;
-                    }
+                    return self.moduleLocation(build_env, module_env, current_uri, target_env, oom);
                 }
             }
 
@@ -1653,15 +1715,7 @@ pub const SyntaxChecker = struct {
             const maybe_type_anno = statementTypeAnno(module_env, stmt);
 
             if (maybe_type_anno) |type_anno_idx| {
-                if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, type_anno_idx, target_offset, oom)) |result| {
-                    // If URI is empty, it's a local type - use current file
-                    if (result.uri.len == 0) {
-                        const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
-                        return DefinitionResult{
-                            .uri = uri_copy,
-                            .range = result.range,
-                        };
-                    }
+                if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, current_uri, type_anno_idx, target_offset, oom)) |result| {
                     return result;
                 }
             }
@@ -1713,59 +1767,27 @@ pub const SyntaxChecker = struct {
             }
             if (expr_tag == .e_lookup_external) {
                 const lookup = expr.e_lookup_external;
-                const import_idx_int = @backingInt(lookup.module_idx);
-                if (import_idx_int >= module_env.imports.imports.len()) return null;
+                const target_env = importedEnvForImport(build_env, module_env, doc_path, lookup.module_idx) orelse return null;
 
-                const string_idx = module_env.imports.imports.items.items[import_idx_int];
-                const module_name = module_env.common.getString(string_idx);
-                const member_name = module_env.getIdentText(lookup.ident_idx);
-
+                // On the qualifier (`List` in `List.len`), go to the type that
+                // declares the value, or to the module when no type does.
                 const region_text = module_env.getSource(lookup.region);
-                if (std.mem.find(u8, region_text, ".")) |dot_pos| {
-                    const prefix = region_text[0..dot_pos];
-                    const suffix = region_text[dot_pos + 1 ..];
-                    const dot_offset = lookup.region.start.offset + @as(u32, @intCast(dot_pos));
-                    if (target_offset < dot_offset) {
-                        if (completion_builtins.isBuiltinType(prefix)) {
-                            return self.findBuiltinDefinition(prefix, null, oom);
+                if (std.mem.findScalarLast(u8, region_text, '.')) |dot_pos| {
+                    if (target_offset < lookup.region.start.offset + @as(u32, @intCast(dot_pos))) {
+                        if (owningTypeDeclaration(target_env, lookup.target_node_idx)) |owner| {
+                            return self.declarationLocation(build_env, module_env, current_uri, target_env, target_env.store.getStatementRegion(owner), oom);
                         }
-                        return self.findDefinitionInModule(build_env, doc_path, module_name, null, oom);
-                    } else {
-                        if (completion_builtins.isBuiltinType(prefix)) {
-                            return self.findBuiltinDefinition(prefix, suffix, oom);
-                        }
+                        return self.moduleLocation(build_env, module_env, current_uri, target_env, oom);
                     }
                 }
-                return self.findDefinitionInModule(build_env, doc_path, module_name, member_name, oom);
+
+                return self.declarationLocation(build_env, module_env, current_uri, target_env, declarationNodeRegion(target_env, lookup.target_node_idx), oom);
             }
-            if (expr_tag == .e_lookup_associated) {
-                const lookup = expr.e_lookup_associated;
-                const member_name = module_env.getIdentText(lookup.item_ident);
-                const import_idx_int = @backingInt(lookup.module_idx);
-                if (import_idx_int < module_env.imports.imports.len()) {
-                    const string_idx = module_env.imports.imports.items.items[import_idx_int];
-                    const module_name = module_env.common.getString(string_idx);
-                    const expr_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
-                    const expr_region = module_env.store.getRegionAt(expr_node_idx);
-                    const region_text = module_env.getSource(expr_region);
-                    if (std.mem.find(u8, region_text, ".")) |dot_pos| {
-                        const prefix = region_text[0..dot_pos];
-                        const suffix = region_text[dot_pos + 1 ..];
-                        const dot_offset = expr_region.start.offset + @as(u32, @intCast(dot_pos));
-                        if (target_offset < dot_offset) {
-                            if (completion_builtins.isBuiltinType(prefix)) {
-                                return self.findBuiltinDefinition(prefix, null, oom);
-                            }
-                            return self.findDefinitionInModule(build_env, doc_path, module_name, null, oom);
-                        } else {
-                            if (completion_builtins.isBuiltinType(prefix)) {
-                                return self.findBuiltinDefinition(prefix, suffix, oom);
-                            }
-                        }
-                    }
-                    return self.findDefinitionInModule(build_env, doc_path, module_name, member_name, oom);
-                }
-                return null;
+            if (expr_tag == .e_lookup_associated_resolved) {
+                const resolved = expr.e_lookup_associated_resolved;
+                const target_env = moduleEnvForIdentity(build_env, module_env, resolved.module_identity) orelse return null;
+                const def = target_env.store.getDef(resolved.target_def_idx);
+                return self.declarationLocation(build_env, module_env, current_uri, target_env, target_env.store.getPatternRegion(def.pattern), oom);
             }
             if (expr_tag == .e_method_call) {
                 const method_call = expr.e_method_call;
@@ -1801,42 +1823,87 @@ pub const SyntaxChecker = struct {
         oom: *?Allocator.Error,
     ) ?DefinitionResult {
         const method_owner = resolveMethodOwnerForLookup(module_env, ModuleEnv.varFrom(receiver)) orelse return null;
-
-        if (method_owner.builtin_origin) {
-            const type_name = module_env.getIdentText(method_owner.type_ident);
-            const base_name = if (std.mem.findLast(u8, type_name, ".")) |dot_pos|
-                type_name[dot_pos + 1 ..]
-            else
-                type_name;
-            return self.findBuiltinDefinition(base_name, module_env.getIdentText(method_name), oom);
-        }
-
-        if (method_owner.origin_module == module_env.selfModuleIdentity()) {
-            const range = methodDefinitionRange(module_env, module_env, method_owner.owner, method_name) orelse return null;
-            const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
-            return DefinitionResult{ .uri = uri_copy, .range = range };
-        }
-
-        const origin_hash = module_env.moduleIdentityHash(method_owner.origin_module);
-        const target_mod_state = findModuleByContentIdentity(build_env, origin_hash) orelse return null;
-        const target_mod_env = target_mod_state.moduleEnv() orelse return null;
-        const range = methodDefinitionRange(target_mod_env, module_env, method_owner.owner, method_name) orelse return null;
-        const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, target_mod_state.path)) orelse return null;
-        return DefinitionResult{ .uri = module_uri, .range = range };
+        const owner_env = methodOwnerModuleEnv(build_env, module_env, method_owner) orelse return null;
+        const owner_method_name = owner_env.common.findIdentFrom(&module_env.common, method_name) orelse return null;
+        const qualified_ident = owner_env.lookupMethodIdentForOwnerConst(method_owner.owner, owner_method_name) orelse return null;
+        const pattern_idx = findPatternForQualifiedIdent(owner_env, qualified_ident) orelse return null;
+        return self.declarationLocation(build_env, module_env, current_uri, owner_env, owner_env.store.getPatternRegion(pattern_idx), oom);
     }
 
-    /// The range of the definition of `method_name` (an ident in `source_env`)
-    /// on the type declared by `owner` in `owner_env`.
-    fn methodDefinitionRange(
-        owner_env: *ModuleEnv,
-        source_env: *const ModuleEnv,
-        owner: CIR.Statement.Idx,
-        method_name: base.Ident.Idx,
-    ) ?LspRange {
-        const owner_method_name = owner_env.common.findIdentFrom(&source_env.common, method_name) orelse return null;
-        const qualified_ident = owner_env.lookupMethodIdentForOwnerConst(owner, owner_method_name) orelse return null;
-        const pattern_idx = findPatternForQualifiedIdent(owner_env, qualified_ident) orelse return null;
-        return cir_queries.regionToRange(owner_env, owner_env.store.getPatternRegion(pattern_idx));
+    /// The location of `region` in `target_env`'s source file.
+    fn declarationLocation(
+        self: *SyntaxChecker,
+        build_env: *BuildEnv,
+        module_env: *ModuleEnv,
+        current_uri: []const u8,
+        target_env: *ModuleEnv,
+        region: Region,
+        oom: *?Allocator.Error,
+    ) ?DefinitionResult {
+        const range = cir_queries.regionToRange(target_env, region) orelse return null;
+        const uri = self.moduleSourceUri(build_env, module_env, current_uri, target_env, oom) orelse return null;
+        return DefinitionResult{ .uri = uri, .range = range };
+    }
+
+    /// The URI of the file holding `target_env`'s source: the open document,
+    /// the cached copy of the embedded Builtin source, or the module's file.
+    fn moduleSourceUri(
+        self: *SyntaxChecker,
+        build_env: *BuildEnv,
+        module_env: *ModuleEnv,
+        current_uri: []const u8,
+        target_env: *ModuleEnv,
+        oom: *?Allocator.Error,
+    ) ?[]u8 {
+        if (target_env == module_env) return noteOom(oom, self.allocator.dupe(u8, current_uri));
+        if (target_env == build_env.builtin_modules.builtin_module.env) return self.builtinSourceUri(oom);
+        const target_hash = target_env.contentIdentityHash() orelse return null;
+        const target_mod_state = findModuleByContentIdentity(build_env, target_hash) orelse return null;
+        return noteOom(oom, self.uriForPath(target_mod_state.path));
+    }
+
+    /// The region of a declaration node: the name a value definition (or a
+    /// destructuring binder) binds, or a type declaration statement.
+    fn declarationNodeRegion(module_env: *ModuleEnv, decl_node: u32) Region {
+        const store = &module_env.store;
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(decl_node));
+        const tag = store.nodes.get(node_idx).tag;
+        if (tag == .def) return store.getPatternRegion(store.getDef(@fromBackingInt(decl_node)).pattern);
+        if (tag == .statement_nominal_decl or tag == .statement_alias_decl) return store.getStatementRegion(@fromBackingInt(decl_node));
+        return store.getPatternRegion(@fromBackingInt(decl_node));
+    }
+
+    /// The start of `target_env`'s source file.
+    fn moduleLocation(
+        self: *SyntaxChecker,
+        build_env: *BuildEnv,
+        module_env: *ModuleEnv,
+        current_uri: []const u8,
+        target_env: *ModuleEnv,
+        oom: *?Allocator.Error,
+    ) ?DefinitionResult {
+        const uri = self.moduleSourceUri(build_env, module_env, current_uri, target_env, oom) orelse return null;
+        return DefinitionResult{ .uri = uri, .range = .{ .start_line = 0, .start_col = 0, .end_line = 0, .end_col = 0 } };
+    }
+
+    /// The type declaration whose associated items include the value
+    /// definition `value_node`, if any.
+    fn owningTypeDeclaration(module_env: *ModuleEnv, value_node: u32) ?CIR.Statement.Idx {
+        const store = &module_env.store;
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(value_node));
+        if (store.nodes.get(node_idx).tag != .def) return null;
+        const def = store.getDef(@fromBackingInt(value_node));
+        const ident = module_lookup.extractIdentFromPattern(store, def.pattern) orelse return null;
+        for (module_env.method_idents.entries.items) |entry| {
+            if (entry.key.owner_module == ModuleEnv.MethodOwner.self_module and entry.value.eql(ident)) return entry.key.owner;
+        }
+        return null;
+    }
+
+    /// The checked environment `module_env`'s import `import_idx` resolved to.
+    fn importedEnvForImport(env: *BuildEnv, module_env: *ModuleEnv, doc_path: []const u8, import_idx: CIR.Import.Idx) ?*ModuleEnv {
+        const import_name = module_env.common.getString(module_env.imports.imports.items.items[@backingInt(import_idx)]);
+        return env.importedModuleEnv(doc_path, import_name);
     }
 
     const TagOriginInfo = struct {
@@ -1985,7 +2052,7 @@ pub const SyntaxChecker = struct {
                             if (maybe_anno) |anno_idx| {
                                 if (findTagInTypeAnno(&target_mod_env.store, &target_mod_env.common, anno_idx, tag_name)) |tag_region| {
                                     const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                                    const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, mod_state.path)) orelse return null;
+                                    const module_uri = noteOom(oom, self.uriForPath(mod_state.path)) orelse return null;
                                     return DefinitionResult{
                                         .uri = module_uri,
                                         .range = range,
@@ -1995,7 +2062,7 @@ pub const SyntaxChecker = struct {
                         }
                         if (findTagInModuleEnv(target_mod_env, tag_name)) |tag_region| {
                             const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                            const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, mod_state.path)) orelse return null;
+                            const module_uri = noteOom(oom, self.uriForPath(mod_state.path)) orelse return null;
                             return DefinitionResult{
                                 .uri = module_uri,
                                 .range = range,
@@ -2063,7 +2130,7 @@ pub const SyntaxChecker = struct {
                             if (maybe_anno) |anno_idx| {
                                 if (findTagInTypeAnno(&target_mod_env.store, &target_mod_env.common, anno_idx, tag_name)) |tag_region| {
                                     const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                                    const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, target_mod_state.path)) orelse return null;
+                                    const module_uri = noteOom(oom, self.uriForPath(target_mod_state.path)) orelse return null;
                                     return DefinitionResult{
                                         .uri = module_uri,
                                         .range = range,
@@ -2073,7 +2140,7 @@ pub const SyntaxChecker = struct {
                         }
                         if (findTagInModuleEnv(target_mod_env, tag_name)) |tag_region| {
                             const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                            const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, target_mod_state.path)) orelse return null;
+                            const module_uri = noteOom(oom, self.uriForPath(target_mod_state.path)) orelse return null;
                             return DefinitionResult{
                                 .uri = module_uri,
                                 .range = range,
@@ -2098,14 +2165,9 @@ pub const SyntaxChecker = struct {
         return null;
     }
 
-    /// Helper function to find a builtin definition/type in Builtin.roc
-    fn findBuiltinDefinition(
-        self: *SyntaxChecker,
-        base_name: []const u8,
-        member_name: ?[]const u8,
-        oom: *?Allocator.Error,
-    ) ?DefinitionResult {
-        // Write embedded builtin source to roc cache
+    /// The URI of the cached copy of the embedded Builtin source, written on
+    /// first use so editors can open it.
+    fn builtinSourceUri(self: *SyntaxChecker, oom: *?Allocator.Error) ?[]u8 {
         const cache_dir = self.cache_config.getModuleCacheDir(self.allocator) catch |err| switch (err) {
             error.OutOfMemory => {
                 oom.* = error.OutOfMemory;
@@ -2139,298 +2201,55 @@ pub const SyntaxChecker = struct {
             };
         }
 
-        const module_uri = uri_util.pathToUri(self.allocator, builtin_cache_path) catch |err| {
+        const module_uri = self.uriForPath(builtin_cache_path) catch |err| {
             self.allocator.free(builtin_cache_path);
             oom.* = err;
             return null;
         };
         self.allocator.free(builtin_cache_path);
 
-        var builtin_module = can.BuiltinStatic.moduleView(
-            self.allocator,
-            compiled_builtins.builtin_bin[0..],
-            "Builtin",
-            compiled_builtins.builtin_source,
-        ) catch {
-            self.allocator.free(module_uri);
-            return null;
-        };
-        defer builtin_module.deinit();
-
-        const benv = builtin_module.env;
-
-        // Find the type declaration region from the generated builtin CIR.
-        var type_decl_range: ?LspRange = null;
-        var type_decl_start: ?u32 = null;
-        var type_decl_end: u32 = std.math.maxInt(u32);
-
-        const builtin_indices = compiled_builtins.builtinIndices(CIR);
-        inline for (CIR.builtin_type_specs) |spec| {
-            if (std.mem.eql(u8, spec.display_name, base_name) or std.mem.eql(u8, spec.qualified_name, base_name)) {
-                const stmt_idx = @field(builtin_indices, spec.type_field);
-                const decl_region = benv.store.getStatementRegion(stmt_idx);
-                type_decl_range = cir_queries.regionToRange(benv, decl_region);
-                type_decl_start = decl_region.start.offset;
-            }
-        }
-
-        if (type_decl_start) |start| {
-            inline for (CIR.builtin_type_specs) |spec| {
-                if (spec.lookup == .top_level) {
-                    const stmt_idx = @field(builtin_indices, spec.type_field);
-                    const decl_region = benv.store.getStatementRegion(stmt_idx);
-                    if (decl_region.start.offset > start and decl_region.start.offset < type_decl_end) {
-                        type_decl_end = decl_region.start.offset;
-                    }
-                }
-            }
-        }
-
-        // If a member is requested (e.g., "is_empty" in "Str.is_empty"), find that member in the builtin module
-        if (member_name) |member| {
-            const lines = std.mem.splitScalar(u8, compiled_builtins.builtin_source, '\n');
-            var line_it = lines;
-            var offset: usize = 0;
-            while (line_it.next()) |line| : (offset += line.len + 1) {
-                if (std.mem.find(u8, line, base_name) != null and std.mem.find(u8, line, member) != null) {
-                    var col: usize = 0;
-                    while (col < line.len and (line[col] == ' ' or line[col] == '\t')) : (col += 1) {}
-                    const rest = line[col..];
-                    if (std.mem.startsWith(u8, rest, member) and rest.len > member.len and
-                        (rest[member.len] == ' ' or rest[member.len] == '\t' or rest[member.len] == ':' or rest[member.len] == '='))
-                    {
-                        const region = Region{
-                            .start = .{ .offset = @intCast(offset + col) },
-                            .end = .{ .offset = @intCast(offset + col + member.len) },
-                        };
-                        if (cir_queries.regionToRange(benv, region)) |range| {
-                            return DefinitionResult{ .uri = module_uri, .range = range };
-                        }
-                    }
-                }
-            }
-            if (findMemberRangeInModuleEnv(benv, base_name, member)) |range| {
-                return DefinitionResult{
-                    .uri = module_uri,
-                    .range = range,
-                };
-            }
-            self.allocator.free(module_uri);
-            return null;
-        }
-
-        if (type_decl_range) |r| {
-            return DefinitionResult{
-                .uri = module_uri,
-                .range = r,
-            };
-        }
-
-        self.allocator.free(module_uri);
-        return null;
-    }
-
-    fn findMemberRangeInModuleEnv(mod_env: *ModuleEnv, base_name: []const u8, member: []const u8) ?LspRange {
-        const maybe_def = module_lookup.findDefinitionByName(mod_env, member);
-
-        if (maybe_def) |def_info| {
-            const pattern_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(def_info.pattern_idx)));
-            const def_region = mod_env.store.getRegionAt(pattern_node_idx);
-            return cir_queries.regionToRange(mod_env, def_region);
-        }
-
-        if (module_lookup.findTypeDeclarationByModuleMember(mod_env, base_name, member)) |stmt_idx| {
-            const decl_region = mod_env.store.getStatementRegion(stmt_idx);
-            return cir_queries.regionToRange(mod_env, decl_region);
-        }
-        for (mod_env.store.sliceStatements(mod_env.all_statements)) |stmt_idx| {
-            const stmt = mod_env.store.getSourceStatement(stmt_idx);
-            const header_idx: ?CIR.TypeHeader.Idx = switch (stmt) {
-                .s_alias_decl => |a| a.header,
-                .s_nominal_decl => |n| n.header,
-                .s_decl,
-                .s_var,
-                .s_var_uninitialized,
-                .s_reassign,
-                .s_crash,
-                .s_dbg,
-                .s_expr,
-                .s_expect,
-                .s_for,
-                .s_while,
-                .s_infinite_loop,
-                .s_breakable_loop,
-                .s_break,
-                .s_return,
-                .s_import,
-                .s_where_alias_decl,
-                .s_type_anno,
-                .s_type_var_alias,
-                .s_runtime_error,
-                => null,
-            };
-            if (header_idx) |h_idx| {
-                const header = mod_env.store.getTypeHeader(h_idx);
-                if (std.mem.eql(u8, mod_env.getIdentText(header.name), member)) {
-                    return cir_queries.regionToRange(mod_env, mod_env.store.getStatementRegion(stmt_idx));
-                }
-            }
-        }
-        return null;
-    }
-
-    /// Helper function to find a definition in a module by module name and optional member name
-    fn findDefinitionInModule(
-        self: *SyntaxChecker,
-        build_env: *BuildEnv,
-        doc_path: []const u8,
-        module_name: []const u8,
-        member_name: ?[]const u8,
-        oom: *?Allocator.Error,
-    ) ?DefinitionResult {
-        const is_qualified = std.mem.find(u8, module_name, ".") != null;
-        const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
-            module_name[dot_pos + 1 ..]
-        else
-            module_name;
-
-        const is_builtin_module = std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name);
-        const is_pkg_qualified = is_qualified and !is_builtin_module;
-
-        // Check if member is a builtin type member (e.g., "Str.is_empty" or "List.is_empty")
-        if (member_name) |member| {
-            if (std.mem.find(u8, member, ".")) |dot_pos| {
-                const prefix = member[0..dot_pos];
-                const suffix = member[dot_pos + 1 ..];
-                if (!is_pkg_qualified and completion_builtins.isBuiltinType(prefix)) {
-                    return self.findBuiltinDefinition(prefix, suffix, oom);
-                }
-            }
-        }
-
-        // Check if this is a builtin type - use embedded Builtin.roc source
-        if (!is_pkg_qualified and completion_builtins.isBuiltinType(base_name)) {
-            self.logDebug(.build, "[DEF] '{s}' is a builtin type", .{base_name});
-            return self.findBuiltinDefinition(base_name, member_name, oom);
-        }
-
-        if (is_builtin_module) {
-            if (member_name) |member| {
-                if (std.mem.find(u8, member, ".")) |dot_pos| {
-                    const prefix = member[0..dot_pos];
-                    const suffix = member[dot_pos + 1 ..];
-                    return self.findBuiltinDefinition(prefix, suffix, oom);
-                }
-                if (completion_builtins.isBuiltinType(member)) {
-                    return self.findBuiltinDefinition(member, null, oom);
-                }
-            }
-        }
-
-        const env = build_env;
-        const importing_pkg = env.findPackageForModulePath(doc_path);
-        const module_state = if (is_qualified)
-            env.findModuleByQualifiedNameInPackage(importing_pkg, module_name)
-        else
-            env.findModuleByNameInPackage(importing_pkg, base_name);
-        if (module_state) |mod_state| {
-            const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, mod_state.path)) orelse return null;
-
-            var range = LspRange{
-                .start_line = 0,
-                .start_col = 0,
-                .end_line = 0,
-                .end_col = 0,
-            };
-
-            if (member_name) |member| {
-                var found_range: ?LspRange = null;
-                const mod_env_opt = mod_state.moduleEnv() orelse self.getModuleEnvByPathInEnv(build_env, mod_state.path);
-                if (mod_env_opt) |mod_env| {
-                    found_range = findMemberRangeInModuleEnv(mod_env, base_name, member);
-                }
-                if (found_range == null) {
-                    if (self.getSnapshotEnv()) |snap_env| {
-                        const snap_importing_pkg = snap_env.findPackageForModulePath(doc_path);
-                        const snap_module_state = if (is_qualified)
-                            snap_env.findModuleByQualifiedNameInPackage(snap_importing_pkg, module_name)
-                        else
-                            snap_env.findModuleByNameInPackage(snap_importing_pkg, base_name);
-                        if (snap_module_state) |snap_mod_state| {
-                            if (snap_mod_state.moduleEnv()) |snap_mod_env| {
-                                found_range = findMemberRangeInModuleEnv(snap_mod_env, base_name, member);
-                            }
-                        }
-                    }
-                }
-                if (found_range) |r| {
-                    range = r;
-                } else {
-                    self.allocator.free(module_uri);
-                    return null;
-                }
-            }
-
-            return DefinitionResult{
-                .uri = module_uri,
-                .range = range,
-            };
-        }
-
-        return null;
-    }
-
-    /// Helper function to find a module by name and return a DefinitionResult pointing to it
-    fn findModuleByName(self: *SyntaxChecker, build_env: *BuildEnv, doc_path: []const u8, module_name: []const u8, oom: *?Allocator.Error) ?DefinitionResult {
-        return self.findDefinitionInModule(build_env, doc_path, module_name, null, oom);
+        return module_uri;
     }
 
     // findLookupAtOffset moved to cir_queries module
 
+    /// The declaration a type annotation's base names.
     fn resolveTypeBase(
         self: *SyntaxChecker,
         build_env: *BuildEnv,
         module_env: *ModuleEnv,
         doc_path: []const u8,
+        current_uri: []const u8,
         base_info: CIR.TypeAnno.LocalOrExternal,
-        type_name: []const u8,
         oom: *?Allocator.Error,
     ) ?DefinitionResult {
-        switch (base_info) {
-            .local => |local| {
-                // Local type definition - navigate to the statement where it's declared
-                const decl_region = module_env.store.getStatementRegion(local.decl_idx);
-                const range = cir_queries.regionToRange(module_env, decl_region) orelse return null;
-                return DefinitionResult{
-                    .uri = "", // Empty URI means same file - caller should fill in
-                    .range = range,
-                };
+        const Target = struct { env: *ModuleEnv, decl: CIR.Statement.Idx };
+        const target: Target = switch (base_info) {
+            .local => |local| .{ .env = module_env, .decl = local.decl_idx },
+            .external => |ext| .{
+                .env = importedEnvForImport(build_env, module_env, doc_path, ext.module_idx) orelse return null,
+                .decl = @fromBackingInt(ext.target_node_idx),
             },
-            inline .external, .pending => |ext| {
-                const import_idx_int = @backingInt(ext.module_idx);
-                if (import_idx_int < module_env.imports.imports.len()) {
-                    const string_idx = module_env.imports.imports.items.items[import_idx_int];
-                    const module_name = module_env.common.getString(string_idx);
-                    return self.findDefinitionInModule(build_env, doc_path, module_name, type_name, oom);
-                }
-                return self.findModuleByName(build_env, doc_path, type_name, oom);
+            .external_identity => |ext| .{
+                .env = moduleEnvForIdentity(build_env, module_env, ext.module_identity) orelse return null,
+                .decl = @fromBackingInt(ext.target_node_idx),
             },
-            .builtin => {
-                if (completion_builtins.isBuiltinType(type_name)) {
-                    return self.findBuiltinDefinition(type_name, null, oom);
-                }
-                return self.findModuleByName(build_env, doc_path, type_name, oom);
-            },
-            .external_identity => |ext| {
-                // The declaration lives in the module an exposed alias named,
-                // which this module records by content identity.
-                const module_name = module_env.moduleIdentityDisplayText(ext.module_identity);
-                if (module_name.len > 0) {
-                    return self.findDefinitionInModule(build_env, doc_path, module_name, type_name, oom);
-                }
-                return self.findModuleByName(build_env, doc_path, type_name, oom);
-            },
+            .builtin => |builtin_type| .{ .env = build_env.builtin_modules.builtin_module.env, .decl = builtinTypeDeclaration(builtin_type) },
+            .pending => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+        };
+        return self.declarationLocation(build_env, module_env, current_uri, target.env, target.env.store.getStatementRegion(target.decl), oom);
+    }
+
+    /// The Builtin module's declaration of a builtin type annotation base.
+    fn builtinTypeDeclaration(builtin_type: CIR.TypeAnno.Builtin) CIR.Statement.Idx {
+        const builtin_indices = compiled_builtins.builtinIndices(CIR);
+        inline for (CIR.builtin_type_specs) |spec| {
+            const tag_name = spec.type_field[0 .. spec.type_field.len - "_type".len];
+            if (@hasField(CIR.TypeAnno.Builtin, tag_name) and builtin_type == @field(CIR.TypeAnno.Builtin, tag_name)) {
+                return @field(builtin_indices, spec.type_field);
+            }
         }
+        base.invariant("compiler invariant violated: builtin type annotation {s} has no Builtin declaration", .{@tagName(builtin_type)});
     }
 
     /// Find the type annotation at the given offset and return a DefinitionResult.
@@ -2440,6 +2259,7 @@ pub const SyntaxChecker = struct {
         build_env: *BuildEnv,
         module_env: *ModuleEnv,
         doc_path: []const u8,
+        current_uri: []const u8,
         type_anno_idx: CIR.TypeAnno.Idx,
         target_offset: u32,
         oom: *?Allocator.Error,
@@ -2455,13 +2275,13 @@ pub const SyntaxChecker = struct {
                     type_name,
                     @tagName(lookup.base),
                 });
-                return self.resolveTypeBase(build_env, module_env, doc_path, lookup.base, type_name, oom);
+                return self.resolveTypeBase(build_env, module_env, doc_path, current_uri, lookup.base, oom);
             },
             .apply => |apply| {
                 // Type with args like `List(Str)` - check args first, then the base type
                 const args_slice = module_env.store.sliceTypeAnnos(apply.args);
                 for (args_slice) |arg_idx| {
-                    if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, arg_idx, target_offset, oom)) |result| {
+                    if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, current_uri, arg_idx, target_offset, oom)) |result| {
                         return result;
                     }
                 }
@@ -2471,14 +2291,14 @@ pub const SyntaxChecker = struct {
                     type_name,
                     @tagName(apply.base),
                 });
-                return self.resolveTypeBase(build_env, module_env, doc_path, apply.base, type_name, oom);
+                return self.resolveTypeBase(build_env, module_env, doc_path, current_uri, apply.base, oom);
             },
             .record => |rec| {
                 // Check record field types
                 const fields_slice = module_env.store.sliceAnnoRecordFields(rec.fields);
                 for (fields_slice) |field_idx| {
                     const field = module_env.store.getAnnoRecordField(field_idx);
-                    if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, field.ty, target_offset, oom)) |result| {
+                    if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, current_uri, field.ty, target_offset, oom)) |result| {
                         return result;
                     }
                 }
@@ -2488,12 +2308,12 @@ pub const SyntaxChecker = struct {
                 // Check tag types
                 const tags_slice = module_env.store.sliceTypeAnnos(tu.tags);
                 for (tags_slice) |tag_idx| {
-                    if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, tag_idx, target_offset, oom)) |result| {
+                    if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, current_uri, tag_idx, target_offset, oom)) |result| {
                         return result;
                     }
                 }
                 if (tu.ext) |ext_idx| {
-                    if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, ext_idx, target_offset, oom)) |result| {
+                    if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, current_uri, ext_idx, target_offset, oom)) |result| {
                         return result;
                     }
                 }
@@ -2503,7 +2323,7 @@ pub const SyntaxChecker = struct {
                 // Check tag argument types
                 const args_slice = module_env.store.sliceTypeAnnos(t.args);
                 for (args_slice) |arg_idx| {
-                    if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, arg_idx, target_offset, oom)) |result| {
+                    if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, current_uri, arg_idx, target_offset, oom)) |result| {
                         return result;
                     }
                 }
@@ -2513,11 +2333,11 @@ pub const SyntaxChecker = struct {
                 // Check function argument and return types
                 const args_slice = module_env.store.sliceTypeAnnos(f.args);
                 for (args_slice) |arg_idx| {
-                    if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, arg_idx, target_offset, oom)) |result| {
+                    if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, current_uri, arg_idx, target_offset, oom)) |result| {
                         return result;
                     }
                 }
-                if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, f.ret, target_offset, oom)) |result| {
+                if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, current_uri, f.ret, target_offset, oom)) |result| {
                     return result;
                 }
                 return null;
@@ -2526,7 +2346,7 @@ pub const SyntaxChecker = struct {
                 // Check tuple element types
                 const elems_slice = module_env.store.sliceTypeAnnos(t.elems);
                 for (elems_slice) |elem_idx| {
-                    if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, elem_idx, target_offset, oom)) |result| {
+                    if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, current_uri, elem_idx, target_offset, oom)) |result| {
                         return result;
                     }
                 }
@@ -2534,7 +2354,7 @@ pub const SyntaxChecker = struct {
             },
             .parens => |p| {
                 // Unwrap and recurse
-                return self.findTypeAnnoAtOffset(build_env, module_env, doc_path, p.anno, target_offset, oom);
+                return self.findTypeAnnoAtOffset(build_env, module_env, doc_path, current_uri, p.anno, target_offset, oom);
             },
             .rigid_var, .rigid_var_lookup, .underscore, .malformed => {
                 // These don't have type definitions to navigate to
@@ -2627,13 +2447,8 @@ pub const SyntaxChecker = struct {
 
             fn visitStmt(search: *@This(), _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
                 const type_anno_idx = statementTypeAnno(search.module_env, stmt) orelse return .continue_traversal;
-                const found = search.checker.findTypeAnnoAtOffset(search.build_env, search.module_env, search.doc_path, type_anno_idx, search.target_offset, search.oom) orelse return .continue_traversal;
-                if (found.uri.len == 0) {
-                    const uri_copy = noteOom(search.oom, search.checker.allocator.dupe(u8, search.current_uri)) orelse return .stop;
-                    search.result = .{ .uri = uri_copy, .range = found.range };
-                } else {
-                    search.result = found;
-                }
+                const found = search.checker.findTypeAnnoAtOffset(search.build_env, search.module_env, search.doc_path, search.current_uri, type_anno_idx, search.target_offset, search.oom) orelse return .continue_traversal;
+                search.result = found;
                 return .stop;
             }
         };
@@ -3199,17 +3014,15 @@ pub const SyntaxChecker = struct {
     /// `new_name`, so an overlap is refused. Bindings in unrelated scopes do
     /// not overlap and stay renameable.
     fn checkNewNameAgainstScope(
-        self: *SyntaxChecker,
+        handle: *BuildEnvHandle,
         module_env: *ModuleEnv,
         target_pattern: CIR.Pattern.Idx,
         new_name: []const u8,
     ) Allocator.Error!ScopeCheck {
-        var scopes = scope_map.ScopeMap.init(self.allocator);
-        defer scopes.deinit();
-        try scopes.build(module_env);
+        const bindings = try handle.scopeBindings(module_env);
 
         var target_binding: ?scope_map.Binding = null;
-        for (scopes.bindings.items) |binding| {
+        for (bindings) |binding| {
             if (@backingInt(binding.pattern_idx) == @backingInt(target_pattern)) {
                 target_binding = binding;
                 break;
@@ -3217,14 +3030,12 @@ pub const SyntaxChecker = struct {
         }
 
         // Without the renamed binding's own extent there is nothing to compare
-        // against. `ScopeMap` records a destructured field under the extent of
-        // the pattern that destructures it, for one, so not every binding is
-        // found by its own index. Refuse, but say which of the two happened:
+        // against. Refuse, but say which of the two happened:
         // "the name is taken" would be a claim about the code that has not
         // been established.
         const target = target_binding orelse return .scope_unavailable;
 
-        for (scopes.bindings.items) |binding| {
+        for (bindings) |binding| {
             if (@backingInt(binding.pattern_idx) == @backingInt(target_pattern)) continue;
             if (!std.mem.eql(u8, module_env.common.idents.getText(binding.ident), new_name)) continue;
             if (binding.visible_from <= target.visible_to and target.visible_from <= binding.visible_to) {
@@ -3372,7 +3183,7 @@ pub const SyntaxChecker = struct {
             return RenameOutcome{ .rejected = .{ .bad_new_name = rejection } };
         }
 
-        switch (try self.checkNewNameAgainstScope(module_env, target.pattern, new_name)) {
+        switch (try checkNewNameAgainstScope(build.handle, module_env, target.pattern, new_name)) {
             .clear => {},
             .taken => return RenameOutcome{ .rejected = .name_already_in_scope },
             .scope_unavailable => return RenameOutcome{ .rejected = .scope_unavailable },
@@ -3511,12 +3322,10 @@ pub const SyntaxChecker = struct {
     }
 
     /// Resolve a local binding's type var for chained access completion.
-    fn resolveLocalBindingTypeVar(self: *SyntaxChecker, module_env: *ModuleEnv, name: []const u8, name_start: u32, oom: *?Allocator.Error) ?types.Var {
-        var scope = scope_map.ScopeMap.init(self.allocator);
-        defer scope.deinit();
-        noteOom(oom, scope.build(module_env)) orelse return null;
+    fn resolveLocalBindingTypeVar(builder: *completion_builder.CompletionBuilder, module_env: *ModuleEnv, name: []const u8, name_start: u32, oom: *?Allocator.Error) ?types.Var {
+        const bindings = noteOom(oom, builder.scopeBindings(module_env)) orelse return null;
 
-        for (scope.bindings.items) |binding| {
+        for (bindings) |binding| {
             const binding_name = module_env.getIdentText(binding.ident);
             if (!scope_map.ScopeMap.isVisibleAt(binding, name_start)) continue;
             if (std.mem.eql(u8, binding_name, name)) {
@@ -3607,7 +3416,7 @@ pub const SyntaxChecker = struct {
             return .{ .module_env = resolved_env, .type_var = type_var };
         }
 
-        var type_var = self.resolveLocalBindingTypeVar(module_env, first.segment, chain_start, oom) orelse return null;
+        var type_var = resolveLocalBindingTypeVar(builder, module_env, first.segment, chain_start, oom) orelse return null;
         while (nextChainSegment(access_chain, idx)) |segment| {
             idx = segment.next;
             const next_var = builder.getFieldTypeVarFromTypeVar(module_env, type_var, segment.segment) orelse return null;
@@ -3633,12 +3442,7 @@ pub const SyntaxChecker = struct {
             return def_info;
         }
 
-        if (findDefinitionByQualifiedPrefix(allocator, module_env, namespace_prefix, member_name, oom)) |def_info| {
-            return def_info;
-        }
-        if (oom.* != null) return null;
-
-        return module_lookup.findDefinitionByUnqualifiedName(module_env, member_name);
+        return findDefinitionByQualifiedPrefix(allocator, module_env, namespace_prefix, member_name, oom);
     }
 
     /// Find a definition by building `prefix.member` and doing exact lookup.
@@ -3726,18 +3530,11 @@ pub const SyntaxChecker = struct {
         // Compute cursor offset for scope-based completions
         const cursor_offset = completion_context.computeOffset(source, line, character);
 
-        // Collect completions based on context
+        // Collect completions based on context. The items and their strings
+        // live in one arena that the result owns.
+        var arena = base.SingleThreadArena.init(self.allocator);
+        errdefer arena.deinit();
         var items: std.ArrayList(completion_handler.CompletionItem) = .empty;
-        errdefer {
-            for (items.items) |item| {
-                self.allocator.free(item.label);
-                if (item.detail) |d| self.allocator.free(d);
-                if (item.documentation) |doc| self.allocator.free(doc);
-                if (item.sortText) |sort_text| self.allocator.free(sort_text);
-                if (item.insertText) |insert_text| self.allocator.free(insert_text);
-            }
-            items.deinit(self.allocator);
-        }
 
         // Try to get the module environment for richer completions
         // ALWAYS try snapshot first for completion - typing usually produces incomplete code
@@ -3745,6 +3542,8 @@ pub const SyntaxChecker = struct {
         // Track which BuildEnv backs the chosen module_env_opt so module member
         // lookups stay consistent with snapshot/previous envs.
         var module_lookup_env: *BuildEnv = env;
+        // The handle owning `module_env_opt`, which holds its scope map.
+        var module_handle: *BuildEnvHandle = build.handle;
         const module_env_opt: ?*ModuleEnv = blk: {
             if (!build_has_reports) {
                 if (build.getModuleEnv()) |module_env| {
@@ -3757,6 +3556,7 @@ pub const SyntaxChecker = struct {
                 if (snapshot_module_env) |module_env| {
                     used_snapshot = true;
                     module_lookup_env = snapshot_handle.envPtr();
+                    module_handle = snapshot_handle;
                     break :blk module_env;
                 }
             }
@@ -3767,15 +3567,19 @@ pub const SyntaxChecker = struct {
                 if (prev_module_env) |module_env| {
                     used_snapshot = true;
                     module_lookup_env = previous_handle.envPtr();
+                    module_handle = previous_handle;
                     break :blk module_env;
                 }
             }
 
             // Fall back to current build only if no snapshot available and build succeeded
             if (build.build_succeeded and !build_has_reports) {
-                if (self.getModuleEnvByPath(build.absolute_path)) |module_env| {
-                    module_lookup_env = env;
-                    break :blk module_env;
+                if (self.getModuleLookupHandle()) |lookup_handle| {
+                    if (self.getModuleEnvByPathInEnv(lookup_handle.envPtr(), build.absolute_path)) |module_env| {
+                        module_lookup_env = env;
+                        module_handle = lookup_handle;
+                        break :blk module_env;
+                    }
                 }
 
                 module_lookup_env = env;
@@ -3789,7 +3593,7 @@ pub const SyntaxChecker = struct {
 
         // Initialize CompletionBuilder for deduplication and organized completion item building
         // Provide the builtin module env so completion can resolve builtin method data.
-        var builder = completion_builder.CompletionBuilder.initWithDebug(self.allocator, self.std_io, &items, env.builtin_modules.builtin_module.env, self.debug, self.log_file);
+        var builder = completion_builder.CompletionBuilder.initWithDebug(self.allocator, arena.allocator(), self.std_io, &items, env.builtin_modules.builtin_module.env, module_handle, self.debug, self.log_file);
         defer builder.deinit();
 
         switch (context) {
@@ -3938,20 +3742,13 @@ pub const SyntaxChecker = struct {
         // remains robust even when environments expose very large symbol sets.
         const max_completion_items: usize = 512;
         if (items.items.len > max_completion_items) {
-            // Free the allocated strings in items being dropped
-            for (items.items[max_completion_items..]) |item| {
-                self.allocator.free(item.label);
-                if (item.detail) |d| self.allocator.free(d);
-                if (item.documentation) |doc| self.allocator.free(doc);
-                if (item.sortText) |sort_text| self.allocator.free(sort_text);
-                if (item.insertText) |insert_text| self.allocator.free(insert_text);
-            }
             items.items.len = max_completion_items;
         }
 
         return .{
-            .items = try items.toOwnedSlice(self.allocator),
+            .items = items.items,
             .is_incomplete = false,
+            .arena = arena,
         };
     }
 };

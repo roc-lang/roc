@@ -116,56 +116,56 @@ const TestAdapter = struct {
     pub fn child(_: @This(), id: PatternId) PatternId {
         return switch (pattern(id)) {
             .child => |child_id| child_id,
-            .wildcard, .literal, .sequence, .record, .list => unreachable,
+            .wildcard, .literal, .sequence, .record, .list => unreachable, // canMiss calls child only after patternClass reports .child
         };
     }
 
     pub fn sequenceLen(_: @This(), id: PatternId) usize {
         return switch (pattern(id)) {
             .sequence => |children| children.len,
-            .wildcard, .literal, .child, .record, .list => unreachable,
+            .wildcard, .literal, .child, .record, .list => unreachable, // canMiss calls sequenceLen only after patternClass reports .sequence
         };
     }
 
     pub fn sequenceChild(_: @This(), id: PatternId, index: usize) PatternId {
         return switch (pattern(id)) {
             .sequence => |children| children[index],
-            .wildcard, .literal, .child, .record, .list => unreachable,
+            .wildcard, .literal, .child, .record, .list => unreachable, // canMiss calls sequenceChild only after patternClass reports .sequence
         };
     }
 
     pub fn recordLen(_: @This(), id: PatternId) usize {
         return switch (pattern(id)) {
             .record => |children| children.len,
-            .wildcard, .literal, .child, .sequence, .list => unreachable,
+            .wildcard, .literal, .child, .sequence, .list => unreachable, // canMiss calls recordLen only after patternClass reports .record
         };
     }
 
     pub fn recordChild(_: @This(), id: PatternId, index: usize) PatternId {
         return switch (pattern(id)) {
             .record => |children| children[index],
-            .wildcard, .literal, .child, .sequence, .list => unreachable,
+            .wildcard, .literal, .child, .sequence, .list => unreachable, // canMiss calls recordChild only after patternClass reports .record
         };
     }
 
     pub fn listFixedLen(_: @This(), id: PatternId) usize {
         return switch (pattern(id)) {
             .list => |list| list.fixed.len,
-            .wildcard, .literal, .child, .sequence, .record => unreachable,
+            .wildcard, .literal, .child, .sequence, .record => unreachable, // canMiss calls listFixedLen only after patternClass reports .list
         };
     }
 
     pub fn listHasRest(_: @This(), id: PatternId) bool {
         return switch (pattern(id)) {
             .list => |list| list.has_rest,
-            .wildcard, .literal, .child, .sequence, .record => unreachable,
+            .wildcard, .literal, .child, .sequence, .record => unreachable, // canMiss calls listHasRest only after patternClass reports .list
         };
     }
 
     pub fn listRestPattern(_: @This(), id: PatternId) ?PatternId {
         return switch (pattern(id)) {
             .list => |list| list.rest,
-            .wildcard, .literal, .child, .sequence, .record => unreachable,
+            .wildcard, .literal, .child, .sequence, .record => unreachable, // canMiss calls listRestPattern only after patternClass reports .list
         };
     }
 };

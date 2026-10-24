@@ -118,6 +118,31 @@ the same.
 An [`expect`](#expect) cannot reassign a `var` declared outside of it. (See
 [control flow and variables inside `expect`](#expect-control-flow).)
 
+Only an assignment with `=` changes a `var`. A [`match`](pattern-matching) branch
+pattern or a [`for`](loops) pattern can't bind a `var` at all, so this gives an
+error at compile time:
+
+```roc
+var $latest = ""
+
+for $latest in names { # Error: a for pattern can't bind a var
+    …
+}
+```
+
+That's because a pattern there looks like it might change the `var` but doesn't
+read like an assignment, so it's not obvious whether the `var` changes. Bind an
+ordinary name in the pattern, and assign it to the `var` with `=` if you want the
+`var` to change:
+
+```roc
+var $latest = ""
+
+for name in names {
+    $latest = name
+}
+```
+
 ## [`import`](#import) {#import}
 
 The `import` statement imports a [type](types) into scope from a [type module](modules#type-modules).

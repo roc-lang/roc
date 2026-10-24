@@ -32,6 +32,9 @@ pub const Entry = enum {
     /// One module's canonicalization output: an env body and the encoded
     /// parse-stage record.
     canonicalized_module,
+    /// One program root module's literal values: explicitly encoded tables
+    /// and a serialized `ConstStore`.
+    literal_values,
 };
 
 /// Layout fingerprint of `ModuleEnv.Serialized`.
@@ -39,11 +42,14 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 
 /// Version of the checked-module envelope: its magic, header layout, and body
 /// order. Platform-pairing entries share the envelope.
-const checked_envelope_version: u32 = 13;
+const checked_envelope_version: u32 = 14;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.
 const canonicalized_envelope_version: u32 = 3;
+
+/// Version of the literal values file: its magic, header and table layout.
+const literal_values_version: u32 = 1;
 
 /// The running compiler's admission hash for `entry`.
 pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
@@ -62,6 +68,13 @@ pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
             "roc-canonicalized-module-entry-v1",
             &.{ canonicalized_envelope_version, canonicalized_cache_entry.format_version },
             &.{module_env_layout},
+        ),
+        // The literal values' const store has the checked module's
+        // `ConstStore` layout, which the artifact fingerprint covers.
+        .literal_values => compose(
+            "roc-literal-values-entry-v1",
+            &.{literal_values_version},
+            &.{CheckedModuleArtifact.SERIALIZED_VERSION_HASH},
         ),
     };
 }
@@ -113,6 +126,7 @@ test "every entry kind has a distinct admission hash" {
         entryVersionHash(.checked_module),
         entryVersionHash(.platform_pairing),
         entryVersionHash(.canonicalized_module),
+        entryVersionHash(.literal_values),
     };
     for (hashes, 0..) |a, i| {
         for (hashes[i + 1 ..]) |b| try std.testing.expect(!std.mem.eql(u8, &a, &b));
@@ -138,8 +152,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x62, 0x75, 0x77, 0xD5, 0x4B, 0x02, 0x01, 0x0D, 0xB7, 0xCF, 0xB0, 0x29, 0x57, 0x9B, 0xE9, 0xCA,
-        0x84, 0x48, 0xE9, 0x90, 0x70, 0x45, 0xE6, 0xD4, 0x5D, 0xFD, 0xB9, 0x9E, 0x66, 0xFE, 0x37, 0xD8,
+        0x79, 0x53, 0xA4, 0x50, 0xB0, 0xD9, 0x8E, 0x8E, 0x03, 0xA8, 0x15, 0x45, 0xFB, 0xA5, 0xAE, 0xF6,
+        0x60, 0x87, 0x88, 0x5C, 0x53, 0x6B, 0x6F, 0x3A, 0x67, 0xE7, 0x7D, 0x8E, 0x9A, 0xFB, 0x99, 0x9A,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

@@ -13,6 +13,7 @@
 
 const LowLevel = @import("LowLevel.zig").LowLevel;
 const builtins = @import("builtins");
+const invariant = @import("invariant.zig").invariant;
 
 pub const BuiltinFn = builtins.builtin_registry.BuiltinFn;
 
@@ -20,7 +21,7 @@ fn lookup(op: LowLevel, mappings: anytype) BuiltinFn {
     inline for (mappings) |mapping| {
         if (op == mapping[0]) return mapping[1];
     }
-    unreachable;
+    invariant("LowLevelBuiltins invariant violated: low-level op {t} has no member in the requested builtin family", .{op});
 }
 
 /// Float variant of a unary transcendental math op.
@@ -129,7 +130,7 @@ pub fn scalarModBy(bits: u16, is_signed: bool) BuiltinFn {
         16 => if (is_signed) BuiltinFn.i16_mod_by else BuiltinFn.u16_mod_by,
         32 => if (is_signed) BuiltinFn.i32_mod_by else BuiltinFn.u32_mod_by,
         64 => if (is_signed) BuiltinFn.i64_mod_by else BuiltinFn.u64_mod_by,
-        else => unreachable,
+        else => invariant("LowLevelBuiltins invariant violated: scalar modulo width {d} is not 8, 16, 32, or 64", .{bits}),
     };
 }
 
@@ -240,6 +241,7 @@ pub fn listOp(op: LowLevel) BuiltinFn {
         .{ LowLevel.list_append_range_within_unsafe, BuiltinFn.list_append_range_within_unsafe },
         .{ LowLevel.list_append_sublist, BuiltinFn.list_append_sublist },
         .{ LowLevel.list_append_le_bytes, BuiltinFn.list_append_le_bytes },
+        .{ LowLevel.list_append_le_bytes_unsafe, BuiltinFn.list_append_le_bytes },
         .{ LowLevel.list_slack_unique, BuiltinFn.list_slack_unique },
         .{ LowLevel.list_owned_unique, BuiltinFn.list_owned_unique },
         .{ LowLevel.list_prepend, BuiltinFn.list_prepend },

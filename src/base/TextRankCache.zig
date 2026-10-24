@@ -40,8 +40,8 @@ pub fn current(self: *const Self, limit: usize) ?[]const u32 {
     return self.ranks.items;
 }
 
-/// Context supplies the exact text and successor for each valid index. This
-/// supports both dense serial names and byte-offset identifier indices.
+/// Context supplies the exact text and successor for each valid index from
+/// `first` up to `limit`, so stores whose ids start past zero are ranked by id.
 pub fn ensure(self: *Self, first: u32, limit: usize, count: usize, context: anytype) Allocator.Error![]const u32 {
     if (self.current(limit)) |ranks| return ranks;
     while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
@@ -60,8 +60,8 @@ pub fn ensure(self: *Self, first: u32, limit: usize, count: usize, context: anyt
     defer self.allocator.free(entries);
     var index = first;
     for (entries) |*entry| {
-        // Resolve each string once. Byte-offset interners otherwise scan for
-        // its terminator again on every comparison in the rank sort.
+        // Resolve each string once, so the rank sort compares slices without
+        // going back through the store.
         entry.* = .{ .index = index, .text = context.text(index) };
         index = context.next(index, entry.text);
     }

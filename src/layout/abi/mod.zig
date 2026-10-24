@@ -36,6 +36,10 @@ pub const PhysicalArg = call.PhysicalArg;
 pub const PhysicalCall = call.PhysicalCall;
 pub const assignPhysicalArgs = call.assignPhysicalArgs;
 pub const markRegisterOverflow = call.markRegisterOverflow;
+pub const sysv_gp_registers = call.sysv_gp_registers;
+pub const aarch64_gp_registers = call.aarch64_gp_registers;
+pub const simd_argument_registers = call.simd_argument_registers;
+pub const win64_argument_registers = call.win64_argument_registers;
 
 /// Whether a hosted function with these argument and return layouts must be passed a leading
 /// `*RocOps`—i.e. whether it could allocate or free Roc-managed memory. True exactly when

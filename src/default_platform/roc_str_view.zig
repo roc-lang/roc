@@ -4,9 +4,20 @@
 //! `c_runtime.zig` and `linux_runtime.zig` are compiled as standalone objects
 //! (freestanding, no libc, no compiler-rt) without the `builtins` module, so
 //! they cannot import the canonical builtins types directly. The builtins tests
-//! assert these views stay byte-for-byte identical to their canonical structs.
+//! assert these views stay byte-for-byte identical to their canonical structs,
+//! that the constants below equal their canonical counterparts, and that the
+//! view's accessors agree with the canonical `RocStr` on every representation.
 
-const seamless_slice_tag: usize = 1;
+/// Mirrors `builtins.list.SEAMLESS_SLICE_TAG`.
+pub const seamless_slice_tag: usize = 1;
+/// Mirrors `builtins.str.RocStr.small_str_flag`.
+pub const small_str_flag: u8 = 0b1000_0000;
+/// Mirrors `builtins.str.RocStr.capacity_shift` and `builtins.list.RocList.capacity_shift`.
+pub const capacity_shift = 1;
+/// Mirrors `builtins.utils.REFCOUNT_STATIC_DATA`.
+pub const static_refcount: isize = 0;
+
+const small_str_bit: usize = @as(usize, small_str_flag) << (@bitSizeOf(usize) - 8);
 
 /// ABI-compatible view of the canonical `builtins.list.RocList` representation.
 pub const RocList = extern struct {
@@ -27,23 +38,23 @@ pub const RocStr = extern struct {
     capacity_or_alloc_ptr: usize,
     length: usize,
 
-    fn isSmallStr(self: RocStr) bool {
-        return @as(isize, @bitCast(self.length)) < 0;
+    pub fn isSmallStr(self: RocStr) bool {
+        return self.length & small_str_bit != 0;
     }
 
-    fn isSeamlessSlice(self: RocStr) bool {
+    pub fn isSeamlessSlice(self: RocStr) bool {
         return !self.isSmallStr() and (self.capacity_or_alloc_ptr & seamless_slice_tag) == seamless_slice_tag;
     }
 
-    fn len(self: RocStr) usize {
+    pub fn len(self: RocStr) usize {
         if (self.isSmallStr()) {
             const raw: *const [@sizeOf(RocStr)]u8 = @ptrCast(&self);
-            return raw.*[@sizeOf(RocStr) - 1] ^ 0b1000_0000;
+            return raw.*[@sizeOf(RocStr) - 1] & ~small_str_flag;
         }
         return self.length;
     }
 
-    fn allocationPtr(self: RocStr) ?[*]u8 {
+    pub fn allocationPtr(self: RocStr) ?[*]u8 {
         if (self.isSmallStr()) return null;
         if (self.isSeamlessSlice()) {
             return @ptrFromInt(self.capacity_or_alloc_ptr & ~seamless_slice_tag);
@@ -62,12 +73,12 @@ pub const RocStr = extern struct {
 
     /// Release one reference to the string, freeing the backing allocation with
     /// `deallocFn` (the runtime's `roc_dealloc`) when the last reference drops.
-    /// Small strings and static-lifetime allocations (refcount 0) are no-ops.
+    /// Small strings and static-lifetime allocations are no-ops.
     pub fn decref(self: *RocStr, deallocFn: *const fn (*anyopaque, usize) callconv(.c) void) void {
         const data = self.allocationPtr() orelse return;
         const refcount_ptr: *isize = @ptrCast(@alignCast(data - @sizeOf(usize)));
         const refcount = refcount_ptr.*;
-        if (refcount == 0) return;
+        if (refcount == static_refcount) return;
 
         const last = @atomicRmw(isize, refcount_ptr, .Sub, 1, .monotonic);
         if (last == 1) {

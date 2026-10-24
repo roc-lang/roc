@@ -14,6 +14,7 @@ const Allocator = std.mem.Allocator;
 const RocTarget = @import("roc_target").RocTarget;
 const Registers = @import("Registers.zig");
 const RegisterWidth = Registers.RegisterWidth;
+const Call = @import("Call.zig");
 
 const Relocation = @import("../Relocation.zig").Relocation;
 
@@ -38,13 +39,9 @@ pub fn Emit(comptime target: RocTarget) type {
         /// Calling convention constants derived from target (AAPCS64)
         /// Note: aarch64 uses AAPCS64 for all targets, including Windows.
         pub const CC = struct {
-            pub const PARAM_REGS = [_]Registers.GeneralReg{
-                .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7,
-            };
+            pub const PARAM_REGS = Call.GENERAL_PARAM_REGS;
 
-            pub const FLOAT_PARAM_REGS = [_]Registers.FloatReg{
-                .V0, .V1, .V2, .V3, .V4, .V5, .V6, .V7,
-            };
+            pub const FLOAT_PARAM_REGS = Call.FLOAT_PARAM_REGS;
 
             pub const RETURN_REGS = [_]Registers.GeneralReg{ .X0, .X1 };
 
@@ -1512,7 +1509,7 @@ pub fn Emit(comptime target: RocTarget) type {
                 16 => (@as(u5, index) << 2) | 2,
                 32 => (@as(u5, index) << 3) | 4,
                 64 => (@as(u5, index) << 4) | 8,
-                else => unreachable,
+                else => invariant("AArch64 emit invariant violated: SIMD lane width {d} is not 8, 16, 32, or 64", .{lane_bits}),
             };
         }
 
@@ -1527,7 +1524,7 @@ pub fn Emit(comptime target: RocTarget) type {
                 16 => 0x4E020C00,
                 32 => 0x4E040C00,
                 64 => 0x4E080C00,
-                else => unreachable,
+                else => invariant("AArch64 emit invariant violated: SIMD lane width {d} is not 8, 16, 32, or 64", .{lane_bits}),
             };
             try self.emit32(opcode | (@as(u32, src.enc()) << 5) | dst.enc());
         }

@@ -1089,6 +1089,29 @@ const cases = [_]Case{
         \\}
         ,
     },
+    .{
+        // A loop whose only operation on its list is `append_le_bytes_to` is
+        // rewritten by `lir/loop_append_promote.zig` into a slack-guarded
+        // diamond whose hot side is `list_append_le_bytes_unsafe`.
+        .name = "loop byte appends promote to the unchecked word store",
+        .source_kind = .module,
+        .inline_wrappers = true,
+        .source =
+        \\main = || {
+        \\    var $out = List.with_capacity(3)
+        \\    var $i = 0.U64
+        \\    while $i < 40 {
+        \\        word = $i.times_wrap(0x0101010101010101).bitwise_xor(0x5A)
+        \\        $out = match word.append_le_bytes_to($out, 3) {
+        \\            Ok(next) => next
+        \\            Err(_) => $out
+        \\        }
+        \\        $i = $i + 1
+        \\    }
+        \\    List.len($out)
+        \\}
+        ,
+    },
 };
 
 /// Ops that this source-level sweep cannot reach. Each needs a reason; the

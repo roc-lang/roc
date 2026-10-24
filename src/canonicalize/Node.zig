@@ -235,7 +235,6 @@ pub const Tag = enum {
     diag_default_app_missing_main,
     diag_default_app_wrong_arity,
     diag_cannot_import_default_app,
-    diag_execution_requires_app_or_default_app,
     diag_type_name_case_mismatch,
     diag_module_header_deprecated,
     diag_roc_version_mismatch,
@@ -244,6 +243,7 @@ pub const Tag = enum {
     diag_var_across_function_boundary,
     diag_shadowing_warning,
     diag_binding_name_does_not_match_mutability,
+    diag_var_in_binder_pattern,
     diag_type_redeclared,
     diag_undeclared_type,
     diag_undeclared_type_var,
@@ -260,6 +260,7 @@ pub const Tag = enum {
     diag_private_type_in_exposed_field,
     diag_type_from_missing_module,
     diag_module_not_imported,
+    diag_public_type_not_defined,
     diag_nested_type_not_found,
     diag_internal_builtin_type,
     diag_nested_value_not_found,
@@ -1358,7 +1359,7 @@ pub const Payload = extern union {
         name: u32,
         alias: u32,
         flags: u32,
-        _reserved: [4]u8 = .{ 0, 0, 0, 0 },
+        target: u32 = 0,
     };
 
     pub const IfBranch = extern struct {

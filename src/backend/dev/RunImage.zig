@@ -23,8 +23,8 @@ pub const BoxySidecar = lir.LirImage.BoxySidecar;
 pub const MAGIC: u32 = 0x56454452;
 
 /// Version of the shared-memory dev run image format.
-/// v5: embedded Boxy sidecars carry dense name identities and byte/range columns.
-pub const FORMAT_VERSION: u32 = 5;
+/// v6: function relocations carry their producer-selected call encoding.
+pub const FORMAT_VERSION: u32 = 6;
 
 /// Maximum bytes reserved per host jump stub on the supported dev-shim hosts.
 /// The machine-code shim owns the per-arch emitted sizes and asserts at compile
@@ -91,11 +91,12 @@ pub const Entrypoint = extern struct {
 
 /// Relocation encodings stored in shared memory for the shim to apply.
 pub const RelocationKind = enum(u8) {
-    linked_function = 1,
+    linked_function_x86_call_rel32 = 1,
     linked_data_abs64 = 2,
     linked_data_rel32 = 3,
     linked_data_page21 = 4,
     linked_data_pageoff12 = 5,
+    linked_function_aarch64_call26 = 6,
 };
 
 /// Serialized relocation record that names the target symbol explicitly.
@@ -215,16 +216,18 @@ pub fn writeToSharedMemory(
 
     var relocation_records = std.ArrayList(RelocationRecord).empty;
     defer relocation_records.deinit(scratch);
+    try relocation_records.ensureTotalCapacity(scratch, relocations.len);
     var data_relocation_records = std.ArrayList(DataRelocationRecord).empty;
     defer data_relocation_records.deinit(scratch);
 
     var code_symbols = std.ArrayList(CodeSymbol).empty;
     defer code_symbols.deinit(scratch);
+    try code_symbols.ensureTotalCapacity(scratch, code_symbol_inputs.len);
 
     for (code_symbol_inputs) |input| {
         if (input.code_offset >= code.len) return error.InvalidDevRunImage;
         const name_ref = try symbol_names.intern(scratch, input.name, .code);
-        try code_symbols.append(scratch, .{
+        code_symbols.appendAssumeCapacity(.{
             .name = name_ref,
             .code_offset = @intCast(input.code_offset),
         });
@@ -233,21 +236,24 @@ pub fn writeToSharedMemory(
     for (relocations) |relocation| {
         switch (relocation) {
             .linked_function => |function| {
-                try relocation_records.append(scratch, .{
+                relocation_records.appendAssumeCapacity(.{
                     .code_offset = function.offset,
                     .symbol = symbol_refs[@backingInt(function.symbol)],
-                    .kind = @backingInt(RelocationKind.linked_function),
+                    .kind = @backingInt(switch (function.kind) {
+                        .x86_call_rel32 => RelocationKind.linked_function_x86_call_rel32,
+                        .aarch64_call26 => RelocationKind.linked_function_aarch64_call26,
+                    }),
                 });
             },
             .linked_data => |data| {
-                try relocation_records.append(scratch, .{
+                relocation_records.appendAssumeCapacity(.{
                     .code_offset = data.offset,
                     .symbol = symbol_refs[@backingInt(data.symbol)],
                     .kind = @backingInt(relocationKindForData(data.kind)),
                 });
             },
-            .local_data, .jmp_to_return => return error.UnsupportedDevRunRelocation,
-            .retired => {},
+            .local_data => return error.UnsupportedDevRunRelocation,
+            .retired, .runtime_ref => {},
         }
     }
 
@@ -256,6 +262,12 @@ pub fn writeToSharedMemory(
 
     var data_symbols = std.ArrayList(DataSymbol).empty;
     defer data_symbols.deinit(scratch);
+    try data_symbols.ensureTotalCapacity(scratch, data_exports.len);
+    {
+        var data_relocation_count: usize = 0;
+        for (data_exports) |data_export| data_relocation_count += data_export.relocations.len;
+        try data_relocation_records.ensureTotalCapacity(scratch, data_relocation_count);
+    }
 
     const data_refs = try scratch.alloc(StringRef, data_exports.len);
     defer scratch.free(data_refs);
@@ -274,7 +286,7 @@ pub fn writeToSharedMemory(
         const data_offset = data_bytes.items.len;
         try data_bytes.appendSlice(scratch, data_export.bytes);
 
-        try data_symbols.append(scratch, .{
+        data_symbols.appendAssumeCapacity(.{
             .name = name_ref,
             .data_offset = @intCast(data_offset),
             .len = @intCast(data_export.bytes.len),
@@ -295,7 +307,7 @@ pub fn writeToSharedMemory(
                 },
                 .function_pointer => symbol_names.find(relocation.target_symbol_name, .code) orelse return error.UnsupportedStaticDataRelocation,
             };
-            try data_relocation_records.append(scratch, .{
+            data_relocation_records.appendAssumeCapacity(.{
                 .data_offset = @intCast(data_offset + relocation_offset),
                 .symbol = target_ref,
                 .addend = relocation.addend,
@@ -451,8 +463,8 @@ pub fn requiredCapacityFromOffset(
             .linked_function, .linked_data => {
                 relocation_count = try addNoOverflow(relocation_count, 1);
             },
-            .local_data, .jmp_to_return => return error.UnsupportedDevRunRelocation,
-            .retired => {},
+            .local_data => return error.UnsupportedDevRunRelocation,
+            .retired, .runtime_ref => {},
         }
     }
 
@@ -585,8 +597,8 @@ fn countReservedFunctionStubs(
         .linked_data => |data| {
             uses[@backingInt(data.symbol)] |= 2;
         },
-        .local_data, .jmp_to_return => return error.UnsupportedDevRunRelocation,
-        .retired => {},
+        .local_data => return error.UnsupportedDevRunRelocation,
+        .retired, .runtime_ref => {},
     };
     var count: usize = 0;
     for (names, uses) |name, use| {
@@ -705,7 +717,7 @@ test "writeToSharedMemory serializes only executable image sections" {
     const alloc_symbol = try symbols.intern(scratch, @import("builtins").shim_symbols.roc_alloc, .shared);
     const answer_symbol = try symbols.intern(scratch, "roc__answer", .shared);
     const relocations = [_]Relocation{
-        .{ .linked_function = .{ .offset = 1, .symbol = alloc_symbol } },
+        .{ .linked_function = .{ .offset = 1, .symbol = alloc_symbol, .kind = .x86_call_rel32 } },
         .{ .linked_data = .{ .offset = 2, .symbol = answer_symbol, .kind = .rel32 } },
     };
     const data_bytes = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
@@ -781,7 +793,7 @@ test "writeToSharedMemory serializes only executable image sections" {
     try std.testing.expectEqual(@as(u64, 3), view.code_symbols[0].code_offset);
 
     try std.testing.expectEqual(@as(usize, relocations.len), view.relocations.len);
-    try std.testing.expectEqual(RelocationKind.linked_function, try view.relocations[0].relocationKind());
+    try std.testing.expectEqual(RelocationKind.linked_function_x86_call_rel32, try view.relocations[0].relocationKind());
     try std.testing.expectEqual(@as(u64, 1), view.relocations[0].code_offset);
     try std.testing.expectEqualStrings(@import("builtins").shim_symbols.roc_alloc, try view.symbolName(view.relocations[0].symbol));
     try std.testing.expectEqual(RelocationKind.linked_data_rel32, try view.relocations[1].relocationKind());

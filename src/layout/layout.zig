@@ -7,6 +7,7 @@ const std = @import("std");
 const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
+const builtins = @import("builtins");
 
 const CIR = @import("can").CIR;
 
@@ -30,6 +31,11 @@ pub const LayoutTag = enum(u4) {
     // tag payload, or list element. The pass author must uphold those invariants.
     ptr, // Compiler-internal pointer to a value of the element layout; never refcounted.
     erased_box, // Descriptor-backed refcounted box whose payload layout is known only at runtime.
+    // A demand-shaped procedure's stand-in for a list or box element type its
+    // body never reads, moves, or refcounts (design.md "Specialization By
+    // Demand"). Zero-sized and never refcounted; only ever a list or box
+    // element, never a value, struct field, or tag payload of its own.
+    hole,
 };
 
 /// The Layout untagged union should take up this many bits in memory.
@@ -313,6 +319,12 @@ pub const StructData = struct {
     /// when the struct is committed (its field layouts are already committed by
     /// then) so `Store.layoutContainsRefcounted` is an O(1), infallible lookup.
     contains_refcounted: bool = false,
+    /// Whether a field is itself a struct holding refcounted data, so that
+    /// field ownership slots differ from semantic indices. Precomputed at
+    /// commit with `ownership_slots`; see `Store.ownershipSlotCount`.
+    expands_fields: bool = false,
+    /// The ownership slots of this struct when it holds refcounted data.
+    ownership_slots: u32 = 1,
 
     pub fn getFields(self: StructData) StructField.SafeMultiList.Range {
         // Handle empty structs specially - NonEmptyRange.toRange() asserts count > 0
@@ -348,6 +360,16 @@ pub const TagUnionLayout = packed struct {
 pub const TagUnionIdx = packed struct {
     int_idx: @Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(SortKey)),
 };
+
+/// A variant's position in its tag union. Discriminant values number a tag
+/// union's variants the same way, so a discriminant has this type too. The
+/// layout store rejects a tag union with more than `max_tag_union_variants`
+/// variants, so every variant index and discriminant of a committed layout
+/// fits.
+pub const VariantIndex = u30;
+
+/// The most variants a tag union layout can have.
+pub const max_tag_union_variants: usize = 1 << @bitSizeOf(VariantIndex);
 
 /// Tag union data stored in the layout Store
 pub const TagUnionData = struct {
@@ -547,9 +569,9 @@ pub const SizeAlign = packed struct(u32) {
         .alignment = RocAlignment.fromByteUnits(@alignOf(usize)),
     };
 
-    /// List size and alignment (3 pointer-sized fields)
+    /// List size and alignment (pointer-sized fields)
     pub const list = SizeAlign{
-        .size = 3 * @sizeOf(usize),
+        .size = @sizeOf(builtins.list.RocList),
         .alignment = RocAlignment.fromByteUnits(@alignOf(usize)),
     };
 };
@@ -726,7 +748,7 @@ pub const Layout = packed struct {
             .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .closure, .ptr => target_usize.alignment(),
             .struct_ => self.getStruct().sort_key.alignment(target_usize),
             .tag_union => self.getTagUnion().sort_key.alignment(target_usize),
-            .zst => std.mem.Alignment.@"1",
+            .zst, .hole => std.mem.Alignment.@"1",
         };
     }
 
@@ -743,7 +765,7 @@ pub const Layout = packed struct {
                 .vector => .align_16,
             },
             .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .ptr, .closure => .pointer,
-            .zst => .align_1,
+            .zst, .hole => .align_1,
             .struct_ => self.getStruct().sort_key,
             .tag_union => self.getTagUnion().sort_key,
         };
@@ -846,6 +868,11 @@ pub const Layout = packed struct {
         return .{ .data = 0, .tag = .zst };
     }
 
+    /// The element layout of a demand-shaped procedure's hole.
+    pub fn hole() Layout {
+        return .{ .data = 0, .tag = .hole };
+    }
+
     /// tag union layout with the given alignment class and tag union metadata
     pub fn tagUnion(tu_sort_key: SortKey, tu_idx: TagUnionIdx) Layout {
         return .{ .data = packData(TagUnionLayout{ .sort_key = tu_sort_key, .idx = tu_idx }), .tag = .tag_union };
@@ -871,7 +898,7 @@ pub const Layout = packed struct {
                 self.getStruct().idx.int_idx == other.getStruct().idx.int_idx,
             .closure => self.getClosure().captures_layout_idx == other.getClosure().captures_layout_idx,
             .erased_callable => true,
-            .zst => true, // No additional data
+            .zst, .hole => true, // No additional data
             .tag_union => self.getTagUnion().sort_key == other.getTagUnion().sort_key and
                 self.getTagUnion().idx.int_idx == other.getTagUnion().idx.int_idx,
         };

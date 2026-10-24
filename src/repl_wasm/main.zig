@@ -177,7 +177,7 @@ fn copyEvents(arena: Allocator, session: *ReplSession) Allocator.Error![]const E
             .dbg => |message| .{ .kind = "dbg", .message = try arenaDupe(arena, message) },
             .expect_failed => |message| .{ .kind = "expect_failed", .message = try arenaDupe(arena, message) },
             .crashed => |message| .{ .kind = "crashed", .message = try arenaDupe(arena, message) },
-            .effect => unreachable,
+            .effect => unreachable, // the session's ComptimeEventCollector records only dbg events
         };
     }
     return events;

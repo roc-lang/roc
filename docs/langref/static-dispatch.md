@@ -395,12 +395,12 @@ Token := { raw : Str }.{
 
     encoder_for : encoding -> (Token, state -> Try(state, err))
         where [
-            encoding.encode_str : encoding, Str, state -> Try(state, err),
+            encoding.encode_str : Str, state -> Try(state, err),
         ]
-    encoder_for = |encoding| {
+    encoder_for = |_encoding| {
         Encoding : encoding
 
-        |token, state| Encoding.encode_str(encoding, token.raw, state)
+        |token, state| Encoding.encode_str(token.raw, state)
     }
 }
 ```
