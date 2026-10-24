@@ -5,7 +5,7 @@
 const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
-fn expectOneShadowWarningAndNoTypeProblems(src: []const u8) !void {
+fn expectOneShadowWarningAndNoTypeProblems(src: []const u8) TestEnv.TestEnvError!void {
     var test_env = try TestEnv.init("Test", src);
     defer test_env.deinit();
 
