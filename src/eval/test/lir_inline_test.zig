@@ -13781,3 +13781,41 @@ test "issue 12290: interpreter memory does not grow with the number of loop iter
         }
     }
 }
+
+fn expectIssue12491BlockLocalClosureChain(strategy: base.SpecializationStrategy) TestError!void {
+    const allocator = std.testing.allocator;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .expr,
+        \\{
+        \\    r = (((|n| (|id| (|x| id(x + n))))(1))(|y| y))(41)
+        \\    r
+        \\}
+    ,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        strategy,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("42.0", output);
+}
+
+test "issue 12491 nested closure chain bound to a block local lowers under lss" {
+    // https://github.com/roc-lang/roc/issues/12491: the lambda returned by
+    // `|n|` is that function's result, not a binding, so it takes no scheme
+    // of its own and `id`'s result is the call's `Dec` all the way down.
+    // Binding the chain's result to a block local evaluates to 42.0, the
+    // same as the bare expression.
+    try expectIssue12491BlockLocalClosureChain(.lss);
+}
+
+test "issue 12491 nested closure chain bound to a block local lowers under boxy" {
+    try expectIssue12491BlockLocalClosureChain(.boxy);
+}

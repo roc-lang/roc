@@ -95,6 +95,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/exhaustiveness_test.zig"));
     std.testing.refAllDecls(@import("test/type_view_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9705_test.zig"));
+    std.testing.refAllDecls(@import("test/builtin_type_shadowing_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9709_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9710_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9711_test.zig"));
@@ -165,6 +166,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_11886_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12318_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12309_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12489_test.zig"));
     std.testing.refAllDecls(@import("test/nominal_decl_growth_test.zig"));
     std.testing.refAllDecls(@import("test/frame_owned_judgment_test.zig"));
 

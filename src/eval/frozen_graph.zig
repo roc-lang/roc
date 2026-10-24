@@ -83,6 +83,8 @@ pub fn Graph(comptime AllocationKey: type) type {
         /// the graph owns from here on, including when this fails.
         pub fn addNode(self: *Self, name: []const u8, byte_count: usize, alignment_: u32) Allocator.Error!SymbolId {
             errdefer self.output.free(name);
+            // A node the target's address space cannot hold cannot exist there.
+            if (self.word() == 4 and byte_count > std.math.maxInt(u32)) return error.OutOfMemory;
             const node_bytes = try self.output.alloc(u8, byte_count);
             errdefer self.output.free(node_bytes);
             @memset(node_bytes, 0);
@@ -106,10 +108,12 @@ pub fn Graph(comptime AllocationKey: type) type {
             return self.node(dest).bytes[dest.offset..][0..count];
         }
 
-        /// Write one target-width little-endian word at `dest`.
-        pub fn writeWord(self: *Self, dest: Destination, value: u64) void {
+        /// Write one target-width little-endian word at `dest`. A value the
+        /// target's word cannot hold, such as a length a 64-bit evaluation
+        /// produced for a 32-bit target, is past what that target can address.
+        pub fn writeWord(self: *Self, dest: Destination, value: u64) Allocator.Error!void {
             switch (self.word()) {
-                4 => std.mem.writeInt(u32, self.bytes(dest, 4)[0..4], @intCast(value), .little),
+                4 => std.mem.writeInt(u32, self.bytes(dest, 4)[0..4], std.math.cast(u32, value) orelse return error.OutOfMemory, .little),
                 8 => std.mem.writeInt(u64, self.bytes(dest, 8)[0..8], value, .little),
                 else => invariant("unsupported target pointer width"),
             }
@@ -118,7 +122,7 @@ pub fn Graph(comptime AllocationKey: type) type {
         /// Make the word at `dest` point at `target`.
         pub fn relocate(self: *Self, dest: Destination, target: Destination) Allocator.Error!void {
             // Zero pointer bytes explicitly; only the relocation gives them meaning.
-            self.writeWord(dest, 0);
+            try self.writeWord(dest, 0);
             try self.node(dest).relocations.append(self.allocator, .{
                 .offset = dest.offset,
                 .target_symbol_name = self.node(target).name,
@@ -133,10 +137,10 @@ pub fn Graph(comptime AllocationKey: type) type {
             if (self.allocations.get(key)) |existing| return .{ .dest = existing, .fresh = false };
             const header_size: usize = (if (contains_refcounted) @as(usize, 2) else 1) * self.word();
             const payload_offset = std.mem.alignForward(usize, header_size, alignment_);
-            const symbol = try self.addChildNode(payload_offset + byte_count, @intCast(@max(alignment_, self.word())));
+            const symbol = try self.addChildNode(std.math.add(usize, payload_offset, byte_count) catch return error.OutOfMemory, @intCast(@max(alignment_, self.word())));
             const dest = Destination{ .symbol = symbol, .offset = payload_offset };
             // A zero RC header is the runtime's immutable/static allocation marker.
-            if (contains_refcounted) self.writeWord(.{ .symbol = symbol, .offset = payload_offset - 2 * self.word() }, element_count orelse 0);
+            if (contains_refcounted) try self.writeWord(.{ .symbol = symbol, .offset = payload_offset - 2 * self.word() }, element_count orelse 0);
             try self.allocations.put(self.allocator, key, dest);
             return .{ .dest = dest, .fresh = true };
         }

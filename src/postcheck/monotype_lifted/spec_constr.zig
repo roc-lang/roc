@@ -12404,7 +12404,10 @@ const Cloner = struct {
             .call_proc => |call| {
                 try self.collectExprSpan(task, call.args);
                 try self.collectCaptureOperands(task, call.captures);
-                try items.append(allocator, .{ .call_pattern = expr_id });
+                // A demand-shaped call's operands keep the caller's types,
+                // not the callee's, so its values cannot specialize the
+                // callee.
+                if (!call.demand_shaped) try items.append(allocator, .{ .call_pattern = expr_id });
             },
             .low_level => |call| try self.collectExprSpan(task, call.args),
             .field_access => |field| try items.append(allocator, .{ .expr = field.receiver }),

@@ -73,7 +73,7 @@ fn childResolvesPackageAliases() integration_spec.SpecError!void {
     test_env.configureChecker(&checker, cache_path);
     defer checker.deinit();
 
-    const publish_sets = try checker.check(thing_fx_uri, null, platform_dir);
+    const publish_sets = try checker.check(thing_fx_uri, null, platform_dir, null);
     defer freePublishSets(allocator, publish_sets);
 
     try std.testing.expect(!publishContainsModuleNotFound(publish_sets));
@@ -111,7 +111,7 @@ fn openingMainClearsStaleChildDiagnostics() integration_spec.SpecError!void {
     // Seed a previously published non-empty diagnostic for the child URI.
     try checker.seedPublishedDiagnosticUriForTesting(thing_fx_uri);
 
-    const publish_sets = try checker.check(main_uri, null, platform_dir);
+    const publish_sets = try checker.check(main_uri, null, platform_dir, null);
     defer freePublishSets(allocator, publish_sets);
 
     const cleared = findPublishForUri(publish_sets, thing_fx_uri) orelse return error.TestUnexpectedResult;
@@ -154,7 +154,7 @@ fn siblingPackageRootUsesOwnHeader() integration_spec.SpecError!void {
 
     // workspace_root points at the platform dir, whose main.roc is unrelated
     // to pkg/main.roc; the package root must still resolve using its own header.
-    const publish_sets = try checker.check(pkg_main_uri, null, platform_dir);
+    const publish_sets = try checker.check(pkg_main_uri, null, platform_dir, null);
     defer freePublishSets(allocator, publish_sets);
 
     try std.testing.expect(!publishContainsModuleNotFound(publish_sets));

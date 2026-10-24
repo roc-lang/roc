@@ -77,10 +77,11 @@ pub const BuildSession = struct {
         const preferred_main = try preferredMainFromWorkspace(allocator, std_io, env.filesystem, workspace_root);
         defer if (preferred_main) |main_path| allocator.free(main_path);
 
-        // Build
+        // Build. A canceled build has no result to report.
         const build_succeeded = blk: {
-            env.buildResolvingMain(absolute_path, preferred_main) catch {
-                break :blk false;
+            env.buildResolvingMain(absolute_path, preferred_main) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                else => break :blk false,
             };
             break :blk true;
         };

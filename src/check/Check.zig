@@ -1123,14 +1123,15 @@ ambiguity_candidates: std.ArrayListUnmanaged(AmbiguityCandidate) = .empty,
 /// remain distinct, while repeated explicit requirements on one shared outer
 /// receiver contribute only one judgment candidate.
 ambiguity_candidate_by_key: std.AutoHashMapUnmanaged(AmbiguityCandidateKey, u32) = .empty,
-/// Undo journal for `requires_current_resolution` escalations performed while
-/// a probe is open: each entry is the index of a candidate whose flag an
-/// in-probe repeated observation flipped. `Probe.rollback` resets the flags
-/// its scope journaled (the observation was speculative work that did not
+/// Undo journal for the monotone candidate payload flips performed while a
+/// probe is open: each entry names a candidate and the payload an in-probe
+/// repeated observation flipped (`requires_current_resolution` escalated, or
+/// `position` raised to `.row_tail`). `Probe.rollback` resets the flips its
+/// scope journaled (the observation was speculative work that did not
 /// survive), while `Probe.commit` drops the entries keeping the flips (a
-/// committed probe's observation is as real as an unprobed one). Escalations
+/// committed probe's observation is as real as an unprobed one). Flips
 /// performed with no probe open are permanent and never journaled.
-ambiguity_escalation_journal: std.ArrayListUnmanaged(u32) = .empty,
+ambiguity_candidate_journal: std.ArrayListUnmanaged(AmbiguityCandidateFlip) = .empty,
 /// Index into `ambiguity_candidates` where the currently-processing top-level
 /// def's entries begin. Generalization events scan only from here: entries
 /// below the cursor belong to earlier defs and are either already judged or
@@ -1232,11 +1233,11 @@ scratch_replay_matches: std.ArrayListUnmanaged(u32) = .empty,
 link_var_map: collections.DenseMap(Var, Var),
 link_scratch_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
 link_scratch_owned: std.ArrayListUnmanaged(Var) = .empty,
-link_new_copies: std.ArrayListUnmanaged(SavedCopy) = .empty,
+link_new_copies: std.ArrayListUnmanaged(LinkedCopy) = .empty,
 /// Uses linked inside the current probes, with the copies their links made,
 /// registered when the outermost probe commits.
 probe_links: std.ArrayListUnmanaged(ProbeLink) = .empty,
-probe_link_copies: std.ArrayListUnmanaged(SavedCopy) = .empty,
+probe_link_copies: std.ArrayListUnmanaged(LinkedCopy) = .empty,
 /// Schemes one of whose uses settled as a replay source would: only their
 /// uses encode a shape.
 use_replayable_schemes: collections.DenseMapUnmanaged(Var, void) = .empty,
@@ -1821,7 +1822,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .pending_scheme_requirement_dispatchers = .boundary,
     .ambiguity_candidates = .boundary,
     .ambiguity_candidate_by_key = .keyed,
-    .ambiguity_escalation_journal = .frame_partitioned,
+    .ambiguity_candidate_journal = .frame_partitioned,
     .ambiguity_candidates_def_start = .lexical,
     .ambiguity_candidates_residual_checked = .keyed,
     .ambiguity_verdicts = .settled,
@@ -2316,9 +2317,16 @@ const AmbiguityCandidate = struct {
     /// nested closure bodies remain false because their invocation is still
     /// outside the checked body.
     requires_current_resolution: bool,
+    position: Position,
     /// Set once the candidate has been judged (either verdict or acquittal) so
     /// later events and the end-of-check residual pass skip it.
     judged: bool = false,
+
+    /// Where the receiver stands in the type that produced it. A row tail is a
+    /// record or tag union's extension: when nothing pins it, its row default
+    /// closes it to the empty row, which discharges `is_eq` and `to_hash`
+    /// (design.md "Derived Equality And Hashing Over Open Rows").
+    const Position = enum(u8) { value, row_tail };
 
     const Source = enum(u8) {
         /// The constraint was created directly at a dispatch expression the
@@ -2333,6 +2341,13 @@ const AmbiguityCandidate = struct {
         /// gated on an in-module dispatch use or a body-forced contract.
         instantiation,
     };
+};
+
+/// One journaled flip of a candidate's monotone payload
+/// (`ambiguity_candidate_journal`).
+const AmbiguityCandidateFlip = struct {
+    candidate: u32,
+    payload: enum(u8) { requires_current_resolution, row_tail },
 };
 
 const AmbiguityCandidateKey = struct {
@@ -2540,6 +2555,14 @@ const ProbeLink = struct {
 const SavedCopy = struct {
     old: Var,
     fresh: Var,
+};
+
+/// One variable linking a use's deferred callables copied, with where the
+/// link placed the copy.
+const LinkedCopy = struct {
+    old: Var,
+    fresh: Var,
+    position: AmbiguityCandidate.Position,
 };
 
 /// The instantiation state linking a use's deferred callables restores, so
@@ -2931,6 +2954,7 @@ fn registerInstantiatedSchemeRequirement(
     requirement: InstantiatedSchemeDispatchRequirement,
     instantiation_expr: ?CIR.Expr.Idx,
     parent_constraint_fn_var: ?Var,
+    receiver_position: AmbiguityCandidate.Position,
     env: *Env,
 ) Allocator.Error!void {
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{requirement.constraint});
@@ -2968,6 +2992,7 @@ fn registerInstantiatedSchemeRequirement(
         requirement.receiver_var,
         .instantiation,
         instantiation_expr,
+        receiver_position,
     );
     try self.recordSchemeRequirementCandidate(
         requirement.receiver_var,
@@ -2984,6 +3009,7 @@ fn registerInstantiatedAttachedDispatch(
     constraints: StaticDispatchConstraint.SafeList.Range,
     instantiation_expr: ?CIR.Expr.Idx,
     owner_group_index: ?u32,
+    receiver_position: AmbiguityCandidate.Position,
 ) Allocator.Error!void {
     try self.instantiation_dispatchers.append(self.gpa, .{
         .dispatcher_var = receiver_var,
@@ -2991,7 +3017,7 @@ fn registerInstantiatedAttachedDispatch(
         .instantiation_expr = instantiation_expr,
         .owner_group_index = owner_group_index,
     });
-    try self.recordAmbiguityCandidate(receiver_var, .instantiation, instantiation_expr);
+    try self.recordAmbiguityCandidate(receiver_var, .instantiation, instantiation_expr, receiver_position);
     // An attached constraint copied by instantiation lives on the fresh
     // receiver's descriptor exactly like a creation-site attached constraint,
     // so it is indexed as a creation candidate: the owning boundary stores an
@@ -10543,6 +10569,11 @@ fn instantiateVarHelpFromScheme(
 
     // First, reset state
     instantiator.var_map.clearRetainingCapacity();
+    var row_tail_copies = collections.DenseMap(Var, void).init(self.gpa);
+    defer row_tail_copies.deinit();
+    std.debug.assert(instantiator.constrained_row_tail_copies == null);
+    instantiator.constrained_row_tail_copies = &row_tail_copies;
+    defer instantiator.constrained_row_tail_copies = null;
 
     // Vars the caller asked to share keep their identity in the copy: the
     // walk's `var_map` lookup resolves them to themselves instead of minting
@@ -10636,7 +10667,14 @@ fn instantiateVarHelpFromScheme(
     if (instantiator.var_map.count() > 0) {
         var iterator = instantiator.var_map.iterator();
         while (iterator.next()) |x| {
-            try self.registerInstantiatedVar(x.key_ptr.*, x.value_ptr.*, instantiator.var_map, var_context, env);
+            try self.registerInstantiatedVar(
+                x.key_ptr.*,
+                x.value_ptr.*,
+                instantiator.var_map,
+                var_context,
+                self.instantiatedReceiverPosition(&row_tail_copies, x.value_ptr.*),
+                env,
+            );
         }
     }
     for (self.scratch_deferred_callables.items) |deferred| {
@@ -10697,10 +10735,12 @@ fn instantiateVarHelpFromScheme(
     // and propagate an unresolved outer-rank relation into an enclosing scheme.
     const requirement_parent = if (target) |site| site.constraint_fn_var else null;
     for (requirements_start..self.instantiated_requirements_stack.items.len) |requirement_idx| {
+        const requirement = self.instantiated_requirements_stack.items[requirement_idx];
         try self.registerInstantiatedSchemeRequirement(
-            self.instantiated_requirements_stack.items[requirement_idx],
+            requirement,
             self.discarded_binding_rhs_expr orelse self.instantiation_source_expr,
             requirement_parent,
+            self.instantiatedReceiverPosition(&row_tail_copies, requirement.receiver_var),
             env,
         );
     }
@@ -10776,15 +10816,27 @@ const InstantiatedVarContext = struct {
     deferred: ?*const collections.DenseMap(Var, Var),
 };
 
+/// Where an instantiation placed a variable it copied: a row tail when the
+/// instantiator recorded the copy in a row's extension position
+/// (`Instantiator.constrained_row_tail_copies`).
+fn instantiatedReceiverPosition(
+    self: *Self,
+    row_tail_copies: *const collections.DenseMap(Var, void),
+    receiver_var: Var,
+) AmbiguityCandidate.Position {
+    return if (row_tail_copies.contains(self.types.resolveVar(receiver_var).var_)) .row_tail else .value;
+}
+
 /// Register one variable an instantiation copied (`old` in the scheme,
-/// `fresh` its copy): its substitution pairs, its relations, its rank pool and
-/// its region.
+/// `fresh` its copy, standing at `position` in the copied type): its
+/// substitution pairs, its relations, its rank pool and its region.
 inline fn registerInstantiatedVar(
     self: *Self,
     old: Var,
     fresh_copy: Var,
     var_map: *const collections.DenseMap(Var, Var),
     ctx: InstantiatedVarContext,
+    position: AmbiguityCandidate.Position,
     env: *Env,
 ) Allocator.Error!void {
     // Get the newly created var
@@ -10900,6 +10952,7 @@ inline fn registerInstantiatedVar(
                     flex.constraints,
                     instantiation_expr,
                     ctx.group_index,
+                    position,
                 );
             }
         }
@@ -15426,6 +15479,7 @@ fn recordAmbiguityCandidate(
     receiver_var: Var,
     source: AmbiguityCandidate.Source,
     instantiation_expr: ?CIR.Expr.Idx,
+    position: AmbiguityCandidate.Position,
 ) std.mem.Allocator.Error!void {
     const dedup_owner = self.active_scheme_root orelse if (instantiation_expr orelse self.instantiation_source_expr) |expr_idx|
         ModuleEnv.varFrom(expr_idx)
@@ -15443,21 +15497,27 @@ fn recordAmbiguityCandidate(
     if (entry.found_existing) {
         // Repeated observations of one obligation are one judgment candidate,
         // but the payload is monotone: any direct executable observation makes
-        // current resolution mandatory. An in-probe observation of a pre-probe
-        // candidate flips the flag like any other—the probe's rollback
-        // truncates candidate entries, not their payloads, so the flip is
-        // journaled (`ambiguity_escalation_journal`) and the probe scope
-        // settles it: rollback resets it (no phantom escalation from
-        // speculative work), commit keeps it (a committed probe's observation
-        // is as real as an unprobed one).
+        // current resolution mandatory, and any observation of the receiver
+        // in a row's tail gives it that row's default. An in-probe observation
+        // of a pre-probe candidate flips the payload like any other—the
+        // probe's rollback truncates candidate entries, not their payloads, so
+        // the flip is journaled (`ambiguity_candidate_journal`) and the probe
+        // scope settles it: rollback resets it (no phantom escalation or row
+        // default from speculative work), commit keeps it (a committed probe's
+        // observation is as real as an unprobed one).
         const candidate_idx = entry.value_ptr.*;
-        if (requires_current_resolution and
-            !self.ambiguity_candidates.items[candidate_idx].requires_current_resolution)
-        {
+        const candidate = &self.ambiguity_candidates.items[candidate_idx];
+        if (requires_current_resolution and !candidate.requires_current_resolution) {
             if (self.probe_depth > 0) {
-                try self.ambiguity_escalation_journal.append(self.gpa, candidate_idx);
+                try self.ambiguity_candidate_journal.append(self.gpa, .{ .candidate = candidate_idx, .payload = .requires_current_resolution });
             }
-            self.ambiguity_candidates.items[candidate_idx].requires_current_resolution = true;
+            candidate.requires_current_resolution = true;
+        }
+        if (position == .row_tail and candidate.position != .row_tail) {
+            if (self.probe_depth > 0) {
+                try self.ambiguity_candidate_journal.append(self.gpa, .{ .candidate = candidate_idx, .payload = .row_tail });
+            }
+            candidate.position = .row_tail;
         }
         return;
     }
@@ -15472,6 +15532,7 @@ fn recordAmbiguityCandidate(
         .source = source,
         .dedup_owner = dedup_owner,
         .requires_current_resolution = requires_current_resolution,
+        .position = position,
     });
 }
 
@@ -15529,8 +15590,9 @@ const AmbiguitySelection = struct {
 ///   candidate instead, which keys on the expression whose OWN type is the
 ///   receiver.
 /// - `to_hash` is deliberately NOT skipped: a structural hash on a concrete
-///   key resolves its receiver before judgment, so what reaches here is a
-///   `to_hash` contract on a genuinely undetermined key (issue 9644)—a real
+///   key resolves its receiver before judgment, and a row tail's hash is
+///   discharged by its row default before selection, so what reaches here is
+///   a `to_hash` contract on a genuinely undetermined key (issue 9644)—a real
 ///   dead end reported via the body-forced path like any other unsatisfiable
 ///   contract.
 /// - An instantiated `where`-clause contract gets priority (it is an explicit
@@ -15645,6 +15707,10 @@ fn judgeAmbiguityCandidate(
     resolved_rank: Rank,
     constraints_range: StaticDispatchConstraint.SafeList.Range,
 ) Allocator.Error!void {
+    // An unpinned row tail is closed by its row default, and the empty row
+    // satisfies every constraint this one carries.
+    if (candidate.position == .row_tail and self.rowDefaultDischargesConstraints(constraints_range)) return;
+
     const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
     const selection = try self.selectAmbiguityConstraint(
         constraints,
@@ -19685,7 +19751,7 @@ fn finishRecursiveGroupBoundary(self: *Self, defs: []const CIR.Def.Idx, member_r
             try self.bindBindingSchemeVar(expr_var, predeclared_scheme_var);
         }
     }
-    self.retireNonGeneralizedTypeSchemes(member_roots);
+    try self.retireNonGeneralizedTypeSchemes(member_roots);
     try self.retireStructurallyPublishedTypeSchemeRequirements(member_roots, env);
     try self.activateSchemeDeferredCodecConstraints(member_roots);
     try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(member_roots);
@@ -20314,8 +20380,11 @@ fn replayPredeclaredSchemeUse(
         try seeded_body_vars.put(body_root, {});
     }
 
+    var row_tail_copies = collections.DenseMap(Var, void).init(self.gpa);
+    defer row_tail_copies.deinit();
     var instantiator = self.baseInstantiator(env.rank(), .fresh_flex);
     instantiator.polarity_var_behavior = .close;
+    instantiator.constrained_row_tail_copies = &row_tail_copies;
     const requirements_start = self.instantiated_requirements_stack.items.len;
     defer self.instantiated_requirements_stack.shrinkRetainingCapacity(requirements_start);
     if (self.typeSchemeIndexForRoot(scheme_root)) |scheme_idx| {
@@ -20383,6 +20452,7 @@ fn replayPredeclaredSchemeUse(
                         flex.constraints,
                         pending.source_expr,
                         self.currentGroupIndex(),
+                        self.instantiatedReceiverPosition(&row_tail_copies, fresh_var),
                     );
                 }
             }
@@ -20402,10 +20472,12 @@ fn replayPredeclaredSchemeUse(
     }, env);
 
     for (requirements_start..self.instantiated_requirements_stack.items.len) |requirement_idx| {
+        const requirement = self.instantiated_requirements_stack.items[requirement_idx];
         try self.registerInstantiatedSchemeRequirement(
-            self.instantiated_requirements_stack.items[requirement_idx],
+            requirement,
             pending.source_expr,
             null, // Named value uses start their own dispatch lineage.
+            self.instantiatedReceiverPosition(&row_tail_copies, requirement.receiver_var),
             env,
         );
     }
@@ -26886,7 +26958,7 @@ const ExprCheckFrame = struct {
             env,
         );
         try checker.publishBindingScheme(self.expr_var_raw);
-        checker.retireNonGeneralizedTypeSchemes(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }});
+        try checker.retireNonGeneralizedTypeSchemes(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }});
         try checker.retireStructurallyPublishedTypeSchemeRequirements(
             &.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }},
             env,
@@ -29500,7 +29572,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var, decl_pattern_var, env);
                 try self.publishBindingScheme(decl_pattern_var);
                 try self.bindTypeSchemeVar(decl_pattern_var, decl_expr_var);
-                self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }});
+                try self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }});
                 try self.retireStructurallyPublishedTypeSchemeRequirements(
                     &.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }},
                     env,
@@ -34191,7 +34263,7 @@ fn mkBinopConstraint(
 
     _ = try self.unify(constrained_var, lhs_var, env);
     try self.recordSchemeRequirementCandidate(lhs_var, constraint, .creation, null, false);
-    try self.recordAmbiguityCandidate(lhs_var, .creation, constraintIntroExpr(constraint));
+    try self.recordAmbiguityCandidate(lhs_var, .creation, constraintIntroExpr(constraint), .value);
     return constraint_fn_var;
 }
 
@@ -34291,7 +34363,7 @@ fn mkUnaryOp(
 
     _ = try self.unify(constrained_var, arg_var, env);
     try self.recordSchemeRequirementCandidate(arg_var, constraint, .creation, null, false);
-    try self.recordAmbiguityCandidate(arg_var, .creation, constraintIntroExpr(constraint));
+    try self.recordAmbiguityCandidate(arg_var, .creation, constraintIntroExpr(constraint), .value);
 }
 
 fn publishUnaryDispatchExpr(
@@ -34560,7 +34632,7 @@ fn mkReceiverDispatchConstraint(
 
     _ = try self.unify(constrained_var, receiver_var, env);
     try self.recordSchemeRequirementCandidate(receiver_var, constraint, .creation, null, false);
-    try self.recordAmbiguityCandidate(receiver_var, .creation, constraintIntroExpr(constraint));
+    try self.recordAmbiguityCandidate(receiver_var, .creation, constraintIntroExpr(constraint), .value);
     return constraint_fn_var;
 }
 
@@ -34599,7 +34671,7 @@ fn mkTypeMethodCallConstraint(
 
     _ = try self.unify(constrained_var, dispatcher_var, env);
     try self.recordSchemeRequirementCandidate(dispatcher_var, constraint, .creation, null, false);
-    try self.recordAmbiguityCandidate(dispatcher_var, .creation, constraintIntroExpr(constraint));
+    try self.recordAmbiguityCandidate(dispatcher_var, .creation, constraintIntroExpr(constraint), .value);
     return constraint_fn_var;
 }
 
@@ -36633,7 +36705,7 @@ const Probe = struct {
     instantiation_dispatchers_checked: usize,
     pending_scheme_requirement_dispatchers_len: usize,
     ambiguity_candidates_len: usize,
-    ambiguity_escalation_journal_len: usize,
+    ambiguity_candidate_journal_len: usize,
     scheme_requirement_candidates_len: usize,
     open_literal_vars_len: usize,
     open_numeral_literals_len: usize,
@@ -36646,6 +36718,7 @@ const Probe = struct {
     waiting_predeclared_dispatch_uses_len: usize,
     generated_codec_derivations_len: usize,
     generated_codec_calls_len: usize,
+    generated_codec_renamings_len: usize,
     boundary_codec_derivations_len: usize,
     boundary_codec_calls_len: usize,
     codec_row_demands_len: usize,
@@ -36679,12 +36752,16 @@ const Probe = struct {
         self.check.instantiation_dispatchers.shrinkRetainingCapacity(self.instantiation_dispatchers_len);
         self.check.instantiation_dispatchers_checked = self.instantiation_dispatchers_checked;
         self.check.pending_scheme_requirement_dispatchers.shrinkRetainingCapacity(self.pending_scheme_requirement_dispatchers_len);
-        // Escalation flips journaled by this probe scope were speculative
-        // work: reset them before the candidate truncation below, while every
+        // Payload flips journaled by this probe scope were speculative work:
+        // reset them before the candidate truncation below, while every
         // journaled index is still in bounds.
-        while (self.check.ambiguity_escalation_journal.items.len > self.ambiguity_escalation_journal_len) {
-            const flipped_idx = self.check.ambiguity_escalation_journal.pop().?;
-            self.check.ambiguity_candidates.items[flipped_idx].requires_current_resolution = false;
+        while (self.check.ambiguity_candidate_journal.items.len > self.ambiguity_candidate_journal_len) {
+            const flip = self.check.ambiguity_candidate_journal.pop().?;
+            const flipped = &self.check.ambiguity_candidates.items[flip.candidate];
+            switch (flip.payload) {
+                .requires_current_resolution => flipped.requires_current_resolution = false,
+                .row_tail => flipped.position = .value,
+            }
         }
         self.check.shrinkAmbiguityCandidatesTo(self.ambiguity_candidates_len);
         self.check.shrinkSchemeRequirementCandidatesTo(self.scheme_requirement_candidates_len);
@@ -36712,6 +36789,7 @@ const Probe = struct {
         self.check.waiting_predeclared_dispatch_uses.shrinkRetainingCapacity(self.waiting_predeclared_dispatch_uses_len);
         self.check.cir.generated_codec_derivations.items.shrinkRetainingCapacity(self.generated_codec_derivations_len);
         self.check.cir.generated_codec_calls.items.shrinkRetainingCapacity(self.generated_codec_calls_len);
+        self.check.cir.generated_codec_renamings.items.shrinkRetainingCapacity(self.generated_codec_renamings_len);
         self.check.boundary_codec_derivations.shrinkRetainingCapacity(self.boundary_codec_derivations_len);
         self.check.boundary_codec_calls.shrinkRetainingCapacity(self.boundary_codec_calls_len);
         self.check.codec_row_demands.shrinkRetainingCapacity(self.codec_row_demands_len);
@@ -36757,10 +36835,10 @@ const Probe = struct {
         std.debug.assert(self.check.probe_depth > 0);
         self.check.types.commitSavepoint(&self.savepoint);
         self.check.probe_depth -= 1;
-        // Escalation flips this scope journaled are kept—the committed
+        // Payload flips this scope journaled are kept—the committed
         // observations are real—so the journal entries are dead weight and
         // drop with the scope.
-        self.check.ambiguity_escalation_journal.shrinkRetainingCapacity(self.ambiguity_escalation_journal_len);
+        self.check.ambiguity_candidate_journal.shrinkRetainingCapacity(self.ambiguity_candidate_journal_len);
         if (self.check.probe_depth == 0 and !self.check.commit_probe_active) {
             try self.check.registerProbeLinks();
         }
@@ -36772,7 +36850,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const instantiation_dispatchers_len = self.instantiation_dispatchers.items.len;
     const pending_scheme_requirement_dispatchers_len = self.pending_scheme_requirement_dispatchers.items.len;
     const ambiguity_candidates_len = self.ambiguity_candidates.items.len;
-    const ambiguity_escalation_journal_len = self.ambiguity_escalation_journal.items.len;
+    const ambiguity_candidate_journal_len = self.ambiguity_candidate_journal.items.len;
     const scheme_requirement_candidates_len = self.scheme_requirement_candidates.items.len;
     const open_literal_vars_len = self.open_literal_vars.items.len;
     const open_numeral_literals_len = self.open_numeral_literals.items.len;
@@ -36785,6 +36863,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const waiting_predeclared_dispatch_uses_len = self.waiting_predeclared_dispatch_uses.items.len;
     const generated_codec_derivations_len = self.cir.generated_codec_derivations.items.items.len;
     const generated_codec_calls_len = self.cir.generated_codec_calls.items.items.len;
+    const generated_codec_renamings_len = self.cir.generated_codec_renamings.items.items.len;
     const boundary_codec_derivations_len = self.boundary_codec_derivations.items.len;
     const boundary_codec_calls_len = self.boundary_codec_calls.items.len;
     const codec_row_demands_len = self.codec_row_demands.items.len;
@@ -36814,7 +36893,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .instantiation_dispatchers_checked = self.instantiation_dispatchers_checked,
         .pending_scheme_requirement_dispatchers_len = pending_scheme_requirement_dispatchers_len,
         .ambiguity_candidates_len = ambiguity_candidates_len,
-        .ambiguity_escalation_journal_len = ambiguity_escalation_journal_len,
+        .ambiguity_candidate_journal_len = ambiguity_candidate_journal_len,
         .scheme_requirement_candidates_len = scheme_requirement_candidates_len,
         .open_literal_vars_len = open_literal_vars_len,
         .open_numeral_literals_len = open_numeral_literals_len,
@@ -36827,6 +36906,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .waiting_predeclared_dispatch_uses_len = waiting_predeclared_dispatch_uses_len,
         .generated_codec_derivations_len = generated_codec_derivations_len,
         .generated_codec_calls_len = generated_codec_calls_len,
+        .generated_codec_renamings_len = generated_codec_renamings_len,
         .boundary_codec_derivations_len = boundary_codec_derivations_len,
         .boundary_codec_calls_len = boundary_codec_calls_len,
         .codec_row_demands_len = codec_row_demands_len,
@@ -40519,11 +40599,30 @@ fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!
 /// will become schemes; discard side-table entries for members that the
 /// boundary did not explicitly classify as schemes. Root rank is insufficient:
 /// a partially generalized scheme can have a monomorphic structural root.
-fn retireNonGeneralizedTypeSchemes(self: *Self, roots: []const BoundaryRoot) void {
+///
+/// A discarded scheme's captured requirements are not discarded with it. No
+/// use of a monomorphic binding instantiates a scheme, so nothing would copy
+/// them out; every use shares the binding's one type instead, so the innermost
+/// enclosing root still prospective receives each requirement exactly as a
+/// use's copy would. A generated codec relation over an enclosing scope's
+/// variable depends on this: it is attached to no receiver descriptor, so the
+/// enclosing scheme can only learn of it from this explicit transfer.
+fn retireNonGeneralizedTypeSchemes(self: *Self, roots: []const BoundaryRoot) Allocator.Error!void {
     for (roots) |root| {
         const scheme_idx = self.typeSchemeIndexForRoot(root.owner) orelse continue;
         const scheme = &self.type_schemes.items[scheme_idx];
         if (self.isBindingSchemeVar(scheme.root_var)) continue;
+        // Recording a candidate never adds or removes a scheme, so the index
+        // and the requirements list stay valid across the loop.
+        for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |requirement| {
+            try self.recordSchemeRequirementCandidate(
+                requirement.receiver_var,
+                requirement.constraint,
+                .scheme_copy,
+                requirement.structural_origin,
+                requirement.deferred_generated_codec,
+            );
+        }
         self.removeTypeSchemeAt(scheme_idx);
     }
 }
@@ -40675,21 +40774,33 @@ fn refinableVarsIntersect(self: *Self, a: *const collections.DenseMap(Var, void)
     return false;
 }
 
+/// Whether any refinable var in `vars` belongs to a definition enclosing the
+/// boundary at `rank`. The outermost rank is the module's own scope, which no
+/// definition's scheme encloses.
+fn refinableVarsEscapeRank(self: *Self, vars: *const collections.DenseMap(Var, void), rank: Rank) bool {
+    var iter = vars.constKeyIterator();
+    while (iter.next()) |var_| {
+        if (!self.laterUseCanRefine(var_)) continue;
+        const var_rank = @backingInt(self.types.resolveVar(var_).desc.rank);
+        if (var_rank > @backingInt(Rank.outermost) and var_rank < @backingInt(rank)) return true;
+    }
+    return false;
+}
+
 /// A codec's output error row is a constraint result, not an input to shape
-/// selection. Settled local inputs can produce those constraints before the
-/// result generalizes, while the exact calls wait for final row settlement.
-fn codecInputsAreBoundaryLocal(
+/// selection. Settled inputs can produce those constraints before the result
+/// generalizes, while the exact calls wait for final row settlement. Adds the
+/// relation's inputs to `inputs`.
+fn codecInputsAreSettledAtBoundary(
     self: *Self,
     constraint: StaticDispatchConstraint,
     inputs: *collections.DenseMap(Var, void),
-    interface: *const collections.DenseMap(Var, void),
     rank: Rank,
 ) Allocator.Error!bool {
     const factory = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
     for (self.types.sliceVars(factory.args)) |arg| try self.collectReachableVars(arg, inputs);
     const runtime = self.types.resolveThroughAliases(factory.ret).desc.content.unwrapFunc() orelse return false;
     for (self.types.sliceVars(runtime.args)) |arg| try self.collectReachableVars(arg, inputs);
-    if (self.refinableVarsIntersect(inputs, interface)) return false;
 
     var iter = inputs.keyIterator();
     while (iter.next()) |var_| {
@@ -40777,12 +40888,13 @@ fn captureSchemeDispatchRequirements(
                 codec_relation_vars.clearRetainingCapacity();
                 try self.collectReachableVars(candidate.receiver_var, &codec_relation_vars);
                 if (boundary_codecs) |ready| {
-                    if (final_codec and try self.codecInputsAreBoundaryLocal(
+                    if (final_codec and try self.codecInputsAreSettledAtBoundary(
                         candidate.constraint,
                         &codec_relation_vars,
-                        &interface_vars,
                         rank,
                     )) {
+                        // The definition's own relation produces its
+                        // constraints here, before its variables generalize.
                         try ready.append(self.gpa, .{
                             .dispatcher_var = candidate.receiver_var,
                             .constraint = candidate.constraint,
@@ -40792,13 +40904,21 @@ fn captureSchemeDispatchRequirements(
                         // The exact relation has transferred to this boundary;
                         // duplicate candidates cannot schedule it again.
                         self.final_codec_dispatch_constraint_fns.getPtr(candidate.constraint.fn_var).?.* = .boundary;
-                        break :blk false;
+                        // A use can still refine an input that escapes through
+                        // the interface, so such a relation also belongs to the
+                        // scheme, for each use to validate at its own types.
+                        if (!self.refinableVarsIntersect(&codec_relation_vars, &interface_vars)) break :blk false;
                     }
                 }
                 // Unsettled codec inputs need the complete relation, including
                 // an escaping error row after the success shape was erased.
                 try self.collectReachableVars(candidate.constraint.fn_var, &codec_relation_vars);
-                break :blk self.refinableVarsIntersect(&codec_relation_vars, &interface_vars);
+                if (self.refinableVarsIntersect(&codec_relation_vars, &interface_vars)) break :blk true;
+                // A refinable input owned by an enclosing scope is refined by
+                // that scope's uses rather than this boundary's, so the
+                // relation escapes exactly as an outer-rank ordinary receiver
+                // does and needs an explicit requirement to reach them.
+                break :blk self.refinableVarsEscapeRank(&codec_relation_vars, rank);
             } else blk: {
                 if (receiver.desc.content != .flex) break :blk false;
                 if (receiver.desc.rank == .generalized) break :blk false;
@@ -45849,6 +45969,8 @@ fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
         try self.link_var_map.put(copy.old, copy.fresh);
     }
     const first_new = self.types.len();
+    var row_tail_copies = collections.DenseMap(Var, void).init(self.gpa);
+    defer row_tail_copies.deinit();
     var instantiator = Instantiator{
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
@@ -45858,6 +45980,7 @@ fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
         .polarity_var_ident = self.cir.idents.polarity_var,
         .anonymous_ext_ident = self.cir.idents.open_ext,
         .polarity_var_behavior = .close,
+        .constrained_row_tail_copies = &row_tail_copies,
     };
     for (self.use_deferred_callables.items[use.deferred_start..][0..use.deferred_len]) |deferred| {
         const copy = try instantiator.instantiateDeferredCallable(deferred);
@@ -45867,7 +45990,11 @@ fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
     var copies = self.link_var_map.iterator();
     while (copies.next()) |copy| {
         if (@backingInt(copy.value_ptr.*) < first_new) continue;
-        try self.link_new_copies.append(self.gpa, .{ .old = copy.key_ptr.*, .fresh = copy.value_ptr.* });
+        try self.link_new_copies.append(self.gpa, .{
+            .old = copy.key_ptr.*,
+            .fresh = copy.value_ptr.*,
+            .position = self.instantiatedReceiverPosition(&row_tail_copies, copy.value_ptr.*),
+        });
     }
 
     // Inside a probe the copies are part of the speculation: a rollback
@@ -45894,7 +46021,7 @@ fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
 /// would have, under that instantiation's own state, collecting their
 /// substitution pairs and relation callables apart from any instantiation in
 /// progress, and extend the use's substitution and relations with them.
-fn registerLinkedCopies(self: *Self, use_idx: u32, new_copies: []const SavedCopy) Allocator.Error!void {
+fn registerLinkedCopies(self: *Self, use_idx: u32, new_copies: []const LinkedCopy) Allocator.Error!void {
     const use = self.use_instances.items[use_idx];
     const link = use.link.?;
     const env = link.env;
@@ -45954,7 +46081,7 @@ fn registerLinkedCopies(self: *Self, use_idx: u32, new_copies: []const SavedCopy
         .deferred = null,
     };
     for (new_copies) |copy| {
-        try self.registerInstantiatedVar(copy.old, copy.fresh, &self.link_var_map, var_context, env);
+        try self.registerInstantiatedVar(copy.old, copy.fresh, &self.link_var_map, var_context, copy.position, env);
     }
 
     // A replayed use's record names its source's substitution.
@@ -49370,7 +49497,7 @@ fn varDeriveComponentObligations(
                         if (admit_rigids) break :blk;
                         // The nominal's own method is the component comparison:
                         // dispatch it exactly like a direct comparison would.
-                        _ = try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env, owner);
+                        _ = try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env, owner, .value);
                         break :blk;
                     }
                     if (self.nominalIsBuiltinDecl(nominal, .box)) break :blk;
@@ -49389,7 +49516,7 @@ fn varDeriveComponentObligations(
             },
             .flex, .rigid => {
                 if (!admit_rigids) {
-                    const fn_var = try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env, owner);
+                    const fn_var = try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env, owner, if (item.row_extension != null) .row_tail else .value);
                     if (item.row_extension) |row| try self.row_extension_derivations.append(self.gpa, .{ .fn_var = fn_var, .row = row.row, .kind = row.kind });
                 }
             },
@@ -49442,6 +49569,7 @@ fn mkDerivedComponentConstraint(
     parent_constraint: StaticDispatchConstraint,
     env: *Env,
     owner: DeferredDispatchObligationOwner,
+    position: AmbiguityCandidate.Position,
 ) Allocator.Error!Var {
     const method_name = switch (derivation) {
         .equality => self.cir.idents.is_eq,
@@ -49493,7 +49621,7 @@ fn mkDerivedComponentConstraint(
     );
     _ = try self.runUnifyWithDispatchOwner(constrained_var, component_var, env, .{}, owner);
     try self.recordSchemeRequirementCandidate(component_var, constraint, .creation, null, false);
-    try self.recordAmbiguityCandidate(component_var, .creation, constraintIntroExpr(constraint));
+    try self.recordAmbiguityCandidate(component_var, .creation, constraintIntroExpr(constraint), position);
     return constraint_fn_var;
 }
 
@@ -49574,49 +49702,22 @@ fn closeDerivedCodecUnitTagDictKeyRow(
     env: *Env,
     region: Region,
 ) Allocator.Error!bool {
-    return switch (self.types.resolveThroughAliases(var_).desc.content) {
-        .structure => |structure| switch (structure) {
-            .tag_union => |tag_union| blk: {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                if (tags.items(.name).len == 0) break :blk false;
-                for (tags.items(.args)) |args| {
-                    if (args.len() != 0) break :blk false;
-                }
-                break :blk try self.closeDerivedCodecUnitTagDictKeyExt(tag_union.ext, env, region);
-            },
-            .record,
-            .tuple,
-            .nominal_type,
-            .fn_pure,
-            .fn_effectful,
-            .fn_unbound,
-            .empty_record,
-            .empty_tag_union,
-            => false,
-        },
-        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
-        .flex, .rigid, .field_presence, .err => false,
-    };
-}
-
-fn closeDerivedCodecUnitTagDictKeyExt(
-    self: *Self,
-    var_: Var,
-    env: *Env,
-    region: Region,
-) Allocator.Error!bool {
-    // Follow the row's extension chain, closing an open tail.
+    // Follow the row's extension chain, closing an open tail. A row can be
+    // stored as several segments, any of which may list no tags, so the
+    // row's tags are counted across all of them.
     var current = var_;
+    var has_tag = false;
     while (true) {
-        switch (self.types.resolveVar(current).desc.content) {
+        switch (self.types.resolveThroughAliases(current).desc.content) {
             .structure => |structure| switch (structure) {
-                .empty_tag_union => return true,
-                .tag_union => |tag_union| {
-                    const tags = self.types.getTagsSlice(tag_union.tags);
+                .empty_tag_union => return has_tag,
+                .tag_union => |segment| {
+                    const tags = self.types.getTagsSlice(segment.tags);
+                    if (tags.items(.name).len > 0) has_tag = true;
                     for (tags.items(.args)) |args| {
                         if (args.len() != 0) return false;
                     }
-                    current = tag_union.ext;
+                    current = segment.ext;
                 },
                 .record,
                 .tuple,
@@ -49627,8 +49728,9 @@ fn closeDerivedCodecUnitTagDictKeyExt(
                 .empty_record,
                 => return false,
             },
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .flex => {
+                if (!has_tag) return false;
                 const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
                 return (try self.unify(current, empty, env)).isEstablished();
             },
@@ -49638,30 +49740,21 @@ fn closeDerivedCodecUnitTagDictKeyExt(
 }
 
 fn tagUnionIsClosedAndUnit(self: *Self, tag_union: types_mod.TagUnion) std.mem.Allocator.Error!bool {
-    const tags = self.types.getTagsSlice(tag_union.tags);
-    if (tags.items(.name).len == 0) return false;
-    for (tags.items(.args)) |tag_args_range| {
-        if (tag_args_range.len() != 0) return false;
-    }
-    return try self.tagExtIsClosedAndUnit(tag_union.ext);
-}
-
-fn tagExtIsClosedAndUnit(self: *Self, ext_var: Var) std.mem.Allocator.Error!bool {
-    // Follow the row's extension chain: every row along it must list only
-    // payload-free tags, and it must end closed.
-    var current = ext_var;
+    // Follow the row's extension chain: every segment along it must list only
+    // payload-free tags, and it must end closed. A segment may list no tags,
+    // but the row as a whole must list at least one.
+    var segment = tag_union;
+    var has_tag = false;
     while (true) {
-        switch (self.types.resolveVar(current).desc.content) {
+        const tags = self.types.getTagsSlice(segment.tags);
+        if (tags.items(.name).len > 0) has_tag = true;
+        for (tags.items(.args)) |tag_args_range| {
+            if (tag_args_range.len() != 0) return false;
+        }
+        switch (self.types.resolveThroughAliases(segment.ext).desc.content) {
             .structure => |structure| switch (structure) {
-                .empty_tag_union => return true,
-                .tag_union => |tag_union| {
-                    const tags = self.types.getTagsSlice(tag_union.tags);
-                    if (tags.items(.name).len == 0) return false;
-                    for (tags.items(.args)) |tag_args_range| {
-                        if (tag_args_range.len() != 0) return false;
-                    }
-                    current = tag_union.ext;
-                },
+                .empty_tag_union => return has_tag,
+                .tag_union => |next| segment = next,
                 .record,
                 .tuple,
                 .nominal_type,
@@ -49671,7 +49764,7 @@ fn tagExtIsClosedAndUnit(self: *Self, ext_var: Var) std.mem.Allocator.Error!bool
                 .empty_record,
                 => return false,
             },
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .err => return true,
             .flex, .rigid, .field_presence => return false,
         }
@@ -49921,6 +50014,22 @@ fn derivedParseSupport(self: *Self, root: DerivedParseQuery) Allocator.Error!Der
     return support;
 }
 
+/// Queue one storage segment of a tag union's row: its payloads and the rest
+/// of the row. Whether the whole union has any tag is a property of the
+/// logical union, decided once at its head, so a segment may have none.
+fn pushDerivedParseTagRowSegment(
+    self: *Self,
+    segment: types_mod.TagUnion,
+    pending: *std.ArrayListUnmanaged(DerivedParseQuery),
+) Allocator.Error!void {
+    try pending.append(self.gpa, .{ .tag_ext = segment.ext });
+    for (self.types.getTagsSlice(segment.tags).items(.args)) |tag_args_range| {
+        for (self.types.sliceVars(tag_args_range)) |tag_arg| {
+            try pending.append(self.gpa, .{ .shape = tag_arg });
+        }
+    }
+}
+
 /// The query's own answer; positions it depends on go on `pending`.
 fn expandDerivedParseQuery(
     self: *Self,
@@ -49973,7 +50082,10 @@ fn expandDerivedParseQuery(
         .tag_ext => |var_| return switch (self.types.resolveThroughAliases(var_).desc.content) {
             .structure => |structure| switch (structure) {
                 .empty_tag_union => .supported,
-                .tag_union => try self.expandDerivedParseQuery(.{ .flat = structure }, pending),
+                .tag_union => |segment| blk: {
+                    try self.pushDerivedParseTagRowSegment(segment, pending);
+                    break :blk .supported;
+                },
                 .record,
                 .tuple,
                 .nominal_type,
@@ -50006,12 +50118,7 @@ fn expandDerivedParseQuery(
                     .supported => {},
                     .unsupported, .unresolved => |support| return support,
                 }
-                try pending.append(self.gpa, .{ .tag_ext = tag_union.ext });
-                for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args_range| {
-                    for (self.types.sliceVars(tag_args_range)) |tag_arg| {
-                        try pending.append(self.gpa, .{ .shape = tag_arg });
-                    }
-                }
+                try self.pushDerivedParseTagRowSegment(tag_union, pending);
                 return .supported;
             },
             .tuple => |tuple| {
@@ -50408,6 +50515,22 @@ fn derivedEncodeSupport(self: *Self, root: DerivedEncodeQuery) Allocator.Error!D
     return support;
 }
 
+/// Queue one storage segment of a tag union's row: its payloads and the rest
+/// of the row. Whether the whole union has any tag is a property of the
+/// logical union, decided once at its head, so a segment may have none.
+fn pushDerivedEncodeTagRowSegment(
+    self: *Self,
+    segment: types_mod.TagUnion,
+    pending: *std.ArrayListUnmanaged(DerivedEncodeQuery),
+) Allocator.Error!void {
+    try pending.append(self.gpa, .{ .tag_ext = segment.ext });
+    for (self.types.getTagsSlice(segment.tags).items(.args)) |tag_args_range| {
+        for (self.types.sliceVars(tag_args_range)) |tag_arg| {
+            try pending.append(self.gpa, .{ .shape = tag_arg });
+        }
+    }
+}
+
 /// The query's own answer; positions it depends on go on `pending`.
 fn expandDerivedEncodeQuery(
     self: *Self,
@@ -50457,7 +50580,10 @@ fn expandDerivedEncodeQuery(
         .tag_ext => |var_| return switch (self.types.resolveThroughAliases(var_).desc.content) {
             .structure => |structure| switch (structure) {
                 .empty_tag_union => .supported,
-                .tag_union => try self.expandDerivedEncodeQuery(.{ .flat = structure }, pending),
+                .tag_union => |segment| blk: {
+                    try self.pushDerivedEncodeTagRowSegment(segment, pending);
+                    break :blk .supported;
+                },
                 .record,
                 .tuple,
                 .nominal_type,
@@ -50485,12 +50611,7 @@ fn expandDerivedEncodeQuery(
                     .supported => {},
                     .unsupported, .unresolved => |support| return support,
                 }
-                try pending.append(self.gpa, .{ .tag_ext = tag_union.ext });
-                for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args_range| {
-                    for (self.types.sliceVars(tag_args_range)) |tag_arg| {
-                        try pending.append(self.gpa, .{ .shape = tag_arg });
-                    }
-                }
+                try self.pushDerivedEncodeTagRowSegment(tag_union, pending);
                 return .supported;
             },
             .tuple => |tuple| {
@@ -52460,10 +52581,10 @@ test "an orphan dispatch obligation is adopted only by the outermost frame" {
     );
 }
 
-// THE ESCALATION JOURNAL CONTRACT (`ambiguity_escalation_journal`): a repeated
+// THE CANDIDATE JOURNAL CONTRACT (`ambiguity_candidate_journal`): a repeated
 // in-probe observation that flips a pre-probe candidate's
-// `requires_current_resolution` is speculative exactly as long as its probe
-// can still roll back. Rollback must reset the flip (no phantom escalation
+// `requires_current_resolution` or `position` is speculative exactly as long
+// as its probe can still roll back. Rollback must reset the flip (no phantom escalation
 // from work that did not survive) and commit must keep it (a committed
 // probe's observation is as real as an unprobed one). Driven directly through
 // the probe API: the flip sites are reachable from several dispatch paths,
@@ -52480,7 +52601,7 @@ test "in-probe ambiguity escalation is journaled: rollback resets, commit keeps"
     // Baseline record outside any probe and outside executable-root checking:
     // the candidate starts unescalated.
     checker.checking_executable_root = false;
-    try checker.recordAmbiguityCandidate(receiver, .creation, null);
+    try checker.recordAmbiguityCandidate(receiver, .creation, null, .value);
     const candidate_idx = checker.ambiguity_candidates.items.len - 1;
     try std.testing.expect(!checker.ambiguity_candidates.items[candidate_idx].requires_current_resolution);
 
@@ -52491,22 +52612,54 @@ test "in-probe ambiguity escalation is journaled: rollback resets, commit keeps"
     // journal is drained.
     {
         var probe = try checker.beginProbe(null);
-        try checker.recordAmbiguityCandidate(receiver, .creation, null);
+        try checker.recordAmbiguityCandidate(receiver, .creation, null, .value);
         try std.testing.expect(checker.ambiguity_candidates.items[candidate_idx].requires_current_resolution);
         probe.rollback();
     }
     try std.testing.expect(!checker.ambiguity_candidates.items[candidate_idx].requires_current_resolution);
-    try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_escalation_journal.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_candidate_journal.items.len);
 
     // Escalation inside a probe that commits: the flip is permanent and the
     // journal entry drops with the scope.
     {
         var probe = try checker.beginProbe(null);
-        try checker.recordAmbiguityCandidate(receiver, .creation, null);
+        try checker.recordAmbiguityCandidate(receiver, .creation, null, .value);
         try probe.commit();
     }
     try std.testing.expect(checker.ambiguity_candidates.items[candidate_idx].requires_current_resolution);
-    try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_escalation_journal.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_candidate_journal.items.len);
+}
+
+test "in-probe row-tail observation is journaled: rollback resets, commit keeps" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("RowTailJournal", "value : U64\nvalue = 42");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const checker = &test_env.checker;
+    const receiver = try checker.types.fresh();
+    checker.checking_executable_root = false;
+
+    try checker.recordAmbiguityCandidate(receiver, .creation, null, .value);
+    const candidate_idx = checker.ambiguity_candidates.items.len - 1;
+    try std.testing.expectEqual(.value, checker.ambiguity_candidates.items[candidate_idx].position);
+
+    {
+        var probe = try checker.beginProbe(null);
+        try checker.recordAmbiguityCandidate(receiver, .creation, null, .row_tail);
+        try std.testing.expectEqual(.row_tail, checker.ambiguity_candidates.items[candidate_idx].position);
+        probe.rollback();
+    }
+    try std.testing.expectEqual(.value, checker.ambiguity_candidates.items[candidate_idx].position);
+    try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_candidate_journal.items.len);
+
+    {
+        var probe = try checker.beginProbe(null);
+        try checker.recordAmbiguityCandidate(receiver, .creation, null, .row_tail);
+        try probe.commit();
+    }
+    try std.testing.expectEqual(.row_tail, checker.ambiguity_candidates.items[candidate_idx].position);
+    try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_candidate_journal.items.len);
 }
 
 const DerivedMapAnalysis = struct {
@@ -53459,6 +53612,16 @@ fn recordGeneratedCodecDerivationSnapshot(
     instantiator.rank_behavior = .ignore_rank;
     instantiator.polarity_var_behavior = .preserve;
     const copied_root = try instantiator.instantiateVar(snapshot_root);
+    // The snapshot renames every type that holds a variable. Its calls'
+    // scheme substitutions were recorded against the originals, so publish
+    // the renaming for them to be read in the snapshot's terms.
+    var renamings = std.ArrayList(ModuleEnv.GeneratedCodecRenaming).empty;
+    defer renamings.deinit(self.gpa);
+    for (ground_marks.order.items, ground_marks.ground.items) |source, is_ground| {
+        if (is_ground) continue;
+        const copy = instantiator.var_map.get(source) orelse continue;
+        try renamings.append(self.gpa, .{ .source_var = @backingInt(source), .copy_var = @backingInt(copy) });
+    }
     var copied_iter = instantiator.var_map.valueIterator();
     while (copied_iter.next()) |copied| {
         if (shared_copies.contains(copied.*)) continue;
@@ -53522,6 +53685,7 @@ fn recordGeneratedCodecDerivationSnapshot(
         copied_vars[5],
         copied_vars[6],
         copied_calls.items,
+        renamings.items,
     );
 }
 

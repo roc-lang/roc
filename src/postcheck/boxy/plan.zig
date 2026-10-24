@@ -1901,6 +1901,23 @@ pub const ProgramPlan = struct {
         return self.tag_variants.items[span.start .. span.start + span.len];
     }
 
+    /// Whether an unquantified variable seals to the empty tag union, so no
+    /// value of its type exists and its dispatches follow the unpinned rule.
+    pub fn repSealsUninhabited(self: *const ProgramPlan, rep: TypeRepresentation) bool {
+        const sealed = rep.sealed_default.get() orelse return false;
+        return self.representations.items[@backingInt(sealed)].kind == .empty_tag_union;
+    }
+
+    /// Whether no value has this tag: one of its payloads seals to the empty
+    /// tag union. A generated encoder gives such a tag no branch, and the
+    /// checker discharged that payload's encoder as statically unreachable.
+    pub fn tagVariantSealsUninhabited(self: *const ProgramPlan, variant: TagVariant) bool {
+        for (self.childSlice(variant.payloads)) |payload| {
+            if (self.repSealsUninhabited(self.representations.items[@backingInt(payload.rep)])) return true;
+        }
+        return false;
+    }
+
     /// Whether two representations are the same representation under
     /// different ids: equal kinds and storage metadata, with children and tag
     /// payloads pairwise identical in turn. A value of one needs no conversion
@@ -6255,7 +6272,7 @@ const Builder = struct {
                 continue;
             }
             const payloads = self.plan.childSlice(variants[cursor.variant].payloads);
-            if (cursor.payload == payloads.len) {
+            if (cursor.payload == payloads.len or self.plan.tagVariantSealsUninhabited(variants[cursor.variant])) {
                 cursor.variant += 1;
                 cursor.payload = 0;
                 continue;
@@ -17773,7 +17790,7 @@ const Builder = struct {
         // dictionary is the static one the unpinned-dispatch rule selects
         // (`beginStaticDictionaryMethodEvidence`).
         const source_is_unpinned = evidence_source.rep == null and substituted_rep == null and
-            self.repSealsUninhabited(self.plan.representations.items[@backingInt(source_rep)]);
+            self.plan.repSealsUninhabited(self.plan.representations.items[@backingInt(source_rep)]);
         if (!source_is_bound and !source_is_defaulted and !source_is_unpinned and substituted_rep == null and evidence_source.rep == null) {
             boxyPlanInvariant("boxy callable body dictionary had neither a bound caller dictionary nor concrete checked use-site evidence");
         }
@@ -18213,7 +18230,7 @@ const Builder = struct {
                 return with_nested;
             }
         }
-        if (owner == null and self.repSealsUninhabited(source_rep)) {
+        if (owner == null and self.plan.repSealsUninhabited(source_rep)) {
             switch (static_dispatch.unpinnedDispatchResolution(self.structuralKindForRequirement(requirement, requirement_view))) {
                 .structural => {},
                 .unreachable_value => return .{
@@ -19904,13 +19921,6 @@ const Builder = struct {
             if (std.meta.eql(param.dictionaries, dictionaries)) return true;
         }
         return false;
-    }
-
-    /// Whether an unquantified variable seals to the empty tag union, so no
-    /// value of its type exists and its dispatches follow the unpinned rule.
-    fn repSealsUninhabited(self: *const Builder, rep: TypeRepresentation) bool {
-        const sealed = rep.sealed_default.get() orelse return false;
-        return self.plan.representations.items[@backingInt(sealed)].kind == .empty_tag_union;
     }
 
     const StaticDictionaryMethodInstantiation = struct {

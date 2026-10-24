@@ -24541,14 +24541,7 @@ const BodyContext = struct {
                     const tag = GuardedList.at(self.typeStore().tagSpan(tag_union.tags), tag_union.index);
                     tag_union.index += 1;
                     const payload_tys = tag.payloads;
-                    var tag_is_uninhabited = false;
-                    for (0..payload_tys.len) |payload_i| {
-                        if (try self.typeIsProvenUninhabited(self.spanTypeAt(payload_tys, payload_i))) {
-                            tag_is_uninhabited = true;
-                            break;
-                        }
-                    }
-                    if (tag_is_uninhabited) continue;
+                    if (try self.tagHasProvenUninhabitedPayload(tag)) continue;
                     tag_union.payload_tys = payload_tys;
                     const payload_pats = try self.allocator.alloc(DraftPatId, payload_tys.len);
                     defer self.allocator.free(payload_pats);
@@ -24746,6 +24739,13 @@ const BodyContext = struct {
     fn hasInspectOverride(self: *BodyContext, value_ty: Type.TypeId) Allocator.Error!bool {
         const owner = methodOwnerFromType(self.typeStore(), value_ty) orelse return false;
         return (try self.builder.inspectOverrideFor(self.method_scope, self.nameStore(), owner)) != null;
+    }
+
+    fn tagHasProvenUninhabitedPayload(self: *BodyContext, tag: Type.Tag) Allocator.Error!bool {
+        for (0..tag.payloads.len) |payload_i| {
+            if (try self.typeIsProvenUninhabited(self.spanTypeAt(tag.payloads, payload_i))) return true;
+        }
+        return false;
     }
 
     fn uninhabitedInspect(self: *BodyContext, value: DraftExprId, str_ty: Type.TypeId) Allocator.Error!DraftExprId {
@@ -55463,6 +55463,7 @@ const BodyContext = struct {
             value_ty: Type.TypeId = undefined,
             pat: DraftPatId = undefined,
             branches: []DraftBranch = &.{},
+            branch_count: usize = 0,
             index: usize = 0,
             payload_tys: []Type.TypeId = &.{},
             payload_exprs: []DraftExprId = &.{},
@@ -56577,21 +56578,27 @@ const BodyContext = struct {
     ) Allocator.Error!EncodeStep {
         if (stage == 0) {
             task.tags = try GuardedList.dupe(self.allocator, Type.Tag, self.typeStore().tagSpan(task.tags_span));
-            if (task.tags.len == 0) Common.invariant("encoder_for selected an empty tag union");
             task.value_ty = try self.exprType(task.value.value_expr);
             task.branches = try self.allocator.alloc(DraftBranch, task.tags.len);
         } else {
-            task.branches[task.index] = .{ .pat = task.pat, .body = input.?.expr };
+            task.branches[task.branch_count] = .{ .pat = task.pat, .body = input.?.expr };
+            task.branch_count += 1;
             self.allocator.free(task.payload_tys);
             task.payload_tys = &.{};
             self.allocator.free(task.payload_exprs);
             task.payload_exprs = &.{};
             task.index += 1;
         }
+        // No value has a tag with a proven-uninhabited payload, so that tag
+        // gets no branch, and the checker discharged its payload's encoder as
+        // statically unreachable. A union of only such tags is itself
+        // uninhabited, so its match has no branches.
+        while (task.index < task.tags.len and
+            try self.tagHasProvenUninhabitedPayload(task.tags[task.index])) task.index += 1;
         if (task.index == task.tags.len) {
             return encodeExpr(try self.addExpr(.{ .ty = task.value.ret_ty, .data = .{ .match_ = .{
                 .scrutinee = task.value.value_expr,
-                .branches = try self.addBranchSpan(task.branches),
+                .branches = try self.addBranchSpan(task.branches[0..task.branch_count]),
             } } }));
         }
 
@@ -57490,6 +57497,11 @@ const BodyContext = struct {
             _ = self.codec_support_path.remove(ty);
             return err;
         };
+        // An encoder never runs on a value of a proven-uninhabited type: the
+        // checker discharged that dispatch as statically unreachable
+        // (`unpinnedDispatchResolution`), and the enclosing tag union gives
+        // such a payload's tag no branch.
+        if (kind == .encoder and try self.typeIsProvenUninhabited(ty)) return true;
         if (self.scalarCodecMethodName(ty, scalar_prefix) != null) return true;
         if (kind == .parser) {
             if (try self.missingTryInfo(ty)) |info| {

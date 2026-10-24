@@ -71,7 +71,7 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v51: statements keep their rows out of line, and the store records its
 ///      lowering modules' keys.
 /// v54: combines the independent v51-v53 image changes.
-pub const FORMAT_VERSION: u32 = 54;
+pub const FORMAT_VERSION: u32 = 55;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -355,6 +355,7 @@ pub const LayoutStoreImage = extern struct {
     struct_data: ArrayRef,
     tag_union_variants: TagUnionVariantsImage,
     tag_union_data: ArrayRef,
+    recursive_layout_keys: ArrayRef,
 
     fn fromStore(encoder: anytype, store: *const layout_mod.Store) @TypeOf(encoder).Error!LayoutStoreImage {
         return .{
@@ -367,6 +368,7 @@ pub const LayoutStoreImage = extern struct {
             .struct_data = try encoder.ref(store.struct_data.items.items),
             .tag_union_variants = try TagUnionVariantsImage.fromStore(encoder, &store.tag_union_variants),
             .tag_union_data = try encoder.ref(store.tag_union_data.items.items),
+            .recursive_layout_keys = try encoder.ref(store.recursive_layout_keys.items.items),
         };
     }
 
@@ -395,7 +397,8 @@ pub const LayoutStoreImage = extern struct {
             .interned_layouts = .empty,
             .interned_key_bytes = .empty,
             .scratch_intern_key = .empty,
-            .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(allocator),
+            .recursive_layout_keys = try safeListFromRef(layout_mod.Store.RecursiveLayoutKey, base_ptr, image_size, self.recursive_layout_keys),
+            .interned_recursive_graphs = .empty,
             .recursive_unfoldings = .empty,
             .recursive_groups = .{},
             .target_usize = target_usize,
@@ -745,7 +748,8 @@ fn serializeSidecarInto(
         .interned_layouts = .empty,
         .interned_key_bytes = .empty,
         .scratch_intern_key = .empty,
-        .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(gpa),
+        .recursive_layout_keys = try cloneSafeList(layout_mod.Store.RecursiveLayoutKey, gpa, lowered.layouts.recursive_layout_keys),
+        .interned_recursive_graphs = .empty,
         .recursive_unfoldings = .empty,
         .recursive_groups = .{},
         .target_usize = lowered.layouts.target_usize,
@@ -994,7 +998,12 @@ fn serializeCanonicalSidecarInto(
         .interned_layouts = .empty,
         .interned_key_bytes = .empty,
         .scratch_intern_key = .empty,
-        .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(gpa),
+        // The Boxy runtime only reads this store's layouts and never takes
+        // their content digests, so it carries no recursive-graph keys, whose
+        // presence depends on how each layout was committed rather than on
+        // what the code loads.
+        .recursive_layout_keys = .{},
+        .interned_recursive_graphs = .empty,
         .recursive_unfoldings = .empty,
         .recursive_groups = .{},
         .target_usize = source.target_usize,
@@ -1065,7 +1074,7 @@ comptime {
     // each view starts empty, and its `commit_scratch` and
     // `scratch_field_offsets` are scratch that views start empty.
     std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 40);
-    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 20);
+    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 21);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
     // The header is authored field by field in image storage and is part of a
@@ -1964,7 +1973,7 @@ test "LIR image copies and round-trips every populated store field" {
     const empty_name = try store.insertBoxyName("");
 
     // A layout Store with every serialized list populated distinctively. Only
-    // the nine array-backed fields are serialized; the interning caches are not
+    // the ten array-backed fields are serialized; the interning caches are not
     // read by `fromStore`, so they are left undefined here.
     var layouts = layout_mod.Store{
         .allocator = gpa,
@@ -1980,6 +1989,7 @@ test "LIR image copies and round-trips every populated store field" {
         .interned_layouts = undefined,
         .interned_key_bytes = undefined,
         .scratch_intern_key = undefined,
+        .recursive_layout_keys = try h.safeList(layout_mod.Store.RecursiveLayoutKey, source_allocator, 2, 0xa8),
         .interned_recursive_graphs = undefined,
         .recursive_unfoldings = undefined,
         .recursive_groups = undefined,
@@ -2064,6 +2074,10 @@ test "LIR image copies and round-trips every populated store field" {
     try h.expectBytesEq(
         std.mem.sliceAsBytes(layouts.tag_union_data.items.items),
         std.mem.sliceAsBytes(view.layouts.tag_union_data.items.items),
+    );
+    try h.expectBytesEq(
+        std.mem.sliceAsBytes(layouts.recursive_layout_keys.items.items),
+        std.mem.sliceAsBytes(view.layouts.recursive_layout_keys.items.items),
     );
     try h.expectBytesEq(
         std.mem.sliceAsBytes(layouts.struct_fields.field(.index)),
@@ -2180,4 +2194,36 @@ test "in-place frozen image retains existing LIR arrays" {
     try std.testing.expectEqualSlices(u8, &value, view.static_data[0].bytes);
     try std.testing.expect(@intFromPtr(view.static_data[0].bytes.ptr) >= @intFromPtr(memory.ptr));
     try std.testing.expect(@intFromPtr(view.static_data[0].bytes.ptr) + value.len <= @intFromPtr(memory.ptr) + fixed.end_index);
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12480
+// A viewed image's layout store must compute the same content digest for a
+// recursive layout as the store the image was copied from.
+test "a viewed LIR image digests a recursive layout" {
+    const allocator = std.testing.allocator;
+    var program = try Program.Result.init(allocator, .u64);
+    defer program.deinit();
+
+    // `Node := [Nil, Cons(Box(Node))]`, as in layout/digest.zig's tests.
+    var graph = layout_mod.Graph{};
+    defer graph.deinit(allocator);
+    const union_node = try graph.reserveNode(allocator);
+    const box_node = try graph.reserveNode(allocator);
+    graph.setNode(box_node, .{ .box = .{ .local = union_node } });
+    graph.setNode(union_node, .{ .tag_union = try graph.appendRefs(allocator, &[_]layout_mod.GraphRef{ .{ .canonical = .zst }, .{ .local = box_node } }) });
+    var commit = try program.layouts.commitGraph(&graph, .{ .local = union_node });
+    defer commit.deinit(allocator);
+    const root = commit.root_idx;
+    const expected = try program.layouts.contentDigest(root);
+
+    const memory = try allocator.alignedAlloc(u8, .@"16", 1 << 16);
+    defer allocator.free(memory);
+    var fixed = std.heap.FixedBufferAllocator.init(memory);
+    const header = try fixed.allocator().create(Header);
+    const copied = try copyProgramWithStaticDataIntoBuffer(fixed.allocator(), memory.ptr, memory.len, .mapped, &program, &.{}, &.{});
+    try copied.fillHeader(header, fixed.end_index);
+    var view = try viewMappedImageWithAllocator(header, memory.ptr, fixed.end_index, .u64, allocator);
+    defer view.deinit();
+
+    try std.testing.expectEqualSlices(u8, &expected, &(try view.layouts.contentDigest(root)));
 }
