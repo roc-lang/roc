@@ -546,6 +546,9 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     var dismantles = try dismantle_result;
     defer dismantles.deinit();
     inserter.dismantles = &dismantles;
+    // Dismantle rewrote canonicalized reads into aliases of their
+    // representatives after the solve; the borrow facts must describe them.
+    try solution.adoptProjectionAliases(store.allocator, &dismantles.projection_aliases);
 
     // Committed takes carry field uniqueness to the locals they define;
     // the solver settled without them, so re-derive against the takes.
