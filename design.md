@@ -10362,16 +10362,19 @@ row a host-boundary annotation (a hosted declaration or a `provides`
 definition) writes is marked (`DescriptorFlags.host_fixed_row`, set by
 `Check.markHostFixedRows` as the annotation is generated, carried by
 instantiation and kept by unification), and the checker never widens a marked
-row: `widenedRowCopy` shares it, and `?` composition relates it whole, so a
-result wider than the host's row is a type mismatch. The report says the row
-is fixed by the host, names the host function, and shows how to rebuild the
-value tag by tag (`.map_err(|StdoutErr(e)| StdoutErr(e))`). A `where`
-requirement whose result reaches a tag row is opened per use and may be used
-at a wider union, which a hosted implementation cannot serve, so dispatch
-resolution rejects a hosted implementation for such a requirement ("Hosted
-Function In Where Clause", `hosted_where_requirement`) rather than relating
-the two rows. These are the only rows that do not join, and every one of them
-is a type error the checker decides.
+row. The mark is on the row itself, so an alias naming the row (`LoadError :
+[NotFound, PathInvalid]` written as `Try(U64, LoadError)`) is read through to
+it, exactly as an inline row is. `widenedRowCopy` shares a marked row, and `?`
+composition relates it whole, so a result wider than the host's row is a type
+mismatch. The report says the row is fixed by the host, names the host
+function, and shows how to rebuild the value tag by tag
+(`.map_err(|StdoutErr(e)| StdoutErr(e))`). A `where` requirement whose result
+reaches a tag row is opened per use and may be used at a wider union, which a
+hosted implementation cannot serve, so dispatch resolution rejects a hosted
+implementation for such a requirement ("Hosted Function In Where Clause",
+`hosted_where_requirement`) rather than relating the two rows. These are the
+only rows that do not join, and every one of them is a type error the checker
+decides.
 
 ### Value Rows: Uses Share One Row
 
