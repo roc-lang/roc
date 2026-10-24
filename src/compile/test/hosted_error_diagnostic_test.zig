@@ -3,7 +3,8 @@
 //! that forwards its result unchanged is rejected where it meets a wider error
 //! row, and the report names the host function and says how to rebuild the
 //! value. A wrapper that rebuilds the error, or forwards a row that is not the
-//! host's, is accepted.
+//! host's, is accepted. Every case runs with the host's error row written
+//! inline and named through an alias, which fixes the row the same way.
 const std = @import("std");
 const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
@@ -100,10 +101,31 @@ fn checkHostErrorDiagnostic(wrapper: []const u8, expected: Expected) DiagnosticT
     try checkHostErrorDiagnosticAgainst(wrapper, "[Exit(I32), StdoutErr(Str)]", expected);
 }
 
+/// The hosted `Host.stdout_line! : Str => Try({}, [StdoutErr(Str)])`, with its
+/// error row written inline and named through an alias.
+const host_sources = [_][]const u8{
+    \\Host := [].{
+    \\    stdout_line! : Str => Try({}, [StdoutErr(Str)])
+    \\}
+    ,
+    \\Host := [].{
+    \\    LineError : [StdoutErr(Str)]
+    \\    stdout_line! : Str => Try({}, LineError)
+    \\}
+    ,
+};
+
 /// Build an app whose `main!` declares the error row `main_err_row` and calls
-/// `Stdout.line!(..)?`, with `Stdout.line!` defined by `wrapper` over the
-/// hosted `Host.stdout_line! : Str => Try({}, [StdoutErr(Str)])`.
+/// `Stdout.line!(..)?`, with `Stdout.line!` defined by `wrapper` over each of
+/// `host_sources`.
 fn checkHostErrorDiagnosticAgainst(wrapper: []const u8, main_err_row: []const u8, expected: Expected) DiagnosticTestError!void {
+    for (host_sources) |host_source| {
+        errdefer std.debug.print("with Host.roc:\n{s}\n", .{host_source});
+        try checkHostErrorDiagnosticWithHost(host_source, wrapper, main_err_row, expected);
+    }
+}
+
+fn checkHostErrorDiagnosticWithHost(host_source: []const u8, wrapper: []const u8, main_err_row: []const u8, expected: Expected) DiagnosticTestError!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -137,14 +159,9 @@ fn checkHostErrorDiagnosticAgainst(wrapper: []const u8, main_err_row: []const u8
             \\    Err(_) => 1
             \\}
         },
-        .{
-            "Host.roc",
-            \\Host := [].{
-            \\    stdout_line! : Str => Try({}, [StdoutErr(Str)])
-            \\}
-        },
     };
     inline for (files) |file| try tmp.dir.writeFile(io, .{ .sub_path = file[0], .data = file[1] });
+    try tmp.dir.writeFile(io, .{ .sub_path = "Host.roc", .data = host_source });
     const stdout_source = try std.fmt.allocPrint(gpa,
         \\import Host
         \\Stdout := [].{{

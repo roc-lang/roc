@@ -21525,13 +21525,18 @@ fn appendWidenedReachChildren(self: *Self, var_: Var, children: *std.ArrayListUn
 /// copied through the reach, under a fresh open extension. A row whose chain
 /// ends in a rigid is not the value's to widen and is shared.
 fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!Var {
-    // A host-boundary row never widens (design.md "Row Joins").
-    if (self.rowIsHostFixed(row)) return self.types.resolveVar(row).var_;
     const tags_start = self.widened_use_tags.items.len;
     defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
     var current = row;
+    var at_head = true;
     while (true) {
         const resolved = self.types.resolveVar(current);
+        if (at_head) {
+            // A host-boundary row never widens (design.md "Row Joins"),
+            // whether it is written inline or named by an alias.
+            if (resolved.desc.flags.host_fixed_row) return self.types.resolveVar(row).var_;
+            at_head = resolved.desc.content == .alias;
+        }
         switch (resolved.desc.content) {
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
             .structure => |flat| switch (flat) {
@@ -21724,11 +21729,6 @@ fn markHostFixedRows(self: *Self, root: Var) std.mem.Allocator.Error!void {
             },
         }
     }
-}
-
-/// Whether the tag row at `var_` is one a host-boundary annotation wrote.
-fn rowIsHostFixed(self: *const Self, var_: Var) bool {
-    return self.types.resolveVar(var_).desc.flags.host_fixed_row;
 }
 
 /// Whether a value of type `var_` carries a host-boundary tag row within the
@@ -42814,17 +42814,25 @@ fn collectTryReturnRowUses(self: *Self) Allocator.Error!void {
 /// Gather just a row spine, retaining every payload's original type variable.
 /// `tags` is scratch owned by this request and must be consumed before the next
 /// gather. Nestedness is from the pre-relation inventory, never a cycle repair.
-fn gatherTryReturnRow(self: *Self, start: Var, comptime collect_tags: bool) Allocator.Error!struct { tail: Var, nested: bool, has_tags: bool } {
+/// `host_fixed` is whether the row's head, or an alias naming it, is a
+/// host-boundary row (`DescriptorFlags.host_fixed_row`).
+fn gatherTryReturnRow(self: *Self, start: Var, comptime collect_tags: bool) Allocator.Error!struct { tail: Var, nested: bool, has_tags: bool, host_fixed: bool } {
     const rows = &self.try_return_rows;
     rows.tags.clearRetainingCapacity();
     var current = start;
     var nested = false;
     var has_tags = false;
+    var at_head = true;
+    var host_fixed = false;
     var guard = types_mod.debug.IterationGuard.init("gatherTryReturnRow");
     while (true) {
         guard.tick();
         const resolved = self.types.resolveVar(current);
         nested = nested or ((rows.uses.get(resolved.var_) orelse 0) & 2 != 0);
+        if (at_head) {
+            host_fixed = host_fixed or resolved.desc.flags.host_fixed_row;
+            at_head = resolved.desc.content == .alias;
+        }
         switch (resolved.desc.content) {
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
             .structure => |flat| switch (flat) {
@@ -42846,9 +42854,9 @@ fn gatherTryReturnRow(self: *Self, start: Var, comptime collect_tags: bool) Allo
                 .fn_unbound,
                 .empty_record,
                 .empty_tag_union,
-                => return .{ .tail = resolved.var_, .nested = nested, .has_tags = has_tags },
+                => return .{ .tail = resolved.var_, .nested = nested, .has_tags = has_tags, .host_fixed = host_fixed },
             },
-            .flex, .rigid, .field_presence, .err => return .{ .tail = resolved.var_, .nested = nested, .has_tags = has_tags },
+            .flex, .rigid, .field_presence, .err => return .{ .tail = resolved.var_, .nested = nested, .has_tags = has_tags, .host_fixed = host_fixed },
         }
     }
 }
@@ -43231,7 +43239,7 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
             // the result's row (design.md "Row Subsumption"). A host-boundary
             // row is the exception: it never widens, so it is equated with the
             // result and a wider result is a mismatch (design.md "Row Joins").
-            if (gathered.nested or (self.varIsEmptyTagUnion(gathered.tail) and !self.rowIsHostFixed(root))) {
+            if (gathered.nested or (self.varIsEmptyTagUnion(gathered.tail) and !gathered.host_fixed)) {
                 _ = try self.gatherTryReturnRow(root, true);
                 const projection = try self.projectTryReturnRow(gathered.tail, env, self.cir.store.getExprRegion(plan.expr));
                 try rows.projections.put(root, projection);
