@@ -998,7 +998,12 @@ fn serializeCanonicalSidecarInto(
         .interned_layouts = .empty,
         .interned_key_bytes = .empty,
         .scratch_intern_key = .empty,
-        .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(gpa),
+        // The Boxy runtime only reads this store's layouts and never takes
+        // their content digests, so it carries no recursive-graph keys, whose
+        // presence depends on how each layout was committed rather than on
+        // what the code loads.
+        .recursive_layout_keys = .{},
+        .interned_recursive_graphs = .empty,
         .recursive_unfoldings = .empty,
         .recursive_groups = .{},
         .target_usize = source.target_usize,
