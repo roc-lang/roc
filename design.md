@@ -10797,7 +10797,8 @@ Validation uses ordinary unification and retains the exact selected calls and
 contract roots. Their snapshot waits until final type settlement, so error-row
 widening does not require validating the shape again. Unsettled inputs retain
 their complete receiver/callable requirement when any refinable component of
-that relation escapes. Capturing an error-only dependency does not authorize
+that relation escapes through a member's interface or belongs to an enclosing
+scope. Capturing an error-only dependency does not authorize
 closing an unfinished input row. Boundary work consumes only the boundary's
 explicitly owned candidates and reaches quiescence before generalization.
 
@@ -11326,6 +11327,15 @@ callable copy, which is never attached to the shared receiver. This carries
 requirements transitively through
 helper definitions without turning ordinary same-rank creation sites into
 schemes or reconstructing ownership from solved type shape.
+
+A boundary whose root does not generalize publishes no scheme, and no use of
+its monomorphic binding instantiates one, so `retireNonGeneralizedTypeSchemes`
+hands each requirement it captured to the innermost enclosing root still
+prospective, exactly as a use's copy would; every use shares the binding's one
+type, so that single copy stands for all of them. A generated codec relation
+over an enclosing scope's variable (`g = |{}| Json.to_str(W.(r))` inside a
+function of `r`) is attached to no receiver descriptor, so this transfer is how
+the enclosing scheme learns of it and validates it at each of its own uses.
 
 Owner keys are stable raw source vars. An annotation or expected type may
 introduce a separate solved var without changing the owner key passed to the
@@ -16731,7 +16741,14 @@ uninhabited resolves by the unpinned-dispatch rule
 (`unpinnedDispatchResolution`), the same one the checker applies to a
 dispatcher no edge can pin, before any structural derivation is attempted: a
 derived map needs a payload selection only checking can make, and no value
-exists to map. If compile-time
+exists to map. A generated encoder likewise gives a tag whose payload is
+proven uninhabited no branch: no value has that tag, and the checker discharged
+that payload's encoder as statically unreachable. Boxy plans and lowers no
+payload encoder and no dispatch branch for a variant with a payload whose
+unquantified variable seals to the empty tag union. A Boxy generated encoder
+runtime whose value is stored as its nominal's shared backing template converts
+it into the use's own backing inside that nominal's formal scope before
+walking it. If compile-time
 evaluation stores that function inside another value before the
 callable is concrete, `ConstStore` retains the same symbolic entry in the
 function's evidence vector, including inside nested evidence trees. Pool offsets are not
@@ -18321,6 +18338,11 @@ record payload at that destination preserves the supplying expression's exact
 payload descriptor; an adapted destination with a declared storage shape uses
 the destination descriptor.
 
+A transparent nominal whose declaration backing is one of its own formals
+(`W(a) := a`) stores that argument unchanged, so its storage representation is
+the argument's, and one descriptor describes both. Every other nominal use with
+type arguments stores its declaration's shared backing template.
+
 Nominal construction runs inside that nominal's formal scope. The shared
 backing representation fixes storage; its descriptor describes each formal by
 the actual this nominal use supplies. Construction and its
@@ -18386,8 +18408,12 @@ parent rather than from its own key: a nested descriptor read for aggregate,
 list and box positions, a tag payload read
 (`ErasedArgDescRead.tag_payload`) for a variant payload such as a presence
 slot's `Present` value, and an extension read (`ErasedArgDescRead.tag_ext`)
-for an open tag row's extension. Only a descriptor no earlier parameter holds
-is read from its call-site key. When two earlier parameters hold it, the nearer one is
+for an open tag row's extension. A payload read through a nominal stored as
+its shared backing template names the actual its use substitutes for the
+template's formal. A descriptor whose storage is an earlier parameter's own
+storage (a nominal over its own type parameter) is that parameter's
+descriptor, bound to the same local with no read and no key. Only a descriptor
+no earlier parameter holds is read from its call-site key. When two earlier parameters hold it, the nearer one is
 read: the one the other holds, or the other's backing (a nominal's record,
 whose fields the nominal's descriptor also lists). Otherwise the
 representation occurs at two places in the argument (a field type inside a
