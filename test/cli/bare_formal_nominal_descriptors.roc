@@ -46,6 +46,8 @@ encode_custom = |r| Json.to_str(C.(r))
 
 encode_custom_list = |r| Json.to_str([C.(r)])
 
+inspect_wrapped_custom = |r| Str.inspect([W.(C.(r))])
+
 encode_custom_nested = |r| Json.to_str(C.(C.(r)))
 
 encode_custom_over_nominal = |r| Json.to_str(C.(Reply.Err(r)))
@@ -64,3 +66,6 @@ expect encode_custom_nested(1.U8) == "1"
 expect encode_custom_over_nominal(1.U8) == "{\"Err\":1}"
 expect Json.to_str(W.(Reply.Err(1.U8))) == "{\"Err\":1}"
 expect Str.inspect([C.(1.U8)]) == "[C!]"
+expect inspect_wrapped_custom(1.U8) == "[C!]"
+expect Str.inspect(W.(C.(1.U8))) == "C!"
+expect Str.inspect(W.(W.(C.(1.U8)))) == "C!"
