@@ -2314,6 +2314,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     std.debug.assert(args.len >= 2);
                     const list_loc, const index_loc = try self.emitValueLocals(2, args);
 
+                    if (builtin.mode == .debug) {
+                        const index_layout = self.valueLayout(GuardedList.at(args, 1));
+                        if (index_layout != .u64) {
+                            base.invariant(
+                                "LIR/codegen invariant violated: list_get_unsafe index must have U64 layout, got {d}",
+                                .{@backingInt(index_layout)},
+                            );
+                        }
+                    }
+
                     // Get base offset of list struct
                     const list_base: i32 = listStructOffset(list_loc);
 
@@ -2381,22 +2391,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const off = s.offset;
                             try self.codegen.emitLoadStack(.w64, index_reg, off);
                         },
-                        .stack_i128 => |off| {
-                            // Dec/i128 index - just load the low 64 bits as U64
-                            try self.codegen.emitLoadStack(.w64, index_reg, off);
-                        },
-                        .immediate_i128 => |imm| {
-                            const val = imm.get();
-                            // i128 immediate - truncate to 64 bits for index
-                            const low: u64 = @truncate(@as(u128, @bitCast(val)));
-                            try self.codegen.emitLoadImm(index_reg, @bitCast(low));
-                        },
                         .float_reg,
                         .vector_reg,
+                        .stack_i128,
                         .stack_str,
                         .list_stack,
                         .immediate_f32,
                         .immediate_f64,
+                        .immediate_i128,
                         .noreturn,
                         => unexpectedLocation("list_get_unsafe index", index_loc),
                     }
