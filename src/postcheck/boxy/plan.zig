@@ -467,6 +467,9 @@ pub const TypeRepresentation = struct {
     /// The source nominal type declared itself opaque: inspect must not
     /// reveal the backing structure.
     inspect_opaque: bool = false,
+    /// The source nominal declares a descriptor method of its own: an inspect
+    /// override, or an equality or hash method that is not structural.
+    owns_descriptor_methods: bool = false,
     /// Public source opacity boxes record backings that contain callables.
     /// Selected while resolving checked ABI shapes, before layout commitment.
     abi_boxed_backing: bool = false,
@@ -4033,6 +4036,7 @@ pub fn analyzeProgram(
         builder.propagateDynamicRequirements();
         try builder.materializeDescriptorRequirements();
     }
+    builder.markDescriptorMethodOwners();
 
     const out = builder.plan;
     builder.plan = ProgramPlan.init(allocator);
@@ -13811,11 +13815,24 @@ const Builder = struct {
     fn requireWorkerSchemeDictionary(self: *Builder, worker: WorkerPlanId, key: SchemeDictionaryKey) Allocator.Error!HiddenDictionaryParam {
         const param = try self.schemeDictionary(key);
         if (self.workerBindsDictionarySpan(worker, param.dictionaries)) return param;
+        try self.recordSchemeDictionaryUse(worker, param);
+        return param;
+    }
+
+    fn recordSchemeDictionaryUse(self: *Builder, worker: WorkerPlanId, param: HiddenDictionaryParam) Allocator.Error!void {
         for (self.scheme_dictionary_uses.items) |use| {
-            if (use.worker == worker and use.param.dictionaries.start == param.dictionaries.start) return param;
+            if (use.worker == worker and use.param.dictionaries.start == param.dictionaries.start) return;
         }
         try self.scheme_dictionary_uses.append(self.allocator, .{ .worker = worker, .param = param });
-        return param;
+    }
+
+    /// Whether `param` is a checked scheme requirement's dictionary some
+    /// worker receives, rather than one collected from a representation.
+    fn isSchemeDictionaryParam(self: *const Builder, param: HiddenDictionaryParam) bool {
+        for (self.scheme_dictionary_uses.items) |use| {
+            if (use.param.dictionaries.start == param.dictionaries.start and use.param.dictionaries.len == param.dictionaries.len) return true;
+        }
+        return false;
     }
 
     fn materializeWorkerHiddenDictionaryParams(self: *Builder) Allocator.Error!void {
@@ -14718,6 +14735,15 @@ const Builder = struct {
         }
     }
 
+    /// Whether `frame` is a nested worker whose own scheme does not quantify
+    /// `variable`, so an enclosing scheme does.
+    fn frameNestedInQuantifyingScheme(self: *Builder, frame: WorkerPlanId, variable: CheckedTypeIdentity) bool {
+        const source = self.plan.workers.items[@backingInt(frame)].source;
+        if (source != .nested_expr) return false;
+        if (self.workerSchemeVars(source)) |own| return !schemeVarsContain(own, variable);
+        return true;
+    }
+
     fn schemeVarsContain(scheme: WorkerSchemeVars, variable: CheckedTypeIdentity) bool {
         if (viewModule(scheme.view) != variable.module) return false;
         for (scheme.vars) |candidate| {
@@ -14834,6 +14860,16 @@ const Builder = struct {
                 const quantified = self.frameLexicallyQuantifies(walk.root.frame, self.sharedVariableIdentity(rep_id));
                 if (quantified) {
                     if (self.derivedSchemeRequirement(rep_id, walk.root.method)) |requirement| {
+                        // A frame nested inside the quantifying scheme, such
+                        // as a closure, receives that variable's dictionary
+                        // from the site that builds it.
+                        if (walk.root.frame) |frame| {
+                            if (self.frameNestedInQuantifyingScheme(frame, self.sharedVariableIdentity(rep_id)) and
+                                !self.workerBindsDictionarySpan(frame, rep.dictionaries))
+                            {
+                                try self.recordWorkerDictionaryUse(frame, rep_id);
+                            }
+                        }
                         return try self.recordDerivedDecision(walk, rep_id, .{ .scheme_dictionary = requirement });
                     }
                 }
@@ -14947,6 +14983,20 @@ const Builder = struct {
 
     /// The component type's own method, when it declares one. A derived
     /// marker resolves structurally and expands instead.
+    /// Mark every nominal representation whose declaration brings a
+    /// descriptor method of its own.
+    fn markDescriptorMethodOwners(self: *Builder) void {
+        for (self.plan.representations.items, 0..) |*rep, index| {
+            if (rep.kind != .nominal) continue;
+            const rep_id: TypeRepId = @fromBackingInt(@intCast(index));
+            const view = self.moduleForId(rep.source_type.module);
+            const owner = methodOwnerForModuleType(view, rep.source_type.ty) orelse continue;
+            rep.owns_descriptor_methods = inspectOverrideFor(self.methodSearchModules(), view, owner) != null or
+                self.derivedMethodTarget(rep_id, .equality) != null or
+                self.derivedMethodTarget(rep_id, .hash) != null;
+        }
+    }
+
     fn derivedMethodTarget(self: *Builder, rep_id: TypeRepId, method: DerivedMethod) ?MethodLookupResult {
         const rep = self.plan.representations.items[@backingInt(rep_id)];
         const view = self.moduleForId(rep.source_type.module);
@@ -16581,7 +16631,7 @@ const Builder = struct {
                 for (mappings) |mapping| {
                     if (mapping.hidden_desc_index >= hidden_index) continue;
                     const root = pending.items[mapping.hidden_desc_index];
-                    const rep = try self.repAtPosition(.runtime, params[mapping.hidden_desc_index].rep, param.rep, root.rep) orelse continue;
+                    const rep = try self.repAtPosition(.hidden_descriptor, params[mapping.hidden_desc_index].rep, param.rep, root.rep) orelse continue;
                     if (source_rep) |existing| {
                         if (existing != rep) boxyPlanInvariant("one evidence-only worker descriptor sat inside two evidence sources");
                         continue;
@@ -17805,6 +17855,27 @@ const Builder = struct {
             });
             return;
         }
+        // A type variable of the calling worker that its signature does not
+        // reach, such as a closure's dispatch on its enclosing function's
+        // variable, has no static dictionary: the worker receives that
+        // variable's dictionary, which its callers and the sites that build
+        // it as a value then supply.
+        if (caller_id) |caller| {
+            if (!source_is_defaulted and !source_is_unpinned and self.repIsUnboundVariable(source_rep) and
+                self.frameNestedInQuantifyingScheme(caller, self.sharedVariableIdentity(source_rep)))
+            {
+                try self.recordWorkerDictionaryUse(caller, source_rep);
+                state.record(.{
+                    .worker_dictionaries = param.dictionaries,
+                    .source_type = self.plan.representations.items[@backingInt(source_rep)].source_type,
+                    .rep = source_rep,
+                    .method_evidence = evidence_source.method_evidence,
+                    .source = .{ .bound_dictionaries = source_rep_dictionaries },
+                    .env = 0,
+                });
+                return;
+            }
+        }
         if (evidence_source.method_evidence.len != 0 and evidence_source.method_evidence.len != param.dictionaries.len) {
             boxyPlanInvariant("static dictionary checked evidence did not cover every method requirement");
         }
@@ -18647,10 +18718,12 @@ const Builder = struct {
     }
 
     /// Which children a representation path may step through: `.runtime`
-    /// follows only children that carry a runtime descriptor; `.type_position`
-    /// also follows a function's arguments and result, and the type arguments
-    /// that describe a nominal's shared backing template.
-    const RepPathPositions = enum { runtime, type_position };
+    /// follows only children that carry a runtime descriptor;
+    /// `.hidden_descriptor` follows the children hidden descriptors are
+    /// collected through, a nominal's type arguments included;
+    /// `.type_position` also follows a function's arguments and result, and
+    /// the type arguments that describe a nominal's shared backing template.
+    const RepPathPositions = enum { runtime, hidden_descriptor, type_position };
 
     /// The representation inside `value_root` at the position `target`
     /// occupies inside `worker_root`: the path from `worker_root` to `target`,
@@ -18720,6 +18793,7 @@ const Builder = struct {
             top.index += 1;
             const skipped = switch (positions) {
                 .runtime => !childCarriesRuntimeDescriptor(child.role),
+                .hidden_descriptor => !self.plan.childCarriesHiddenDescriptor(current, child),
                 .type_position => switch (child.role) {
                     .function_arg, .function_ret => false,
                     // A nominal's type arguments stand in for its shared
@@ -21314,6 +21388,7 @@ const Builder = struct {
         }
 
         const dictionary_use_count = self.worker_dictionary_uses.items.len;
+        const scheme_dictionary_use_count = self.scheme_dictionary_uses.items.len;
         index = 0;
         while (index < self.plan.nested_callable_uses.items.len) : (index += 1) {
             const use = self.plan.nested_callable_uses.items[index];
@@ -21370,10 +21445,17 @@ const Builder = struct {
 
             for (self.plan.hiddenDictionaryParamSlice(worker.hidden_dicts)) |param| {
                 if (self.workerBindsDictionarySpan(use.caller, param.dictionaries)) continue;
+                // A checked scheme requirement the nested callable forwards
+                // is the same requirement for the worker that builds it.
+                if (self.isSchemeDictionaryParam(param)) {
+                    try self.recordSchemeDictionaryUse(use.caller, param);
+                    continue;
+                }
                 try self.recordWorkerDictionaryUse(use.caller, param.rep);
             }
         }
-        if (self.worker_dictionary_uses.items.len != dictionary_use_count) return;
+        if (self.worker_dictionary_uses.items.len != dictionary_use_count or
+            self.scheme_dictionary_uses.items.len != scheme_dictionary_use_count) return;
 
         for (self.plan.nested_callable_uses.items) |use| {
             const worker = self.plan.workers.items[@backingInt(use.worker)];

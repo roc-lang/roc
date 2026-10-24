@@ -18383,8 +18383,17 @@ the destination descriptor.
 
 A transparent nominal whose declaration backing is one of its own formals
 (`W(a) := a`) stores that argument unchanged, so its storage representation is
-the argument's, and one descriptor describes both. Every other nominal use with
-type arguments stores its declaration's shared backing template.
+the argument's. When the nominal brings no descriptor method of its own, one
+descriptor describes both. Every other nominal use with type arguments stores
+its declaration's shared backing template.
+
+A descriptor whose backing-shape chain ends at a type variable stored in a box
+(a nominal whose backing is a formal, whether stored as its argument or as the
+shared template) carries the wrapper's own methods and names the variable's
+descriptor as its one nested descriptor, describing the box payload. A
+generic frame builds it from the variable's descriptor local; reading a
+binding environment from it reads the variable's descriptor from that nested
+position.
 
 Nominal construction runs inside that nominal's formal scope. The shared
 backing representation fixes storage; its descriptor describes each formal by
@@ -18454,8 +18463,12 @@ slot's `Present` value, and an extension read (`ErasedArgDescRead.tag_ext`)
 for an open tag row's extension. A payload read through a nominal stored as
 its shared backing template names the actual its use substitutes for the
 template's formal. A descriptor whose storage is an earlier parameter's own
-storage (a nominal over its own type parameter) is that parameter's
-descriptor, bound to the same local with no read and no key. Only a descriptor
+storage (a nominal over its own type parameter with no descriptor method of
+its own) is that parameter's
+descriptor, bound to the same local with no read and no key. When that
+parameter's nominal brings descriptor methods of its own, the stored
+argument's descriptor is instead rebuilt after the reads, from the descriptors
+read for its parts, again with no key. Only a descriptor
 no earlier parameter holds is read from its call-site key. When two earlier parameters hold it, the nearer one is
 read: the one the other holds, or the other's backing (a nominal's record,
 whose fields the nominal's descriptor also lists). Otherwise the
