@@ -52,6 +52,7 @@ const CpuLevel = roc_target_mod.CpuLevel;
 // with 24-byte RocList struct returns on aarch64
 
 const Relocation = @import("Relocation.zig").IndexedRelocation;
+const RuntimeRef = @import("Relocation.zig").RuntimeRef;
 const collections = @import("collections");
 const SymbolTable = @import("SymbolTable.zig");
 const StackPlan = lir.StackPlan;
@@ -419,7 +420,7 @@ pub const BoxyBuiltinFn = enum {
     pub fn paramAbiSizes(self: BoxyBuiltinFn) ?[]const u8 {
         const p = 8; // pointer, usize, or u64
         return switch (self) {
-            .register_erased_proc => &.{ p, 4, 4, 4, 4, 4, 4, 4, 4 },
+            .register_erased_proc => &.{ p, 4, 4, 4, 4, 4, 4, 4 },
             .call_erased => &.{ p, p, p, p, p, p, p, 4, p, 4, 4, 4, 4 },
             .defer_erased => &.{ p, p, p, p, p, p, 4, 4, 4, 4, p, 4 },
             .tag_payload => &.{ p, p, p, 4, p, 4, 4, 4, 1 },
@@ -12633,6 +12634,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
+            var runtime_regs: RuntimeRefRegs = .{};
             for (args) |arg| switch (arg) {
                 .lea => |offset| try builder.addLeaArg(frame_ptr, offset),
                 .list => |offset| try builder.addListBytesLenCapMemArgs(frame_ptr, offset),
@@ -12644,7 +12646,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .elem_rc => switch (rc) {
                     .boxy => |boxy_elem| {
-                        try builder.addImmArg(@backingInt(boxy_elem.elem_layout));
+                        try self.addRuntimeLayoutArg(&builder, &runtime_regs, boxy_elem.elem_layout);
                         try builder.addMemArg(frame_ptr, boxy_elem.desc_slot);
                     },
                     .callbacks => |callbacks| {
@@ -12664,7 +12666,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
             };
             switch (rc) {
-                .boxy => try self.callBoxyBuiltin(&builder, boxy_fn orelse base.invariant("LIR/codegen invariant violated: list builtin call needs a Boxy wrapper but has none", .{})),
+                .boxy => {
+                    try self.callBoxyBuiltin(&builder, boxy_fn orelse base.invariant("LIR/codegen invariant violated: list builtin call needs a Boxy wrapper but has none", .{}));
+                    runtime_regs.release(self);
+                },
                 .callbacks => |callbacks| {
                     if (builtin_fn) |f| try self.callBuiltin(&builder, f) else try self.callBoxyBuiltin(&builder, boxy_fn orelse base.invariant("LIR/codegen invariant violated: list builtin call needs a Boxy wrapper but has none", .{}));
                     if (callbacks.decref) |reg| self.codegen.freeGeneral(reg);
@@ -13087,13 +13092,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
+            var runtime_regs: RuntimeRefRegs = .{};
             try builder.addRegArg(capture_reg);
-            try builder.addImmArg(@backingInt(capture_layout));
+            try self.addRuntimeLayoutArg(&builder, &runtime_regs, capture_layout);
             try builder.addRegArg(desc_reg);
             try builder.addImmArg(@backingInt(RcOp.decref));
             try builder.addImmArg(1);
             try builder.addImmArg(@backingInt(RcAtomicity.atomic));
             try self.callBoxyBuiltin(&builder, .drop);
+            runtime_regs.release(self);
 
             self.freeGenerals(.{ desc_reg, capture_reg });
         }
@@ -14378,6 +14385,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // no value until then, so its storage is left as allocated.
                 var defer_builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 defer defer_builder.deinit();
+                var defer_runtime_regs: RuntimeRefRegs = .{};
                 try defer_builder.addMemArg(frame_ptr, fn_ptr_slot);
                 try defer_builder.addMemArg(frame_ptr, closure_ptr_slot);
                 try defer_builder.addMemArg(frame_ptr, capture_stack_offset);
@@ -14394,11 +14402,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try defer_builder.addLeaArg(frame_ptr, arg_descs_slot);
                 try defer_builder.addImmArg(arg_desc_keys.start);
                 try defer_builder.addImmArg(arg_desc_keys.len);
-                try defer_builder.addImmArg(arg_layouts_span.start);
-                try defer_builder.addImmArg(arg_layouts_span.len);
+                try self.addErasedArgLayoutsArgs(&defer_builder, &defer_runtime_regs, arg_layouts_span);
                 if (result_desc_slot) |s| try defer_builder.addMemArg(frame_ptr, s) else try defer_builder.addImmArg(0);
-                try defer_builder.addImmArg(@backingInt(runtime_ret_layout));
+                try self.addRuntimeLayoutArg(&defer_builder, &defer_runtime_regs, runtime_ret_layout);
                 try self.callBoxyBuiltin(&defer_builder, .defer_erased);
+                defer_runtime_regs.release(self);
                 if (out_desc) |local| try self.bindAssignedLocal(local, .{ .immediate_i64 = 0 });
                 return if (ret_size == 0)
                     .{ .immediate_i64 = 0 }
@@ -14413,6 +14421,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // the call site's public ABI.
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
+            var runtime_regs: RuntimeRefRegs = .{};
             try builder.addMemArg(frame_ptr, fn_ptr_slot);
             if (ret_size == 0) {
                 try builder.addImmArg(0);
@@ -14432,16 +14441,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             if (result_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
-            try builder.addImmArg(@backingInt(runtime_ret_layout));
+            try self.addRuntimeLayoutArg(&builder, &runtime_regs, runtime_ret_layout);
             if (arg_desc_refs.len == 0)
                 try builder.addImmArg(0)
             else
                 try builder.addLeaArg(frame_ptr, arg_descs_slot);
             try builder.addImmArg(arg_desc_keys.start);
             try builder.addImmArg(arg_desc_keys.len);
-            try builder.addImmArg(arg_layouts_span.start);
-            try builder.addImmArg(arg_layouts_span.len);
+            try self.addErasedArgLayoutsArgs(&builder, &runtime_regs, arg_layouts_span);
             try self.callBoxyBuiltin(&builder, .call_erased);
+            runtime_regs.release(self);
 
             if (out_desc) |local| {
                 try self.bindAssignedLocal(
@@ -14495,6 +14504,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
+            var runtime_regs: RuntimeRefRegs = .{};
             if (size == 0) {
                 try builder.addImmArg(0);
             } else {
@@ -14502,8 +14512,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             if (result_desc_slot) |slot| try builder.addMemArg(frame_ptr, slot) else try builder.addImmArg(0);
-            try builder.addImmArg(@backingInt(runtime_layout));
+            try self.addRuntimeLayoutArg(&builder, &runtime_regs, runtime_layout);
             try self.callBoxyBuiltin(&builder, .drive_pending);
+            runtime_regs.release(self);
             if (skip_patch) |patch| try self.codegen.patchJump(patch, self.codegen.currentOffset());
             if (out_desc) |local| {
                 try self.bindAssignedLocal(local, self.stackLocationForLayout(self.localLayout(local), out_desc_slot));
@@ -14524,12 +14535,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const slot = self.codegen.allocStackSlot(8);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
+            var runtime_regs: RuntimeRefRegs = .{};
             if (result_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
             const returned_layout = self.early_return_ret_layout orelse
                 std.debug.panic("Dev/codegen invariant violated: a procedure returning a pending call has no return layout", .{});
-            try builder.addImmArg(@backingInt(self.runtimeRepresentationLayoutIdx(returned_layout)));
+            try self.addRuntimeLayoutArg(&builder, &runtime_regs, self.runtimeRepresentationLayoutIdx(returned_layout));
             try builder.addImmArg(@intFromBool(pending.keeps_own_desc));
             try self.callBoxyBuiltin(&builder, .return_pending);
+            runtime_regs.release(self);
             try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
             const flag_reg = try self.allocTempGeneral();
             // The runtime returns one byte; the rest of the slot is unspecified.
@@ -15661,18 +15674,100 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// One argument of `callBoxyToSlot`: an immediate, or the word at a
         /// frame offset.
-        const BoxyScalarArg = union(enum) { imm: i64, mem: i32 };
+        const BoxyScalarArg = union(enum) { imm: i64, mem: i32, runtime_layout: layout.Idx };
+
+        /// The registers a call's runtime table numbers were loaded into,
+        /// released once the call is emitted.
+        const RuntimeRefRegs = struct {
+            regs: [boxy_call_plan.max_operands]GeneralReg = undefined,
+            len: u8 = 0,
+
+            fn release(self: *RuntimeRefRegs, owner: *Self) void {
+                for (self.regs[0..self.len]) |reg| owner.codegen.freeGeneral(reg);
+                self.len = 0;
+            }
+        };
+
+        /// Load a number the Boxy runtime reads its sidecar tables by into a
+        /// temporary register. An object file's canonical image renumbers
+        /// what its code uses (design.md "Canonical Dev Images"), so the load
+        /// is patchable and recorded as a runtime reference, which every
+        /// other image leaves holding the program's own number.
+        fn loadRuntimeRef(self: *Self, ref: RuntimeRef) Allocator.Error!GeneralReg {
+            const reg = try self.allocTempGeneral();
+            try self.emitRuntimeRefInto(reg, ref);
+            return reg;
+        }
+
+        /// `loadRuntimeRef` into a register the caller holds.
+        fn emitRuntimeRefInto(self: *Self, reg: GeneralReg, ref: RuntimeRef) Allocator.Error!void {
+            const value = switch (ref) {
+                .layout => |idx| idx,
+                .erased_arg_layouts => |span| span.start,
+            };
+            const site = try self.codegen.emitPatchableImm32(reg, value);
+            try self.codegen.relocations.append(self.allocator, .{ .runtime_ref = .{ .offset = site, .ref = ref } });
+        }
+
+        /// Give every runtime table number the placed code loads its
+        /// canonical number, in placement order, and patch each load to it
+        /// (design.md "Canonical Dev Images"). The recorded references then
+        /// name canonical numbers.
+        pub fn renumberRuntimeRefs(self: *Self, numbering: *lir.RuntimeTables.Numbering) Allocator.Error!void {
+            const code = self.codegen.emit.buf.items;
+            for (self.codegen.relocations.items) |*relocation| switch (relocation.*) {
+                .runtime_ref => |*runtime_ref| {
+                    const canonical: RuntimeRef = switch (runtime_ref.ref) {
+                        .layout => |idx| .{ .layout = try numbering.layoutId(self.allocator, @fromBackingInt(@intCast(idx))) },
+                        .erased_arg_layouts => |span| .{ .erased_arg_layouts = .{
+                            .start = try numbering.erasedArgLayoutsStart(self.allocator, .{ .start = span.start, .len = span.len }),
+                            .len = span.len,
+                        } },
+                    };
+                    @TypeOf(self.codegen).patchImm32(code, @intCast(runtime_ref.offset), switch (canonical) {
+                        .layout => |idx| idx,
+                        .erased_arg_layouts => |span| span.start,
+                    });
+                    runtime_ref.ref = canonical;
+                },
+                .linked_function, .linked_data, .local_data, .retired => {},
+            };
+        }
+
+        /// Pass a runtime table number as the call's next argument.
+        fn addRuntimeRefArg(self: *Self, builder: *Builder, regs: *RuntimeRefRegs, ref: RuntimeRef) Allocator.Error!void {
+            const reg = try self.loadRuntimeRef(ref);
+            regs.regs[regs.len] = reg;
+            regs.len += 1;
+            try builder.addRegArg(reg);
+        }
+
+        /// Pass a layout index the Boxy runtime reads as the call's next
+        /// argument.
+        fn addRuntimeLayoutArg(self: *Self, builder: *Builder, regs: *RuntimeRefRegs, layout_idx: layout.Idx) Allocator.Error!void {
+            try self.addRuntimeRefArg(builder, regs, .{ .layout = @backingInt(layout_idx) });
+        }
+
+        /// Pass a run of erased argument layouts as the call's next two
+        /// arguments: its start and its length.
+        fn addErasedArgLayoutsArgs(self: *Self, builder: *Builder, regs: *RuntimeRefRegs, span: lir.LIR.BoxySpan) Allocator.Error!void {
+            try self.addRuntimeRefArg(builder, regs, .{ .erased_arg_layouts = .{ .start = span.start, .len = span.len } });
+            try builder.addImmArg(span.len);
+        }
 
         /// Call a pointer-returning Boxy wrapper and store its result into a
         /// fresh 8-byte frame slot, returning the slot's offset.
         fn callBoxyToSlot(self: *Self, boxy_fn: BoxyBuiltinFn, args: []const BoxyScalarArg) Allocator.Error!i32 {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
+            var runtime_regs: RuntimeRefRegs = .{};
             for (args) |arg| switch (arg) {
                 .imm => |value| try builder.addImmArg(value),
                 .mem => |offset| try builder.addMemArg(frame_ptr, offset),
+                .runtime_layout => |layout_idx| try self.addRuntimeLayoutArg(&builder, &runtime_regs, layout_idx),
             };
             try self.callBoxyBuiltin(&builder, boxy_fn);
+            runtime_regs.release(self);
             const slot = self.codegen.allocStackSlot(8);
             try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
             return slot;
@@ -15870,7 +15965,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // the local descriptor base.
                     if (assign.box_payload_layout) |box_layout| {
                         const base_slot = try self.boxyDescRefToSlot(.{ .local = local });
-                        const slot = try self.callBoxyToSlot(.box_payload_desc, &.{ .{ .mem = base_slot }, .{ .imm = @backingInt(box_layout) } });
+                        const slot = try self.callBoxyToSlot(.box_payload_desc, &.{ .{ .mem = base_slot }, .{ .runtime_layout = box_layout } });
                         return self.stackLocationForLayout(target_layout, slot);
                     } else if (assign.tag_ext) {
                         const base_slot = try self.boxyDescRefToSlot(.{ .local = local });
@@ -15929,8 +16024,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer projection_builder.deinit();
                 try projection_builder.addMemArg(frame_ptr, base_slot);
                 if (assign.box_payload_layout) |box_layout| {
-                    try projection_builder.addImmArg(@backingInt(box_layout));
+                    var runtime_regs: RuntimeRefRegs = .{};
+                    try self.addRuntimeLayoutArg(&projection_builder, &runtime_regs, box_layout);
                     try self.callBoxyBuiltin(&projection_builder, .box_payload_desc);
+                    runtime_regs.release(self);
                 } else if (assign.nested_index) |nested_index| {
                     try projection_builder.addImmArg(@intCast(nested_index));
                     try self.callBoxyBuiltin(&projection_builder, .nested_desc);
@@ -16008,7 +16105,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     writes_out = true;
                     break :blk null;
                 },
-                .out_desc, .local_layout, .imm32, .imm8 => null,
+                .out_desc, .local_layout, .layout, .imm32, .imm8 => null,
                 .value => |local| try self.boxyLocalBytesOffset(local),
                 .opt_value => |local| if (local) |l| try self.boxyLocalBytesOffset(l) else null,
                 .desc => |ref| try self.boxyDescRefToSlot(ref),
@@ -16023,16 +16120,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
+            var runtime_regs: RuntimeRefRegs = .{};
             for (plan.operands(), operand_slots[0..plan.len]) |operand, slot| switch (operand) {
                 .out => try builder.addLeaArg(frame_ptr, slots.out),
                 .out_desc => try builder.addLeaArg(frame_ptr, slots.out_desc),
                 .value, .opt_value => if (slot) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0),
                 .desc, .opt_desc => if (slot) |off| try builder.addMemArg(frame_ptr, off) else try builder.addImmArg(0),
-                .local_layout => |local| try builder.addImmArg(@backingInt(self.localLayout(local))),
+                .local_layout => |local| try self.addRuntimeLayoutArg(&builder, &runtime_regs, self.localLayout(local)),
+                .layout => |layout_idx| try self.addRuntimeLayoutArg(&builder, &runtime_regs, layout_idx),
                 .imm32 => |value| try builder.addImmArg(value),
                 .imm8 => |value| try builder.addImmArg(value),
             };
             try self.callBoxyBuiltin(&builder, plan.func);
+            runtime_regs.release(self);
             return slots;
         }
 
@@ -16344,7 +16444,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const reg = try self.allocTempGeneral();
                 if (plan.value_off) |off| try self.emitLeaStack(reg, off) else try self.codegen.emitLoadImm(reg, 0);
                 try self.emitStore(.w64, frame_ptr, entry_base + call_arg_value_off, reg);
-                try self.codegen.emitLoadImm(reg, @backingInt(plan.layout));
+                try self.emitRuntimeRefInto(reg, .{ .layout = @backingInt(plan.layout) });
                 try self.emitStore(.w32, frame_ptr, entry_base + call_arg_layout_off, reg);
                 if (plan.desc_slot) |s| try self.emitLoad(.w64, reg, frame_ptr, s) else try self.codegen.emitLoadImm(reg, 0);
                 try self.emitStore(.w64, frame_ptr, entry_base + call_arg_desc_off, reg);
@@ -16368,6 +16468,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
+            var runtime_regs: RuntimeRefRegs = .{};
             try builder.addLeaArg(frame_ptr, out_slot);
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             try builder.addMemArg(frame_ptr, dict_slot);
@@ -16378,8 +16479,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (hidden_locals.len == 0) try builder.addImmArg(0) else try builder.addLeaArg(frame_ptr, hidden_slot);
             try builder.addImmArg(@intCast(hidden_locals.len));
             if (result_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
-            try builder.addImmArg(@backingInt(target_layout));
+            try self.addRuntimeLayoutArg(&builder, &runtime_regs, target_layout);
             try self.callBoxyBuiltin(&builder, .call_dict);
+            runtime_regs.release(self);
             try self.bindBoxyOutDescriptor(target_local, out_desc_slot);
             return self.stackLocationForLayout(target_layout, out_slot);
         }
@@ -16406,9 +16508,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             try builder.addLeaArg(frame_ptr, value_slot);
             try builder.addMemArg(frame_ptr, desc_slot);
-            try builder.addImmArg(@backingInt(default_layout));
-            try builder.addImmArg(@backingInt(target_layout));
+            var runtime_regs: RuntimeRefRegs = .{};
+            try self.addRuntimeLayoutArg(&builder, &runtime_regs, default_layout);
+            try self.addRuntimeLayoutArg(&builder, &runtime_regs, target_layout);
             try self.callBoxyBuiltin(&builder, boxy_fn);
+            runtime_regs.release(self);
             try self.bindBoxyOutDescriptor(target_local, out_desc_slot);
             return self.stackLocationForLayout(target_layout, out_slot);
         }
@@ -16447,13 +16551,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
+            var runtime_regs: RuntimeRefRegs = .{};
             try builder.addLeaArg(frame_ptr, value_off);
-            try builder.addImmArg(@backingInt(value_layout));
+            try self.addRuntimeLayoutArg(&builder, &runtime_regs, value_layout);
             try builder.addMemArg(frame_ptr, desc_slot);
             try builder.addImmArg(@backingInt(op));
             try builder.addImmArg(count);
             try builder.addImmArg(@backingInt(atomicity));
             try self.callBoxyBuiltin(&builder, .drop);
+            runtime_regs.release(self);
         }
 
         fn emitBuiltinAddress(self: *Self, dst_reg: GeneralReg, builtin_fn: BuiltinFn) Allocator.Error!void {
@@ -22219,16 +22325,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitInternalCodeAddress(.{ .proc = proc.id }, proc.code_start, addr_reg);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
+            var runtime_regs: RuntimeRefRegs = .{};
             try builder.addRegArg(addr_reg);
-            try builder.addImmArg(@backingInt(proc_id));
-            try builder.addImmArg(@backingInt(self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout)));
+            try self.addRuntimeLayoutArg(&builder, &runtime_regs, self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout));
             try builder.addImmArg(metadata_offset);
-            try builder.addImmArg(proc_spec.erased_arg_layouts.start);
-            try builder.addImmArg(proc_spec.erased_arg_layouts.len);
+            try self.addErasedArgLayoutsArgs(&builder, &runtime_regs, proc_spec.erased_arg_layouts);
             try builder.addImmArg(proc_spec.erased_arg_desc_offsets.start);
             try builder.addImmArg(proc_spec.erased_arg_desc_offsets.len);
             try builder.addImmArg(capture_prefix_size);
             try self.callBoxyBuiltin(&builder, .register_erased_proc);
+            runtime_regs.release(self);
             self.codegen.freeGeneral(addr_reg);
         }
 
@@ -22239,13 +22345,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// runtime is installed so the runtime's tables are populated before
         /// any dictionary dispatch or erased call.
         fn emitBoxyDictProcRegistrations(self: *Self) Allocator.Error!void {
+            // In identity order, which no cache hit changes, unlike the
+            // program's procedure numbering.
+            var frozen_workers = std.ArrayList(lir.LIR.LirProcSpecId).empty;
+            defer frozen_workers.deinit(self.allocator);
             for (self.store.getProcSpecs(), 0..) |proc_spec, index| {
-                const capture_layout = proc_spec.static_erased_capture_layout orelse continue;
+                if (proc_spec.static_erased_capture_layout == null) continue;
+                try frozen_workers.append(self.allocator, @fromBackingInt(@intCast(index)));
+            }
+            std.mem.sort(lir.LIR.LirProcSpecId, frozen_workers.items, self.store, struct {
+                fn before(store: @TypeOf(self.store), a: lir.LIR.LirProcSpecId, b: lir.LIR.LirProcSpecId) bool {
+                    return std.mem.lessThan(u8, &store.getProcSpec(a).identity.bytes, &store.getProcSpec(b).identity.bytes);
+                }
+            }.before);
+            for (frozen_workers.items) |proc_id| {
+                const capture_layout = self.store.getProcSpec(proc_id).static_erased_capture_layout.?;
                 // A frozen value reserves the program's capture prefix, like
                 // one this code packs, before its captures and metadata.
                 const capture_prefix_size: u32 = self.erased_capture_prefix;
                 const capture_size = capture_prefix_size + self.getLayoutSize(capture_layout);
-                try self.emitErasedProcRegistration(@fromBackingInt(@intCast(index)), @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size)), capture_prefix_size);
+                try self.emitErasedProcRegistration(proc_id, @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size)), capture_prefix_size);
             }
             for (self.boxy_worker_procs) |proc_id| {
                 const proc_index = @backingInt(proc_id);
@@ -22259,13 +22378,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitInternalCodeAddress(.{ .boxy_thunk = proc_id }, thunk_offset, addr_reg);
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 defer builder.deinit();
+                var runtime_regs: RuntimeRefRegs = .{};
                 try builder.addImmArg(@intCast(proc_index));
                 try builder.addRegArg(addr_reg);
-                try builder.addImmArg(@backingInt(ret_layout));
+                try self.addRuntimeLayoutArg(&builder, &runtime_regs, ret_layout);
                 try builder.addImmArg(@bitCast(proc.rc_borrowed_params));
                 try builder.addImmArg(if (proc.rc_ret_borrowed) 1 else 0);
                 try builder.addImmArg(@bitCast(proc.rc_ret_lenders));
                 try self.callBoxyBuiltin(&builder, .register_proc);
+                runtime_regs.release(self);
                 self.codegen.freeGeneral(addr_reg);
             }
         }
@@ -26161,7 +26282,7 @@ test "independent fragments record their static data use" {
             .linked_data => |data| {
                 if (std.mem.eql(u8, cg.getSymbolNames()[@backingInt(data.symbol)], "fragment_static_value")) reads_value = true;
             },
-            .linked_function, .retired => {},
+            .linked_function, .retired, .runtime_ref => {},
         }
     }
     try std.testing.expect(reads_value);

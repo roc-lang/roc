@@ -4809,7 +4809,7 @@ pub const MonoLlvmCodeGen = struct {
         for (plan.operands(), 0..) |operand, i| {
             types[i] = switch (operand) {
                 .out, .out_desc, .value, .opt_value, .desc, .opt_desc => ptr_ty,
-                .local_layout, .imm32 => .i32,
+                .local_layout, .layout, .imm32 => .i32,
                 .imm8 => .i8,
             };
             values[i] = switch (operand) {
@@ -4820,6 +4820,7 @@ pub const MonoLlvmCodeGen = struct {
                 .desc => |ref| try self.resolveBoxyDesc(ref),
                 .opt_desc => |ref| if (ref) |r| try self.resolveBoxyDesc(r) else try self.boxyNullPtr(),
                 .local_layout => |local| try self.boxyInt(.i32, @backingInt(self.localLayout(local))),
+                .layout => |layout_idx| try self.boxyInt(.i32, @backingInt(layout_idx)),
                 .imm32 => |value| try self.boxyInt(.i32, value),
                 .imm8 => |value| try self.boxyInt(.i8, value),
             };
@@ -5516,10 +5517,9 @@ pub const MonoLlvmCodeGen = struct {
         const proc_spec = self.store.getProcSpec(proc_id);
         try self.callBoxyVoid(
             "roc_boxy_register_erased_proc",
-            &.{ try self.ptrType(), .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 },
+            &.{ try self.ptrType(), .i32, .i32, .i32, .i32, .i32, .i32, .i32 },
             &.{
                 proc_fn.toValue(builder),
-                try self.boxyInt(.i32, @backingInt(proc_id)),
                 try self.boxyInt(.i32, @backingInt(self.layouts().runtimeRepresentationLayoutIdx(proc_spec.ret_layout))),
                 try self.boxyInt(.i32, metadata_offset),
                 try self.boxyInt(.i32, proc_spec.erased_arg_layouts.start),

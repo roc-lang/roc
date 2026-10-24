@@ -38,6 +38,8 @@ pub const MatchTree = @import("match_tree.zig");
 pub const SolvedInline = @import("solved_inline.zig");
 pub const SolvedLirLower = @import("solved_lir_lower.zig");
 pub const ComptimeScalarValues = @import("comptime_scalar_values.zig");
+/// The erased callables completed compile-time values hold.
+pub const CompletedErasedMembers = @import("completed_erased_members.zig").CompletedErasedMembers;
 /// The compile-time producers each producer's evaluation reads.
 pub const ComptimeRootGraph = @import("comptime_root_graph.zig");
 /// Discovery summaries of a lowered program (design.md "Discovery Summaries").

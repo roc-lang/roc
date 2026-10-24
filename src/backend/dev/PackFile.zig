@@ -232,6 +232,21 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
             const scope: ProcArtifact.SymbolScope = if (names.renames(relocation.name)) .shared else relocation.scope;
             try writer.byte(@backingInt(scope));
         }
+        try writer.word(@intCast(artifact.runtime_refs.len));
+        for (artifact.runtime_refs) |runtime_ref| {
+            try writer.word(runtime_ref.site);
+            switch (runtime_ref.ref) {
+                .layout => |idx| {
+                    try writer.byte(0);
+                    try writer.word(idx);
+                },
+                .erased_arg_layouts => |span| {
+                    try writer.byte(1);
+                    try writer.word(span.start);
+                    try writer.word(span.len);
+                },
+            }
+        }
         try writer.word(@intCast(artifact.data.len));
         for (artifact.data) |item| {
             try writer.str(names.of(item.name));
@@ -412,6 +427,15 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
                 },
             };
         }
+        const runtime_refs = try arena_allocator.alloc(ProcArtifact.RuntimeReference, try reader.word());
+        for (runtime_refs) |*runtime_ref| {
+            const site = try reader.word();
+            runtime_ref.* = .{ .site = site, .ref = switch (try reader.byte()) {
+                0 => .{ .layout = try reader.word() },
+                1 => .{ .erased_arg_layouts = .{ .start = try reader.word(), .len = try reader.word() } },
+                else => return error.MalformedPack,
+            } };
+        }
         const data = try arena_allocator.alloc(ProcArtifact.DataItem, try reader.word());
         for (data) |*item| {
             const name = try reader.str();
@@ -458,6 +482,7 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
             .lines = lines,
             .failure_sites = failure_sites,
             .relocations = relocations,
+            .runtime_refs = runtime_refs,
             .data = data,
             .loc = loc,
         };

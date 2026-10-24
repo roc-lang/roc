@@ -17,6 +17,7 @@ const Common = @import("common.zig");
 const value_rules = @import("value_rules");
 const AnyAll = collections.AnyAll;
 const ComptimeScalarValues = @import("comptime_scalar_values.zig");
+const CompletedErasedMembers = @import("completed_erased_members.zig").CompletedErasedMembers;
 const match_tree = @import("match_tree.zig");
 const Mono = @import("monotype/ast.zig");
 const postcheck_values = @import("comptime_scalar_values.zig");
@@ -209,6 +210,10 @@ pub const Options = struct {
     /// slot reads so the LIR passes see the constants. Only a continuation
     /// lowered after the host program completed can supply them.
     completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues = null,
+    /// The erased callables the completed values this consumer reads hold.
+    /// An erased callable plan compiles a member only when this program
+    /// creates it or a completed value holds it.
+    completed_erased_members: ?*const CompletedErasedMembers = null,
     /// Optional deterministic task counts for parallel solved-LIR lowering.
     /// `run` resets this destination before doing any work.
     parallel_metrics: ?*ParallelMetrics = null,
@@ -290,6 +295,7 @@ pub fn runBorrowed(
     try lowerer.lower();
     try lowerer.bindRoots();
     try lowerer.lowerReachableFns();
+    try lowerer.keepReachedErasedMembers();
     lowerer.keepLoweredSpecProcs();
     try lowerer.writeRuntimeSchemas();
     lowerer.result.finishExpectSites();
@@ -892,6 +898,7 @@ const Lowerer = struct {
     list_in_place_map: bool,
     dict_seed_mode: DictSeedMode,
     completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues,
+    completed_erased_members: ?*const CompletedErasedMembers,
     proc_debug_names: bool,
     spec_cache: ?Common.SpecCacheLookup,
     spec_cache_takes: Common.SpecCacheTakes,
@@ -1262,6 +1269,7 @@ const Lowerer = struct {
             .list_in_place_map = options.list_in_place_map,
             .dict_seed_mode = options.dict_seed_mode,
             .completed_scalar_values = options.completed_scalar_values,
+            .completed_erased_members = options.completed_erased_members,
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
             .spec_cache_takes = options.spec_cache_takes,
@@ -1482,6 +1490,37 @@ const Lowerer = struct {
         self.deinitLoweringState();
         self.runtime_schemas.deinit();
         self.result.deinit();
+    }
+
+    /// Drop each erased callable plan's members that nothing reached: no
+    /// code this program runs creates them and no completed value it reads
+    /// holds them, so no value of the plan can be one of them.
+    fn keepReachedErasedMembers(self: *Lowerer) Allocator.Error!void {
+        const reached = try self.allocator.alloc(bool, self.result.store.procSpecCount());
+        defer self.allocator.free(reached);
+        @memset(reached, false);
+        for (self.fn_entries.items, self.fn_reachable.items) |entry, is_reached| {
+            if (!is_reached) continue;
+            const proc = entry.proc orelse Common.invariant("reachable function had no procedure");
+            reached[@backingInt(proc)] = true;
+        }
+        for (self.result.erased_fns.items) |*set| {
+            var kept: usize = 0;
+            for (set.entries) |entry| {
+                if (reached[@backingInt(entry.entry)]) kept += 1;
+            }
+            if (kept == set.entries.len) continue;
+            const entries = try self.allocator.alloc(LirProgram.ErasedFn, kept);
+            var write: usize = 0;
+            for (set.entries) |entry| {
+                if (reached[@backingInt(entry.entry)]) {
+                    entries[write] = entry;
+                    write += 1;
+                } else freeConstCallableEntry(self.allocator, entry.captures, entry.template.?);
+            }
+            self.allocator.free(set.entries);
+            set.entries = entries;
+        }
     }
 
     /// A keyed specialization is offered to the object cache only when this
@@ -6025,13 +6064,18 @@ const Lowerer = struct {
             if (member.capture_ty) |capture_ty| {
                 if (waiting) return .{ .call = .{ .capture_slots = .{ .ty = capture_ty } } };
             }
-            const entry_proc = try self.markReachableFn(member.target);
+            const template = try constFnTemplateForFn(self, member.target);
+            errdefer freeConstCallableEntry(self.allocator, &.{}, template);
+            // A member the program never creates is named, not compiled: it
+            // may read compile-time values this program does not have.
+            const held = if (self.completed_erased_members) |completed| completed.contains(template) else false;
+            const entry_proc = if (held) try self.markReachableFn(member.target) else try self.procPlaceholder(member.target);
             const capture_layout = if (member.capture_ty) |capture_ty| try self.layoutOfType(capture_ty) else .zst;
             task.entries[task.index] = .{
                 .on_drop = self.erasedCallableOnDrop(capture_layout),
                 .entry = entry_proc,
                 .capture_layout = capture_layout,
-                .template = try constFnTemplateForFn(self, member.target),
+                .template = template,
                 .captures = task.captures,
             };
             task.captures = &.{};

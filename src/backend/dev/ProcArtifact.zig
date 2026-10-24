@@ -80,6 +80,13 @@ pub const Reference = struct {
     veneer: ?u32 = null,
 };
 
+/// A runtime table number the artifact's code loads, with the offset of its
+/// patchable load relative to the artifact.
+pub const RuntimeReference = struct {
+    site: u32,
+    ref: RelocationMod.RuntimeRef,
+};
+
 /// A relocation against a named symbol, with its offset relative to the artifact.
 pub const NamedRelocation = struct {
     offset: u32,
@@ -163,6 +170,9 @@ pub const Artifact = struct {
     lines: []const LineEntry = &.{},
     failure_sites: []const FailureSite = &.{},
     relocations: []const NamedRelocation,
+    /// The Boxy runtime table numbers the code loads, in the producing
+    /// program's numbering until a canonical image renumbers them.
+    runtime_refs: []const RuntimeReference = &.{},
     data: []const DataItem,
     /// The source location a procedure's debug entry names: its procedure's
     /// location (`LirStore.procLoc`) in the set's source-file domain, the
@@ -522,6 +532,7 @@ fn copyArtifacts(a: Allocator, artifacts: *std.ArrayList(Artifact), set: *const 
         const relocations = try a.dupe(NamedRelocation, source.relocations);
         for (relocations) |*relocation| relocation.name = try a.dupe(u8, relocation.name);
         artifact.relocations = relocations;
+        artifact.runtime_refs = try a.dupe(RuntimeReference, source.runtime_refs);
         const data = try a.alloc(DataItem, source.data.len);
         for (source.data, data) |item, *owned| owned.* = try cloneData(a, item);
         artifact.data = data;
@@ -933,7 +944,7 @@ pub fn extractPrepared(
     const refs = codegen.codeRefs();
     for (relocations) |relocation| switch (relocation) {
         .local_data => return error.UnsupportedRelocation,
-        .retired, .linked_function, .linked_data => {},
+        .retired, .linked_function, .linked_data, .runtime_ref => {},
     };
 
     // Standalone branch islands belong to this placement, not the artifact
@@ -1067,9 +1078,14 @@ pub fn extractPrepared(
         }
 
         var region_relocations = std.ArrayList(NamedRelocation).empty;
+        var region_runtime_refs = std.ArrayList(RuntimeReference).empty;
         for (relocation_groups.of(region_index)) |relocation_index| {
             const relocation = relocations[relocation_index];
             const offset = relocation.getOffset();
+            if (relocation == .runtime_ref) {
+                try region_runtime_refs.append(arena_allocator, .{ .site = @intCast(offset - region.start), .ref = relocation.runtime_ref.ref });
+                continue;
+            }
             try region_relocations.append(arena_allocator, switch (relocation) {
                 .linked_function => |function| .{
                     .offset = @intCast(offset - region.start),
@@ -1083,7 +1099,7 @@ pub fn extractPrepared(
                     .scope = codegen.symbolScope(data.symbol),
                     .kind = .{ .data = data.kind },
                 },
-                .retired, .local_data => unreachable, // the switch above skipped or rejected these kinds
+                .retired, .local_data, .runtime_ref => unreachable, // the switch above skipped or rejected these kinds, and the loop took runtime references
             });
         }
 
@@ -1120,6 +1136,7 @@ pub fn extractPrepared(
             .lines = try lines.toOwnedSlice(arena_allocator),
             .failure_sites = try failure_sites.toOwnedSlice(arena_allocator),
             .relocations = try region_relocations.toOwnedSlice(arena_allocator),
+            .runtime_refs = try region_runtime_refs.toOwnedSlice(arena_allocator),
             .data = region_data,
             .loc = switch (region.kind) {
                 // A procedure placed from another set carries the location
@@ -1141,7 +1158,7 @@ fn refSite(ref: anytype) ?usize {
 fn relocationOffset(relocation: anytype) ?usize {
     return switch (relocation) {
         .retired => null,
-        .linked_function, .linked_data => @intCast(relocation.getOffset()),
+        .linked_function, .linked_data, .runtime_ref => @intCast(relocation.getOffset()),
         .local_data => unreachable, // extraction rejected these kinds before grouping relocations
     };
 }
@@ -1507,6 +1524,7 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
         const relocations = try a.dupe(NamedRelocation, source.relocations);
         for (relocations) |*relocation| relocation.name = try a.dupe(u8, relocation.name);
         artifact.relocations = relocations;
+        artifact.runtime_refs = try a.dupe(RuntimeReference, source.runtime_refs);
         const data = try a.alloc(DataItem, source.data.len);
         for (source.data, data) |item, *owned| owned.* = try cloneData(a, item);
         artifact.data = data;
@@ -1647,6 +1665,7 @@ pub fn canonicalize(allocator: Allocator, set: *const Set, host_visible: []const
         out.symbolic_refs = symbolic_refs;
         out.lines = try a.dupe(LineEntry, source.lines);
         out.failure_sites = try a.dupe(FailureSite, source.failure_sites);
+        out.runtime_refs = try a.dupe(RuntimeReference, source.runtime_refs);
         const relocations = try a.dupe(NamedRelocation, source.relocations);
         for (relocations) |*relocation| {
             const renamed = names.renames(relocation.name);
@@ -1763,6 +1782,7 @@ pub fn assembleCanonical(
         };
         start.* = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame);
         try appendMetadata(CG, codegen, artifact, start.*, .same_domain);
+        try appendRuntimeRefs(CG, codegen, artifact, start.*);
         for (artifact.relocations) |relocation| {
             const symbol = try codegen.internSymbolName(relocation.name, relocation.scope);
             const offset: u64 = start.* + relocation.offset;
@@ -1868,6 +1888,7 @@ pub fn appendPrepared(
         };
         starts[index] = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame);
         try appendMetadata(CG, codegen, artifact, starts[index], .same_domain);
+        try appendRuntimeRefs(CG, codegen, artifact, starts[index]);
         for (artifact.relocations) |relocation| {
             const symbol = try codegen.internSymbolName(relocation.name, relocation.scope);
             const offset: u64 = starts[index] + relocation.offset;
@@ -1910,6 +1931,13 @@ const LineBinding = union(enum) {
     same_domain,
     file_map: []const ?u32,
 };
+
+/// Record the runtime table numbers an artifact placed at `start` loads.
+fn appendRuntimeRefs(comptime CG: type, codegen: *CG, artifact: Artifact, start: usize) Allocator.Error!void {
+    for (artifact.runtime_refs) |runtime_ref| {
+        try codegen.appendAssembledRelocation(.{ .runtime_ref = .{ .offset = start + runtime_ref.site, .ref = runtime_ref.ref } });
+    }
+}
 
 fn appendMetadata(comptime CG: type, codegen: *CG, artifact: Artifact, start: usize, lines: LineBinding) Allocator.Error!void {
     switch (artifact.kind) {
@@ -2077,6 +2105,7 @@ fn relocationEql(comptime CG: type, original: *CG, fresh: *CG, lhs: IndexedReloc
             std.mem.eql(u8, original.symbolName(function.symbol), fresh.symbolName(rhs.linked_function.symbol)),
         .linked_data => |data| data.offset == rhs.linked_data.offset and data.kind == rhs.linked_data.kind and
             std.mem.eql(u8, original.symbolName(data.symbol), fresh.symbolName(rhs.linked_data.symbol)),
+        .runtime_ref => |ref| ref.offset == rhs.runtime_ref.offset and std.meta.eql(ref.ref, rhs.runtime_ref.ref),
         .local_data, .retired => false,
     };
 }
@@ -2290,6 +2319,10 @@ pub fn splice(
         };
         const start = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame);
         try appendMetadata(CG, codegen, artifact, start, .{ .file_map = file_map });
+        // A program's own code loads its table numbers; code another
+        // program compiled never reaches the runtime's tables.
+        if (artifact.runtime_refs.len != 0)
+            base.invariant("a spliced artifact loads another program's Boxy runtime table numbers", .{});
         switch (artifact.kind) {
             .rc_helper => |name| try codegen.registerSplicedHelper(name, start + artifact.entry),
             .proc => |identity| try codegen.registerSplicedProc(identity, start),

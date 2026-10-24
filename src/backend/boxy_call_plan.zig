@@ -38,6 +38,8 @@ pub const Operand = union(enum) {
     opt_desc: ?LIR.BoxyDescRef,
     /// The layout index of a local, as a `u32`.
     local_layout: LocalId,
+    /// A layout index, as a `u32`.
+    layout: layout.Idx,
     /// A `u32` immediate.
     imm32: u32,
     /// A `u8` immediate (a `BoxyTransferMode`).
@@ -84,7 +86,7 @@ fn mode(m: LIR.BoxyTransferMode) Operand {
 }
 
 fn layoutImm(idx: layout.Idx) Operand {
-    return .{ .imm32 = @backingInt(idx) };
+    return .{ .layout = idx };
 }
 
 /// `roc_boxy_box(out, out_desc, payload, payload_layout, source_desc, payload_desc, payload_mode, target_layout)`.

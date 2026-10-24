@@ -9619,6 +9619,8 @@ fn closureConvertsLiteral(converting_artifacts: *const std.DynamicBitSetUnmanage
 fn closureNamesProgramLocalSymbols(set: *const backend.dev.ProcArtifact.Set, placed: []const u32) bool {
     for (placed) |index| {
         const artifact = set.artifacts[index];
+        // The Boxy runtime's table numbers are the writing program's own.
+        if (artifact.runtime_refs.len != 0) return true;
         for (artifact.relocations) |relocation| {
             if (relocation.scope == .program and !carriesData(artifact, relocation.name)) return true;
         }
@@ -10051,13 +10053,16 @@ fn lirResultNeedsBoxyRuntime(result: *const lir.Program.Result) bool {
 /// link. The runtime object provides the `roc_boxy_*` wrappers and
 /// `roc_boxy_init_embedded`; a companion data object carries the sidecar those
 /// symbols read (the descriptor tables, layout store, and string store the
-/// program's boxy statements index).
+/// program's boxy statements index). A canonical dev image's code numbers
+/// those tables as `canonical_order` does, so its sidecar holds exactly what
+/// that order names; an LLVM image's indexes the program's own tables.
 fn appendBoxyRuntimeLinkInputs(
     ctx: *CliCtx,
     object_files: *std.array_list.Managed([]const u8),
     scratch_dir: []const u8,
     target: RocTarget,
     lir_result: *const lir.Program.Result,
+    canonical_order: ?*const lir.RuntimeTables.Order,
 ) CliMainError!void {
     const runtime_bytes = EmbeddedTargetObjects.forTarget(target).boxy_runtime orelse {
         try ctx.io.stderr().print(
@@ -10072,7 +10077,10 @@ fn appendBoxyRuntimeLinkInputs(
         return error.NativeCompilationFailed;
     };
 
-    var sidecar_blob = lir.LirImage.buildSidecarBlob(ctx.gpa, lir_result) catch {
+    var sidecar_blob = (if (canonical_order) |order|
+        lir.LirImage.buildCanonicalSidecarBlob(ctx.gpa, lir_result, order)
+    else
+        lir.LirImage.buildSidecarBlob(ctx.gpa, lir_result)) catch {
         return error.NativeCompilationFailed;
     };
     defer sidecar_blob.deinit(ctx.gpa);
@@ -11638,7 +11646,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
             try appendDefaultPlatformLinkInputs(ctx, &object_files, app_object.artifact_dir, target);
         }
         if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) {
-            try appendBoxyRuntimeLinkInputs(ctx, &object_files, app_object.artifact_dir, target, &lowered.lir_result);
+            try appendBoxyRuntimeLinkInputs(ctx, &object_files, app_object.artifact_dir, target, &lowered.lir_result, null);
         }
         reporter.end();
 
@@ -11968,7 +11976,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
 
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
     const obj_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, obj_filename });
-    const uses_boxy = object_compiler.compileToObjectFileAndWrite(
+    var written = object_compiler.compileToObjectFileAndWrite(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         entrypoints,
@@ -11985,6 +11993,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         std.log.err("Native compilation failed: {}", .{err});
         return error.NativeCompilationFailed;
     };
+    defer written.runtime_tables.deinit(ctx.gpa);
+    const uses_boxy = written.uses_boxy;
     reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
     reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
     try writePackObjects(ctx, &build_env, root_artifact, imported_artifacts, relation_artifacts, &lowered, args, target, final_output_path);
@@ -12023,7 +12033,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // entrypoints, call `roc_boxy_init_embedded`. Link the boxy runtime object
     // and a data object carrying the sidecar those symbols read.
     if (uses_boxy) {
-        try appendBoxyRuntimeLinkInputs(ctx, &extra_objects, build_scratch_dir, target, &lowered.lir_result);
+        try appendBoxyRuntimeLinkInputs(ctx, &extra_objects, build_scratch_dir, target, &lowered.lir_result, &written.runtime_tables);
     }
     try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, obj_path, extra_objects.items, link_facts);
 

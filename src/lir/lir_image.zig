@@ -15,6 +15,7 @@ const layout_mod = @import("layout");
 const LIR = core.LIR;
 const LirStore = core.LirStore;
 const Program = core.Program;
+const RuntimeTables = @import("runtime_tables.zig");
 const GuardedList = collections.GuardedList;
 
 /// Public `MAGIC` declaration.
@@ -795,12 +796,34 @@ pub fn buildSidecarBlob(
     gpa: std.mem.Allocator,
     lowered: *const Program.Result,
 ) (ImageError || std.mem.Allocator.Error)!SidecarBlob {
+    return serializeGrowing(gpa, serializeSidecarInto, .{lowered});
+}
+
+/// The sidecar of a canonical dev image (design.md "Canonical Dev Images"):
+/// its layouts are the fixed ones, then those `order` lists, numbered as the
+/// image's code loads them, then every layout those and the Boxy tables
+/// reach, in the order a walk from them first meets each; its erased
+/// argument layouts are `order`'s runs. Which procedures this program
+/// lowered therefore changes nothing in it.
+pub fn buildCanonicalSidecarBlob(
+    gpa: std.mem.Allocator,
+    lowered: *const Program.Result,
+    order: *const RuntimeTables.Order,
+) (ImageError || std.mem.Allocator.Error)!SidecarBlob {
+    var canonical = try CanonicalLayouts.init(gpa, lowered, order);
+    defer canonical.deinit(gpa);
+    return serializeGrowing(gpa, serializeCanonicalSidecarInto, .{ lowered, &canonical, order });
+}
+
+/// Serialize into a buffer that grows until the sidecar fits, then copy it
+/// into one exactly its size.
+fn serializeGrowing(gpa: std.mem.Allocator, comptime serialize: anytype, args: anytype) (ImageError || std.mem.Allocator.Error)!SidecarBlob {
     var capacity: usize = 1 << 16;
     while (true) {
         const bytes = try gpa.alignedAlloc(u8, .@"16", capacity);
         @memset(bytes, 0);
         var fba = std.heap.FixedBufferAllocator.init(bytes);
-        if (serializeSidecarInto(fba.allocator(), bytes, lowered)) |sidecar| {
+        if (@call(.auto, serialize, .{ fba.allocator(), bytes } ++ args)) |sidecar| {
             const compact = gpa.alignedAlloc(u8, .@"16", fba.end_index) catch |err| {
                 gpa.free(bytes);
                 return err;
@@ -819,6 +842,214 @@ pub fn buildSidecarBlob(
             },
         }
     }
+}
+
+/// The canonical index of every layout a canonical sidecar holds.
+const CanonicalLayouts = struct {
+    /// The program layout at each canonical index.
+    programs: std.ArrayList(layout_mod.Idx) = .empty,
+    /// The canonical index of each program layout, or `absent`.
+    canonical_of: []u32,
+
+    const absent = std.math.maxInt(u32);
+
+    fn init(gpa: std.mem.Allocator, lowered: *const Program.Result, order: *const RuntimeTables.Order) std.mem.Allocator.Error!CanonicalLayouts {
+        const store = &lowered.layouts;
+        var self = CanonicalLayouts{ .canonical_of = try gpa.alloc(u32, store.layoutCount()) };
+        errdefer self.deinit(gpa);
+        @memset(self.canonical_of, absent);
+        for (0..RuntimeTables.fixed_layout_count) |index| try self.add(gpa, @fromBackingInt(@intCast(index)));
+        // The code numbered these first, in this order.
+        for (order.layouts.items) |idx| try self.add(gpa, idx);
+        for (order.erased_arg_layouts.items) |span| {
+            for (lowered.boxy_erased_arg_layouts.items[span.start..][0..span.len]) |idx| try self.add(gpa, idx);
+        }
+        for (lowered.boxy_type_descs.items) |desc| try self.add(gpa, desc.payload_layout);
+        for (lowered.boxy_tag_variants.items) |variant| try self.add(gpa, variant.payload_layout);
+        for (lowered.boxy_adapters.items) |adapter| {
+            try self.add(gpa, adapter.source_layout);
+            try self.add(gpa, adapter.target_layout);
+        }
+        for (lowered.boxy_method_arg_layouts.items) |idx| try self.add(gpa, idx);
+        for (lowered.boxy_method_slots.items) |slot| if (slot.adapter.ret_layout) |idx| try self.add(gpa, idx);
+        // Every layout one of these names, so the runtime can follow it.
+        var next: usize = 0;
+        while (next < self.programs.items.len) : (next += 1) {
+            const program = self.programs.items[next];
+            const value = store.getLayout(program);
+            switch (value.tag) {
+                .box, .list, .ptr => try self.add(gpa, value.getIdx()),
+                .closure => try self.add(gpa, value.getClosure().captures_layout_idx),
+                .struct_ => {
+                    const data = store.getStructData(value.getStruct().idx);
+                    for (store.struct_fields.sliceRange(data.getFields()).items(.layout)) |field| try self.add(gpa, field);
+                },
+                .tag_union => {
+                    const data = store.getTagUnionData(value.getTagUnion().idx);
+                    for (store.getTagUnionVariants(data).items(.payload_layout)) |payload| try self.add(gpa, payload);
+                },
+                .scalar, .box_of_zst, .list_of_zst, .erased_callable, .zst, .erased_box, .hole => {},
+            }
+            const resolved = store.resolved_list_layouts.items[@backingInt(program)];
+            if (resolved != layout_mod.Idx.none) try self.add(gpa, resolved);
+        }
+        return self;
+    }
+
+    fn deinit(self: *CanonicalLayouts, gpa: std.mem.Allocator) void {
+        self.programs.deinit(gpa);
+        gpa.free(self.canonical_of);
+        self.* = undefined;
+    }
+
+    fn add(self: *CanonicalLayouts, gpa: std.mem.Allocator, program: layout_mod.Idx) std.mem.Allocator.Error!void {
+        const slot = &self.canonical_of[@backingInt(program)];
+        if (slot.* != absent) return;
+        slot.* = @intCast(self.programs.items.len);
+        try self.programs.append(gpa, program);
+    }
+
+    fn of(self: *const CanonicalLayouts, program: layout_mod.Idx) layout_mod.Idx {
+        const canonical = self.canonical_of[@backingInt(program)];
+        if (canonical == absent) base.invariant("a canonical sidecar names a layout it does not hold", .{});
+        return @fromBackingInt(@intCast(canonical));
+    }
+};
+
+fn serializeCanonicalSidecarInto(
+    gpa: std.mem.Allocator,
+    buffer: []align(16) u8,
+    lowered: *const Program.Result,
+    canonical: *const CanonicalLayouts,
+    order: *const RuntimeTables.Order,
+) (ImageError || std.mem.Allocator.Error)!BoxySidecar {
+    const source = &lowered.layouts;
+    var layouts: collections.SafeList(layout_mod.Layout) = .{};
+    var resolved_list_layouts: std.ArrayList(layout_mod.Idx) = .empty;
+    var struct_fields: layout_mod.StructField.SafeMultiList = .{};
+    var struct_field_offsets: collections.SafeList(layout_mod.WidthValues(u32)) = .{};
+    var struct_field_original_order: collections.SafeList(u32) = .{};
+    var struct_data: collections.SafeList(layout_mod.StructData) = .{};
+    var tag_union_variants: layout_mod.TagUnionVariant.SafeMultiList = .{};
+    var tag_union_data: collections.SafeList(layout_mod.TagUnionData) = .{};
+    for (canonical.programs.items) |program| {
+        const value = source.getLayout(program);
+        const copied: layout_mod.Layout = switch (value.tag) {
+            .box, .list, .ptr => .{ .data = @backingInt(canonical.of(value.getIdx())), .tag = value.tag },
+            .closure => layout_mod.Layout.closure(canonical.of(value.getClosure().captures_layout_idx)),
+            .struct_ => copied: {
+                const struct_layout = value.getStruct();
+                var data = source.getStructData(struct_layout.idx).*;
+                const fields = data.getFields();
+                const first: u32 = @intCast(struct_fields.len());
+                const field_start = @backingInt(fields.start);
+                for (field_start..field_start + fields.count) |field_index| {
+                    const field = source.struct_fields.get(@fromBackingInt(@intCast(field_index)));
+                    _ = try struct_fields.append(gpa, .{ .index = field.index, .layout = canonical.of(field.layout), .is_padding = field.is_padding });
+                    _ = try struct_field_offsets.append(gpa, source.struct_field_offsets.items.items[field_index]);
+                    _ = try struct_field_original_order.append(gpa, source.struct_field_original_order.items.items[field_index]);
+                }
+                data.fields = .{ .start = first, .count = fields.count };
+                const index = try struct_data.append(gpa, data);
+                break :copied layout_mod.Layout.struct_(struct_layout.sort_key, .{ .int_idx = @intCast(@backingInt(index)) });
+            },
+            .tag_union => copied: {
+                const tag_union_layout = value.getTagUnion();
+                var data = source.getTagUnionData(tag_union_layout.idx).*;
+                const first: u32 = @intCast(tag_union_variants.len());
+                for (source.getTagUnionVariants(&data).items(.payload_layout)) |payload| {
+                    _ = try tag_union_variants.append(gpa, .{ .payload_layout = canonical.of(payload) });
+                }
+                data.variants = .{ .start = first, .count = data.variants.count };
+                const index = try tag_union_data.append(gpa, data);
+                break :copied layout_mod.Layout.tagUnion(tag_union_layout.sort_key, .{ .int_idx = @intCast(@backingInt(index)) });
+            },
+            .scalar, .box_of_zst, .list_of_zst, .erased_callable, .zst, .erased_box, .hole => value,
+        };
+        _ = try layouts.append(gpa, copied);
+        const resolved = source.resolved_list_layouts.items[@backingInt(program)];
+        try resolved_list_layouts.append(gpa, if (resolved == layout_mod.Idx.none) resolved else canonical.of(resolved));
+    }
+    canonicalizePersistedItems(layout_mod.Layout, layouts.items.items);
+    canonicalizePersistedItems(layout_mod.Idx, resolved_list_layouts.items);
+    canonicalizePersistedItems(u32, struct_fields.field(.index));
+    canonicalizePersistedItems(layout_mod.Idx, struct_fields.field(.layout));
+    canonicalizePersistedItems(bool, struct_fields.field(.is_padding));
+    canonicalizePersistedItems(layout_mod.WidthValues(u32), struct_field_offsets.items.items);
+    canonicalizePersistedItems(u32, struct_field_original_order.items.items);
+    canonicalizePersistedItems(layout_mod.StructData, struct_data.items.items);
+    canonicalizePersistedItems(layout_mod.Idx, tag_union_variants.field(.payload_layout));
+    canonicalizePersistedItems(layout_mod.TagUnionData, tag_union_data.items.items);
+    const layout_store: layout_mod.Store = .{
+        .allocator = gpa,
+        .layouts = layouts,
+        .resolved_list_layouts = resolved_list_layouts,
+        .tuple_elems = .{},
+        .struct_fields = struct_fields,
+        .struct_field_offsets = struct_field_offsets,
+        .struct_field_original_order = struct_field_original_order,
+        .struct_data = struct_data,
+        .tag_union_variants = tag_union_variants,
+        .tag_union_data = tag_union_data,
+        .interned_layouts = .empty,
+        .interned_key_bytes = .empty,
+        .scratch_intern_key = .empty,
+        .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(gpa),
+        .recursive_unfoldings = .empty,
+        .recursive_groups = .{},
+        .target_usize = source.target_usize,
+        // `BoxySidecar.fromStores` reads only the array-backed fields.
+        .digest_cache = undefined,
+    };
+    const names = try BoxyNamesImage.fromStore(Copier{ .allocator = gpa, .base_ptr = buffer.ptr, .image_capacity = buffer.len, .contract = .persisted }, &lowered.store.boxy_names);
+
+    const type_descs = try cloneStdArrayList(Program.BoxyTypeDesc, gpa, lowered.boxy_type_descs);
+    for (type_descs.items) |*desc| desc.payload_layout = canonical.of(desc.payload_layout);
+    const tag_variants = try cloneStdArrayList(Program.BoxyTagVariant, gpa, lowered.boxy_tag_variants);
+    for (tag_variants.items) |*variant| variant.payload_layout = canonical.of(variant.payload_layout);
+    const adapters = try cloneStdArrayList(Program.BoxyAdapter, gpa, lowered.boxy_adapters);
+    for (adapters.items) |*adapter| {
+        adapter.source_layout = canonical.of(adapter.source_layout);
+        adapter.target_layout = canonical.of(adapter.target_layout);
+    }
+    const method_arg_layouts = try cloneStdArrayList(layout_mod.Idx, gpa, lowered.boxy_method_arg_layouts);
+    for (method_arg_layouts.items) |*idx| idx.* = canonical.of(idx.*);
+    const method_slots = try cloneStdArrayList(Program.BoxyMethodSlot, gpa, lowered.boxy_method_slots);
+    for (method_slots.items) |*slot| if (slot.adapter.ret_layout) |idx| {
+        slot.adapter.ret_layout = canonical.of(idx);
+    };
+    var erased_arg_layouts: std.ArrayList(layout_mod.Idx) = .empty;
+    for (order.erased_arg_layouts.items) |span| {
+        for (lowered.boxy_erased_arg_layouts.items[span.start..][0..span.len]) |idx| try erased_arg_layouts.append(gpa, canonical.of(idx));
+    }
+    canonicalizePersistedItems(layout_mod.Idx, erased_arg_layouts.items);
+    const dicts = try cloneStdArrayList(Program.BoxyDict, gpa, lowered.boxy_dicts);
+    const desc_refs = try cloneStdArrayList(Program.BoxyDescRef, gpa, lowered.boxy_desc_refs);
+    const dict_refs = try cloneStdArrayList(Program.BoxyDictRef, gpa, lowered.boxy_dict_refs);
+    const tag_payload_descs = try cloneStdArrayList(Program.BoxyTagPayloadDesc, gpa, lowered.boxy_tag_payload_descs);
+    const field_names = try cloneStdArrayList(LIR.BoxyNameId, gpa, lowered.boxy_field_names);
+    const method_hidden_desc_sources = try cloneStdArrayList(Program.BoxyMethodHiddenDescSource, gpa, lowered.boxy_method_hidden_desc_sources);
+    const erased_arg_desc_keys = try cloneStdArrayList(LIR.ErasedArgDescKey, gpa, lowered.boxy_erased_arg_desc_keys);
+    const erased_arg_desc_offsets = try cloneStdArrayList(LIR.ErasedArgDescOffset, gpa, lowered.boxy_erased_arg_desc_offsets);
+    const erased_arg_desc_params = try cloneStdArrayList(LIR.ErasedArgDescParam, gpa, lowered.boxy_erased_arg_desc_params);
+
+    return BoxySidecar.fromStores(buffer.ptr, buffer.len, &layout_store, names, .{
+        .type_descs = type_descs.items,
+        .dicts = dicts.items,
+        .adapters = adapters.items,
+        .desc_refs = desc_refs.items,
+        .dict_refs = dict_refs.items,
+        .tag_variants = tag_variants.items,
+        .tag_payload_descs = tag_payload_descs.items,
+        .field_names = field_names.items,
+        .method_slots = method_slots.items,
+        .method_arg_layouts = method_arg_layouts.items,
+        .method_hidden_desc_sources = method_hidden_desc_sources.items,
+        .erased_arg_layouts = erased_arg_layouts.items,
+        .erased_arg_desc_keys = erased_arg_desc_keys.items,
+        .erased_arg_desc_offsets = erased_arg_desc_offsets.items,
+        .erased_arg_desc_params = erased_arg_desc_params.items,
+    });
 }
 
 comptime {

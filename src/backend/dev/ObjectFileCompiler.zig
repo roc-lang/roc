@@ -65,10 +65,15 @@ pub const CompilationResult = struct {
     /// The compiled program lifted into artifacts, when the compile ran in
     /// pack mode on a target whose artifacts can be extracted.
     artifacts: ?ProcArtifact.Set = null,
+    /// The Boxy runtime table entries the object's code loads, in the
+    /// canonical order it numbers them by; the sidecar linked beside the
+    /// object holds exactly these (`LirImage.buildCanonicalSidecarBlob`).
+    runtime_tables: lir.RuntimeTables.Order = .{},
 
     pub fn deinit(self: *CompilationResult) void {
         self.allocator.free(self.object_bytes);
         if (self.artifacts) |*set| set.deinit();
+        self.runtime_tables.deinit(self.allocator);
     }
 };
 
@@ -196,9 +201,18 @@ pub const ObjectFileCompiler = struct {
         return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.erased_capture_prefix, self.timing, self.pack_mode, self.splice_source, self.capture_artifacts, self.emit_object, self.post_check_executor, self.reuse_same_program);
     }
 
-    /// Compile to an object file and write it to a path. Returns whether the
-    /// compiled object emits boxy runtime calls; when set, the caller must add
-    /// the boxy runtime object and the embedded sidecar to the link.
+    /// What a written object needs linked beside it.
+    pub const WrittenObject = struct {
+        /// Whether the compiled object emits boxy runtime calls; when set,
+        /// the caller must add the boxy runtime object and the embedded
+        /// sidecar to the link.
+        uses_boxy: bool,
+        /// The runtime table entries the object's code loads, which its
+        /// sidecar holds (`CompilationResult.runtime_tables`).
+        runtime_tables: lir.RuntimeTables.Order,
+    };
+
+    /// Compile to an object file and write it to a path.
     pub fn compileToObjectFileAndWrite(
         self: *ObjectFileCompiler,
         lir_store: *const LirStore,
@@ -212,7 +226,7 @@ pub const ObjectFileCompiler = struct {
         target: RocTarget,
         output_path: []const u8,
         roc_ctx: CoreCtx,
-    ) CompilationError!bool {
+    ) CompilationError!WrittenObject {
         var result = try self.compileToObjectFile(
             lir_store,
             layout_store,
@@ -240,7 +254,9 @@ pub const ObjectFileCompiler = struct {
             return CompilationError.ObjectGenerationFailed;
         };
         if (self.timing) |timing| timing.finish(file_io_started_ns, .file_io);
-        return result.uses_boxy;
+        const runtime_tables = result.runtime_tables;
+        result.runtime_tables = .{};
+        return .{ .uses_boxy = result.uses_boxy, .runtime_tables = runtime_tables };
     }
 
     /// Emit a data-only object from already materialized readonly exports.
@@ -516,6 +532,11 @@ fn compileWithCodeGen(
     }
     const starts = ProcArtifact.assembleCanonical(CodeGen, allocator, &final, &canonical.set, &procs_by_identity, &helper_keys) catch return CompilationError.OutOfMemory;
     defer allocator.free(starts);
+    // The placed code loads the Boxy runtime's table numbers in canonical
+    // order; number them by it, so they depend on nothing but that code.
+    var runtime_numbering: lir.RuntimeTables.Numbering = .{};
+    defer runtime_numbering.deinit(allocator);
+    final.renumberRuntimeRefs(&runtime_numbering) catch return CompilationError.OutOfMemory;
 
     var symbols = std.ArrayList(SymbolDefinition).empty;
     defer symbols.deinit(allocator);
@@ -745,6 +766,7 @@ fn compileWithCodeGen(
         .allocator = allocator,
         .uses_boxy = final.boxy_runtime_used,
         .artifacts = artifacts,
+        .runtime_tables = runtime_numbering.takeOrder(),
     };
 }
 
@@ -914,7 +936,7 @@ fn resolveObjectSymbols(
         .linked_function => |function| {
             symbols[@backingInt(function.symbol)].is_function = true;
         },
-        .linked_data, .local_data, .retired => {},
+        .linked_data, .local_data, .retired, .runtime_ref => {},
     };
     for (definitions) |definition| {
         const symbol = &symbols[@backingInt(definition.id)];
