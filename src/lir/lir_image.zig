@@ -936,13 +936,7 @@ fn serializeCanonicalSidecarInto(
     var struct_data: collections.SafeList(layout_mod.StructData) = .{};
     var tag_union_variants: layout_mod.TagUnionVariant.SafeMultiList = .{};
     var tag_union_data: collections.SafeList(layout_mod.TagUnionData) = .{};
-    var recursive_layout_keys: collections.SafeList(layout_mod.Store.RecursiveLayoutKey) = .{};
-    // The recursive-graph key position of each program layout, or `absent`.
-    const key_position_of = try gpa.alloc(u32, source.layoutCount());
-    defer gpa.free(key_position_of);
-    @memset(key_position_of, CanonicalLayouts.absent);
-    for (source.recursiveLayoutKeys(), 0..) |entry, position| key_position_of[@backingInt(entry.layout)] = @intCast(position);
-    for (canonical.programs.items, 0..) |program, canonical_index| {
+    for (canonical.programs.items) |program| {
         const value = source.getLayout(program);
         const copied: layout_mod.Layout = switch (value.tag) {
             .box, .list, .ptr => .{ .data = @backingInt(canonical.of(value.getIdx())), .tag = value.tag },
@@ -979,13 +973,6 @@ fn serializeCanonicalSidecarInto(
         _ = try layouts.append(gpa, copied);
         const resolved = source.resolved_list_layouts.items[@backingInt(program)];
         try resolved_list_layouts.append(gpa, if (resolved == layout_mod.Idx.none) resolved else canonical.of(resolved));
-        const key_position = key_position_of[@backingInt(program)];
-        if (key_position != CanonicalLayouts.absent) {
-            _ = try recursive_layout_keys.append(gpa, .{
-                .key = source.recursiveLayoutKeys()[key_position].key,
-                .layout = @fromBackingInt(@intCast(canonical_index)),
-            });
-        }
     }
     canonicalizePersistedItems(layout_mod.Layout, layouts.items.items);
     canonicalizePersistedItems(layout_mod.Idx, resolved_list_layouts.items);
@@ -997,7 +984,6 @@ fn serializeCanonicalSidecarInto(
     canonicalizePersistedItems(layout_mod.StructData, struct_data.items.items);
     canonicalizePersistedItems(layout_mod.Idx, tag_union_variants.field(.payload_layout));
     canonicalizePersistedItems(layout_mod.TagUnionData, tag_union_data.items.items);
-    canonicalizePersistedItems(layout_mod.Store.RecursiveLayoutKey, recursive_layout_keys.items.items);
     const layout_store: layout_mod.Store = .{
         .allocator = gpa,
         .layouts = layouts,
@@ -1012,7 +998,11 @@ fn serializeCanonicalSidecarInto(
         .interned_layouts = .empty,
         .interned_key_bytes = .empty,
         .scratch_intern_key = .empty,
-        .recursive_layout_keys = recursive_layout_keys,
+        // The Boxy runtime only reads this store's layouts and never takes
+        // their content digests, so it carries no recursive-graph keys, whose
+        // presence depends on how each layout was committed rather than on
+        // what the code loads.
+        .recursive_layout_keys = .{},
         .interned_recursive_graphs = .empty,
         .recursive_unfoldings = .empty,
         .recursive_groups = .{},
