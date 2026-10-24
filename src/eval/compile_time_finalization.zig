@@ -135,6 +135,15 @@ pub const Options = struct {
     /// Where evaluation records the values of literal roots that have value
     /// identities. Set by `finalizeProgram`.
     literal_capture: ?*LiteralCapture = null,
+    /// Set by an embedder that abandons the compilation. Finalization reads
+    /// it between its phases and between evaluation levels, and fails with
+    /// `error.Canceled` once it is set.
+    cancel_request: ?*const std.atomic.Value(bool) = null,
+
+    fn checkCancelRequest(self: Options) error{Canceled}!void {
+        const request = self.cancel_request orelse return;
+        if (request.load(.acquire)) return error.Canceled;
+    }
 };
 
 /// The values and outcomes of the literal roots one finalization evaluates
@@ -1495,6 +1504,7 @@ fn specializeAndEvaluate(
         host_target.spec_comptime_reads = target.spec_comptime_reads;
     }
     if (options.object_cache != null) host_target.spec_comptime_reads = true;
+    try options.checkCancelRequest();
     var monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.HostedFunctionNotBound => finalizationInvariant("compile-time evaluation required every hosted procedure to be bound"),
@@ -1517,6 +1527,7 @@ fn specializeAndEvaluate(
     errdefer if (prepared_owned) prepared.deinit();
 
     if (compile_time_root_count != 0 or prepared.literalRootCount() != 0) {
+        try options.checkCancelRequest();
         // The compile-time roots are published first, so compile-time
         // evaluation's own share of the root plan is the positions before
         // the program roots; its literal roots join it.
@@ -1946,6 +1957,7 @@ fn evaluateStaged(
     var failure_origins = std.AutoHashMapUnmanaged(StaticSlotEnvironment.ProducerOriginKey, lir.LIR.ComptimeFailureOrigin).empty;
     defer failure_origins.deinit(allocator);
     for (0..groups.level_count) |level| {
+        try options.checkCancelRequest();
         stage_roots.clearRetainingCapacity();
         stage_literals.clearRetainingCapacity();
         completed_values.clearRetainingCapacity();

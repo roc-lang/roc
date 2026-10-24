@@ -127,6 +127,27 @@ receives an explicit trust-required error. Request registrations declare
 whether they require trust. This gate precedes compiler entry; it does not skip
 stages or produce partially checked modules as checked module data.
 
+## LSP document checks
+
+Opening or editing a document schedules a check of it rather than checking it
+on the spot. A reader task receives client messages while the server handles
+them, and the server runs scheduled checks only when no message is pending and
+the reader has consumed all buffered input. A burst of edits (undo, multi-cursor
+edits, fast typing) is therefore checked once, against its final text, with no
+delay added when input is quiet. A request that needs checked types runs its
+document's scheduled check first, since it answers from that build. Shutdown
+drops scheduled checks; the end of client input runs them.
+
+A message that makes the check in progress stale (an edit to, reopening of, or
+closing of the checked document, or shutdown or exit) sets the build's cancel
+request. `BuildEnv.cancel_request` is read between coordinator tasks, before
+checked-program finalization, and between the phases and evaluation levels of
+compile-time finalization; once it is set the build fails with
+`error.Canceled`. A canceled build is only ever deinitialized: the LSP retains
+no build, content hash, or diagnostics from it, and the document stays
+scheduled until the message that canceled it is handled. Cancellation is an
+explicit input from the embedder, never inferred from timing or progress.
+
 ## Core Principles
 
 Compiler stages after parsing and error reporting must not use workarounds,

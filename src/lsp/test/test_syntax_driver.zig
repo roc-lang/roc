@@ -16,6 +16,10 @@ const document_symbol_handler = @import("lsp").handlers.document_symbol;
 pub const TestSyntaxDriver = struct {
     allocator: std.mem.Allocator,
     check_calls: usize = 0,
+    /// When set, the first check waits until its cancel request is set and
+    /// then fails with `error.Canceled`.
+    cancel_gate: ?*CancelGate = null,
+    canceled_checks: usize = 0,
     close_calls: usize = 0,
     imported_module_calls: usize = 0,
     hover_calls: usize = 0,
@@ -31,6 +35,12 @@ pub const TestSyntaxDriver = struct {
     forget_calls: usize = 0,
 
     pub const CheckError = syntax.SyntaxChecker.CheckError;
+
+    /// Lets a test learn when the gated check started.
+    pub const CancelGate = struct {
+        io: std.Io,
+        started: std.Io.Event = .unset,
+    };
     pub const QueryError = syntax.SyntaxChecker.QueryError;
 
     pub const LspRange = struct {
@@ -89,8 +99,23 @@ pub const TestSyntaxDriver = struct {
         _: []const u8,
         _: ?[]const u8,
         _: ?[]const u8,
+        cancel_request: ?*const std.atomic.Value(bool),
     ) CheckError![]Diagnostics.PublishDiagnostics {
         self.check_calls += 1;
+        if (self.cancel_gate) |gate| if (self.check_calls == 1) {
+            gate.started.set(gate.io);
+            if (cancel_request) |request| {
+                // Give up after ten seconds; the test then sees no canceled check.
+                var waited_ms: usize = 0;
+                while (!request.load(.acquire) and waited_ms < 10_000) : (waited_ms += 1) {
+                    std.Io.sleep(gate.io, .fromMilliseconds(1), .awake) catch {};
+                }
+                if (request.load(.acquire)) {
+                    self.canceled_checks += 1;
+                    return error.Canceled;
+                }
+            }
+        };
         return try self.allocator.alloc(Diagnostics.PublishDiagnostics, 0);
     }
 
