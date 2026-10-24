@@ -23825,6 +23825,25 @@ const BodyContext = struct {
         return pat;
     }
 
+    /// A pattern destructuring the nominal layers of `ty` down to
+    /// `target_ty`, one of its nominal backings, which `data` matches.
+    fn addConstructorPatTo(self: *BodyContext, ty: Type.TypeId, target_ty: Type.TypeId, data: BodyPatData) Allocator.Error!DraftPatId {
+        var layers: std.ArrayListUnmanaged(Type.TypeId) = .empty;
+        defer layers.deinit(self.allocator);
+        var current = ty;
+        while (current != target_ty) {
+            const layer = nominalConstructionLayer(self.typeStore(), current) orelse
+                Common.invariant("Monotype inspect target was not a nominal backing of the inspected value");
+            try layers.append(self.allocator, layer.named);
+            current = layer.backing;
+        }
+        var pat = try self.addPat(.{ .ty = current, .data = data });
+        while (layers.pop()) |named| {
+            pat = try self.addPat(.{ .ty = named, .data = .{ .nominal = pat } });
+        }
+        return pat;
+    }
+
     fn addPat(self: *BodyContext, pat: BodyPat) Allocator.Error!DraftPatId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
@@ -24668,15 +24687,14 @@ const BodyContext = struct {
         str_ty: Type.TypeId,
     ) Allocator.Error!InspectStep {
         const shapes = InspectShapes{ .body = self };
-        return switch (InspectRules.actionForShape(shapes, try self.inspectShapeOf(value_ty, shape_ty))) {
+        return switch (InspectRules.actionForShape(shapes, try self.inspectShapeOf(shape_ty))) {
             .literal => |text| .{ .done = .{ .expr = try self.stringExpr(text, str_ty) } },
             .primitive => |primitive| .{ .done = .{ .expr = switch (Common.primitiveInspectLowering(primitive)) {
                 .low_level => |op| try self.lowLevelExpr(op, &.{value}, str_ty),
                 .builtin_method => try self.inspectPrimitiveMethod(value, value_ty, shape_ty, str_ty),
                 .bool_tag_union => Common.invariant("Bool must lower as an ordinary tag union before Str.inspect"),
             } } },
-            .override => .{ .done = .{ .expr = (try self.toInspectCall(value, value_ty, str_ty)) orelse
-                Common.invariant("Monotype inspect override disappeared between its lookup and its call") } },
+            .override => .{ .done = .{ .expr = try self.inspectOverrideAtShape(value, value_ty, shape_ty, str_ty) } },
             .backing => |backing_ty| .{ .tail = .{ .body = .{ .value = value, .value_ty = value_ty, .shape_ty = backing_ty } } },
             .record => |fields| blk: {
                 var list = InspectPartList{ .allocator = self.allocator };
@@ -24707,9 +24725,9 @@ const BodyContext = struct {
         };
     }
 
-    /// How inspection reads `shape_ty`, which is `value_ty` or an inspectable
-    /// backing reached through it.
-    fn inspectShapeOf(self: *BodyContext, value_ty: Type.TypeId, shape_ty: Type.TypeId) Allocator.Error!InspectRules.Shape {
+    /// How inspection reads `shape_ty`, which is the inspected value's type or
+    /// an inspectable backing reached through it.
+    fn inspectShapeOf(self: *BodyContext, shape_ty: Type.TypeId) Allocator.Error!InspectRules.Shape {
         return switch (self.typeStore().get(shape_ty)) {
             .primitive => |primitive| .{ .primitive = primitive },
             .named => |named| blk: {
@@ -24718,7 +24736,7 @@ const BodyContext = struct {
                     if (args.len != 1) Common.invariant("List type reached Monotype inspect lowering without one type argument");
                     break :blk .{ .list = GuardedList.at(args, 0) };
                 }
-                if (try self.hasInspectOverride(value_ty)) break :blk .{ .nominal = .{ .override = {}, .backing = null } };
+                if (try self.hasInspectOverride(shape_ty)) break :blk .{ .nominal = .{ .override = {}, .backing = null } };
                 const backing = named.backing orelse Common.invariant("Str.inspect reached opaque named type without checked inspect authority");
                 break :blk .{ .nominal = .{
                     .override = null,
@@ -24778,6 +24796,31 @@ const BodyContext = struct {
         const body = (try self.toInspectCall(backing_value, shape_ty, str_ty)) orelse
             Common.invariant("primitive inspect backing had no checked to_inspect method");
         const pat = try self.addConstructorPat(value_ty, .{ .bind = backing_local });
+        return try self.addExpr(.{ .ty = str_ty, .data = .{ .match_ = .{
+            .scrutinee = value,
+            .branches = try self.addBranchSpan(&.{.{ .pat = pat, .body = body }}),
+        } } });
+    }
+
+    /// Call the inspect override of `shape_ty`, which is `value_ty` or a
+    /// nominal backing reached through it: the value is destructured down to
+    /// that nominal, whose override renders it.
+    fn inspectOverrideAtShape(
+        self: *BodyContext,
+        value: DraftExprId,
+        value_ty: Type.TypeId,
+        shape_ty: Type.TypeId,
+        str_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        if (value_ty == shape_ty) {
+            return (try self.toInspectCall(value, value_ty, str_ty)) orelse
+                Common.invariant("Monotype inspect override disappeared between its lookup and its call");
+        }
+        const shape_local = try self.addLocal(self.builder.symbols.fresh(), shape_ty);
+        const shape_value = try self.localExpr(shape_local, shape_ty);
+        const body = (try self.toInspectCall(shape_value, shape_ty, str_ty)) orelse
+            Common.invariant("Monotype inspect override disappeared between its lookup and its call");
+        const pat = try self.addConstructorPatTo(value_ty, shape_ty, .{ .bind = shape_local });
         return try self.addExpr(.{ .ty = str_ty, .data = .{ .match_ = .{
             .scrutinee = value,
             .branches = try self.addBranchSpan(&.{.{ .pat = pat, .body = body }}),
