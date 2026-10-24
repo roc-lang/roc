@@ -8078,7 +8078,6 @@ const ProcedureBuilder = struct {
                 .body = try self.lowerGeneratedParseTagUnionPlan(
                     proc,
                     plan,
-                    args[0].rep,
                     tag,
                     encoding,
                     encoding_child,
@@ -8147,7 +8146,6 @@ const ProcedureBuilder = struct {
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
         plan: Plan.GeneratedParserTagUnionPlan,
-        spec_rep: Plan.TypeRepId,
         tag: LIR.LocalId,
         encoding: LIR.LocalId,
         encoding_child: Plan.RepChild,
@@ -8188,7 +8186,6 @@ const ProcedureBuilder = struct {
                 proc,
                 plan,
                 variants[index],
-                spec_rep,
                 exact_encoding,
                 exact_encoding_child,
                 exact_state,
@@ -8278,7 +8275,6 @@ const ProcedureBuilder = struct {
         proc: *ProcBodyBuilder,
         plan: Plan.GeneratedParserTagUnionPlan,
         variant: GeneratedParserTagVariant,
-        spec_rep: Plan.TypeRepId,
         encoding: LIR.LocalId,
         encoding_child: Plan.RepChild,
         state: LIR.LocalId,
@@ -8301,7 +8297,6 @@ const ProcedureBuilder = struct {
             .result_rep = target_rep,
             .next = next,
             .tag_union_spec = proc.arg_locals.items[0],
-            .tag_union_spec_rep = spec_rep,
             .tag_union_plan = plan,
         };
         const success = try self.lowerGeneratedParserSuccess(proc, context, value, shape_rep, rest);
@@ -11246,7 +11241,6 @@ const ProcedureBuilder = struct {
         result_rep: Plan.TypeRepId,
         next: LIR.CFStmtId,
         tag_union_spec: ?LIR.LocalId = null,
-        tag_union_spec_rep: ?Plan.TypeRepId = null,
         tag_union_plan: ?Plan.GeneratedParserTagUnionPlan = null,
     };
 
@@ -11739,14 +11733,6 @@ const ProcedureBuilder = struct {
             if (proc.recordRepForBoundary(shape_rep) != null or
                 self.plan.representations.items[@backingInt(shape_rep)].kind == .empty_record)
             {
-                const field_names_source: GeneratedParserFieldNamesSource = if (context.tag_union_spec) |spec|
-                    .{ .tag_union_spec = .{
-                        .spec = spec,
-                        .plan = context.tag_union_plan orelse
-                            boxyLowerInvariant("generated tag payload record had no explicit evidence plan"),
-                    } }
-                else
-                    .captures;
                 return try self.beginGeneratedRecordParse(
                     proc,
                     frames,
@@ -11757,7 +11743,7 @@ const ProcedureBuilder = struct {
                     value,
                     rest,
                     success,
-                    field_names_source,
+                    generatedParserFieldNamesSource(context),
                 );
             }
 
@@ -12118,6 +12104,7 @@ const ProcedureBuilder = struct {
                     return .{ .request = try self.beginGeneratedMatchedRecordField(
                         proc,
                         &state.context,
+                        state.field_names_source,
                         state.field_cursor,
                         state.field_states[state.field_cursor],
                     ) };
@@ -12809,11 +12796,13 @@ const ProcedureBuilder = struct {
     }
 
     /// The parser for a matched record field's value, reserving the value
-    /// and building the loop update that follows it.
+    /// and building the loop update that follows it. A field's value reads
+    /// field names from wherever its record does.
     fn beginGeneratedMatchedRecordField(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
         context: *const GeneratedParserRecordContext,
+        field_names_source: GeneratedParserFieldNamesSource,
         field_index: usize,
         rest: LIR.LocalId,
     ) Allocator.Error!ParseShapeRequest {
@@ -12852,6 +12841,14 @@ const ProcedureBuilder = struct {
                 .result = context.target,
                 .result_rep = context.target_rep,
                 .next = context.next,
+                .tag_union_spec = switch (field_names_source) {
+                    .captures => null,
+                    .tag_union_spec => |enclosing| enclosing.spec,
+                },
+                .tag_union_plan = switch (field_names_source) {
+                    .captures => null,
+                    .tag_union_spec => |enclosing| enclosing.plan,
+                },
             },
             .shape_type = field.parse_type,
             .shape_rep = field.parse_rep,
@@ -13075,32 +13072,45 @@ const ProcedureBuilder = struct {
         const bodies = [_]LIR.CFStmtId{ ok_body, err_body };
         const impossible = try self.result.store.addCFStmt(.runtime_error, proc.derivedOrigin());
         const dispatch = try proc.generatedParserTagDispatch(parsed, parsed_rep, &variants, &bodies, impossible);
-        var continuation = try self.lowerGeneratedCodecCallLocalsInto(
+        const continuation = try self.lowerGeneratedCodecCallLocalsInto(
             proc,
             call,
             parsed,
             &.{ context.encoding, spec, state },
             dispatch,
         );
-        if (context.tag_union_spec) |existing_spec| {
-            return try proc.assignRepresentationBoundary(
-                spec,
-                existing_spec,
-                spec_rep,
-                context.tag_union_spec_rep orelse
-                    boxyLowerInvariant("generated nested tag-union spec had no representation metadata"),
-                continuation,
-            );
-        }
-        continuation = try self.lowerGeneratedTagUnionSpecValue(proc, context.worker, plan, spec, continuation);
-        return continuation;
+        return try self.lowerGeneratedTagUnionSpecValue(
+            proc,
+            context.worker,
+            plan,
+            generatedParserFieldNamesSource(context),
+            spec,
+            continuation,
+        );
     }
 
+    /// Where a generated parser reads the field names of the records it
+    /// parses. A payload parser receives its union's spec, which holds the
+    /// field names of every record its contract parses; anything else reads
+    /// the contract worker's captures.
+    fn generatedParserFieldNamesSource(context: GeneratedParserShapeContext) GeneratedParserFieldNamesSource {
+        const spec = context.tag_union_spec orelse return .captures;
+        return .{ .tag_union_spec = .{
+            .spec = spec,
+            .plan = context.tag_union_plan orelse
+                boxyLowerInvariant("generated tag payload parser had no explicit evidence plan"),
+        } };
+    }
+
+    /// Build `plan`'s spec into `spec`. Each record's field names come from
+    /// `field_names_source`, which for an enclosing union's spec holds them
+    /// for every record type the contract parses.
     fn lowerGeneratedTagUnionSpecValue(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
         worker: Plan.WorkerPlanId,
         plan: Plan.GeneratedParserTagUnionPlan,
+        field_names_source: GeneratedParserFieldNamesSource,
         spec: LIR.LocalId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -13128,18 +13138,57 @@ const ProcedureBuilder = struct {
         var index = record_types.len;
         while (index > 0) {
             index -= 1;
-            const record_rep = proc.repForTypeRef(record_types[index]);
-            const fields = try self.generatedParserRecordFields(
-                proc,
-                worker,
-                record_types[index],
-                record_rep,
-                .captures,
-            );
-            defer self.allocator.free(fields);
-            continuation = try self.lowerGeneratedFieldNamesValue(proc, evidence[index], fields, continuation);
+            switch (field_names_source) {
+                .captures => {
+                    const record_rep = proc.repForTypeRef(record_types[index]);
+                    const fields = try self.generatedParserRecordFields(
+                        proc,
+                        worker,
+                        record_types[index],
+                        record_rep,
+                        .captures,
+                    );
+                    defer self.allocator.free(fields);
+                    continuation = try self.lowerGeneratedFieldNamesValue(proc, evidence[index], fields, continuation);
+                },
+                .tag_union_spec => |enclosing| {
+                    continuation = try self.lowerEnclosingSpecFieldNames(proc, enclosing, record_types[index], evidence[index], continuation);
+                },
+            }
         }
         return continuation;
+    }
+
+    /// Read `record_type`'s field names out of an enclosing union's spec.
+    fn lowerEnclosingSpecFieldNames(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        enclosing: GeneratedParserEnclosingSpec,
+        record_type: Plan.CheckedTypeIdentity,
+        target: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const record_index_value = self.generatedParserSpecRecordIndex(enclosing.plan, record_type);
+        const evidence_list = try proc.addFrameLocal(self.layout_plan.generated_evidence.field_names_list);
+        const record_index = try proc.addFrameLocal(.u64);
+        var continuation = try proc.assignBinaryLowLevel(target, .list_get_unsafe, evidence_list, record_index, next);
+        continuation = try proc.assignIntLiteral(record_index, @intCast(record_index_value), continuation);
+        return try self.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = evidence_list,
+            .op = .field(enclosing.spec, 0),
+            .next = continuation,
+        } }, proc.derivedOrigin());
+    }
+
+    /// The position of `record_type`'s field names in `plan`'s spec.
+    fn generatedParserSpecRecordIndex(self: *const ProcedureBuilder, plan: Plan.GeneratedParserTagUnionPlan, record_type: Plan.CheckedTypeIdentity) usize {
+        var found: ?usize = null;
+        for (self.plan.generatedParserTagUnionRecordTypes(plan.record_types), 0..) |candidate, index| {
+            if (!planTypeRefEql(candidate, record_type)) continue;
+            if (found != null) boxyLowerInvariant("generated tag-union spec contained duplicate record evidence");
+            found = index;
+        }
+        return found orelse boxyLowerInvariant("generated tag-union spec was missing record evidence");
     }
 
     fn generatedParserTupleItems(
@@ -13598,10 +13647,13 @@ const ProcedureBuilder = struct {
 
     const GeneratedParserFieldNamesSource = union(enum) {
         captures,
-        tag_union_spec: struct {
-            spec: LIR.LocalId,
-            plan: Plan.GeneratedParserTagUnionPlan,
-        },
+        tag_union_spec: GeneratedParserEnclosingSpec,
+    };
+
+    /// The spec of the union whose payload a generated parser is parsing.
+    const GeneratedParserEnclosingSpec = struct {
+        spec: LIR.LocalId,
+        plan: Plan.GeneratedParserTagUnionPlan,
     };
 
     fn lowerGeneratedRecordParserRuntimeInto(
@@ -13747,17 +13799,7 @@ const ProcedureBuilder = struct {
         const record_rep = proc.recordRepForBoundary(shape_rep) orelse
             boxyLowerInvariant("generated tag-union record evidence had no record representation");
         const record_type = self.plan.representations.items[@backingInt(record_rep)].source_type;
-        const record_types = self.plan.generatedParserTagUnionRecordTypes(tag_source.plan.record_types);
-        var maybe_record_index: ?usize = null;
-        for (record_types, 0..) |candidate, index| {
-            if (!planTypeRefEql(candidate, record_type)) continue;
-            if (maybe_record_index != null) {
-                boxyLowerInvariant("generated tag-union spec contained duplicate record evidence");
-            }
-            maybe_record_index = index;
-        }
-        const record_index_value = maybe_record_index orelse
-            boxyLowerInvariant("generated tag-union spec was missing record evidence");
+        const record_index_value = self.generatedParserSpecRecordIndex(tag_source.plan, record_type);
 
         const field_names = try proc.addFrameLocal(self.layout_plan.generated_evidence.field_names);
         const evidence_list = try proc.addFrameLocal(self.layout_plan.generated_evidence.field_names_list);

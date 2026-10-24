@@ -356,7 +356,9 @@ pub const Constants = struct {
     ///      constraints index.
     /// 160: procedure templates record how much of each quantified variable
     ///      their bodies demand.
-    pub const CACHE_VERSION = 160;
+    /// 161: generated codec derivations record the renaming their snapshot
+    ///      applied to every type that holds a variable.
+    pub const CACHE_VERSION = 161;
 };
 
 /// Configuration for the Roc cache system.

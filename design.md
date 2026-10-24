@@ -7515,6 +7515,24 @@ identity. Boxy and Monotype consume the identity directly; they must not find a
 derivation by comparing runtime types or resolve one of its calls by looking up
 the method name in a registry.
 
+A contract's types are a snapshot copy of the checker's relation, and the copy
+renames every type that holds a variable. A definition's own quantified
+variable (the implicitly open tail of `dec : Str -> Try([A, B], [InvalidJson(Str)])`)
+is therefore a fresh, unquantified variable inside the contract, which reads
+at its default. A generated call's dispatch-target record was written against
+the originals, so the contract publishes its renaming (`generated_codec_renamings`)
+and the call's evidence-edge substitution names the renamed copies. The
+substitution then describes the same types as the call's callable; it never
+names a variable of the defining scheme that the contract's own types do not
+mention.
+
+A `ParseTagUnionSpec` describes exactly one union. A payload that is itself a
+tag union is parsed with that union's own spec, never with the enclosing
+union's. Inside a payload parser the record field names come from the
+enclosing union's spec, which carries them for every record type its contract
+parses, including the records of a nested union and the values of record
+fields within the payload.
+
 The evidence schema of a binding includes its explicitly captured codec
 requirements as well as constraints attached to variables in its callable.
 CheckedModule construction enumerates that complete schema once per owning scheme and reuses
@@ -10790,11 +10808,14 @@ copies are kept only while it is unchanged, and a probe remembers none, since
 its copies roll back with it. Nested contracts whose shapes nest therefore
 share all the structure below their own level.
 
-A codec whose shape, encoding, and state are settled and local to the closing
-boundary is validated once at that boundary. None of their refinable components
-may escape through a member's interface or belong to an enclosing scope.
-Validation uses ordinary unification and retains the exact selected calls and
-contract roots. Their snapshot waits until final type settlement, so error-row
+A codec whose shape, encoding, and state are settled at the closing boundary is
+validated once at that boundary, so its error-row demands (such as a record's
+`MissingRequiredField(Str)`) reach the definition's type before it generalizes
+and before any use copies it. None of their refinable components may belong to
+an enclosing scope. When a refinable component escapes through a member's
+interface, a use can still refine it, so the relation also stays in the scheme
+and each use validates it at its own types. Validation uses ordinary
+unification and retains the exact selected calls and contract roots. Their snapshot waits until final type settlement, so error-row
 widening does not require validating the shape again. Unsettled inputs retain
 their complete receiver/callable requirement when any refinable component of
 that relation escapes through a member's interface or belongs to an enclosing

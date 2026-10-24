@@ -711,6 +711,10 @@ pub const GeneratedCodecDerivation = extern struct {
     error_var: u32,
     calls_start: u32,
     calls_len: u32,
+    /// Range of `generated_codec_renamings`: every variable-bearing type the
+    /// derivation's snapshot copied, with its copy.
+    renamings_start: u32,
+    renamings_len: u32,
 
     pub const SafeList = collections.SafeList(@This());
 
@@ -734,6 +738,19 @@ pub const GeneratedCodecCall = extern struct {
     subject_var: u32,
 
     pub const no_subject_var = std.math.maxInt(u32);
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// A type a generated codec derivation's snapshot copied because it contains a
+/// type variable, and the copy the snapshot made of it. The derivation's
+/// callables name the copy; anything checking recorded against the source
+/// before the snapshot (a call's scheme substitution) names the source.
+pub const GeneratedCodecRenaming = extern struct {
+    /// Resolved root of the copied type at snapshot time (`Var`).
+    source_var: u32,
+    /// The snapshot's copy of it (`Var`).
+    copy_var: u32,
+
     pub const SafeList = collections.SafeList(@This());
 };
 
@@ -1065,6 +1082,8 @@ binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList,
 generated_codec_derivations: GeneratedCodecDerivation.SafeList,
 /// Flat pool backing `generated_codec_derivations.calls_start/calls_len`.
 generated_codec_calls: GeneratedCodecCall.SafeList,
+/// Flat pool backing `generated_codec_derivations.renamings_start/renamings_len`.
+generated_codec_renamings: GeneratedCodecRenaming.SafeList,
 /// Static-dispatch obligations explicitly rejected by checking. Publication
 /// consumes these records instead of inferring rejection from erroneous types.
 rejected_static_dispatches: RejectedStaticDispatch.SafeList,
@@ -1501,6 +1520,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .binding_scheme_codec_requirements = try BindingSchemeCodecRequirement.SafeList.initCapacity(gpa, 4),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
+        .generated_codec_renamings = try GeneratedCodecRenaming.SafeList.initCapacity(gpa, 4),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
         .record_omitted_defaults = try RecordOmittedDefault.SafeList.initCapacity(gpa, 4),
         .inspect_override_instances = try InspectOverrideInstance.SafeList.initCapacity(gpa, 0),
@@ -1539,6 +1559,7 @@ pub fn deinit(self: *Self) void {
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
+    self.generated_codec_renamings.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
     self.inspect_override_instances.deinit(self.gpa);
@@ -1673,6 +1694,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
+    self.generated_codec_renamings.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
     self.inspect_override_instances.deinit(self.gpa);
@@ -3960,6 +3982,7 @@ pub const Serialized = extern struct {
     binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
+    generated_codec_renamings: GeneratedCodecRenaming.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
     record_omitted_defaults: RecordOmittedDefault.SafeList.Serialized,
     inspect_override_instances: InspectOverrideInstance.SafeList.Serialized,
@@ -4081,6 +4104,7 @@ pub const Serialized = extern struct {
         try self.binding_scheme_codec_requirements.serialize(&env.binding_scheme_codec_requirements, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
+        try self.generated_codec_renamings.serialize(&env.generated_codec_renamings, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
         try self.record_omitted_defaults.serialize(&env.record_omitted_defaults, allocator, writer);
         try self.inspect_override_instances.serialize(&env.inspect_override_instances, allocator, writer);
@@ -4157,6 +4181,7 @@ pub const Serialized = extern struct {
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
+            .generated_codec_renamings = self.generated_codec_renamings.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
             .inspect_override_instances = self.inspect_override_instances.deserializeInto(base_addr),
@@ -4239,6 +4264,7 @@ pub const Serialized = extern struct {
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_renamings = try self.generated_codec_renamings.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
             .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
@@ -4333,6 +4359,7 @@ pub const Serialized = extern struct {
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_renamings = try self.generated_codec_renamings.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
             .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
@@ -4753,6 +4780,7 @@ pub fn recordGeneratedCodecDerivation(
     state_var: TypeVar,
     error_var: TypeVar,
     calls: []const GeneratedCodecCall,
+    renamings: []const GeneratedCodecRenaming,
 ) std.mem.Allocator.Error!void {
     var existing_index: ?usize = null;
     for (self.generated_codec_derivations.items.items, 0..) |existing, index| {
@@ -4768,10 +4796,15 @@ pub fn recordGeneratedCodecDerivation(
         if (existing.calls_start + existing.calls_len == self.generated_codec_calls.items.items.len) {
             self.generated_codec_calls.items.shrinkRetainingCapacity(existing.calls_start);
         }
+        if (existing.renamings_start + existing.renamings_len == self.generated_codec_renamings.items.items.len) {
+            self.generated_codec_renamings.items.shrinkRetainingCapacity(existing.renamings_start);
+        }
     }
 
     const calls_start: u32 = @intCast(self.generated_codec_calls.items.items.len);
     _ = try self.generated_codec_calls.appendSlice(self.gpa, calls);
+    const renamings_start: u32 = @intCast(self.generated_codec_renamings.items.items.len);
+    _ = try self.generated_codec_renamings.appendSlice(self.gpa, renamings);
     const derivation = GeneratedCodecDerivation{
         .kind = @backingInt(kind),
         .source_constraint_fn_var = @backingInt(source_constraint_fn_var),
@@ -4790,6 +4823,8 @@ pub fn recordGeneratedCodecDerivation(
         .error_var = @backingInt(error_var),
         .calls_start = calls_start,
         .calls_len = @intCast(calls.len),
+        .renamings_start = renamings_start,
+        .renamings_len = @intCast(renamings.len),
     };
     if (existing_index) |index| {
         self.generated_codec_derivations.items.items[index] = derivation;
