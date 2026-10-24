@@ -256,8 +256,8 @@ TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 DECLARATION HAS NO VALUE - fuzz_crash_027.md:28:1:31:2
 TYPE MISMATCH - fuzz_crash_027.md:50:5:50:8
 NAME NOT BOUND IN EVERY ALTERNATIVE - fuzz_crash_027.md:64:17:64:20
-MISSING METHOD - fuzz_crash_027.md:68:3:68:8
-MISSING METHOD - fuzz_crash_027.md:70:3:70:8
+TYPE MISMATCH - fuzz_crash_027.md:68:3:68:8
+TYPE MISMATCH - fuzz_crash_027.md:68:3:68:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
 TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
@@ -2114,22 +2114,14 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(reflow "in a branch must give values the same names, so the branch can use those names no matter which pattern matched.")))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 68 3) (end 68 8))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
 			(source-region (file "fuzz_crash_027.md") (start 68 3) (end 68 8) (annotation error) (line-text "\t\t\"foo\" => # ent"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -2138,22 +2130,14 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(annotation-end)))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 70 3) (end 70 8))
+		(title "Type Mismatch")
+		(region (start 68 3) (end 68 8))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
-			(source-region (file "fuzz_crash_027.md") (start 70 3) (end 70 8) (annotation error) (line-text "\t\t\"foo\" | \"bar\" => 20[1, 2, 3, .. as rest] # Aftet"))
+			(source-region (file "fuzz_crash_027.md") (start 68 3) (end 68 8) (annotation error) (line-text "\t\t\"foo\" => # ent"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

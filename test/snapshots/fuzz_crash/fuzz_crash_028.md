@@ -257,8 +257,8 @@ DOES NOT EXIST - fuzz_crash_028.md:134:2:134:7
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:28:1:31:2
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:47:1:47:21
 NAME NOT BOUND IN EVERY ALTERNATIVE - fuzz_crash_028.md:64:17:64:20
-MISSING METHOD - fuzz_crash_028.md:68:3:68:8
-MISSING METHOD - fuzz_crash_028.md:70:3:70:8
+TYPE MISMATCH - fuzz_crash_028.md:68:3:68:8
+TYPE MISMATCH - fuzz_crash_028.md:68:3:68:8
 TYPE MISMATCH - fuzz_crash_028.md:64:2:64:2
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:95:1:95:34
 TYPE MISMATCH - fuzz_crash_028.md:102:8:102:11
@@ -2115,22 +2115,14 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(reflow "in a branch must give values the same names, so the branch can use those names no matter which pattern matched.")))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 68 3) (end 68 8))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
 			(source-region (file "fuzz_crash_028.md") (start 68 3) (end 68 8) (annotation error) (line-text "\t\t\"foo\" => # ent"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -2139,22 +2131,14 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(annotation-end)))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 70 3) (end 70 8))
+		(title "Type Mismatch")
+		(region (start 68 3) (end 68 8))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
-			(source-region (file "fuzz_crash_028.md") (start 70 3) (end 70 8) (annotation error) (line-text "\t\t\"foo\" | \"bar\" => 20[1, 2, 3, .. as rest] # t"))
+			(source-region (file "fuzz_crash_028.md") (start 68 3) (end 68 8) (annotation error) (line-text "\t\t\"foo\" => # ent"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

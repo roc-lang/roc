@@ -3349,6 +3349,59 @@ fn readWhereAliasQualificationChain(self: *Parser) std.mem.Allocator.Error!Quali
     };
 }
 
+/// Whether `expr` is a literal that could take a type suffix, wrapped in one
+/// or more pairs of parentheses, as in `(1)`. A type suffix after it, as in
+/// `(1).U64`, belongs directly on the literal.
+fn isParenthesizedLiteral(self: *Parser, expr: AST.Expr.Idx) bool {
+    var current = self.store.getExpr(expr);
+    var parenthesized = false;
+    while (current == .tuple) {
+        const items = self.store.exprSlice(current.tuple.items);
+        if (items.len != 1) return false;
+        current = self.store.getExpr(items[0]);
+        parenthesized = true;
+    }
+    return parenthesized and switch (current) {
+        .int, .frac, .string, .multiline_string => true,
+        .single_quote => |single_quote| single_quote.type_suffix == null,
+        .apply,
+        .arrow_call,
+        .bin_op,
+        .block,
+        .@"break",
+        .crash,
+        .dbg,
+        .ellipsis,
+        .field_access,
+        .for_expr,
+        .ident,
+        .if_then_else,
+        .if_without_else,
+        .lambda,
+        .list,
+        .malformed,
+        .match,
+        .method_call,
+        .nominal_apply,
+        .nominal_record,
+        .record,
+        .record_builder,
+        .record_updater,
+        .@"return",
+        .string_part,
+        .suffix_single_question,
+        .tag,
+        .tuple,
+        .tuple_access,
+        .typed_frac,
+        .typed_int,
+        .typed_multiline_string,
+        .typed_string,
+        .unary_op,
+        => false,
+    };
+}
+
 /// Parse a Roc expression with the lowest binding power.
 pub fn runExpr(self: *Parser) std.mem.Allocator.Error!AST.Expr.Idx {
     const trace = tracy.trace(@src());
@@ -4117,7 +4170,12 @@ fn runExprStatementKernel(
                 if (tok_int >= @backingInt(Token.Tag.DotUpperIdent) and
                     tok_int <= @backingInt(Token.Tag.MalformedNoSpaceDotQuestionUnicodeIdent))
                 {
-                    const expr = try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
+                    const reason: AST.Diagnostic.Tag = if ((tok == .DotUpperIdent or tok == .NoSpaceDotUpperIdent) and
+                        self.isParenthesizedLiteral(expr_finish_state.expr))
+                        .expr_type_suffix_on_parenthesized_literal
+                    else
+                        .expr_dot_suffix_not_allowed;
+                    const expr = try self.pushMalformed(AST.Expr.Idx, reason, self.pos);
                     expr_finish_state = .{ .start = expr_finish_state.start, .min_bp = expr_finish_state.min_bp, .expr = expr };
                     continue :expr_kernel .suffix;
                 }

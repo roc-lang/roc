@@ -8,28 +8,24 @@ type=snippet
 x = 12.34()
 ~~~
 # EXPECTED
-MISSING METHOD - call_float_literal.md:1:5:1:10
+TYPE MISMATCH - call_float_literal.md:1:5:1:10
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 1 5) (end 1 10))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This number is being used where a non-number type is needed."))
 		(document
 			(source-region (file "call_float_literal.md") (start 1 5) (end 1 10) (annotation error) (line-text "x = 12.34()"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be non-numeric here:")
+			(line-break)
+			(source-region (file "call_float_literal.md") (start 1 5) (end 1 12) (annotation error) (line-text "x = 12.34()"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
