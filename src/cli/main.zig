@@ -9377,14 +9377,17 @@ const PackOffers = struct {
             if ((try self.keys.getOrPut(spec_proc.key)).found_existing) continue;
             try self.keyed.append(self.arena.allocator(), try self.candidate(lowered, spec_proc.proc, spec_proc.key, comptime_reads.get(spec_proc.key)));
         }
-        for (store.getProcSpecs(), 0..) |proc, index| {
+        const carriers = try lir.PackProgram.siteCodeCarriers(allocator, store);
+        defer allocator.free(carriers);
+        for (store.getProcSpecs(), carriers, 0..) |proc, carries_site_code, index| {
             if (proc.abi != .roc or proc.hosted != null or proc.is_static_initializer) continue;
             const source_fn = proc.source_monotype_fn orelse continue;
             const id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
             // A procedure whose identity names its template by site is offered
             // under its code key; any other is offered under its identity only
-            // when its identity names all of its code.
-            if (proc.code_key == null and try lir.PackProgram.procCopiesSiteCode(allocator, store, id)) continue;
+            // when its identity names all of its code and all the code the
+            // pack carries with it.
+            if (carries_site_code) continue;
             const key = postcheck.Common.procIdentityCacheKey(if (proc.code_key) |code| code else proc.identity.bytes);
             if ((try self.keys.getOrPut(key)).found_existing) continue;
             try self.by_identity.append(self.arena.allocator(), try self.candidate(lowered, id, key, comptime_reads.fnReads(source_fn)));

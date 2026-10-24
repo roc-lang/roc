@@ -421,15 +421,19 @@ test "a compile-time table re-bound from a helper's returned record field each i
         \\table = List.repeat(0.U32, 1000)
         \\step : List(U32), U64 -> { table : List(U32), sum : U64 }
         \\step = |t, i| { table: List.append(t, i.to_u32_wrap()), sum: i }
-        \\main! = |args| {
+        \\grow : U64 -> List(U32)
+        \\grow = |n| {
         \\    var $t = table
         \\    var $i = 0
-        \\    while $i < List.len(args) {
+        \\    while $i < n {
         \\        r = step($t, $i)
         \\        $t = r.table
         \\        $i = $i + 1
         \\    }
-        \\    Echo.line!(Str.inspect(List.get($t, 0)))
+        \\    $t
+        \\}
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(List.get(grow(List.len(args)), 0)))
         \\    Ok({})
         \\}
     , .wrappers);
@@ -439,7 +443,10 @@ test "a compile-time table re-bound from a helper's returned record field each i
         // returned field on every later iteration; the origin follows the
         // value through the call, the record and the take, so the value
         // the helper's append checks is born of the read, and the read
-        // takes its fresh form.
+        // takes its fresh form. The loop is an app function's: `main!`'s
+        // body is inlined into the platform's `main_for_host!`, and an app
+        // function code outside the app calls keeps the signature its types
+        // determine (`LIR.LirProcSpec.stable_signature`).
         try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
         try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_append_range_within_unsafe));
     }

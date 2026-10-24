@@ -192,6 +192,7 @@ test "lir tests" {
     std.testing.refAllDecls(@import("arc_liveness.zig"));
     std.testing.refAllDecls(ArcDismantle);
     std.testing.refAllDecls(LirImage);
+    std.testing.refAllDecls(PackProgram);
 }
 
 /// Canonical packed product data and committed-layout copy plans.

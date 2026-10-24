@@ -491,6 +491,136 @@ pub fn procCopiesSiteCode(allocator: Allocator, store: *const LirStore, proc: LI
     return false;
 }
 
+/// Per procedure, whether the code a pack offering it carries holds a copy of
+/// code from a procedure whose identity names its template by site
+/// (`LIR.InlineScope.copies_site_code`): its own body holds one, or a
+/// procedure without a code key that it calls directly carries one. A pack
+/// carries the code of each such callee along with the entry, and reaches a
+/// procedure with a code key by that procedure's identity instead, so only a
+/// procedure without a code key carries one. The entry's identity names none
+/// of that copied code. Caller owns the result.
+pub fn siteCodeCarriers(allocator: Allocator, store: *const LirStore) Allocator.Error![]bool {
+    const proc_count = store.procSpecCount();
+    const carries = try allocator.alloc(bool, proc_count);
+    errdefer allocator.free(carries);
+    @memset(carries, false);
+    const seen = try allocator.alloc(bool, store.cfStmtCount());
+    defer allocator.free(seen);
+    @memset(seen, false);
+    var visited = std.ArrayList(LIR.CFStmtId).empty;
+    defer visited.deinit(allocator);
+    var work = std.ArrayList(LIR.CFStmtId).empty;
+    defer work.deinit(allocator);
+    const Edge = struct { caller: LIR.LirProcSpecId, callee: LIR.LirProcSpecId };
+    var edges = std.ArrayList(Edge).empty;
+    defer edges.deinit(allocator);
+    var carriers = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer carriers.deinit(allocator);
+    for (carries, 0..) |*carried, index| {
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
+        const proc = store.getProcSpecImmediate(proc_id);
+        if (proc.code_key != null) continue;
+        const body = proc.body orelse continue;
+        for (visited.items) |stmt_id| seen[@backingInt(stmt_id)] = false;
+        visited.clearRetainingCapacity();
+        work.clearRetainingCapacity();
+        try work.append(allocator, body);
+        while (work.pop()) |stmt_id| {
+            if (seen[@backingInt(stmt_id)]) continue;
+            seen[@backingInt(stmt_id)] = true;
+            try visited.append(allocator, stmt_id);
+            var scope = store.stmtInlineScope(stmt_id);
+            while (scope != LIR.InlineScopeId.none) {
+                const inline_scope = store.inlineScope(scope);
+                if (inline_scope.copies_site_code) carried.* = true;
+                scope = inline_scope.parent;
+            }
+            if (stmtDirectCallee(store, stmt_id)) |callee| {
+                if (store.getProcSpecImmediate(callee).code_key == null) try edges.append(allocator, .{ .caller = proc_id, .callee = callee });
+            }
+            try BodyClone.appendSuccessors(store, &work, stmt_id, allocator);
+        }
+        if (carried.*) try carriers.append(allocator, proc_id);
+    }
+
+    // Each carrier's callers carry its copy too.
+    const caller_starts = try allocator.alloc(u32, proc_count + 1);
+    defer allocator.free(caller_starts);
+    @memset(caller_starts, 0);
+    for (edges.items) |edge| caller_starts[@backingInt(edge.callee) + 1] += 1;
+    for (1..caller_starts.len) |index| caller_starts[index] += caller_starts[index - 1];
+    const callers = try allocator.alloc(LIR.LirProcSpecId, edges.items.len);
+    defer allocator.free(callers);
+    const fill = try allocator.dupe(u32, caller_starts[0..proc_count]);
+    defer allocator.free(fill);
+    for (edges.items) |edge| {
+        callers[fill[@backingInt(edge.callee)]] = edge.caller;
+        fill[@backingInt(edge.callee)] += 1;
+    }
+    while (carriers.pop()) |carrier| {
+        const raw = @backingInt(carrier);
+        for (callers[caller_starts[raw]..caller_starts[raw + 1]]) |caller| {
+            if (carries[@backingInt(caller)]) continue;
+            carries[@backingInt(caller)] = true;
+            try carriers.append(allocator, caller);
+        }
+    }
+    return carries;
+}
+
+/// The procedure statement `stmt_id` calls directly, if any.
+fn stmtDirectCallee(store: *const LirStore, stmt_id: LIR.CFStmtId) ?LIR.LirProcSpecId {
+    return switch (store.getCFStmtImmediate(stmt_id).*) {
+        .assign_call => |call| call.proc,
+        .assign_packed_erased_fn => |packed_fn_stmt| blk_packed_fn: {
+            const packed_fn = store.stmtRow(packed_fn_stmt.data);
+            break :blk_packed_fn packed_fn.proc;
+        },
+        .assign_literal => |literal| store.literalExtra(literal.value).fresh_alternative,
+        .init_uninitialized,
+        .assign_ref,
+        .assign_call_erased,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_record_update,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .boxy_tag_match,
+        .assign_call_dict,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .join,
+        .jump,
+        .ret,
+        .crash,
+        => null,
+    };
+}
+
 /// The procedures `root`'s code reaches through direct calls, `root`
 /// included, as a set over `store`'s procedures. Caller owns the result.
 pub fn procCallClosure(allocator: Allocator, store: *const LirStore, root: LIR.LirProcSpecId) Allocator.Error![]bool {
@@ -512,55 +642,7 @@ pub fn procCallClosure(allocator: Allocator, store: *const LirStore, root: LIR.L
         while (work.pop()) |stmt_id| {
             if (seen[@backingInt(stmt_id)]) continue;
             seen[@backingInt(stmt_id)] = true;
-            const callee: ?LIR.LirProcSpecId = switch (store.getCFStmtImmediate(stmt_id).*) {
-                .assign_call => |call| call.proc,
-                .assign_packed_erased_fn => |packed_fn_stmt| blk_packed_fn: {
-                    const packed_fn = store.stmtRow(packed_fn_stmt.data);
-                    break :blk_packed_fn packed_fn.proc;
-                },
-                .assign_literal => |literal| store.literalExtra(literal.value).fresh_alternative,
-                .init_uninitialized,
-                .assign_ref,
-                .assign_call_erased,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
-                .assign_low_level,
-                .assign_list,
-                .assign_struct,
-                .assign_tag,
-                .store_struct,
-                .store_tag,
-                .set_local,
-                .debug,
-                .expect,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .incref,
-                .decref,
-                .decref_if_initialized,
-                .free,
-                .switch_stmt,
-                .switch_initialized_payload,
-                .str_match,
-                .str_match_set,
-                .join,
-                .jump,
-                .ret,
-                .crash,
-                => null,
-            };
+            const callee = stmtDirectCallee(store, stmt_id);
             if (callee) |reached_callee| {
                 const callee_id = reached_callee;
                 if (!reached[@backingInt(callee_id)]) {
@@ -617,4 +699,65 @@ pub fn literalConvertingProcs(allocator: Allocator, store: *const LirStore) Allo
 /// Convert an intentional fixture-table position while preserving enum inference.
 fn fixtureTableIndex(comptime index: u32) u32 {
     return index;
+}
+
+test "site code carriers follow calls to procedures without a code key" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const Fixture = struct {
+        fn proc(fixture_store: *LirStore, body: LIR.CFStmtId, code_key: ?[32]u8) Allocator.Error!LIR.LirProcSpecId {
+            const id = try fixture_store.addProcSpec(.{
+                .name = fixture_store.freshSyntheticSymbol(),
+                .identity = LIR.ProcIdentity.forTest(1),
+                .args = try fixture_store.addLocalSpan(&.{}),
+                .body = body,
+                .frame_locals = try fixture_store.addLocalSpan(&.{}),
+                .ret_layout = .u64,
+            }, .none);
+            fixture_store.getProcSpecPtr(id).code_key = code_key;
+            return id;
+        }
+
+        fn calling(fixture_store: *LirStore, target: LIR.LocalId, callee: LIR.LirProcSpecId, code_key: ?[32]u8) Allocator.Error!LIR.LirProcSpecId {
+            const ret = try fixture_store.addCFStmt(.{ .ret = .{ .value = target } }, .test_fixture);
+            const call = try fixture_store.addCFStmt(.{ .assign_call = .{
+                .target = target,
+                .proc = callee,
+                .args = try fixture_store.addLocalSpan(&.{}),
+                .next = ret,
+            } }, .test_fixture);
+            return try proc(fixture_store, call, code_key);
+        }
+    };
+
+    // A body holding code inlined from a procedure named by site.
+    const scope = try store.addInlineScope(.{
+        .source_identity = LIR.ProcIdentity.forTest(2),
+        .copies_site_code = true,
+        .source_name = .none,
+        .source_loc = .none,
+        .call_site = .none,
+        .parent = .none,
+    });
+    var copied_origin = LIR.StmtOrigin.test_fixture;
+    copied_origin.inline_scope = scope;
+    const copier = try Fixture.proc(&store, try store.addCFStmt(.{ .ret = .{ .value = value } }, copied_origin), null);
+    const caller = try Fixture.calling(&store, value, copier, null);
+    const outer = try Fixture.calling(&store, value, caller, null);
+    // A procedure with a code key is reached by identity, so neither it nor
+    // its callers carry its callee's copy.
+    const keyed = try Fixture.calling(&store, value, copier, @splat(1));
+    const keyed_caller = try Fixture.calling(&store, value, keyed, null);
+    const plain = try Fixture.proc(&store, try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture), null);
+
+    const carries = try siteCodeCarriers(testing.allocator, &store);
+    defer testing.allocator.free(carries);
+    try testing.expect(carries[@backingInt(copier)]);
+    try testing.expect(carries[@backingInt(caller)]);
+    try testing.expect(carries[@backingInt(outer)]);
+    try testing.expect(!carries[@backingInt(keyed)]);
+    try testing.expect(!carries[@backingInt(keyed_caller)]);
+    try testing.expect(!carries[@backingInt(plain)]);
 }

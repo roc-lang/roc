@@ -3551,6 +3551,12 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11824: failure-state loops do not copy the list passed to a fallible call (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_error_state_loop.roc", .contains = &.{.{ .stream = .stderr, .text = "linear: yes" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11824: failure-state loops do not copy the list passed to a fallible call (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_error_state_loop.roc", .contains = &.{.{ .stream = .stderr, .text = "linear: yes" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11824: failure-state loops do not copy the list passed to a fallible call (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/alloc-count/app_error_state_loop.roc", .contains = &.{.{ .stream = .stderr, .text = "linear: yes" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11678: a failure-state loop around a called callee does not copy its list, cached (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/alloc-count/app_error_state_loop_called.roc", .contains = &.{.{ .stream = .stderr, .text = "linear: yes" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11678: a failure-state loop around a called callee does not copy its list, uncached (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_error_state_loop_called.roc", .contains = &.{.{ .stream = .stderr, .text = "linear: yes" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11678: a failure-state loop around a called callee does not copy its list, cached (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/alloc-count/app_error_state_loop_called.roc", .contains = &.{.{ .stream = .stderr, .text = "linear: yes" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11678: a failure-state loop around a callee builtin code also calls does not copy its list, cached (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/alloc-count/app_error_state_loop_shared.roc", .contains = &.{ .{ .stream = .stderr, .text = "linear: yes" }, .{ .stream = .stderr, .text = "folded: 3" } }, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11678: a failure-state loop around a callee builtin code also calls does not copy its list, uncached (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_error_state_loop_shared.roc", .contains = &.{ .{ .stream = .stderr, .text = "linear: yes" }, .{ .stream = .stderr, .text = "folded: 3" } }, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11678: a failure-state loop around a callee builtin code also calls does not copy its list, cached (interpreter)", .backend = .interpreter, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/alloc-count/app_error_state_loop_shared.roc", .contains = &.{ .{ .stream = .stderr, .text = "linear: yes" }, .{ .stream = .stderr, .text = "folded: 3" } }, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11824: a flag loop around a non-inlined step does not copy its state (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_loop_flag_state_dynamic.roc", .contains = &.{.{ .stream = .stderr, .text = "linear: yes" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11824: a flag loop around a non-inlined step does not copy its state (speed)", .backend = .speed, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/alloc-count/app_loop_flag_state_dynamic.roc", .contains = &.{.{ .stream = .stderr, .text = "linear: yes" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "test/alloc-count/app_while.roc: while loop performs zero allocations (dev)", .backend = .dev, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/alloc-count/app_while.roc", .contains = &.{.{ .stream = .stderr, .text = "sum: 1609, loop allocations: 0" }}, .not_contains = &.{.{ .stream = .stderr, .text = "Expect failed" }} } } },
@@ -9928,11 +9934,12 @@ fn customIssue11678RecursiveCallbackCache(
     return null;
 }
 
-/// The Boxy runtime's tables are part of a dev executable, which is a
-/// function of the program and the optimization state alone (design.md
-/// "Output Determinism"). A first build, a build its own dev packs serve, and
-/// a build in a store another app filled first must write one executable,
-/// which prints what a build without the cache prints.
+/// A dev executable is a function of the program and the optimization state
+/// alone (design.md "Output Determinism"): the Boxy runtime's tables, and the
+/// signatures and variants of the app's functions, are the same whatever the
+/// dev cache holds and whether the build uses it. A build without the cache,
+/// a first build, a build its own dev packs serve, and a build in a store
+/// another app filled first must write one executable.
 fn customIssue11678DevCacheBoxyTables(
     io: std.Io,
     allocator: Allocator,
@@ -9942,7 +9949,7 @@ fn customIssue11678DevCacheBoxyTables(
 ) ?TestResult {
     const app = "test/cli/dev_cache_boxy_tables/App.roc";
     const builds = [_]struct { name: []const u8, store: u8, roc_file: []const u8, no_cache: bool = false, compared: bool = true }{
-        .{ .name = "uncached", .store = 0, .roc_file = app, .no_cache = true, .compared = false },
+        .{ .name = "uncached", .store = 0, .roc_file = app, .no_cache = true },
         .{ .name = "first", .store = 0, .roc_file = app },
         .{ .name = "served", .store = 0, .roc_file = app },
         .{ .name = "other_app", .store = 1, .roc_file = "test/cli/linked_object_pack/App.roc", .compared = false },
@@ -9987,14 +9994,14 @@ fn customIssue11678DevCacheBoxyTables(
         if (!std.mem.eql(u8, build.roc_file, app)) continue;
         if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
             .args = &.{},
-            .stdout_exact = "sum of squares to 10: 385\nn=127/2\n",
+            .stdout_exact = "sum of squares to 10: 385\nn=127/2\n3 10\n",
         })) |failure| return failure;
         if (!build.compared) continue;
         const bytes = std.Io.Dir.cwd().readFileAlloc(io, exe, allocator, .limited(256 * 1024 * 1024)) catch |err|
             return customInfraFailure(allocator, timer, "failed to read the {s} executable: {}", .{ build.name, err });
         if (compared) |first| {
             if (!std.mem.eql(u8, first, bytes)) {
-                return customFailure(allocator, timer, "the {s} dev executable differs from the first build's", .{build.name});
+                return customFailure(allocator, timer, "the {s} dev executable differs from the uncached one", .{build.name});
             }
         } else compared = bytes;
     }
