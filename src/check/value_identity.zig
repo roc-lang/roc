@@ -46,7 +46,7 @@ pub const Inputs = struct {
     roots: []const CompileTimeRoot,
     top_level_values: *const checked_artifact.TopLevelValueTable,
     /// The checked artifact key's inputs outside the module's own source:
-    /// the compiler, the checking context, and the direct imports' keys.
+    /// the checking context and the direct imports' keys.
     context: ContextHashes,
     /// The module's own content identity, which names its own declarations.
     own_identity: [32]u8,
@@ -54,7 +54,6 @@ pub const Inputs = struct {
 
 /// The artifact-key inputs a module's value context hashes.
 pub const ContextHashes = struct {
-    compiler_artifact: [32]u8,
     checking_context: [32]u8,
     direct_import_keys: [32]u8,
 };
@@ -342,15 +341,14 @@ const State = struct {
     }
 
     /// Everything outside any one root that its value can depend on: the
-    /// compiler, the module's checking context and imports, its name and
-    /// kind, and the files it imports.
+    /// module's checking context and imports, its name and kind, and the
+    /// files it imports.
     fn moduleContext(self: *const State) [32]u8 {
         const env = self.inputs.env;
         const context = self.inputs.context;
         var hasher = Sha256.init(.{});
         hashTag(&hasher, domain);
         hashTag(&hasher, "context");
-        hasher.update(&context.compiler_artifact);
         hasher.update(&context.checking_context);
         hasher.update(&context.direct_import_keys);
         // A type module's main type is named after the module, so the name
