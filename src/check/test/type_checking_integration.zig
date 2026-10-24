@@ -4377,14 +4377,14 @@ test "check type - match - diff cond types 1" {
     try checkTypesModule(
         source,
         .fail_with,
-        \\**Missing Method**
-        \\This `from_quote` method is being called on a value whose type doesn't have that method.
+        \\**Type Mismatch**
+        \\This string literal is being used where a non-string type is needed.
         \\```roc
         \\  match "hello" {
         \\```
         \\        ^^^^^^^
         \\
-        \\The value's type, which does not have a method named `from_quote`, is:
+        \\The type was determined to be:
         \\
         \\    [True]
         \\
@@ -4628,7 +4628,7 @@ test "check type - record - access - not a record" {
         \\
         \\x = r.my_field
     ;
-    try checkTypesModule(source, .fail, "Missing Method");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 // record update
@@ -4948,7 +4948,7 @@ test "check type - patterns - wrong type" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "Missing Method");
+    try checkTypesExpr(source, .fail, "Type Mismatch");
 }
 
 test "check type - patterns tag with payload" {
@@ -4976,7 +4976,7 @@ test "check type - patterns tag with payload mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail_first, "Missing Method");
+    try checkTypesExpr(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - patterns str" {
@@ -5133,7 +5133,7 @@ test "check type - patterns record field mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "Missing Method");
+    try checkTypesExpr(source, .fail, "Type Mismatch");
 }
 
 // vars + reassignment //

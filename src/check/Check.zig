@@ -41991,7 +41991,7 @@ fn reportUndeterminedType(
             },
             .quote, .interpolation => .{
                 .string_literal_shared_with_number,
-                self.quoteLiteralRegionForDispatcher(constraint, dispatcher_var) orelse
+                self.stringLiteralRegionForDispatcher(constraint, dispatcher_var) orelse
                     self.undeterminedTypeUseRegion(dispatcher_var, constraint, owner_expr),
             },
         };
@@ -57505,12 +57505,16 @@ fn markStaticDispatchFnRejected(self: *Self, fn_var: Var) Allocator.Error!void {
     try self.cir.recordRejectedStaticDispatch(fn_var);
 }
 
-/// Find the source region of the string literal whose from_quote constraint
-/// resolved into `dispatcher_var`, for error reporting. The constraint itself
-/// carries no region, but the literal's dispatch plan records its source node.
-fn quoteLiteralRegionForDispatcher(self: *Self, constraint: StaticDispatchConstraint, dispatcher_var: Var) ?Region {
-    const kind = constraint.origin.literalKind() orelse return null;
-    if (kind != .quote) return null;
+/// Find the source region of the string literal whose `from_quote` or
+/// `from_interpolation` constraint resolved into `dispatcher_var`, for error
+/// reporting. A `from_quote` constraint carries no region, but the literal's
+/// dispatch plan records its source node; an interpolation carries its own.
+fn stringLiteralRegionForDispatcher(self: *Self, constraint: StaticDispatchConstraint, dispatcher_var: Var) ?Region {
+    switch (constraint.origin.literalKind() orelse return null) {
+        .numeral => return null,
+        .interpolation => return self.firstInterpolationRegion(&.{constraint}),
+        .quote => {},
+    }
     const dispatcher_root = self.types.resolveVar(dispatcher_var).var_;
     const plan = self.matchingLiteralDispatchPlan(
         self.cir.store.literalDispatchPlans(),
@@ -57604,7 +57608,7 @@ fn reportConstraintErrorAt(
                     .origin = constraint.origin,
                     .owner_region = owner_region,
                     .num_literal = self.types.constraintNumeralInfo(constraint),
-                    .quote_region = self.quoteLiteralRegionForDispatcher(constraint, dispatcher_var),
+                    .string_literal_region = self.stringLiteralRegionForDispatcher(constraint, dispatcher_var),
                     .str_conversion = if (constraint.origin.literalKind() == .numeral)
                         try self.numeralDispatcherStrConversion(dispatcher_var)
                     else
@@ -57625,6 +57629,8 @@ fn reportConstraintErrorAt(
                 .method_name = constraint.fn_name,
                 .origin = constraint.origin,
                 .owner_region = owner_region,
+                .num_literal = self.types.constraintNumeralInfo(constraint),
+                .string_literal_region = self.stringLiteralRegionForDispatcher(constraint, dispatcher_var),
             },
         } },
     };

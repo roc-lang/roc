@@ -53,7 +53,7 @@ test "a match branch binder of a literal its patterns reject adds no method repo
         \\        Ok(y) => y.to_str()
         \\        Err(_) => ""
         \\    }
-    , &.{ "Unconditional Condition", "Missing Method" });
+    , &.{ "Unconditional Condition", "Type Mismatch" });
 }
 
 test "a destructured binder of a literal its pattern rejects adds no method report" {
@@ -62,7 +62,7 @@ test "a destructured binder of a literal its pattern rejects adds no method repo
         \\    (a, _b) = "abc"
         \\    a.to_str()
         \\}
-    , &.{"Missing Method"});
+    , &.{"Type Mismatch"});
 }
 
 test "a name bound from a local whose literal a later `?` rejects adds no method report" {
@@ -94,7 +94,7 @@ test "a name bound through a destructure of an alias of a rejected literal adds 
         \\    c = a
         \\    c.to_str()
         \\}
-    , &.{"Missing Method"});
+    , &.{"Type Mismatch"});
 }
 
 test "a loop binder of a literal whose default is rejected adds no method report" {

@@ -19,28 +19,24 @@ type=expr
 ]
 ~~~
 # EXPECTED
-MISSING METHOD - tag_applications_simple.md:2:10:2:12
+TYPE MISMATCH - tag_applications_simple.md:2:10:2:12
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 2 10) (end 2 12))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This number is being used where a non-number type is needed."))
 		(document
 			(source-region (file "tag_applications_simple.md") (start 2 10) (end 2 12) (annotation error) (line-text "    Some(42),"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be non-numeric here:")
+			(line-break)
+			(source-region (file "tag_applications_simple.md") (start 10 10) (end 10 22) (annotation error) (line-text "    Some(Ok(Just(42))),"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

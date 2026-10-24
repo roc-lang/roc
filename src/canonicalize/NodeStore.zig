@@ -2715,7 +2715,7 @@ pub fn settleDeferredPatternAsRuntimeError(
 
 /// The node at `node_idx` as written in source: the node a runtime error
 /// replaced, if one did, and otherwise the node itself.
-fn sourceNode(store: *const NodeStore, node_idx: Node.Idx) Node {
+pub fn sourceNode(store: *const NodeStore, node_idx: Node.Idx) Node {
     const node = store.nodes.get(node_idx);
     if (node.tag != .malformed) return node;
     const source_node_plus_one = node.getPayload().malformed.source_node_plus_one;

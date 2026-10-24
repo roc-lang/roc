@@ -8,28 +8,24 @@ type=expr
 0.0()
 ~~~
 # EXPECTED
-MISSING METHOD - call_float_literal.md:1:1:1:4
+TYPE MISMATCH - call_float_literal.md:1:1:1:4
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 1 1) (end 1 4))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This number is being used where a non-number type is needed."))
 		(document
 			(source-region (file "call_float_literal.md") (start 1 1) (end 1 4) (annotation error) (line-text "0.0()"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be non-numeric here:")
+			(line-break)
+			(source-region (file "call_float_literal.md") (start 1 1) (end 1 6) (annotation error) (line-text "0.0()"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

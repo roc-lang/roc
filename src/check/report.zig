@@ -2584,6 +2584,13 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: DispatcherNotNominal,
     ) Allocator.Error!Report {
+        if (try self.buildLiteralMismatchReport(data.origin, .{
+            .dispatcher_var = data.dispatcher_var,
+            .dispatcher_snapshot = data.dispatcher_snapshot,
+            .num_literal = data.num_literal,
+            .string_literal_region = data.string_literal_region,
+        })) |report| return report;
+
         var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
         errdefer report.deinit();
         if (data.owner_region != null and data.origin == .where_clause) {
@@ -2631,18 +2638,13 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: DispatcherDoesNotImplMethod,
     ) Allocator.Error!Report {
-        // Special case: a literal used where a type lacking its `from_*`
-        // conversion method is expected.
-        if (data.origin.literalKind()) |kind| {
-            return switch (kind) {
-                // number literal used where a non-number type is expected
-                .numeral => if (data.num_literal != null and data.num_literal.?.explicit_suffix)
-                    self.buildStaticDispatchMissingMethod(data)
-                else
-                    self.buildNumberUsedAsNonNumber(data),
-                // string/interpolation literal used where a non-string type is expected
-                .quote, .interpolation => self.buildStringUsedAsNonString(data),
-            };
+        if (data.origin.literalKind() != null) {
+            return try self.buildLiteralMismatchReport(data.origin, .{
+                .dispatcher_var = data.dispatcher_var,
+                .dispatcher_snapshot = data.dispatcher_snapshot,
+                .num_literal = data.num_literal,
+                .string_literal_region = data.string_literal_region,
+            }) orelse try self.buildStaticDispatchMissingMethod(data);
         }
 
         if (data.row_extension_of) |row_extension| return self.buildRowExtensionMissingMethod(data, row_extension);
@@ -3060,17 +3062,48 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// A literal whose `from_*` conversion failed, whatever kind of type the
+    /// literal was used as.
+    const LiteralMismatch = struct {
+        dispatcher_var: Var,
+        dispatcher_snapshot: SnapshotContentIdx,
+        num_literal: ?types_mod.NumeralInfo,
+        string_literal_region: ?Region,
+    };
+
+    /// Report a literal used where a type lacking its `from_*` conversion
+    /// method is expected, in terms of the literal rather than the conversion
+    /// method it implicitly calls. Null when the failure is not a literal's
+    /// conversion, or is a suffixed number literal's: the suffix names the
+    /// type, so the missing method is reported on that type.
+    fn buildLiteralMismatchReport(
+        self: *Self,
+        origin: types_mod.StaticDispatchConstraint.Origin,
+        data: LiteralMismatch,
+    ) Allocator.Error!?Report {
+        const kind = origin.literalKind() orelse return null;
+        return switch (kind) {
+            // number literal used where a non-number type is expected
+            .numeral => if (data.num_literal != null and data.num_literal.?.explicit_suffix)
+                null
+            else
+                try self.buildNumberUsedAsNonNumber(data),
+            // string/interpolation literal used where a non-string type is expected
+            .quote, .interpolation => try self.buildStringUsedAsNonString(data),
+        };
+    }
+
     /// Build a report for when a string literal is used where a non-string type is expected
     fn buildStringUsedAsNonString(
         self: *Self,
-        data: DispatcherDoesNotImplMethod,
+        data: LiteralMismatch,
     ) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Type Mismatch", "This string literal is being used where a non-string type is needed.", .runtime_error);
         errdefer report.deinit();
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
-        const literal_region = data.quote_region orelse
+        const literal_region = data.string_literal_region orelse
             (if (self.getRegionSafe(@fromBackingInt(@intCast(@backingInt(data.dispatcher_var))))) |r| r.* else Region.zero());
         const region_info = self.module_env.calcRegionInfo(literal_region);
 
@@ -3089,7 +3122,7 @@ pub const ReportBuilder = struct {
     /// Build a report for when a number literal is used where a non-number type is expected
     fn buildNumberUsedAsNonNumber(
         self: *Self,
-        data: DispatcherDoesNotImplMethod,
+        data: LiteralMismatch,
     ) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Type Mismatch", "This number is being used where a non-number type is needed.", .runtime_error);
         errdefer report.deinit();
@@ -3128,7 +3161,107 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
 
+        if (self.lowercaseNumberSuffix(num_region)) |type_name| {
+            const literal_text = self.source[num_region.start.offset..num_region.end.offset];
+            const suggestion = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ literal_text, type_name });
+            defer self.gpa.free(suggestion);
+            try report.document.addLineBreaks(2);
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("Type suffixes on number literals are capitalized and go directly after the number. To give this number the type"),
+                D.bytes(type_name).withAnnotation(.type_variable),
+                D.bytes(", write").withNoPrecedingSpace(),
+                D.bytes(try report.addOwnedString(suggestion)).withAnnotation(.inline_code),
+                D.bytes("instead."),
+            }, self, &report);
+        }
+
         return report;
+    }
+
+    /// When the number literal at `literal_region` is the receiver of a field
+    /// access whose first field is a builtin number type's name in lowercase
+    /// (as in `1.u64`), the builtin number type that access most likely meant
+    /// as a type suffix.
+    fn lowercaseNumberSuffix(self: *Self, literal_region: Region) ?[]const u8 {
+        const builtin_number_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "F32", "F64", "Dec" };
+        // A rejected literal and its access are replaced by runtime errors, so
+        // both are read as written in source.
+        const store = &self.can_ir.store;
+        var raw: u32 = 0;
+        while (raw < store.nodes.len()) : (raw += 1) {
+            const node_idx: CIR.Node.Idx = @fromBackingInt(raw);
+            if (store.sourceNode(node_idx).tag != .expr_field_access) continue;
+            const access = store.getSourceExpr(@fromBackingInt(raw)).e_field_access;
+            switch (store.getSourceExpr(access.receiver)) {
+                .e_num, .e_num_from_numeral, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => {},
+                .e_anno_only,
+                .e_binop,
+                .e_block,
+                .e_break,
+                .e_bytes_literal,
+                .e_call,
+                .e_closure,
+                .e_crash,
+                .e_dbg,
+                .e_deferred_import_ref,
+                .e_derived_method,
+                .e_dispatch_call,
+                .e_ellipsis,
+                .e_empty_list,
+                .e_empty_record,
+                .e_expect,
+                .e_expect_err,
+                .e_field_access,
+                .e_for,
+                .e_hosted_lambda,
+                .e_if,
+                .e_interpolation,
+                .e_lambda,
+                .e_list,
+                .e_lookup_associated,
+                .e_lookup_associated_local,
+                .e_lookup_associated_resolved,
+                .e_lookup_external,
+                .e_lookup_local,
+                .e_lookup_required,
+                .e_match,
+                .e_method_call,
+                .e_method_eq,
+                .e_nominal,
+                .e_nominal_external,
+                .e_record,
+                .e_return,
+                .e_run_low_level,
+                .e_runtime_error,
+                .e_str,
+                .e_str_segment,
+                .e_structural_eq,
+                .e_structural_hash,
+                .e_tag,
+                .e_tuple,
+                .e_tuple_access,
+                .e_typed_frac,
+                .e_typed_int,
+                .e_type_dispatch_call,
+                .e_typed_num_from_numeral,
+                .e_type_method_call,
+                .e_unary_minus,
+                .e_zero_argument_tag,
+                => continue,
+            }
+            const receiver_region = store.getExprRegion(access.receiver);
+            if (receiver_region.start.offset > literal_region.start.offset or
+                receiver_region.end.offset < literal_region.end.offset) continue;
+            std.debug.assert(access.segments.len > 0);
+            const first_segment = store.getFieldAccessSegment(store.fieldAccessSegmentAt(access.segments, 0));
+            const field_name = self.can_ir.getIdentText(first_segment.name);
+            for (builtin_number_types) |type_name| {
+                if (std.ascii.eqlIgnoreCase(field_name, type_name)) return type_name;
+            }
+            return null;
+        }
+        return null;
     }
 
     fn buildInvalidNumericLiteralReport(

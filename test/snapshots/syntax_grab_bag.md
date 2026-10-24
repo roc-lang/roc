@@ -267,8 +267,8 @@ DOES NOT EXIST - syntax_grab_bag.md:175:3:175:15
 DOES NOT EXIST - syntax_grab_bag.md:190:2:190:14
 DOES NOT EXIST - syntax_grab_bag.md:191:2:191:14
 TYPE MISMATCH - syntax_grab_bag.md:70:5:70:8
-MISSING METHOD - syntax_grab_bag.md:99:3:99:8
-MISSING METHOD - syntax_grab_bag.md:101:3:101:8
+TYPE MISMATCH - syntax_grab_bag.md:99:3:99:8
+TYPE MISMATCH - syntax_grab_bag.md:99:3:99:8
 TYPE MISMATCH - syntax_grab_bag.md:84:2:84:2
 TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
 TOO FEW ARGS - syntax_grab_bag.md:155:2:157:3
@@ -979,22 +979,14 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 			(reflow "value.")))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 99 3) (end 99 8))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
 			(source-region (file "syntax_grab_bag.md") (start 99 3) (end 99 8) (annotation error) (line-text "\t\t\"foo\" => # After arrow comment"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -1003,22 +995,14 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 			(annotation-end)))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 101 3) (end 101 8))
+		(title "Type Mismatch")
+		(region (start 99 3) (end 99 8))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
-			(source-region (file "syntax_grab_bag.md") (start 101 3) (end 101 8) (annotation error) (line-text "\t\t\"foo\" | \"bar\" => 200"))
+			(source-region (file "syntax_grab_bag.md") (start 99 3) (end 99 8) (annotation error) (line-text "\t\t\"foo\" => # After arrow comment"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
