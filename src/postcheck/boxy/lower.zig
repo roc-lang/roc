@@ -2163,6 +2163,7 @@ const ProcedureBuilder = struct {
                 boxyLowerInvariant("nested descriptor request delivered no descriptor"));
         } else {
             frame.started = true;
+            const boxed_variable = self.backingShapeBoxedVariable(frame.position.worker);
             // A backing-shape wrapper's positions are its backing's.
             while (self.descriptorBackingShapeRep(frame.position.worker)) |worker_backing| {
                 frame.position.worker = worker_backing;
@@ -2173,22 +2174,30 @@ const ProcedureBuilder = struct {
                         null;
                 }
             }
-            const worker_rep = self.plan.representations.items[@backingInt(frame.position.worker)];
-            if (try self.staticGeneratedEvidenceNestedDescRefs(worker_rep.kind)) |nested_descs| {
-                return .{ .done = .{ .span = nested_descs } };
-            }
-            if (frame.position.mapping != null) {
-                if (frame.position.source) |source| {
-                    frame.source_children = self.plan.childSlice(self.plan.representations.items[@backingInt(source)].children);
+            if (boxed_variable) |variable| {
+                // The box payload is the variable's value, described by the
+                // variable's own descriptor.
+                try frame.slots.append(self.allocator, .{ .rep = variable, .kind = .box_payload });
+            } else {
+                const worker_rep = self.plan.representations.items[@backingInt(frame.position.worker)];
+                if (try self.staticGeneratedEvidenceNestedDescRefs(worker_rep.kind)) |nested_descs| {
+                    return .{ .done = .{ .span = nested_descs } };
                 }
+                if (frame.position.mapping != null) {
+                    if (frame.position.source) |source| {
+                        frame.source_children = self.plan.childSlice(self.plan.representations.items[@backingInt(source)].children);
+                    }
+                }
+                try self.appendNestedDescriptorSlots(frame.position.worker, self.descriptorPayloadLayoutForRep(frame.position.worker), &frame.slots);
             }
-            try self.appendNestedDescriptorSlots(frame.position.worker, self.descriptorPayloadLayoutForRep(frame.position.worker), &frame.slots);
             if (frame.slots.items.len == 0) return .{ .done = .{ .span = .{} } };
         }
         if (frame.refs.items.len < frame.slots.items.len) {
             const slot = frame.slots.items[frame.refs.items.len];
             const slot_source = if (frame.position.mapping == null)
                 null
+            else if (slot.child == null and slot.declared_field == null)
+                frame.position.source
             else if (slot.declared_field) |field|
                 try self.matchingDeclaredFieldInstantiationSource(frame.position.source, field)
             else
@@ -6283,10 +6292,17 @@ const ProcedureBuilder = struct {
 
     /// The type argument a transparent nominal use stores unchanged, when its
     /// declaration's backing is that bare formal (`W(a) := a`): the use is
-    /// stored as the argument, so one descriptor describes both. Any other
-    /// nominal use with type arguments stores its declaration's shared
-    /// backing template.
+    /// stored as the argument, so one descriptor describes both unless the
+    /// nominal brings descriptor methods of its own. Any other nominal use
+    /// with type arguments stores its declaration's shared backing template.
     fn nominalStoredArgument(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
+        if (self.plan.representations.items[@backingInt(rep_id)].owns_descriptor_methods) return null;
+        return self.nominalStorageArgument(rep_id);
+    }
+
+    /// The type argument a transparent nominal use stores unchanged, whatever
+    /// descriptor methods the nominal brings.
+    fn nominalStorageArgument(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
         const rep = self.plan.representations.items[@backingInt(rep_id)];
         if (rep.kind != .nominal or rep.declared_fields.len != 0) return null;
         switch (rep.kind.nominal) {
@@ -6304,9 +6320,35 @@ const ProcedureBuilder = struct {
         return null;
     }
 
+    /// The type variable a wrapper's backing-shape chain ends at, when the
+    /// wrapper stores that variable's value in a box: its descriptor names the
+    /// variable's descriptor as its one nested descriptor, describing the box
+    /// payload, alongside the wrapper's own methods.
+    fn backingShapeBoxedVariable(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
+        if (!self.layoutIsBoxStorage(self.descriptorPayloadLayoutForRep(rep_id))) return null;
+        // Nominals stored as their type arguments share one box with them.
+        var current = rep_id;
+        while (self.nominalStorageArgument(current)) |argument| current = argument;
+        if (current != rep_id and self.repIsBareVariable(current)) return current;
+        current = self.descriptorBackingShapeRep(current) orelse return null;
+        while (self.descriptorBackingShapeRep(current)) |backing| current = backing;
+        return if (self.repIsBareVariable(current)) current else null;
+    }
+
+    fn repIsBareVariable(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) bool {
+        const rep = self.plan.representations.items[@backingInt(rep_id)];
+        return rep.kind == .dynamic and rep.children.len == 0 and rep.tag_variants.len == 0 and rep.declared_fields.len == 0;
+    }
+
     fn descriptorIdentityRep(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
         var current = rep_id;
         while (true) {
+            // A use stored as its type argument shares that argument's
+            // descriptor.
+            if (self.nominalStoredArgument(current)) |stored| {
+                current = stored;
+                continue;
+            }
             if (self.plan.repOwnsDescriptorMethod(current)) return current;
 
             const rep = self.plan.representations.items[@backingInt(current)];
@@ -16397,6 +16439,8 @@ const ProcBodyBuilder = struct {
         const start = self.parent.result.boxy_erased_arg_desc_offsets.items.len;
         for (args, 0..) |_, arg_index| {
             const arg_params = params.items[param_starts[arg_index]..param_starts[arg_index + 1]];
+            const sources = try self.erasedArgumentDescriptorParamSources(arg_params);
+            defer self.parent.allocator.free(sources);
             for (arg_params, 0..) |param, descriptor_index| {
                 if (arg_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy erased argument descriptor key exceeded its index range");
@@ -16404,7 +16448,7 @@ const ProcBodyBuilder = struct {
                 if (descriptor_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy erased argument descriptor index exceeded its key range");
                 }
-                const source = try self.erasedArgumentDescriptorParamSource(arg_params, descriptor_index);
+                const source = sources[descriptor_index];
                 if (source.read != .call_key) continue;
                 var capture_index: ?u32 = null;
                 for (captures, 0..) |capture, index| {
@@ -16471,6 +16515,10 @@ const ProcBodyBuilder = struct {
             try self.collectHiddenDescriptorParamsForRep(.all, arg.rep, &params, &seen_reps, &seen_descs);
             const param_locals_by_index = try self.parent.allocator.alloc(LIR.LocalId, params.items.len);
             defer self.parent.allocator.free(param_locals_by_index);
+            var rebuilt_params = std.ArrayList(Plan.HiddenDescriptorParam).empty;
+            defer rebuilt_params.deinit(self.parent.allocator);
+            const sources = try self.erasedArgumentDescriptorParamSources(params.items);
+            defer self.parent.allocator.free(sources);
             for (params.items, 0..) |param, param_index| {
                 if (arg_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy erased argument descriptor parameter key exceeded its index range");
@@ -16479,7 +16527,7 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("boxy erased argument descriptor parameter index exceeded its key range");
                 }
                 const descriptor_index: u32 = @intCast(param_index);
-                const descriptor_source = try self.erasedArgumentDescriptorParamSource(params.items, param_index);
+                const descriptor_source = sources[param_index];
                 if (descriptor_source.read == .parent) {
                     const parent_local = param_locals_by_index[descriptor_source.descriptor_index];
                     param_locals_by_index[param_index] = parent_local;
@@ -16487,6 +16535,10 @@ const ProcBodyBuilder = struct {
                     if (self.repOwnsDescriptor(param.rep, param.desc)) {
                         try self.bindDescriptorIdentityLocalForRep(param.rep, parent_local, true);
                     }
+                    continue;
+                }
+                if (descriptor_source.read == .rebuilt) {
+                    try rebuilt_params.append(self.parent.allocator, param);
                     continue;
                 }
                 const is_root_descriptor = self.repOwnsShapeDescriptor(param.rep, param.desc) and
@@ -16518,6 +16570,17 @@ const ProcBodyBuilder = struct {
                     .source_tag_name = descriptor_source.tag_name,
                     .read = descriptor_source.read.lir(),
                 });
+            }
+            for (rebuilt_params.items) |param| {
+                const local = try self.addFrameLocal(.opaque_ptr);
+                const materialization = try self.descriptorMaterializationForKnownRep(param.rep);
+                try self.worker_argument_desc_initializers.append(self.parent.allocator, materialization.initializer(local));
+                try appendUniqueLocal(self.parent.allocator, &self.runtime_initialized_descriptor_locals, local);
+                try self.recordDescriptorLocalTemplate(local, materialization);
+                try self.bindDescriptorRequirementLocalForRep(param.desc, param.rep, local, true);
+                if (self.repOwnsDescriptor(param.rep, param.desc)) {
+                    try self.bindDescriptorIdentityLocalForRep(param.rep, local, true);
+                }
             }
 
             var all_params = std.ArrayList(Plan.HiddenDescriptorParam).empty;
@@ -16642,6 +16705,10 @@ const ProcBodyBuilder = struct {
             /// The parent stores this representation's value unchanged, so
             /// its own descriptor is this one: no read and no key.
             parent,
+            /// The parent stores this representation's value unchanged but
+            /// brings descriptor methods of its own, so this descriptor is
+            /// rebuilt from the descriptors read for its parts: no key.
+            rebuilt,
 
             fn lir(self: Read) LIR.ErasedArgDescRead {
                 return switch (self) {
@@ -16650,18 +16717,35 @@ const ProcBodyBuilder = struct {
                     .tag_payload => .tag_payload,
                     .tag_ext => .tag_ext,
                     .parent => unreachable, // a parent-held descriptor is bound to the parent's local, never emitted as a parameter
+                    .rebuilt => unreachable, // a rebuilt descriptor is materialized after the reads, never emitted as a parameter
                 };
             }
         };
     };
 
+    /// The source of each of an erased argument's descriptor parameters, in
+    /// parameter order. The caller owns the returned slice.
+    fn erasedArgumentDescriptorParamSources(
+        self: *ProcBodyBuilder,
+        params: []const Plan.HiddenDescriptorParam,
+    ) Allocator.Error![]ErasedArgumentDescriptorParamSource {
+        const sources = try self.parent.allocator.alloc(ErasedArgumentDescriptorParamSource, params.len);
+        errdefer self.parent.allocator.free(sources);
+        for (sources, 0..) |*source, param_index| {
+            source.* = try self.erasedArgumentDescriptorParamSource(params, param_index, sources[0..param_index]);
+        }
+        return sources;
+    }
+
     /// Every descriptor of an erased argument that an earlier parameter holds
     /// is read from that parent, so any caller supplies it through the
     /// parent's key, whatever its view of the argument's type.
+    /// `earlier_sources` holds the sources of the parameters before `param_index`.
     fn erasedArgumentDescriptorParamSource(
         self: *ProcBodyBuilder,
         params: []const Plan.HiddenDescriptorParam,
         param_index: usize,
+        earlier_sources: []const ErasedArgumentDescriptorParamSource,
     ) Allocator.Error!ErasedArgumentDescriptorParamSource {
         if (param_index > std.math.maxInt(u32)) {
             boxyLowerInvariant("boxy erased argument descriptor source index exceeded its key range");
@@ -16676,8 +16760,27 @@ const ProcBodyBuilder = struct {
 
         const target_rep = self.parent.descriptorStorageRep(params[param_index].rep);
         var source: ?ErasedArgumentDescriptorParamSource = null;
+        var rebuilt: ?ErasedArgumentDescriptorParamSource = null;
         for (params[0..param_index], 0..) |candidate, candidate_index| {
             const parent_rep = self.parent.descriptorStorageRep(candidate.rep);
+            // A rebuilt descriptor exists only once the reads are done.
+            if (earlier_sources[candidate_index].read == .rebuilt) continue;
+            // A nominal with descriptor methods of its own stored as the
+            // target has a descriptor of its own; the target's is rebuilt
+            // from the descriptors read for its parts.
+            if (rebuilt == null) {
+                var stored = self.parent.nominalStorageArgument(parent_rep);
+                while (stored) |argument| : (stored = self.parent.nominalStorageArgument(argument)) {
+                    if (self.parent.descriptorStorageRep(argument) != target_rep) continue;
+                    rebuilt = .{
+                        .descriptor_index = @intCast(candidate_index),
+                        .nested_index = std.math.maxInt(u32),
+                        .tag_name = no_tag_payload_read,
+                        .read = .rebuilt,
+                    };
+                    break;
+                }
+            }
             // One storage has one descriptor: a parent stored as exactly the
             // target (a nominal whose backing is that type argument) is it.
             if (parent_rep == target_rep) return .{
@@ -16713,7 +16816,7 @@ const ProcBodyBuilder = struct {
             }
             source = projected;
         }
-        return source orelse direct;
+        return source orelse rebuilt orelse direct;
     }
 
     /// Whether `backing_rep` is the alias or nominal backing of `rep_id`.
@@ -16732,10 +16835,13 @@ const ProcBodyBuilder = struct {
     /// `parent_index`.
     fn immediateTagReadDescriptorForRep(
         self: *ProcBodyBuilder,
-        parent_rep_id: Plan.TypeRepId,
+        stored_parent_rep_id: Plan.TypeRepId,
         target_rep: Plan.TypeRepId,
         parent_index: usize,
     ) Allocator.Error!?ErasedArgumentDescriptorParamSource {
+        // A nominal stored as its type argument has that argument's shape.
+        var parent_rep_id = stored_parent_rep_id;
+        while (self.parent.nominalStorageArgument(parent_rep_id)) |argument| parent_rep_id = self.parent.descriptorStorageRep(argument);
         if (self.tagVariantRepForBoundary(parent_rep_id) == null) return null;
         var read_path = std.ArrayList(DescriptorReadStep).empty;
         defer read_path.deinit(self.parent.allocator);
@@ -28715,9 +28821,8 @@ const ProcBodyBuilder = struct {
         if (!self.payloadFieldCarriesRuntimeDesc(tuple_rep, elem_index)) return read;
         const nested_index = self.tupleElemNestedDescriptorIndex(tuple_rep, elem_index);
         const desc_local = try self.mutableDescriptorLocalForValue(target);
-        if (self.localIsReadOnlyDescriptorInput(desc_local)) {
-            boxyLowerInvariant("tuple field read target reused a read-only descriptor input");
-        }
+        // The frame's own descriptor input already describes the element.
+        if (self.localIsReadOnlyDescriptorInput(desc_local)) return read;
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = desc_local,
             .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
@@ -32702,11 +32807,22 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!?u32 {
         const target_rep = self.parent.descriptorStorageRep(nested_rep_id);
         if (self.repIsOpenRecord(parent_rep_id)) return null;
+        // A wrapper over a boxed variable holds that variable's descriptor as
+        // its only nested descriptor.
+        if (self.parent.backingShapeBoxedVariable(parent_rep_id)) |variable| {
+            // A wrapper stored as its declaration's shared template names its
+            // formal there, standing for the actual its use substitutes.
+            const actual = self.nominalFormalActual(parent_rep_id, variable) orelse variable;
+            return if (self.parent.descriptorStorageRep(actual) == target_rep) 0 else null;
+        }
+        // A nominal stored as its type argument has that argument's shape.
+        var shape_rep_id = parent_rep_id;
+        while (self.parent.nominalStorageArgument(shape_rep_id)) |argument| shape_rep_id = self.parent.descriptorStorageRep(argument);
         var slots = std.ArrayList(ProcedureBuilder.NestedDescriptorSlot).empty;
         defer slots.deinit(self.parent.allocator);
         try self.parent.appendNestedDescriptorSlots(
-            parent_rep_id,
-            self.parent.descriptorPayloadLayoutForRep(parent_rep_id),
+            shape_rep_id,
+            self.parent.descriptorPayloadLayoutForRep(shape_rep_id),
             &slots,
         );
         for (slots.items, 0..) |slot, position| {
@@ -33778,6 +33894,10 @@ const ProcBodyBuilder = struct {
         const current_desc = rep.descriptor.get();
         const rep_layout = self.parent.layout_plan.rep_layouts[rep_index];
         const payload_layout = rep_layout.descriptor_payload_layout orelse rep_layout.worker.layoutIdx();
+        if (self.parent.backingShapeBoxedVariable(identity_rep)) |variable| {
+            try pending.append(allocator, .{ .ref = .{ .rep = variable, .parent_desc = current_desc } });
+            return;
+        }
         if (self.parent.descriptorBackingShapeRep(identity_rep)) |backing_rep| {
             try pending.append(allocator, .{ .body = backing_rep });
             return;
@@ -34271,9 +34391,18 @@ const ProcBodyBuilder = struct {
         const rep_id = frame.rep_id;
         while (true) switch (frame.phase) {
             .nested_begin => {
+                frame.phase = .tag_begin;
+                if (self.parent.backingShapeBoxedVariable(rep_id)) |variable| {
+                    // The box payload is the variable's value, described by
+                    // the variable's own descriptor.
+                    try frame.slots.append(allocator, .{ .rep = variable, .kind = .box_payload });
+                    frame.refs.clearRetainingCapacity();
+                    frame.index = 0;
+                    frame.phase = .nested;
+                    continue;
+                }
                 var shape_rep = rep_id;
                 while (self.parent.descriptorBackingShapeRep(shape_rep)) |backing_rep| shape_rep = backing_rep;
-                frame.phase = .tag_begin;
                 const shape = plan.representations.items[@backingInt(shape_rep)];
                 if (try self.parent.staticGeneratedEvidenceNestedDescRefs(shape.kind)) |nested_descs| {
                     frame.nested_descs = nested_descs;
@@ -38255,6 +38384,8 @@ const ProcBodyBuilder = struct {
             var params = std.ArrayList(Plan.HiddenDescriptorParam).empty;
             defer params.deinit(self.parent.allocator);
             try self.collectHiddenDescriptorParamsForRep(.all, arg.rep, &params, &seen_reps, &seen_descs);
+            const sources = try self.erasedArgumentDescriptorParamSources(params.items);
+            defer self.parent.allocator.free(sources);
             for (params.items, 0..) |param, descriptor_index| {
                 if (arg_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy callable adapter argument descriptor key exceeded its index range");
@@ -38262,7 +38393,7 @@ const ProcBodyBuilder = struct {
                 if (descriptor_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy callable adapter argument descriptor index exceeded its key range");
                 }
-                const source = try self.erasedArgumentDescriptorParamSource(params.items, descriptor_index);
+                const source = sources[descriptor_index];
                 if (source.read != .call_key) continue;
                 var capture_index: ?u32 = null;
                 for (descriptor_captures, 0..) |capture, index| {
@@ -38858,6 +38989,16 @@ const ProcBodyBuilder = struct {
                         }
                     }
 
+                    // A boxed variable's descriptor is the wrapper's first
+                    // nested descriptor.
+                    if (self.parent.backingShapeBoxedVariable(identity_rep)) |variable| {
+                        try actions.append(allocator, .{ .nested = .{
+                            .nested_rep = variable,
+                            .parent_desc = desc_ref,
+                            .nested_index = 0,
+                        } });
+                        break;
+                    }
                     if (self.parent.descriptorBackingShapeRep(identity_rep)) |backing_rep| {
                         identity_rep = self.parent.descriptorStorageRep(backing_rep);
                         continue;
@@ -42336,8 +42477,12 @@ const ProcBodyBuilder = struct {
 
     fn reserveDescriptorLocalForRepWithFresh(
         self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
+        use_rep_id: Plan.TypeRepId,
     ) Allocator.Error!?DescriptorLocalReservation {
+        // A use stored as its type argument is described by that argument's
+        // descriptor.
+        var rep_id = use_rep_id;
+        while (self.parent.nominalStoredArgument(rep_id)) |stored| rep_id = stored;
         const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
         if (rep.descriptor.get() != null and try self.repDependsOnNominalFormals(rep_id)) {
             const identity_rep = self.parent.descriptorStorageRep(rep_id);
