@@ -30,9 +30,9 @@ pub const LiteralValueRead = postcheck.Common.LiteralValueRead;
 pub const LiteralRootReuse = postcheck.Common.LiteralRootReuse;
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
+const LowLevelLayouts = @import("low_level_layouts.zig");
 const DebugPrint = @import("debug_print.zig");
 const LIR = core.LIR;
-const CheckedArithmetic = core.CheckedArithmetic;
 const LirImage = @import("lir_image.zig");
 const LirProgram = core.Program;
 const postcheck = @import("postcheck");
@@ -1934,7 +1934,7 @@ fn finishLoweredOutput(
     lowered: anytype,
     frozen: *?LirProgram.FrozenStaticData,
 ) LowerResourceError!LoweredProgram {
-    verifyArithmeticBoundary(&lowered.lir_result.store);
+    try LowLevelLayouts.verify(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts);
     var lir_passes_timing_scope = PipelineStageScope.begin(target.timing, .lir_passes);
     defer lir_passes_timing_scope.end();
     var local_pass_metrics: LirPassParallelMetrics = .{};
@@ -2053,6 +2053,8 @@ fn finishLoweredOutput(
 
     try @import("comptime_value_guards.zig").insert(allocator, &lowered.lir_result, if (frozen.*) |*data| data else null);
 
+    try LowLevelLayouts.verify(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts);
+
     try LirDump.run(&lowered.lir_result);
     if (SpecCensus.enabled()) try SpecCensus.runLir(allocator, &lowered.lir_result);
 
@@ -2158,21 +2160,6 @@ pub fn prepareBoxyCheckedModules(
         .static_data_requests = static_data_requests,
         .plan = plan,
     };
-}
-
-/// Source-policy arithmetic is resolved to a concrete family member during
-/// lowering, so none of it may survive into LIR. The proven members cannot be
-/// checked here: lowering mints them for the builtin module's private
-/// `plus_infallible` and `minus_infallible`, and LIR carries no provenance
-/// that would tell those apart from a pass that minted one it should not have.
-fn verifyArithmeticBoundary(store: *const core.LirStore) void {
-    if (builtin.mode != .debug) return;
-    for (store.getCFStmts()) |stmt| {
-        if (stmt != .assign_low_level) continue;
-        if (CheckedArithmetic.isSourcePolicyOp(stmt.assign_low_level.op)) {
-            checkedPipelineInvariant("source-policy arithmetic operation reached LIR");
-        }
-    }
 }
 
 fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Allocator.Error!void {

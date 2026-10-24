@@ -2313,16 +2313,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     std.debug.assert(args.len >= 2);
                     const list_loc, const index_loc = try self.emitValueLocals(2, args);
 
-                    if (builtin.mode == .debug) {
-                        const index_layout = self.valueLayout(GuardedList.at(args, 1));
-                        if (index_layout != .u64) {
-                            base.invariant(
-                                "LIR/codegen invariant violated: list_get_unsafe index must have U64 layout, got {d}",
-                                .{@backingInt(index_layout)},
-                            );
-                        }
-                    }
-
                     // Get base offset of list struct
                     const list_base: i32 = listStructOffset(list_loc);
 

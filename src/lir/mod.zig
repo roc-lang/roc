@@ -78,6 +78,8 @@ test "LIR image tests" {
 }
 
 pub const ImmortalLocals = @import("immortal_locals.zig");
+/// Debug-only check of every low-level operation's layouts against its signature.
+pub const LowLevelLayouts = @import("low_level_layouts.zig");
 /// Decides where erased calls left pending by a tail call are run.
 pub const TailDrive = @import("tail_drive.zig");
 /// Final immutable failure-image guards and explicit completion.

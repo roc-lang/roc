@@ -25085,6 +25085,12 @@ Minimum boundary checks:
 - LIR lowering receives only the selected strategy's explicit inputs: Lambda
   Solved lifted syntax plus Lambda Mono decisions for `.lss`, or checked
 CheckedModule data plus boxy representation data for `.boxy`.
+- Every `assign_low_level` a procedure reaches has the argument and result
+  layouts its operation's signature declares (`base.low_level_signatures`),
+  and no operation that lowering always rewrites (source-policy arithmetic,
+  `list_prefetched`, `crash`) reaches LIR. This is checked when LIR lowering
+  finishes and again before LIR reaches a backend, so backends read every
+  operand through its declared layout without checking it.
 - ARC insertion receives LIR containing no RC statements.
 - ARC insertion sees dynamic boxy RC helper plans only where the LIR statement
   carries an explicit descriptor reference.

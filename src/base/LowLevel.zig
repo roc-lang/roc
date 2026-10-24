@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const numeric_conversion = @import("numeric_conversion.zig");
+const low_level_signatures = @import("low_level_signatures.zig");
 
 /// Canonical primitive operations shared across canonicalization and LIR/codegen.
 pub const LowLevel = enum(u16) {
@@ -1388,6 +1389,12 @@ pub const LowLevel = enum(u16) {
         .compare = byType(.none()),
         .crash = byType(.none()),
     };
+
+    /// The layouts this operation takes and returns in LIR, or that LIR never
+    /// contains it.
+    pub fn lirSignature(self: LowLevel) low_level_signatures.LirSignature {
+        return low_level_signatures.of(self);
+    }
 
     /// ARC-only primitive variant whose result may borrow from an argument.
     /// Neutral LIR keeps the source operation; ARC uses this explicit mapping

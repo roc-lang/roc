@@ -2297,8 +2297,47 @@ pub const Store = struct {
                     switch (self_finalizer.graph.getNode(child_id)) {
                         .nominal => |child| current = child,
                         .pending, .committed, .box, .list, .closure, .erased_callable, .struct_, .tag_union => {
-                            self_finalizer.raw_used[@backingInt(child_id)] = true;
+                            std.debug.assert(self_finalizer.raw_used[@backingInt(child_id)]);
                             return self_finalizer.raw_layouts[@backingInt(child_id)];
+                        },
+                    }
+                }
+            }
+
+            /// Mark the raw slot of every node a recursive slot box points
+            /// at as that node's value, before any node is finalized. A box
+            /// is built from its target's raw slot, so a target finalized
+            /// before the box's parent must already know to keep that slot
+            /// rather than intern a second layout with the same contents.
+            fn markRecursiveSlotTargets(self_finalizer: *@This(), cycle_reachers: []const bool) void {
+                for (self_finalizer.graph.nodes.items, cycle_reachers, 0..) |node, reaches, i| {
+                    if (!reaches) continue;
+                    const parent_id: GraphNodeId = @fromBackingInt(@intCast(i));
+                    switch (node) {
+                        .struct_ => |span| for (self_finalizer.graph.getFields(span)) |field| {
+                            self_finalizer.markRecursiveSlotTarget(parent_id, field.child);
+                        },
+                        .tag_union => |span| for (self_finalizer.graph.getRefs(span)) |variant_ref| {
+                            self_finalizer.markRecursiveSlotTarget(parent_id, variant_ref);
+                        },
+                        .pending, .committed, .nominal, .box, .list, .closure, .erased_callable => {},
+                    }
+                }
+            }
+
+            fn markRecursiveSlotTarget(self_finalizer: *@This(), parent_id: GraphNodeId, child_ref: GraphRef) void {
+                if (!self_finalizer.shouldBoxRecursiveSlotEdge(parent_id, child_ref)) return;
+                var current = child_ref;
+                while (true) {
+                    const child_id = switch (current) {
+                        .canonical => return,
+                        .local => |child_id| child_id,
+                    };
+                    switch (self_finalizer.graph.getNode(child_id)) {
+                        .nominal => |child| current = child,
+                        .pending, .committed, .box, .list, .closure, .erased_callable, .struct_, .tag_union => {
+                            self_finalizer.raw_used[@backingInt(child_id)] = true;
+                            return;
                         },
                     }
                 }
@@ -2742,6 +2781,7 @@ pub const Store = struct {
             }
         }
 
+        finalizer.markRecursiveSlotTargets(reaches_cycle);
         for (graph.nodes.items, 0..) |_, i| {
             const finalized = try finalizer.finalizeNode(@fromBackingInt(@intCast(i)));
             std.debug.assert(finalized == value_layouts[i]);
@@ -4169,6 +4209,34 @@ test "commitGraph produces identical recursive tag union shapes regardless of co
         const b_tag = store.getLayout(info_b.variants.get(i).payload_layout).tag;
         try testing.expectEqual(a_tag, b_tag);
     }
+}
+
+test "commitGraph boxes each member of a mutually recursive union group with that member's own layout" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // expr = [Str, tail], tail = [expr]: neither union holds an explicit
+    // box, so the commit boxes both recursive edges itself.
+    var graph = LayoutGraph{};
+    defer graph.deinit(testing.allocator);
+    const expr = try graph.reserveNode(testing.allocator);
+    const tail = try graph.reserveNode(testing.allocator);
+    graph.setNode(expr, .{ .tag_union = try graph.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .str }, .{ .local = tail } }) });
+    graph.setNode(tail, .{ .tag_union = try graph.appendRefs(testing.allocator, &[_]GraphRef{.{ .local = expr }}) });
+    var commit = try store.commitGraph(&graph, .{ .local = expr });
+    defer commit.deinit(testing.allocator);
+
+    const expr_idx = commit.value_layouts[@backingInt(expr)];
+    const tail_idx = commit.value_layouts[@backingInt(tail)];
+    const expr_variants = store.getTagUnionInfo(store.getLayout(expr_idx)).variants;
+    const tail_variants = store.getTagUnionInfo(store.getLayout(tail_idx)).variants;
+    const expr_to_tail = store.getLayout(expr_variants.get(1).payload_layout);
+    const tail_to_expr = store.getLayout(tail_variants.get(0).payload_layout);
+    try testing.expectEqual(LayoutTag.box, expr_to_tail.tag);
+    try testing.expectEqual(LayoutTag.box, tail_to_expr.tag);
+    try testing.expectEqual(tail_idx, expr_to_tail.getIdx());
+    try testing.expectEqual(expr_idx, tail_to_expr.getIdx());
 }
 
 test "commitGraph identifies recursive nodes by reduced position, not by unrolling depth" {

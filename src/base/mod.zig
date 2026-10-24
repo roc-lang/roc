@@ -18,6 +18,8 @@ pub const rc_effect_rules = @import("rc_effect_rules.zig");
 /// The source type, destination type, and mode of each numeric conversion
 /// low-level, parsed from its name.
 pub const numeric_conversion = @import("numeric_conversion.zig");
+/// The layouts every `LowLevel` operation takes and returns in LIR.
+pub const low_level_signatures = @import("low_level_signatures.zig");
 
 comptime {
     rc_effect_rules.assertTableConforms();
@@ -208,6 +210,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("ice_context.zig"));
     std.testing.refAllDecls(@import("InternedBytes.zig"));
     std.testing.refAllDecls(@import("LowLevel.zig"));
+    std.testing.refAllDecls(@import("low_level_signatures.zig"));
     std.testing.refAllDecls(@import("memory_fault.zig"));
     std.testing.refAllDecls(@import("module_identity.zig"));
     std.testing.refAllDecls(@import("parallel.zig"));
