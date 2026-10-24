@@ -181,6 +181,10 @@ pub const Options = struct {
     /// linked, so a linked-object entry (`Common.SpecCacheHit.c_abi_entry`)
     /// can, and whether its emitter splices dev code.
     spec_cache_takes: Common.SpecCacheTakes = .dev_code,
+    /// Give every site-named procedure a code key
+    /// (`CheckedPipeline.TargetConfig.site_code_keys`); required whenever
+    /// `spec_cache` is set.
+    site_code_keys: bool = false,
     inline_plan: SolvedInline.Plan = .{},
     /// Lower every keyed specialization's procedure body, even one whose every
     /// call was inlined, so a pack program can offer it.
@@ -898,6 +902,7 @@ const Lowerer = struct {
     proc_debug_names: bool,
     spec_cache: ?Common.SpecCacheLookup,
     spec_cache_takes: Common.SpecCacheTakes,
+    site_code_keys: bool,
     /// The module identities of this program's source files, which the
     /// object cache serves entries for (`Common.ProgramModules`).
     program_modules: Common.ProgramModules = &.{},
@@ -1191,6 +1196,8 @@ const Lowerer = struct {
         solved: *const Solved.Program,
         options: Options,
     ) Common.LowerError!Lowerer {
+        // Cached code names a site-named procedure by its code key.
+        if (options.spec_cache != null and !options.site_code_keys) Common.invariant("a program served by the object cache gave site-named procedures no code keys");
         var payload_conditions = collections.DenseMap(Lifted.LocalId, PayloadCondition).init(allocator);
         errdefer payload_conditions.deinit();
         for (0..solved.lifted.exprCount()) |raw_expr| {
@@ -1269,6 +1276,7 @@ const Lowerer = struct {
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
             .spec_cache_takes = options.spec_cache_takes,
+            .site_code_keys = options.site_code_keys,
             .root_manifest = options.root_manifest,
             .fn_queue_index = 0,
             .initializer_queue_index = 0,
@@ -1497,6 +1505,8 @@ const Lowerer = struct {
     /// from a pack, so every program marks the same procedures. Every
     /// specialization of a marked source function is marked.
     fn markStableSignatures(self: *Lowerer) Common.LowerError!void {
+        // Without code keys no procedure is stable.
+        if (!self.site_code_keys) return;
         const stable_sources = try self.allocator.alloc(bool, self.solved.lifted.fnCount());
         defer self.allocator.free(stable_sources);
         @memset(stable_sources, false);
@@ -3229,10 +3239,11 @@ const Lowerer = struct {
         } else if (dev_diagnostics.isSet(.pack_trace) and self.spec_cache != null) {
             if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped plain={} cached={}\n", .{ key.bytes[0..8], plain_spec, cached != null });
         }
-        // Every program separates a site-named procedure's code from its
-        // identity, so whether it uses the object cache changes nothing it
-        // compiles (design.md "Output Determinism").
-        const code_key = procCodeKey(source_fn.source, identity);
+        // A program whose code a pack can hold separates a site-named
+        // procedure's code from its identity whether or not it uses the
+        // object cache, so the cache changes nothing it compiles (design.md
+        // "Output Determinism").
+        const code_key = if (self.site_code_keys) procCodeKey(source_fn.source, identity) else null;
         // Any other procedure a body lowered for is served by its identity,
         // which names its code once Lambda Mono has decided it: its source,
         // its solved types with their lambda sets, and its captures. A

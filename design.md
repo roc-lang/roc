@@ -846,12 +846,17 @@ other procedure's. A stable procedure keeps its outcome variant ("Outcome-
 Conditioned Argument Restitution") for callers with a code key; a caller
 without one calls its pinned base. A variant of a procedure with a code key
 has a code key derived from it, since the variant's code is the source's.
-Every program gives its site-named procedures code keys, whether or not it
-uses the object cache. An entry whose code reaches the
-app from outside it (`Lifted.Program.appCalleesReachedBy`) is offered under
-its identity only, never under a reservation-time key, and a program that
-takes it lowers every app function it reaches as a served callee of the
-entry, so the entry calls that code's current version too.
+Every program whose code a pack can hold (dev builds, compile-time
+evaluation, and the object pack lowering of an optimized build:
+`CheckedPipeline.TargetConfig.site_code_keys`) gives its site-named
+procedures code keys, whether or not it uses the object cache. An optimized
+build's or the interpreter's own program gives none: it takes no code from a
+pack and offers none, so nothing compiled against an earlier body calls its
+procedures, and ARC solves their signatures freely. An entry whose code
+reaches the app from outside it (`Lifted.Program.appCalleesReachedBy`) is
+offered under its identity only, never under a reservation-time key, and a
+program that takes it lowers every app function it reaches as a served
+callee of the entry, so the entry calls that code's current version too.
 
 A package function that dispatches to a method of an app type records that
 method in its evidence. The evidence digest it is keyed by

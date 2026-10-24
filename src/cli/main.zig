@@ -13632,6 +13632,15 @@ fn zeroDictSeedForOpt(opt: cli_args.OptLevel) bool {
     };
 }
 
+/// Only dev builds, whose code packs hold, give site-named procedures code
+/// keys (`TargetConfig.site_code_keys`), with or without the object cache.
+fn siteCodeKeysForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .dev => true,
+        .size, .speed, .interpreter => false,
+    };
+}
+
 fn listInPlaceMapForOpt(opt: cli_args.OptLevel) bool {
     return switch (opt) {
         .size, .speed => true,
@@ -13738,6 +13747,7 @@ fn checkedRuntimeLoweringConfig(
             },
             .list_in_place_map = listInPlaceMapForOpt(opt),
             .zero_dict_seed = zeroDictSeedForOpt(opt),
+            .site_code_keys = siteCodeKeysForOpt(opt),
             .tag_reachability = tagReachabilityForOpt(opt),
             .prove_ranges = proveRangesForOpt(opt),
             .scalarize_joins = optimizeLirForOpt(opt),
