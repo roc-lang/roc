@@ -5982,19 +5982,8 @@ pub const Interpreter = struct {
                 if (crash_boundary.set() != 0) return self.crashError();
                 const result = builtins.str.splitFirst(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
 
-                const layout_val = self.layout_store.getLayout(ll.ret_layout);
-                if (layout_val.tag != .struct_) {
-                    return self.runtimeError("str_split_first expected a record return layout");
-                }
-                const record_idx = layout_val.getStruct().idx;
-                const fields = self.layout_store.struct_fields.sliceRange(self.layout_store.getStructData(record_idx).getFields());
-                if (fields.len != 3 or
-                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str or
-                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str or
-                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool)
-                {
-                    return self.runtimeError("str_split_first expected fields after Str, before Str, found Bool");
-                }
+                // `{ after : Str, before : Str, found : Bool }`
+                const record_idx = self.layout_store.getLayout(ll.ret_layout).getStruct().idx;
 
                 const val = try self.alloc(ll.ret_layout);
                 @memcpy(val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 0)).ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.after));
@@ -6008,19 +5997,8 @@ pub const Interpreter = struct {
                 if (crash_boundary.set() != 0) return self.crashError();
                 const result = builtins.str.splitLast(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
 
-                const layout_val = self.layout_store.getLayout(ll.ret_layout);
-                if (layout_val.tag != .struct_) {
-                    return self.runtimeError("str_split_last expected a record return layout");
-                }
-                const record_idx = layout_val.getStruct().idx;
-                const fields = self.layout_store.struct_fields.sliceRange(self.layout_store.getStructData(record_idx).getFields());
-                if (fields.len != 3 or
-                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str or
-                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str or
-                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool)
-                {
-                    return self.runtimeError("str_split_last expected fields after Str, before Str, found Bool");
-                }
+                // `{ after : Str, before : Str, found : Bool }`
+                const record_idx = self.layout_store.getLayout(ll.ret_layout).getStruct().idx;
 
                 const val = try self.alloc(ll.ret_layout);
                 @memcpy(val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 0)).ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.after));
@@ -6034,18 +6012,8 @@ pub const Interpreter = struct {
                 if (crash_boundary.set() != 0) return self.crashError();
                 const result = builtins.str.strDropPrefixCaselessAscii(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
 
-                const layout_val = self.layout_store.getLayout(ll.ret_layout);
-                if (layout_val.tag != .struct_) {
-                    return self.runtimeError("str_drop_prefix_caseless_ascii expected a record return layout");
-                }
-                const record_idx = layout_val.getStruct().idx;
-                const fields = self.layout_store.struct_fields.sliceRange(self.layout_store.getStructData(record_idx).getFields());
-                if (fields.len != 2 or
-                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str or
-                    self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .bool)
-                {
-                    return self.runtimeError("str_drop_prefix_caseless_ascii expected fields after Str, found Bool");
-                }
+                // `{ after : Str, found : Bool }`
+                const record_idx = self.layout_store.getLayout(ll.ret_layout).getStruct().idx;
 
                 const val = try self.alloc(ll.ret_layout);
                 @memcpy(val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 0)).ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.after));
@@ -6088,9 +6056,6 @@ pub const Interpreter = struct {
                 const result = builtins.str.fromUtf8C(self.valueToRocListForLayout(args[0], arg_layout), UpdateMode.Immutable, &self.roc_ops);
 
                 const ret_layout_val = self.layout_store.getLayout(ll.ret_layout);
-                if (ret_layout_val.tag != .tag_union) {
-                    return self.invariantFailedError("str_from_utf8 expected a Try return layout", .{});
-                }
                 const tu_data = self.layout_store.getTagUnionData(ret_layout_val.getTagUnion().idx);
                 // `Try`'s `Err` is discriminant 0 and `Ok` is 1; `Err`'s payload is the error record.
                 const err_payload = self.layout_store.getTagUnionVariants(tu_data).get(0).payload_layout;
@@ -6537,19 +6502,10 @@ pub const Interpreter = struct {
                 break :blk self.rocListToValue(rl, ll.ret_layout);
             },
             .list_sublist, .list_sublist_borrowed => blk: {
-                if (args.len != 2 or ll.arg_layouts.len != 2) {
-                    return self.runtimeError("list_sublist expected 2 arguments");
-                }
-
                 const info = self.listElemInfo(arg_layout);
                 const elems_rc = self.builtinListElemRc(arg_layout);
-                const record_layout = ll.arg_layouts[1];
-                const record_layout_val = self.layout_store.getLayout(record_layout);
-                if (record_layout_val.tag != .struct_) {
-                    return self.runtimeError("list_sublist expected a { start, len } record");
-                }
-
-                const record_idx = record_layout_val.getStruct().idx;
+                // `{ len : U64, start : U64 }`
+                const record_idx = self.layout_store.getLayout(ll.arg_layouts[1]).getStruct().idx;
                 const len_field_off = self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 0);
                 const start_field_off = self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 1);
                 const start = args[1].offset(start_field_off).read(u64);
@@ -6616,20 +6572,11 @@ pub const Interpreter = struct {
                 const info = self.listElemInfo(arg_layout);
                 const elems_rc = self.builtinListElemRc(arg_layout);
 
-                // The return layout is a 2-field record { list : List(a), value : a }.
-                // Disambiguate the two fields by their layout tag (one is a list, one is the element).
-                const ret_layout_val = self.layout_store.getLayout(ll.ret_layout);
-                if (ret_layout_val.tag != .struct_) return self.runtimeError("list_replace_unsafe: expected struct return layout");
-                const rec_idx = ret_layout_val.getStruct().idx;
-                const f0_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(rec_idx, 0);
-                const f0_layout_val = self.layout_store.getLayout(f0_layout);
-                const f0_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 0);
-                const f1_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 1);
-                const f1_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(rec_idx, 1);
-                const f0_is_list = f0_layout_val.tag == .list or f0_layout_val.tag == .list_of_zst;
-                const list_field_off = if (f0_is_list) f0_offset else f1_offset;
-                const value_field_off = if (f0_is_list) f1_offset else f0_offset;
-                const list_field_layout = if (f0_is_list) f0_layout else f1_layout;
+                // `{ list : List(item), prev : item }`
+                const rec_idx = self.layout_store.getLayout(ll.ret_layout).getStruct().idx;
+                const list_field_off = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 0);
+                const value_field_off = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 1);
+                const list_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(rec_idx, 0);
 
                 const val = try self.alloc(ll.ret_layout);
 
@@ -7083,13 +7030,8 @@ pub const Interpreter = struct {
             .f32_from_str,
             .f64_from_str,
             => blk: {
-                const parse_spec = numeric_conversion.getNumericParseSpec(ll.op) orelse
-                    return self.runtimeError("typed from_str low-level missing numeric parse spec");
+                const parse_spec = numeric_conversion.getNumericParseSpec(ll.op).?;
                 const ret_layout_val = self.layout_store.getLayout(ll.ret_layout);
-                if (ret_layout_val.tag != .tag_union) {
-                    return self.runtimeError("typed from_str expected a tag union return layout");
-                }
-
                 const tu_data = self.layout_store.getTagUnionData(ret_layout_val.getTagUnion().idx);
                 const result = try self.alloc(ll.ret_layout);
                 const roc_str = valueToRocStr(args[0]);
@@ -7150,17 +7092,9 @@ pub const Interpreter = struct {
             .f64_from_str_prefix,
             .f64_from_utf8_prefix,
             => blk: {
-                const spec = numeric_conversion.getNumericPrefixParseSpec(ll.op) orelse
-                    return self.runtimeError("prefix parse low-level missing numeric prefix parse spec");
-                const layout_val = self.layout_store.getLayout(ll.ret_layout);
-                if (layout_val.tag != .struct_) {
-                    return self.runtimeError("prefix parse expected a record return layout");
-                }
-                const record_idx = layout_val.getStruct().idx;
-                const fields = self.layout_store.struct_fields.sliceRange(self.layout_store.getStructData(record_idx).getFields());
-                if (fields.len != 3 or self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .u8) {
-                    return self.runtimeError("prefix parse expected fields err : U8, rest, value");
-                }
+                const spec = numeric_conversion.getNumericPrefixParseSpec(ll.op).?;
+                // `{ err : U8, rest : Str | List(U8), value : T }`
+                const record_idx = self.layout_store.getLayout(ll.ret_layout).getStruct().idx;
 
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
@@ -7187,12 +7121,12 @@ pub const Interpreter = struct {
                         4 => if (int.signed) self.writePrefixParse(i32, out, source, builtins.num.parseIntPrefix(i32, bytes)) else self.writePrefixParse(u32, out, source, builtins.num.parseIntPrefix(u32, bytes)),
                         8 => if (int.signed) self.writePrefixParse(i64, out, source, builtins.num.parseIntPrefix(i64, bytes)) else self.writePrefixParse(u64, out, source, builtins.num.parseIntPrefix(u64, bytes)),
                         16 => if (int.signed) self.writePrefixParse(i128, out, source, builtins.num.parseIntPrefix(i128, bytes)) else self.writePrefixParse(u128, out, source, builtins.num.parseIntPrefix(u128, bytes)),
-                        else => return self.runtimeError("prefix parse: unexpected integer width"),
+                        else => unreachable, // an integer parse spec's width is the byte width of a Roc integer type
                     },
                     .float => |float| switch (float.width_bytes) {
                         4 => self.writePrefixParse(f32, out, source, builtins.num.parseFloatPrefix(f32, bytes)),
                         8 => self.writePrefixParse(f64, out, source, builtins.num.parseFloatPrefix(f64, bytes)),
-                        else => return self.runtimeError("prefix parse: unexpected float width"),
+                        else => unreachable, // a float parse spec's width is the byte width of F32 or F64
                     },
                     .dec => self.writePrefixParse(i128, out, source, builtins.dec.parsePrefix(bytes)),
                 }
@@ -8106,18 +8040,9 @@ pub const Interpreter = struct {
         );
     }
 
-    fn lowLevelTryRecord(self: *LirInterpreter, ret_layout: layout_mod.Idx) Error!LowLevelTryRecord {
-        const layout_val = self.layout_store.getLayout(ret_layout);
-        if (layout_val.tag != .struct_) {
-            return self.runtimeError("low-level try record expected a struct return layout");
-        }
-
-        const struct_idx = layout_val.getStruct().idx;
-        const struct_info = self.layout_store.getStructInfo(layout_val);
-        if (struct_info.fields.len != 2) {
-            return self.runtimeError("low-level try record expected exactly two fields");
-        }
-
+    /// The fields of a `{ success : U8, val_or_memory_garbage : T }` result.
+    fn lowLevelTryRecord(self: *LirInterpreter, ret_layout: layout_mod.Idx) LowLevelTryRecord {
+        const struct_idx = self.layout_store.getLayout(ret_layout).getStruct().idx;
         return .{
             .success_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 0),
             .value_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, 1),
@@ -8130,7 +8055,7 @@ pub const Interpreter = struct {
         if (size > 0) {
             @memset(val.ptr[0..size], 0);
         }
-        const fields = try self.lowLevelTryRecord(ret_layout);
+        const fields = self.lowLevelTryRecord(ret_layout);
         if (maybe_payload) |payload| {
             val.offset(fields.value_offset).write(Payload, payload);
             val.offset(fields.success_offset).write(u8, 1);
