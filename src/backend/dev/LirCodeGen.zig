@@ -17030,22 +17030,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const reg = try self.ensureInGeneralReg(loc);
                     try self.emitStoreScalarToPtr(saved_ptr_reg, reg, 2);
                 },
-                .u8 => {
-                    // Zero-extend to 64 bits before storing, since the register
-                    // may have garbage in the upper bits from mutable variable loads.
-                    // Shift left 56, then logical shift right 56 to clear upper bits.
+                .i8, .u8 => {
                     const reg = try self.ensureInGeneralReg(loc);
-                    try self.emitShiftImm(.shl, .w64, reg, reg, 56);
-                    try self.emitShiftImm(.shr, .w64, reg, reg, 56);
-                    try self.emitStoreScalarToPtr(saved_ptr_reg, reg, 1);
-                },
-                .i8 => {
-                    // Sign-extend to 64 bits before storing, since the register
-                    // may have garbage in the upper bits from mutable variable loads.
-                    // Shift left 56, then arithmetic shift right 56 to sign-extend.
-                    const reg = try self.ensureInGeneralReg(loc);
-                    try self.emitShiftImm(.shl, .w64, reg, reg, 56);
-                    try self.emitShiftImm(.sar, .w64, reg, reg, 56);
                     try self.emitStoreScalarToPtr(saved_ptr_reg, reg, 1);
                 },
                 .f64 => {
@@ -26330,4 +26316,55 @@ test "branch location checkpoints restore only changed bindings in a wide proced
     try codegen.setLocalLocation(8, .{ .immediate_i64 = 500 });
     codegen.restoreStmtEnv(&outer);
     try std.testing.expectEqual(@as(i64, 8), codegen.local_locations.get(8).?.immediate_i64);
+}
+
+fn expectSingleByteResultStoreIsOneStore(comptime target: roc_target_mod.RocTarget, value_reg: anytype, ptr_reg: anytype, result_layout: layout.Idx) (Allocator.Error || error{TestExpectedEqual})!void {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    const CG = LirCodeGen(target);
+
+    var expected_cg = try CG.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
+    defer expected_cg.deinit();
+    try expected_cg.emitStoreScalarToPtr(ptr_reg, value_reg, 1);
+
+    var actual_cg = try CG.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
+    defer actual_cg.deinit();
+    try actual_cg.storeResultToSavedPtr(.{ .general_reg = value_reg }, result_layout, ptr_reg);
+
+    try std.testing.expectEqualSlices(u8, expected_cg.codegen.getCode(), actual_cg.codegen.getCode());
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12483
+// Storing a U8 or I8 result writes only the lowest byte, so the emitted code is
+// exactly one 1-byte store, with no shifts to clear or sign-extend upper bits.
+test "dev stores a U8 or I8 result with a single byte store" {
+    inline for (.{ layout.Idx.u8, layout.Idx.i8 }) |result_layout| {
+        try expectSingleByteResultStoreIsOneStore(.x64glibc, x86_64.GeneralReg.RAX, x86_64.GeneralReg.RDI, result_layout);
+        try expectSingleByteResultStoreIsOneStore(.arm64linux, aarch64.GeneralReg.X0, aarch64.GeneralReg.X1, result_layout);
+    }
+}
+
+test "dev stores an I8 result as its own byte" {
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
+        return error.SkipZigTest;
+    }
+
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+
+    // -10 is loaded sign-extended, so the register's upper bits are all ones.
+    // Only the lowest byte, 0xF6, may reach the result.
+    const values = [_]i64{ -10, -128, 127, -1, 0 };
+    for (values) |value| {
+        const proc = try addLiteralProc(&store, .{ .i64_literal = .{ .value = value, .layout_idx = .i8 } }, .i8);
+        const expected: u8 = @bitCast(@as(i8, @intCast(value)));
+        try std.testing.expectEqual(expected, try runRootU8(&store, &test_state.layout_store, proc, .i8));
+    }
 }
