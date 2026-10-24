@@ -139,7 +139,14 @@ pub const Store = struct {
     // These keys identify a node by its position in its reduced recursive
     // group (see `RecursiveGraphAnalysis`), so exactly the nodes describing
     // the same infinite runtime representation share a layout.
-    interned_recursive_graphs: RecursiveGraphMap,
+    /// The recursive-graph key of every layout committed as part of a
+    /// recursive graph, in commit order. A key is recorded only together with
+    /// the layout its commit creates, so each layout has at most one key and
+    /// a key never names a layout that existed before its commit. Content
+    /// digests read these keys, so a viewed store carries them.
+    recursive_layout_keys: collections.SafeList(RecursiveLayoutKey),
+    /// Position in `recursive_layout_keys` of each key, looked up by key.
+    interned_recursive_graphs: RecursiveGraphIndex,
     // One-step unfolding of every committed recursive node, mapped to that
     // node's recursive key. Persisting these across commits lets an acyclic
     // unrolled copy committed later (possibly against `committed` leaves)
@@ -194,7 +201,8 @@ pub const Store = struct {
             .interned_layouts = .empty,
             .interned_key_bytes = .empty,
             .scratch_intern_key = .empty,
-            .interned_recursive_graphs = RecursiveGraphMap.init(allocator),
+            .recursive_layout_keys = .{},
+            .interned_recursive_graphs = .empty,
             .recursive_unfoldings = .empty,
             .recursive_groups = .{},
             .target_usize = target_usize,
@@ -376,7 +384,8 @@ pub const Store = struct {
         self.interned_key_bytes.deinit(self.allocator);
         self.scratch_intern_key.deinit(self.allocator);
         self.scratch_field_offsets.deinit(self.allocator);
-        self.interned_recursive_graphs.deinit();
+        self.recursive_layout_keys.deinit(self.allocator);
+        self.interned_recursive_graphs.deinit(self.allocator);
         self.recursive_unfoldings.deinit(self.allocator);
         self.recursive_groups.deinit(self.allocator);
         self.digest_cache.destroy(self.allocator);
@@ -931,8 +940,66 @@ pub const Store = struct {
         return Layout.tagUnion(self.tagUnionVariantsSortKey(variant_layouts, discriminant_size), .{ .int_idx = @intCast(tag_union_data_idx) });
     }
 
-    /// Committed layout per recursive-graph node identity.
-    pub const RecursiveGraphMap = std.AutoHashMap(RecursiveGraphAnalysis.RecursiveKey, Idx);
+    /// One committed recursive layout and its recursive-graph key.
+    pub const RecursiveLayoutKey = struct {
+        key: RecursiveGraphAnalysis.RecursiveKey,
+        layout: Idx,
+    };
+    /// Positions in `recursive_layout_keys`, hashed and compared by the key
+    /// stored there.
+    pub const RecursiveGraphIndex = std.HashMapUnmanaged(u32, void, RecursiveKeyContext, std.hash_map.default_max_load_percentage);
+
+    /// Recursive-graph keys are SHA-256 digests, so their leading bytes are
+    /// already a uniform hash.
+    fn recursiveKeyHash(key: *const RecursiveGraphAnalysis.RecursiveKey) u64 {
+        return std.mem.readInt(u64, key[0..8], .little);
+    }
+
+    pub const RecursiveKeyContext = struct {
+        entries: []const RecursiveLayoutKey,
+
+        pub fn hash(ctx: RecursiveKeyContext, position: u32) u64 {
+            return recursiveKeyHash(&ctx.entries[position].key);
+        }
+
+        pub fn eql(_: RecursiveKeyContext, a: u32, b: u32) bool {
+            // Each key is stored at exactly one position.
+            return a == b;
+        }
+    };
+
+    /// Looks a stored position up by its key.
+    const RecursiveKeyAdapter = struct {
+        entries: []const RecursiveLayoutKey,
+
+        pub fn hash(_: RecursiveKeyAdapter, key: RecursiveGraphAnalysis.RecursiveKey) u64 {
+            return recursiveKeyHash(&key);
+        }
+
+        pub fn eql(ctx: RecursiveKeyAdapter, key: RecursiveGraphAnalysis.RecursiveKey, position: u32) bool {
+            return std.meta.eql(key, ctx.entries[position].key);
+        }
+    };
+
+    /// The committed layout of a recursive-graph key, if any.
+    fn recursiveGraphLayout(self: *const Self, key: RecursiveGraphAnalysis.RecursiveKey) ?Idx {
+        const entries = self.recursive_layout_keys.items.items;
+        const position = self.interned_recursive_graphs.getKeyAdapted(key, RecursiveKeyAdapter{ .entries = entries }) orelse return null;
+        return entries[position].layout;
+    }
+
+    /// Record the key of a layout this commit created.
+    fn recordRecursiveLayoutKey(self: *Self, key: RecursiveGraphAnalysis.RecursiveKey, layout_idx: Idx) std.mem.Allocator.Error!void {
+        const position: u32 = @intCast(self.recursive_layout_keys.len());
+        try self.interned_recursive_graphs.ensureUnusedCapacityContext(self.allocator, 1, .{ .entries = self.recursive_layout_keys.items.items });
+        _ = try self.recursive_layout_keys.append(self.allocator, .{ .key = key, .layout = layout_idx });
+        self.interned_recursive_graphs.putAssumeCapacityNoClobberContext(position, {}, .{ .entries = self.recursive_layout_keys.items.items });
+    }
+
+    /// Every committed recursive layout with its key, in commit order.
+    pub fn recursiveLayoutKeys(self: *const Self) []const RecursiveLayoutKey {
+        return self.recursive_layout_keys.items.items;
+    }
     /// Recursive key per one-step unfolding of a committed recursive node.
     pub const RecursiveGraphUnfoldings = std.AutoHashMapUnmanaged(RecursiveGraphAnalysis.RecursiveKey, RecursiveGraphAnalysis.RecursiveKey);
     /// One-step shapes of the members of settled recursive groups.
@@ -1797,7 +1864,7 @@ pub const Store = struct {
                 .pending, .nominal, .box, .list, .closure, .erased_callable, .struct_, .tag_union => {},
             }
             if (analysis.keys[i]) |key| {
-                if (self.interned_recursive_graphs.get(key)) |layout_idx| {
+                if (self.recursiveGraphLayout(key)) |layout_idx| {
                     mapping[i] = .{ .canonical = layout_idx };
                     continue;
                 }
@@ -1864,6 +1931,7 @@ pub const Store = struct {
         const value_layouts = try self.allocator.alloc(Idx, node_count);
         errdefer self.allocator.free(value_layouts);
 
+        const layouts_before_commit = self.layouts.len();
         const working_layouts: []const Idx = if (working.nodes.items.len != 0)
             try self.commitGraphUncached(scratch, &working)
         else
@@ -1878,10 +1946,13 @@ pub const Store = struct {
 
         for (analysis.keys, 0..) |maybe_key, i| {
             const key = maybe_key orelse continue;
-            if (self.interned_recursive_graphs.get(key)) |existing| {
+            if (self.recursiveGraphLayout(key)) |existing| {
                 std.debug.assert(existing == value_layouts[i]);
             } else {
-                try self.interned_recursive_graphs.put(key, value_layouts[i]);
+                // A new key names a layout this commit created, so no
+                // digest taken before this commit depends on it.
+                std.debug.assert(@backingInt(value_layouts[i]) >= layouts_before_commit);
+                try self.recordRecursiveLayoutKey(key, value_layouts[i]);
             }
         }
 
@@ -4501,7 +4572,7 @@ test "commitGraph collapses interchangeable copies of a recursive closure layout
 
     // The store remembers one union, one box and one capture record, not
     // one of each per copy.
-    try testing.expectEqual(@as(usize, 3), store.interned_recursive_graphs.count());
+    try testing.expectEqual(@as(usize, 3), store.recursiveLayoutKeys().len);
 }
 
 test "commitGraph resolves locally built container children inside struct fields" {

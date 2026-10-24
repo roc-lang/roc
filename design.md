@@ -17770,7 +17770,7 @@ Direct LIR lowering renders the identity of the plain procedure of a marked
 specialization (finite ABI, no captures, no erased return reuse, not a
 SpecConstr clone) from the template's source identity without its Monotype
 type (`Lifted.Program.fnLayoutKeyedSourceDigest`), followed by the content
-digests (`layout.Digests`) of its argument layouts and its result layout.
+digests (`layout.Store.contentDigest`) of its argument layouts and its result layout.
 Every other ABI of the same specialization keeps its type-keyed identity. The
 existing interning of procedures by identity then gives specializations whose
 layouts agree one procedure: the first one reached owns the body, the rest call
@@ -24178,6 +24178,16 @@ columns with its supplied scratch allocator, and owns those reconstructed
 columns until `deinit`. The mapped bytes and the scratch allocator must both
 outlive the view. Format version 15 introduced the portable columns; version 16
 added `LirProcSpec.ret_desc`.
+
+A viewed layout store answers every read-only query the producing store
+answers, including `contentDigest`, which backends use to name refcount
+helpers. The image therefore carries `Store.recursive_layout_keys`, the
+recursive-graph key of every cyclic committed layout, as an ordinary array;
+the digest of a cyclic layout hashes that key. The view leaves the interning
+tables empty, since a view never commits layouts. A commit records a key only
+together with the layout it creates, so a layout has at most one key and a
+memoized digest never depends on a key recorded after it: digest memos live
+for their store's whole lifetime and take in newly recorded keys as they go.
 
 The producer of a copied LirImage states which of two byte contracts the image
 has. A *persisted* image is one whose bytes are written into a file that
