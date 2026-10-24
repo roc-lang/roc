@@ -188,7 +188,7 @@ fn expectRecursiveBoxedCallableForwardsReuseThroughLet(
             if (entry.found_existing) continue;
             const stmt = store.getCFStmt(stmt_id);
             if (stmt == .assign_packed_erased_fn) {
-                if (stmt.assign_packed_erased_fn.reuse == reuse_arg) matching_repack_count += 1;
+                if (store.stmtRow(stmt.assign_packed_erased_fn.data).reuse == reuse_arg) matching_repack_count += 1;
             }
             try lir.BodyClone.appendSuccessors(store, &work, stmt_id, store.allocator);
         }
@@ -234,7 +234,7 @@ fn expectParallelRecursiveBoxedCallablesForwardReuse(
             const entry = try visited.getOrPut(stmt_id);
             if (entry.found_existing) continue;
             const stmt = store.getCFStmt(stmt_id);
-            if (stmt == .assign_packed_erased_fn and stmt.assign_packed_erased_fn.reuse == reuse_arg) {
+            if (stmt == .assign_packed_erased_fn and store.stmtRow(stmt.assign_packed_erased_fn.data).reuse == reuse_arg) {
                 matching_repack_count += 1;
             }
             try lir.BodyClone.appendSuccessors(store, &work, stmt_id, store.allocator);

@@ -30,10 +30,10 @@ UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:6:5:6:8
 UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:6:19:6:20
 UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:7:5:7:7
 UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:7:19:7:20
-MISSING METHOD - record_different_fields_reserved_error.md:2:9:2:22
+TYPE MISMATCH - record_different_fields_reserved_error.md:2:9:2:22
 DECLARATION HAS NO VALUE - record_different_fields_reserved_error.md:3:5:3:12
-MISSING METHOD - record_different_fields_reserved_error.md:4:13:4:29
-MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:23
+TYPE MISMATCH - record_different_fields_reserved_error.md:4:13:4:29
+TYPE MISMATCH - record_different_fields_reserved_error.md:5:13:5:23
 # PROBLEMS
 ~~~clojure
 (reports
@@ -417,22 +417,14 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:23
 			(source-region (file "record_different_fields_reserved_error.md") (start 7 19) (end 7 20) (annotation error) (line-text "    or: Bool.false,"))))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 2 9) (end 2 22))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
 			(source-region (file "record_different_fields_reserved_error.md") (start 2 9) (end 2 22) (annotation error) (line-text "    if: \"conditional\","))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -452,22 +444,14 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:23
 			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 4 13) (end 4 29))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
 			(source-region (file "record_different_fields_reserved_error.md") (start 4 13) (end 4 29) (annotation error) (line-text "    expect: \"test assertion\","))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -476,22 +460,14 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:23
 			(annotation-end)))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 5 13) (end 5 23))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
 			(source-region (file "record_different_fields_reserved_error.md") (start 5 13) (end 5 23) (annotation error) (line-text "    import: \"mod load\","))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

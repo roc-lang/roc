@@ -154,10 +154,7 @@ pub const Store = struct {
             pending.site = site;
             return;
         }
-        if (@import("builtin").mode == .debug) {
-            base.invariant("checked artifact invariant violated: exhaustiveness site source had no pending diagnostic", .{});
-        }
-        unreachable;
+        base.invariant("checked artifact invariant violated: exhaustiveness site source had no pending diagnostic", .{});
     }
 
     /// Record that a checker-selected compile-time root will execute this site.
@@ -172,28 +169,7 @@ pub const Store = struct {
             pending.mode = .empirical;
             return;
         }
-        if (@import("builtin").mode == .debug) {
-            base.invariant("checked artifact invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
-        }
-        unreachable;
-    }
-
-    /// Record that the compile-time root selected to execute this site failed
-    /// and left its code to runtime, so the diagnostic is decided statically.
-    pub fn markPendingStaticExhaustivenessStatic(self: *Self, site: CheckedExhaustivenessSiteId) void {
-        for (self.pending_static_exhaustiveness.items) |*pending| {
-            if (pending.site != null and pending.site.? == site) pending.mode = .static;
-        }
-    }
-
-    pub fn resolvePendingStaticExhaustiveness(self: *Self, site: CheckedExhaustivenessSiteId) void {
-        var write: usize = 0;
-        for (self.pending_static_exhaustiveness.items) |pending| {
-            if (pending.site != null and pending.site.? == site) continue;
-            self.pending_static_exhaustiveness.items[write] = pending;
-            write += 1;
-        }
-        self.pending_static_exhaustiveness.shrinkRetainingCapacity(write);
+        base.invariant("checked artifact invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
     }
 
     pub fn discardPendingStaticExhaustiveness(self: *Self, site: CheckedExhaustivenessSiteId) void {
@@ -242,6 +218,7 @@ pub const Store = struct {
                     .where_alias_in_type_position,
                     .recursive_where_alias,
                     .where_clause_receiver_not_introduced,
+                    .where_requirement_not_function,
                     .invalid_nominal_decl_recursion,
                     .infinite_recursion,
                     .anonymous_recursion,
@@ -255,6 +232,7 @@ pub const Store = struct {
                     .effectful_function_name,
                     .annotation_only_value,
                     .annotation_only_value_use,
+                    .hosted_where_requirement,
                     .derived_method_value_use,
                     .capturing_method,
                     .unsupported_generated_method,
@@ -287,13 +265,12 @@ pub const Store = struct {
                     .unmatchable_pattern,
                     .match_alt_binder_missing,
                     .discarded_var_update,
-                    .comptime_unused_branch,
                     .comptime_condition,
                     .derived_parser_error_row,
                     .derived_codec_open_record,
                     .associated_item_not_found,
                     .redundant_open_tag_union,
-                    => unreachable,
+                    => unreachable, // the checker queues only non-exhaustive match and destructure problems as pending exhaustiveness diagnostics
                 }
             }
             if (!pending.reported) _ = try self.appendProblem(problem);

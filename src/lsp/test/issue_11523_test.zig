@@ -63,7 +63,7 @@ const Fixture = struct {
         errdefer fixture.checker.deinit();
         fixture.checker.cache_config.cache_dir = std.fs.path.dirname(fixture.file_path) orelse fixture.file_path;
 
-        const publish_sets = try fixture.checker.check(fixture.file_uri, fixture.source, null);
+        const publish_sets = try fixture.checker.check(fixture.file_uri, fixture.source, null, null);
         defer {
             for (publish_sets) |*set| set.deinit(allocator);
             allocator.free(publish_sets);

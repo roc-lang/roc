@@ -117,7 +117,7 @@ const Document = struct {
         test_env.configureChecker(&self.checker, ".zig-cache/tmp");
         errdefer self.checker.deinit();
 
-        const publish_sets = try self.checker.check(self.uri, null, null);
+        const publish_sets = try self.checker.check(self.uri, null, null, null);
         defer {
             for (publish_sets) |*set| set.deinit(allocator);
             allocator.free(publish_sets);

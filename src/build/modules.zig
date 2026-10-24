@@ -235,6 +235,7 @@ pub const ModuleType = enum {
     roc_target,
     backend,
     lir_core,
+    value_rules,
     postcheck,
     lir,
     symbol,
@@ -261,7 +262,7 @@ pub const ModuleType = enum {
         return switch (self) {
             .base => .{
                 .root = "src/base/mod.zig",
-                .deps = &.{ .collections, .builtins },
+                .deps = &.{ .collections, .builtins, .build_options },
                 .tests = .{ .unit = .{ .aggregators = &.{"base tests"} } },
             },
             .collections => .{
@@ -326,7 +327,7 @@ pub const ModuleType = enum {
             },
             .eval => .{
                 .root = "src/eval/mod.zig",
-                .deps = &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .static_data, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc },
+                .deps = &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .static_data, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc, .value_rules },
                 .extra_imports = &.{"vendor_relocatable_loader"},
                 .tests = .{ .unit = .{ .aggregators = &.{"eval tests"} } },
             },
@@ -359,9 +360,15 @@ pub const ModuleType = enum {
                 .deps = &.{ .base, .collections, .layout, .types, .can, .check },
                 .tests = .{ .unit = .{ .aggregators = &.{"lir core declarations are referenced"} } },
             },
+            // Shared by the post-check lowerers and the standalone Boxy
+            // runtime object, so it imports nothing from the compiler.
+            .value_rules => .{
+                .root = "src/postcheck/value_rules/mod.zig",
+                .tests = .{ .unit = .{ .aggregators = &.{"value rules declarations are referenced"} } },
+            },
             .postcheck => .{
                 .root = "src/postcheck/mod.zig",
-                .deps = &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core, .types, .build_options },
+                .deps = &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core, .types, .value_rules, .build_options },
                 .tests = .{ .unit = .{ .aggregators = &.{"postcheck declarations are referenced"} } },
             },
             .lir => .{
@@ -423,7 +430,7 @@ pub const ModuleType = enum {
             },
             .lsp => .{
                 .root = "src/lsp/mod.zig",
-                .deps = &.{ .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
+                .deps = &.{ .collections, .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
                 .tests = .{ .unit = .{} },
                 .available = .native,
             },
@@ -555,6 +562,7 @@ pub const RocModules = struct {
     lsp_integration: *Module,
     backend: *Module,
     lir_core: *Module,
+    value_rules: *Module,
     postcheck: *Module,
     lir: *Module,
     symbol: *Module,
@@ -603,6 +611,18 @@ pub const RocModules = struct {
     vendor_llvm_ir: *Module,
     vendor_llvm_compile_bindings: *Module,
 
+    /// A `bundle` module linked against `zstd`'s library rather than the
+    /// compiler target's, for a build tool compiled for the build machine.
+    pub fn bundleWithZstd(self: RocModules, b: *Build, zstd: *Dependency) *Module {
+        const module = b.createModule(.{ .root_source_file = self.bundle.root_source_file });
+        var imports = self.bundle.import_table.iterator();
+        while (imports.next()) |entry| {
+            if (!std.mem.eql(u8, entry.key_ptr.*, "zstd")) module.addImport(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        linkZstd(b, module, zstd);
+        return module;
+    }
+
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         var self: RocModules = undefined;
         inline for (comptime std.enums.values(ModuleType)) |module_type| {
@@ -616,23 +636,17 @@ pub const RocModules = struct {
             @field(self, extra.name) = b.addModule(extra.name, .{ .root_source_file = b.path(extra.root) });
         }
         @field(self, generated_module) = createCompilerPlatformSourcesModule(b);
+        // Compile-time evaluation locates a failure inside a builtin by
+        // walking frame pointers out to the generated code that called it
+        // (design.md "Compile-Time Failure Sites"). Programs link their own
+        // builtins object, built separately.
+        self.builtins.omit_frame_pointer = false;
 
         self.fmt.addAnonymousImport("builtin_source", .{ .root_source_file = b.path("src/build/builtin_source.zig") });
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
         // Note: unbundle uses Zig's stdlib zstd for WASM compatibility
-        if (zstd) |z| {
-            const library = z.artifact("zstd");
-            const headers = b.addWriteFiles();
-            const translate = b.addTranslateC(.{
-                .root_source_file = headers.add("roc_zstd.h", "#define ZSTD_STATIC_LINKING_ONLY 1\n#include <zstd.h>\n"),
-                .target = library.root_module.resolved_target.?,
-                .optimize = library.root_module.optimize.?,
-            });
-            translate.addIncludePath(library.getEmittedIncludeTree());
-            self.bundle.addImport("zstd", translate.createModule());
-            self.bundle.linkLibrary(library);
-        }
+        if (zstd) |z| linkZstd(b, self.bundle, z);
 
         // The interpreter's hosted-call trampoline is hand-written assembly (see
         // host_trampoline.S); attach it to the eval module so it is assembled and linked into
@@ -708,7 +722,7 @@ pub const RocModules = struct {
         inline for (comptime std.enums.values(ModuleType)) |candidate| {
             if (module_type == candidate) return @field(self, @tagName(candidate));
         }
-        unreachable;
+        unreachable; // the loop covers every ModuleType value
     }
 
     /// Add dependencies for a specific module type to a compile step
@@ -790,3 +804,16 @@ pub const RocModules = struct {
         };
     }
 };
+
+fn linkZstd(b: *Build, module: *Module, zstd: *Dependency) void {
+    const library = zstd.artifact("zstd");
+    const headers = b.addWriteFiles();
+    const translate = b.addTranslateC(.{
+        .root_source_file = headers.add("roc_zstd.h", "#define ZSTD_STATIC_LINKING_ONLY 1\n#include <zstd.h>\n"),
+        .target = library.root_module.resolved_target.?,
+        .optimize = library.root_module.optimize.?,
+    });
+    translate.addIncludePath(library.getEmittedIncludeTree());
+    module.addImport("zstd", translate.createModule());
+    module.linkLibrary(library);
+}

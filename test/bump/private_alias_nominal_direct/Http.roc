@@ -2,5 +2,5 @@ Secret := [Secret]
 Hidden : Secret
 
 Http :: [].{
-    Err : Secret
+    Err : List(Secret)
 }

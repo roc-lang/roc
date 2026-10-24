@@ -1,7 +1,7 @@
 # `state` and `run_steps` refer to each other, so `run_steps` uses `state`
 # while `state`'s own definition is still being checked. A tag row inside a
-# record field is not widened at each use: every use shares it, so the two
-# lists need `Busy` with two different payloads.
+# record field is not widened at each use: every use shares it, and the
+# annotation bounds it to `[Idle]`, so neither list can add a `Busy` tag.
 state : { tag : [Idle], step : {} -> {} }
 state = { tag: Idle, step: |_| run_steps({}) }
 

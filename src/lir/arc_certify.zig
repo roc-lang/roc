@@ -263,9 +263,9 @@ fn certifyStoreWithWorkStats(
 
     for (0..store.procSpecCount()) |index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        const proc = store.getProcSpec(proc_id);
-        const body = proc.body orelse continue;
-        try certifier.certifyProc(proc_id, proc, body);
+        const proc = store.getProcSpecImmediate(proc_id);
+        const body = proc.arcBody() orelse continue;
+        try certifier.certifyProc(proc_id, proc.*, body);
     }
 }
 
@@ -417,7 +417,7 @@ fn certifyRcAtomicity(
         else if (stmt.* == .decref)
             .{ .value = stmt.decref.value, .atomicity = stmt.decref.atomicity }
         else if (stmt.* == .decref_if_initialized)
-            .{ .value = stmt.decref_if_initialized.value, .atomicity = stmt.decref_if_initialized.atomicity }
+            .{ .value = stmt.decref_if_initialized.value, .atomicity = store.stmtRow(stmt.decref_if_initialized.data).atomicity }
         else if (stmt.* == .free)
             .{ .value = stmt.free.value, .atomicity = stmt.free.atomicity }
         else
@@ -477,7 +477,7 @@ fn certifyUniqueArgs(
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         const proc = store.getProcSpec(proc_id);
-        const body = proc.body orelse continue;
+        const body = proc.arcBody() orelse continue;
         const sig = sigs.get(proc_id);
 
         for (dense_locals.items) |local| local_to_dense[@backingInt(local)] = no_dense;
@@ -507,18 +507,19 @@ fn certifyUniqueArgs(
         defer uniqueness.deinit(allocator);
 
         for (proc_stmts.items) |current| {
-            const stmt = store.getCFStmt(current);
-            if (stmt == .assign_literal and stmt.assign_literal.fresh_alternative != null) {
+            const stmt = store.getCFStmtImmediate(current);
+            if (stmt.* == .assign_literal and store.literalExtra(stmt.assign_literal.value).fresh_alternative != null) {
                 diag.context_proc = proc_id;
                 diag.context_stmt = current;
                 diag.set("stmt={d}: a read still names a fresh form after ARC chose", .{@backingInt(current)});
                 return error.Certification;
             }
-            if (stmt != .assign_low_level) continue;
+            if (stmt.* != .assign_low_level) continue;
             const assign = stmt.assign_low_level;
-            if (assign.unique_args == 0) continue;
+            const unique_args = store.stmtRowOrDefault(assign.extra).unique_args;
+            if (unique_args == 0) continue;
             const stmt_index = @backingInt(current);
-            if ((assign.unique_args & ~assign.rc_effect.may_runtime_uniqueness_check_args) != 0) {
+            if ((unique_args & ~store.stmtRow(assign.rc_effect).may_runtime_uniqueness_check_args) != 0) {
                 diag.context_proc = proc_id;
                 diag.context_stmt = current;
                 diag.set("stmt={d}: unique_args bit outside the op's runtime-checked argument mask", .{stmt_index});
@@ -529,7 +530,7 @@ fn certifyUniqueArgs(
                 const arg = GuardedList.at(args, position);
                 if (position >= 64) break;
                 const bit = @as(u64, 1) << @as(u6, @intCast(position));
-                if ((assign.unique_args & bit) == 0) continue;
+                if ((unique_args & bit) == 0) continue;
                 const raw = @backingInt(arg);
                 const dense = if (raw < local_to_dense.len) local_to_dense[raw] else no_dense;
                 // The birth must hold under the parameter positions this
@@ -612,7 +613,7 @@ fn writeFailureContext(
     local: ?LIR.LocalId,
     extra_locals: []const LIR.LocalId,
 ) void {
-    const proc = store.getProcSpec(proc_id);
+    const proc = store.getProcSpecImmediate(proc_id);
     context.append("\nfailure context: proc={d}", .{@backingInt(proc_id)});
     if (store.procDebugName(proc_id)) |name| context.append(" name={s}", .{name});
     if (local) |l| {
@@ -680,12 +681,15 @@ fn writeFailureContext(
             .init_uninitialized => |a| context.append(" target={d} next={d}", .{ @backingInt(a.target), @backingInt(a.next) }),
             .incref => |rc| context.append(" value={d} next={d}", .{ @backingInt(rc.value), @backingInt(rc.next) }),
             .decref => |rc| context.append(" value={d} next={d}", .{ @backingInt(rc.value), @backingInt(rc.next) }),
-            .decref_if_initialized => |rc| context.append(" cond={d}/0x{x} value={d} next={d}", .{
-                @backingInt(rc.cond),
-                rc.cond_mask,
-                @backingInt(rc.value),
-                @backingInt(rc.next),
-            }),
+            .decref_if_initialized => |rc_stmt| blk_rc: {
+                const rc = store.stmtRow(rc_stmt.data);
+                break :blk_rc context.append(" cond={d}/0x{x} value={d} next={d}", .{
+                    @backingInt(rc_stmt.cond),
+                    rc.cond_mask,
+                    @backingInt(rc_stmt.value),
+                    @backingInt(rc_stmt.next),
+                });
+            },
             .free => |rc| context.append(" value={d} next={d}", .{ @backingInt(rc.value), @backingInt(rc.next) }),
             .assign_call => |a| {
                 const sig = sigs.get(a.proc);
@@ -698,23 +702,25 @@ fn writeFailureContext(
                 appendLocalSpan(context, store, a.args);
                 context.append(" next={d}", .{@backingInt(a.next)});
             },
-            .assign_call_erased => |a| {
-                context.append(" target={d} closure={d} args=", .{ @backingInt(a.target), @backingInt(a.closure) });
+            .assign_call_erased => |inline_a| {
+                const a = store.stmtRow(inline_a.data);
+                context.append(" target={d} closure={d} args=", .{ @backingInt(inline_a.target), @backingInt(a.closure) });
                 appendLocalSpan(context, store, a.args);
                 if (a.result_desc) |result_desc| {
                     context.append(" result_desc=", .{});
                     appendBoxyDescRef(context, result_desc);
                 }
                 if (a.out_desc) |out_desc| context.append(" out_desc={d}", .{@backingInt(out_desc)});
-                context.append(" next={d}", .{@backingInt(a.next)});
+                context.append(" next={d}", .{@backingInt(inline_a.next)});
             },
             .assign_low_level => |a| {
                 context.append(" target={d} op={s} args=", .{ @backingInt(a.target), @tagName(a.op) });
                 appendLocalSpan(context, store, a.args);
                 context.append(" next={d}", .{@backingInt(a.next)});
             },
-            .assign_call_dict => |a| {
-                context.append(" target={d} method={d} slot={d} args=", .{ @backingInt(a.target), @backingInt(a.method), a.method_slot });
+            .assign_call_dict => |inline_a| {
+                const a = store.stmtRow(inline_a.data);
+                context.append(" target={d} method={d} slot={d} args=", .{ @backingInt(inline_a.target), @backingInt(a.method), a.method_slot });
                 appendLocalSpan(context, store, a.args);
                 context.append(" arg_descs=", .{});
                 appendLocalSpan(context, store, a.arg_descs);
@@ -724,7 +730,7 @@ fn writeFailureContext(
                     context.append(" result_desc=", .{});
                     appendBoxyDescRef(context, result_desc);
                 }
-                context.append(" next={d}", .{@backingInt(a.next)});
+                context.append(" next={d}", .{@backingInt(inline_a.next)});
             },
             .str_match => |a| context.append(" source={d} match={d} miss={d}", .{
                 @backingInt(a.source), @backingInt(a.on_match), @backingInt(a.on_miss),
@@ -762,11 +768,12 @@ fn writeFailureContext(
                 appendLocalSpan(context, store, a.fields);
                 context.append(" next={d}", .{@backingInt(a.next)});
             },
-            .assign_boxy_tag => |a| {
-                const target_layout_idx = store.getLocal(a.target).layout_idx;
+            .assign_boxy_tag => |inline_a| {
+                const a = store.stmtRow(inline_a.data);
+                const target_layout_idx = store.getLocal(inline_a.target).layout_idx;
                 const target_layout = layouts.getLayout(target_layout_idx);
                 context.append(" target={d} target_layout={d}:{s}:rc={}", .{
-                    @backingInt(a.target),
+                    @backingInt(inline_a.target),
                     @backingInt(target_layout_idx),
                     @tagName(target_layout.tag),
                     layouts.layoutContainsRefcounted(target_layout),
@@ -780,11 +787,12 @@ fn writeFailureContext(
                     context.append(" payload_desc=", .{});
                     appendBoxyDescRef(context, desc);
                 }
-                context.append(" next={d}", .{@backingInt(a.next)});
+                context.append(" next={d}", .{@backingInt(inline_a.next)});
             },
-            .assign_boxy_box => |a| {
+            .assign_boxy_box => |inline_a| {
+                const a = store.stmtRow(inline_a.data);
                 context.append(" target={d} payload={d} payload_layout={d} mode={s}", .{
-                    @backingInt(a.target),
+                    @backingInt(inline_a.target),
                     @backingInt(a.payload),
                     @backingInt(a.payload_layout),
                     @tagName(a.payload_mode),
@@ -793,11 +801,12 @@ fn writeFailureContext(
                     context.append(" payload_desc=", .{});
                     appendBoxyDescRef(context, desc);
                 }
-                context.append(" next={d}", .{@backingInt(a.next)});
+                context.append(" next={d}", .{@backingInt(inline_a.next)});
             },
-            .assign_boxy_record_update => |a| {
+            .assign_boxy_record_update => |inline_a| {
+                const a = store.stmtRow(inline_a.data);
                 context.append(" target={d} base={d} fields={d} fields_layout={d} base_desc=", .{
-                    @backingInt(a.target),
+                    @backingInt(inline_a.target),
                     @backingInt(a.base),
                     @backingInt(a.fields),
                     @backingInt(a.fields_layout),
@@ -805,7 +814,7 @@ fn writeFailureContext(
                 appendBoxyDescRef(context, a.base_desc);
                 context.append(" fields_desc=", .{});
                 appendBoxyDescRef(context, a.fields_desc);
-                context.append(" next={d}", .{@backingInt(a.next)});
+                context.append(" next={d}", .{@backingInt(inline_a.next)});
             },
             .assign_tag => |a| {
                 const target_layout_idx = store.getLocal(a.target).layout_idx;
@@ -822,9 +831,10 @@ fn writeFailureContext(
                 });
                 context.append(" next={d}", .{@backingInt(a.next)});
             },
-            .assign_boxy_unbox => |a| {
+            .assign_boxy_unbox => |inline_a| {
+                const a = store.stmtRow(inline_a.data);
                 context.append(" target={d} source={d} mode={s}", .{
-                    @backingInt(a.target),
+                    @backingInt(inline_a.target),
                     @backingInt(a.source),
                     @tagName(a.source_mode),
                 });
@@ -832,32 +842,44 @@ fn writeFailureContext(
                     context.append(" target_desc=", .{});
                     appendBoxyDescRef(context, desc);
                 }
-                context.append(" next={d}", .{@backingInt(a.next)});
+                context.append(" next={d}", .{@backingInt(inline_a.next)});
             },
-            .assign_boxy_tag_payload => |a| context.append(" target={d} source={d} mode={s} next={d}", .{
-                @backingInt(a.target),
-                @backingInt(a.source),
-                @tagName(a.source_mode),
-                @backingInt(a.next),
-            }),
-            .assign_boxy_inspect => |a| context.append(" target={d} source={d} mode={s} next={d}", .{
-                @backingInt(a.target),
-                @backingInt(a.source),
-                @tagName(a.source_mode),
-                @backingInt(a.next),
-            }),
-            .assign_boxy_eq => |a| context.append(" target={d} lhs={d} rhs={d} next={d}", .{
-                @backingInt(a.target),
-                @backingInt(a.lhs),
-                @backingInt(a.rhs),
-                @backingInt(a.next),
-            }),
-            .assign_boxy_hash => |a| context.append(" target={d} value={d} hasher={d} next={d}", .{
-                @backingInt(a.target),
-                @backingInt(a.value),
-                @backingInt(a.hasher),
-                @backingInt(a.next),
-            }),
+            .assign_boxy_tag_payload => |inline_a| blk_a: {
+                const a = store.stmtRow(inline_a.data);
+                break :blk_a context.append(" target={d} source={d} mode={s} next={d}", .{
+                    @backingInt(inline_a.target),
+                    @backingInt(a.source),
+                    @tagName(a.source_mode),
+                    @backingInt(inline_a.next),
+                });
+            },
+            .assign_boxy_inspect => |inline_a| blk_a: {
+                const a = store.stmtRow(inline_a.data);
+                break :blk_a context.append(" target={d} source={d} mode={s} next={d}", .{
+                    @backingInt(inline_a.target),
+                    @backingInt(a.source),
+                    @tagName(a.source_mode),
+                    @backingInt(inline_a.next),
+                });
+            },
+            .assign_boxy_eq => |inline_a| blk_a: {
+                const a = store.stmtRow(inline_a.data);
+                break :blk_a context.append(" target={d} lhs={d} rhs={d} next={d}", .{
+                    @backingInt(inline_a.target),
+                    @backingInt(a.lhs),
+                    @backingInt(a.rhs),
+                    @backingInt(inline_a.next),
+                });
+            },
+            .assign_boxy_hash => |inline_a| blk_a: {
+                const a = store.stmtRow(inline_a.data);
+                break :blk_a context.append(" target={d} value={d} hasher={d} next={d}", .{
+                    @backingInt(inline_a.target),
+                    @backingInt(a.value),
+                    @backingInt(a.hasher),
+                    @backingInt(inline_a.next),
+                });
+            },
             inline .assign_literal, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_adapt => |a| context.append(" target={d} next={d}", .{ @backingInt(a.target), @backingInt(a.next) }),
             .store_struct,
             .store_tag,
@@ -866,7 +888,6 @@ fn writeFailureContext(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .crash,
             => {},
         }
@@ -901,23 +922,23 @@ fn appendLocalSpan(context: *FailureContext, store: *const LirStore, span: LIR.L
 }
 
 fn appendRefOp(context: *FailureContext, op: LIR.RefOp) void {
-    switch (op) {
-        .local => |source| context.append("local({d})", .{@backingInt(source)}),
-        .discriminant => |ref| context.append("discriminant({d})", .{@backingInt(ref.source)}),
-        .field => |ref| context.append("field({d}, {d})", .{ @backingInt(ref.source), ref.field_idx }),
-        .tag_payload => |ref| context.append("tag_payload({d}, variant={d}, payload={d}, disc={d})", .{
-            @backingInt(ref.source),
-            ref.variant_index,
-            ref.payload_idx,
-            ref.tag_discriminant,
+    switch (op.kind) {
+        .local => context.append("local({d})", .{@backingInt(op.source)}),
+        .discriminant => context.append("discriminant({d})", .{@backingInt(op.source)}),
+        .field => context.append("field({d}, {d})", .{ @backingInt(op.source), op.index }),
+        .tag_payload => context.append("tag_payload({d}, variant={d}, payload={d}, disc={d})", .{
+            @backingInt(op.source),
+            op.variant_index,
+            op.index,
+            op.tag_discriminant,
         }),
-        .tag_payload_struct => |ref| context.append("tag_payload_struct({d}, variant={d}, disc={d})", .{
-            @backingInt(ref.source),
-            ref.variant_index,
-            ref.tag_discriminant,
+        .tag_payload_struct => context.append("tag_payload_struct({d}, variant={d}, disc={d})", .{
+            @backingInt(op.source),
+            op.variant_index,
+            op.tag_discriminant,
         }),
-        .list_reinterpret => |ref| context.append("list_reinterpret({d})", .{@backingInt(ref.backing_ref)}),
-        .nominal => |ref| context.append("nominal({d})", .{@backingInt(ref.backing_ref)}),
+        .list_reinterpret => context.append("list_reinterpret({d})", .{@backingInt(op.source)}),
+        .nominal => context.append("nominal({d})", .{@backingInt(op.source)}),
     }
 }
 
@@ -977,9 +998,10 @@ const MaybeUninitializedConditions = struct {
             const stmt = store.getCFStmtImmediate(stmt_id);
             if (stmt.* != .join) continue;
 
-            const params = store.getLocalSpan(stmt.join.maybe_uninitialized_params);
-            const conditions = store.getLocalSpan(stmt.join.maybe_uninitialized_conditions);
-            const masks = store.getU64Span(stmt.join.maybe_uninitialized_condition_masks);
+            const join_extra = store.stmtRowOrDefault(stmt.join.extra);
+            const params = store.getLocalSpan(join_extra.maybe_uninitialized_params);
+            const conditions = store.getLocalSpan(join_extra.maybe_uninitialized_conditions);
+            const masks = store.getU64Span(join_extra.maybe_uninitialized_condition_masks);
             if (params.len != conditions.len or params.len != masks.len) {
                 diag.context_stmt = stmt_id;
                 diag.set("stmt={d}: maybe-uninitialized join metadata arity mismatch", .{stmt_index});
@@ -1072,6 +1094,8 @@ const State = struct {
     /// True until the state first forks. Before that point its tree nodes have
     /// one owner and construction can update them in place.
     unique: bool = true,
+    /// The state arena every snapshot of this state allocates its nodes in.
+    allocator: Allocator,
     /// Dense proc-local position per store local, owned by the certifier and
     /// stable for the lifetime of every state for the current proc.
     local_dense: []const u32,
@@ -1135,19 +1159,20 @@ const State = struct {
 
     fn init(allocator: Allocator, local_dense: []const u32, proc_local_count: usize) Allocator.Error!State {
         return .{
+            .allocator = allocator,
             .local_dense = local_dense,
-            .local_value = ArcSnapshot(ValueId, no_value).init(allocator, proc_local_count),
-            .balance = ArcSnapshot(i32, 0).init(allocator, proc_local_count),
-            .holder = ArcSnapshot(ValueId, no_value).init(allocator, proc_local_count),
-            .conditional = ArcSnapshot(ConditionalEntry, .{}).init(allocator, proc_local_count),
-            .claims = ArcSnapshot(ClaimSet, .{}).init(allocator, proc_local_count),
-            .outcome_discriminants = ArcSnapshot(ValueId, no_value).init(allocator, local_dense.len),
-            .known_variants = ArcSnapshot(u32, no_variant).init(allocator, proc_local_count),
-            .variant_discriminants = ArcSnapshot(ValueId, no_value).init(allocator, local_dense.len),
+            .local_value = ArcSnapshot(ValueId, no_value).init(proc_local_count),
+            .balance = ArcSnapshot(i32, 0).init(proc_local_count),
+            .holder = ArcSnapshot(ValueId, no_value).init(proc_local_count),
+            .conditional = ArcSnapshot(ConditionalEntry, .{}).init(proc_local_count),
+            .claims = ArcSnapshot(ClaimSet, .{}).init(proc_local_count),
+            .outcome_discriminants = ArcSnapshot(ValueId, no_value).init(local_dense.len),
+            .known_variants = ArcSnapshot(u32, no_variant).init(proc_local_count),
+            .variant_discriminants = ArcSnapshot(ValueId, no_value).init(local_dense.len),
             .result_discriminant = no_dense,
-            .maybe_uninitialized_unresolved = ArcSnapshot(bool, false).init(allocator, proc_local_count),
-            .maybe_uninitialized_released = ArcSnapshot(bool, false).init(allocator, proc_local_count),
-            .negative_balance = ArcSnapshot(u64, 0).init(allocator, (proc_local_count + 63) / 64),
+            .maybe_uninitialized_unresolved = ArcSnapshot(bool, false).init(proc_local_count),
+            .maybe_uninitialized_released = ArcSnapshot(bool, false).init(proc_local_count),
+            .negative_balance = ArcSnapshot(u64, 0).init((proc_local_count + 63) / 64),
         };
     }
 
@@ -1162,9 +1187,9 @@ const State = struct {
 
     fn put(self: *State, snapshot: anytype, index: u32, value: anytype) Allocator.Error!void {
         if (self.unique) {
-            try snapshot.putUnique(index, value);
+            try snapshot.putUnique(self.allocator, index, value);
         } else {
-            try snapshot.put(index, value);
+            try snapshot.put(self.allocator, index, value);
         }
     }
 
@@ -1751,7 +1776,8 @@ const WorkQueue = struct {
             .join_body => |walk| {
                 try self.joins.push(allocator, .{
                     .walk = walk,
-                    .component = self.components.get(walk.join) orelse unreachable,
+                    .component = self.components.get(walk.join) orelse
+                        base.invariant("ARC borrow certifier invariant violated: queued join {d} has no liveness component", .{@backingInt(walk.join)}),
                     .sequence = self.sequence,
                 });
                 self.sequence += 1;
@@ -1984,6 +2010,8 @@ const Certifier = struct {
     domain_values_scratch: collections.DenseMap(ValueId, void),
     value_reach_seen: collections.DenseMap(ValueId, void),
     value_reach_stack: std.ArrayList(ValueId) = .empty,
+    /// Values the target of `copyReachedValues` binds to some local.
+    target_carried_scratch: collections.DenseMap(ValueId, void),
     /// Scratch bitset over values, reused by the liveness and borrow-anchor
     /// chain walks. Both walks unset every bit they set on the way out, so
     /// the set is all zero between top-level calls and only ever needs to
@@ -2035,6 +2063,7 @@ const Certifier = struct {
             .region_of_join = collections.DenseMap(LIR.JoinPointId, u32).init(allocator),
             .domain_scratch = collections.DenseMap(u32, void).init(allocator),
             .carrier_scratch = collections.DenseMap(ValueId, u32).init(allocator),
+            .target_carried_scratch = collections.DenseMap(ValueId, void).init(allocator),
             .provenance_carrier_scratch = collections.DenseMap(u32, void).init(allocator),
             .summary_index_scratch = collections.DenseMap(u32, u32).init(allocator),
             .domain_values_scratch = collections.DenseMap(ValueId, void).init(allocator),
@@ -2092,6 +2121,7 @@ const Certifier = struct {
         self.domain_scratch.deinit();
         self.domain_list_scratch.deinit(self.allocator);
         self.carrier_scratch.deinit();
+        self.target_carried_scratch.deinit();
         self.provenance_carrier_scratch.deinit();
         self.summary_index_scratch.deinit();
         self.relevant_bound_scratch.deinit(self.allocator);
@@ -2416,11 +2446,14 @@ const Certifier = struct {
     }
 
     /// A container that must claim its own unit from its parent before the
-    /// field under it is claimed.
+    /// field under it is claimed. When `settles_spent`, the container's one
+    /// explicit unit is already fully spent by its claims: the parent's unit
+    /// replaces it, so those claims settle and the field starts a fresh set.
     const PendingContainerClaim = struct {
         container: ValueId,
         claim: ClaimSet,
         existing: ClaimSet,
+        settles_spent: bool = false,
     };
 
     /// A range of a struct's ownership slots.
@@ -2520,6 +2553,7 @@ const Certifier = struct {
                 .closure,
                 .erased_callable,
                 .zst,
+                .hole,
                 .ptr,
                 => break :walk false,
             };
@@ -2534,9 +2568,27 @@ const Certifier = struct {
             if (claim.isEmpty()) break :walk false;
             const existing = state.claimsOf(container);
             if (existing.intersects(claim)) {
-                // Only a complete projection can spend another whole unit;
-                // repeating a partial field claim would lose its other fields.
-                if (!required.eql(claim)) break :walk false;
+                if (!required.eql(claim)) {
+                    // A partial field claim repeats an earlier one only when
+                    // that earlier claim set spent a whole unit. The field is
+                    // then spent from another unit of the container: an
+                    // intact surplus unit, or its original unit, which a
+                    // retained projection still holds in its parent. The
+                    // spent claims settle against the unit they spent.
+                    // Repeating a field of an incomplete claim set would
+                    // lose its other fields.
+                    if (!existing.eql(required)) break :walk false;
+                    if (state.conditionalConditionOf(container) != null) break :walk false;
+                    if (state.balanceOf(container) >= 2) {
+                        try self.settleSpentClaims(state, container, existing, mutations);
+                        try self.claimContainerField(state, container, claim, .{}, mutations);
+                        break :walk true;
+                    }
+                    if (state.balanceOf(container) != 1) break :walk false;
+                    try pending.append(self.allocator, .{ .container = container, .claim = claim, .existing = .{}, .settles_spent = true });
+                    value = container;
+                    continue :walk;
+                }
                 // A second stamped take of the same projection spends that field
                 // from an intact surplus aggregate unit. The first unit remains
                 // represented by the existing claim set.
@@ -2580,10 +2632,37 @@ const Certifier = struct {
                 .before = before,
                 .after = before + 1,
             } });
+            if (claim.settles_spent) try self.settleSpentClaims(state, claim.container, state.claimsOf(claim.container), mutations);
             try self.claimContainerField(state, claim.container, claim.claim, claim.existing, mutations);
             claimed = true;
         }
         return claimed;
+    }
+
+    /// Settles a claim set that spent one whole unit of `container` while it
+    /// holds another: the spent unit and its claims are both gone.
+    fn settleSpentClaims(
+        self: *Certifier,
+        state: *State,
+        container: ValueId,
+        spent: ClaimSet,
+        mutations: ?*std.ArrayList(OwnershipMutation),
+    ) Allocator.Error!void {
+        const balance = state.balanceOf(container);
+        try state.setClaims(container, .{});
+        try state.addBalance(container, -1);
+        if (mutations) |list| {
+            try list.append(self.allocator, .{ .claims = .{
+                .value = container,
+                .before = spent,
+                .after = .{},
+            } });
+            try list.append(self.allocator, .{ .balance = .{
+                .value = container,
+                .before = balance,
+                .after = balance - 1,
+            } });
+        }
     }
 
     fn claimContainerField(
@@ -2604,20 +2683,7 @@ const Certifier = struct {
         if (balance >= 2) {
             if (try self.requiredClaims(container)) |required| {
                 if (updated.eql(required)) {
-                    try state.setClaims(container, .{});
-                    try state.addBalance(container, -1);
-                    if (mutations) |list| {
-                        try list.append(self.allocator, .{ .claims = .{
-                            .value = container,
-                            .before = existing,
-                            .after = .{},
-                        } });
-                        try list.append(self.allocator, .{ .balance = .{
-                            .value = container,
-                            .before = balance,
-                            .after = balance - 1,
-                        } });
-                    }
+                    try self.settleSpentClaims(state, container, existing, mutations);
                     return;
                 }
             }
@@ -2676,6 +2742,7 @@ const Certifier = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .ptr,
             => return null,
         };
@@ -3383,7 +3450,7 @@ const Certifier = struct {
                     break :blk conditional;
                 },
                 .borrowed, .representation => try self.bindFresh(&state, local, 0, &.{}),
-                .unbound => unreachable,
+                .unbound => unreachable, // the loop skips unbound entries above
             };
             if (entry.abi_live) self.values.items[value].always_live = true;
             if (!entry.claims.isEmpty()) try state.setClaims(value, entry.claims);
@@ -3761,9 +3828,9 @@ const Certifier = struct {
             if (first_visit) try visited.put(current, {});
             self.collect_region = region;
 
-            const current_stmt = self.store.getCFStmt(current);
-            if (first_visit) try self.erased_owners.noteStmt(self.store, self.layouts, current_stmt);
-            switch (current_stmt) {
+            const current_stmt = self.store.getCFStmtImmediate(current);
+            if (first_visit) try self.erased_owners.noteStmt(self.store, self.layouts, current_stmt.*);
+            switch (current_stmt.*) {
                 .assign_ref => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocal(body_clone.refOpSource(assign.op));
@@ -3774,7 +3841,8 @@ const Certifier = struct {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocalSpan(assign.args);
                 },
-                .assign_call_erased => |assign| {
+                .assign_call_erased => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     self.diag.context_proc = self.current_proc;
                     self.diag.context_stmt = current;
                     try certifyErasedCallArgsPlan(
@@ -3786,7 +3854,7 @@ const Certifier = struct {
                         self.store.getLocalSpan(assign.args).len,
                         self.diag,
                     );
-                    try self.noteProcLocal(assign.target);
+                    try self.noteProcLocal(assign_stmt.target);
                     try self.noteProcLocal(assign.closure);
                     if (assign.reuse_source) |reuse_source| {
                         try self.noteProcLocal(reuse_source);
@@ -3798,16 +3866,18 @@ const Certifier = struct {
                     }
                     try self.noteProcLocalSpan(assign.args);
                 },
-                .assign_packed_erased_fn => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_packed_erased_fn => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     if (assign.capture) |capture| try self.noteProcLocal(capture);
                     if (assign.result_desc) |result_desc| {
                         if (result_desc.localOrNull()) |local| try self.noteProcLocal(local);
                     }
                     if (assign.reuse) |reuse| try self.noteProcLocal(reuse);
                 },
-                .assign_boxy_desc_ref => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_desc_ref => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     if (assign.desc.localOrNull()) |local| try self.noteProcLocal(local);
                     if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
                     try self.noteProcLocalSpan(assign.captures);
@@ -3817,63 +3887,73 @@ const Certifier = struct {
                     if (assign.dict.localOrNull()) |local| try self.noteProcLocal(local);
                     try self.noteProcLocalSpan(assign.captures);
                 },
-                .assign_boxy_box => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_box => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     try self.noteProcLocal(assign.payload);
                     if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
                 },
-                .assign_boxy_record_update => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_record_update => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     try self.noteProcLocal(assign.base);
                     try self.noteProcLocal(assign.fields);
                     if (assign.base_desc.localOrNull()) |local| try self.noteProcLocal(local);
                     if (assign.fields_desc.localOrNull()) |local| try self.noteProcLocal(local);
                 },
-                .assign_boxy_unbox => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_unbox => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     try self.noteProcLocal(assign.source);
                     if (assign.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
                     if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
                 },
-                .assign_boxy_adapt => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_adapt => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     try self.noteProcLocal(assign.source);
                     if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
                     if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
                 },
-                .assign_boxy_inspect => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_inspect => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     try self.noteProcLocal(assign.source);
                     if (assign.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
                 },
-                .assign_boxy_eq => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_eq => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     try self.noteProcLocal(assign.lhs);
                     try self.noteProcLocal(assign.rhs);
                     if (assign.desc.localOrNull()) |local| try self.noteProcLocal(local);
                 },
-                .assign_boxy_hash => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_hash => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     try self.noteProcLocal(assign.value);
                     try self.noteProcLocal(assign.hasher);
                     if (assign.desc.localOrNull()) |local| try self.noteProcLocal(local);
                 },
-                .assign_boxy_tag => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_tag => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     if (assign.target_desc.localOrNull()) |local| try self.noteProcLocal(local);
                     if (assign.payload) |payload| try self.noteProcLocal(payload);
                     if (assign.payload_desc) |desc| {
                         if (desc.localOrNull()) |local| try self.noteProcLocal(local);
                     }
                 },
-                .assign_boxy_tag_payload => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_tag_payload => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     if (assign.target_desc) |target_desc| try self.noteProcLocal(target_desc);
                     try self.noteProcLocal(assign.source);
                     if (assign.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
                 },
-                .assign_call_dict => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_call_dict => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     if (assign.dict.localOrNull()) |local| try self.noteProcLocal(local);
                     if (assign.result_desc) |result_desc| {
                         if (result_desc.localOrNull()) |local| try self.noteProcLocal(local);
@@ -3919,8 +3999,9 @@ const Certifier = struct {
                     try self.noteProcLocal(switch_stmt.cond);
                     try self.noteProcLocal(switch_stmt.payload);
                 },
-                .str_match => |str_match| {
-                    try self.noteProcLocal(str_match.source);
+                .str_match => |str_match_stmt| {
+                    const str_match = self.store.stmtRow(str_match_stmt.data);
+                    try self.noteProcLocal(str_match_stmt.source);
                     const steps = self.store.getStrMatchSteps(str_match.steps);
                     for (0..GuardedList.borrowLen(steps)) |step_index| {
                         const step = GuardedList.at(steps, step_index);
@@ -3932,7 +4013,7 @@ const Certifier = struct {
                 },
                 .boxy_tag_match => |tag_match| {
                     try self.noteProcLocal(tag_match.source);
-                    if (tag_match.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    if (self.store.stmtRow(tag_match.source_desc).localOrNull()) |local| try self.noteProcLocal(local);
                 },
                 .str_match_set => |str_match_set| {
                     try self.noteProcLocal(str_match_set.source);
@@ -3983,7 +4064,7 @@ const Certifier = struct {
                 },
                 .ret => |ret_stmt| try self.noteProcLocal(ret_stmt.value),
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteProcLocal(message),
-                .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken => {},
+                .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
             }
             // Every other statement's successors stay in its region.
             successors.clearRetainingCapacity();
@@ -4071,7 +4152,6 @@ const Certifier = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -4215,20 +4295,26 @@ const Certifier = struct {
         var successors = std.ArrayList(LIR.CFStmtId).empty;
         defer successors.deinit(self.allocator);
         while (work.pop()) |stmt| {
-            const node_index = graph.indices.get(stmt) orelse unreachable;
+            const node_index = graph.indices.get(stmt) orelse unreachable; // ensureReadBeforeRebindNode indexes every stmt before queueing it
             node_reads.clearRetainingCapacity();
 
             // String-match captures are branch-local definitions. The graph
             // tracks one def per statement, not per edge, so they are not
             // marked as unconditional defs; that would hide reads on the miss
             // path. Over-reporting relevance is safe.
-            const current = self.store.getCFStmt(stmt);
+            const current = self.store.getCFStmtImmediate(stmt);
             var exposed: ExposedReads = .{ .certifier = self, .reads = &node_reads };
-            try body_clone.tryForEachStmtRead(self.store, current, &exposed, ExposedReads.note);
-            if (body_clone.definedTarget(current)) |target| self.setReadBeforeRebindDef(&graph, node_index, target);
-            switch (current) {
-                .assign_call_erased => |s| if (s.out_desc) |out_desc| self.setReadBeforeRebindDef(&graph, node_index, out_desc),
-                .assign_boxy_tag_payload => |s| if (s.target_desc) |target_desc| self.setReadBeforeRebindDef(&graph, node_index, target_desc),
+            try body_clone.tryForEachStmtRead(self.store, current.*, &exposed, ExposedReads.note);
+            if (body_clone.definedTarget(current.*)) |target| self.setReadBeforeRebindDef(&graph, node_index, target);
+            switch (current.*) {
+                .assign_call_erased => |inline_s| blk_s: {
+                    const s = self.store.stmtRow(inline_s.data);
+                    break :blk_s if (s.out_desc) |out_desc| self.setReadBeforeRebindDef(&graph, node_index, out_desc);
+                },
+                .assign_boxy_tag_payload => |inline_s| blk_s: {
+                    const s = self.store.stmtRow(inline_s.data);
+                    break :blk_s if (s.target_desc) |target_desc| self.setReadBeforeRebindDef(&graph, node_index, target_desc);
+                },
                 .init_uninitialized,
                 .assign_ref,
                 .assign_literal,
@@ -4258,7 +4344,6 @@ const Certifier = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -4273,7 +4358,7 @@ const Certifier = struct {
                 .crash,
                 => {},
             }
-            switch (current) {
+            switch (current.*) {
                 .join => |join| {
                     try ensureReadBeforeRebindNode(&graph, &work, join.body);
                     try cache_roots.append(graph_allocator, join.body);
@@ -4315,7 +4400,6 @@ const Certifier = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -4350,7 +4434,8 @@ const Certifier = struct {
         var succ_cursor: u32 = 0;
         for (graph.nodes.items, 0..) |node, node_index| {
             for (graph.successors.items[node.successor_start..][0..node.successor_len]) |successor| {
-                succs[succ_cursor] = @intCast(graph.indices.get(successor) orelse unreachable);
+                const successor_node = graph.indices.get(successor) orelse unreachable; // appendReadBeforeRebindSuccessor indexes every successor it records
+                succs[succ_cursor] = @intCast(successor_node);
                 succ_cursor += 1;
             }
             succ_starts[node_index + 1] = succ_cursor;
@@ -4369,7 +4454,8 @@ const Certifier = struct {
         const components = try collections.scc.compute(graph_allocator, succ_starts, succs, preds.starts, preds.targets);
         var joins = self.join_bodies.iterator();
         while (joins.next()) |join| {
-            const node = graph.indices.get(join.value_ptr.*) orelse unreachable;
+            const node = graph.indices.get(join.value_ptr.*) orelse
+                base.invariant("ARC borrow certifier invariant violated: join {d} body is missing from the read-before-rebind graph", .{@backingInt(join.key_ptr.*)});
             try self.join_components.put(join.key_ptr.*, components.component_of[node]);
         }
 
@@ -4388,7 +4474,7 @@ const Certifier = struct {
 
         for (cache_roots.items) |root| {
             if (self.reads_before_rebind_cache.contains(root)) continue;
-            const node_index = graph.indices.get(root) orelse unreachable;
+            const node_index = graph.indices.get(root) orelse unreachable; // every cache root was indexed by ensureReadBeforeRebindNode before being recorded
             try self.reads_before_rebind_cache.put(root, rows[node_index]);
         }
 
@@ -4747,8 +4833,14 @@ const Certifier = struct {
     /// relevant state: dropping its carrier would cut the chain, so the
     /// selection could no longer reach the unit that pays for it. Each such
     /// carrier joins the relevant bound positions for this summary. A chain
-    /// that reaches no carried container gains no carriers: the selection
-    /// claims the stored unit before quotienting instead.
+    /// that reaches no carried container gains no carriers when the selection
+    /// holds no unit of its own: it claims the stored unit before quotienting
+    /// instead. A selection that holds its own unit (retained after a take)
+    /// cannot absorb the stored unit, so every carrier on its chain joins the
+    /// relevant bound positions too; otherwise the stored unit would cross
+    /// the join with no local naming it. At an entry jump such a carrier
+    /// lands in the frame or the summary domain by the same region rule as
+    /// every other relevant position.
     fn addProvenanceCarriers(self: *Certifier, state: *const State) Allocator.Error!void {
         self.provenance_carrier_scratch.clearRetainingCapacity();
         self.repr_scratch.clearRetainingCapacity();
@@ -4768,7 +4860,8 @@ const Certifier = struct {
                 }
                 break :reach false;
             };
-            if (!reaches_carried) continue;
+            const holds_unit = state.balanceOf(value) != 0 and !try self.claimsSpendUnit(state, value);
+            if (!reaches_carried and !holds_unit) continue;
             var link = self.values.items[value].payload_source;
             while (link != no_value and !self.carrier_scratch.contains(link)) : (link = self.values.items[link].payload_source) {
                 const carrier = self.repr_scratch.get(link) orelse continue;
@@ -4985,8 +5078,8 @@ const Certifier = struct {
         try arc_solve.collectProcStatements(self.allocator, self.store, body, &proc_stmts);
         var return_local_mismatch = false;
         for (proc_stmts.items) |stmt_id| {
-            const stmt = self.store.getCFStmt(stmt_id);
-            if (stmt != .ret) continue;
+            const stmt = self.store.getCFStmtImmediate(stmt_id);
+            if (stmt.* != .ret) continue;
             if (self.current_return_local) |expected| {
                 if (expected != stmt.ret.value) {
                     return_local_mismatch = true;
@@ -5188,8 +5281,19 @@ const Certifier = struct {
 
     /// Copies every value reachable from `value_reach_stack` (through
     /// lenders, holders, and payload sources) with its ownership facts from
-    /// `source` into `target`.
+    /// `source` into `target`. The containers through which a reached taken
+    /// projection still owes its claim also retain a carrier binding (see
+    /// `bindTakenProjectionCarriers`).
     fn copyReachedValues(self: *Certifier, source: *const State, target: *State) Allocator.Error!void {
+        self.repr_scratch.clearRetainingCapacity();
+        var bindings = source.local_value.iterator();
+        while (bindings.next()) |binding| {
+            const carrier = try self.repr_scratch.getOrPut(binding.value);
+            if (!carrier.found_existing) carrier.value_ptr.* = binding.index;
+        }
+        self.target_carried_scratch.clearRetainingCapacity();
+        var carried = target.local_value.iterator();
+        while (carried.next()) |binding| try self.target_carried_scratch.put(binding.value, {});
         while (self.value_reach_stack.pop()) |value| {
             if (value == no_value) continue;
             const seen = try self.value_reach_seen.getOrPut(value);
@@ -5205,8 +5309,33 @@ const Certifier = struct {
             if (source.knownVariant(value)) |known| try target.setKnownVariant(value, known);
             const info = self.values.items[value];
             try self.value_reach_stack.appendSlice(self.allocator, info.lenders);
+            if (info.payload_taken and balance <= 0) try self.bindTakenProjectionCarriers(source, target, value);
             try self.value_reach_stack.append(self.allocator, info.payload_source);
             try self.value_reach_stack.append(self.allocator, holder);
+        }
+    }
+
+    /// A taken projection without a unit of its own claims its stored unit
+    /// by walking its container chain (`tryClaimSeen`) through views up to
+    /// the first container that holds a unit or claims; one with a unit
+    /// never walks it. Later summaries encode that path by carrier
+    /// local, so an anonymous container alone cannot preserve it: each
+    /// container on the path that `target` does not already carry keeps its
+    /// lowest carrier from `source`, even a local of an exited region.
+    /// Borrowed projections spend no stored unit; summaries reduce their
+    /// unnamed containers to live anchors instead.
+    fn bindTakenProjectionCarriers(self: *Certifier, source: *const State, target: *State, taken: ValueId) Allocator.Error!void {
+        var container = self.values.items[taken].payload_source;
+        while (container != no_value) : (container = self.values.items[container].payload_source) {
+            if (!self.target_carried_scratch.contains(container)) {
+                if (self.repr_scratch.get(container)) |carrier| {
+                    try target.bindValue(self.proc_locals.items[carrier], container);
+                    try self.target_carried_scratch.put(container, {});
+                }
+            }
+            if (source.balanceOf(container) != 0 or
+                !source.claimsOf(container).isEmpty() or
+                source.conditionalConditionOf(container) != null) break;
         }
     }
 
@@ -5387,19 +5516,19 @@ const Certifier = struct {
                 if (seen.found_existing) return;
             }
 
-            const stmt = self.store.getCFStmt(cursor);
+            const stmt = self.store.getCFStmtImmediate(cursor);
             // Any write to the returned local kills its discriminant witness;
             // `assign_tag` establishes a replacement after this kill.
             if (self.current_return_local) |return_local| {
                 // Emission rebinding of the returned local kills its witness exactly
                 // as it does in the solver's outcome domain; `assign_tag`
                 // establishes a replacement witness after this generic kill.
-                if (body_clone.writtenLocal(stmt)) |target| {
+                if (body_clone.writtenLocal(stmt.*)) |target| {
                     if (target == return_local) state.result_discriminant = no_dense;
                 }
             }
             if (state.outcomeDiscriminantCount() != 0) {
-                const consumes_refinement = stmt == .switch_stmt and
+                const consumes_refinement = stmt.* == .switch_stmt and
                     state.hasOutcomeDiscriminant(stmt.switch_stmt.cond);
                 // ARC may insert explicit RC bookkeeping after the source
                 // discriminant read and before its immediately refining
@@ -5407,7 +5536,7 @@ const Certifier = struct {
                 // result/discriminant relation; any balance mutation that
                 // invalidates restitution is checked independently when the
                 // switch replays its exact call receipt.
-                const stmt_tag = std.meta.activeTag(stmt);
+                const stmt_tag = std.meta.activeTag(stmt.*);
                 const preserves_refinement = stmt_tag == .incref or
                     stmt_tag == .decref or
                     stmt_tag == .decref_if_initialized or
@@ -5416,17 +5545,17 @@ const Certifier = struct {
                     state.clearOutcomeDiscriminants();
                 }
             }
-            switch (stmt) {
+            switch (stmt.*) {
                 .assign_ref => |assign| {
                     try self.validateResidualShellFields(&state, assign);
-                    switch (assign.op) {
-                        .local => |source| {
-                            if (assign.target != source) {
-                                try self.bindLocalAlias(&state, assign.target, source);
+                    switch (assign.op.kind) {
+                        .local => {
+                            if (assign.target != assign.op.source) {
+                                try self.bindLocalAlias(&state, assign.target, assign.op.source);
                             }
                         },
-                        .discriminant => |op| {
-                            const source_value = try self.requireAggregateRepresentation(&state, op.source);
+                        .discriminant => {
+                            const source_value = try self.requireAggregateRepresentation(&state, assign.op.source);
                             try state.removeOutcomeDiscriminant(assign.target);
                             if (source_value != no_value and
                                 !self.values.items[source_value].call_outcomes.isEmpty())
@@ -5438,32 +5567,32 @@ const Certifier = struct {
                                 try state.put(&state.variant_discriminants, @backingInt(assign.target), source_value);
                             }
                         },
-                        .field => |op| try self.bindPayloadReadWithShell(
+                        .field => try self.bindPayloadReadWithShell(
                             &state,
                             assign.target,
-                            op.source,
+                            assign.op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
-                            assign.take_kind,
+                            self.store.stmtRowOrDefault(assign.extra).take_kind,
                             null,
-                            self.store.getU32Span(assign.residual_shell_absent_fields),
+                            self.store.getU32Span(self.store.stmtRowOrDefault(assign.extra).residual_shell_absent_fields),
                         ),
-                        .tag_payload => |op| try self.bindPayloadRead(
+                        .tag_payload => try self.bindPayloadRead(
                             &state,
                             assign.target,
-                            op.source,
+                            assign.op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
-                            assign.take_kind,
-                            op.tag_discriminant,
+                            self.store.stmtRowOrDefault(assign.extra).take_kind,
+                            assign.op.tag_discriminant,
                         ),
-                        .tag_payload_struct => |op| try self.bindPayloadRead(
+                        .tag_payload_struct => try self.bindPayloadRead(
                             &state,
                             assign.target,
-                            op.source,
+                            assign.op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
-                            assign.take_kind,
-                            op.tag_discriminant,
+                            self.store.stmtRowOrDefault(assign.extra).take_kind,
+                            assign.op.tag_discriminant,
                         ),
-                        inline .list_reinterpret, .nominal => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
+                        inline .list_reinterpret, .nominal => try self.bindSameValue(&state, assign.target, assign.op.source),
                     }
                     cursor = assign.next;
                 },
@@ -5485,11 +5614,12 @@ const Certifier = struct {
                     cursor = init.next;
                 },
                 .assign_call => |assign| {
-                    if (assign.result_desc) |result_desc| try self.requireBoxyDescRef(&state, result_desc);
+                    if (self.store.stmtRowOrDefault(assign.extra).result_desc) |result_desc| try self.requireBoxyDescRef(&state, result_desc);
                     try self.applyCall(&state, assign.target, self.sigs.get(assign.proc), assign.args);
                     cursor = assign.next;
                 },
-                .assign_call_erased => |assign| {
+                .assign_call_erased => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     if (!LIR.erasedCallReuseFieldsMatch(assign)) {
                         return self.fail("erased call reuse flag and ownership source disagreed", .{});
                     }
@@ -5501,11 +5631,12 @@ const Certifier = struct {
                         try self.requireLive(&state, reuse_source)
                     else
                         no_value;
-                    try self.applyCall(&state, assign.target, arc_sig.RcSig.all_owned, assign.args);
+                    try self.applyCall(&state, assign_stmt.target, arc_sig.RcSig.all_owned, assign.args);
                     if (assign.reuse_source) |reuse_source| try self.consumeUnit(&state, reuse_value, reuse_source);
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
-                .assign_packed_erased_fn => |assign| {
+                .assign_packed_erased_fn => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     if (assign.result_desc) |result_desc| try self.requireBoxyDescRef(&state, result_desc);
                     const capture_value = if (assign.capture) |capture|
                         try self.requireLive(&state, capture)
@@ -5515,8 +5646,8 @@ const Certifier = struct {
                         try self.requireLive(&state, reuse)
                     else
                         no_value;
-                    if (self.isRc(assign.target)) {
-                        const target_value = try self.bindFresh(&state, assign.target, 1, &.{});
+                    if (self.isRc(assign_stmt.target)) {
+                        const target_value = try self.bindFresh(&state, assign_stmt.target, 1, &.{});
                         if (assign.capture != null) {
                             try self.consumeIntoHolder(&state, capture_value, target_value);
                         }
@@ -5531,17 +5662,18 @@ const Certifier = struct {
                     } else if (assign.reuse != null) {
                         try self.consumeUnit(&state, reuse_value, assign.reuse.?);
                     }
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_desc_ref => |assign| {
+                .assign_boxy_desc_ref => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDescRef(&state, assign.desc);
                     const captures = self.store.getLocalSpan(assign.captures);
                     for (0..GuardedList.borrowLen(captures)) |index| {
                         const local = GuardedList.at(captures, index);
                         _ = try self.requireLive(&state, local);
                     }
-                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
-                    cursor = assign.next;
+                    _ = try self.bindBoxyOwnedTarget(&state, assign_stmt.target);
+                    cursor = assign_stmt.next;
                 },
                 .assign_boxy_dict_ref => |assign| {
                     try self.requireBoxyDictRef(&state, assign.dict);
@@ -5552,88 +5684,97 @@ const Certifier = struct {
                     _ = try self.bindBoxyOwnedTarget(&state, assign.target);
                     cursor = assign.next;
                 },
-                .assign_boxy_box => |assign| {
+                .assign_boxy_box => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     if (assign.payload_desc) |desc| try self.requireBoxyDescRef(&state, desc);
-                    const target_value = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    const target_value = try self.bindBoxyOwnedTarget(&state, assign_stmt.target);
                     try self.consumeBoxyTransferIntoHolder(&state, assign.payload, assign.payload_mode, target_value);
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_record_update => |assign| {
+                .assign_boxy_record_update => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDescRef(&state, assign.base_desc);
                     try self.requireBoxyDescRef(&state, assign.fields_desc);
                     _ = try self.requireBoxyTransferSource(&state, assign.base, .borrow);
-                    const target_value = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    const target_value = try self.bindBoxyOwnedTarget(&state, assign_stmt.target);
                     try self.consumeBoxyTransferIntoHolder(&state, assign.fields, .move, target_value);
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_unbox => |assign| {
+                .assign_boxy_unbox => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDescRef(&state, assign.source_desc);
                     if (assign.target_desc) |desc| try self.requireBoxyDescRef(&state, desc);
                     const source_value = try self.requireBoxyTransferSource(&state, assign.source, assign.source_mode);
-                    if (self.isRc(assign.target)) {
+                    if (self.isRc(assign_stmt.target)) {
                         switch (assign.source_mode) {
-                            .move, .copy => _ = try self.bindFresh(&state, assign.target, 1, &.{}),
-                            .borrow => _ = try self.bindFresh(&state, assign.target, 0, &.{source_value}),
+                            .move, .copy => _ = try self.bindFresh(&state, assign_stmt.target, 1, &.{}),
+                            .borrow => _ = try self.bindFresh(&state, assign_stmt.target, 0, &.{source_value}),
                         }
                     }
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_adapt => |assign| {
+                .assign_boxy_adapt => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     if (assign.source_desc) |desc| try self.requireBoxyDescRef(&state, desc);
                     if (assign.target_desc) |desc| try self.requireBoxyDescRef(&state, desc);
-                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    _ = try self.bindBoxyOwnedTarget(&state, assign_stmt.target);
                     _ = try self.requireBoxyTransferSource(&state, assign.source, assign.source_mode);
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_inspect => |assign| {
+                .assign_boxy_inspect => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDescRef(&state, assign.source_desc);
-                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    _ = try self.bindBoxyOwnedTarget(&state, assign_stmt.target);
                     _ = try self.requireBoxyTransferSource(&state, assign.source, assign.source_mode);
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_eq => |assign| {
+                .assign_boxy_eq => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDescRef(&state, assign.desc);
                     _ = try self.requireLive(&state, assign.lhs);
                     _ = try self.requireLive(&state, assign.rhs);
-                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
-                    cursor = assign.next;
+                    _ = try self.bindBoxyOwnedTarget(&state, assign_stmt.target);
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_hash => |assign| {
+                .assign_boxy_hash => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDescRef(&state, assign.desc);
                     _ = try self.requireLive(&state, assign.value);
                     _ = try self.requireLive(&state, assign.hasher);
-                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
-                    cursor = assign.next;
+                    _ = try self.bindBoxyOwnedTarget(&state, assign_stmt.target);
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_tag => |assign| {
+                .assign_boxy_tag => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDescRef(&state, assign.target_desc);
                     if (assign.payload_desc) |desc| try self.requireBoxyDescRef(&state, desc);
-                    const target_value = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    const target_value = try self.bindBoxyOwnedTarget(&state, assign_stmt.target);
                     if (assign.payload) |payload| {
                         try self.consumeBoxyTransferIntoHolder(&state, payload, assign.payload_mode, target_value);
                     }
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_tag_payload => |assign| {
+                .assign_boxy_tag_payload => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDescRef(&state, assign.source_desc);
                     const source_value = try self.requireBoxyTransferSource(&state, assign.source, assign.source_mode);
-                    if (self.isRc(assign.target)) {
+                    if (self.isRc(assign_stmt.target)) {
                         switch (assign.source_mode) {
                             .borrow => {
                                 if (source_value == no_value) {
-                                    _ = try self.bindBorrowedFromImplicitLive(&state, assign.target);
+                                    _ = try self.bindBorrowedFromImplicitLive(&state, assign_stmt.target);
                                 } else {
-                                    _ = try self.bindFresh(&state, assign.target, 0, &.{source_value});
+                                    _ = try self.bindFresh(&state, assign_stmt.target, 0, &.{source_value});
                                 }
                             },
-                            .copy, .move => _ = try self.bindFresh(&state, assign.target, 1, &.{}),
+                            .copy, .move => _ = try self.bindFresh(&state, assign_stmt.target, 1, &.{}),
                         }
                     }
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
                 .boxy_tag_match => |tag_match| {
                     _ = try self.requireLive(&state, tag_match.source);
-                    try self.requireBoxyDescRef(&state, tag_match.source_desc);
+                    try self.requireBoxyDescRef(&state, self.store.stmtRow(tag_match.source_desc));
                     var match_state = try state.clone();
                     errdefer match_state.deinit();
                     try work.append(self.allocator, .{ .segment = .{ .cursor = tag_match.on_match, .state = match_state, .origin_join = segment.origin_join, .walk = segment.walk } });
@@ -5643,10 +5784,11 @@ const Certifier = struct {
                     try work.append(self.allocator, .{ .segment = .{ .cursor = tag_match.on_miss, .state = miss_state, .origin_join = segment.origin_join, .walk = segment.walk } });
                     return;
                 },
-                .assign_call_dict => |assign| {
+                .assign_call_dict => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDictRef(&state, assign.dict);
                     if (assign.result_desc) |result_desc| try self.requireBoxyDescRef(&state, result_desc);
-                    try self.applyCall(&state, assign.target, arc_sig.RcSig.all_owned, assign.args);
+                    try self.applyCall(&state, assign_stmt.target, arc_sig.RcSig.all_owned, assign.args);
                     const arg_descs = self.store.getLocalSpan(assign.arg_descs);
                     for (0..GuardedList.borrowLen(arg_descs)) |index| {
                         _ = try self.requireLive(&state, GuardedList.at(arg_descs, index));
@@ -5656,7 +5798,7 @@ const Certifier = struct {
                         const hidden = GuardedList.at(hidden_args, index);
                         _ = try self.requireLive(&state, hidden);
                     }
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
                 .assign_low_level => |assign| {
                     try self.applyLowLevel(&state, assign);
@@ -5671,7 +5813,7 @@ const Certifier = struct {
                     cursor = assign.next;
                 },
                 .assign_tag => |assign| {
-                    if (assign.target_desc) |target_desc| try self.requireBoxyDescRef(&state, target_desc);
+                    if (self.store.optionalStmtRow(assign.target_desc)) |target_desc| try self.requireBoxyDescRef(&state, target_desc);
                     if (assign.payload) |payload| {
                         const operands = [_]LIR.LocalId{payload};
                         try self.applyAggregate(&state, assign.target, &operands);
@@ -5728,9 +5870,6 @@ const Certifier = struct {
                 .expect => |expect_stmt| {
                     _ = try self.requireLive(&state, expect_stmt.condition);
                     cursor = expect_stmt.next;
-                },
-                .comptime_branch_taken => |taken| {
-                    cursor = taken.next;
                 },
                 .incref => |rc| {
                     if (!self.isRc(rc.value)) {
@@ -5866,8 +6005,9 @@ const Certifier = struct {
                     try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.uninitialized_branch, .state = uninitialized_state, .origin_join = segment.origin_join, .walk = segment.walk } });
                     return;
                 },
-                .str_match => |str_match| {
-                    const source_value = try self.requireLive(&state, str_match.source);
+                .str_match => |str_match_stmt| {
+                    const str_match = self.store.stmtRow(str_match_stmt.data);
+                    const source_value = try self.requireLive(&state, str_match_stmt.source);
                     var match_state = try state.clone();
                     errdefer match_state.deinit();
                     const steps = self.store.getStrMatchSteps(str_match.steps);
@@ -5880,11 +6020,11 @@ const Certifier = struct {
                             },
                         }
                     }
-                    try work.append(self.allocator, .{ .segment = .{ .cursor = str_match.on_match, .state = match_state, .origin_join = segment.origin_join, .walk = segment.walk } });
+                    try work.append(self.allocator, .{ .segment = .{ .cursor = str_match_stmt.on_match, .state = match_state, .origin_join = segment.origin_join, .walk = segment.walk } });
 
                     var miss_state = try state.clone();
                     errdefer miss_state.deinit();
-                    try work.append(self.allocator, .{ .segment = .{ .cursor = str_match.on_miss, .state = miss_state, .origin_join = segment.origin_join, .walk = segment.walk } });
+                    try work.append(self.allocator, .{ .segment = .{ .cursor = str_match_stmt.on_miss, .state = miss_state, .origin_join = segment.origin_join, .walk = segment.walk } });
                     return;
                 },
                 .str_match_set => |str_match_set| {
@@ -5913,7 +6053,8 @@ const Certifier = struct {
                     return;
                 },
                 .join => |join_stmt| {
-                    const maybe_uninitialized_params = self.store.getLocalSpan(join_stmt.maybe_uninitialized_params);
+                    const join_maybe_uninitialized = self.store.stmtRowOrDefault(join_stmt.extra).maybe_uninitialized_params;
+                    const maybe_uninitialized_params = self.store.getLocalSpan(join_maybe_uninitialized);
                     for (0..GuardedList.borrowLen(maybe_uninitialized_params)) |index| {
                         const dense = self.denseOf(GuardedList.at(maybe_uninitialized_params, index));
                         if (dense != no_dense) {
@@ -5933,7 +6074,7 @@ const Certifier = struct {
                         // split loops with conditionally initialized payload
                         // cells into one entry summary per field-presence subset.
                         const relevant = (try self.computeReadsBeforeRebind(join_stmt.body)).*;
-                        const maybe_uninitialized = try self.computeJoinMaybeUninitialized(join_stmt.maybe_uninitialized_params);
+                        const maybe_uninitialized = try self.computeJoinMaybeUninitialized(join_maybe_uninitialized);
                         record.value_ptr.* = .{
                             .body = join_stmt.body,
                             .params = join_stmt.params,
@@ -5950,8 +6091,8 @@ const Certifier = struct {
                         return self.fail("jump to join {d} before its definition", .{@backingInt(jump_stmt.target)});
                     };
                     if (self.current_return_local) |return_local| {
-                        const target_stmt = self.store.getCFStmt(record.body);
-                        if (target_stmt == .ret and target_stmt.ret.value == return_local) {
+                        const target_stmt = self.store.getCFStmtImmediate(record.body);
+                        if (target_stmt.* == .ret and target_stmt.ret.value == return_local) {
                             try self.applyOutcomeRestitution(&state);
                         }
                     }
@@ -6037,6 +6178,23 @@ const Certifier = struct {
             _ = try self.requireAggregateRepresentation(state, source);
             return;
         }
+        // A struct view whose residual shell names every refcounted slot of
+        // its layout holds no unit: it copies only its container's inline
+        // representation, which stays readable after every stored unit has
+        // left (design.md "Residual Shells").
+        if (shell.len != 0 and try self.shellCoversLayout(self.store.getLocal(target).layout_idx, shell)) {
+            std.debug.assert(take_kind == .none);
+            const representation = try self.requireAggregateRepresentation(state, source);
+            const value = if (representation == no_value)
+                try self.bindBorrowedFromImplicitLive(state, target)
+            else
+                try self.bindFresh(state, target, 0, &.{representation});
+            const info = &self.values.items[value];
+            info.payload_source = representation;
+            info.payload_projection = projection;
+            info.payload_taken = false;
+            return;
+        }
         const source_value = try self.requireLive(state, source);
         // Reading a variant's payload proves the container holds that variant
         // on this path; anything else is already undefined.
@@ -6067,6 +6225,17 @@ const Certifier = struct {
         info.payload_source = source_value;
         info.payload_projection = projection;
         info.payload_taken = take_kind == .take;
+    }
+
+    /// Whether `shell`, already validated against `layout_idx` by
+    /// `validateResidualShellFields`, names every refcounted slot of it.
+    fn shellCoversLayout(self: *Certifier, layout_idx: layout_mod.Idx, shell: anytype) Allocator.Error!bool {
+        const required = try self.requiredClaimsForLayout(layout_idx) orelse return false;
+        var listed: ClaimSet = .{};
+        for (0..shell.len) |index| {
+            listed = try listed.withField(self.state_arena.allocator(), @intCast(GuardedList.at(shell, index)));
+        }
+        return listed.eql(required);
     }
 
     /// An RC-bearing projection read observes the stored unit behind the
@@ -6130,6 +6299,7 @@ const Certifier = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .ptr,
             => false,
         };
@@ -6148,9 +6318,9 @@ const Certifier = struct {
         state: *const State,
         assign: @FieldType(LIR.CFStmt, "assign_ref"),
     ) CertifyError!void {
-        const absent_fields = self.store.getU32Span(assign.residual_shell_absent_fields);
-        const source = switch (assign.op) {
-            .local => |local| local,
+        const absent_fields = self.store.getU32Span(self.store.stmtRowOrDefault(assign.extra).residual_shell_absent_fields);
+        const source = switch (assign.op.kind) {
+            .local => assign.op.source,
             .field => {
                 // A struct view's shell names refcounted slots of its own
                 // layout; the read itself checks them against the claims of
@@ -6418,7 +6588,7 @@ const Certifier = struct {
         // real argument count names nothing: the ownership it describes is
         // dropped instead of applied. This is the one place where a row and the
         // arguments it talks about are both in hand.
-        if (rc_effect_rules.maskExceedsArgCount(assign.rc_effect, GuardedList.borrowLen(arg_locals))) |position| {
+        if (rc_effect_rules.maskExceedsArgCount(self.store.stmtRow(assign.rc_effect), GuardedList.borrowLen(arg_locals))) |position| {
             return self.fail(
                 "low-level op {s} has an RcEffect mask naming argument {d}, but it takes {d} arguments",
                 .{ @tagName(assign.op), position, GuardedList.borrowLen(arg_locals) },
@@ -6439,13 +6609,13 @@ const Certifier = struct {
             if (index >= 64) break;
             if (!self.isRc(arg)) continue;
             const bit = @as(u64, 1) << @as(u6, @intCast(index));
-            if ((assign.rc_effect.consume_args & bit) == 0) continue;
+            if ((self.store.stmtRow(assign.rc_effect).consume_args & bit) == 0) continue;
             try self.consumeUnit(state, arg_values_buffer[index], arg);
         }
 
         var target_value: ValueId = no_value;
         if (self.isRc(assign.target)) {
-            if (assign.rc_effect.retain_result) {
+            if (self.store.stmtRow(assign.rc_effect).retain_result) {
                 // The result reads payload data out of the op's refcounted
                 // arguments; it borrows until the trailing incref lands.
                 var lenders_buffer: [64]ValueId = undefined;
@@ -6477,7 +6647,7 @@ const Certifier = struct {
             if (index >= 64) break;
             if (!self.isRc(arg)) continue;
             const bit = @as(u64, 1) << @as(u6, @intCast(index));
-            if ((assign.rc_effect.retain_args & bit) == 0) continue;
+            if ((self.store.stmtRow(assign.rc_effect).retain_args & bit) == 0) continue;
             try self.consumeIntoHolder(state, arg_values_buffer[index], target_value);
         }
     }
@@ -6605,14 +6775,14 @@ test "certify list metadata survives release but payload and retain do not" {
             var read = try f.store.addCFStmt(.{ .assign_low_level = .{
                 .target = result,
                 .op = op,
-                .rc_effect = op.rcEffect(),
+                .rc_effect = try f.store.addRcEffect(op.rcEffect()),
                 .args = try f.store.addLocalSpan(if (use == .payload) &.{ alias, index } else &.{alias}),
                 .next = ret,
             } }, .test_fixture);
             if (use == .retain) read = try f.increfStmt(alias, list_layout, read);
             const copy = try f.store.addCFStmt(.{ .assign_ref = .{
                 .target = alias,
-                .op = .{ .local = list },
+                .op = .local(list),
                 .next = read,
             } }, .test_fixture);
             const continuation = if (cross_join) blk: {
@@ -6651,7 +6821,7 @@ test "certify list metadata from a container requires extraction before release"
         const read_length = try f.store.addCFStmt(.{ .assign_low_level = .{
             .target = length,
             .op = .list_len,
-            .rc_effect = LIR.LowLevel.list_len.rcEffect(),
+            .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_len.rcEffect()),
             .args = try f.store.addLocalSpan(&.{inner}),
             .next = ret,
         } }, .test_fixture);
@@ -6659,7 +6829,7 @@ test "certify list metadata from a container requires extraction before release"
         const extract = try f.store.addCFStmt(.{ .assign_low_level = .{
             .target = inner,
             .op = .list_get_unsafe,
-            .rc_effect = LIR.LowLevel.list_get_unsafe.rcEffect(),
+            .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_get_unsafe.rcEffect()),
             .args = try f.store.addLocalSpan(&.{ outer, index }),
             .next = after_extract,
         } }, .test_fixture);
@@ -6759,7 +6929,7 @@ const CertifyTest = struct {
     fn decrefStmt(self: *CertifyTest, value: LIR.LocalId, layout_idx: layout_mod.Idx, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .decref = .{
             .value = value,
-            .rc = rcHelper(.decref, layout_idx),
+            .rc = try self.store.addRcHelperRef(rcHelper(.decref, layout_idx)),
             .next = next,
         } }, .test_fixture);
     }
@@ -6768,7 +6938,9 @@ const CertifyTest = struct {
         return try self.store.addCFStmt(.{ .decref_if_initialized = .{
             .cond = cond,
             .value = value,
-            .rc = rcHelper(.decref, layout_idx),
+            .data = try self.store.addStmtRow(LIR.DecrefIfInitializedData, .{
+                .rc = rcHelper(.decref, layout_idx),
+            }),
             .next = next,
         } }, .test_fixture);
     }
@@ -6776,7 +6948,7 @@ const CertifyTest = struct {
     fn increfStmt(self: *CertifyTest, value: LIR.LocalId, layout_idx: layout_mod.Idx, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .incref = .{
             .value = value,
-            .rc = rcHelper(.incref, layout_idx),
+            .rc = try self.store.addRcHelperRef(rcHelper(.incref, layout_idx)),
             .next = next,
         } }, .test_fixture);
     }
@@ -7030,9 +7202,11 @@ test "certify rejects an erased call site whose argument plan differs" {
     const wrong_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{ .u8, .u8 });
     const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
-        .closure = closure,
-        .args = args,
-        .arg_plan = wrong_plan,
+        .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = args,
+            .arg_plan = wrong_plan,
+        }),
         .next = ret,
     } }, .test_fixture);
     _ = try f.addProc(&.{ closure, first, second }, body, .i64);
@@ -7061,15 +7235,17 @@ test "unique-argument certification isolates shared locals between procedures" {
         const checked = try f.store.addCFStmt(.{ .assign_low_level = .{
             .target = result,
             .op = .str_concat,
-            .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+            .rc_effect = try f.store.addRcEffect(LIR.LowLevel.str_concat.rcEffect()),
             .args = checked_args,
-            .unique_args = 1,
+            .extra = try f.store.addOptionalStmtRow(LIR.LowLevelExtra, .{
+                .unique_args = 1,
+            }),
             .next = ret,
         } }, .test_fixture);
         const birth = try f.store.addCFStmt(.{ .assign_low_level = .{
             .target = fresh,
             .op = .str_concat,
-            .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+            .rc_effect = try f.store.addRcEffect(LIR.LowLevel.str_concat.rcEffect()),
             .args = args,
             .next = checked,
         } }, .test_fixture);
@@ -7101,22 +7277,24 @@ test "unique-argument certification rejects a multiply-defined local with a fore
     const checked = try f.store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
         .op = .str_concat,
-        .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.str_concat.rcEffect()),
         .args = checked_args,
-        .unique_args = 1,
+        .extra = try f.store.addOptionalStmtRow(LIR.LowLevelExtra, .{
+            .unique_args = 1,
+        }),
         .next = ret,
     } }, .test_fixture);
     const first_birth = try f.store.addCFStmt(.{ .assign_low_level = .{
         .target = fresh,
         .op = .str_concat,
-        .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.str_concat.rcEffect()),
         .args = args,
         .next = checked,
     } }, .test_fixture);
     // The other arm binds the parameter's value, which is no birth at all.
     const second_def = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = fresh,
-        .op = .{ .local = left },
+        .op = .local(left),
         .next = checked,
     } }, .test_fixture);
     const body = try f.store.addCFStmt(.{ .switch_stmt = .{
@@ -7155,11 +7333,13 @@ test "certify rejects inconsistent erased call reuse fields" {
         const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
         const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
             .target = result,
-            .closure = closure,
-            .args = LIR.LocalSpan.empty(),
-            .arg_plan = arg_plan,
-            .reuse_closure = true,
-            .reuse_source = null,
+            .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+                .closure = closure,
+                .args = LIR.LocalSpan.empty(),
+                .arg_plan = arg_plan,
+                .reuse_closure = true,
+                .reuse_source = null,
+            }),
             .next = ret,
         } }, .test_fixture);
         _ = try f.addProc(&.{closure}, body, erased_callable);
@@ -7177,11 +7357,13 @@ test "certify rejects inconsistent erased call reuse fields" {
         const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
         const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
             .target = result,
-            .closure = closure,
-            .args = LIR.LocalSpan.empty(),
-            .arg_plan = arg_plan,
-            .reuse_closure = false,
-            .reuse_source = closure,
+            .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+                .closure = closure,
+                .args = LIR.LocalSpan.empty(),
+                .arg_plan = arg_plan,
+                .reuse_closure = false,
+                .reuse_source = closure,
+            }),
             .next = ret,
         } }, .test_fixture);
         _ = try f.addProc(&.{closure}, body, erased_callable);
@@ -7201,16 +7383,18 @@ test "certify accepts erased call reuse from a transparent outer owner" {
     const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
     const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
-        .closure = closure,
-        .args = LIR.LocalSpan.empty(),
-        .arg_plan = arg_plan,
-        .reuse_closure = true,
-        .reuse_source = owner,
+        .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
+            .reuse_closure = true,
+            .reuse_source = owner,
+        }),
         .next = ret,
     } }, .test_fixture);
     const body = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = closure,
-        .op = .{ .nominal = .{ .backing_ref = owner } },
+        .op = .nominal(owner),
         .next = call,
     } }, .test_fixture);
     _ = try f.addProc(&.{owner}, body, erased_callable);
@@ -7231,28 +7415,30 @@ test "erased owner resolution re-derives a reuse source that became an alias" {
     // `read` is now an alias of `owner`, so `owner` is the allocation.
     const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
-        .closure = closure,
-        .args = LIR.LocalSpan.empty(),
-        .arg_plan = arg_plan,
-        .reuse_closure = true,
-        .reuse_source = read,
+        .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
+            .reuse_closure = true,
+            .reuse_source = read,
+        }),
         .next = ret,
     } }, .test_fixture);
     const closure_assign = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = closure,
-        .op = .{ .local = read },
+        .op = .local(read),
         .next = call,
     } }, .test_fixture);
     const body = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = read,
-        .op = .{ .local = owner },
+        .op = .local(owner),
         .next = closure_assign,
     } }, .test_fixture);
     const proc_id = try f.addProc(&.{owner}, body, erased_callable);
     try testing.expectError(error.Certification, f.certify());
 
     try erased_owner.resolveProcReuseSources(f.allocator, &f.store, &f.layouts, proc_id);
-    try testing.expectEqual(owner, f.store.getCFStmtImmediate(call).assign_call_erased.reuse_source.?);
+    try testing.expectEqual(owner, f.store.stmtRow(f.store.getCFStmtImmediate(call).assign_call_erased.data).reuse_source.?);
     try f.certify();
 }
 
@@ -7267,11 +7453,13 @@ test "certify rejects erased call reuse from a different allocation" {
     const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
     const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
-        .closure = closure,
-        .args = LIR.LocalSpan.empty(),
-        .arg_plan = arg_plan,
-        .reuse_closure = true,
-        .reuse_source = unrelated,
+        .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
+            .reuse_closure = true,
+            .reuse_source = unrelated,
+        }),
         .next = ret,
     } }, .test_fixture);
     _ = try f.addProc(&.{ closure, unrelated }, body, erased_callable);
@@ -7379,7 +7567,7 @@ test "certify accepts an aliased value released through either name" {
     const result_assign = try f.assignI64(result, release);
     const alias_stmt = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = original },
+        .op = .local(original),
         .next = result_assign,
     } }, .test_fixture);
     const body = try f.assignStr(original, alias_stmt);
@@ -7399,7 +7587,7 @@ test "certify flags releasing an aliased value through both names" {
     const result_assign = try f.assignI64(result, first);
     const alias_stmt = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = original },
+        .op = .local(original),
         .next = result_assign,
     } }, .test_fixture);
     const body = try f.assignStr(original, alias_stmt);
@@ -7428,7 +7616,7 @@ test "certify accepts a payload borrow used while the owner is live" {
     } }, .test_fixture);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = pair, .field_idx = 0 } },
+        .op = .field(pair, 0),
         .next = use_field,
     } }, .test_fixture);
     const release_b = try f.decrefStmt(b, .str, field_read);
@@ -7459,23 +7647,23 @@ test "certify accepts a retained Boxy field borrowed from implicit capture stora
     const result = try f.local(.i64);
     const desc_local = try f.local(.opaque_ptr);
     const desc = LIR.BoxyDescRef{ .local = desc_local };
-    f.store.setLocalBoxyDesc(field, desc);
+    try f.store.setLocalBoxyDesc(field, desc);
 
     const ret = try f.ret(result);
     const result_assign = try f.assignI64(result, ret);
     const release = try f.store.addCFStmt(.{ .decref = .{
         .value = field,
-        .rc = .{ .boxy = desc },
+        .rc = try f.store.addRcHelperRef(.{ .boxy = desc }),
         .next = result_assign,
     } }, .test_fixture);
     const retain = try f.store.addCFStmt(.{ .incref = .{
         .value = field,
-        .rc = .{ .boxy = desc },
+        .rc = try f.store.addRcHelperRef(.{ .boxy = desc }),
         .next = release,
     } }, .test_fixture);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = capture, .field_idx = 0 } },
+        .op = .field(capture, 0),
         .next = retain,
     } }, .test_fixture);
     _ = try f.addProc(&.{ capture, desc_local }, field_read, .i64);
@@ -7507,7 +7695,7 @@ test "certify flags a payload borrow used after the owner dies" {
     const release_pair = try f.decrefStmt(pair, f.pair_str, use_field);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = pair, .field_idx = 0 } },
+        .op = .field(pair, 0),
         .next = release_pair,
     } }, .test_fixture);
     const a = try f.local(.str);
@@ -7545,7 +7733,7 @@ test "certify flags an incref-restored payload borrow only when over-released" {
     const incref_field = try f.increfStmt(field, .str, release_pair);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = pair, .field_idx = 0 } },
+        .op = .field(pair, 0),
         .next = incref_field,
     } }, .test_fixture);
     const a = try f.local(.str);
@@ -7679,7 +7867,7 @@ test "certify preserves borrowed parameter lifetime through an owned alias join"
     const retain_alias = try f.increfStmt(alias, .str, join_stmt);
     const bind_alias = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = param },
+        .op = .local(param),
         .next = retain_alias,
     } }, .test_fixture);
     _ = try f.addProc(&.{param}, bind_alias, .i64);
@@ -7803,7 +7991,7 @@ test "decref_if_initialized tracks a guarded cell release across aliases" {
     const retain_alias = try f.increfStmt(alias, .str, first_guarded_release);
     const bind_alias = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = payload },
+        .op = .local(payload),
         .next = retain_alias,
     } }, .test_fixture);
     const result_assign = try f.assignI64(result, bind_alias);
@@ -7839,9 +8027,11 @@ fn conditionalJoinChainWork(field_count: usize) CertifyError!CertifierWorkStats 
     for (payloads[0..field_count], masks[0..field_count]) |payload, mask| {
         loop_body = try f.store.addCFStmt(.{ .decref_if_initialized = .{
             .cond = presence,
-            .cond_mask = mask,
             .value = payload,
-            .rc = CertifyTest.rcHelper(.decref, .str),
+            .data = try f.store.addStmtRow(LIR.DecrefIfInitializedData, .{
+                .cond_mask = mask,
+                .rc = CertifyTest.rcHelper(.decref, .str),
+            }),
             .next = loop_body,
         } }, .test_fixture);
     }
@@ -7863,9 +8053,11 @@ fn conditionalJoinChainWork(field_count: usize) CertifyError!CertifierWorkStats 
         const parse_value = try f.assignStr(parsed, initialize_payload);
         const clear_old_payload = try f.store.addCFStmt(.{ .decref_if_initialized = .{
             .cond = presence,
-            .cond_mask = masks[field_index],
             .value = payloads[field_index],
-            .rc = CertifyTest.rcHelper(.decref, .str),
+            .data = try f.store.addStmtRow(LIR.DecrefIfInitializedData, .{
+                .cond_mask = masks[field_index],
+                .rc = CertifyTest.rcHelper(.decref, .str),
+            }),
             .next = parse_value,
         } }, .test_fixture);
         const choose = try f.store.addCFStmt(.{ .switch_stmt = .{
@@ -7886,11 +8078,13 @@ fn conditionalJoinChainWork(field_count: usize) CertifyError!CertifierWorkStats 
     const outer_join = try f.store.addCFStmt(.{ .join = .{
         .id = loop_join,
         .params = try f.store.addLocalSpan(payloads[0..field_count]),
-        .maybe_uninitialized_params = try f.store.addLocalSpan(payloads[0..field_count]),
-        .maybe_uninitialized_conditions = try f.store.addLocalSpan(conditions[0..field_count]),
-        .maybe_uninitialized_condition_masks = try f.store.addU64Span(masks[0..field_count]),
         .body = loop_body,
         .remainder = field_flow,
+        .extra = try f.store.addOptionalStmtRow(LIR.JoinExtra, .{
+            .maybe_uninitialized_params = try f.store.addLocalSpan(payloads[0..field_count]),
+            .maybe_uninitialized_conditions = try f.store.addLocalSpan(conditions[0..field_count]),
+            .maybe_uninitialized_condition_masks = try f.store.addU64Span(masks[0..field_count]),
+        }),
     } }, .test_fixture);
     const body = try f.assignI64(presence, outer_join);
     _ = try f.addProc(&.{}, body, .i64);
@@ -7958,11 +8152,13 @@ test "certify compresses maybe-initialized join payload states" {
     const join_stmt = try f.store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try f.store.addLocalSpan(&.{payload}),
-        .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
-        .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{cond}),
-        .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
         .body = result_assign,
         .remainder = switch_stmt,
+        .extra = try f.store.addOptionalStmtRow(LIR.JoinExtra, .{
+            .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
+            .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{cond}),
+            .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
+        }),
     } }, .test_fixture);
     const cond_assign = try f.assignI64(cond, join_stmt);
     const body = try f.assignStr(payload, cond_assign);
@@ -8010,11 +8206,13 @@ test "certify promotes conditional payload on initialized switch edge" {
     const join_stmt = try f.store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try f.store.addLocalSpan(&.{payload}),
-        .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
-        .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{presence}),
-        .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
         .body = first_switch,
         .remainder = choose_presence,
+        .extra = try f.store.addOptionalStmtRow(LIR.JoinExtra, .{
+            .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
+            .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{presence}),
+            .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
+        }),
     } }, .test_fixture);
     const presence_assign = try f.assignI64(presence, join_stmt);
     const body = try f.assignStr(payload, presence_assign);
@@ -8066,11 +8264,13 @@ test "certify does not repeat conditional payload work after initialized edge" {
     const join_stmt = try f.store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try f.store.addLocalSpan(&.{payload}),
-        .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
-        .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{presence}),
-        .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
         .body = initialized_branch,
         .remainder = choose_presence,
+        .extra = try f.store.addOptionalStmtRow(LIR.JoinExtra, .{
+            .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
+            .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{presence}),
+            .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
+        }),
     } }, .test_fixture);
     const presence_assign = try f.assignI64(presence, join_stmt);
     const body = try f.assignStr(payload, presence_assign);
@@ -8114,11 +8314,13 @@ test "certify rejects a mismatched conditional payload guard before refinement" 
     const join_stmt = try f.store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try f.store.addLocalSpan(&.{payload}),
-        .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
-        .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{presence}),
-        .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
         .body = mismatched_switch,
         .remainder = choose_presence,
+        .extra = try f.store.addOptionalStmtRow(LIR.JoinExtra, .{
+            .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
+            .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{presence}),
+            .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
+        }),
     } }, .test_fixture);
     const unrelated_assign = try f.assignI64(unrelated, join_stmt);
     const presence_assign = try f.assignI64(presence, unrelated_assign);
@@ -8183,7 +8385,7 @@ fn certifyDistinctBorrowLenders(release_last_lender: bool) (CertifyError || erro
     body = try f.store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
         .op = .str_count_utf8_bytes,
-        .rc_effect = LIR.LowLevel.str_count_utf8_bytes.rcEffect(),
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.str_count_utf8_bytes.rcEffect()),
         .args = try f.store.addLocalSpan(&.{field}),
         .next = body,
     } }, .test_fixture);
@@ -8193,7 +8395,7 @@ fn certifyDistinctBorrowLenders(release_last_lender: bool) (CertifyError || erro
         const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
         const read = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = field,
-            .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+            .op = .field(owner, 0),
             .next = if (release_last_lender and index == owners.len - 1)
                 try f.decrefStmt(owner, f.pair_str, jump)
             else
@@ -8302,7 +8504,7 @@ test "certify preserves payload lender when retained holder crosses join" {
     const retain_field = try f.increfStmt(field, .str, assign_holder_other);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+        .op = .field(owner, 0),
         .next = retain_field,
     } }, .test_fixture);
     _ = try f.addProc(&.{owner}, field_read, .i64);
@@ -8333,7 +8535,7 @@ fn buildRecordDismantledTwice(f: *CertifyTest, retain: bool) Allocator.Error!voi
     const take_right = try takeFieldStmt(f, right_taken, right, 0, take_right_residual);
     const alias_right = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = right,
-        .op = .{ .local = record },
+        .op = .local(record),
         .next = take_right,
     } }, .test_fixture);
     const release_left_taken = try f.decrefStmt(left_taken, .str, alias_right);
@@ -8343,7 +8545,7 @@ fn buildRecordDismantledTwice(f: *CertifyTest, retain: bool) Allocator.Error!voi
     const retain_left = if (retain) try f.increfStmt(left, f.pair_str, take_left) else take_left;
     const alias_left = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = left,
-        .op = .{ .local = record },
+        .op = .local(record),
         .next = retain_left,
     } }, .test_fixture);
     const make_record = try f.store.addCFStmt(.{ .assign_struct = .{
@@ -8421,17 +8623,15 @@ fn buildPayloadViewDismantledBeforeJoin(f: *CertifyTest, retain: bool) Allocator
     const retain_copy = if (retain) try f.increfStmt(copy, f.pair_str, take) else take;
     const alias_copy = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = copy,
-        .op = .{ .local = view },
+        .op = .local(view),
         .next = retain_copy,
     } }, .test_fixture);
     const project = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = view,
-        .op = .{ .tag_payload_struct = .{
-            .source = tag_value,
-            .variant_index = 1,
-            .tag_discriminant = 1,
-        } },
-        .take_kind = .take,
+        .op = .tagPayloadStruct(tag_value, 1, 1),
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .take_kind = .take,
+        }),
         .next = alias_copy,
     } }, .test_fixture);
     const make_tag = try f.store.addCFStmt(.{ .assign_tag = .{
@@ -8466,6 +8666,78 @@ test "certify rejects dismantling a payload view in a join after its only unit w
     try testing.expect(std.mem.find(u8, f.diag.message(), "use of dead refcounted local") != null);
 }
 
+/// A payload taken from a tag borrows the tag's stored unit until it is
+/// consumed, and an incref gives it a unit of its own. An inner join whose
+/// region never names the payload enters with the payload in its frame, and
+/// the inner body jumps to an outer join whose body spends both units. The
+/// tag's stored unit is named only by the tag, which nothing reads again, so
+/// the frame must carry the tag along with the payload. Without
+/// `release_both` the outer body spends only one of the two units.
+fn buildTakenPayloadInInnerJoinFrame(f: *CertifyTest, release_both: bool) Allocator.Error!void {
+    const tag_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        .str,
+    });
+    const text = try f.local(.str);
+    const tag_value = try f.local(tag_layout);
+    const payload = try f.local(.str);
+    const result = try f.local(.i64);
+
+    const outer_id = f.freshJoinPointId();
+    const inner_id = f.freshJoinPointId();
+    const ret = try f.ret(result);
+    const assign_result = try f.assignI64(result, ret);
+    const release_stored = try f.decrefStmt(payload, .str, assign_result);
+    const outer_body = if (release_both) try f.decrefStmt(payload, .str, release_stored) else release_stored;
+    const jump_outer = try f.store.addCFStmt(.{ .jump = .{ .target = outer_id } }, .test_fixture);
+    const jump_inner = try f.store.addCFStmt(.{ .jump = .{ .target = inner_id } }, .test_fixture);
+    const inner_join = try f.store.addCFStmt(.{ .join = .{
+        .id = inner_id,
+        .params = try f.store.addLocalSpan(&.{}),
+        .body = jump_outer,
+        .remainder = jump_inner,
+    } }, .test_fixture);
+    const outer_join = try f.store.addCFStmt(.{ .join = .{
+        .id = outer_id,
+        .params = try f.store.addLocalSpan(&.{}),
+        .body = outer_body,
+        .remainder = inner_join,
+    } }, .test_fixture);
+    const retain_payload = try f.increfStmt(payload, .str, outer_join);
+    const take = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = payload,
+        .op = .tagPayloadStruct(tag_value, 1, 1),
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .take_kind = .take,
+        }),
+        .next = retain_payload,
+    } }, .test_fixture);
+    const make_tag = try f.store.addCFStmt(.{ .assign_tag = .{
+        .target = tag_value,
+        .variant_index = 1,
+        .discriminant = 1,
+        .payload = text,
+        .next = take,
+    } }, .test_fixture);
+    const body = try f.assignStr(text, make_tag);
+    _ = try f.addProc(&.{}, body, .i64);
+}
+
+test "certify carries a taken payload's stored unit through an inner join's frame" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildTakenPayloadInInnerJoinFrame(&f, true);
+    try f.certify();
+}
+
+test "certify flags a leaked unit of a taken payload carried through an inner join's frame" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildTakenPayloadInInnerJoinFrame(&f, false);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "leaked") != null);
+}
+
 test "certify preserves an owned payload's dormant lender across a join" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
@@ -8492,7 +8764,7 @@ test "certify preserves an owned payload's dormant lender across a join" {
     const retain_field = try f.increfStmt(field, .str, join_stmt);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+        .op = .field(owner, 0),
         .next = retain_field,
     } }, .test_fixture);
     _ = try f.addProc(&.{owner}, field_read, .i64);
@@ -8534,7 +8806,7 @@ test "certify preserves a holder alternative to a payload lender across a join" 
     const retain_field = try f.increfStmt(field, .str, assign_holder_other);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+        .op = .field(owner, 0),
         .next = retain_field,
     } }, .test_fixture);
     _ = try f.addProc(&.{owner}, field_read, .i64);
@@ -8601,7 +8873,7 @@ test "certify drops a dead dormant lender from an owned join value" {
     const retain_field = try f.increfStmt(field, .str, release_owner);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+        .op = .field(owner, 0),
         .next = retain_field,
     } }, .test_fixture);
     _ = try f.addProc(&.{owner}, field_read, .i64);
@@ -8643,7 +8915,7 @@ test "certify rejects a join value after every dormant lifetime alternative dies
     const retain_field = try f.increfStmt(field, .str, assign_holder_other);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+        .op = .field(owner, 0),
         .next = retain_field,
     } }, .test_fixture);
     _ = try f.addProc(&.{owner}, field_read, .i64);
@@ -8684,13 +8956,13 @@ test "certify preserves deep ABI lender when join body releases retained interme
     } }, .test_fixture);
     const read_inner_field = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = inner_field,
-        .op = .{ .field = .{ .source = retained_intermediate, .field_idx = 0 } },
+        .op = .field(retained_intermediate, 0),
         .next = join_stmt,
     } }, .test_fixture);
     const retain_intermediate = try f.increfStmt(retained_intermediate, f.pair_str, read_inner_field);
     const read_intermediate = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = retained_intermediate,
-        .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+        .op = .field(owner, 0),
         .next = retain_intermediate,
     } }, .test_fixture);
     _ = try f.addProc(&.{owner}, read_intermediate, .i64);
@@ -8746,7 +9018,7 @@ fn buildAliasLoop(f: *CertifyTest, comptime k: usize, injection: AliasLoopInject
         const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
         const rebind = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = locals[i + 1],
-            .op = .{ .local = locals[i] },
+            .op = .local(locals[i]),
             .next = jump,
         } }, .test_fixture);
         const release_old = if (injection == .leak_on_rebind and i == 0)
@@ -8850,7 +9122,7 @@ test "certify joins entries whose partitions differ but balances agree" {
     const jump_aliased = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const rebind = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = y,
-        .op = .{ .local = x },
+        .op = .local(x),
         .next = jump_aliased,
     } }, .test_fixture);
     const release_old_y = try f.decrefStmt(y, .str, rebind);
@@ -8906,7 +9178,7 @@ test "certify flags unbounded per-iteration balance accumulation" {
 fn fieldReadStmt(f: *CertifyTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
     return try f.store.addCFStmt(.{ .assign_ref = .{
         .target = target,
-        .op = .{ .field = .{ .source = source, .field_idx = field_idx } },
+        .op = .field(source, field_idx),
         .next = next,
     } }, .test_fixture);
 }
@@ -8914,8 +9186,10 @@ fn fieldReadStmt(f: *CertifyTest, target: LIR.LocalId, source: LIR.LocalId, fiel
 fn takeFieldStmt(f: *CertifyTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
     return try f.store.addCFStmt(.{ .assign_ref = .{
         .target = target,
-        .op = .{ .field = .{ .source = source, .field_idx = field_idx } },
-        .take_kind = .take,
+        .op = .field(source, field_idx),
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .take_kind = .take,
+        }),
         .next = next,
     } }, .test_fixture);
 }
@@ -8924,16 +9198,12 @@ fn tagPayloadStructReadStmt(
     f: *CertifyTest,
     target: LIR.LocalId,
     source: LIR.LocalId,
-    variant_index: u32,
+    variant_index: layout_mod.VariantIndex,
     next: LIR.CFStmtId,
 ) Allocator.Error!LIR.CFStmtId {
     return try f.store.addCFStmt(.{ .assign_ref = .{
         .target = target,
-        .op = .{ .tag_payload_struct = .{
-            .source = source,
-            .variant_index = variant_index,
-            .tag_discriminant = variant_index,
-        } },
+        .op = .tagPayloadStruct(source, variant_index, variant_index),
         .next = next,
     } }, .test_fixture);
 }
@@ -8954,8 +9224,10 @@ test "certify carries a released struct representation across a join for scalar 
     const read_scalar = try fieldReadStmt(&f, scalar, alias, 1, ret);
     const alias_shell = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = record },
-        .residual_shell_absent_fields = try f.store.addU32Span(&.{0}),
+        .op = .local(record),
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .residual_shell_absent_fields = try f.store.addU32Span(&.{0}),
+        }),
         .next = read_scalar,
     } }, .test_fixture);
     const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
@@ -8981,12 +9253,12 @@ test "certify carries a released union tag across a join and alias" {
     const ret = try f.ret(disc);
     const read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
-        .op = .{ .discriminant = .{ .source = alias } },
+        .op = .discriminant(alias),
         .next = ret,
     } }, .test_fixture);
     const copy = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = tag },
+        .op = .local(tag),
         .next = read,
     } }, .test_fixture);
     const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
@@ -9014,7 +9286,7 @@ test "certify rejects a payload view through a released union representation" {
     const read_payload = try tagPayloadStructReadStmt(&f, view, tag, 1, result_assign);
     const read_tag = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
-        .op = .{ .discriminant = .{ .source = tag } },
+        .op = .discriminant(tag),
         .next = read_payload,
     } }, .test_fixture);
     const release = try f.decrefStmt(tag, tag_layout, read_tag);
@@ -9039,7 +9311,7 @@ test "certify rejects a released struct alias without exact residual-shell field
     const read_scalar = try fieldReadStmt(&f, scalar, alias, 1, ret);
     const malformed_alias = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = record },
+        .op = .local(record),
         .next = read_scalar,
     } }, .test_fixture);
     const release = try f.decrefStmt(record, record_layout, malformed_alias);
@@ -9066,8 +9338,10 @@ test "certify accepts shell fields transferred before their lazy claims settle" 
     const read_scalar = try fieldReadStmt(&f, scalar, alias, 1, release_field);
     const alias_shell = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = record },
-        .residual_shell_absent_fields = try f.store.addU32Span(&.{0}),
+        .op = .local(record),
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .residual_shell_absent_fields = try f.store.addU32Span(&.{0}),
+        }),
         .next = read_scalar,
     } }, .test_fixture);
     const body = try fieldReadStmt(&f, field, record, 0, alias_shell);
@@ -9127,7 +9401,7 @@ test "certify rejects an RC field read after a take through its payload projecti
     const read_second = try fieldReadStmt(&f, second, second_alias, 0, retain_second);
     const alias_second = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = second_alias,
-        .op = .{ .local = projection },
+        .op = .local(projection),
         .next = read_second,
     } }, .test_fixture);
     const release_holder = try f.decrefStmt(holder, record_layout, alias_second);
@@ -9139,7 +9413,7 @@ test "certify rejects an RC field read after a take through its payload projecti
     const read_first = try fieldReadStmt(&f, first, first_alias, 0, make_holder);
     const alias_first = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = first_alias,
-        .op = .{ .local = projection },
+        .op = .local(projection),
         .next = read_first,
     } }, .test_fixture);
     const project = try tagPayloadStructReadStmt(&f, projection, tag_value, 1, alias_first);
@@ -9190,7 +9464,7 @@ test "certify accepts a retained payload field read twice through aliases of its
     const read_second = try fieldReadStmt(&f, second, second_alias, 0, retain_second);
     const alias_second = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = second_alias,
-        .op = .{ .local = projection },
+        .op = .local(projection),
         .next = read_second,
     } }, .test_fixture);
     const release_holder = try f.decrefStmt(holder, record_layout, alias_second);
@@ -9203,7 +9477,7 @@ test "certify accepts a retained payload field read twice through aliases of its
     const read_first = try fieldReadStmt(&f, first, first_alias, 0, retain_first);
     const alias_first = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = first_alias,
-        .op = .{ .local = projection },
+        .op = .local(projection),
         .next = read_first,
     } }, .test_fixture);
     const project = try tagPayloadStructReadStmt(&f, projection, tag_value, 1, alias_first);
@@ -9283,23 +9557,27 @@ test "certify accepts a retained record moved whole after a field take across a 
         } }, .test_fixture);
         const join_body = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = moved_alias,
-            .op = .{ .local = carried_alias },
+            .op = .local(carried_alias),
             .next = move_after_take,
         } }, .test_fixture);
         const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
         const release_before_jump = try f.decrefStmt(taken, .str, jump);
         const take_before_jump = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = taken,
-            .op = .{ .field = .{ .source = record, .field_idx = 0 } },
-            .take_kind = .take,
+            .op = .field(record, 0),
+            .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+                .take_kind = .take,
+            }),
             .next = release_before_jump,
         } }, .test_fixture);
 
         const release_after_move = try f.decrefStmt(taken, .str, ret);
         const take_after_move = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = taken,
-            .op = .{ .field = .{ .source = record, .field_idx = 0 } },
-            .take_kind = .take,
+            .op = .field(record, 0),
+            .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+                .take_kind = .take,
+            }),
             .next = release_after_move,
         } }, .test_fixture);
         const move_before_take = try f.store.addCFStmt(.{ .assign_struct = .{
@@ -9320,19 +9598,21 @@ test "certify accepts a retained record moved whole after a field take across a 
         } }, .test_fixture);
         const carry = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = carried_alias,
-            .op = .{ .local = retained_alias },
+            .op = .local(retained_alias),
             .next = join,
         } }, .test_fixture);
         const retain = try f.increfStmt(retained_alias, record_layout, carry);
         const alias = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = retained_alias,
-            .op = .{ .local = record },
+            .op = .local(record),
             .next = retain,
         } }, .test_fixture);
         const body = if (projected) try f.store.addCFStmt(.{ .assign_ref = .{
             .target = record,
-            .op = .{ .field = .{ .source = parent, .field_idx = 0 } },
-            .take_kind = .take,
+            .op = .field(parent, 0),
+            .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+                .take_kind = .take,
+            }),
             .next = alias,
         } }, .test_fixture) else alias;
         _ = try f.addProc(&.{ if (projected) parent else record, cond }, body, holder_layout);
@@ -9397,8 +9677,10 @@ test "certify whole consumption of dismantled projections requires an available 
                 }
                 var body = try f.store.addCFStmt(.{ .assign_ref = .{
                     .target = taken,
-                    .op = .{ .field = .{ .source = record, .field_idx = 0 } },
-                    .take_kind = .take,
+                    .op = .field(record, 0),
+                    .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+                        .take_kind = .take,
+                    }),
                     .next = try f.decrefStmt(taken, .str, consume),
                 } }, .test_fixture);
                 // Releasing the parent after the retain leaves only the unit
@@ -9408,8 +9690,10 @@ test "certify whole consumption of dismantled projections requires an available 
                 for (0..depth) |index| {
                     body = try f.store.addCFStmt(.{ .assign_ref = .{
                         .target = locals[index],
-                        .op = .{ .field = .{ .source = locals[index + 1], .field_idx = 0 } },
-                        .take_kind = .take,
+                        .op = .field(locals[index + 1], 0),
+                        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+                            .take_kind = .take,
+                        }),
                         .next = body,
                     } }, .test_fixture);
                 }
@@ -9447,7 +9731,7 @@ test "certifier restitution restores a claimed surplus parent unit exactly once"
     const parent_value = try certifier.bindFresh(&state, parent, 1, &.{});
     const record_value = try certifier.bindFresh(&state, record, 1, &.{parent_value});
     certifier.values.items[record_value].payload_source = parent_value;
-    certifier.values.items[record_value].payload_projection = arc_dismantle.encodeProjection(.{ .field = .{ .source = parent, .field_idx = 0 } }).?;
+    certifier.values.items[record_value].payload_projection = arc_dismantle.encodeProjection(LIR.RefOp.field(parent, 0)).?;
     try state.setClaims(record_value, .{ .low = 1 });
     const result_value = try certifier.bindFresh(&state, result, 0, &.{});
     var mutations = std.ArrayList(OwnershipMutation).empty;
@@ -9525,9 +9809,9 @@ test "certify complete projections spend exactly the retained units" {
             } }, .test_fixture);
             for ([_]LIR.LocalId{ second, first }) |target| {
                 const op: LIR.RefOp = if (tagged)
-                    .{ .tag_payload = .{ .source = container, .payload_idx = 0, .variant_index = 1, .tag_discriminant = 1 } }
+                    LIR.RefOp.tagPayload(container, 0, 1, 1)
                 else
-                    .{ .field = .{ .source = container, .field_idx = 0 } };
+                    LIR.RefOp.field(container, 0);
                 body = try f.store.addCFStmt(.{ .assign_ref = .{ .target = target, .op = op, .next = body } }, .test_fixture);
             }
             for (0..retains) |_| body = try f.increfStmt(container, container_layout, body);
@@ -9698,8 +9982,10 @@ test "certify validates wide residual shell identities across a join" {
         const read_scalar = try fieldReadStmt(&f, scalar, alias, 0, try f.ret(scalar));
         const alias_shell = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = alias,
-            .op = .{ .local = record },
-            .residual_shell_absent_fields = try f.store.addU32Span(absent),
+            .op = .local(record),
+            .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+                .residual_shell_absent_fields = try f.store.addU32Span(absent),
+            }),
             .next = read_scalar,
         } }, .test_fixture);
         const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
@@ -9777,8 +10063,10 @@ fn buildNestedViewTakes(f: *CertifyTest, second_view_shell: []const u32, release
     const take_a = if (release_a) try takeFieldStmt(f, a, second_view, 0, after_a) else after_a;
     const read_second_view = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = second_view,
-        .op = .{ .field = .{ .source = outer, .field_idx = 0 } },
-        .residual_shell_absent_fields = try f.store.addU32Span(second_view_shell),
+        .op = .field(outer, 0),
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .residual_shell_absent_fields = try f.store.addU32Span(second_view_shell),
+        }),
         .next = take_a,
     } }, .test_fixture);
     const release_b = try f.decrefStmt(b, .str, read_second_view);
@@ -9808,6 +10096,55 @@ test "certify flags a nested field a view dismantle leaves unspent" {
     try buildNestedViewTakes(&f, &.{1}, false);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "unspent") != null);
+}
+
+/// `outer = { 0: { 0: I64, 1: Str }, 1: Str }` as a parameter, both of whose
+/// stored units are taken and released, then field 0 read again as a view
+/// (marked with `view_shell`) and the scalar inside it read through that view.
+fn buildScalarReadThroughSpentView(f: *CertifyTest, view_shell: []const u32) Allocator.Error!void {
+    const inner_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = .i64 },
+        .{ .index = 1, .layout = .str },
+    });
+    const outer_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = inner_layout },
+        .{ .index = 1, .layout = .str },
+    });
+    const outer = try f.local(outer_layout);
+    const inner = try f.local(inner_layout);
+    const other = try f.local(.str);
+    const view = try f.local(inner_layout);
+    const scalar = try f.local(.i64);
+    const ret = try f.ret(scalar);
+    const read_scalar = try fieldReadStmt(f, scalar, view, 0, ret);
+    const read_view = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = view,
+        .op = .field(outer, 0),
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .residual_shell_absent_fields = try f.store.addU32Span(view_shell),
+        }),
+        .next = read_scalar,
+    } }, .test_fixture);
+    const release_other = try f.decrefStmt(other, .str, read_view);
+    const take_other = try takeFieldStmt(f, other, outer, 1, release_other);
+    const release_inner = try f.decrefStmt(inner, inner_layout, take_other);
+    const body = try takeFieldStmt(f, inner, outer, 0, release_inner);
+    _ = try f.addProc(&.{outer}, body, .i64);
+}
+
+test "certify accepts a scalar read through a view of a dismantled record whose shell names every slot" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildScalarReadThroughSpentView(&f, &.{1});
+    try f.certify();
+}
+
+test "certify flags a view of a dismantled record that leaves its taken slot unnamed" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildScalarReadThroughSpentView(&f, &.{});
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "use of dead refcounted local") != null);
 }
 
 test "certify flags a double take of one field" {
@@ -9938,12 +10275,7 @@ test "certify rejects moving only part of an active tag payload" {
     const release_partial = try f.decrefStmt(partial, .str, result_assign);
     const body = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = partial,
-        .op = .{ .tag_payload = .{
-            .source = tag,
-            .payload_idx = 0,
-            .variant_index = 1,
-            .tag_discriminant = 1,
-        } },
+        .op = .tagPayload(tag, 0, 1, 1),
         .next = release_partial,
     } }, .test_fixture);
     _ = try f.addProc(&.{tag}, body, .i64);
@@ -9994,7 +10326,7 @@ test "certify rejects consuming Box.unbox after the ARC boundary" {
     const body = try f.store.addCFStmt(.{ .assign_low_level = .{
         .target = payload,
         .op = .box_unbox,
-        .rc_effect = LIR.LowLevel.box_unbox.rcEffect(),
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.box_unbox.rcEffect()),
         .args = try f.store.addLocalSpan(&.{boxed}),
         .next = ret,
     } }, .test_fixture);
@@ -10055,7 +10387,7 @@ fn buildFrameNest(f: *CertifyTest, shape: FrameNestShape) Allocator.Error!void {
     if (shape == .inner_alias_release) {
         outer_default = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = alias,
-            .op = .{ .local = outer_value },
+            .op = .local(outer_value),
             .next = outer_default,
         } }, .test_fixture);
     }
@@ -10098,4 +10430,186 @@ test "certify rejects an inner loop returning while an outer value is still owne
     try buildFrameNest(&f, .inner_terminal_leak);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "leaked") != null);
+}
+
+/// One sibling of a nested record is carried while a loop rebuilds the other.
+/// The loop's inner join never names that sibling, so its frame must preserve
+/// the intermediate projection needed to claim the sibling on the next exit.
+fn buildNestedSiblingAcrossInnerJoin(f: *CertifyTest, overconsume: bool) Allocator.Error!void {
+    const chosen_layout = try f.layouts.insertList(.str);
+    const sibling_layout = try f.layouts.insertList(f.pair_str);
+    const pair = try f.layouts.putStructFields(&.{ .{ .index = 0, .layout = chosen_layout }, .{ .index = 1, .layout = sibling_layout } });
+    const root_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = pair },
+        .{ .index = 1, .layout = .str },
+    });
+    const root = try f.local(root_layout);
+    const cond = try f.local(.i64);
+    const inner = try f.local(pair);
+    const inner_again = try f.local(pair);
+    const sibling = try f.local(sibling_layout);
+    const chosen = try f.local(chosen_layout);
+    const outer_piece = try f.local(.str);
+    const loop_param = try f.local(chosen_layout);
+    const result_pair = try f.local(pair);
+    const result_root = try f.local(root_layout);
+    const outer_param = try f.local(pair);
+    const sibling_field = try f.local(sibling_layout);
+    const acc = try f.local(chosen_layout);
+    const next_acc = try f.local(chosen_layout);
+    const outer = f.freshJoinPointId();
+    const loop = f.freshJoinPointId();
+    const done = try f.store.addCFStmt(.{ .assign_struct = .{ .target = result_root, .fields = try f.store.addLocalSpan(&.{ outer_param, outer_piece }), .next = try f.ret(result_root) } }, .test_fixture);
+    var exit = try f.store.addCFStmt(.{ .jump = .{ .target = outer } }, .test_fixture);
+    exit = try f.store.addCFStmt(.{ .set_local = .{ .target = outer_param, .value = result_pair, .mode = .initialize_join_param, .next = exit } }, .test_fixture);
+    exit = try f.store.addCFStmt(.{ .assign_struct = .{ .target = result_pair, .fields = try f.store.addLocalSpan(&.{ acc, sibling }), .next = exit } }, .test_fixture);
+
+    if (overconsume) exit = try f.decrefStmt(sibling, sibling_layout, exit);
+    exit = try f.decrefStmt(loop_param, chosen_layout, exit);
+    var back = try f.store.addCFStmt(.{ .jump = .{ .target = loop } }, .test_fixture);
+    back = try f.store.addCFStmt(.{ .set_local = .{ .target = acc, .value = next_acc, .mode = .initialize_join_param, .next = back } }, .test_fixture);
+    back = try f.store.addCFStmt(.{ .assign_list = .{ .target = next_acc, .elems = .empty(), .next = back } }, .test_fixture);
+    back = try f.decrefStmt(acc, chosen_layout, back);
+    const nested = f.freshJoinPointId();
+    back = try f.store.addCFStmt(.{ .join = .{ .id = nested, .params = .empty(), .body = back, .remainder = try f.store.addCFStmt(.{ .jump = .{ .target = nested } }, .test_fixture) } }, .test_fixture);
+    exit = try f.store.addCFStmt(.{ .switch_stmt = .{ .cond = cond, .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = exit }}), .default_branch = back } }, .test_fixture);
+    var enter = try f.store.addCFStmt(.{ .jump = .{ .target = loop } }, .test_fixture);
+    enter = try f.store.addCFStmt(.{ .assign_list = .{ .target = acc, .elems = .empty(), .next = enter } }, .test_fixture);
+    enter = try f.store.addCFStmt(.{ .set_local = .{ .target = loop_param, .value = chosen, .mode = .initialize_join_param, .next = enter } }, .test_fixture);
+    enter = try f.store.addCFStmt(.{ .assign_ref = .{ .target = chosen, .op = .field(inner_again, 0), .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{ .take_kind = .take }), .next = enter } }, .test_fixture);
+    enter = try f.store.addCFStmt(.{ .assign_ref = .{ .target = inner_again, .op = .field(root, 0), .next = enter } }, .test_fixture);
+    var remainder = try f.store.addCFStmt(.{ .join = .{ .id = loop, .params = try f.store.addLocalSpan(&.{ loop_param, acc }), .body = exit, .remainder = enter } }, .test_fixture);
+    remainder = try f.store.addCFStmt(.{ .assign_ref = .{ .target = sibling, .op = .local(sibling_field), .next = remainder } }, .test_fixture);
+    remainder = try f.store.addCFStmt(.{ .assign_ref = .{ .target = sibling_field, .op = .field(inner, 1), .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{ .take_kind = .take }), .next = remainder } }, .test_fixture);
+    remainder = try f.store.addCFStmt(.{ .assign_ref = .{ .target = inner, .op = .field(root, 0), .next = remainder } }, .test_fixture);
+    var body = try f.store.addCFStmt(.{ .join = .{ .id = outer, .params = try f.store.addLocalSpan(&.{outer_param}), .body = done, .remainder = remainder } }, .test_fixture);
+    body = try takeFieldStmt(f, outer_piece, root, 1, body);
+    _ = try f.addProc(&.{ root, cond }, body, root_layout);
+}
+
+test "issue 12505 taken nested sibling survives inner join" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildNestedSiblingAcrossInnerJoin(&f, false);
+    try f.certify();
+}
+
+test "issue 12505 nested sibling cannot be consumed twice across inner join" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildNestedSiblingAcrossInnerJoin(&f, true);
+    try testing.expectError(error.Certification, f.certify());
+}
+
+test "issue 12505 taken tag record list crosses nested result joins" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const list_layout = try f.layouts.insertList(.str);
+    const payload_layout = try f.layouts.putStructFields(&.{ .{ .index = 0, .layout = .i64 }, .{ .index = 1, .layout = .i64 }, .{ .index = 2, .layout = list_layout } });
+    const tag_layout = try f.layouts.putTagUnion(&.{ payload_layout, try f.layouts.ensureZstLayout() });
+    const tag = try f.local(tag_layout);
+    const payload = try f.local(payload_layout);
+    const selected = try f.local(list_layout);
+    const result = try f.local(.i64);
+    const outer = f.freshJoinPointId();
+    const inner = f.freshJoinPointId();
+    const done = try f.decrefStmt(selected, list_layout, try f.assignI64(result, try f.ret(result)));
+    const jump_outer = try f.store.addCFStmt(.{ .jump = .{ .target = outer } }, .test_fixture);
+    var enter = try f.store.addCFStmt(.{ .jump = .{ .target = inner } }, .test_fixture);
+    enter = try takeFieldStmt(&f, selected, payload, 2, enter);
+    enter = try f.store.addCFStmt(.{ .assign_ref = .{ .target = payload, .op = .tagPayloadStruct(tag, 0, 0), .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{ .take_kind = .take }), .next = enter } }, .test_fixture);
+    const inner_join = try f.store.addCFStmt(.{ .join = .{ .id = inner, .params = try f.store.addLocalSpan(&.{selected}), .body = jump_outer, .remainder = enter } }, .test_fixture);
+    const middle = f.freshJoinPointId();
+    const middle_join = try f.store.addCFStmt(.{ .join = .{ .id = middle, .params = .empty(), .body = inner_join, .remainder = try f.store.addCFStmt(.{ .jump = .{ .target = middle } }, .test_fixture) } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .join = .{ .id = outer, .params = try f.store.addLocalSpan(&.{selected}), .body = done, .remainder = middle_join } }, .test_fixture);
+    _ = try f.addProc(&.{tag}, body, .i64);
+    try f.certify();
+}
+
+/// The selected field escapes a region that owns its intermediate projection,
+/// while the outer record remains live to supply the other fields.
+fn buildEscapingProjectionWithLiveRoot(f: *CertifyTest, overconsume: bool) Allocator.Error!void {
+    const root_layout = try f.layouts.putStructFields(&.{ .{ .index = 0, .layout = f.pair_str }, .{ .index = 1, .layout = .str } });
+    const root = try f.local(root_layout);
+    const inner_view = try f.local(f.pair_str);
+    const selected = try f.local(.str);
+    const remaining_view = try f.local(f.pair_str);
+    const sibling = try f.local(.str);
+    const outer_field = try f.local(.str);
+    const result = try f.local(.i64);
+    const outer = f.freshJoinPointId();
+    const middle = f.freshJoinPointId();
+    const inner = f.freshJoinPointId();
+    var done = try f.assignI64(result, try f.ret(result));
+    done = try f.decrefStmt(outer_field, .str, done);
+    done = try f.decrefStmt(sibling, .str, done);
+    done = try f.decrefStmt(selected, .str, done);
+    if (overconsume) done = try f.decrefStmt(selected, .str, done);
+    done = try takeFieldStmt(f, outer_field, root, 1, done);
+    done = try takeFieldStmt(f, sibling, remaining_view, 1, done);
+    done = try f.store.addCFStmt(.{ .assign_ref = .{ .target = remaining_view, .op = .field(root, 0), .next = done } }, .test_fixture);
+    const jump_outer = try f.store.addCFStmt(.{ .jump = .{ .target = outer } }, .test_fixture);
+    var enter = try f.store.addCFStmt(.{ .jump = .{ .target = inner } }, .test_fixture);
+    enter = try takeFieldStmt(f, selected, inner_view, 0, enter);
+    enter = try f.store.addCFStmt(.{ .assign_ref = .{ .target = inner_view, .op = .field(root, 0), .next = enter } }, .test_fixture);
+    const inner_join = try f.store.addCFStmt(.{ .join = .{ .id = inner, .params = try f.store.addLocalSpan(&.{selected}), .body = jump_outer, .remainder = enter } }, .test_fixture);
+    const middle_join = try f.store.addCFStmt(.{ .join = .{ .id = middle, .params = .empty(), .body = inner_join, .remainder = try f.store.addCFStmt(.{ .jump = .{ .target = middle } }, .test_fixture) } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .join = .{ .id = outer, .params = try f.store.addLocalSpan(&.{selected}), .body = done, .remainder = middle_join } }, .test_fixture);
+    _ = try f.addProc(&.{root}, body, .i64);
+}
+
+test "issue 12505 escaping nested projection preserves its independently live root" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildEscapingProjectionWithLiveRoot(&f, false);
+    try f.certify();
+}
+
+test "issue 12505 escaping nested projection cannot spend its field twice" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildEscapingProjectionWithLiveRoot(&f, true);
+    try testing.expectError(error.Certification, f.certify());
+}
+
+/// A record taken from its parent is retained once and dismantled field by
+/// field, then dismantled again starting from a field the first claim set
+/// already spent. With `retain` the second dismantle spends the record's
+/// original unit, still held in the parent; without it that unit is the one
+/// the first dismantle already spent.
+fn buildRetainedRecordDismantledFromParentTwice(f: *CertifyTest, retain: bool) Allocator.Error!void {
+    const parent_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = f.pair_str }});
+    const parent = try f.local(parent_layout);
+    const record = try f.local(f.pair_str);
+    const first_a = try f.local(.str);
+    const first_b = try f.local(.str);
+    const second_a = try f.local(.str);
+    const second_b = try f.local(.str);
+    const result = try f.local(.i64);
+    var body = try f.assignI64(result, try f.ret(result));
+    body = try f.decrefStmt(second_a, .str, body);
+    body = try takeFieldStmt(f, second_a, record, 0, body);
+    body = try f.decrefStmt(second_b, .str, body);
+    body = try takeFieldStmt(f, second_b, record, 1, body);
+    body = try f.decrefStmt(first_b, .str, body);
+    body = try takeFieldStmt(f, first_b, record, 1, body);
+    body = try f.decrefStmt(first_a, .str, body);
+    body = try takeFieldStmt(f, first_a, record, 0, body);
+    if (retain) body = try f.increfStmt(record, f.pair_str, body);
+    body = try takeFieldStmt(f, record, parent, 0, body);
+    _ = try f.addProc(&.{parent}, body, .i64);
+}
+
+test "issue 12505 a retained record's second dismantle spends its unit held in the parent" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildRetainedRecordDismantledFromParentTwice(&f, true);
+    try f.certify();
+}
+
+test "issue 12505 a record taken from its parent cannot be dismantled twice from one unit" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildRetainedRecordDismantledFromParentTwice(&f, false);
+    try testing.expectError(error.Certification, f.certify());
 }

@@ -109,10 +109,10 @@ expect 5 ==
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "({}) -> U8")))
+		(patt (type "() -> U8")))
 	(type_decls
 		(nominal (type "Blub")
 			(ty-header (name "Blub"))))
 	(expressions
-		(expr (type "({}) -> U8"))))
+		(expr (type "() -> U8"))))
 ~~~

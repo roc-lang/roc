@@ -53,7 +53,7 @@ test "a match branch binder of a literal its patterns reject adds no method repo
         \\        Ok(y) => y.to_str()
         \\        Err(_) => ""
         \\    }
-    , &.{ "Unconditional Condition", "Missing Method" });
+    , &.{ "Unconditional Condition", "Type Mismatch" });
 }
 
 test "a destructured binder of a literal its pattern rejects adds no method report" {
@@ -62,7 +62,7 @@ test "a destructured binder of a literal its pattern rejects adds no method repo
         \\    (a, _b) = "abc"
         \\    a.to_str()
         \\}
-    , &.{"Missing Method"});
+    , &.{"Type Mismatch"});
 }
 
 test "a name bound from a local whose literal a later `?` rejects adds no method report" {
@@ -94,7 +94,7 @@ test "a name bound through a destructure of an alias of a rejected literal adds 
         \\    c = a
         \\    c.to_str()
         \\}
-    , &.{"Missing Method"});
+    , &.{"Type Mismatch"});
 }
 
 test "a loop binder of a literal whose default is rejected adds no method report" {
@@ -106,7 +106,7 @@ test "a loop binder of a literal whose default is rejected adds no method report
         \\    }
         \\    $acc
         \\}
-    , &.{"Type Not Determined"});
+    , &.{"Missing Method"});
 }
 
 test "two uses of a loop binder of a rejected literal that conflict with each other add no report" {
@@ -119,7 +119,7 @@ test "two uses of a loop binder of a rejected literal that conflict with each ot
         \\    }
         \\    {}
         \\}
-    , &.{"Type Not Determined"});
+    , &.{"Missing Method"});
 }
 
 test "list elements that relate a rejected loop binder to conflicting literals add no report" {
@@ -132,7 +132,7 @@ test "list elements that relate a rejected loop binder to conflicting literals a
         \\    }
         \\    {}
         \\}
-    , &.{"Type Not Determined"});
+    , &.{"Missing Method"});
 }
 
 test "conflicting annotations on aliases of a rejected loop binder add no report" {
@@ -148,7 +148,7 @@ test "conflicting annotations on aliases of a rejected loop binder add no report
         \\    }
         \\    {}
         \\}
-    , &.{"Type Not Determined"});
+    , &.{"Missing Method"});
 }
 
 test "an operator on a rejected loop binder whose other use determined its type adds no report" {
@@ -161,7 +161,7 @@ test "an operator on a rejected loop binder whose other use determined its type 
         \\    }
         \\    {}
         \\}
-    , &.{"Type Not Determined"});
+    , &.{"Missing Method"});
 }
 
 test "comparisons of a rejected loop binder with conflicting literals add no report" {
@@ -174,7 +174,7 @@ test "comparisons of a rejected loop binder with conflicting literals add no rep
         \\    }
         \\    {}
         \\}
-    , &.{"Type Not Determined"});
+    , &.{"Missing Method"});
 }
 
 test "a value computed from a rejected loop binder binds nothing" {
@@ -187,7 +187,7 @@ test "a value computed from a rejected loop binder binds nothing" {
         \\    }
         \\    {}
         \\}
-    , &.{"Type Not Determined"});
+    , &.{"Missing Method"});
 }
 
 test "conflicting uses of the result of a dispatch rejected at its literal's default add no report" {
@@ -199,7 +199,7 @@ test "conflicting uses of the result of a dispatch rejected at its literal's def
         \\    b = List.len(y)
         \\    (a, b)
         \\}
-    , &.{"Type Not Determined"});
+    , &.{"Missing Method"});
 }
 
 test "independent errors beside a rejected loop binder's conflicting uses are still reported" {
@@ -214,7 +214,7 @@ test "independent errors beside a rejected loop binder's conflicting uses are st
         \\    }
         \\    {}
         \\}
-    , &.{ "Type Mismatch", "Type Mismatch", "Type Not Determined" });
+    , &.{ "Type Mismatch", "Type Mismatch", "Missing Method" });
 }
 
 test "a branch that conflicts with a valid branch beside a rejected loop binder is still reported" {
@@ -226,7 +226,7 @@ test "a branch that conflicts with a valid branch beside a rejected loop binder 
         \\    }
         \\    {}
         \\}
-    , &.{ "Type Mismatch", "Type Not Determined" });
+    , &.{ "Type Mismatch", "Missing Method" });
 }
 
 test "the relation that rejects a name's literal still reports the rejection" {
@@ -248,7 +248,7 @@ test "a dispatch on a tag payload no value determines is reported as an undeterm
         \\}
         \\
         \\main = unwrap(T7("x"))
-    , &.{"Type Not Determined"});
+    , &.{"Missing Method"});
 }
 
 test "returning an erroneous value from a closed result adds no mismatch" {

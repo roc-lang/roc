@@ -86,7 +86,7 @@ pub const Report = struct {
 /// Intern worker-required layouts before freezing the phase's shared store.
 pub fn prepareLayouts(store: *const LirStore, layouts: *layout_mod.Store) ResourceError!void {
     for (0..store.procSpecCount()) |index| {
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(index)));
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(index)));
         // Only a procedure that calls itself can be rewritten to thread a
         // pointer to its result.
         if (proc.body != null and proc.hosted == null and proc.abi == .roc and proc.shapes.self_call and
@@ -99,10 +99,20 @@ pub fn prepareLayouts(store: *const LirStore, layouts: *layout_mod.Store) Resour
 
 /// Rewrite one proc without mutating layouts or emitting unordered diagnostics.
 pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator) ResourceError!?Report {
-    std.debug.assert(store.tail_call_builder == null);
     var scratch = Scratch.init(scratch_allocator);
     defer scratch.deinit();
-    return transformProc(store, layouts, proc_id, &scratch);
+    return runProcWithScratch(store, layouts, proc_id, &scratch);
+}
+
+/// Detection and rewrite storage one executor lane retains across
+/// procedures; only empty storage survives a procedure.
+pub const LaneScratch = Scratch;
+
+/// `runProc` with lane-retained storage.
+pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch: *Scratch) ResourceError!?Report {
+    std.debug.assert(store.tail_call_builder == null);
+    defer scratch.release();
+    return transformProc(store, layouts, proc_id, scratch);
 }
 
 /// Apply TRMC/TCE to every eligible proc in the store.
@@ -110,11 +120,13 @@ pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
     std.debug.assert(store.tail_call_builder == null);
     try prepareLayouts(store, layouts);
 
+    var scratch = Scratch.init(store.allocator);
+    defer scratch.deinit();
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(proc_index));
-        if (try runProc(store, layouts, proc_id, store.allocator)) |report| {
+        if (try runProcWithScratch(store, layouts, proc_id, &scratch)) |report| {
             reportProc(store, layouts, proc_id, report);
         }
     }
@@ -126,7 +138,7 @@ fn transformProc(
     proc_id: LIR.LirProcSpecId,
     scratch: *Scratch,
 ) ResourceError!?Report {
-    const proc = store.getProcSpec(proc_id);
+    const proc = store.getProcSpecImmediate(proc_id);
     if (proc.body == null or proc.hosted != null or proc.abi != .roc) return null;
 
     var detection = Detection.init(store, layouts, proc_id, scratch);
@@ -149,7 +161,7 @@ fn transformProc(
     var tail_site: ?CFStmtId = if (proc.tail_calls) |sites| sites.head else null;
     while (tail_site) |id| {
         tail_count += 1;
-        tail_site = store.getCFStmtImmediate(id).assign_call.tail_call.?.next;
+        tail_site = store.getCFStmtImmediate(id).assign_call.tail_call.next();
     }
     if (construct_count == 0 and tail_count == 0) return null;
     if (builtin.mode == .debug) detection.assertRewrittenStmtsUnshared();
@@ -173,7 +185,7 @@ fn transformProc(
 /// Emit diagnostics on the coordinator, after committing the proc in order.
 pub fn reportProc(store: *const LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, report: Report) void {
     if (build_options.print_trmc) {
-        const transformed = store.getProcSpec(proc_id);
+        const transformed = store.getProcSpecImmediate(proc_id);
         debugPrint("{s}: proc p{d} ({d} construct sites, {d} tail calls)\n", .{
             @tagName(transformed.tail_transform),
             @backingInt(proc_id),
@@ -375,13 +387,19 @@ const Scratch = struct {
     new_locals: std.ArrayList(LocalId) = .empty,
     moves: std.ArrayList(LoopMove) = .empty,
     ready_moves: std.ArrayList(usize) = .empty,
+    /// The current procedure's join declarations, for `Detection`.
+    joins: collections.DenseMap(JoinPointId, JoinInfo),
+    /// The current rewrite's moved parameters, for `Transform`.
+    move_targets: collections.DenseMap(LocalId, usize),
 
-    fn init(gpa: Allocator) Scratch {
-        return .{ .gpa = gpa, .stamps = .init(gpa) };
+    pub fn init(gpa: Allocator) Scratch {
+        return .{ .gpa = gpa, .stamps = .init(gpa), .joins = .init(gpa), .move_targets = .init(gpa) };
     }
 
-    fn deinit(self: *Scratch) void {
+    pub fn deinit(self: *Scratch) void {
         self.stamps.deinit();
+        self.joins.deinit();
+        self.move_targets.deinit();
         self.work.deinit(self.gpa);
         self.shared_work.deinit(self.gpa);
         self.candidates.deinit(self.gpa);
@@ -393,7 +411,18 @@ const Scratch = struct {
         self.ready_moves.deinit(self.gpa);
     }
 
+    /// Empty every table after a procedure, keeping capacity, so no stamp,
+    /// candidate or join reaches the next one.
+    fn release(self: *Scratch) void {
+        self.beginProc();
+        self.stamps.clearRetainingCapacity();
+        self.generation = 0;
+        self.shared_work.clearRetainingCapacity();
+    }
+
     fn beginProc(self: *Scratch) void {
+        self.joins.clearRetainingCapacity();
+        self.move_targets.clearRetainingCapacity();
         self.work.clearRetainingCapacity();
         self.candidates.clearRetainingCapacity();
         self.shared_heads.clearRetainingCapacity();
@@ -421,7 +450,7 @@ const Detection = struct {
     eligible_trmc: bool = false,
     /// Set when the proc exceeds a pass limit; the proc is left untouched.
     bail: bool = false,
-    joins: collections.DenseMap(JoinPointId, JoinInfo),
+    joins: *collections.DenseMap(JoinPointId, JoinInfo),
     max_join_id: u32 = 0,
 
     fn init(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch: *Scratch) Detection {
@@ -431,12 +460,12 @@ const Detection = struct {
             .layouts = layouts,
             .proc_id = proc_id,
             .scratch = scratch,
-            .joins = collections.DenseMap(JoinPointId, JoinInfo).init(scratch.gpa),
+            .joins = &scratch.joins,
         };
     }
 
     fn deinit(self: *Detection) void {
-        self.joins.deinit();
+        self.joins.clearRetainingCapacity();
     }
 
     fn detect(self: *Detection) ResourceError!void {
@@ -460,9 +489,9 @@ const Detection = struct {
         while (steps < limit) : (steps += 1) {
             const params = self.store.getLocalSpan(join.params);
             if (params.len != 1 or GuardedList.at(params, 0) != local) return false;
-            const stmt = self.store.getCFStmt(join.body);
-            if (stmt == .ret) return stmt.ret.value == local;
-            if (stmt != .jump) return false;
+            const stmt = self.store.getCFStmtImmediate(join.body);
+            if (stmt.* == .ret) return stmt.ret.value == local;
+            if (stmt.* != .jump) return false;
             join = self.joins.get(stmt.jump.target) orelse return false;
         }
         return false;
@@ -562,7 +591,7 @@ const Detection = struct {
                     try work.append(gpa, .{ .stmt = s.on_match, .edge = .{ .boxy_tag_on_match = item.stmt } });
                 },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {},
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try work.append(gpa, .{ .stmt = s.next, .edge = .{ .stmt_next = item.stmt } });
                 },
             }
@@ -611,7 +640,7 @@ const Detection = struct {
 
         // A self-call starts a new candidate (after the use checks above, so
         // its arguments invalidate any candidate locals they mention).
-        if (stmt == .assign_call and stmt.assign_call.proc == self.proc_id and stmt.assign_call.tail_call == null) {
+        if (stmt == .assign_call and stmt.assign_call.proc == self.proc_id and !stmt.assign_call.tail_call.isSite()) {
             if (self.scratch.candidates.items.len == max_candidates) {
                 self.bail = true;
                 return;
@@ -695,12 +724,12 @@ const Detection = struct {
             },
             .assign_ref => |s| {
                 if (candidate.state != .tagged) return false;
-                const source = if (s.op == .local)
-                    s.op.local
-                else if (s.op == .nominal)
-                    s.op.nominal.backing_ref
-                else if (s.op == .list_reinterpret)
-                    s.op.list_reinterpret.backing_ref
+                const source = if (s.op.kind == .local)
+                    s.op.source
+                else if (s.op.kind == .nominal)
+                    s.op.source
+                else if (s.op.kind == .list_reinterpret)
+                    s.op.source
                 else
                     return false;
                 if (source != candidate.current()) return false;
@@ -748,7 +777,6 @@ const Detection = struct {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -841,7 +869,6 @@ const Detection = struct {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -960,7 +987,7 @@ const Transform = struct {
     old_args: []const LocalId,
     join_id: JoinPointId,
     /// Movement state is indexed only for parameters of this procedure.
-    move_targets: collections.DenseMap(LocalId, usize),
+    move_targets: *collections.DenseMap(LocalId, usize),
     moves: *std.ArrayList(LoopMove),
     ready_moves: *std.ArrayList(usize),
     hole: LocalId = undefined,
@@ -977,7 +1004,7 @@ const Transform = struct {
             .moves = &detection.scratch.moves,
             .ready_moves = &detection.scratch.ready_moves,
             .old_args = &.{},
-            .move_targets = .init(gpa),
+            .move_targets = &detection.scratch.move_targets,
             .join_id = if (store.getProcSpecImmediate(proc_id).tail_calls) |sites|
                 sites.loop
             else
@@ -986,7 +1013,7 @@ const Transform = struct {
     }
 
     fn deinit(self: *Transform) void {
-        self.move_targets.deinit();
+        self.move_targets.clearRetainingCapacity();
     }
 
     fn copyArgs(self: *Transform, span: LIR.LocalSpan) ResourceError!void {
@@ -1069,7 +1096,7 @@ const Transform = struct {
         try self.store.replaceCFStmt(ret_stmt, .{ .assign_low_level = .{
             .target = st,
             .op = .ptr_store,
-            .rc_effect = LowLevelOp.ptr_store.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.ptr_store.rcEffect()),
             .args = store_args,
             .next = load,
         } }, origin);
@@ -1086,7 +1113,7 @@ const Transform = struct {
         const cell = blk: {
             var alloc = self.store.getCFStmtImmediate(candidate.box_stmt).assign_low_level;
             alloc.op = .box_alloc_zeroed;
-            alloc.rc_effect = LowLevelOp.box_alloc_zeroed.rcEffect();
+            alloc.rc_effect = try self.store.addRcEffect(LowLevelOp.box_alloc_zeroed.rcEffect());
             alloc.args = empty_args;
             try self.store.replaceCFStmt(candidate.box_stmt, .{ .assign_low_level = alloc }, box_origin);
             break :blk alloc.target;
@@ -1099,7 +1126,7 @@ const Transform = struct {
         const cast = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = next_hole,
             .op = .ptr_cast,
-            .rc_effect = LowLevelOp.ptr_cast.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.ptr_cast.rcEffect()),
             .args = try self.store.addLocalSpan(&.{cell}),
             .next = self.nextOf(candidate.box_stmt),
         } }, box_origin);
@@ -1124,7 +1151,7 @@ const Transform = struct {
         try self.store.replaceCFStmt(candidate.terminal_stmt, .{ .assign_low_level = .{
             .target = st,
             .op = .ptr_store,
-            .rc_effect = LowLevelOp.ptr_store.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.ptr_store.rcEffect()),
             .args = store_args,
             .next = loop_back,
         } }, terminal_origin);
@@ -1134,7 +1161,7 @@ const Transform = struct {
         var site: ?CFStmtId = if (self.store.getProcSpecImmediate(self.proc_id).tail_calls) |sites| sites.head else null;
         while (site) |id| {
             const call = self.store.getCFStmtImmediate(id).assign_call;
-            site = call.tail_call.?.next;
+            site = call.tail_call.next();
             // Every incoming reference reaches the same replacement. The
             // shared return continuation remains available to other paths.
             const loop_back = try self.buildLoopBack(call.args, null, id, trmcOrigin(self.store.stmtOrigin(id)));
@@ -1214,7 +1241,7 @@ const Transform = struct {
             const tmp = try self.addLocal(self.store.getLocal(move.target).layout_idx);
             try self.appendLoopBackStmt(&first, &last, origin, .{ .assign_ref = .{
                 .target = tmp,
-                .op = .{ .local = move.target },
+                .op = .local(move.target),
                 .next = undefined,
             } });
             var index = start;

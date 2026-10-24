@@ -24,6 +24,8 @@
 
 const std = @import("std");
 const invariant = @import("base").invariant;
+const SingleThreadArena = @import("base").SingleThreadArena;
+const collections = @import("collections");
 const builtin = @import("builtin");
 const backend = @import("backend");
 const layout_mod = @import("layout");
@@ -92,7 +94,6 @@ const RegisteredProc = struct {
 };
 
 const RegisteredErasedProc = struct {
-    proc_id: u32,
     ret_layout: layout_mod.Idx,
     metadata_offset: u32,
     arg_layouts: LIR.BoxySpan,
@@ -116,12 +117,13 @@ pub const GlobalBoxyRuntime = struct {
     runtime_boxy_tag_payload_descs: std.ArrayList(LirProgram.BoxyTagPayloadDesc) = .empty,
     runtime_boxy_dicts: boxy_runtime.RuntimeBoxyDicts = .{},
     /// Backs runtime-materialized descriptors; they live until deinit.
-    desc_arena: std.heap.ArenaAllocator,
+    desc_arena: SingleThreadArena,
     /// Backs value temporaries; reset when the outermost wrapper call
     /// returns.
-    value_scratch: std.heap.ArenaAllocator,
+    value_scratch: SingleThreadArena,
     call_depth: usize = 0,
-    procs: std.AutoHashMapUnmanaged(u32, RegisteredProc) = .empty,
+    /// Registered dictionary workers, by LIR proc id.
+    procs: collections.DenseMapUnmanaged(u32, RegisteredProc) = .empty,
     /// Return layout of each Roc-created erased-callable proc, keyed by the
     /// worker's runtime code address. An erased call reads the actual return
     /// layout here to materialize the worker's result into the caller's
@@ -236,6 +238,13 @@ const PendingErasedCall = struct {
     /// was pending. Each procedure that returns early replaces it, so it is
     /// the one nearest whoever makes the call.
     conversion: ?PendingConversion,
+    /// The conversion the erased-call runtime skipped when the registered
+    /// callee it invoked left this call pending: from that callee's result
+    /// layout to the layout and result descriptor its own caller called with
+    /// (`callErasedOnce`). It applies after `conversion`, which the callee's
+    /// own procedures skipped, and is replaced by any boundary skipped nearer
+    /// whoever makes the call.
+    callee_boundary: ?PendingConversion = null,
 };
 
 /// A conversion of a pending call's result that a procedure left to whoever
@@ -366,9 +375,17 @@ pub fn roc_boxy_drive_pending(
     // The conversion skipped on the way out to this caller. It belongs to
     // the first pending call; later ones are left inside that call's extent.
     var outermost: ?PendingConversion = null;
+    // The first pending call's own site: a later call's value, once
+    // converted out of its own extent, is stored as the first call's
+    // statement stores it before the outermost conversion applies.
+    var first_site: ?PendingConversion = null;
     var first = true;
     while (tail.pending) |call| {
         tail.pending = null;
+        const back_to_first: ?PendingConversion = if (first_site) |site|
+            (if (site.layout == call.site_layout and site.desc == call.result_desc and call.conversion == null and call.callee_boundary == null) null else site)
+        else
+            null;
         var args = tail.args;
         var arg_descs = tail.arg_descs;
         tail.args = .empty;
@@ -378,7 +395,7 @@ pub fn roc_boxy_drive_pending(
         if (runtime) |g| enter(g);
         const args_ptr: ?[*]const u8 = if (call.args_len == 0) null else args.items.ptr;
         const arg_descs_ptr: ?[*]const ?*const BoxyTypeDesc = if (arg_descs.items.len == 0) null else arg_descs.items.ptr;
-        if (call.conversion == null and outermost == null and call.site_layout == expected_layout) {
+        if (call.conversion == null and call.callee_boundary == null and back_to_first == null and outermost == null and call.site_layout == expected_layout) {
             callErasedOnce(call.fn_ptr, ret, args_ptr, call.capture, null, out_desc, call.result_desc, expected_layout, arg_descs_ptr, call.arg_desc_keys_start, call.arg_desc_keys_len, call.arg_layouts_start, call.arg_layouts_len);
             if (tail.pending == null) {
                 if (result_desc) |own| {
@@ -395,7 +412,7 @@ pub fn roc_boxy_drive_pending(
                 var value = site_value;
                 var value_layout = site_layout;
                 var value_desc = site_desc;
-                for ([_]?PendingConversion{ call.conversion, outermost }) |skipped| {
+                for ([_]?PendingConversion{ call.conversion, call.callee_boundary, back_to_first, outermost }) |skipped| {
                     const conversion = skipped orelse continue;
                     const stored_as = if (conversion.keeps_own_desc) value_desc else conversion.desc;
                     const converted = g.runtime.materializeCallResult(hooks(g), value, value_layout, value_desc, stored_as, layoutIdx(conversion.layout)) catch
@@ -418,6 +435,7 @@ pub fn roc_boxy_drive_pending(
         if (runtime) |g| leave(g);
         if (first) {
             outermost = call.conversion;
+            first_site = .{ .layout = call.site_layout, .desc = call.result_desc, .keeps_own_desc = false };
             first = false;
         }
         builtins.erased_callable.decref(call.closure, tailOps());
@@ -494,8 +512,8 @@ fn createRuntime(
     g.* = .{
         .gpa = gpa,
         .store_shell = LirStore.init(gpa),
-        .desc_arena = std.heap.ArenaAllocator.init(gpa),
-        .value_scratch = std.heap.ArenaAllocator.init(gpa),
+        .desc_arena = SingleThreadArena.init(gpa),
+        .value_scratch = SingleThreadArena.init(gpa),
         .runtime = .{
             .store = store,
             .layout_store = layout_store,
@@ -692,7 +710,7 @@ const AbiHooks = struct {
     /// Crash at code checking rejected and already reported.
     pub fn crashCheckedError(_: AbiHooks, message: []const u8) Error {
         builtins.dev_wrappers.roc_builtins_checked_error_crashed(message.ptr, message.len);
-        unreachable;
+        unreachable; // roc_builtins_checked_error_crashed ends in the noreturn RocOps.crash
     }
 
     /// Call the `kind` method slot the first argument's descriptor carries
@@ -768,7 +786,7 @@ const AbiHooks = struct {
             .@"4" => scratch.alignedAlloc(u8, .@"4", sa.size),
             .@"8" => scratch.alignedAlloc(u8, .@"8", sa.size),
             .@"16" => scratch.alignedAlloc(u8, .@"16", sa.size),
-            _ => unreachable,
+            _ => invariant("boxy ABI layout alignment {d} exceeds 16 bytes", .{sa.alignment.toByteUnits()}),
         } catch return error.OutOfMemory;
         return Value.fromSlice(slice);
     }
@@ -896,13 +914,10 @@ fn abiCrashMissingDescriptorCapture(
 
 fn abiCrashNullErasedArgDescriptor(
     g: *GlobalBoxyRuntime,
-    proc_id: u32,
     key: LIR.ErasedArgDescKey,
 ) noreturn {
     var message: CrashMessage = .{};
-    message.str("boxy runtime erased call supplied a null descriptor to proc ");
-    message.uint(proc_id);
-    message.str(" for key (");
+    message.str("boxy runtime erased call supplied a null descriptor for key (");
     message.uint(key.arg_index);
     message.str(", ");
     message.uint(key.descriptor_index);
@@ -912,14 +927,11 @@ fn abiCrashNullErasedArgDescriptor(
 
 fn abiCrashMissingErasedArgDescriptor(
     g: *GlobalBoxyRuntime,
-    proc_id: u32,
     key: LIR.ErasedArgDescKey,
     supplied_keys: []const LIR.ErasedArgDescKey,
 ) noreturn {
     var message: CrashMessage = .{};
-    message.str("boxy runtime erased proc ");
-    message.uint(proc_id);
-    message.str(" required descriptor key (");
+    message.str("boxy runtime erased proc required descriptor key (");
     message.uint(key.arg_index);
     message.str(", ");
     message.uint(key.descriptor_index);
@@ -930,13 +942,10 @@ fn abiCrashMissingErasedArgDescriptor(
 
 fn abiCrashDuplicateErasedArgDescriptor(
     g: *GlobalBoxyRuntime,
-    proc_id: u32,
     key: LIR.ErasedArgDescKey,
 ) noreturn {
     var message: CrashMessage = .{};
-    message.str("boxy runtime erased call supplied duplicate descriptors to proc ");
-    message.uint(proc_id);
-    message.str(" for key (");
+    message.str("boxy runtime erased call supplied duplicate descriptors for key (");
     message.uint(key.arg_index);
     message.str(", ");
     message.uint(key.descriptor_index);
@@ -1051,7 +1060,6 @@ pub fn roc_boxy_register_proc(
 /// address is the relocated runtime address.
 pub fn roc_boxy_register_erased_proc(
     fn_ptr: ?*const anyopaque,
-    proc_id: u32,
     ret_layout: u32,
     metadata_offset: u32,
     arg_layouts_start: u32,
@@ -1071,7 +1079,6 @@ pub fn roc_boxy_register_erased_proc(
         abiCrash(g, "erased proc argument-layout registration");
     }
     g.erased_procs.put(g.gpa, @intFromPtr(ptr), .{
-        .proc_id = proc_id,
         .ret_layout = layoutIdx(ret_layout),
         .metadata_offset = metadata_offset,
         .arg_layouts = .{
@@ -1131,18 +1138,18 @@ fn erasedInvocationCaptureWithKeys(
         for (keys, 0..) |key, desc_index| {
             if (!std.meta.eql(key, offset.key)) continue;
             if (matching_desc_index != null) {
-                abiCrashDuplicateErasedArgDescriptor(g, registered.proc_id, offset.key);
+                abiCrashDuplicateErasedArgDescriptor(g, offset.key);
             }
             matching_desc_index = desc_index;
         }
         const desc_index = matching_desc_index orelse
-            abiCrashMissingErasedArgDescriptor(g, registered.proc_id, offset.key, keys);
+            abiCrashMissingErasedArgDescriptor(g, offset.key, keys);
         const destination = @as(usize, registered.capture_offset_base) + offset.offset;
         if (destination + @sizeOf(?*const BoxyTypeDesc) > invocation.len) {
             abiCrash(g, "erased invocation descriptor destination");
         }
         const desc = descs[desc_index] orelse
-            abiCrashNullErasedArgDescriptor(g, registered.proc_id, offset.key);
+            abiCrashNullErasedArgDescriptor(g, offset.key);
         const payload_index = @backingInt(desc.payload_layout);
         if (payload_index >= g.runtime.layout_store.layoutCount()) {
             abiCrash(g, "erased invocation descriptor payload layout");
@@ -1389,9 +1396,13 @@ fn callErasedOnce(
     const worker_result = hooks(g).allocValue(actual_layout) catch abiCrash(g, "erased call result buffer");
     var returned_desc: ?*const anyopaque = @ptrCast(metadata_desc);
     invokeErasedCallableDriving(raw, g.runtime.roc_ops, if (actual_size == 0) null else @ptrCast(worker_result.ptr), invocation_args, invocation_capture, reuse, &returned_desc);
-    // A callee that deferred a call returned no value; the pending call
-    // delivers the result in the caller's layout itself.
-    if (TailStateSelection.get().pending != null) return;
+    // A callee that deferred a call returned no value. Whoever makes the
+    // pending call delivers its result, converted as this boundary would
+    // have converted the callee's own result.
+    if (TailStateSelection.get().pending) |*pending| {
+        pending.callee_boundary = .{ .layout = expected_layout, .desc = result_desc, .keeps_own_desc = false };
+        return;
+    }
     const actual_desc: ?*const BoxyTypeDesc = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
     const materialized = g.runtime.materializeCallResult(
         hooks(g),
@@ -1785,6 +1796,43 @@ pub fn roc_boxy_list_concat(
         &boxyListElementDecref,
         update_mode_a,
         update_mode_b,
+        ctx.g.runtime.roc_ops,
+    );
+}
+
+/// Append a range of another list using the element descriptor for copy and
+/// drop logic.
+pub fn roc_boxy_list_append_sublist(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    src_bytes: ?[*]u8,
+    src_len: usize,
+    src_cap: usize,
+    start: u64,
+    len: u64,
+    alignment: u32,
+    element_width: usize,
+    elem_layout: u32,
+    list_desc: *const BoxyTypeDesc,
+    update_mode: builtins.utils.UpdateMode,
+) callconv(.c) void {
+    var ctx = enterBoxyList(list_desc, elem_layout);
+    defer leave(ctx.g);
+    out.* = builtins.list.listAppendSublist(
+        .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
+        .{ .bytes = src_bytes, .length = src_len, .capacity_or_alloc_ptr = src_cap },
+        start,
+        len,
+        alignment,
+        element_width,
+        ctx.elements_refcounted,
+        @ptrCast(&ctx),
+        &boxyListElementIncref,
+        @ptrCast(&ctx),
+        &boxyListElementDecref,
+        update_mode,
         ctx.g.runtime.roc_ops,
     );
 }
@@ -2408,10 +2456,9 @@ pub fn roc_boxy_call_dict(
     }
     const raw_hidden: []const usize = if (hidden_args) |h| h[0..hidden_len] else &.{};
     const hidden_values = scratch.alloc(Value, raw_hidden.len) catch abiCrash(g, "dictionary call hidden argument collection");
-    for (raw_hidden, 0..) |raw, i| {
-        const slot = scratch.alloc(usize, 1) catch abiCrash(g, "dictionary call hidden argument collection");
-        slot[0] = raw;
-        hidden_values[i] = .{ .ptr = @ptrCast(slot.ptr) };
+    const hidden_slots = scratch.dupe(usize, raw_hidden) catch abiCrash(g, "dictionary call hidden argument collection");
+    for (hidden_slots, 0..) |*slot, i| {
+        hidden_values[i] = .{ .ptr = @ptrCast(slot) };
     }
 
     const call = g.runtime.prepareDictCall(

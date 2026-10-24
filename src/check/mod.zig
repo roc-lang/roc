@@ -35,6 +35,8 @@ pub const CheckedArtifact = @import("checked_artifact.zig");
 /// nested aggregates and `SerializedElement`s), so every admitted blob invalidates on
 /// any layout change, not just a top-level one.
 pub const rootLayoutVersionHash = @import("artifact_serialize.zig").rootLayoutVersionHash;
+/// Bounds-check every relocatable marker of a serialized store.
+pub const validateSerialized = @import("artifact_serialize.zig").validateSerialized;
 /// Checked module data exported under the post-check-facing name.
 pub const CheckedModule = CheckedArtifact;
 
@@ -93,6 +95,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/exhaustiveness_test.zig"));
     std.testing.refAllDecls(@import("test/type_view_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9705_test.zig"));
+    std.testing.refAllDecls(@import("test/builtin_type_shadowing_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9709_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9710_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9711_test.zig"));
@@ -159,7 +162,11 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_12211_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12223_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12228_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12310_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11886_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12318_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12309_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12489_test.zig"));
     std.testing.refAllDecls(@import("test/nominal_decl_growth_test.zig"));
     std.testing.refAllDecls(@import("test/frame_owned_judgment_test.zig"));
 

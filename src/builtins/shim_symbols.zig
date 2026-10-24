@@ -27,6 +27,15 @@ pub const roc_shim_hosted_fns_table = "roc_shim_hosted_fns_table";
 /// Names of the hosted functions in `roc_shim_hosted_fns` order, so the
 /// machine-code shim can resolve a hosted symbol by name.
 pub const roc_shim_hosted_names = "roc_shim_hosted_names";
+/// The C-ABI entries of the object-cache objects linked into a `roc run`
+/// host executable (`ProcIdentity.writeCAbiEntryName`), defined by the
+/// generated platform shim module, so the machine-code shim can resolve an
+/// image's call to a package procedure by name.
+pub const roc_shim_package_fns = "roc_shim_package_fns";
+/// Names of the entries in `roc_shim_package_fns`, in the same order.
+pub const roc_shim_package_names = "roc_shim_package_names";
+/// Number of entries in `roc_shim_package_fns`.
+pub const roc_shim_package_count = "roc_shim_package_count";
 /// The in-process host's recorder for the source region of a `?` that
 /// evaluated an `Err` inside a top-level `expect`. Builtins reference it
 /// weakly; a platform executable defines no such symbol.

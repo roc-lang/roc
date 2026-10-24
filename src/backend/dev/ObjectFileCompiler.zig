@@ -13,8 +13,8 @@
 
 const std = @import("std");
 const invariant = @import("base").invariant;
+const dev_diagnostics = @import("base").dev_diagnostics;
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
@@ -24,7 +24,6 @@ const LirStore = lir.LirStore;
 const LirProcSpec = lir.LirProcSpec;
 const RocTarget = @import("roc_target").RocTarget;
 const Dwarf = @import("Dwarf.zig");
-const coff = @import("object/coff.zig");
 
 const ObjectWriter = @import("ObjectWriter.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
@@ -66,10 +65,15 @@ pub const CompilationResult = struct {
     /// The compiled program lifted into artifacts, when the compile ran in
     /// pack mode on a target whose artifacts can be extracted.
     artifacts: ?ProcArtifact.Set = null,
+    /// The Boxy runtime table entries the object's code loads, in the
+    /// canonical order it numbers them by; the sidecar linked beside the
+    /// object holds exactly these (`LirImage.buildCanonicalSidecarBlob`).
+    runtime_tables: lir.RuntimeTables.Order = .{},
 
     pub fn deinit(self: *CompilationResult) void {
         self.allocator.free(self.object_bytes);
         if (self.artifacts) |*set| set.deinit();
+        self.runtime_tables.deinit(self.allocator);
     }
 };
 
@@ -87,6 +91,10 @@ pub const CompilationError = error{
 pub const ObjectFileCompiler = struct {
     allocator: Allocator,
     enable_default_platform_runtime: bool = false,
+    /// Bytes the program's erased callables reserve before their captures
+    /// (`LirProgram.Result.erased_capture_prefix`); nonzero when its code
+    /// supports a hot-reload session.
+    erased_capture_prefix: u32 = 0,
     timing: ?*Timing = null,
     post_check_executor: ?Executor = null,
     /// Borrowed artifacts from this exact LIR program, never an executable image.
@@ -101,6 +109,10 @@ pub const ObjectFileCompiler = struct {
     /// program's own pack can be written from the build that produced it.
     capture_artifacts: bool = false,
     captured_artifacts: ?ProcArtifact.Set = null,
+    /// Encode the object file and its debug sections. A pack written only
+    /// as artifacts leaves this off, and its result's `object_bytes` is
+    /// empty.
+    emit_object: bool = true,
 
     pub const TimingSnapshot = struct {
         backend_setup_ns: u64 = 0,
@@ -186,12 +198,21 @@ pub const ObjectFileCompiler = struct {
         boxy_worker_procs: []const lir.LIR.LirProcSpecId,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.timing, self.pack_mode, self.splice_source, self.capture_artifacts, self.post_check_executor, self.reuse_same_program);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.erased_capture_prefix, self.timing, self.pack_mode, self.splice_source, self.capture_artifacts, self.emit_object, self.post_check_executor, self.reuse_same_program);
     }
 
-    /// Compile to an object file and write it to a path. Returns whether the
-    /// compiled object emits boxy runtime calls; when set, the caller must add
-    /// the boxy runtime object and the embedded sidecar to the link.
+    /// What a written object needs linked beside it.
+    pub const WrittenObject = struct {
+        /// Whether the compiled object emits boxy runtime calls; when set,
+        /// the caller must add the boxy runtime object and the embedded
+        /// sidecar to the link.
+        uses_boxy: bool,
+        /// The runtime table entries the object's code loads, which its
+        /// sidecar holds (`CompilationResult.runtime_tables`).
+        runtime_tables: lir.RuntimeTables.Order,
+    };
+
+    /// Compile to an object file and write it to a path.
     pub fn compileToObjectFileAndWrite(
         self: *ObjectFileCompiler,
         lir_store: *const LirStore,
@@ -205,7 +226,7 @@ pub const ObjectFileCompiler = struct {
         target: RocTarget,
         output_path: []const u8,
         roc_ctx: CoreCtx,
-    ) CompilationError!bool {
+    ) CompilationError!WrittenObject {
         var result = try self.compileToObjectFile(
             lir_store,
             layout_store,
@@ -233,7 +254,9 @@ pub const ObjectFileCompiler = struct {
             return CompilationError.ObjectGenerationFailed;
         };
         if (self.timing) |timing| timing.finish(file_io_started_ns, .file_io);
-        return result.uses_boxy;
+        const runtime_tables = result.runtime_tables;
+        result.runtime_tables = .{};
+        return .{ .uses_boxy = result.uses_boxy, .runtime_tables = runtime_tables };
     }
 
     /// Emit a data-only object from already materialized readonly exports.
@@ -301,10 +324,12 @@ fn compileWithCodeGen(
     boxy_worker_procs: []const lir.LIR.LirProcSpecId,
     target: RocTarget,
     enable_default_platform_runtime: bool,
+    erased_capture_prefix: u32,
     timing: ?*ObjectFileCompiler.Timing,
     pack_mode: bool,
     splice_source: ?SpliceSource,
     capture_artifacts: bool,
+    emit_object: bool,
     executor: ?Executor,
     reuse_same_program: ?*const NativeProcCompiler.Retained,
 ) CompilationError!CompilationResult {
@@ -327,6 +352,7 @@ fn compileWithCodeGen(
         erased_arg_desc_offsets,
         erased_arg_desc_params,
         boxy_worker_procs,
+        erased_capture_prefix,
         target.cpuLevel(),
     ) catch return CompilationError.OutOfMemory;
     defer codegen.deinit();
@@ -351,14 +377,14 @@ fn compileWithCodeGen(
         var external_procs = std.ArrayList(lir.LIR.LirProcSpecId).empty;
         defer external_procs.deinit(allocator);
         for (proc_specs, 0..) |proc, index| {
-            if (proc.external) external_procs.append(allocator, @fromBackingInt(@intCast(@as(u32, @intCast(index))))) catch return CompilationError.OutOfMemory;
+            if (proc.external and !proc.c_abi_entry) external_procs.append(allocator, @fromBackingInt(@intCast(@as(u32, @intCast(index))))) catch return CompilationError.OutOfMemory;
         }
         spliceExternalProcs(CodeGen, allocator, &codegen, proc_specs, external_procs.items, source, &spliced_data) catch return CompilationError.OutOfMemory;
     }
     var demand = std.ArrayList(lir.LIR.LirProcSpecId).empty;
     defer demand.deinit(allocator);
     for (proc_specs, 0..) |proc, index| {
-        if (proc.is_static_initializer or proc.external) continue;
+        if (proc.is_static_initializer or (proc.external and !proc.c_abi_entry)) continue;
         demand.append(allocator, @fromBackingInt(@intCast(index))) catch return CompilationError.OutOfMemory;
     }
     var native_metrics: NativeProcCompiler.Metrics = .{};
@@ -379,8 +405,139 @@ fn compileWithCodeGen(
     if (timing) |timings| timings.snapshot_value.native_emission.add(native_metrics);
     if (timing) |timings| timings.finish(procedure_instructions_started_ns, .procedure_instructions);
 
-    // Track symbols for object file generation
+    // Lay the program's code out canonically, so that whether each procedure
+    // was compiled now or spliced from an object-cache entry, and in which
+    // order either happened, changes nothing in the object (design.md
+    // "Canonical Dev Images"). The code generated so far is lifted into
+    // artifacts and placed again, in canonical order and under canonical
+    // names, into the code generator the object is encoded from.
     var symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
+    codegen.finishImage() catch return CompilationError.OutOfMemory;
+    var catalog = ProcArtifact.PreparedData.init(allocator, static_strings.exports, static_data_exports, spliced_data.items) catch return CompilationError.OutOfMemory;
+    defer catalog.deinit();
+    var staged = ProcArtifact.extractCataloged(CodeGen, allocator, &codegen, proc_specs, layout_store, &catalog) catch |err| switch (err) {
+        error.OutOfMemory => return CompilationError.OutOfMemory,
+        error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => invariant("canonical image extraction failed: {s}", .{@errorName(err)}),
+    };
+    defer staged.deinit();
+    var host_visible = std.ArrayList(ProcArtifact.DataItem).empty;
+    defer host_visible.deinit(allocator);
+    {
+        var roots = std.ArrayList([]const u8).empty;
+        defer roots.deinit(allocator);
+        for (static_data_exports) |data_export| {
+            if (data_export.is_exported) roots.append(allocator, data_export.symbol_name) catch return CompilationError.OutOfMemory;
+        }
+        ProcArtifact.dataClosure(allocator, &catalog, roots.items, &host_visible) catch |err| switch (err) {
+            error.OutOfMemory => return CompilationError.OutOfMemory,
+            error.DanglingReference => invariant("a host-visible constant names a constant the program does not define", .{}),
+        };
+    }
+    // Each refcount helper static data names, by the artifact name of its
+    // code, and the global name static data relocates to it by.
+    var static_helper_names = std.StringHashMap(layout.RcHelperKey).init(allocator);
+    defer {
+        var names = static_helper_names.keyIterator();
+        while (names.next()) |name| allocator.free(name.*);
+        static_helper_names.deinit();
+    }
+    var helper_aliases = std.StringHashMap([]const u8).init(allocator);
+    defer {
+        var aliases = helper_aliases.keyIterator();
+        while (aliases.next()) |alias| allocator.free(alias.*);
+        helper_aliases.deinit();
+    }
+    for (static_rc_helpers) |helper_key| {
+        const name = LirCodeGenMod.compiledRcHelperSymbolName(allocator, layout_store, LirCodeGenMod.staticDataRcHelperKey(helper_key)) catch return CompilationError.OutOfMemory;
+        const gop = static_helper_names.getOrPut(name) catch {
+            allocator.free(name);
+            return CompilationError.OutOfMemory;
+        };
+        if (gop.found_existing) {
+            allocator.free(name);
+            continue;
+        }
+        gop.value_ptr.* = helper_key;
+        const alias = static_data_export.atomicRcHelperSymbolName(allocator, layout_store, helper_key) catch return CompilationError.OutOfMemory;
+        helper_aliases.put(alias, gop.key_ptr.*) catch {
+            allocator.free(alias);
+            return CompilationError.OutOfMemory;
+        };
+    }
+    // A linked program's image holds the code its roots reach, however its
+    // procedures were provided; a pack program's holds every procedure it
+    // offers.
+    var reachable: ?ProcArtifact.Set = null;
+    defer if (reachable) |*retained_set| retained_set.deinit();
+    if (!pack_mode) {
+        const root_procs = allocator.alloc(lir.ProcIdentity, entrypoints.len) catch return CompilationError.OutOfMemory;
+        defer allocator.free(root_procs);
+        for (entrypoints, root_procs) |entrypoint, *identity| identity.* = proc_specs[@backingInt(entrypoint.proc)].identity;
+        var root_data = std.ArrayList([]const u8).empty;
+        defer root_data.deinit(allocator);
+        for (host_visible.items) |item| root_data.append(allocator, item.name) catch return CompilationError.OutOfMemory;
+        reachable = ProcArtifact.retainReachable(allocator, &staged, &catalog, .{
+            .procs = root_procs,
+            .data = root_data.items,
+            .helper_aliases = &helper_aliases,
+            .all_thunks = boxy_worker_procs.len != 0,
+        }) catch return CompilationError.OutOfMemory;
+    }
+    var canonical = ProcArtifact.canonicalize(allocator, if (reachable) |*retained_set| retained_set else &staged, host_visible.items) catch return CompilationError.OutOfMemory;
+    defer canonical.deinit();
+
+    var final = CodeGen.initWithBoxyMetadata(
+        allocator,
+        lir_store,
+        layout_store,
+        static_strings.view(),
+        erased_arg_desc_offsets,
+        erased_arg_desc_params,
+        boxy_worker_procs,
+        erased_capture_prefix,
+        target.cpuLevel(),
+    ) catch return CompilationError.OutOfMemory;
+    defer final.deinit();
+    final.generation_mode = .object_file;
+    final.enable_default_platform_runtime = enable_default_platform_runtime;
+    final.boxy_runtime_used = codegen.boxy_runtime_used;
+
+    var procs_by_identity = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
+    defer procs_by_identity.deinit();
+    for (proc_specs, 0..) |proc, index| {
+        if (proc.is_static_initializer) continue;
+        procs_by_identity.put(proc.identity, @fromBackingInt(@intCast(@as(u32, @intCast(index))))) catch return CompilationError.OutOfMemory;
+    }
+    var helper_keys = ProcArtifact.HelperKeys.init(allocator);
+    defer {
+        var names = helper_keys.keyIterator();
+        while (names.next()) |name| allocator.free(name.*);
+        helper_keys.deinit();
+    }
+    {
+        const compiled_helpers = codegen.compiledRcHelpers(allocator) catch return CompilationError.OutOfMemory;
+        defer allocator.free(compiled_helpers);
+        for (compiled_helpers) |helper| {
+            const name = LirCodeGenMod.compiledRcHelperSymbolName(allocator, layout_store, helper.key) catch return CompilationError.OutOfMemory;
+            const gop = helper_keys.getOrPut(name) catch {
+                allocator.free(name);
+                return CompilationError.OutOfMemory;
+            };
+            if (gop.found_existing) {
+                allocator.free(name);
+                continue;
+            }
+            gop.value_ptr.* = helper.key;
+        }
+    }
+    const starts = ProcArtifact.assembleCanonical(CodeGen, allocator, &final, &canonical.set, &procs_by_identity, &helper_keys) catch return CompilationError.OutOfMemory;
+    defer allocator.free(starts);
+    // The placed code loads the Boxy runtime's table numbers in canonical
+    // order; number them by it, so they depend on nothing but that code.
+    var runtime_numbering: lir.RuntimeTables.Numbering = .{};
+    defer runtime_numbering.deinit(allocator);
+    final.renumberRuntimeRefs(&runtime_numbering) catch return CompilationError.OutOfMemory;
+
     var symbols = std.ArrayList(SymbolDefinition).empty;
     defer symbols.deinit(allocator);
 
@@ -400,189 +557,133 @@ fn compileWithCodeGen(
     var dwarf_procs = std.ArrayList(Dwarf.ProcEntry).empty;
     defer dwarf_procs.deinit(allocator);
 
-    var seen_proc_symbol_names = std.StringHashMap(void).init(allocator);
-    defer seen_proc_symbol_names.deinit();
-
-    try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
-    try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_strings.exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
     {
-        // Readonly data named by native artifacts or spliced object-cache code
-        // that this program did not define itself.
-        var defined = std.StringHashMap(void).init(allocator);
-        defer defined.deinit();
-        for (static_data_exports) |data_export| defined.put(data_export.symbol_name, {}) catch return CompilationError.OutOfMemory;
-        for (static_strings.exports) |data_export| defined.put(data_export.symbol_name, {}) catch return CompilationError.OutOfMemory;
-        var extra = std.ArrayList(static_data_export.StaticDataExport).empty;
-        defer extra.deinit(allocator);
-        var extra_relocations = std.ArrayList([]static_data_export.StaticDataRelocation).empty;
+        // Every constant the code names, and every host-visible constant
+        // with every constant it names, in name order.
+        const data_exports = allocator.alloc(static_data_export.StaticDataExport, canonical.data.len) catch return CompilationError.OutOfMemory;
+        defer allocator.free(data_exports);
+        var data_relocations = std.ArrayList([]static_data_export.StaticDataRelocation).empty;
         defer {
-            for (extra_relocations.items) |relocations| allocator.free(relocations);
-            extra_relocations.deinit(allocator);
+            for (data_relocations.items) |relocations| allocator.free(relocations);
+            data_relocations.deinit(allocator);
         }
-        for (spliced_data.items) |item| {
-            const gop = defined.getOrPut(item.name) catch return CompilationError.OutOfMemory;
-            if (gop.found_existing) continue;
+        for (canonical.data, data_exports) |datum, *out| {
+            const item = datum.item;
             const relocations = allocator.alloc(static_data_export.StaticDataRelocation, item.relocations.len) catch return CompilationError.OutOfMemory;
-            extra_relocations.append(allocator, relocations) catch {
+            data_relocations.append(allocator, relocations) catch {
                 allocator.free(relocations);
                 return CompilationError.OutOfMemory;
             };
-            for (item.relocations, relocations) |relocation, *out| out.* = .{
+            for (item.relocations, relocations) |relocation, *relocation_out| relocation_out.* = .{
                 .offset = relocation.offset,
                 .target_symbol_name = relocation.name,
                 .target = .named,
                 .addend = relocation.addend,
                 .kind = if (relocation.function) .function_pointer else .address,
             };
-            extra.append(allocator, .{
+            out.* = .{
                 .symbol_name = item.name,
                 .bytes = item.bytes,
                 .symbol_offset = item.symbol_offset,
                 .alignment = item.alignment,
-                .is_global = false,
-                .is_exported = false,
+                .is_global = datum.host_visible,
+                .is_exported = datum.host_visible,
                 .relocations = relocations,
-            }) catch return CompilationError.OutOfMemory;
-        }
-        try appendStaticDataExports(allocator, &codegen.codegen.symbols, extra.items, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
-    }
-
-    for (proc_specs, 0..) |_, i| {
-        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
-        if (proc_specs[i].is_static_initializer) continue;
-        const proc_symbol = codegen.compiledProcSymbol(proc_id) orelse {
-            if (builtin.mode == .debug) {
-                invariant("ObjectFileCompiler invariant violated: LIR proc {d} was not compiled before symbol publication", .{i});
-            }
-            unreachable;
-        };
-        const symbol_name = static_data_export.procSymbolName(allocator, proc_specs[i].identity) catch return CompilationError.OutOfMemory;
-        if (seen_proc_symbol_names.contains(symbol_name)) {
-            invariant("ObjectFileCompiler invariant violated: two LIR procs share the symbol {s}", .{symbol_name});
-        }
-        seen_proc_symbol_names.putNoClobber(symbol_name, {}) catch return CompilationError.OutOfMemory;
-        owned_proc_symbol_names.append(allocator, symbol_name) catch {
-            allocator.free(symbol_name);
-            return CompilationError.OutOfMemory;
-        };
-        appendDefinition(allocator, &codegen.codegen.symbols, &symbols, .{
-            .name = symbol_name,
-            .offset = proc_symbol.code_start,
-            .size = proc_symbol.code_end - proc_symbol.code_start,
-            .is_global = pack_mode,
-            .is_function = true,
-            .is_external = false,
-            .section = .text,
-            .prologue_size = proc_symbol.prologue_size,
-            .stack_alloc = proc_symbol.stack_alloc,
-            .frame_size = proc_symbol.frame_size,
-            .callee_saved_mask = proc_symbol.callee_saved_mask,
-            .epilogue_offset = proc_symbol.epilogue_offset,
-            .uses_frame_pointer = proc_symbol.uses_frame_pointer,
-        }) catch return CompilationError.OutOfMemory;
-        dwarf_procs.append(allocator, .{
-            .name = symbol_name,
-            .code_start = proc_symbol.code_start,
-            .code_size = proc_symbol.code_end - proc_symbol.code_start,
-            .loc = lir_store.procLoc(proc_id),
-        }) catch return CompilationError.OutOfMemory;
-    }
-    for (static_rc_helpers) |helper_key| {
-        const helper = codegen.compiledStaticDataRcHelperInfo(helper_key) orelse {
-            if (builtin.mode == .debug) {
-                invariant(
-                    "ObjectFileCompiler invariant violated: static RC helper {x} was not compiled before symbol publication",
-                    .{helper_key.encode()},
-                );
-            }
-            unreachable;
-        };
-        const symbol_name = static_data_export.atomicRcHelperSymbolName(allocator, layout_store, helper_key) catch return CompilationError.OutOfMemory;
-        owned_proc_symbol_names.append(allocator, symbol_name) catch {
-            allocator.free(symbol_name);
-            return CompilationError.OutOfMemory;
-        };
-        appendDefinition(allocator, &codegen.codegen.symbols, &symbols, .{
-            .name = symbol_name,
-            .offset = helper.start_offset,
-            .size = helper.end_offset - helper.start_offset,
-            .is_global = true,
-            .is_function = true,
-            .is_external = false,
-            .is_hidden = true,
-            .section = .text,
-            .prologue_size = helper.prologue_size,
-            .stack_alloc = helper.stack_alloc,
-            .frame_size = helper.frame_size,
-            .callee_saved_mask = helper.callee_saved_mask,
-            .epilogue_offset = helper.epilogue_offset,
-            .uses_frame_pointer = helper.uses_frame_pointer,
-        }) catch return CompilationError.OutOfMemory;
-    }
-
-    // Reference-count helpers compiled inline after a procedure body get
-    // local symbols and DWARF entries of their own, so a frame inside one is
-    // named rather than attributed to whichever procedure precedes it. The
-    // helpers static data already published above are skipped by offset.
-    {
-        var published_starts = std.AutoHashMapUnmanaged(u64, void).empty;
-        defer published_starts.deinit(allocator);
-        for (symbols.items) |definition| {
-            const sym = definition.symbol;
-            if (!sym.is_function or sym.is_external) continue;
-            published_starts.put(allocator, sym.offset, {}) catch return CompilationError.OutOfMemory;
-        }
-        var recorded_ranges = std.AutoHashMapUnmanaged(u32, coff.FunctionInfo).empty;
-        defer recorded_ranges.deinit(allocator);
-        for (codegen.getUnwindFunctions()) |function| {
-            recorded_ranges.put(allocator, function.start_offset, function) catch return CompilationError.OutOfMemory;
-        }
-        const rc_helpers = codegen.compiledRcHelpers(allocator) catch return CompilationError.OutOfMemory;
-        defer allocator.free(rc_helpers);
-        for (rc_helpers) |rc_helper| {
-            if (published_starts.contains(rc_helper.start_offset)) continue;
-            const info = recorded_ranges.get(@intCast(rc_helper.start_offset)) orelse continue;
-            const symbol_name = LirCodeGenMod.compiledRcHelperSymbolName(allocator, layout_store, rc_helper.key) catch return CompilationError.OutOfMemory;
-            owned_proc_symbol_names.append(allocator, symbol_name) catch {
-                allocator.free(symbol_name);
-                return CompilationError.OutOfMemory;
             };
-            appendDefinition(allocator, &codegen.codegen.symbols, &symbols, .{
-                .name = symbol_name,
-                .offset = info.start_offset,
-                .size = info.end_offset - info.start_offset,
-                .is_global = false,
-                .is_function = true,
-                .is_external = false,
-                .section = .text,
-                .prologue_size = info.prologue_size,
-                .stack_alloc = info.stack_alloc,
-                .frame_size = info.frame_size,
-                .callee_saved_mask = info.callee_saved_mask,
-                .epilogue_offset = info.epilogue_offset,
-                .uses_frame_pointer = info.uses_frame_pointer,
-            }) catch return CompilationError.OutOfMemory;
-            dwarf_procs.append(allocator, .{
-                .name = symbol_name,
-                .code_start = info.start_offset,
-                .code_size = info.end_offset - info.start_offset,
-                .loc = .none,
-            }) catch return CompilationError.OutOfMemory;
         }
+        try appendStaticDataExports(allocator, &final.codegen.symbols, data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
+    }
+
+    {
+        var seen_proc_symbol_names = std.StringHashMap(void).init(allocator);
+        defer seen_proc_symbol_names.deinit();
+        for (canonical.set.artifacts, starts) |artifact, start| switch (artifact.kind) {
+            .proc => |identity| {
+                const frame = artifact.frame orelse invariant("a procedure artifact had no frame", .{});
+                const symbol_name = static_data_export.procSymbolName(allocator, identity) catch return CompilationError.OutOfMemory;
+                owned_proc_symbol_names.append(allocator, symbol_name) catch {
+                    allocator.free(symbol_name);
+                    return CompilationError.OutOfMemory;
+                };
+                if ((seen_proc_symbol_names.getOrPut(symbol_name) catch return CompilationError.OutOfMemory).found_existing) {
+                    invariant("ObjectFileCompiler invariant violated: two procedures share the symbol {s}", .{symbol_name});
+                }
+                appendDefinition(allocator, &final.codegen.symbols, &symbols, .{
+                    .name = symbol_name,
+                    .offset = start,
+                    .size = artifact.code.len,
+                    .is_global = pack_mode,
+                    .is_function = true,
+                    .is_external = false,
+                    .section = .text,
+                    .prologue_size = frame.prologue_size,
+                    .stack_alloc = frame.stack_alloc,
+                    .frame_size = frame.frame_size,
+                    .callee_saved_mask = frame.callee_saved_mask,
+                    .epilogue_offset = frame.epilogue_offset,
+                    .uses_frame_pointer = frame.uses_frame_pointer,
+                }) catch return CompilationError.OutOfMemory;
+                dwarf_procs.append(allocator, .{
+                    .name = symbol_name,
+                    .code_start = start,
+                    .code_size = artifact.code.len,
+                    .loc = artifact.loc,
+                }) catch return CompilationError.OutOfMemory;
+            },
+            .rc_helper => |name| {
+                // A helper compiled inline after a procedure body gets a
+                // local symbol and a debug entry of its own, so a frame
+                // inside one is named rather than attributed to whichever
+                // procedure precedes it.
+                const frame = artifact.frame orelse continue;
+                const static_helper = static_helper_names.get(name);
+                const symbol_name = if (static_helper) |helper_key|
+                    static_data_export.atomicRcHelperSymbolName(allocator, layout_store, helper_key) catch return CompilationError.OutOfMemory
+                else
+                    allocator.dupe(u8, name) catch return CompilationError.OutOfMemory;
+                owned_proc_symbol_names.append(allocator, symbol_name) catch {
+                    allocator.free(symbol_name);
+                    return CompilationError.OutOfMemory;
+                };
+                appendDefinition(allocator, &final.codegen.symbols, &symbols, .{
+                    .name = symbol_name,
+                    .offset = start + artifact.entry,
+                    .size = artifact.code.len - artifact.entry,
+                    .is_global = static_helper != null,
+                    .is_function = true,
+                    .is_external = false,
+                    .is_hidden = static_helper != null,
+                    .section = .text,
+                    .prologue_size = frame.prologue_size,
+                    .stack_alloc = frame.stack_alloc,
+                    .frame_size = frame.frame_size,
+                    .callee_saved_mask = frame.callee_saved_mask,
+                    .epilogue_offset = frame.epilogue_offset,
+                    .uses_frame_pointer = frame.uses_frame_pointer,
+                }) catch return CompilationError.OutOfMemory;
+                if (static_helper == null) dwarf_procs.append(allocator, .{
+                    .name = symbol_name,
+                    .code_start = start + artifact.entry,
+                    .code_size = artifact.code.len - artifact.entry,
+                    .loc = .none,
+                }) catch return CompilationError.OutOfMemory;
+            },
+            .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
+        };
     }
     if (timing) |timings| timings.finish(symbol_relocations_started_ns, .symbol_relocations);
 
     // Generate entrypoint wrappers
     const entrypoint_instructions_started_ns = if (timing) |timings| timings.start() else 0;
     for (entrypoints) |entrypoint| {
-        const export_info = codegen.generateEntrypointWrapper(
+        const export_info = final.generateEntrypointWrapper(
             entrypoint.symbol_name,
             entrypoint.proc,
             entrypoint.arg_layouts,
             entrypoint.ret_layout,
         ) catch return CompilationError.OutOfMemory;
 
-        appendDefinition(allocator, &codegen.codegen.symbols, &symbols, .{
+        appendDefinition(allocator, &final.codegen.symbols, &symbols, .{
             .name = entrypoint.symbol_name,
             .offset = export_info.offset,
             .size = export_info.size,
@@ -605,8 +706,10 @@ fn compileWithCodeGen(
 
     // Get generated code and relocations
     symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
-    codegen.finishImage() catch return CompilationError.OutOfMemory;
-    if (artifactRoundTripRequested()) {
+    final.finishImage() catch return CompilationError.OutOfMemory;
+    // `ROC_DEV_ARTIFACT_ROUNDTRIP` makes every object compile also assemble the
+    // program from its own procedure artifacts and panic if the result differs.
+    if (dev_diagnostics.isSet(.dev_artifact_roundtrip)) {
         var fresh = CodeGen.initWithBoxyMetadata(
             allocator,
             lir_store,
@@ -615,13 +718,14 @@ fn compileWithCodeGen(
             erased_arg_desc_offsets,
             erased_arg_desc_params,
             boxy_worker_procs,
+            erased_capture_prefix,
             target.cpuLevel(),
         ) catch return CompilationError.OutOfMemory;
         defer fresh.deinit();
         fresh.generation_mode = .object_file;
         fresh.setStaticDataSymbols(static_data_exports) catch return CompilationError.OutOfMemory;
         fresh.enable_default_platform_runtime = enable_default_platform_runtime;
-        ProcArtifact.verifyRoundTrip(CodeGen, allocator, &codegen, &fresh, proc_specs, layout_store, static_strings.exports) catch |err| switch (err) {
+        ProcArtifact.verifyRoundTrip(CodeGen, allocator, &final, &fresh, proc_specs, layout_store, static_strings.exports) catch |err| switch (err) {
             error.OutOfMemory => return CompilationError.OutOfMemory,
             error.NestedCodeRegion,
             error.UncoveredCode,
@@ -633,15 +737,55 @@ fn compileWithCodeGen(
             => invariant("dev artifact round trip failed: {s}", .{@errorName(err)}),
         };
     }
-    const code = codegen.getGeneratedCode();
-    const relocations = codegen.getRelocations();
+    const code = final.getGeneratedCode();
+    const relocations = final.getRelocations();
 
-    var resolved = try resolveObjectSymbols(allocator, &codegen.codegen.symbols, symbols.items, relocations);
+    var resolved = try resolveObjectSymbols(allocator, &final.codegen.symbols, symbols.items, relocations);
     defer resolved.deinit(allocator);
     if (timing) |timings| timings.finish(symbol_relocations_started_ns, .symbol_relocations);
 
-    // Build DWARF debug sections from the line entries recorded during
-    // code generation.
+    const object_bytes: []const u8 = if (emit_object)
+        try encodeObject(allocator, lir_store, target, &final, code, rodata.items, zero_fill_size, resolved.symbols, relocations, rodata_relocations.items, dwarf_procs.items, timing)
+    else
+        &.{};
+    errdefer allocator.free(object_bytes);
+
+    var artifacts: ?ProcArtifact.Set = null;
+    if (pack_mode or capture_artifacts) {
+        const canonical_data = allocator.alloc(ProcArtifact.DataItem, canonical.data.len) catch return CompilationError.OutOfMemory;
+        defer allocator.free(canonical_data);
+        for (canonical.data, canonical_data) |datum, *item| item.* = datum.item;
+        artifacts = ProcArtifact.extract(CodeGen, allocator, &final, proc_specs, layout_store, &.{}, &.{}, canonical_data) catch |err| switch (err) {
+            error.OutOfMemory => return CompilationError.OutOfMemory,
+            error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => invariant("pack artifact extraction failed: {s}", .{@errorName(err)}),
+        };
+    }
+
+    return CompilationResult{
+        .object_bytes = object_bytes,
+        .allocator = allocator,
+        .uses_boxy = final.boxy_runtime_used,
+        .artifacts = artifacts,
+        .runtime_tables = runtime_numbering.takeOrder(),
+    };
+}
+
+/// Encode the compiled program as an object file with DWARF line tables
+/// built from the line entries recorded during code generation.
+fn encodeObject(
+    allocator: Allocator,
+    lir_store: *const LirStore,
+    target: RocTarget,
+    codegen: anytype,
+    code: []const u8,
+    rodata: []const u8,
+    zero_fill_size: u64,
+    symbols: []const ObjectWriter.Symbol,
+    relocations: []const IndexedRelocation,
+    rodata_relocations: []const ObjectWriter.IndexedDataRelocation,
+    dwarf_procs: []const Dwarf.ProcEntry,
+    timing: ?*ObjectFileCompiler.Timing,
+) CompilationError![]const u8 {
     const dwarf_started_ns = if (timing) |timings| timings.start() else 0;
     const source_file_names = allocator.alloc([]const u8, lir_store.sourceFileCount()) catch {
         return CompilationError.OutOfMemory;
@@ -655,13 +799,12 @@ fn compileWithCodeGen(
         "roc dev",
         source_file_names,
         codegen.getLineEntries(),
-        dwarf_procs.items,
+        dwarf_procs,
         code.len,
     ) catch return CompilationError.OutOfMemory;
     defer dwarf_sections.deinit(allocator);
     if (timing) |timings| timings.finish(dwarf_started_ns, .dwarf);
 
-    // Generate object file
     const object_encoding_started_ns = if (timing) |timings| timings.start() else 0;
     var output = std.ArrayList(u8).empty;
     errdefer output.deinit(allocator);
@@ -670,11 +813,11 @@ fn compileWithCodeGen(
         allocator,
         target,
         code,
-        rodata.items,
+        rodata,
         zero_fill_size,
-        resolved.symbols,
+        symbols,
         relocations,
-        rodata_relocations.items,
+        rodata_relocations,
         codegen.getUnwindFunctions(),
         .{
             .line = dwarf_sections.debug_line,
@@ -691,21 +834,7 @@ fn compileWithCodeGen(
 
     const object_bytes = output.toOwnedSlice(allocator) catch return CompilationError.OutOfMemory;
     if (timing) |timings| timings.finish(object_encoding_started_ns, .object_encoding);
-
-    var artifacts: ?ProcArtifact.Set = null;
-    if (pack_mode or capture_artifacts) {
-        artifacts = ProcArtifact.extract(CodeGen, allocator, &codegen, proc_specs, layout_store, static_strings.exports, static_data_exports, spliced_data.items) catch |err| switch (err) {
-            error.OutOfMemory => return CompilationError.OutOfMemory,
-            error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => invariant("pack artifact extraction failed: {s}", .{@errorName(err)}),
-        };
-    }
-
-    return CompilationResult{
-        .object_bytes = object_bytes,
-        .allocator = allocator,
-        .uses_boxy = codegen.boxy_runtime_used,
-        .artifacts = artifacts,
-    };
+    return object_bytes;
 }
 
 const SymbolDefinition = struct {
@@ -719,11 +848,12 @@ pub const LocatedArtifact = struct {
     index: u32,
 };
 
-/// The object cache's artifacts, asked by procedure identity. The consumer
-/// that loaded the packs supplies the context and the lookup.
+/// The object cache's artifacts, asked by the key an entry was served under
+/// (`LIR.LirProcSpec.cache_key`). The consumer that loaded the packs
+/// supplies the context and the lookup.
 pub const SpliceSource = struct {
     context: *anyopaque,
-    find: *const fn (context: *anyopaque, identity: lir.ProcIdentity) ?LocatedArtifact,
+    find: *const fn (context: *anyopaque, key: [32]u8) ?LocatedArtifact,
 };
 
 /// Place the object-cache entry of each of `external_procs`, with its
@@ -758,12 +888,9 @@ pub fn spliceExternalProcs(
     for (external_procs) |proc_id| {
         const proc = proc_specs[@backingInt(proc_id)];
         if (!proc.external) invariant("procedure {d} was offered for splicing but is not an object-cache entry", .{@backingInt(proc_id)});
-        const located = source.find(source.context, proc.identity) orelse {
-            if (builtin.mode == .debug) {
-                invariant("object cache served a specialization whose artifact {s} is not in any loaded pack", .{&proc.identity.symbolHex()});
-            }
-            unreachable;
-        };
+        const key = proc.cache_key orelse invariant("object-cache procedure {d} had no cache key", .{@backingInt(proc_id)});
+        const located = source.find(source.context, key) orelse
+            invariant("object cache served a specialization whose artifact {s} is not in any loaded pack", .{&proc.identity.symbolHex()});
         const gop = try packs.getOrPut(located.set);
         if (!gop.found_existing) gop.value_ptr.* = .{ .placed = std.AutoHashMap(u32, usize).init(allocator) };
         try ProcArtifact.splice(CodeGen, allocator, codegen, located.set, &.{located.index}, &procs_by_identity, &gop.value_ptr.placed, data_out);
@@ -809,7 +936,7 @@ fn resolveObjectSymbols(
         .linked_function => |function| {
             symbols[@backingInt(function.symbol)].is_function = true;
         },
-        .linked_data, .local_data, .jmp_to_return, .retired => {},
+        .linked_data, .local_data, .retired, .runtime_ref => {},
     };
     for (definitions) |definition| {
         const symbol = &symbols[@backingInt(definition.id)];
@@ -844,6 +971,9 @@ fn appendStaticDataExports(
         // A zero-fill export has no relocations, so this offset is only ever
         // used for exports placed in readonly data.
         const aligned_offset = std.mem.alignForward(usize, start, @intCast(data_export.alignment));
+        // A data symbol named by the relocation before is the symbol it
+        // interned: a list of copies of one value names it once per item.
+        var previous_data: ?struct { name: []const u8, id: SymbolTable.Id } = null;
         for (data_export.relocations) |relocation| {
             const id = switch (relocation.target) {
                 .data_symbol => |target| data_symbols[@backingInt(target)],
@@ -860,7 +990,10 @@ fn appendStaticDataExports(
                         helpers.put(helper, id) catch return CompilationError.OutOfMemory;
                         break :blk id;
                     }
-                    break :blk table.internEmitted(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
+                    if (previous_data) |previous| if (std.mem.eql(u8, previous.name, relocation.target_symbol_name)) break :blk previous.id;
+                    const id = table.internEmitted(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
+                    previous_data = .{ .name = relocation.target_symbol_name, .id = id };
+                    break :blk id;
                 },
             };
             relocations.append(allocator, .{
@@ -1014,10 +1147,12 @@ fn crossCompileDispatch(
     boxy_worker_procs: []const lir.LIR.LirProcSpecId,
     target: RocTarget,
     enable_default_platform_runtime: bool,
+    erased_capture_prefix: u32,
     timing: ?*ObjectFileCompiler.Timing,
     pack_mode: bool,
     splice_source: ?SpliceSource,
     capture_artifacts: bool,
+    emit_object: bool,
     executor: ?Executor,
     reuse_same_program: ?*const NativeProcCompiler.Retained,
 ) CompilationError!CompilationResult {
@@ -1042,10 +1177,12 @@ fn crossCompileDispatch(
                     boxy_worker_procs,
                     target,
                     enable_default_platform_runtime,
+                    erased_capture_prefix,
                     timing,
                     pack_mode,
                     splice_source,
                     capture_artifacts,
+                    emit_object,
                     executor,
                     reuse_same_program,
                 );
@@ -1144,7 +1281,7 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
             const body = try store.addCFStmt(.{ .assign_literal = .{
                 .target = local,
-                .value = .{ .static_data = @fromBackingInt(@intCast(7)) },
+                .value = .{ .static_data = .{ .id = @fromBackingInt(@intCast(7)) } },
                 .next = ret,
             } }, .test_fixture);
             _ = try store.addProcSpec(.{
@@ -1261,12 +1398,4 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             try std.testing.expectEqualStrings(text, value[0..output[2]]);
         }
     }
-}
-
-/// `ROC_DEV_ARTIFACT_ROUNDTRIP` makes every object compile also assemble the
-/// program from its own procedure artifacts and panic if the result differs.
-/// A compiler built without developer diagnostics never reads it.
-fn artifactRoundTripRequested() bool {
-    if (comptime !build_options.dev_diagnostics) return false;
-    return std.c.getenv("ROC_DEV_ARTIFACT_ROUNDTRIP") != null;
 }

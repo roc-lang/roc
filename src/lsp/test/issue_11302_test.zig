@@ -71,7 +71,7 @@ fn checkModule(base: []const u8, module: []const u8, workspace: []const u8) inte
     test_env.configureChecker(&checker, cache_path);
     defer checker.deinit();
 
-    const publish_sets = try checker.check(module_uri, null, workspace_root);
+    const publish_sets = try checker.check(module_uri, null, workspace_root, null);
     defer freePublishSets(allocator, publish_sets);
 
     var messages = std.ArrayList(u8).empty;

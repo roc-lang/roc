@@ -47,6 +47,8 @@ pub const ModuleTypeCheckTiming = struct {
 
     name_buf: [max_name_len]u8 = undefined,
     name_len: u16 = 0,
+    /// Bytes of `name_buf` holding the package label.
+    package_len: u16 = 0,
     ns: u64,
 
     /// `package.Module`, cut to `max_name_len` bytes.
@@ -56,11 +58,23 @@ pub const ModuleTypeCheckTiming = struct {
             error.NoSpaceLeft => result.name_buf[0..],
         };
         result.name_len = @intCast(written.len);
+        result.package_len = @intCast(@min(package.len, written.len));
         return result;
     }
 
     pub fn name(self: *const ModuleTypeCheckTiming) []const u8 {
         return self.name_buf[0..self.name_len];
+    }
+
+    /// The package label: a shorthand, or the identity of a package that has
+    /// none, which for a local package is its path.
+    pub fn packageLabel(self: *const ModuleTypeCheckTiming) []const u8 {
+        return self.name_buf[0..self.package_len];
+    }
+
+    /// The module name, after the package label and its `.` separator.
+    pub fn moduleName(self: *const ModuleTypeCheckTiming) []const u8 {
+        return self.name_buf[@min(self.package_len + 1, self.name_len)..self.name_len];
     }
 };
 
@@ -148,6 +162,13 @@ pub const SemanticModuleData = struct {
     checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
 };
 
+/// Output of a module that completed successfully, which always includes its
+/// checked artifact.
+pub const CheckedModuleData = struct {
+    env: *ModuleEnv,
+    checked_artifact: *const CheckedArtifact.CheckedModuleArtifact,
+};
+
 /// Owned output from type checking before the coordinator takes publication.
 pub const TypeCheckOutput = struct {
     checker: Check,
@@ -232,7 +253,7 @@ pub fn buildCheckOwnerEnvs(
         }
     }
 
-    var seen_public_dependencies = std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator);
+    var seen_public_dependencies = std.AutoHashMap(CheckedArtifact.CheckedModuleDigest, void).init(allocator);
     defer seen_public_dependencies.deinit();
 
     for (imported_artifacts) |imported_artifact| {
@@ -252,7 +273,7 @@ fn appendCheckOwnerEnvPublicDependencies(
     allocator: Allocator,
     owner_envs: *std.ArrayList(*const ModuleEnv),
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
-    seen_public_dependencies: *std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void),
+    seen_public_dependencies: *std.AutoHashMap(CheckedArtifact.CheckedModuleDigest, void),
     view: CheckedArtifact.ImportedModuleView,
 ) Allocator.Error!void {
     for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
@@ -297,7 +318,7 @@ fn moduleEnvIdentitiesMatch(a: *const ModuleEnv, b: *const ModuleEnv) bool {
 
 fn availableArtifactByKey(
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
-    key: CheckedArtifact.CheckedModuleArtifactKey,
+    key: CheckedArtifact.ModuleId,
 ) ?CheckedArtifact.ImportedModuleView {
     for (available_artifacts) |artifact| {
         if (std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) return artifact;
@@ -476,6 +497,7 @@ pub fn typeCheckModule(
     validation: Can.Validation,
     ctfe_options: eval.CompileTimeFinalization.Options,
     deferred_imports: can.ImportResolution.Imports,
+    missing_public_types: []const []const u8,
 ) TypeCheckModuleError!TypeCheckOutput {
     const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
 
@@ -506,6 +528,7 @@ pub fn typeCheckModule(
     try can.resolveDeferredImports(env, .{
         .imports = deferred_imports,
         .reachable_envs = owner_envs,
+        .missing_public_types = missing_public_types,
     });
 
     var checker = try Check.initWithOwnerModules(

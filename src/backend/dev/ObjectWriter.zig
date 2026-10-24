@@ -58,10 +58,9 @@ pub fn generateObjectFileWithDebug(
     defer indexed.deinit(allocator);
     for (relocations) |rel| {
         indexed.appendAssumeCapacity(switch (rel) {
-            .linked_function => |f| .{ .linked_function = .{ .offset = f.offset, .symbol = table.indices.get(f.name).? } },
+            .linked_function => |f| .{ .linked_function = .{ .offset = f.offset, .symbol = table.indices.get(f.name).?, .kind = f.kind } },
             .linked_data => |d| .{ .linked_data = .{ .offset = d.offset, .symbol = table.indices.get(d.name).?, .kind = d.kind } },
             .local_data => |d| .{ .local_data = d },
-            .jmp_to_return => |j| .{ .jmp_to_return = j },
         });
     }
     const indexed_data = try allocator.alloc(IndexedDataRelocation, rodata_relocations.len);
@@ -137,9 +136,9 @@ pub fn generateIndexedObjectFileWithDebug(
             }
             for (relocations) |rel| {
                 switch (rel) {
-                    .linked_function => |f| try elf.addTextRelocation(rel.getOffset(), target_indices[@backingInt(f.symbol)], if (cpu_arch == .x86_64) -4 else 0),
+                    .linked_function => |f| try elf.addTextRelocation(rel.getOffset(), target_indices[@backingInt(f.symbol)], f.kind),
                     .linked_data => |d| try elf.addTextDataRelocation(rel.getOffset(), target_indices[@backingInt(d.symbol)], d.kind),
-                    .local_data, .jmp_to_return, .retired => {},
+                    .local_data, .retired, .runtime_ref => {},
                 }
             }
             for (rodata_relocations) |rel| try elf.addRodataRelocation(rel.offset, target_indices[@backingInt(rel.symbol)], rel.addend);
@@ -171,7 +170,7 @@ pub fn generateIndexedObjectFileWithDebug(
                 .linked_data => |d| {
                     referenced[@backingInt(d.symbol)] = true;
                 },
-                .local_data, .jmp_to_return, .retired => {},
+                .local_data, .retired, .runtime_ref => {},
             };
             for (rodata_relocations) |rel| referenced[@backingInt(rel.symbol)] = true;
 
@@ -189,9 +188,9 @@ pub fn generateIndexedObjectFileWithDebug(
             }
             for (relocations) |rel| {
                 switch (rel) {
-                    .linked_function => |f| try macho.addTextRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(f.symbol)], true),
+                    .linked_function => |f| try macho.addTextRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(f.symbol)], true, f.kind),
                     .linked_data => |d| try macho.addTextDataRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(d.symbol)], true, d.kind),
-                    .local_data, .jmp_to_return, .retired => {},
+                    .local_data, .retired, .runtime_ref => {},
                 }
             }
             for (rodata_relocations) |rel| try macho.addRodataRelocation(@intCast(rel.offset), target_indices[@backingInt(rel.symbol)], true, rel.addend);
@@ -264,9 +263,9 @@ pub fn generateIndexedObjectFileWithDebug(
             }
             for (relocations) |rel| {
                 switch (rel) {
-                    .linked_function => |f| try coff_writer.addTextRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(f.symbol)]),
+                    .linked_function => |f| try coff_writer.addTextRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(f.symbol)], f.kind),
                     .linked_data => |d| try coff_writer.addTextDataRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(d.symbol)], d.kind),
-                    .local_data, .jmp_to_return, .retired => {},
+                    .local_data, .retired, .runtime_ref => {},
                 }
             }
             for (rodata_relocations) |rel| try coff_writer.addRdataRelocation(@intCast(rel.offset), target_indices[@backingInt(rel.symbol)], rel.addend);
@@ -979,7 +978,7 @@ test "indexed object relocations preserve targets through format symbol ordering
         const is_x64 = target.toCpuArch() == .x86_64;
         const relocations = [_]IndexedRelocation{
             .{ .linked_data = .{ .offset = 8, .symbol = ids[2], .kind = if (is_x64) .rel32 else .page21 } },
-            .{ .linked_function = .{ .offset = 0, .symbol = ids[0] } },
+            .{ .linked_function = .{ .offset = 0, .symbol = ids[0], .kind = if (is_x64) .x86_call_rel32 else .aarch64_call26 } },
             .{ .linked_data = .{ .offset = 12, .symbol = ids[2], .kind = if (is_x64) .rel32 else .pageoff12 } },
             .{ .linked_data = .{ .offset = 16, .symbol = ids[1] } },
         };

@@ -180,6 +180,9 @@ pub const TypeCheckTask = struct {
     /// Each import's resolution outcome, which `can`'s import-resolution drain
     /// consumes to settle this module's deferred references before checking.
     deferred_imports: []const CanonicalizeImport,
+    /// For a package or platform root, the public names its header exposes
+    /// whose selected nested type the selected module does not define.
+    missing_public_types: []const []const u8 = &.{},
     /// Published checked artifact keys for direct imports, keyed by typed-CIR module index
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     /// Published checked artifacts currently available for exact-key lookup during checking finalization

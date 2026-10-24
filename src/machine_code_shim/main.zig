@@ -297,8 +297,9 @@ fn loadDevProgram(
     for (view.relocations, relocation_records) |record, *relocation| {
         const name = try view.symbolName(record.symbol);
         const shim_function_addr = resolveShimFunction(name);
-        const data_kind: ?@FieldType(@FieldType(backend.Relocation, "linked_data"), "kind") = switch (try record.relocationKind()) {
-            .linked_function => null,
+        const encoding = try record.relocationKind();
+        const data_kind: ?@FieldType(@FieldType(backend.Relocation, "linked_data"), "kind") = switch (encoding) {
+            .linked_function_x86_call_rel32, .linked_function_aarch64_call26 => null,
             .linked_data_abs64 => .abs64,
             .linked_data_rel32 => .rel32,
             .linked_data_page21 => .page21,
@@ -316,10 +317,17 @@ fn loadDevProgram(
         } else {
             const target_addr = shim_function_addr orelse return unresolvedSymbol(name);
             try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
-            relocation.* = .{ .linked_function = .{
-                .offset = record.code_offset,
-                .name = name,
-            } };
+            relocation.* = .{
+                .linked_function = .{
+                    .offset = record.code_offset,
+                    .name = name,
+                    .kind = switch (encoding) {
+                        .linked_function_x86_call_rel32 => .x86_call_rel32,
+                        .linked_function_aarch64_call26 => .aarch64_call26,
+                        .linked_data_abs64, .linked_data_rel32, .linked_data_page21, .linked_data_pageoff12 => unreachable, // data encodings were handled above
+                    },
+                },
+            };
         }
     }
     const stub_size = try jumpStubSize();
@@ -565,7 +573,17 @@ fn resolveShimFunction(name: []const u8) ?usize {
     }
     if (resolveRuntimeSymbol(name)) |address| return address;
     if (resolveHostedSymbol(name)) |address| return address;
+    if (resolvePackageSymbol(name)) |address| return address;
     return resolveBoxyShimFunction(name);
+}
+
+/// An object-cache entry linked into this executable, by its C-ABI entry
+/// name, which the generated platform shim recorded next to its address.
+fn resolvePackageSymbol(name: []const u8) ?usize {
+    for (shim_host_abi.packageNames(), shim_host_abi.packageFns()) |package_name, package_fn| {
+        if (std.mem.eql(u8, std.mem.span(package_name), name)) return @intFromPtr(package_fn);
+    }
+    return null;
 }
 
 /// The host's runtime symbols, which this shim links against directly.
@@ -692,10 +710,7 @@ fn executeDevEntrypoint(
     arg_ptr: ?*anyopaque,
 ) void {
     const entrypoint = devEntrypointForOrdinal(program.entrypoints, entry_idx) orelse {
-        if (builtin.mode == .debug) {
-            invariant("machine-code shim invariant violated: missing dev entrypoint ordinal {d}", .{entry_idx});
-        }
-        unreachable;
+        invariant("machine-code shim invariant violated: missing dev entrypoint ordinal {d}", .{entry_idx});
     };
     if (entrypoint.code_offset > std.math.maxInt(usize)) {
         ops.crash("Machine-code shim received an invalid dev entrypoint offset");
@@ -737,10 +752,7 @@ fn acquireDevProgramRef(program: *DevProgram) void {
         hot_reload.retainDescriptor(descriptor);
         return;
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .debug) {
-            invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
-        }
-        unreachable;
+        invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
     }
 
     const previous = program.local_refs.fetchAdd(1, .acquire);
@@ -753,10 +765,7 @@ fn releaseDevProgramRefLocked(state: *RuntimeState, program: *DevProgram) void {
     if (program.descriptor) |descriptor| {
         hot_reload.releaseDescriptor(descriptor);
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .debug) {
-            invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
-        }
-        unreachable;
+        invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
     } else {
         const previous = program.local_refs.fetchSub(1, .acq_rel);
         if (builtin.mode == .debug and previous == 0) {
@@ -773,10 +782,7 @@ fn releaseDevProgramRef(program: *DevProgram) void {
     if (program.descriptor) |descriptor| {
         hot_reload.releaseDescriptor(descriptor);
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .debug) {
-            invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
-        }
-        unreachable;
+        invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
     } else {
         const previous = program.local_refs.fetchSub(1, .acq_rel);
         if (builtin.mode == .debug and previous == 0) {

@@ -14,7 +14,7 @@ match Answer {
 ~~~
 # EXPECTED
 UNCONDITIONAL CONDITION - literal_patterns.md:1:7:1:13
-MISSING METHOD - literal_patterns.md:5:5:5:7
+TYPE MISMATCH - literal_patterns.md:5:5:5:7
 TYPE MISMATCH - literal_patterns.md:3:13:3:20
 # PROBLEMS
 ~~~clojure
@@ -35,22 +35,14 @@ TYPE MISMATCH - literal_patterns.md:3:13:3:20
 			(source-region (file "literal_patterns.md") (start 1 7) (end 1 13) (annotation warning) (line-text "match Answer {"))))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 5 5) (end 5 7))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This number is being used where a non-number type is needed."))
 		(document
 			(source-region (file "literal_patterns.md") (start 5 5) (end 5 7) (annotation error) (line-text "    10 => 4"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "Other code expects this to have the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

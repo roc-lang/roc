@@ -225,25 +225,32 @@ fn decodeWord(comptime V: type, word: anytype) V {
 /// the node's bytes (null when the diagnostic carries nothing but its region),
 /// and the variant's fields in the order of the payload's data words, where a
 /// Region fills a `<x>_start`/`<x>_end` pair. The variant's one field not
-/// listed is the Region stored as the node's region.
+/// listed is the Region stored as the node's region, except in a diagnostic
+/// about its file as a whole (`file_level`), which has no region; its node's
+/// region is empty.
 const DiagnosticShape = struct {
     cir: []const u8,
     tag: Node.Tag,
     payload: ?[]const u8,
     names: []const []const u8,
+    file_level: bool = false,
 
-    /// The field stored as the node's region.
-    fn regionField(comptime shape: DiagnosticShape) []const u8 {
+    /// The field stored as the node's region, or null for a file-level
+    /// diagnostic.
+    fn regionField(comptime shape: DiagnosticShape) ?[]const u8 {
         const info = @typeInfo(@FieldType(CIR.Diagnostic, shape.cir)).@"struct";
         var region_field: ?[]const u8 = null;
         for (info.field_names, info.field_types) |name, T| {
             if (nameIndex(shape.names, name) != null) continue;
-            if (T != Region or region_field != null) {
+            if (T != Region or region_field != null or shape.file_level) {
                 @compileError("the node shape of ." ++ shape.cir ++ " does not store its field " ++ name);
             }
             region_field = name;
         }
-        return region_field orelse @compileError("." ++ shape.cir ++ " has no region to store as its node's region");
+        if (region_field == null and !shape.file_level) {
+            @compileError("." ++ shape.cir ++ " has no region to store as its node's region");
+        }
+        return region_field;
     }
 };
 
@@ -289,7 +296,7 @@ fn copiedDiagnosticNode(comptime cir_tag: anytype, value: anytype, node: *Node) 
     } else if (shape.names.len != 0) {
         @compileError("." ++ shape.cir ++ " names fields its node has no payload for");
     }
-    return @field(value, shape.regionField());
+    return if (comptime shape.regionField()) |region_field| @field(value, region_field) else Region.zero();
 }
 
 fn encodeDiagnosticPayload(comptime P: type, comptime names: []const []const u8, value: anytype) P {
@@ -323,7 +330,7 @@ fn copiedDiagnostic(store: *const NodeStore, node_idx: Node.Idx, comptime narrow
         if (comptime nameIndex(shape.names, name)) |index| {
             @field(value, name) = decodeDiagnosticWord(T, @field(payload, shape.payload.?), index);
         } else {
-            comptime std.debug.assert(std.mem.eql(u8, name, shape.regionField()));
+            comptime std.debug.assert(std.mem.eql(u8, name, shape.regionField().?));
             @field(value, name) = store.getRegionAt(node_idx);
         }
     }
@@ -441,7 +448,6 @@ const copied_diagnostic_shapes = [_]DiagnosticShape{
     .{ .cir = "unnamed_field_cannot_have_default", .tag = .diag_unnamed_field_cannot_have_default, .payload = null, .names = &.{} },
     .{ .cir = "default_not_allowed_in_structural_record", .tag = .diag_default_not_allowed_in_structural_record, .payload = null, .names = &.{} },
     .{ .cir = "default_not_allowed_on_local_type_decl", .tag = .diag_default_not_allowed_on_local_type_decl, .payload = null, .names = &.{} },
-    .{ .cir = "execution_requires_app_or_default_app", .tag = .diag_execution_requires_app_or_default_app, .payload = null, .names = &.{} },
     .{ .cir = "module_header_deprecated", .tag = .diag_module_header_deprecated, .payload = null, .names = &.{} },
     .{ .cir = "var_across_function_boundary", .tag = .diag_var_across_function_boundary, .payload = null, .names = &.{} },
     .{ .cir = "crash_expects_string", .tag = .diag_crash_expects_string, .payload = null, .names = &.{} },
@@ -469,9 +475,9 @@ const copied_diagnostic_shapes = [_]DiagnosticShape{
     .{ .cir = "invalid_associated_statement", .tag = .diag_invalid_associated_statement, .payload = "diag_single_value", .names = &.{"stmt"} },
     .{ .cir = "where_alias_constraint_not_on_receiver", .tag = .diag_where_alias_constraint_not_on_receiver, .payload = "diag_single_ident", .names = &.{"receiver_name"} },
     .{ .cir = "record_default_reference_cycle", .tag = .diag_record_default_reference_cycle, .payload = "diag_single_ident", .names = &.{"field_name"} },
-    .{ .cir = "type_module_missing_matching_type", .tag = .diag_type_module_missing_matching_type, .payload = "diag_single_ident", .names = &.{"module_name"} },
+    .{ .cir = "type_module_missing_matching_type", .tag = .diag_type_module_missing_matching_type, .payload = "diag_single_ident", .names = &.{"module_name"}, .file_level = true },
     .{ .cir = "type_module_has_alias_not_nominal", .tag = .diag_type_module_has_alias_not_nominal, .payload = "diag_single_ident", .names = &.{"module_name"} },
-    .{ .cir = "default_app_missing_main", .tag = .diag_default_app_missing_main, .payload = "diag_single_ident", .names = &.{"module_name"} },
+    .{ .cir = "default_app_missing_main", .tag = .diag_default_app_missing_main, .payload = "diag_single_ident", .names = &.{"module_name"}, .file_level = true },
     .{ .cir = "default_app_wrong_arity", .tag = .diag_default_app_wrong_arity, .payload = "diag_single_value", .names = &.{"arity"} },
     .{ .cir = "cannot_import_default_app", .tag = .diag_cannot_import_default_app, .payload = "diag_single_ident", .names = &.{"module_name"} },
     .{ .cir = "type_name_case_mismatch", .tag = .diag_type_name_case_mismatch, .payload = "diag_two_idents", .names = &.{ "module_name", "type_name" } },
@@ -480,6 +486,7 @@ const copied_diagnostic_shapes = [_]DiagnosticShape{
     .{ .cir = "invalid_main_type_rename_in_exposing", .tag = .diag_invalid_main_type_rename_in_exposing, .payload = "diag_two_idents", .names = &.{ "type_name", "alias" } },
     .{ .cir = "shadowing_warning", .tag = .diag_shadowing_warning, .payload = "diag_ident_with_region", .names = &.{ "ident", "original_region" } },
     .{ .cir = "binding_name_does_not_match_mutability", .tag = .diag_binding_name_does_not_match_mutability, .payload = "diag_two_idents", .names = &.{ "ident", "mutability" } },
+    .{ .cir = "var_in_binder_pattern", .tag = .diag_var_in_binder_pattern, .payload = "diag_two_idents", .names = &.{ "ident", "position" } },
     .{ .cir = "type_redeclared", .tag = .diag_type_redeclared, .payload = "diag_ident_with_region", .names = &.{ "name", "original_region" } },
     .{ .cir = "undeclared_type", .tag = .diag_undeclared_type, .payload = "diag_single_ident", .names = &.{"name"} },
     .{ .cir = "type_alias_but_needed_nominal", .tag = .diag_type_alias_but_needed_nominal, .payload = "diag_single_ident", .names = &.{"name"} },
@@ -496,6 +503,7 @@ const copied_diagnostic_shapes = [_]DiagnosticShape{
     .{ .cir = "private_type_in_exposed_field", .tag = .diag_private_type_in_exposed_field, .payload = "diag_three_idents", .names = &.{ "exposed_type", "field_name", "private_type" } },
     .{ .cir = "type_from_missing_module", .tag = .diag_type_from_missing_module, .payload = "diag_two_idents", .names = &.{ "module_name", "type_name" } },
     .{ .cir = "module_not_imported", .tag = .diag_module_not_imported, .payload = "diag_single_ident", .names = &.{"module_name"} },
+    .{ .cir = "public_type_not_defined", .tag = .diag_public_type_not_defined, .payload = "diag_single_ident", .names = &.{"import_name"} },
     .{ .cir = "nested_type_not_found", .tag = .diag_nested_type_not_found, .payload = "diag_two_idents", .names = &.{ "parent_name", "nested_name" } },
     .{ .cir = "internal_builtin_type", .tag = .diag_internal_builtin_type, .payload = "diag_internal_builtin_type", .names = &.{ "parent_name", "nested_name", "kind" } },
     .{ .cir = "nested_value_not_found", .tag = .diag_nested_value_not_found, .payload = "diag_two_idents", .names = &.{ "parent_name", "nested_name" } },
@@ -692,6 +700,7 @@ const DiagnosticNodeTag = enum {
     diag_var_across_function_boundary,
     diag_shadowing_warning,
     diag_binding_name_does_not_match_mutability,
+    diag_var_in_binder_pattern,
     diag_type_redeclared,
     diag_undeclared_type,
     diag_type_alias_but_needed_nominal,
@@ -706,6 +715,7 @@ const DiagnosticNodeTag = enum {
     diag_private_type_in_exposed_field,
     diag_type_from_missing_module,
     diag_module_not_imported,
+    diag_public_type_not_defined,
     diag_nested_type_not_found,
     diag_internal_builtin_type,
     diag_nested_value_not_found,
@@ -725,7 +735,6 @@ const DiagnosticNodeTag = enum {
     diag_default_app_missing_main,
     diag_default_app_wrong_arity,
     diag_cannot_import_default_app,
-    diag_execution_requires_app_or_default_app,
     diag_type_name_case_mismatch,
     diag_module_header_deprecated,
     diag_roc_version_mismatch,
@@ -1054,6 +1063,7 @@ const Scratch = struct {
     defs: base.Scratch(CIR.Def.Idx),
     diagnostics: base.Scratch(CIR.Diagnostic.Idx),
     captures: base.Scratch(CIR.Expr.Capture.Idx),
+    where_grouping: WhereGrouping,
 
     fn init(gpa: Allocator) Allocator.Error!*@This() {
         const ptr = try gpa.create(Scratch);
@@ -1109,6 +1119,7 @@ const Scratch = struct {
             .defs = defs,
             .diagnostics = diagnostics,
             .captures = captures,
+            .where_grouping = .init(gpa),
         };
 
         return ptr;
@@ -1131,6 +1142,7 @@ const Scratch = struct {
         self.defs.deinit();
         self.diagnostics.deinit();
         self.captures.deinit();
+        self.where_grouping.deinit(gpa);
         gpa.destroy(self);
     }
 };
@@ -1230,7 +1242,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 94;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 95;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -1458,7 +1470,7 @@ pub fn recordLiteralDispatchPlan(
 
 /// Retain the exact equality constraint created for this literal pattern.
 pub fn recordLiteralPatternEquality(store: *NodeStore, node_idx: Node.Idx, fn_var: types.Var) void {
-    const plan = store.literalDispatchPlanForNode(node_idx) orelse unreachable;
+    const plan = store.literalDispatchPlanForNode(node_idx) orelse base.invariant("literal pattern node {d} has no literal dispatch plan", .{@backingInt(node_idx)});
     std.debug.assert(plan.pattern_context_plus_one != 0);
     const context = store.literal_pattern_contexts.get(@fromBackingInt(@intCast(plan.pattern_context_plus_one - 1)));
     context.equality_fn_var_plus_one = @backingInt(fn_var) + 1;
@@ -2703,7 +2715,7 @@ pub fn settleDeferredPatternAsRuntimeError(
 
 /// The node at `node_idx` as written in source: the node a runtime error
 /// replaced, if one did, and otherwise the node itself.
-fn sourceNode(store: *const NodeStore, node_idx: Node.Idx) Node {
+pub fn sourceNode(store: *const NodeStore, node_idx: Node.Idx) Node {
     const node = store.nodes.get(node_idx);
     if (node.tag != .malformed) return node;
     const source_node_plus_one = node.getPayload().malformed.source_node_plus_one;
@@ -4431,7 +4443,7 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruc
         0 => CIR.Pattern.RecordDestruct.Kind{ .Required = @fromBackingInt(@intCast(kind_data.len)) },
         1 => CIR.Pattern.RecordDestruct.Kind{ .SubPattern = @fromBackingInt(@intCast(kind_data.len)) },
         2 => CIR.Pattern.RecordDestruct.Kind{ .Rest = @fromBackingInt(@intCast(kind_data.len)) },
-        else => unreachable,
+        else => unreachable, // addRecordDestruct encodes only kind tags 0, 1, and 2
     };
 
     return CIR.Pattern.RecordDestruct{
@@ -4640,7 +4652,7 @@ pub fn fieldAccessSegmentAt(
     position: u32,
 ) CIR.Expr.FieldAccessSegment.Idx {
     std.debug.assert(position < span.len);
-    const raw = std.math.add(u32, @backingInt(span.start), position) catch unreachable;
+    const raw = std.math.add(u32, @backingInt(span.start), position) catch unreachable; // position < span.len, and every node of the span has a u32 index in the store
     const segment_idx: CIR.Expr.FieldAccessSegment.Idx = @fromBackingInt(@intCast(raw));
     const node_idx: Node.Idx = @fromBackingInt(@intCast(raw));
     std.debug.assert(raw < store.nodes.len());
@@ -4708,18 +4720,61 @@ pub fn unsetFieldSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Uns
     return try store.spanFrom("record_unset_fields", CIR.UnsetField.Span, start);
 }
 
+/// Storage `whereClauseSpanFrom` works in, kept across annotations. Every
+/// container is cleared before use.
+const WhereGrouping = struct {
+    /// Constrained rigids in the order their first clause appears.
+    owners: std.ArrayListUnmanaged(CIR.TypeAnno.Idx) = .empty,
+    /// Each owner's position in `owners`.
+    owner_positions: collections.DenseMap(CIR.TypeAnno.Idx, u32),
+    /// Each grouped clause with its owner's position, in clause order.
+    owned_clauses: std.ArrayListUnmanaged(OwnedClause) = .empty,
+    /// Where each owner's clauses start once grouped, then their running
+    /// count while they are placed.
+    group_starts: std.ArrayListUnmanaged(u32) = .empty,
+    grouped_clauses: std.ArrayListUnmanaged(CIR.WhereClause.Idx) = .empty,
+    locally_declared: collections.DenseMap(CIR.TypeAnno.Idx, void),
+    reachable: collections.DenseMap(CIR.TypeAnno.Idx, void),
+    dependencies: collections.DenseMap(CIR.TypeAnno.Idx, void),
+    owner_queue: std.ArrayListUnmanaged(CIR.TypeAnno.Idx) = .empty,
+    /// Pending annotations of a rigid-variable walk.
+    walk: std.ArrayListUnmanaged(CIR.TypeAnno.Idx) = .empty,
+
+    const OwnedClause = struct { owner_pos: u32, clause: CIR.WhereClause.Idx };
+
+    fn init(gpa: Allocator) WhereGrouping {
+        return .{
+            .owner_positions = .init(gpa),
+            .locally_declared = .init(gpa),
+            .reachable = .init(gpa),
+            .dependencies = .init(gpa),
+        };
+    }
+
+    fn deinit(self: *WhereGrouping, gpa: Allocator) void {
+        self.owners.deinit(gpa);
+        self.owner_positions.deinit();
+        self.owned_clauses.deinit(gpa);
+        self.group_starts.deinit(gpa);
+        self.grouped_clauses.deinit(gpa);
+        self.locally_declared.deinit();
+        self.reachable.deinit();
+        self.dependencies.deinit();
+        self.owner_queue.deinit(gpa);
+        self.walk.deinit(gpa);
+    }
+};
+
 /// Returns a span from the scratch where clauses starting at the given index,
 /// together with the canonical rigid declaration that owns each method group.
 pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_annos: []const CIR.TypeAnno.Idx) Allocator.Error!CIR.WhereClause.Span {
     const clauses = try store.spanFrom("where_clauses", CIR.WhereClause.IdxSpan, start);
+    const gpa = store.gpa;
+    const grouping = &store.scratch.?.where_grouping;
 
-    const ClauseList = std.ArrayListUnmanaged(CIR.WhereClause.Idx);
-    var grouped = std.AutoArrayHashMapUnmanaged(CIR.TypeAnno.Idx, ClauseList){};
-    defer {
-        for (grouped.values()) |*list| list.deinit(store.gpa);
-        grouped.deinit(store.gpa);
-    }
-
+    grouping.owners.clearRetainingCapacity();
+    grouping.owner_positions.clearRetainingCapacity();
+    grouping.owned_clauses.clearRetainingCapacity();
     for (store.sliceWhereClauseIndices(clauses)) |where_idx| {
         const constrained_var = switch (store.getWhereClause(where_idx)) {
             .w_method => |method| method.var_,
@@ -4733,25 +4788,45 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_annos: []const CI
             anno.rigid_var_lookup.ref
         else
             continue;
-        const gop = try grouped.getOrPut(store.gpa, owner);
-        if (!gop.found_existing) gop.value_ptr.* = .empty;
-        try gop.value_ptr.append(store.gpa, where_idx);
+        const gop = try grouping.owner_positions.getOrPut(owner);
+        if (!gop.found_existing) {
+            errdefer _ = grouping.owner_positions.remove(owner);
+            gop.value_ptr.* = std.math.cast(u32, grouping.owners.items.len) orelse return error.OutOfMemory;
+            try grouping.owners.append(gpa, owner);
+        }
+        try grouping.owned_clauses.append(gpa, .{ .owner_pos = gop.value_ptr.*, .clause = where_idx });
     }
 
-    var locally_declared = std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, void){};
-    defer locally_declared.deinit(store.gpa);
+    // Group the clauses by owner, keeping each owner's clauses in order.
+    const owner_count = grouping.owners.items.len;
+    try grouping.group_starts.resize(gpa, owner_count + 1);
+    @memset(grouping.group_starts.items, 0);
+    for (grouping.owned_clauses.items) |owned| grouping.group_starts.items[owned.owner_pos + 1] += 1;
+    for (1..owner_count + 1) |pos| grouping.group_starts.items[pos] += grouping.group_starts.items[pos - 1];
+    try grouping.grouped_clauses.resize(gpa, grouping.owned_clauses.items.len);
+    for (grouping.owned_clauses.items) |owned| {
+        const slot = &grouping.group_starts.items[owned.owner_pos];
+        grouping.grouped_clauses.items[slot.*] = owned.clause;
+        slot.* += 1;
+    }
+    // Each start advanced to the next owner's; shift them back.
+    var pos = owner_count;
+    while (pos > 0) : (pos -= 1) grouping.group_starts.items[pos] = grouping.group_starts.items[pos - 1];
+    grouping.group_starts.items[0] = 0;
+
+    grouping.locally_declared.clearRetainingCapacity();
     for (root_annos) |root_anno| {
-        try store.collectIntroducedRigidVars(root_anno, &locally_declared);
+        try store.collectRigidVars(.introduced, root_anno, &grouping.locally_declared);
     }
     for (store.sliceWhereClauseIndices(clauses)) |where_idx| {
         switch (store.getWhereClause(where_idx)) {
             .w_method => |method| {
-                try store.collectIntroducedRigidVars(method.var_, &locally_declared);
-                try store.collectIntroducedRigidVars(method.anno, &locally_declared);
+                try store.collectRigidVars(.introduced, method.var_, &grouping.locally_declared);
+                try store.collectRigidVars(.introduced, method.anno, &grouping.locally_declared);
             },
             .w_alias => |alias| {
-                try store.collectIntroducedRigidVars(alias.var_, &locally_declared);
-                try store.collectIntroducedRigidVars(alias.alias, &locally_declared);
+                try store.collectRigidVars(.introduced, alias.var_, &grouping.locally_declared);
+                try store.collectRigidVars(.introduced, alias.alias, &grouping.locally_declared);
             },
             .w_malformed => {},
         }
@@ -4759,61 +4834,60 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_annos: []const CI
 
     // A constraint-only rigid is owned by this annotation only when a chain of
     // method signatures connects it to a rigid in the ordinary annotation.
-    var reachable = std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, void){};
-    defer reachable.deinit(store.gpa);
+    grouping.reachable.clearRetainingCapacity();
     for (root_annos) |root_anno| {
-        try store.collectIntroducedRigidVars(root_anno, &reachable);
+        try store.collectRigidVars(.introduced, root_anno, &grouping.reachable);
     }
 
-    var owner_queue = std.ArrayListUnmanaged(CIR.TypeAnno.Idx).empty;
-    defer owner_queue.deinit(store.gpa);
-    for (grouped.keys()) |owner| {
-        if (reachable.contains(owner)) {
-            try owner_queue.append(store.gpa, owner);
+    grouping.owner_queue.clearRetainingCapacity();
+    for (grouping.owners.items) |owner| {
+        if (grouping.reachable.contains(owner)) {
+            try grouping.owner_queue.append(gpa, owner);
         }
     }
 
-    var dependencies = std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, void){};
-    defer dependencies.deinit(store.gpa);
     var queue_index: usize = 0;
-    while (queue_index < owner_queue.items.len) : (queue_index += 1) {
-        const owner = owner_queue.items[queue_index];
-        dependencies.clearRetainingCapacity();
+    while (queue_index < grouping.owner_queue.items.len) : (queue_index += 1) {
+        const owner = grouping.owner_queue.items[queue_index];
+        grouping.dependencies.clearRetainingCapacity();
 
-        for (grouped.get(owner).?.items) |where_idx| {
+        const owner_pos = grouping.owner_positions.get(owner).?;
+        const group = grouping.grouped_clauses.items[grouping.group_starts.items[owner_pos]..grouping.group_starts.items[owner_pos + 1]];
+        for (group) |where_idx| {
             switch (store.getWhereClause(where_idx)) {
                 .w_method => |method| {
-                    try store.collectReferencedRigidVars(method.anno, &dependencies);
+                    try store.collectRigidVars(.referenced, method.anno, &grouping.dependencies);
                 },
                 // A where alias reaches the type variables its arguments name.
-                .w_alias => |alias| try store.collectReferencedRigidVars(alias.alias, &dependencies),
+                .w_alias => |alias| try store.collectRigidVars(.referenced, alias.alias, &grouping.dependencies),
                 .w_malformed => {},
             }
         }
 
-        var dependency_it = dependencies.keyIterator();
+        var dependency_it = grouping.dependencies.keyIterator();
         while (dependency_it.next()) |dependency_ptr| {
             const dependency = dependency_ptr.*;
-            if (!locally_declared.contains(dependency) or reachable.contains(dependency)) continue;
+            if (!grouping.locally_declared.contains(dependency) or grouping.reachable.contains(dependency)) continue;
 
-            try reachable.put(store.gpa, dependency, {});
-            if (grouped.contains(dependency)) {
-                try owner_queue.append(store.gpa, dependency);
+            try grouping.reachable.put(dependency, {});
+            if (grouping.owner_positions.contains(dependency)) {
+                try grouping.owner_queue.append(gpa, dependency);
             }
         }
     }
 
     const owners_start: u32 = @intCast(store.where_clause_owners.len());
-    for (grouped.keys(), grouped.values()) |owner, owned_clauses| {
+    for (grouping.owners.items, 0..) |owner, owner_pos| {
+        const owned_clauses = grouping.grouped_clauses.items[grouping.group_starts.items[owner_pos]..grouping.group_starts.items[owner_pos + 1]];
         const clauses_start: u32 = @intCast(store.index_data.len());
-        for (owned_clauses.items) |where_idx| {
-            _ = try store.index_data.append(store.gpa, @backingInt(where_idx));
+        for (owned_clauses) |where_idx| {
+            _ = try store.index_data.append(gpa, @backingInt(where_idx));
         }
-        _ = try store.where_clause_owners.append(store.gpa, .{
+        _ = try store.where_clause_owners.append(gpa, .{
             .rigid_var = @backingInt(owner),
             .clauses_start = clauses_start,
-            .clauses_len = @intCast(owned_clauses.items.len),
-            .owned_by_annotation = reachable.contains(owner),
+            .clauses_len = @intCast(owned_clauses.len),
+            .owned_by_annotation = grouping.reachable.contains(owner),
         });
     }
 
@@ -4821,87 +4895,55 @@ pub fn whereClauseSpanFrom(store: *NodeStore, start: u32, root_annos: []const CI
         .span = clauses.span,
         .owners = .{ .span = .{
             .start = owners_start,
-            .len = @intCast(grouped.count()),
+            .len = @intCast(owner_count),
         } },
     };
 }
 
-fn collectIntroducedRigidVars(
-    store: *const NodeStore,
-    anno_idx: CIR.TypeAnno.Idx,
-    introduced: *std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, void),
-) Allocator.Error!void {
-    switch (store.getTypeAnno(anno_idx)) {
-        .rigid_var => try introduced.put(store.gpa, anno_idx, {}),
-        .rigid_var_lookup, .underscore, .lookup, .malformed => {},
-        .apply => |apply| for (store.sliceTypeAnnos(apply.args)) |arg| {
-            try store.collectIntroducedRigidVars(arg, introduced);
-        },
-        .tag_union => |tag_union| {
-            for (store.sliceTypeAnnos(tag_union.tags)) |tag| {
-                try store.collectIntroducedRigidVars(tag, introduced);
-            }
-            if (tag_union.ext) |ext| try store.collectIntroducedRigidVars(ext, introduced);
-        },
-        .tag => |tag| for (store.sliceTypeAnnos(tag.args)) |arg| {
-            try store.collectIntroducedRigidVars(arg, introduced);
-        },
-        .tuple => |tuple| for (store.sliceTypeAnnos(tuple.elems)) |elem| {
-            try store.collectIntroducedRigidVars(elem, introduced);
-        },
-        .record => |record| {
-            for (store.sliceAnnoRecordFields(record.fields)) |field_idx| {
-                try store.collectIntroducedRigidVars(store.getAnnoRecordField(field_idx).ty, introduced);
-            }
-            if (record.ext) |ext| try store.collectIntroducedRigidVars(ext, introduced);
-        },
-        .@"fn" => |func| {
-            for (store.sliceTypeAnnos(func.args)) |arg| {
-                try store.collectIntroducedRigidVars(arg, introduced);
-            }
-            try store.collectIntroducedRigidVars(func.ret, introduced);
-        },
-        .parens => |parens| try store.collectIntroducedRigidVars(parens.anno, introduced),
-    }
-}
+/// Which rigid variables `collectRigidVars` gathers: those an annotation
+/// declares, or those it names (declared or looked up).
+const RigidVarCollection = enum { introduced, referenced };
 
-fn collectReferencedRigidVars(
+/// Add the rigid variables `anno_idx` declares or names to `into`.
+fn collectRigidVars(
     store: *const NodeStore,
+    comptime collection: RigidVarCollection,
     anno_idx: CIR.TypeAnno.Idx,
-    referenced: *std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, void),
+    into: *collections.DenseMap(CIR.TypeAnno.Idx, void),
 ) Allocator.Error!void {
-    switch (store.getTypeAnno(anno_idx)) {
-        .rigid_var => try referenced.put(store.gpa, anno_idx, {}),
-        .rigid_var_lookup => |lookup| try referenced.put(store.gpa, lookup.ref, {}),
-        .underscore, .lookup, .malformed => {},
-        .apply => |apply| for (store.sliceTypeAnnos(apply.args)) |arg| {
-            try store.collectReferencedRigidVars(arg, referenced);
-        },
-        .tag_union => |tag_union| {
-            for (store.sliceTypeAnnos(tag_union.tags)) |tag| {
-                try store.collectReferencedRigidVars(tag, referenced);
-            }
-            if (tag_union.ext) |ext| try store.collectReferencedRigidVars(ext, referenced);
-        },
-        .tag => |tag| for (store.sliceTypeAnnos(tag.args)) |arg| {
-            try store.collectReferencedRigidVars(arg, referenced);
-        },
-        .tuple => |tuple| for (store.sliceTypeAnnos(tuple.elems)) |elem| {
-            try store.collectReferencedRigidVars(elem, referenced);
-        },
-        .record => |record| {
-            for (store.sliceAnnoRecordFields(record.fields)) |field_idx| {
-                try store.collectReferencedRigidVars(store.getAnnoRecordField(field_idx).ty, referenced);
-            }
-            if (record.ext) |ext| try store.collectReferencedRigidVars(ext, referenced);
-        },
-        .@"fn" => |func| {
-            for (store.sliceTypeAnnos(func.args)) |arg| {
-                try store.collectReferencedRigidVars(arg, referenced);
-            }
-            try store.collectReferencedRigidVars(func.ret, referenced);
-        },
-        .parens => |parens| try store.collectReferencedRigidVars(parens.anno, referenced),
+    const gpa = store.gpa;
+    const walk = &store.scratch.?.where_grouping.walk;
+    const walk_start = walk.items.len;
+    defer walk.shrinkRetainingCapacity(walk_start);
+    try walk.append(gpa, anno_idx);
+    while (walk.items.len > walk_start) {
+        const current = walk.pop().?;
+        switch (store.getTypeAnno(current)) {
+            .rigid_var => try into.put(current, {}),
+            .rigid_var_lookup => |lookup| switch (collection) {
+                .introduced => {},
+                .referenced => try into.put(lookup.ref, {}),
+            },
+            .underscore, .lookup, .malformed => {},
+            .apply => |apply| try walk.appendSlice(gpa, store.sliceTypeAnnos(apply.args)),
+            .tag_union => |tag_union| {
+                try walk.appendSlice(gpa, store.sliceTypeAnnos(tag_union.tags));
+                if (tag_union.ext) |ext| try walk.append(gpa, ext);
+            },
+            .tag => |tag| try walk.appendSlice(gpa, store.sliceTypeAnnos(tag.args)),
+            .tuple => |tuple| try walk.appendSlice(gpa, store.sliceTypeAnnos(tuple.elems)),
+            .record => |record| {
+                for (store.sliceAnnoRecordFields(record.fields)) |field_idx| {
+                    try walk.append(gpa, store.getAnnoRecordField(field_idx).ty);
+                }
+                if (record.ext) |ext| try walk.append(gpa, ext);
+            },
+            .@"fn" => |func| {
+                try walk.appendSlice(gpa, store.sliceTypeAnnos(func.args));
+                try walk.append(gpa, func.ret);
+            },
+            .parens => |parens| try walk.append(gpa, parens.anno),
+        }
     }
 }
 
@@ -5262,6 +5304,7 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .var_across_function_boundary,
         .shadowing_warning,
         .binding_name_does_not_match_mutability,
+        .var_in_binder_pattern,
         .type_redeclared,
         .file_import_not_found,
         .file_import_io_error,
@@ -5274,6 +5317,7 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .private_type_in_exposed_field,
         .type_from_missing_module,
         .module_not_imported,
+        .public_type_not_defined,
         .nested_type_not_found,
         .internal_builtin_type,
         .nested_value_not_found,
@@ -5288,7 +5332,6 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .default_app_missing_main,
         .default_app_wrong_arity,
         .cannot_import_default_app,
-        .execution_requires_app_or_default_app,
         .type_name_case_mismatch,
         .module_header_deprecated,
         .roc_version_mismatch,
@@ -5426,6 +5469,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_var_across_function_boundary,
         .diag_shadowing_warning,
         .diag_binding_name_does_not_match_mutability,
+        .diag_var_in_binder_pattern,
         .diag_type_redeclared,
         .diag_undeclared_type,
         .diag_type_alias_but_needed_nominal,
@@ -5440,6 +5484,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_private_type_in_exposed_field,
         .diag_type_from_missing_module,
         .diag_module_not_imported,
+        .diag_public_type_not_defined,
         .diag_nested_type_not_found,
         .diag_internal_builtin_type,
         .diag_nested_value_not_found,
@@ -5459,7 +5504,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_default_app_missing_main,
         .diag_default_app_wrong_arity,
         .diag_cannot_import_default_app,
-        .diag_execution_requires_app_or_default_app,
         .diag_type_name_case_mismatch,
         .diag_module_header_deprecated,
         .diag_roc_version_mismatch,

@@ -12,7 +12,6 @@
 //! the single cross-env identity resolution mechanism—no name matching.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const types_mod = @import("types");
@@ -118,6 +117,9 @@ const Fill = struct {
     placeholder: Var,
     empty_tag_union_is_default: bool,
     nominal_backing_structure: bool,
+    /// A tag row a host-boundary annotation wrote is the same host row in
+    /// every module that imports it (design.md "Row Joins").
+    host_fixed_row: bool,
 };
 
 const IdentityResult = enum { flex, rigid };
@@ -373,6 +375,7 @@ fn request(ctx: *CopyContext, source_var: Var) std.mem.Allocator.Error!bool {
         .placeholder = placeholder_var,
         .empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default,
         .nominal_backing_structure = resolved.desc.flags.nominal_backing_structure,
+        .host_fixed_row = resolved.desc.flags.host_fixed_row,
     };
 
     // NOTE: a copied var whose content is a flex carrying a literal-conversion
@@ -536,6 +539,7 @@ fn finishFrame(ctx: *CopyContext, fill: Fill, content: Content) std.mem.Allocato
         .flags = .{
             .empty_tag_union_is_default = fill.empty_tag_union_is_default,
             .nominal_backing_structure = fill.nominal_backing_structure,
+            .host_fixed_row = fill.host_fixed_row,
         },
     });
     try ctx.scratch.values.append(ctx.allocator, fill.placeholder);
@@ -576,6 +580,9 @@ fn stepIdentity(ctx: *CopyContext, frame: *IdentityFrame) std.mem.Allocator.Erro
                 const source_constraint = frame.source_constraints[frame.idx];
                 frame.pending = source_constraint;
                 frame.pending.fn_name = try ctx.copyIdent(source_constraint.fn_name);
+                // Pool indexes name the source store's entries; the copy
+                // re-pools its own.
+                frame.pending.interpolation = .none;
                 frame.stage = .await_fn;
                 if (!try request(ctx, source_constraint.fn_var)) return false;
             },
@@ -590,20 +597,19 @@ fn stepIdentity(ctx: *CopyContext, frame: *IdentityFrame) std.mem.Allocator.Erro
                 frame.stage = .parts;
             },
             .parts => {
-                const source_parts = ctx.source_store.sliceInterpolationParts(
-                    frame.source_constraints[frame.idx].interpolation.interpolated_parts,
-                );
+                const metadata = ctx.source_store.getInterpolationMetadata(frame.source_constraints[frame.idx].interpolation);
+                const source_parts = ctx.source_store.sliceInterpolationParts(metadata.interpolated_parts);
                 if (frame.part_idx < source_parts.len) {
                     frame.stage = .await_part;
                     if (!try request(ctx, source_parts[frame.part_idx].var_)) return false;
                     continue;
                 }
                 frame.stage = .await_item;
-                if (!try request(ctx, frame.source_constraints[frame.idx].interpolation.item_var)) return false;
+                if (!try request(ctx, metadata.item_var)) return false;
             },
             .await_part => {
                 const source_parts = ctx.source_store.sliceInterpolationParts(
-                    frame.source_constraints[frame.idx].interpolation.interpolated_parts,
+                    ctx.source_store.getInterpolationMetadata(frame.source_constraints[frame.idx].interpolation).interpolated_parts,
                 );
                 try machine.pending_parts.append(ctx.allocator, .{
                     .var_ = machine.values.pop().?,
@@ -618,20 +624,25 @@ fn stepIdentity(ctx: *CopyContext, frame: *IdentityFrame) std.mem.Allocator.Erro
                     machine.pending_parts.items[frame.parts_base..],
                 );
                 machine.pending_parts.items.len = frame.parts_base;
-                frame.pending.interpolation = .{
-                    .expr_region = frame.source_constraints[frame.idx].interpolation.expr_region,
+                frame.pending.interpolation = try ctx.dest_store.appendInterpolationMetadata(.{
+                    .expr_region = ctx.source_store.getInterpolationMetadata(frame.source_constraints[frame.idx].interpolation).expr_region,
                     .item_var = dest_item_var,
                     .interpolated_parts = dest_parts_range,
                     .regions = .imported,
-                };
+                });
                 frame.stage = .finish_constraint;
             },
             .finish_constraint => {
-                if (frame.source_constraints[frame.idx].derived_map_plan) |plan| {
-                    frame.pending.derived_map_plan = .{
+                if (ctx.source_store.constraintNumeralInfo(frame.source_constraints[frame.idx])) |info| {
+                    frame.pending.numeral = try ctx.dest_store.appendNumeralInfo(info);
+                }
+                // A copy of a derived `map`/`map!` relation's callable joins
+                // the relation.
+                if (ctx.source_store.derivedMapPlan(frame.source_constraints[frame.idx].fn_var)) |plan| {
+                    try ctx.dest_store.setDerivedMapPlan(frame.pending.fn_var, .{
                         .tag_name = try ctx.copyIdent(plan.tag_name),
                         .payload_index = plan.payload_index,
-                    };
+                    });
                 }
                 // The introducing expression is module-scoped: its index refers to the
                 // SOURCE module's CIR and is meaningless here. Clear it on the boundary
@@ -854,7 +865,7 @@ fn requestRecordField(
 ) std.mem.Allocator.Error!bool {
     const machine = &ctx.scratch;
     // Indexing through the run's start only happens when the record has
-    // fields; start may be undefined when count is 0.
+    // fields; an empty run's start addresses no row.
     const field = ctx.source_store.record_fields.get(@fromBackingInt(@intCast(@backingInt(source_fields.start) + idx.*)));
     return switch (axis.*) {
         .type_var => blk: {
@@ -914,7 +925,7 @@ fn stepTagUnion(ctx: *CopyContext, frame: *TagUnionFrame) std.mem.Allocator.Erro
             },
             .tag_args => {
                 // Indexing through the run's start only happens when the tag
-                // union has tags; start may be undefined when count is 0.
+                // union has tags; an empty run's start addresses no row.
                 const tag = ctx.source_store.tags.get(@fromBackingInt(@intCast(@backingInt(frame.source_tags.start) + frame.tag_idx)));
                 const args_slice = ctx.source_store.sliceVars(tag.args);
                 if (frame.arg_idx < args_slice.len) {
@@ -981,13 +992,10 @@ fn ensureNominalDeclCopied(
         // Invariant: every nominal application in a store can resolve its
         // declaration in that store, so a keyed application without a source
         // table entry is a compiler bug.
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "copy_import invariant violated: nominal '{s}' has a source declaration but no declaration table entry in its source store",
-                .{ctx.sourceIdents().getText(source_nominal.ident.ident_idx)},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "copy_import invariant violated: nominal '{s}' has a source declaration but no declaration table entry in its source store",
+            .{ctx.sourceIdents().getText(source_nominal.ident.ident_idx)},
+        );
     };
 
     try pushNominalDeclEntry(ctx, ctx.source_store.getNominalDecl(source_decl_idx), translated_origin);

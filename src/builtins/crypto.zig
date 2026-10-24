@@ -43,7 +43,7 @@ const blake3_state_base_len = 1 + 8 * 4 + 8 * 4 + 8 + Blake3.block_length + 1 + 
 
 fn invariant(roc_ops: *RocOps, comptime message: []const u8) noreturn {
     if (std.debug.runtime_safety) roc_ops.crash("crypto builtin invariant violated: " ++ message);
-    unreachable;
+    unreachable; // only builds without runtime safety reach this, where design.md makes a violated invariant undefined
 }
 
 fn readInput(bytes: ?[*]const u8, len: usize, roc_ops: *RocOps) []const u8 {
@@ -280,14 +280,14 @@ pub fn blake3HasherFinish(state_bytes: ?[*]const u8, state_len: usize, roc_ops: 
     return listFromBytes(&digest, roc_ops);
 }
 
-fn listBytes(roc_list: RocList) []const u8 {
+fn listBytes(roc_list: RocList) error{TestUnexpectedResult}![]const u8 {
     if (roc_list.bytes) |ptr| return ptr[0..roc_list.length];
     if (roc_list.length == 0) return &.{};
-    unreachable;
+    return error.TestUnexpectedResult;
 }
 
-fn expectDigestEqual(actual: RocList, expected: []const u8) error{TestExpectedEqual}!void {
-    try std.testing.expectEqualSlices(u8, expected, listBytes(actual));
+fn expectDigestEqual(actual: RocList, expected: []const u8) error{ TestExpectedEqual, TestUnexpectedResult }!void {
+    try std.testing.expectEqualSlices(u8, expected, try listBytes(actual));
 }
 
 fn sha256Digest(input: []const u8) [digest_len]u8 {
@@ -371,16 +371,16 @@ test "crypto finish does not mutate serialized state" {
     const more = "def";
 
     const sha_state = sha256HasherWrite(sha256HasherEmpty(ops).bytes, sha256_state_len, input.ptr, input.len, ops);
-    const sha_before = listBytes(sha_state);
+    const sha_before = try listBytes(sha_state);
     _ = sha256HasherFinish(sha_state.bytes, sha_state.length, ops);
-    try std.testing.expectEqualSlices(u8, sha_before, listBytes(sha_state));
+    try std.testing.expectEqualSlices(u8, sha_before, try listBytes(sha_state));
     const sha_expected = sha256Digest(input ++ more);
     try expectDigestEqual(sha256HasherFinish(sha256HasherWrite(sha_state.bytes, sha_state.length, more.ptr, more.len, ops).bytes, sha256_state_len, ops), &sha_expected);
 
     const blake_state = blake3HasherWrite(blake3HasherEmpty(ops).bytes, blake3_state_base_len, input.ptr, input.len, ops);
-    const blake_before = listBytes(blake_state);
+    const blake_before = try listBytes(blake_state);
     _ = blake3HasherFinish(blake_state.bytes, blake_state.length, ops);
-    try std.testing.expectEqualSlices(u8, blake_before, listBytes(blake_state));
+    try std.testing.expectEqualSlices(u8, blake_before, try listBytes(blake_state));
     const blake_expected = blake3Digest(input ++ more);
     const blake_after = blake3HasherWrite(blake_state.bytes, blake_state.length, more.ptr, more.len, ops);
     try expectDigestEqual(blake3HasherFinish(blake_after.bytes, blake_after.length, ops), &blake_expected);
@@ -435,7 +435,7 @@ test "SHA256 hasher state keeps the version 1 bytes" {
         const saved = stdSha256StateV1(&reference);
 
         const written = sha256HasherWrite(sha256HasherEmpty(ops).bytes, sha256_state_len, &input, len, ops);
-        try std.testing.expectEqualSlices(u8, &saved, listBytes(written));
+        try std.testing.expectEqualSlices(u8, &saved, try listBytes(written));
 
         const resumed = sha256HasherWrite(&saved, saved.len, input[len..].ptr, input.len - len, ops);
         const expected = sha256Digest(&input);

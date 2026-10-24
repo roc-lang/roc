@@ -241,6 +241,8 @@ fn cleanupPersistentCache(std_io: Io, cache_base: []const u8, now_ns: i128, mayb
 /// number of directory levels between a family's root and its files.
 const persistent_families = [_]struct { name: []const u8, nested_directory_depth: u8 }{
     .{ .name = "mod", .nested_directory_depth = 1 },
+    .{ .name = "mod-latest", .nested_directory_depth = 1 },
+    .{ .name = "literals", .nested_directory_depth = 1 },
     .{ .name = "pair", .nested_directory_depth = 1 },
     .{ .name = "exe", .nested_directory_depth = 1 },
     .{ .name = "test", .nested_directory_depth = 1 },
@@ -253,20 +255,23 @@ const persistent_families = [_]struct { name: []const u8, nested_directory_depth
 const object_pack_nested_directory_depth = 3;
 
 /// Writes the namespace of pack format `format_version` into `buf`.
-fn objectPackNamespaceName(buf: []u8, format_version: u32) []const u8 {
+fn objectPackNamespaceName(buf: *[cache_config.object_pack_namespace_prefix.len + 10]u8, format_version: u32) []const u8 {
     return std.fmt.bufPrint(buf, cache_config.object_pack_namespace_prefix ++ "{d}", .{format_version}) catch
-        unreachable;
+        unreachable; // buf holds the prefix plus 10 digits, the most a u32 prints
 }
 
 /// Clean up object-cache packs.
 ///
 /// Layout: `<cache_base>/<version>/objects-v<format>/<target-opt>/<local|pkg>/
-/// <module identity>/<artifact key>.rpk`. A namespace of any format other
-/// than `format_version` is deleted outright: its packs can never be read
-/// again. In the current namespace, packs under `pkg/` come from URL
-/// packages, are written once per package version, and keep the 30-day
-/// window; packs under `local/` are rewritten by every edit of the module and
-/// keep a one-day window, so superseded packs do not pile up. A pack ages from
+/// <module identity>/<artifact key>.rpk`, with the packs optimized builds
+/// file for their programs in `<target-opt>/optimized/<identity>.rpk`
+/// and recorded program outputs in `<target-opt>/programs/<program key>.rpo`.
+/// A namespace of any format other than `format_version` is deleted
+/// outright: its packs can never be read again. In the current namespace,
+/// packs under `pkg/` come from URL packages, are written once per package
+/// version, and keep the 30-day window, as do optimized builds' packs under
+/// `optimized/`; packs under `local/` are rewritten by every edit of the
+/// module and keep a one-day window, so superseded packs do not pile up. A pack ages from
 /// its last use, not its write: an in-use pack whose bytes never change must
 /// not be deleted and rebuilt once per window.
 fn cleanupObjectPacks(std_io: Io, cache_base: []const u8, format_version: u32, now_ns: i128, maybe_stats: ?*CleanupStats) void {
@@ -322,20 +327,37 @@ fn cleanupPackNamespace(std_io: Io, namespace_dir: Dir, now_ns: i128, maybe_stat
                 if (identity_entry.kind != .directory) continue;
                 var identity_dir = origin_dir.openDir(std_io, identity_entry.name, .{ .iterate = true }) catch continue;
                 defer identity_dir.close(std_io);
-                var pack_it = identity_dir.iterate();
-                while (true) {
-                    const pack_entry = (pack_it.next(std_io) catch break) orelse break;
-                    if (pack_entry.kind != .file) continue;
-                    const last_use = lastUseNs(identity_dir, std_io, pack_entry.name) orelse continue;
-                    if (now_ns - last_use <= origin.max_age_ns) continue;
-                    identity_dir.deleteFile(std_io, pack_entry.name) catch {
-                        if (maybe_stats) |stats| stats.errors += 1;
-                        continue;
-                    };
-                    if (maybe_stats) |stats| stats.cache_files_deleted += 1;
-                }
+                ageFilesIn(std_io, identity_dir, origin.max_age_ns, now_ns, maybe_stats);
             }
         }
+        // The pack each optimized build of a program replaces keeps the
+        // window of a package's pack.
+        if (mode_dir.openDir(std_io, "optimized", .{ .iterate = true })) |optimized_dir| {
+            var dir = optimized_dir;
+            defer dir.close(std_io);
+            ageFilesIn(std_io, dir, Config.PERSISTENT_MAX_AGE_NS, now_ns, maybe_stats);
+        } else |_| {}
+        // A recorded program output names one exact program, which an edit
+        // replaces, so it keeps the window of a local pack.
+        var programs_dir = mode_dir.openDir(std_io, "programs", .{ .iterate = true }) catch continue;
+        defer programs_dir.close(std_io);
+        ageFilesIn(std_io, programs_dir, Config.LOCAL_PACK_MAX_AGE_NS, now_ns, maybe_stats);
+    }
+}
+
+/// Delete the files of `dir` last used more than `max_age_ns` before `now_ns`.
+fn ageFilesIn(std_io: Io, dir: Dir, max_age_ns: i96, now_ns: i128, maybe_stats: ?*CleanupStats) void {
+    var file_it = dir.iterate();
+    while (true) {
+        const file_entry = (file_it.next(std_io) catch break) orelse break;
+        if (file_entry.kind != .file) continue;
+        const last_use = lastUseNs(dir, std_io, file_entry.name) orelse continue;
+        if (now_ns - last_use <= max_age_ns) continue;
+        dir.deleteFile(std_io, file_entry.name) catch {
+            if (maybe_stats) |stats| stats.errors += 1;
+            continue;
+        };
+        if (maybe_stats) |stats| stats.cache_files_deleted += 1;
     }
 }
 
@@ -647,18 +669,18 @@ test "deleteTempDir deletes directory and coordination file" {
     defer tmp_dir.cleanup();
 
     // Create a subdirectory simulating a temp runtime dir
-    tmp_dir.dir.createDir(std.testing.io, "test_temp_dir", .default_dir) catch unreachable;
+    try tmp_dir.dir.createDir(std.testing.io, "test_temp_dir", .default_dir);
 
     // Create a file inside the directory
-    const inner_file = tmp_dir.dir.createFile(std.testing.io, "test_temp_dir/executable", .{}) catch unreachable;
+    const inner_file = try tmp_dir.dir.createFile(std.testing.io, "test_temp_dir/executable", .{});
     inner_file.close(std.testing.io);
 
     // Create the coordination file (.txt)
-    const coord_file = tmp_dir.dir.createFile(std.testing.io, "test_temp_dir.txt", .{}) catch unreachable;
+    const coord_file = try tmp_dir.dir.createFile(std.testing.io, "test_temp_dir.txt", .{});
     coord_file.close(std.testing.io);
 
     // Get the full path to the temp dir
-    const temp_dir_path = std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "test_temp_dir" }) catch unreachable;
+    const temp_dir_path = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "test_temp_dir" });
     defer allocator.free(temp_dir_path);
 
     // Verify both exist
@@ -688,19 +710,19 @@ test "cleanupCacheSubdir deletes old files and keeps new files" {
     defer tmp_dir.cleanup();
 
     // Create a cache subdir structure
-    tmp_dir.dir.createDir(std.testing.io, "cache_subdir", .default_dir) catch unreachable;
-    tmp_dir.dir.createDir(std.testing.io, "cache_subdir/bucket1", .default_dir) catch unreachable;
-    tmp_dir.dir.createDir(std.testing.io, "cache_subdir/bucket2", .default_dir) catch unreachable;
+    try tmp_dir.dir.createDir(std.testing.io, "cache_subdir", .default_dir);
+    try tmp_dir.dir.createDir(std.testing.io, "cache_subdir/bucket1", .default_dir);
+    try tmp_dir.dir.createDir(std.testing.io, "cache_subdir/bucket2", .default_dir);
 
     // Create files in buckets
-    const file1 = tmp_dir.dir.createFile(std.testing.io, "cache_subdir/bucket1/old_file.rcache", .{}) catch unreachable;
+    const file1 = try tmp_dir.dir.createFile(std.testing.io, "cache_subdir/bucket1/old_file.rcache", .{});
     file1.close(std.testing.io);
 
-    const file2 = tmp_dir.dir.createFile(std.testing.io, "cache_subdir/bucket2/new_file.rcache", .{}) catch unreachable;
+    const file2 = try tmp_dir.dir.createFile(std.testing.io, "cache_subdir/bucket2/new_file.rcache", .{});
     file2.close(std.testing.io);
 
     // Get the full path
-    const subdir_path = std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "cache_subdir" }) catch unreachable;
+    const subdir_path = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "cache_subdir" });
     defer allocator.free(subdir_path);
 
     // Get current time - files will be very recent (age ~0)
@@ -709,7 +731,7 @@ test "cleanupCacheSubdir deletes old files and keeps new files" {
     // Run cleanup with current time - nothing should be deleted (files are too new)
     var stats = CleanupStats{};
     {
-        var subdir = Dir.cwd().openDir(std.testing.io, subdir_path, .{ .iterate = true }) catch unreachable;
+        var subdir = try Dir.cwd().openDir(std.testing.io, subdir_path, .{ .iterate = true });
         defer subdir.close(std.testing.io);
         cleanupCacheSubdir(std.testing.io, subdir, now_ns, &stats, 1);
     }
@@ -728,7 +750,7 @@ test "cleanupCacheSubdir deletes old files and keeps new files" {
     const far_future_ns: i128 = now_ns + Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s;
     var stats2 = CleanupStats{};
     {
-        var subdir = Dir.cwd().openDir(std.testing.io, subdir_path, .{ .iterate = true }) catch unreachable;
+        var subdir = try Dir.cwd().openDir(std.testing.io, subdir_path, .{ .iterate = true });
         defer subdir.close(std.testing.io);
         cleanupCacheSubdir(std.testing.io, subdir, far_future_ns, &stats2, 1);
     }
@@ -748,43 +770,43 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const cache_base = std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "roc-cache" }) catch unreachable;
+    const cache_base = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "roc-cache" });
     defer allocator.free(cache_base);
 
-    const glue_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "glue-plugin", "x64mac", "dev" }) catch unreachable;
+    const glue_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "glue-plugin", "x64mac", "dev" });
     defer allocator.free(glue_dir);
 
-    const mod_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "mod", "aa" }) catch unreachable;
+    const mod_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "mod", "aa" });
     defer allocator.free(mod_dir);
-    const pair_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "pair", "cc" }) catch unreachable;
+    const pair_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "pair", "cc" });
     defer allocator.free(pair_dir);
-    const wasm_host_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "wasm-host", "bb" }) catch unreachable;
+    const wasm_host_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "wasm-host", "bb" });
     defer allocator.free(wasm_host_dir);
 
-    Dir.cwd().createDirPath(std.testing.io, glue_dir) catch unreachable;
-    Dir.cwd().createDirPath(std.testing.io, mod_dir) catch unreachable;
-    Dir.cwd().createDirPath(std.testing.io, pair_dir) catch unreachable;
-    Dir.cwd().createDirPath(std.testing.io, wasm_host_dir) catch unreachable;
+    try Dir.cwd().createDirPath(std.testing.io, glue_dir);
+    try Dir.cwd().createDirPath(std.testing.io, mod_dir);
+    try Dir.cwd().createDirPath(std.testing.io, pair_dir);
+    try Dir.cwd().createDirPath(std.testing.io, wasm_host_dir);
 
-    const glue_file = std.fs.path.join(allocator, &.{ glue_dir, "old.o" }) catch unreachable;
+    const glue_file = try std.fs.path.join(allocator, &.{ glue_dir, "old.o" });
     defer allocator.free(glue_file);
-    const glue_tmp = std.fs.path.join(allocator, &.{ glue_dir, "old.o.1.0.tmp" }) catch unreachable;
+    const glue_tmp = try std.fs.path.join(allocator, &.{ glue_dir, "old.o.1.0.tmp" });
     defer allocator.free(glue_tmp);
-    const mod_file = std.fs.path.join(allocator, &.{ mod_dir, "old.rcache" }) catch unreachable;
+    const mod_file = try std.fs.path.join(allocator, &.{ mod_dir, "old.rcache" });
     defer allocator.free(mod_file);
-    const pair_file = std.fs.path.join(allocator, &.{ pair_dir, "old-pairing" }) catch unreachable;
+    const pair_file = try std.fs.path.join(allocator, &.{ pair_dir, "old-pairing" });
     defer allocator.free(pair_file);
-    const wasm_host_file = std.fs.path.join(allocator, &.{ wasm_host_dir, "old-host" }) catch unreachable;
+    const wasm_host_file = try std.fs.path.join(allocator, &.{ wasm_host_dir, "old-host" });
     defer allocator.free(wasm_host_file);
-    const wasm_host_lock = std.fs.path.join(allocator, &.{ wasm_host_dir, "old-host.lock" }) catch unreachable;
+    const wasm_host_lock = try std.fs.path.join(allocator, &.{ wasm_host_dir, "old-host.lock" });
     defer allocator.free(wasm_host_lock);
 
-    (Dir.cwd().createFile(std.testing.io, glue_file, .{}) catch unreachable).close(std.testing.io);
-    (Dir.cwd().createFile(std.testing.io, glue_tmp, .{}) catch unreachable).close(std.testing.io);
-    (Dir.cwd().createFile(std.testing.io, mod_file, .{}) catch unreachable).close(std.testing.io);
-    (Dir.cwd().createFile(std.testing.io, pair_file, .{}) catch unreachable).close(std.testing.io);
-    (Dir.cwd().createFile(std.testing.io, wasm_host_file, .{}) catch unreachable).close(std.testing.io);
-    (Dir.cwd().createFile(std.testing.io, wasm_host_lock, .{}) catch unreachable).close(std.testing.io);
+    (try Dir.cwd().createFile(std.testing.io, glue_file, .{})).close(std.testing.io);
+    (try Dir.cwd().createFile(std.testing.io, glue_tmp, .{})).close(std.testing.io);
+    (try Dir.cwd().createFile(std.testing.io, mod_file, .{})).close(std.testing.io);
+    (try Dir.cwd().createFile(std.testing.io, pair_file, .{})).close(std.testing.io);
+    (try Dir.cwd().createFile(std.testing.io, wasm_host_file, .{})).close(std.testing.io);
+    (try Dir.cwd().createFile(std.testing.io, wasm_host_lock, .{})).close(std.testing.io);
 
     const now_ns = nowNs(std.testing.io);
     const far_future_ns: i128 = now_ns + Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s;
@@ -838,9 +860,15 @@ test "object pack sweep deletes stale format namespaces and ages current packs b
     defer allocator.free(stale_dir);
     const stale_namespace = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "objects-v6" });
     defer allocator.free(stale_namespace);
+    const programs_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "objects-v7", "x64glibc-dev", "programs" });
+    defer allocator.free(programs_dir);
+    const optimized_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "objects-v7", "x64glibc-speed", "optimized" });
+    defer allocator.free(optimized_dir);
     try writeTestFile(local_dir, "fresh.rpk", "local", now_ns);
     try writeTestFile(pkg_dir, "fresh.rpk", "pkg", now_ns);
+    try writeTestFile(optimized_dir, "cc.rpk", "optimized", now_ns);
     try writeTestFile(stale_dir, "fresh.rpk", "stale", now_ns);
+    try writeTestFile(programs_dir, "fresh.rpo", "program", now_ns);
 
     const limits: Limits = .{ .object_pack_format_version = 7, .max_size_bytes = std.math.maxInt(u64) };
     var stats = CleanupStats{};
@@ -853,21 +881,29 @@ test "object pack sweep deletes stale format namespaces and ages current packs b
     defer local_dir_handle.close(std.testing.io);
     var pkg_dir_handle = try Dir.cwd().openDir(std.testing.io, pkg_dir, .{});
     defer pkg_dir_handle.close(std.testing.io);
+    var programs_dir_handle = try Dir.cwd().openDir(std.testing.io, programs_dir, .{});
+    defer programs_dir_handle.close(std.testing.io);
+    var optimized_dir_handle = try Dir.cwd().openDir(std.testing.io, optimized_dir, .{});
+    defer optimized_dir_handle.close(std.testing.io);
     try local_dir_handle.access(std.testing.io, "fresh.rpk", .{});
     try pkg_dir_handle.access(std.testing.io, "fresh.rpk", .{});
+    try programs_dir_handle.access(std.testing.io, "fresh.rpo", .{});
 
     const two_days_later = now_ns + 2 * Config.LOCAL_PACK_MAX_AGE_NS;
     var aged_stats = CleanupStats{};
     sweep(std.testing.io, cache_base, limits, two_days_later, &aged_stats);
-    try std.testing.expectEqual(@as(u32, 1), aged_stats.cache_files_deleted);
+    try std.testing.expectEqual(@as(u32, 2), aged_stats.cache_files_deleted);
     try std.testing.expectError(error.FileNotFound, local_dir_handle.access(std.testing.io, "fresh.rpk", .{}));
+    try std.testing.expectError(error.FileNotFound, programs_dir_handle.access(std.testing.io, "fresh.rpo", .{}));
     try pkg_dir_handle.access(std.testing.io, "fresh.rpk", .{});
+    try optimized_dir_handle.access(std.testing.io, "cc.rpk", .{});
 
     const past_window = now_ns + Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s;
     var pkg_stats = CleanupStats{};
     sweep(std.testing.io, cache_base, limits, past_window, &pkg_stats);
-    try std.testing.expectEqual(@as(u32, 1), pkg_stats.cache_files_deleted);
+    try std.testing.expectEqual(@as(u32, 2), pkg_stats.cache_files_deleted);
     try std.testing.expectError(error.FileNotFound, pkg_dir_handle.access(std.testing.io, "fresh.rpk", .{}));
+    try std.testing.expectError(error.FileNotFound, optimized_dir_handle.access(std.testing.io, "cc.rpk", .{}));
 }
 
 test "size bound evicts least recently used files across families until under the limit" {

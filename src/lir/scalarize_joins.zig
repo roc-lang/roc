@@ -34,6 +34,7 @@
 //! their shape.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -72,8 +73,9 @@ const Metrics = struct {
 };
 
 fn runMeasured(store: *LirStore, layouts: *const layout_mod.Store, metrics: ?*Metrics) ScalarizeError!void {
-    var pass = Pass.init(store, layouts, store.allocator, metrics);
+    var pass = Pass.init(store.allocator);
     defer pass.deinit();
+    pass.attach(store, layouts, metrics);
 
     // Procs are independent (join parameters are proc-local), so each proc
     // converges on its own before moving on; a proc that changes nothing is
@@ -85,16 +87,108 @@ fn runMeasured(store: *LirStore, layouts: *const layout_mod.Store, metrics: ?*Me
 
 /// Scalarize one procedure with task-local scratch; rewritten LIR stays in the store.
 pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator) ScalarizeError!void {
-    var pass = Pass.init(store, layouts, scratch_allocator, null);
-    defer pass.deinit();
+    var lane = LaneScratch.init(scratch_allocator);
+    defer lane.deinit();
+    try runProcWithScratch(store, layouts, proc_id, &lane);
+}
+
+/// Analysis storage one executor lane retains across procedures; only empty
+/// storage survives a procedure.
+pub const LaneScratch = struct {
+    pass: Pass,
+
+    pub fn init(allocator: Allocator) LaneScratch {
+        return .{ .pass = Pass.init(allocator) };
+    }
+
+    pub fn deinit(self: *LaneScratch) void {
+        self.pass.deinit();
+    }
+};
+
+/// Scalarize one procedure with lane-retained analysis storage.
+pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, lane: *LaneScratch) ScalarizeError!void {
+    const pass = &lane.pass;
+    pass.attach(store, layouts, null);
+    defer pass.release();
     try pass.transformProc(proc_id);
 }
 
+/// Values noted per local during one collection walk, then frozen into one
+/// shared buffer in which each local's values form a contiguous run in the
+/// order they were noted. Membership is exact while noting; runs are
+/// readable once frozen.
+fn LocalRuns(comptime V: type) type {
+    return struct {
+        const Self = @This();
+        const Run = struct { start: u32, len: u32 };
+        const Pending = struct { local: LIR.LocalId, value: V };
+
+        runs: collections.DenseMap(LIR.LocalId, Run),
+        pending: std.ArrayList(Pending) = .empty,
+        items: std.ArrayList(V) = .empty,
+
+        fn init(allocator: Allocator) Self {
+            return .{ .runs = collections.DenseMap(LIR.LocalId, Run).init(allocator) };
+        }
+
+        fn deinit(self: *Self) void {
+            self.pending.deinit(self.runs.allocator);
+            self.items.deinit(self.runs.allocator);
+            self.runs.deinit();
+        }
+
+        fn clearRetainingCapacity(self: *Self) void {
+            self.runs.clearRetainingCapacity();
+            self.pending.clearRetainingCapacity();
+            self.items.clearRetainingCapacity();
+        }
+
+        fn note(self: *Self, local: LIR.LocalId, value: V) ScalarizeError!void {
+            if (self.pending.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
+            try self.pending.ensureUnusedCapacity(self.runs.allocator, 1);
+            const entry = try self.runs.getOrPut(local);
+            if (!entry.found_existing) entry.value_ptr.* = .{ .start = 0, .len = 0 };
+            entry.value_ptr.len += 1;
+            self.pending.appendAssumeCapacity(.{ .local = local, .value = value });
+        }
+
+        fn contains(self: *const Self, local: LIR.LocalId) bool {
+            return self.runs.contains(local);
+        }
+
+        /// Place every noted value in its local's run, keeping note order.
+        fn freeze(self: *Self) ScalarizeError!void {
+            var next: u32 = 0;
+            var runs = self.runs.valueIterator();
+            while (runs.next()) |span| {
+                span.start = next;
+                next += span.len;
+                span.len = 0;
+            }
+            try self.items.resize(self.runs.allocator, next);
+            for (self.pending.items) |pending| {
+                const span = self.runs.getPtr(pending.local).?;
+                self.items.items[span.start + span.len] = pending.value;
+                span.len += 1;
+            }
+            self.pending.clearRetainingCapacity();
+        }
+
+        fn get(self: *const Self, local: LIR.LocalId) ?[]const V {
+            const span = self.runs.get(local) orelse return null;
+            return self.items.items[span.start..][0..span.len];
+        }
+
+        fn slice(self: *const Self, local: LIR.LocalId) []const V {
+            return self.get(local) orelse &.{};
+        }
+    };
+}
+
+/// Use counts of a local defined by struct literals; the literals
+/// themselves are `Pass.struct_sites`.
 const StructBuild = struct {
-    /// Every struct-literal statement defining the local. A wrapper
-    /// temporary qualifies with exactly one; a parameter built directly may
-    /// have one per jump.
-    builds: std.ArrayList(BuildSite),
     /// Uses other than being an `initialize_join_param` value.
     uses: u32,
     /// Uses as an `initialize_join_param` value; a wrapper temporary
@@ -131,8 +225,9 @@ const BuildSite = struct {
     fields: LIR.LocalSpan,
 };
 
+/// Use counts of a local defined by tag literals; the literals themselves
+/// are `Pass.tag_sites`.
 const TagBuild = struct {
-    builds: std.ArrayList(TagBuildSite),
     uses: u32,
     init_uses: u32,
     /// Whole-value uses: every use that is neither a single-variant read, a
@@ -214,32 +309,38 @@ const Pass = struct {
     /// Locals with any use other than a field read.
     use_other: collections.DenseMap(LIR.LocalId, void),
     /// Field-read statements per source local.
-    field_reads: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
+    field_reads: LocalRuns(LIR.CFStmtId),
     /// `initialize_join_param` writes per target local.
-    init_writes: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
+    init_writes: LocalRuns(LIR.CFStmtId),
     /// Locals with any write other than an `initialize_join_param`, with the
     /// number of such writes.
     write_other: collections.DenseMap(LIR.LocalId, u32),
     /// Struct-literal defs per target local.
     struct_builds: collections.DenseMap(LIR.LocalId, StructBuild),
+    /// Every struct-literal statement defining each local. A wrapper
+    /// temporary qualifies with exactly one; a parameter built directly may
+    /// have one per jump.
+    struct_sites: LocalRuns(BuildSite),
     /// Tag payload/discriminant projections per source. Unlike a whole-value
     /// use, these remain transparent through `ref.local` chains.
-    tag_reads: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
+    tag_reads: LocalRuns(LIR.CFStmtId),
     /// Literal tag constructors per target, used for exact single-variant
     /// scalar replacement.
     tag_builds: collections.DenseMap(LIR.LocalId, TagBuild),
+    /// Every tag-literal statement defining each local.
+    tag_sites: LocalRuns(TagBuildSite),
     /// Join-parameter initializers that forward a one-variant tag unchanged,
     /// keyed by their source. These are representation-transparent and are
     /// rewritten to forward the payload when the source parameter scalarizes.
-    tag_forward_writes: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
+    tag_forward_writes: LocalRuns(LIR.CFStmtId),
     /// Same-layout struct transfers between join parameters. They are broken
     /// by rebuilding from scalar fields while one side of a cycle scalarizes.
-    struct_forward_writes: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
+    struct_forward_writes: LocalRuns(LIR.CFStmtId),
     /// Direct `ref.local` assignments into a join parameter, per parameter.
     /// Lowering initializes a join parameter on some edges this way instead
     /// of with `set_local`; such a statement is an initializer that can seed
     /// per-field writes, exactly like a non-literal `set_local` initializer.
-    alias_init_writes: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
+    alias_init_writes: LocalRuns(LIR.CFStmtId),
     /// Pure `ref.local` defs per target local. Lowered user code reads
     /// aggregates through such aliases, so the pass looks through them:
     /// an alias whose uses are all field reads (or further such aliases) is
@@ -252,7 +353,7 @@ const Pass = struct {
     /// joins; scalarizing such a local for one join would steal the shared
     /// initializers from the others, so only a local listed exactly once may
     /// scalarize.
-    join_params: collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)),
+    join_params: LocalRuns(LIR.CFStmtId),
     /// Aliases proved transparent this round.
     transparent: collections.DenseMap(LIR.LocalId, void),
     /// Explicit reverse alias dependencies; closure queries visit only members.
@@ -281,24 +382,28 @@ const Pass = struct {
     /// rewrite whose own analysis names any of them waits for the next round.
     round_locals: collections.DenseMap(LIR.LocalId, void),
 
-    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, metrics: ?*Metrics) Pass {
+    /// Empty analysis storage; `attach` names the store a procedure is
+    /// rewritten in.
+    fn init(allocator: Allocator) Pass {
         return .{
-            .metrics = metrics,
-            .store = store,
-            .layouts = layouts,
+            .metrics = null,
+            .store = undefined,
+            .layouts = undefined,
             .allocator = allocator,
             .use_other = collections.DenseMap(LIR.LocalId, void).init(allocator),
-            .field_reads = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
-            .init_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
+            .field_reads = LocalRuns(LIR.CFStmtId).init(allocator),
+            .init_writes = LocalRuns(LIR.CFStmtId).init(allocator),
             .write_other = collections.DenseMap(LIR.LocalId, u32).init(allocator),
             .struct_builds = collections.DenseMap(LIR.LocalId, StructBuild).init(allocator),
-            .tag_reads = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
+            .struct_sites = LocalRuns(BuildSite).init(allocator),
+            .tag_reads = LocalRuns(LIR.CFStmtId).init(allocator),
             .tag_builds = collections.DenseMap(LIR.LocalId, TagBuild).init(allocator),
-            .tag_forward_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
-            .struct_forward_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
-            .alias_init_writes = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
+            .tag_sites = LocalRuns(TagBuildSite).init(allocator),
+            .tag_forward_writes = LocalRuns(LIR.CFStmtId).init(allocator),
+            .struct_forward_writes = LocalRuns(LIR.CFStmtId).init(allocator),
+            .alias_init_writes = LocalRuns(LIR.CFStmtId).init(allocator),
             .alias_defs = collections.DenseMap(LIR.LocalId, AliasDef).init(allocator),
-            .join_params = collections.DenseMap(LIR.LocalId, std.ArrayList(LIR.CFStmtId)).init(allocator),
+            .join_params = LocalRuns(LIR.CFStmtId).init(allocator),
             .transparent = collections.DenseMap(LIR.LocalId, void).init(allocator),
             .alias_children = collections.DenseMap(LIR.LocalId, LIR.LocalId).init(allocator),
             .removed = collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId).init(allocator),
@@ -307,6 +412,24 @@ const Pass = struct {
             .round_claimed = collections.DenseMap(LIR.CFStmtId, void).init(allocator),
             .round_locals = collections.DenseMap(LIR.LocalId, void).init(allocator),
         };
+    }
+
+    fn attach(self: *Pass, store: *LirStore, layouts: *const layout_mod.Store, metrics: ?*Metrics) void {
+        self.store = store;
+        self.layouts = layouts;
+        self.metrics = metrics;
+    }
+
+    /// Empty every table for the next procedure, keeping capacity.
+    fn release(self: *Pass) void {
+        self.resetProc();
+        for (self.struct_cascade.items) |*item| item.inherited.deinit(self.allocator);
+        self.struct_cascade.clearRetainingCapacity();
+        for (self.tag_cascade.items) |*item| item.inherited.deinit(self.allocator);
+        self.tag_cascade.clearRetainingCapacity();
+        self.store = undefined;
+        self.layouts = undefined;
+        self.metrics = null;
     }
 
     /// Every round that changes the procedure rewrites at least one
@@ -326,13 +449,14 @@ const Pass = struct {
 
     fn deinit(self: *Pass) void {
         self.use_other.deinit();
-        self.clearLists();
         self.field_reads.deinit();
         self.init_writes.deinit();
         self.write_other.deinit();
         self.struct_builds.deinit();
+        self.struct_sites.deinit();
         self.tag_reads.deinit();
         self.tag_builds.deinit();
+        self.tag_sites.deinit();
         self.tag_forward_writes.deinit();
         self.struct_forward_writes.deinit();
         self.alias_init_writes.deinit();
@@ -353,36 +477,16 @@ const Pass = struct {
         self.tag_cascade.deinit(self.allocator);
     }
 
-    fn clearLists(self: *Pass) void {
-        var reads = self.field_reads.valueIterator();
-        while (reads.next()) |list| list.deinit(self.allocator);
-        var writes = self.init_writes.valueIterator();
-        while (writes.next()) |list| list.deinit(self.allocator);
-        var alias_writes = self.alias_init_writes.valueIterator();
-        while (alias_writes.next()) |list| list.deinit(self.allocator);
-        var listing_joins = self.join_params.valueIterator();
-        while (listing_joins.next()) |list| list.deinit(self.allocator);
-        var builds = self.struct_builds.valueIterator();
-        while (builds.next()) |build| build.builds.deinit(self.allocator);
-        var tag_reads = self.tag_reads.valueIterator();
-        while (tag_reads.next()) |tag_read_list| tag_read_list.deinit(self.allocator);
-        var tag_builds = self.tag_builds.valueIterator();
-        while (tag_builds.next()) |build| build.builds.deinit(self.allocator);
-        var tag_forward_writes = self.tag_forward_writes.valueIterator();
-        while (tag_forward_writes.next()) |forward_list| forward_list.deinit(self.allocator);
-        var struct_forward_writes = self.struct_forward_writes.valueIterator();
-        while (struct_forward_writes.next()) |forward_list| forward_list.deinit(self.allocator);
-    }
-
     fn resetProc(self: *Pass) void {
         self.use_other.clearRetainingCapacity();
-        self.clearLists();
         self.field_reads.clearRetainingCapacity();
         self.init_writes.clearRetainingCapacity();
         self.write_other.clearRetainingCapacity();
         self.struct_builds.clearRetainingCapacity();
+        self.struct_sites.clearRetainingCapacity();
         self.tag_reads.clearRetainingCapacity();
         self.tag_builds.clearRetainingCapacity();
+        self.tag_sites.clearRetainingCapacity();
         self.tag_forward_writes.clearRetainingCapacity();
         self.struct_forward_writes.clearRetainingCapacity();
         self.alias_init_writes.clearRetainingCapacity();
@@ -420,31 +524,23 @@ const Pass = struct {
     }
 
     fn noteFieldRead(self: *Pass, source: LIR.LocalId, stmt: LIR.CFStmtId) ScalarizeError!void {
-        const entry = try self.field_reads.getOrPut(source);
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        try entry.value_ptr.append(self.allocator, stmt);
+        try self.field_reads.note(source, stmt);
         if (self.struct_builds.getPtr(source)) |build| build.uses += 1;
     }
 
     fn noteTagRead(self: *Pass, source: LIR.LocalId, stmt: LIR.CFStmtId) ScalarizeError!void {
-        const entry = try self.tag_reads.getOrPut(source);
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        try entry.value_ptr.append(self.allocator, stmt);
+        try self.tag_reads.note(source, stmt);
         if (self.struct_builds.getPtr(source)) |build| build.uses += 1;
         if (self.tag_builds.getPtr(source)) |build| build.uses += 1;
     }
 
     fn noteTagForward(self: *Pass, source: LIR.LocalId, stmt: LIR.CFStmtId) ScalarizeError!void {
-        const entry = try self.tag_forward_writes.getOrPut(source);
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        try entry.value_ptr.append(self.allocator, stmt);
+        try self.tag_forward_writes.note(source, stmt);
         if (self.tag_builds.getPtr(source)) |build| build.init_uses += 1;
     }
 
     fn noteStructForward(self: *Pass, source: LIR.LocalId, stmt: LIR.CFStmtId) ScalarizeError!void {
-        const entry = try self.struct_forward_writes.getOrPut(source);
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        try entry.value_ptr.append(self.allocator, stmt);
+        try self.struct_forward_writes.note(source, stmt);
         if (self.struct_builds.getPtr(source)) |build| build.init_uses += 1;
     }
 
@@ -470,17 +566,17 @@ const Pass = struct {
     fn noteStructBuild(self: *Pass, target: LIR.LocalId, stmt: LIR.CFStmtId, fields: LIR.LocalSpan) ScalarizeError!void {
         const entry = try self.struct_builds.getOrPut(target);
         if (!entry.found_existing) {
-            entry.value_ptr.* = .{ .builds = .empty, .uses = 0, .init_uses = 0 };
+            entry.value_ptr.* = .{ .uses = 0, .init_uses = 0 };
         }
-        try entry.value_ptr.builds.append(self.allocator, .{ .stmt = stmt, .fields = fields });
+        try self.struct_sites.note(target, .{ .stmt = stmt, .fields = fields });
     }
 
     fn noteTagBuild(self: *Pass, target: LIR.LocalId, stmt: LIR.CFStmtId, assign: @FieldType(LIR.CFStmt, "assign_tag")) ScalarizeError!void {
         const entry = try self.tag_builds.getOrPut(target);
         if (!entry.found_existing) {
-            entry.value_ptr.* = .{ .builds = .empty, .uses = 0, .init_uses = 0 };
+            entry.value_ptr.* = .{ .uses = 0, .init_uses = 0 };
         }
-        try entry.value_ptr.builds.append(self.allocator, .{
+        try self.tag_sites.note(target, .{
             .stmt = stmt,
             .variant_index = assign.variant_index,
             .discriminant = assign.discriminant,
@@ -590,17 +686,17 @@ const Pass = struct {
             try closure.stmts.append(self.allocator, def.stmt);
             if (def.next_sibling) |sibling| try self.alias_work.append(self.allocator, sibling);
             if (self.alias_children.get(target)) |child| try self.alias_work.append(self.allocator, child);
-            if (self.field_reads.getPtr(target)) |reads| {
-                try closure.reads.appendSlice(self.allocator, reads.items);
+            if (self.field_reads.get(target)) |reads| {
+                try closure.reads.appendSlice(self.allocator, reads);
             }
-            if (self.tag_reads.getPtr(target)) |reads| {
-                try closure.tag_reads.appendSlice(self.allocator, reads.items);
+            if (self.tag_reads.get(target)) |reads| {
+                try closure.tag_reads.appendSlice(self.allocator, reads);
             }
-            if (self.tag_forward_writes.getPtr(target)) |writes| {
-                try closure.tag_forwards.appendSlice(self.allocator, writes.items);
+            if (self.tag_forward_writes.get(target)) |writes| {
+                try closure.tag_forwards.appendSlice(self.allocator, writes);
             }
-            if (self.struct_forward_writes.getPtr(target)) |writes| {
-                try closure.struct_forwards.appendSlice(self.allocator, writes.items);
+            if (self.struct_forward_writes.get(target)) |writes| {
+                try closure.struct_forwards.appendSlice(self.allocator, writes);
             }
         }
         return closure;
@@ -609,6 +705,9 @@ const Pass = struct {
     fn scalarizeProc(self: *Pass, proc_id: LIR.LirProcSpecId, body: LIR.CFStmtId) ScalarizeError!bool {
         self.resetProc();
         try self.collect(body);
+        inline for (.{ "field_reads", "init_writes", "tag_reads", "tag_forward_writes", "struct_forward_writes", "alias_init_writes", "join_params", "struct_sites", "tag_sites" }) |field| {
+            try @field(self, field).freeze();
+        }
         try self.resolveAliases();
 
         // Resolve proc-argument membership here, where the argument span is
@@ -688,7 +787,6 @@ const Pass = struct {
                     .expect_err,
                     .runtime_error,
                     .comptime_exhaustiveness_failed,
-                    .comptime_branch_taken,
                     .incref,
                     .decref,
                     .decref_if_initialized,
@@ -777,8 +875,9 @@ const Pass = struct {
     ) ScalarizeError!bool {
         if (self.join_params.contains(local) or self.write_other.contains(local) or self.alias_defs.contains(local)) return false;
         if (build.whole_uses != operand_uses or build.operand_uses != operand_uses or build.init_uses != 0) return false;
-        if (build.builds.items.len != 1) return false;
-        const site = build.builds.items[0];
+        const sites = self.struct_sites.slice(local);
+        if (sites.len != 1) return false;
+        const site = sites[0];
         const operands = self.store.getLocalSpan(site.fields);
         if (operands.len == 0 or operands.len > max_fields) return false;
 
@@ -788,7 +887,7 @@ const Pass = struct {
             const alias = self.store.getCFStmtImmediate(alias_stmt).assign_ref.target;
             if (!self.inheritedAliasIsTransparent(alias)) return false;
             try closure.stmts.append(self.allocator, alias_stmt);
-            if (self.field_reads.getPtr(alias)) |reads| try closure.reads.appendSlice(self.allocator, reads.items);
+            if (self.field_reads.get(alias)) |reads| try closure.reads.appendSlice(self.allocator, reads);
             var alias_closure = try self.aliasClosureOf(alias);
             defer alias_closure.deinit(self.allocator);
             try closure.stmts.appendSlice(self.allocator, alias_closure.stmts.items);
@@ -797,19 +896,19 @@ const Pass = struct {
             try closure.tag_forwards.appendSlice(self.allocator, alias_closure.tag_forwards.items);
             try closure.struct_forwards.appendSlice(self.allocator, alias_closure.struct_forwards.items);
         }
-        const direct_tag_reads: []const LIR.CFStmtId = if (self.tag_reads.getPtr(local)) |reads| reads.items else &.{};
-        const direct_tag_forwards: []const LIR.CFStmtId = if (self.tag_forward_writes.getPtr(local)) |writes| writes.items else &.{};
-        const direct_struct_forwards: []const LIR.CFStmtId = if (self.struct_forward_writes.getPtr(local)) |writes| writes.items else &.{};
+        const direct_tag_reads: []const LIR.CFStmtId = if (self.tag_reads.get(local)) |reads| reads else &.{};
+        const direct_tag_forwards: []const LIR.CFStmtId = if (self.tag_forward_writes.get(local)) |writes| writes else &.{};
+        const direct_struct_forwards: []const LIR.CFStmtId = if (self.struct_forward_writes.get(local)) |writes| writes else &.{};
         if (direct_tag_reads.len != 0 or closure.tag_reads.items.len != 0 or
             direct_tag_forwards.len != 0 or closure.tag_forwards.items.len != 0 or
             direct_struct_forwards.len != 0 or closure.struct_forwards.items.len != 0) return false;
-        const direct_reads: []const LIR.CFStmtId = if (self.field_reads.getPtr(local)) |reads| reads.items else &.{};
+        const direct_reads: []const LIR.CFStmtId = if (self.field_reads.get(local)) |reads| reads else &.{};
         if (direct_reads.len == 0 and closure.reads.items.len == 0) return false;
         for (direct_reads) |read_stmt| {
-            if (self.store.getCFStmtImmediate(read_stmt).assign_ref.op.field.field_idx >= operands.len) return false;
+            if (self.store.getCFStmtImmediate(read_stmt).assign_ref.op.index >= operands.len) return false;
         }
         for (closure.reads.items) |read_stmt| {
-            if (self.store.getCFStmtImmediate(read_stmt).assign_ref.op.field.field_idx >= operands.len) return false;
+            if (self.store.getCFStmtImmediate(read_stmt).assign_ref.op.index >= operands.len) return false;
         }
 
         // Group this build's reads by operand before rewriting them, so each
@@ -832,7 +931,7 @@ const Pass = struct {
             var item: StructCascade = .{ .local = operand, .operand_uses = occurrences, .inherited = .empty };
             errdefer item.inherited.deinit(self.allocator);
             for ([_][]const LIR.CFStmtId{ direct_reads, closure.reads.items }) |reads| for (reads) |read_stmt| {
-                const field = self.store.getCFStmtImmediate(read_stmt).assign_ref.op.field.field_idx;
+                const field = self.store.getCFStmtImmediate(read_stmt).assign_ref.op.index;
                 if (GuardedList.at(operands, field) == operand) try item.inherited.append(self.allocator, read_stmt);
             };
             try self.struct_cascade.append(self.allocator, item);
@@ -840,13 +939,13 @@ const Pass = struct {
 
         for (direct_reads) |read_stmt| {
             const read = self.store.getCFStmtPtr(read_stmt);
-            const operand = GuardedList.at(operands, read.assign_ref.op.field.field_idx);
-            read.assign_ref.op = .{ .local = operand };
+            const operand = GuardedList.at(operands, read.assign_ref.op.index);
+            read.assign_ref.op = .local(operand);
         }
         for (closure.reads.items) |read_stmt| {
             const read = self.store.getCFStmtPtr(read_stmt);
-            const operand = GuardedList.at(operands, read.assign_ref.op.field.field_idx);
-            read.assign_ref.op = .{ .local = operand };
+            const operand = GuardedList.at(operands, read.assign_ref.op.index);
+            read.assign_ref.op = .local(operand);
         }
         for (closure.stmts.items) |alias_stmt| {
             const alias = self.store.getCFStmtImmediate(alias_stmt).assign_ref;
@@ -867,15 +966,15 @@ const Pass = struct {
     }
 
     fn validSingleVariantRead(self: *const Pass, stmt_id: LIR.CFStmtId, payload_layout: layout_mod.Idx) bool {
-        const stmt = self.store.getCFStmt(stmt_id);
-        if (stmt != .assign_ref) return false;
+        const stmt = self.store.getCFStmtImmediate(stmt_id);
+        if (stmt.* != .assign_ref) return false;
         const op = stmt.assign_ref.op;
-        if (op == .discriminant) return true;
-        if (op == .tag_payload_struct) {
-            return op.tag_payload_struct.variant_index == 0 and op.tag_payload_struct.tag_discriminant == 0;
+        if (op.kind == .discriminant) return true;
+        if (op.kind == .tag_payload_struct) {
+            return op.variant_index == 0 and op.tag_discriminant == 0;
         }
-        if (op != .tag_payload) return false;
-        const tag_payload = op.tag_payload;
+        if (op.kind != .tag_payload) return false;
+        const tag_payload = op;
         if (tag_payload.variant_index != 0 or tag_payload.tag_discriminant != 0) return false;
         const payload = self.layouts.getLayout(payload_layout);
         if (payload.tag == .struct_) {
@@ -884,16 +983,16 @@ const Pass = struct {
             for (0..info.fields.len) |index| {
                 field_count = @max(field_count, @as(usize, info.fields.get(@intCast(index)).index) + 1);
             }
-            return tag_payload.payload_idx < field_count;
+            return tag_payload.index < field_count;
         }
-        return tag_payload.payload_idx == 0;
+        return tag_payload.index == 0;
     }
 
     /// Replaces a single-variant tag read with a direct read of `payload`.
     /// The replacement is a `join_scalarize` statement at the read's origin.
     fn rewriteSingleVariantRead(self: *Pass, stmt_id: LIR.CFStmtId, payload: LIR.LocalId, payload_layout: layout_mod.Idx) ScalarizeError!void {
         const assign = self.store.getCFStmtImmediate(stmt_id).assign_ref;
-        const replacement: LIR.CFStmt = switch (assign.op) {
+        const replacement: LIR.CFStmt = switch (assign.op.kind) {
             .discriminant => .{ .assign_literal = .{
                 .target = assign.target,
                 .value = .{ .i64_literal = .{
@@ -904,15 +1003,15 @@ const Pass = struct {
             } },
             .tag_payload_struct => blk: {
                 var updated = assign;
-                updated.op = .{ .local = payload };
+                updated.op = .local(payload);
                 break :blk .{ .assign_ref = updated };
             },
-            .tag_payload => |tag_payload| blk: {
+            .tag_payload => blk: {
                 var updated = assign;
                 updated.op = if (self.layouts.getLayout(payload_layout).tag == .struct_)
-                    .{ .field = .{ .source = payload, .field_idx = tag_payload.payload_idx } }
+                    LIR.RefOp.field(payload, assign.op.index)
                 else
-                    .{ .local = payload };
+                    LIR.RefOp.local(payload);
                 break :blk .{ .assign_ref = updated };
             },
             .local, .field, .list_reinterpret, .nominal => unreachable, // validSingleVariantRead admitted only these reads
@@ -1028,7 +1127,7 @@ const Pass = struct {
         try out.append(self.allocator, param);
         try out.appendSlice(self.allocator, closure.locals.items);
         for (writes) |write_stmt| try out.append(self.allocator, self.store.getCFStmtImmediate(write_stmt).set_local.value);
-        for (alias_writes) |write_stmt| try out.append(self.allocator, self.store.getCFStmtImmediate(write_stmt).assign_ref.op.local);
+        for (alias_writes) |write_stmt| try out.append(self.allocator, self.store.getCFStmtImmediate(write_stmt).assign_ref.op.source);
     }
 
     fn anyRoundLocal(self: *Pass, locals: []const LIR.LocalId) bool {
@@ -1072,14 +1171,15 @@ const Pass = struct {
         const other_uses = self.use_other.contains(local) and
             !(payload_uses != 0 and build.whole_uses == payload_uses and build.payload_uses == payload_uses);
         if (self.join_params.contains(local) or self.write_other.contains(local) or other_uses or self.alias_defs.contains(local)) return false;
-        if (build.builds.items.len != 1) return false;
+        const sites = self.tag_sites.slice(local);
+        if (sites.len != 1) return false;
         const payload_layout = self.singleVariantPayloadLayout(local) orelse return false;
-        const site = build.builds.items[0];
+        const site = sites[0];
         if (self.removed.contains(site.stmt)) return false;
         const payload = site.payload orelse return false;
         if (site.variant_index != 0 or site.discriminant != 0) return false;
         const assign = self.store.getCFStmtImmediate(site.stmt).assign_tag;
-        if (assign.target_desc != null or self.store.getLocal(payload).layout_idx != payload_layout) return false;
+        if (assign.target_desc != .none or self.store.getLocal(payload).layout_idx != payload_layout) return false;
 
         var closure = try self.aliasClosureOf(local);
         defer closure.deinit(self.allocator);
@@ -1087,10 +1187,10 @@ const Pass = struct {
             const alias = self.store.getCFStmtImmediate(alias_stmt).assign_ref.target;
             if (!self.inheritedTagAliasIsTransparent(alias)) return false;
             try closure.stmts.append(self.allocator, alias_stmt);
-            if (self.field_reads.getPtr(alias)) |reads| try closure.reads.appendSlice(self.allocator, reads.items);
-            if (self.tag_reads.getPtr(alias)) |reads| try closure.tag_reads.appendSlice(self.allocator, reads.items);
-            if (self.tag_forward_writes.getPtr(alias)) |writes| try closure.tag_forwards.appendSlice(self.allocator, writes.items);
-            if (self.struct_forward_writes.getPtr(alias)) |writes| try closure.struct_forwards.appendSlice(self.allocator, writes.items);
+            if (self.field_reads.get(alias)) |reads| try closure.reads.appendSlice(self.allocator, reads);
+            if (self.tag_reads.get(alias)) |reads| try closure.tag_reads.appendSlice(self.allocator, reads);
+            if (self.tag_forward_writes.get(alias)) |writes| try closure.tag_forwards.appendSlice(self.allocator, writes);
+            if (self.struct_forward_writes.get(alias)) |writes| try closure.struct_forwards.appendSlice(self.allocator, writes);
             var alias_closure = try self.aliasClosureOf(alias);
             defer alias_closure.deinit(self.allocator);
             try closure.stmts.appendSlice(self.allocator, alias_closure.stmts.items);
@@ -1100,11 +1200,11 @@ const Pass = struct {
             try closure.struct_forwards.appendSlice(self.allocator, alias_closure.struct_forwards.items);
         }
         if (closure.struct_forwards.items.len != 0) return false;
-        const direct_fields: []const LIR.CFStmtId = if (self.field_reads.getPtr(local)) |reads| reads.items else &.{};
+        const direct_fields: []const LIR.CFStmtId = if (self.field_reads.get(local)) |reads| reads else &.{};
         if (direct_fields.len != 0 or closure.reads.items.len != 0) return false;
-        const direct_forwards: []const LIR.CFStmtId = if (self.tag_forward_writes.getPtr(local)) |writes| writes.items else &.{};
+        const direct_forwards: []const LIR.CFStmtId = if (self.tag_forward_writes.get(local)) |writes| writes else &.{};
         if (direct_forwards.len != 0 or closure.tag_forwards.items.len != 0) return false;
-        const direct_reads: []const LIR.CFStmtId = if (self.tag_reads.getPtr(local)) |reads| reads.items else &.{};
+        const direct_reads: []const LIR.CFStmtId = if (self.tag_reads.get(local)) |reads| reads else &.{};
         if (direct_reads.len == 0 and closure.tag_reads.items.len == 0) return false;
         if (!self.validateSingleVariantReads(direct_reads, closure.tag_reads.items, payload_layout)) return false;
 
@@ -1114,7 +1214,7 @@ const Pass = struct {
             var item: TagCascade = .{ .local = payload, .payload_uses = 1, .inherited = .empty };
             errdefer item.inherited.deinit(self.allocator);
             for ([_][]const LIR.CFStmtId{ direct_reads, closure.tag_reads.items }) |reads| for (reads) |read_stmt| {
-                switch (self.store.getCFStmtImmediate(read_stmt).assign_ref.op) {
+                switch (self.store.getCFStmtImmediate(read_stmt).assign_ref.op.kind) {
                     .tag_payload, .tag_payload_struct => try item.inherited.append(self.allocator, read_stmt),
                     .discriminant, .local, .field, .list_reinterpret, .nominal => {},
                 }
@@ -1167,13 +1267,13 @@ const Pass = struct {
         if (self.layouts.getLayout(payload_layout).tag == .zst) return false;
         if (self.use_other.contains(param) or self.write_other.contains(param)) return false;
 
-        const listing_joins: []const LIR.CFStmtId = if (self.join_params.getPtr(param)) |list| list.items else &.{};
+        const listing_joins: []const LIR.CFStmtId = if (self.join_params.get(param)) |list| list else &.{};
         if (listing_joins.len == 0) return false;
         if (param_is_proc_arg and listing_joins.len != 1) return false;
         if (self.anyRoundClaimed(&.{listing_joins})) return false;
         for (listing_joins) |listing_id| {
             const listing = self.store.getCFStmtImmediate(listing_id).join;
-            const maybe_uninitialized = self.store.getLocalSpan(listing.maybe_uninitialized_params);
+            const maybe_uninitialized = self.store.getLocalSpan(self.store.stmtRowOrDefault(listing.extra).maybe_uninitialized_params);
             for (0..GuardedList.borrowLen(maybe_uninitialized)) |index| {
                 if (GuardedList.at(maybe_uninitialized, index) == param) return false;
             }
@@ -1181,15 +1281,15 @@ const Pass = struct {
 
         var closure = try self.aliasClosureOf(param);
         defer closure.deinit(self.allocator);
-        const direct_fields: []const LIR.CFStmtId = if (self.field_reads.getPtr(param)) |reads| reads.items else &.{};
+        const direct_fields: []const LIR.CFStmtId = if (self.field_reads.get(param)) |reads| reads else &.{};
         if (direct_fields.len != 0 or closure.reads.items.len != 0) return false;
-        const direct_reads: []const LIR.CFStmtId = if (self.tag_reads.getPtr(param)) |reads| reads.items else &.{};
-        const direct_forwards: []const LIR.CFStmtId = if (self.tag_forward_writes.getPtr(param)) |writes| writes.items else &.{};
+        const direct_reads: []const LIR.CFStmtId = if (self.tag_reads.get(param)) |reads| reads else &.{};
+        const direct_forwards: []const LIR.CFStmtId = if (self.tag_forward_writes.get(param)) |writes| writes else &.{};
         if (direct_reads.len == 0 and closure.tag_reads.items.len == 0 and
             direct_forwards.len == 0 and closure.tag_forwards.items.len == 0) return false;
-        const writes: []const LIR.CFStmtId = if (self.init_writes.getPtr(param)) |list| list.items else &.{};
-        const alias_writes: []const LIR.CFStmtId = if (self.alias_init_writes.getPtr(param)) |list| list.items else &.{};
-        const direct_builds: []const TagBuildSite = if (self.tag_builds.getPtr(param)) |builds| builds.builds.items else &.{};
+        const writes: []const LIR.CFStmtId = if (self.init_writes.get(param)) |list| list else &.{};
+        const alias_writes: []const LIR.CFStmtId = if (self.alias_init_writes.get(param)) |list| list else &.{};
+        const direct_builds: []const TagBuildSite = self.tag_sites.slice(param);
         if (writes.len == 0 and alias_writes.len == 0 and direct_builds.len == 0) return false;
         if (self.anyRoundClaimed(&.{ direct_reads, closure.tag_reads.items, direct_forwards, closure.tag_forwards.items, closure.stmts.items, writes, alias_writes }) or
             self.anyRoundClaimedBuild(direct_builds)) return false;
@@ -1201,13 +1301,13 @@ const Pass = struct {
         }
         for (alias_writes) |write_stmt| {
             const write = self.store.getCFStmtImmediate(write_stmt).assign_ref;
-            if (write.op.local == param or self.singleVariantPayloadLayout(write.op.local) != payload_layout) return false;
+            if (write.op.source == param or self.singleVariantPayloadLayout(write.op.source) != payload_layout) return false;
         }
         for (direct_builds) |site| {
             const payload = site.payload orelse return false;
             if (site.variant_index != 0 or site.discriminant != 0) return false;
             const assign = self.store.getCFStmtImmediate(site.stmt).assign_tag;
-            if (assign.target_desc != null or self.store.getLocal(payload).layout_idx != payload_layout) return false;
+            if (assign.target_desc != .none or self.store.getLocal(payload).layout_idx != payload_layout) return false;
         }
 
         var claimed = collections.DenseMap(LIR.CFStmtId, void).init(self.allocator);
@@ -1254,7 +1354,7 @@ const Pass = struct {
         }
         for (alias_writes) |write_stmt| {
             const write = self.store.getCFStmtImmediate(write_stmt).assign_ref;
-            try self.seedTagWrite(write_stmt, write.op.local, write.next, payload_param, payload_layout);
+            try self.seedTagWrite(write_stmt, write.op.source, write.next, payload_param, payload_layout);
         }
         for (direct_builds) |site| {
             const assign = self.store.getCFStmtImmediate(site.stmt).assign_tag;
@@ -1284,13 +1384,13 @@ const Pass = struct {
         else if (old == .assign_ref)
             old.assign_ref.target
         else
-            unreachable;
+            base.invariant("scalarize joins invariant violated: tag forward {d} is a {s} statement, not set_local or assign_ref", .{ @backingInt(stmt_id), @tagName(old) });
         const next_after: LIR.CFStmtId = if (old == .set_local)
             old.set_local.next
         else if (old == .assign_ref)
             old.assign_ref.next
         else
-            unreachable;
+            unreachable; // the target lookup above admits only set_local and assign_ref
         const target_layout = self.store.getLocal(target).layout_idx;
         const rebuilt = try self.store.addLocal(.{ .layout_idx = target_layout });
         try self.new_locals.append(self.allocator, rebuilt);
@@ -1304,11 +1404,11 @@ const Pass = struct {
         else if (old == .assign_ref)
             try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
-                .op = .{ .local = rebuilt },
+                .op = .local(rebuilt),
                 .next = next_after,
             } }, origin)
         else
-            unreachable;
+            unreachable; // the target lookup above admits only set_local and assign_ref
         try self.store.replaceCFStmt(stmt_id, .{ .assign_tag = .{
             .target = rebuilt,
             .variant_index = 0,
@@ -1338,11 +1438,7 @@ const Pass = struct {
         } }, origin);
         try self.store.replaceCFStmt(stmt_id, .{ .assign_ref = .{
             .target = tmp,
-            .op = .{ .tag_payload_struct = .{
-                .source = source,
-                .variant_index = 0,
-                .tag_discriminant = 0,
-            } },
+            .op = .tagPayloadStruct(source, 0, 0),
             .next = set_stmt,
         } }, origin);
     }
@@ -1366,11 +1462,7 @@ const Pass = struct {
         } }, origin);
         const seeded_remainder = try self.store.addCFStmt(.{ .assign_ref = .{
             .target = tmp,
-            .op = .{ .tag_payload_struct = .{
-                .source = arg_tag,
-                .variant_index = 0,
-                .tag_discriminant = 0,
-            } },
+            .op = .tagPayloadStruct(arg_tag, 0, 0),
             .next = set_stmt,
         } }, origin);
         self.store.getCFStmtPtr(join_stmt_id).join.remainder = seeded_remainder;
@@ -1405,7 +1497,7 @@ const Pass = struct {
         // struct parameter. The write-less proc-entry seed reads the argument
         // struct in a specific join's remainder, so that shape keeps the
         // single-join requirement.
-        const listing_joins: []const LIR.CFStmtId = if (self.join_params.getPtr(param)) |list| list.items else &.{};
+        const listing_joins: []const LIR.CFStmtId = if (self.join_params.get(param)) |list| list else &.{};
         if (listing_joins.len == 0) return false;
         if (param_is_proc_arg and listing_joins.len != 1) return false;
         if (self.anyRoundClaimed(&.{listing_joins})) return false;
@@ -1413,27 +1505,27 @@ const Pass = struct {
         // local; splitting it is not modeled.
         for (listing_joins) |listing_id| {
             const listing = self.store.getCFStmtImmediate(listing_id).join;
-            const maybe_uninitialized = self.store.getLocalSpan(listing.maybe_uninitialized_params);
+            const maybe_uninitialized = self.store.getLocalSpan(self.store.stmtRowOrDefault(listing.extra).maybe_uninitialized_params);
             for (0..GuardedList.borrowLen(maybe_uninitialized)) |i| {
                 if (GuardedList.at(maybe_uninitialized, i) == param) return false;
             }
         }
         var closure = try self.aliasClosureOf(param);
         defer closure.deinit(self.allocator);
-        const direct_tag_reads: []const LIR.CFStmtId = if (self.tag_reads.getPtr(param)) |list| list.items else &.{};
-        const direct_tag_forwards: []const LIR.CFStmtId = if (self.tag_forward_writes.getPtr(param)) |writes| writes.items else &.{};
+        const direct_tag_reads: []const LIR.CFStmtId = if (self.tag_reads.get(param)) |list| list else &.{};
+        const direct_tag_forwards: []const LIR.CFStmtId = if (self.tag_forward_writes.get(param)) |writes| writes else &.{};
         if (direct_tag_reads.len != 0 or closure.tag_reads.items.len != 0 or
             direct_tag_forwards.len != 0 or closure.tag_forwards.items.len != 0) return false;
         const empty_reads: []const LIR.CFStmtId = &.{};
-        const direct_reads: []const LIR.CFStmtId = if (self.field_reads.getPtr(param)) |list| list.items else empty_reads;
-        const direct_forwards: []const LIR.CFStmtId = if (self.struct_forward_writes.getPtr(param)) |writes| writes.items else &.{};
+        const direct_reads: []const LIR.CFStmtId = if (self.field_reads.get(param)) |list| list else empty_reads;
+        const direct_forwards: []const LIR.CFStmtId = if (self.struct_forward_writes.get(param)) |writes| writes else &.{};
         if (direct_reads.len == 0 and closure.reads.items.len == 0 and
             direct_forwards.len == 0 and closure.struct_forwards.items.len == 0) return false;
         const empty_writes: []const LIR.CFStmtId = &.{};
-        const writes: []const LIR.CFStmtId = if (self.init_writes.getPtr(param)) |list| list.items else empty_writes;
-        const alias_writes: []const LIR.CFStmtId = if (self.alias_init_writes.getPtr(param)) |list| list.items else empty_writes;
+        const writes: []const LIR.CFStmtId = if (self.init_writes.get(param)) |list| list else empty_writes;
+        const alias_writes: []const LIR.CFStmtId = if (self.alias_init_writes.get(param)) |list| list else empty_writes;
         const empty_builds: []const BuildSite = &.{};
-        const direct_builds: []const BuildSite = if (self.struct_builds.getPtr(param)) |entry| entry.builds.items else empty_builds;
+        const direct_builds: []const BuildSite = self.struct_sites.get(param) orelse empty_builds;
         if (writes.len == 0 and alias_writes.len == 0 and direct_builds.len == 0) return false;
         if (self.anyRoundClaimed(&.{ direct_reads, closure.reads.items, closure.stmts.items, direct_forwards, closure.struct_forwards.items, writes, alias_writes }) or
             self.anyRoundClaimedBuild(direct_builds)) return false;
@@ -1451,18 +1543,19 @@ const Pass = struct {
             const write = self.store.getCFStmtImmediate(write_stmt).set_local;
             if (write.value == param) return false;
             const build = self.struct_builds.get(write.value) orelse continue;
-            if (build.builds.items.len != 1 or build.uses != 0 or build.init_uses != 1) continue;
+            const sites = self.struct_sites.slice(write.value);
+            if (sites.len != 1 or build.uses != 0 or build.init_uses != 1) continue;
             if (self.write_other.contains(write.value)) continue;
             if (self.join_params.contains(write.value)) continue;
-            if (self.store.getLocalSpan(build.builds.items[0].fields).len != field_count) return false;
+            if (self.store.getLocalSpan(sites[0].fields).len != field_count) return false;
         }
         for (direct_reads) |read_stmt| {
             const read = self.store.getCFStmtImmediate(read_stmt).assign_ref;
-            if (read.op.field.field_idx >= field_count) return false;
+            if (read.op.index >= field_count) return false;
         }
         for (closure.reads.items) |read_stmt| {
             const read = self.store.getCFStmtImmediate(read_stmt).assign_ref;
-            if (read.op.field.field_idx >= field_count) return false;
+            if (read.op.index >= field_count) return false;
         }
 
         var claimed = collections.DenseMap(LIR.CFStmtId, void).init(self.allocator);
@@ -1485,10 +1578,11 @@ const Pass = struct {
         for (writes) |write_stmt| {
             const write = self.store.getCFStmtImmediate(write_stmt).set_local;
             const build = self.struct_builds.get(write.value) orelse continue;
-            if (build.builds.items.len != 1 or build.uses != 0 or build.init_uses != 1) continue;
+            const sites = self.struct_sites.slice(write.value);
+            if (sites.len != 1 or build.uses != 0 or build.init_uses != 1) continue;
             if (self.write_other.contains(write.value)) continue;
             if (self.join_params.contains(write.value)) continue;
-            try extra.append(self.allocator, build.builds.items[0].stmt);
+            try extra.append(self.allocator, sites[0].stmt);
         }
         var locals = std.ArrayList(LIR.LocalId).empty;
         defer locals.deinit(self.allocator);
@@ -1530,20 +1624,20 @@ const Pass = struct {
         // read the parameter directly or through a transparent alias.
         for (direct_reads) |read_stmt| {
             const read_ptr = self.store.getCFStmtPtr(read_stmt);
-            const field_idx = read_ptr.assign_ref.op.field.field_idx;
-            read_ptr.assign_ref.op = .{ .local = field_locals[field_idx] };
+            const field_idx = read_ptr.assign_ref.op.index;
+            read_ptr.assign_ref.op = .local(field_locals[field_idx]);
         }
         for (closure.reads.items) |read_stmt| {
             const read_ptr = self.store.getCFStmtPtr(read_stmt);
-            const field_idx = read_ptr.assign_ref.op.field.field_idx;
-            read_ptr.assign_ref.op = .{ .local = field_locals[field_idx] };
+            const field_idx = read_ptr.assign_ref.op.index;
+            read_ptr.assign_ref.op = .local(field_locals[field_idx]);
         }
 
         // The transparent aliases' definitions read a value that no longer
         // exists; every use of them was rewritten above, so they are deleted.
         for (closure.stmts.items) |alias_stmt| {
-            const alias = self.store.getCFStmt(alias_stmt);
-            std.debug.assert(alias == .assign_ref);
+            const alias = self.store.getCFStmtImmediate(alias_stmt);
+            std.debug.assert(alias.* == .assign_ref);
             const alias_next = alias.assign_ref.next;
             try self.removed.put(alias_stmt, alias_next);
         }
@@ -1558,7 +1652,7 @@ const Pass = struct {
             const write = self.store.getCFStmtImmediate(write_stmt).set_local;
             const qualifying: ?StructBuild = qualifying: {
                 const build = self.struct_builds.get(write.value) orelse break :qualifying null;
-                if (build.builds.items.len != 1 or build.uses != 0 or build.init_uses != 1) break :qualifying null;
+                if (self.struct_sites.slice(write.value).len != 1 or build.uses != 0 or build.init_uses != 1) break :qualifying null;
                 if (self.write_other.contains(write.value)) break :qualifying null;
                 // A join parameter's literal build is that join's edge
                 // initialization, not a site-local wrapper temporary:
@@ -1569,13 +1663,13 @@ const Pass = struct {
                 if (self.join_params.contains(write.value)) break :qualifying null;
                 break :qualifying build;
             };
-            if (qualifying) |build| {
-                const site = build.builds.items[0];
+            if (qualifying) |_| {
+                const site = self.struct_sites.slice(write.value)[0];
                 const operands = self.store.getLocalSpan(site.fields);
                 try self.writeFields(write_stmt, write.next, field_locals, operands);
 
-                const build_stmt = self.store.getCFStmt(site.stmt);
-                std.debug.assert(build_stmt == .assign_struct);
+                const build_stmt = self.store.getCFStmtImmediate(site.stmt);
+                std.debug.assert(build_stmt.* == .assign_struct);
                 const build_next = build_stmt.assign_struct.next;
                 try self.removed.put(site.stmt, build_next);
             } else {
@@ -1587,14 +1681,14 @@ const Pass = struct {
         // becomes per-field reads of its source.
         for (alias_writes) |write_stmt| {
             const write = self.store.getCFStmtImmediate(write_stmt).assign_ref;
-            try self.seedWrite(write_stmt, write.op.local, write.next, field_locals);
+            try self.seedWrite(write_stmt, write.op.source, write.next, field_locals);
         }
 
         // Each direct build becomes per-field writes in its place.
         for (direct_builds) |site| {
             const operands = self.store.getLocalSpan(site.fields);
-            const build_stmt = self.store.getCFStmt(site.stmt);
-            std.debug.assert(build_stmt == .assign_struct);
+            const build_stmt = self.store.getCFStmtImmediate(site.stmt);
+            std.debug.assert(build_stmt.* == .assign_struct);
             const build_next = build_stmt.assign_struct.next;
             try self.writeFields(site.stmt, build_next, field_locals, operands);
         }
@@ -1619,13 +1713,13 @@ const Pass = struct {
         else if (old == .assign_ref)
             old.assign_ref.target
         else
-            unreachable;
+            base.invariant("scalarize joins invariant violated: struct forward {d} is a {s} statement, not set_local or assign_ref", .{ @backingInt(stmt_id), @tagName(old) });
         const next_after: LIR.CFStmtId = if (old == .set_local)
             old.set_local.next
         else if (old == .assign_ref)
             old.assign_ref.next
         else
-            unreachable;
+            unreachable; // the target lookup above admits only set_local and assign_ref
         const rebuilt = try self.store.addLocal(.{ .layout_idx = self.store.getLocal(target).layout_idx });
         try self.new_locals.append(self.allocator, rebuilt);
         const forward = if (old == .set_local)
@@ -1638,11 +1732,11 @@ const Pass = struct {
         else if (old == .assign_ref)
             try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
-                .op = .{ .local = rebuilt },
+                .op = .local(rebuilt),
                 .next = next_after,
             } }, origin)
         else
-            unreachable;
+            unreachable; // the target lookup above admits only set_local and assign_ref
         try self.store.replaceCFStmt(stmt_id, .{ .assign_struct = .{
             .target = rebuilt,
             .fields = try self.store.addLocalSpan(fields),
@@ -1675,7 +1769,7 @@ const Pass = struct {
             } }, origin);
             next = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = tmp,
-                .op = .{ .field = .{ .source = arg_struct, .field_idx = @intCast(k) } },
+                .op = .field(arg_struct, @intCast(k)),
                 .next = set_stmt,
             } }, origin);
         }
@@ -1726,13 +1820,13 @@ const Pass = struct {
             if (k == 0) {
                 try self.store.replaceCFStmt(write_stmt, .{ .assign_ref = .{
                     .target = temps[0],
-                    .op = .{ .field = .{ .source = value, .field_idx = 0 } },
+                    .op = .field(value, 0),
                     .next = next,
                 } }, origin);
             } else {
                 next = try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = temps[k],
-                    .op = .{ .field = .{ .source = value, .field_idx = @intCast(k) } },
+                    .op = .field(value, @intCast(k)),
                     .next = next,
                 } }, origin);
             }
@@ -1776,13 +1870,13 @@ const Pass = struct {
             if (k == 0) {
                 try self.store.replaceCFStmt(stmt, .{ .assign_ref = .{
                     .target = temps[0],
-                    .op = .{ .local = GuardedList.at(operands, 0) },
+                    .op = .local(GuardedList.at(operands, 0)),
                     .next = next,
                 } }, origin);
             } else {
                 next = try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = temps[k],
-                    .op = .{ .local = GuardedList.at(operands, k) },
+                    .op = .local(GuardedList.at(operands, k)),
                     .next = next,
                 } }, origin);
             }
@@ -1849,7 +1943,6 @@ const Pass = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -1902,9 +1995,7 @@ const Pass = struct {
                 .join => |join_stmt| {
                     const params = self.store.getLocalSpan(join_stmt.params);
                     for (0..GuardedList.borrowLen(params)) |index| {
-                        const entry = try self.join_params.getOrPut(GuardedList.at(params, index));
-                        if (!entry.found_existing) entry.value_ptr.* = .empty;
-                        try entry.value_ptr.append(self.allocator, current);
+                        try self.join_params.note(GuardedList.at(params, index), current);
                     }
                 },
                 .init_uninitialized,
@@ -1936,7 +2027,6 @@ const Pass = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -1962,26 +2052,24 @@ const Pass = struct {
             if (self.metrics) |metrics| metrics.collected_statements += 1;
             switch (self.store.getCFStmtImmediate(current).*) {
                 .assign_ref => |assign| ref: {
-                    switch (assign.op) {
-                        .field => |op| try self.noteFieldRead(op.source, current),
-                        .local => |source| {
-                            if (source == assign.target) {
-                                try self.noteUse(source);
+                    switch (assign.op.kind) {
+                        .field => try self.noteFieldRead(assign.op.source, current),
+                        .local => {
+                            if (assign.op.source == assign.target) {
+                                try self.noteUse(assign.op.source);
                             } else if (self.join_params.contains(assign.target)) {
                                 // An edge initializer. The source is treated
                                 // as used whole for this round: if the target
                                 // scalarizes, this statement becomes per-field
                                 // reads of the source, and the source can
                                 // qualify on a later round.
-                                const entry = try self.alias_init_writes.getOrPut(assign.target);
-                                if (!entry.found_existing) entry.value_ptr.* = .empty;
-                                try entry.value_ptr.append(self.allocator, current);
-                                if (self.isSameSingleVariantTag(assign.target, source)) {
-                                    try self.noteTagForward(source, current);
-                                } else if (self.isSameStruct(assign.target, source)) {
-                                    try self.noteStructForward(source, current);
+                                try self.alias_init_writes.note(assign.target, current);
+                                if (self.isSameSingleVariantTag(assign.target, assign.op.source)) {
+                                    try self.noteTagForward(assign.op.source, current);
+                                } else if (self.isSameStruct(assign.target, assign.op.source)) {
+                                    try self.noteStructForward(assign.op.source, current);
                                 } else {
-                                    try self.noteUse(source);
+                                    try self.noteUse(assign.op.source);
                                 }
                                 break :ref;
                             } else {
@@ -1996,29 +2084,30 @@ const Pass = struct {
                                     // so both count as whole-value uses here.
                                     entry.value_ptr.def_count += 1;
                                     try self.noteUse(entry.value_ptr.source);
-                                    try self.noteUse(source);
+                                    try self.noteUse(assign.op.source);
                                 } else {
-                                    entry.value_ptr.* = .{ .stmt = current, .source = source, .def_count = 1 };
+                                    entry.value_ptr.* = .{ .stmt = current, .source = assign.op.source, .def_count = 1 };
                                 }
                                 break :ref;
                             }
                         },
-                        inline .discriminant, .tag_payload, .tag_payload_struct => |op| try self.noteTagRead(op.source, current),
-                        inline .list_reinterpret, .nominal => |op| try self.noteUse(op.backing_ref),
+                        inline .discriminant, .tag_payload, .tag_payload_struct => try self.noteTagRead(assign.op.source, current),
+                        inline .list_reinterpret, .nominal => try self.noteUse(assign.op.source),
                     }
                     try self.noteWrite(assign.target);
                 },
                 .assign_literal => |assign| try self.noteWrite(assign.target),
                 .init_uninitialized => |initialize| try self.noteWrite(initialize.target),
                 .assign_call => |assign| {
-                    if (assign.result_desc) |result_desc| {
+                    if (self.store.stmtRowOrDefault(assign.extra).result_desc) |result_desc| {
                         if (result_desc.localOrNull()) |local| try self.noteUse(local);
                     }
                     const args = self.store.getLocalSpan(assign.args);
                     for (0..args.len) |index| try self.noteUse(GuardedList.at(args, index));
                     try self.noteWrite(assign.target);
                 },
-                .assign_call_erased => |assign| {
+                .assign_call_erased => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.closure);
                     if (assign.result_desc) |result_desc| {
                         if (result_desc.localOrNull()) |local| try self.noteUse(local);
@@ -2026,23 +2115,25 @@ const Pass = struct {
                     if (assign.reuse_source) |reuse_source| try self.noteUse(reuse_source);
                     const args = self.store.getLocalSpan(assign.args);
                     for (0..args.len) |index| try self.noteUse(GuardedList.at(args, index));
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                     if (assign.out_desc) |out_desc| try self.noteWrite(out_desc);
                 },
-                .assign_packed_erased_fn => |assign| {
+                .assign_packed_erased_fn => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     if (assign.capture) |capture| try self.noteUse(capture);
                     if (assign.result_desc) |result_desc| {
                         if (result_desc.localOrNull()) |local| try self.noteUse(local);
                     }
                     if (assign.reuse) |reuse| try self.noteUse(reuse);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_desc_ref => |assign| {
+                .assign_boxy_desc_ref => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteDescUse(assign.desc);
                     if (assign.tag_residual_for) |desc| try self.noteDescUse(desc);
                     const captures = self.store.getLocalSpan(assign.captures);
                     for (0..GuardedList.borrowLen(captures)) |index| try self.noteUse(GuardedList.at(captures, index));
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
                 .assign_boxy_dict_ref => |assign| {
                     try self.noteDictUse(assign.dict);
@@ -2050,64 +2141,74 @@ const Pass = struct {
                     for (0..GuardedList.borrowLen(captures)) |index| try self.noteUse(GuardedList.at(captures, index));
                     try self.noteWrite(assign.target);
                 },
-                .assign_boxy_box => |assign| {
+                .assign_boxy_box => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.payload);
                     if (assign.payload_desc) |desc| try self.noteDescUse(desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_record_update => |assign| {
+                .assign_boxy_record_update => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.base);
                     try self.noteUse(assign.fields);
                     try self.noteDescUse(assign.base_desc);
                     try self.noteDescUse(assign.fields_desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_unbox => |assign| {
+                .assign_boxy_unbox => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.source);
                     try self.noteDescUse(assign.source_desc);
                     if (assign.target_desc) |desc| try self.noteDescUse(desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_adapt => |assign| {
+                .assign_boxy_adapt => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.source);
                     if (assign.source_desc) |desc| try self.noteDescUse(desc);
                     if (assign.target_desc) |desc| try self.noteDescUse(desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_inspect => |assign| {
+                .assign_boxy_inspect => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.source);
                     try self.noteDescUse(assign.source_desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_eq => |assign| {
+                .assign_boxy_eq => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.lhs);
                     try self.noteUse(assign.rhs);
                     try self.noteDescUse(assign.desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_hash => |assign| {
+                .assign_boxy_hash => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.value);
                     try self.noteUse(assign.hasher);
                     try self.noteDescUse(assign.desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_tag => |assign| {
+                .assign_boxy_tag => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteDescUse(assign.target_desc);
                     if (assign.payload) |payload| try self.noteUse(payload);
                     if (assign.payload_desc) |desc| try self.noteDescUse(desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_tag_payload => |assign| {
+                .assign_boxy_tag_payload => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.source);
                     try self.noteDescUse(assign.source_desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                     if (assign.target_desc) |target_desc| try self.noteWrite(target_desc);
                 },
                 .boxy_tag_match => |s| {
                     try self.noteUse(s.source);
-                    try self.noteDescUse(s.source_desc);
+                    try self.noteDescUse(self.store.stmtRow(s.source_desc));
                 },
-                .assign_call_dict => |assign| {
+                .assign_call_dict => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteDictUse(assign.dict);
                     const args = self.store.getLocalSpan(assign.args);
                     for (0..GuardedList.borrowLen(args)) |index| try self.noteUse(GuardedList.at(args, index));
@@ -2115,7 +2216,7 @@ const Pass = struct {
                     for (0..GuardedList.borrowLen(arg_descs)) |index| try self.noteUse(GuardedList.at(arg_descs, index));
                     const hidden_args = self.store.getLocalSpan(assign.hidden_args);
                     for (0..GuardedList.borrowLen(hidden_args)) |index| try self.noteUse(GuardedList.at(hidden_args, index));
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
                 .assign_low_level => |assign| {
                     const args = self.store.getLocalSpan(assign.args);
@@ -2136,7 +2237,7 @@ const Pass = struct {
                     }
                 },
                 .assign_tag => |assign| {
-                    if (assign.target_desc) |target_desc| try self.noteDescUse(target_desc);
+                    if (self.store.optionalStmtRow(assign.target_desc)) |target_desc| try self.noteDescUse(target_desc);
                     if (assign.payload) |payload| {
                         try self.noteUse(payload);
                         if (self.tag_builds.getPtr(payload)) |build| build.payload_uses += 1;
@@ -2153,9 +2254,7 @@ const Pass = struct {
                 },
                 .set_local => |assign| {
                     if (assign.mode == .initialize_join_param) {
-                        const entry = try self.init_writes.getOrPut(assign.target);
-                        if (!entry.found_existing) entry.value_ptr.* = .empty;
-                        try entry.value_ptr.append(self.allocator, current);
+                        try self.init_writes.note(assign.target, current);
                         if (self.isSameSingleVariantTag(assign.target, assign.value)) {
                             try self.noteTagForward(assign.value, current);
                         } else if (self.isSameStruct(assign.target, assign.value)) {
@@ -2179,8 +2278,9 @@ const Pass = struct {
                 .expect => |s| try self.noteUse(s.condition),
                 .switch_stmt => |s| try self.noteUse(s.cond),
                 .switch_initialized_payload => |s| try self.noteUse(s.cond),
-                .str_match => |s| {
-                    try self.noteUse(s.source);
+                .str_match => |s_stmt| {
+                    const s = self.store.stmtRow(s_stmt.data);
+                    try self.noteUse(s_stmt.source);
                     const steps = self.store.getStrMatchSteps(s.steps);
                     for (0..steps.len) |index| {
                         const step = GuardedList.at(steps, index);
@@ -2213,7 +2313,7 @@ const Pass = struct {
                     try self.noteUse(rc.cond);
                     try self.noteUse(rc.value);
                 },
-                .join, .jump, .comptime_branch_taken, .runtime_error, .comptime_exhaustiveness_failed => {},
+                .join, .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
             }
             try body_clone.appendSuccessorsInOrder(self.store, &self.stack, current, self.allocator, .{ .switch_edges = .arms_first });
         }
@@ -2283,12 +2383,12 @@ fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error
     const ret = try store.addCFStmt(.{ .ret = .{ .value = n } }, .test_fixture);
     const read_s = try store.addCFStmt(.{ .assign_ref = .{
         .target = s,
-        .op = .{ .field = .{ .source = state, .field_idx = 1 } },
+        .op = .field(state, 1),
         .next = ret,
     } }, .test_fixture);
     const read_n = try store.addCFStmt(.{ .assign_ref = .{
         .target = n,
-        .op = .{ .field = .{ .source = state, .field_idx = 0 } },
+        .op = .field(state, 0),
         .next = read_s,
     } }, .test_fixture);
 
@@ -2357,14 +2457,14 @@ fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error
     try testing.expectEqual(@as(usize, 2), params.len);
 
     const new_read_n = store.getCFStmtImmediate(read_n).assign_ref;
-    try testing.expectEqual(GuardedList.at(params, 0), new_read_n.op.local);
+    try testing.expectEqual(GuardedList.at(params, 0), new_read_n.op.source);
     const new_read_s = store.getCFStmtImmediate(read_s).assign_ref;
-    try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.local);
+    try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.source);
 
     const first_snapshot = store.getCFStmtImmediate(set_state).assign_ref;
-    try testing.expectEqual(num, first_snapshot.op.local);
+    try testing.expectEqual(num, first_snapshot.op.source);
     const second_snapshot = store.getCFStmtImmediate(first_snapshot.next).assign_ref;
-    try testing.expectEqual(text, second_snapshot.op.local);
+    try testing.expectEqual(text, second_snapshot.op.source);
     const first_set = store.getCFStmtImmediate(second_snapshot.next).set_local;
     try testing.expectEqual(GuardedList.at(params, 0), first_set.target);
     try testing.expectEqual(first_snapshot.target, first_set.value);
@@ -2385,7 +2485,7 @@ test "scalarize keeps descriptor-bearing struct join parameters" {
 
     const state = try store.addLocal(.{ .layout_idx = f.pair });
     const state_desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
-    store.setLocalBoxyDesc(state, .{ .local = state_desc });
+    try store.setLocalBoxyDesc(state, .{ .local = state_desc });
     const num = try store.addLocal(.{ .layout_idx = .i64 });
     const text = try store.addLocal(.{ .layout_idx = .str });
     const wrapper = try store.addLocal(.{ .layout_idx = f.pair });
@@ -2396,12 +2496,12 @@ test "scalarize keeps descriptor-bearing struct join parameters" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = n } }, .test_fixture);
     const read_s = try store.addCFStmt(.{ .assign_ref = .{
         .target = s,
-        .op = .{ .field = .{ .source = state, .field_idx = 1 } },
+        .op = .field(state, 1),
         .next = ret,
     } }, .test_fixture);
     const read_n = try store.addCFStmt(.{ .assign_ref = .{
         .target = n,
-        .op = .{ .field = .{ .source = state, .field_idx = 0 } },
+        .op = .field(state, 0),
         .next = read_s,
     } }, .test_fixture);
     const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
@@ -2445,8 +2545,8 @@ test "scalarize keeps descriptor-bearing struct join parameters" {
     const params = store.getLocalSpan(store.getCFStmtImmediate(join).join.params);
     try testing.expectEqual(@as(usize, 1), params.len);
     try testing.expectEqual(state, GuardedList.at(params, 0));
-    try testing.expectEqual(state, store.getCFStmtImmediate(read_n).assign_ref.op.field.source);
-    try testing.expectEqual(state, store.getCFStmtImmediate(read_s).assign_ref.op.field.source);
+    try testing.expectEqual(state, store.getCFStmtImmediate(read_n).assign_ref.op.source);
+    try testing.expectEqual(state, store.getCFStmtImmediate(read_s).assign_ref.op.source);
 }
 
 test "scalarize keeps parameters with whole-value uses" {
@@ -2471,7 +2571,7 @@ test "scalarize keeps parameters with whole-value uses" {
     } }, .test_fixture);
     const copy_whole = try store.addCFStmt(.{ .assign_ref = .{
         .target = whole,
-        .op = .{ .local = state },
+        .op = .local(state),
         .next = ret_assign,
     } }, .test_fixture);
 
@@ -2538,12 +2638,12 @@ test "scalarize splits a parameter built directly by a struct literal" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = n } }, .test_fixture);
     const read_s = try store.addCFStmt(.{ .assign_ref = .{
         .target = s,
-        .op = .{ .field = .{ .source = state, .field_idx = 1 } },
+        .op = .field(state, 1),
         .next = ret,
     } }, .test_fixture);
     const read_n = try store.addCFStmt(.{ .assign_ref = .{
         .target = n,
-        .op = .{ .field = .{ .source = state, .field_idx = 0 } },
+        .op = .field(state, 0),
         .next = read_s,
     } }, .test_fixture);
 
@@ -2586,14 +2686,14 @@ test "scalarize splits a parameter built directly by a struct literal" {
     try testing.expectEqual(@as(usize, 2), params.len);
 
     const new_read_n = store.getCFStmtImmediate(read_n).assign_ref;
-    try testing.expectEqual(GuardedList.at(params, 0), new_read_n.op.local);
+    try testing.expectEqual(GuardedList.at(params, 0), new_read_n.op.source);
     const new_read_s = store.getCFStmtImmediate(read_s).assign_ref;
-    try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.local);
+    try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.source);
 
     const first_snapshot = store.getCFStmtImmediate(build).assign_ref;
-    try testing.expectEqual(num, first_snapshot.op.local);
+    try testing.expectEqual(num, first_snapshot.op.source);
     const second_snapshot = store.getCFStmtImmediate(first_snapshot.next).assign_ref;
-    try testing.expectEqual(text, second_snapshot.op.local);
+    try testing.expectEqual(text, second_snapshot.op.source);
     const first_set = store.getCFStmtImmediate(second_snapshot.next).set_local;
     try testing.expectEqual(GuardedList.at(params, 0), first_set.target);
     try testing.expectEqual(first_snapshot.target, first_set.value);
@@ -2628,17 +2728,17 @@ test "scalarize sees through pure aliases to field reads" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = n } }, .test_fixture);
     const read_s = try store.addCFStmt(.{ .assign_ref = .{
         .target = s,
-        .op = .{ .field = .{ .source = view, .field_idx = 1 } },
+        .op = .field(view, 1),
         .next = ret,
     } }, .test_fixture);
     const read_n = try store.addCFStmt(.{ .assign_ref = .{
         .target = n,
-        .op = .{ .field = .{ .source = view, .field_idx = 0 } },
+        .op = .field(view, 0),
         .next = read_s,
     } }, .test_fixture);
     const make_view = try store.addCFStmt(.{ .assign_ref = .{
         .target = view,
-        .op = .{ .local = state },
+        .op = .local(state),
         .next = read_n,
     } }, .test_fixture);
 
@@ -2687,9 +2787,9 @@ test "scalarize sees through pure aliases to field reads" {
     // Both reads now alias the field parameters, and the alias's definition
     // is gone: the join body starts at the first read.
     const new_read_n = store.getCFStmtImmediate(read_n).assign_ref;
-    try testing.expectEqual(GuardedList.at(params, 0), new_read_n.op.local);
+    try testing.expectEqual(GuardedList.at(params, 0), new_read_n.op.source);
     const new_read_s = store.getCFStmtImmediate(read_s).assign_ref;
-    try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.local);
+    try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.source);
     try testing.expectEqual(read_n, store.getCFStmtImmediate(join).join.body);
     try testing.expectEqual(join, store.getProcSpecImmediate(proc).body);
 }
@@ -2712,12 +2812,12 @@ test "scalarize keeps parameters whose alias escapes whole" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = view } }, .test_fixture);
     const read_n = try store.addCFStmt(.{ .assign_ref = .{
         .target = n,
-        .op = .{ .field = .{ .source = view, .field_idx = 0 } },
+        .op = .field(view, 0),
         .next = ret,
     } }, .test_fixture);
     const make_view = try store.addCFStmt(.{ .assign_ref = .{
         .target = view,
-        .op = .{ .local = state },
+        .op = .local(state),
         .next = read_n,
     } }, .test_fixture);
 
@@ -2786,12 +2886,12 @@ test "scalarize seeds field parameters from a non-literal initializer" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = n } }, .test_fixture);
     const read_s = try store.addCFStmt(.{ .assign_ref = .{
         .target = s,
-        .op = .{ .field = .{ .source = state, .field_idx = 1 } },
+        .op = .field(state, 1),
         .next = ret,
     } }, .test_fixture);
     const read_n = try store.addCFStmt(.{ .assign_ref = .{
         .target = n,
-        .op = .{ .field = .{ .source = state, .field_idx = 0 } },
+        .op = .field(state, 0),
         .next = read_s,
     } }, .test_fixture);
 
@@ -2829,11 +2929,11 @@ test "scalarize seeds field parameters from a non-literal initializer" {
 
     // The write became: read init.0; read init.1; set P0; set P1; jump.
     const first_read = store.getCFStmtImmediate(set_state).assign_ref;
-    try testing.expectEqual(init_value, first_read.op.field.source);
-    try testing.expectEqual(@as(u32, 0), first_read.op.field.field_idx);
+    try testing.expectEqual(init_value, first_read.op.source);
+    try testing.expectEqual(@as(u32, 0), first_read.op.index);
     const second_read = store.getCFStmtImmediate(first_read.next).assign_ref;
-    try testing.expectEqual(init_value, second_read.op.field.source);
-    try testing.expectEqual(@as(u32, 1), second_read.op.field.field_idx);
+    try testing.expectEqual(init_value, second_read.op.source);
+    try testing.expectEqual(@as(u32, 1), second_read.op.index);
     const first_set = store.getCFStmtImmediate(second_read.next).set_local;
     try testing.expectEqual(GuardedList.at(params, 0), first_set.target);
     try testing.expectEqual(first_read.target, first_set.value);
@@ -2843,9 +2943,9 @@ test "scalarize seeds field parameters from a non-literal initializer" {
 
     // The field reads alias the new parameters.
     const new_read_n = store.getCFStmtImmediate(read_n).assign_ref;
-    try testing.expectEqual(GuardedList.at(params, 0), new_read_n.op.local);
+    try testing.expectEqual(GuardedList.at(params, 0), new_read_n.op.source);
     const new_read_s = store.getCFStmtImmediate(read_s).assign_ref;
-    try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.local);
+    try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.source);
 }
 
 test "scalarize splits a parameter shared by two joins" {
@@ -2876,14 +2976,14 @@ test "scalarize splits a parameter shared by two joins" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = n } }, .test_fixture);
     const read_n = try store.addCFStmt(.{ .assign_ref = .{
         .target = n,
-        .op = .{ .field = .{ .source = state, .field_idx = 0 } },
+        .op = .field(state, 0),
         .next = ret,
     } }, .test_fixture);
 
     const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } }, .test_fixture);
     const read_s = try store.addCFStmt(.{ .assign_ref = .{
         .target = s,
-        .op = .{ .field = .{ .source = state, .field_idx = 1 } },
+        .op = .field(state, 1),
         .next = jump_outer,
     } }, .test_fixture);
 
@@ -2936,9 +3036,9 @@ test "scalarize splits a parameter shared by two joins" {
     // The build became snapshot reads of its operands feeding per-field
     // writes.
     const first_snap = store.getCFStmtImmediate(build).assign_ref;
-    try testing.expectEqual(num, first_snap.op.local);
+    try testing.expectEqual(num, first_snap.op.source);
     const second_snap = store.getCFStmtImmediate(first_snap.next).assign_ref;
-    try testing.expectEqual(text, second_snap.op.local);
+    try testing.expectEqual(text, second_snap.op.source);
     const first_write = store.getCFStmtImmediate(second_snap.next).set_local;
     try testing.expectEqual(GuardedList.at(inner_params, 0), first_write.target);
     try testing.expectEqual(first_snap.target, first_write.value);
@@ -2949,9 +3049,9 @@ test "scalarize splits a parameter shared by two joins" {
 
     // Each join's field reads alias the shared field parameters.
     const new_read_n = store.getCFStmtImmediate(read_n).assign_ref;
-    try testing.expectEqual(GuardedList.at(outer_params, 0), new_read_n.op.local);
+    try testing.expectEqual(GuardedList.at(outer_params, 0), new_read_n.op.source);
     const new_read_s = store.getCFStmtImmediate(read_s).assign_ref;
-    try testing.expectEqual(GuardedList.at(inner_params, 1), new_read_s.op.local);
+    try testing.expectEqual(GuardedList.at(inner_params, 1), new_read_s.op.source);
 }
 
 test "scalarize batches independent constructors without recollecting each one" {
@@ -2966,7 +3066,7 @@ test "scalarize batches independent constructors without recollecting each one" 
         const projected = try store.addLocal(.{ .layout_idx = .i64 });
         body = try store.addCFStmt(.{ .assign_ref = .{
             .target = projected,
-            .op = .{ .field = .{ .source = wrapper, .field_idx = 0 } },
+            .op = .field(wrapper, 0),
             .next = body,
         } }, .test_fixture);
         body = try store.addCFStmt(.{ .assign_struct = .{
@@ -3009,7 +3109,7 @@ test "scalarize dissolves nested wrappers in one round" {
     for (0..depth) |level| {
         body = try store.addCFStmt(.{ .assign_ref = .{
             .target = reads[level],
-            .op = .{ .field = .{ .source = if (level + 1 == depth) wrappers[depth] else reads[level + 1], .field_idx = 0 } },
+            .op = .field(if (level + 1 == depth) wrappers[depth] else reads[level + 1], 0),
             .next = body,
         } }, .test_fixture);
     }
@@ -3037,7 +3137,7 @@ test "scalarize dissolves nested wrappers in one round" {
     const first = store.getCFStmt(final_body);
     try testing.expect(first == .assign_ref);
     try testing.expectEqual(reads[0], first.assign_ref.target);
-    try testing.expectEqual(LIR.RefOp{ .local = wrappers[0] }, first.assign_ref.op);
+    try testing.expectEqual(LIR.RefOp.local(wrappers[0]), first.assign_ref.op);
 }
 
 test "scalarize propagates escaping alias chains in linear work" {
@@ -3051,7 +3151,7 @@ test "scalarize propagates escaping alias chains in linear work" {
     while (index != 0) {
         body = try store.addCFStmt(.{ .assign_ref = .{
             .target = aliases[index],
-            .op = .{ .local = aliases[index - 1] },
+            .op = .local(aliases[index - 1]),
             .next = body,
         } }, .test_fixture);
         index -= 1;
@@ -3087,12 +3187,12 @@ test "scalarize keeps a constructor with an alias definition and its source" {
     } }, .test_fixture);
     const read = try store.addCFStmt(.{ .assign_ref = .{
         .target = result,
-        .op = .{ .field = .{ .source = alias, .field_idx = 0 } },
+        .op = .field(alias, 0),
         .next = overwrite,
     } }, .test_fixture);
     const copy = try store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = source },
+        .op = .local(source),
         .next = read,
     } }, .test_fixture);
     const original = try store.addCFStmt(.{ .assign_struct = .{
@@ -3109,8 +3209,8 @@ test "scalarize keeps a constructor with an alias definition and its source" {
     }, .none);
     try run(store, &fixture.layouts);
     try testing.expectEqual(original, store.getProcSpecImmediate(proc).body.?);
-    try testing.expect(store.getCFStmtImmediate(read).assign_ref.op == .field);
-    try testing.expectEqual(alias, store.getCFStmtImmediate(read).assign_ref.op.field.source);
+    try testing.expect(store.getCFStmtImmediate(read).assign_ref.op.kind == .field);
+    try testing.expectEqual(alias, store.getCFStmtImmediate(read).assign_ref.op.source);
 }
 
 test "scalarize propagates an escaping whole value through a long alias chain" {
@@ -3132,11 +3232,11 @@ test "scalarize propagates an escaping whole value through a long alias chain" {
     while (index > 0) : (index -= 1) {
         body = try store.addCFStmt(.{ .assign_ref = .{
             .target = locals.items[index],
-            .op = .{ .local = locals.items[index - 1] },
+            .op = .local(locals.items[index - 1]),
             .next = body,
         } }, .test_fixture);
     }
-    body = try store.addCFStmt(.{ .assign_ref = .{ .target = field, .op = .{ .field = .{ .source = record, .field_idx = 0 } }, .next = body } }, .test_fixture);
+    body = try store.addCFStmt(.{ .assign_ref = .{ .target = field, .op = .field(record, 0), .next = body } }, .test_fixture);
     const build = try store.addCFStmt(.{ .assign_struct = .{ .target = record, .fields = try store.addLocalSpan(&.{ num, text }), .next = body } }, .test_fixture);
     const proc_id = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(1), .args = try store.addLocalSpan(&.{ num, text }), .body = build, .ret_layout = f.pair }, .none);
     try run(store, &f.layouts);

@@ -29,7 +29,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if (x > 5) "big" else "small"
 ~~~
 # CANONICALIZE
 ~~~clojure

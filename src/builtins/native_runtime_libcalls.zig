@@ -116,8 +116,12 @@ const entries = .{
 const host_routines = struct {
     /// Apple targets lower a zero-filling `memset` to `bzero`.
     extern fn bzero(dest: ?[*]u8, len: usize) callconv(.c) void;
-    /// LLVM's stack probe for frames past a page on Windows x64.
-    extern fn ___chkstk_ms() callconv(.c) void;
+    /// Apple targets lower a loop storing a repeated non-zero value to
+    /// `memset_pattern16`.
+    extern fn memset_pattern16(dest: ?[*]u8, pattern: *const [16]u8, len: usize) callconv(.c) void;
+    /// LLVM's stack probe for frames past a page on Windows: `___chkstk_ms`
+    /// on x64 MinGW, `__chkstk` on x64 MSVC and on ARM64.
+    const stack_probe = if (builtin.cpu.arch == .x86_64 and builtin.abi.isGnu()) "___chkstk_ms" else "__chkstk";
 };
 
 /// The C memory and math routines native codegen may emit calls to, exactly
@@ -138,9 +142,10 @@ pub fn resolve(name: []const u8) ?usize {
     if (builtin.os.tag.isDarwin()) {
         // Darwin codegen also emits the libc __bzero entry point.
         if (std.mem.eql(u8, name, "bzero") or std.mem.eql(u8, name, "__bzero")) return @intFromPtr(&host_routines.bzero);
+        if (std.mem.eql(u8, name, "memset_pattern16")) return @intFromPtr(&host_routines.memset_pattern16);
     }
-    if (builtin.os.tag == .windows and builtin.cpu.arch == .x86_64) {
-        if (std.mem.eql(u8, name, "___chkstk_ms")) return @intFromPtr(&host_routines.___chkstk_ms);
+    if (builtin.os.tag == .windows and (builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64)) {
+        if (std.mem.eql(u8, name, host_routines.stack_probe)) return @intFromPtr(@extern(*const anyopaque, .{ .name = host_routines.stack_probe }));
     }
     return null;
 }
@@ -223,4 +228,19 @@ test "Darwin zero-fill libcalls clear exactly the requested bytes" {
         zero(bytes[2..].ptr, 4);
         try std.testing.expectEqualSlices(u8, &.{ 0xaa, 0xaa, 0, 0, 0, 0, 0xaa, 0xaa }, &bytes);
     }
+}
+
+test "Darwin pattern-fill libcall repeats the pattern over exactly the requested bytes" {
+    if (!builtin.os.tag.isDarwin()) return error.SkipZigTest;
+    const fill: *const fn (?[*]u8, *const [16]u8, usize) callconv(.c) void = @ptrFromInt(resolve("memset_pattern16").?);
+    const pattern: [16]u8 = .{ 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0 };
+    var bytes = @as([24]u8, @splat(0xaa));
+    fill(bytes[1..].ptr, &pattern, 20);
+    try std.testing.expectEqualSlices(u8, &.{ 0xaa, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 1, 0, 0, 0, 0xaa, 0xaa, 0xaa }, &bytes);
+}
+
+test "Windows binds the stack probe LLVM calls for frames past a page" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    try std.testing.expect(resolve(host_routines.stack_probe) != null);
 }
