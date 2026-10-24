@@ -52,7 +52,7 @@ pub fn parseErrorsAreReportedAsDiagnostics() integration_spec.SpecError!void {
     test_env.configureChecker(&checker, std.fs.path.dirname(file_path) orelse file_path);
     defer checker.deinit();
 
-    const result = try checker.check(uri, source, null);
+    const result = try checker.check(uri, source, null, null);
     defer {
         for (result) |*pub_diag| {
             pub_diag.deinit(allocator);

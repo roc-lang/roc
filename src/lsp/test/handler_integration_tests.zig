@@ -3635,6 +3635,16 @@ pub fn completionHandlerReturnsRecordFieldsAfterDot() integration_spec.SpecError
     const change_msg = try frame(allocator, change_body);
     defer allocator.free(change_msg);
 
+    // Editors request semantic tokens for a document they open. That request
+    // runs the open's scheduled check, whose clean build completion answers
+    // from once the edit leaves "rec." unfinished.
+    const tokens_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":4,"method":"textDocument/semanticTokens/full","params":{{"textDocument":{{"uri":"{s}"}}}}}}
+    , .{file_uri});
+    defer allocator.free(tokens_body);
+    const tokens_msg = try frame(allocator, tokens_body);
+    defer allocator.free(tokens_msg);
+
     // Request completion right after "rec." (line 3, character 8).
     const completion_body = try std.fmt.allocPrint(allocator,
         \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":3,"character":8}}}}}}
@@ -3660,6 +3670,7 @@ pub fn completionHandlerReturnsRecordFieldsAfterDot() integration_spec.SpecError
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
     try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, tokens_msg);
     try builder.appendSlice(allocator, change_msg);
     try builder.appendSlice(allocator, completion_msg);
     try builder.appendSlice(allocator, shutdown_msg);
@@ -3856,25 +3867,13 @@ pub fn workspaceDocumentEndingInBuiltinRocBuildsAndProducesDiagnostics() integra
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    const shutdown_body =
-        \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
-    ;
-    const shutdown_msg = try frame(allocator, shutdown_body);
-    defer allocator.free(shutdown_msg);
-
-    const exit_body =
-        \\{"jsonrpc":"2.0","method":"exit"}
-    ;
-    const exit_msg = try frame(allocator, exit_body);
-    defer allocator.free(exit_msg);
-
     var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
+    // The input ends after the open, which checks it. Shutting down instead
+    // would drop that scheduled check.
     try builder.appendSlice(allocator, open_msg);
-    try builder.appendSlice(allocator, shutdown_msg);
-    try builder.appendSlice(allocator, exit_msg);
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 

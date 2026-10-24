@@ -11,6 +11,7 @@ const DocumentStore = @import("document_store.zig").DocumentStore;
 const DebugFlags = @import("debug.zig").DebugFlags;
 const Diagnostics = @import("diagnostics.zig");
 const uri_util = @import("uri.zig");
+const inbox_mod = @import("inbox.zig");
 
 /// TODO
 pub const DebugOptions = struct {
@@ -43,7 +44,7 @@ const log = std.log.scoped(.roc_lsp_server);
 /// Errors that can occur while opening the optional LSP debug log.
 pub const CreateLogFileError = Allocator.Error || std.Io.File.OpenError || std.Io.Dir.CreateDirPathError || error{NoHomeDirectory};
 /// Errors that can occur while running the LSP server over standard IO.
-pub const RunWithStdIoError = CreateLogFileError || std.Io.File.Reader.Error || error{
+pub const RunWithStdIoError = CreateLogFileError || std.Io.File.Reader.Error || std.Io.ConcurrentError || error{
     EndOfStream,
     HeaderTooLong,
     InvalidHeader,
@@ -67,7 +68,8 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         const NotificationError = Allocator.Error || error{WriteFailed};
         const PayloadError = HandlerError || NotificationError;
         /// Errors that terminate the server because input or output can no longer be processed reliably.
-        pub const RunError = TransportType.ReadMessageError || PayloadError;
+        pub const RunError = TransportType.ReadMessageError || PayloadError || std.Io.ConcurrentError;
+        const InboxType = inbox_mod.Inbox(TransportType.ReadMessageError);
         const RunSyntaxCheckError = SyntaxDriverType.CheckError || Allocator.Error || error{WriteFailed};
         const HandlerFn = fn (*Self, *protocol.JsonId, ?std.json.Value) HandlerError!void;
         const HandlerRegistration = struct {
@@ -126,6 +128,10 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         state: State = .waiting_for_initialize,
         doc_store: DocumentStore,
         syntax_checker: SyntaxDriverType,
+        inbox: InboxType,
+        /// Open documents whose text changed since they were last checked, in
+        /// the order they changed. Owns its keys.
+        scheduled_checks: std.StringArrayHashMapUnmanaged(void) = .empty,
         log_file: ?std.Io.File = null,
         debug: DebugFlags,
 
@@ -160,6 +166,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
                 .transport = TransportType.init(allocator, std_io, reader, writer, if (debug_options.transport) log_file else null),
                 .doc_store = DocumentStore.init(allocator),
                 .syntax_checker = SyntaxDriverType.init(allocator, std_io, flags, log_file),
+                .inbox = InboxType.init(allocator, std_io),
                 .log_file = log_file,
                 .debug = flags,
             };
@@ -170,42 +177,67 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             self.transport.deinit();
             self.doc_store.deinit();
             self.syntax_checker.deinit();
+            self.inbox.deinit();
+            for (self.scheduled_checks.keys()) |uri| self.allocator.free(uri);
+            self.scheduled_checks.deinit(self.allocator);
         }
 
+        /// Serve until the client exits or its input ends. A reader task
+        /// receives messages while this task handles them and checks
+        /// documents, so an edit that arrives during a check cancels that
+        /// check when it makes the check stale.
         pub fn run(self: *Self) RunError!void {
-            while (try self.processNextMessage()) {}
-        }
+            var reader = try std.Io.concurrent(self.std_io, readMessages, .{self});
+            defer reader.cancel(self.std_io);
 
-        fn processNextMessage(self: *Self) RunError!bool {
-            if (self.state == .exit_success or self.state == .exit_failure) {
-                return false;
+            while (self.state != .exit_success and self.state != .exit_failure) {
+                switch (self.inbox.next(self.hasScheduledChecks())) {
+                    .message => |message| {
+                        var owned = message;
+                        defer owned.deinit(self.allocator);
+                        try self.handleMessage(&owned);
+                    },
+                    .idle => try self.runScheduledCheck(),
+                    .ended => |maybe_err| {
+                        if (maybe_err) |err| return err;
+                        // No input can make the remaining checks stale.
+                        while (self.hasScheduledChecks()) {
+                            const uri = self.scheduled_checks.keys()[0];
+                            try self.checkScheduledDocument(uri, .uncancelable);
+                        }
+                        return;
+                    },
+                }
             }
-
-            const payload = self.transport.readMessage() catch |err| switch (err) {
-                error.EndOfStream => return false,
-                error.HeaderTooLong,
-                error.InvalidHeader,
-                error.MissingContentLength,
-                error.OutOfMemory,
-                error.PayloadTooLarge,
-                => return err,
-            };
-            defer self.allocator.free(payload);
-
-            try self.handlePayload(payload);
-
-            return self.state != .exit_success and self.state != .exit_failure;
         }
 
-        fn handlePayload(self: *Self, payload: []u8) PayloadError!void {
-            var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, payload, .{}) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => {
-                    try self.sendError(null, .parse_error, "parse error");
-                    return;
-                },
+        /// The reader task: receive messages until the input ends or the
+        /// server cancels this task.
+        fn readMessages(self: *Self) void {
+            while (true) {
+                if (!self.transport.hasBufferedInput()) self.inbox.noteWaiting();
+                const payload = self.transport.readMessage() catch |err| switch (err) {
+                    error.EndOfStream => return self.inbox.finish(null),
+                    error.HeaderTooLong,
+                    error.InvalidHeader,
+                    error.MissingContentLength,
+                    error.OutOfMemory,
+                    error.PayloadTooLarge,
+                    => return self.inbox.finish(err),
+                };
+                var message = inbox_mod.Message.init(self.allocator, payload) catch |err| return self.inbox.finish(err);
+                self.inbox.push(message) catch |err| {
+                    message.deinit(self.allocator);
+                    return self.inbox.finish(err);
+                };
+            }
+        }
+
+        fn handleMessage(self: *Self, message: *const inbox_mod.Message) PayloadError!void {
+            const parsed = message.parsed orelse {
+                try self.sendError(null, .parse_error, "parse error");
+                return;
             };
-            defer parsed.deinit();
 
             const root = parsed.value;
             if (std.meta.activeTag(root) != .object) {
@@ -284,6 +316,16 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
                     try self.sendError(id, .request_failed, "Semantic features require initializationOptions.trustedWorkspace: true; restart the server after granting trust.");
                     return;
                 }
+                // A semantic request answers from the build of its document's
+                // current text, which a scheduled check of that document
+                // produces, so the check runs first and is not canceled.
+                if (handler.requires_trust) {
+                    if (requestDocumentUri(maybe_params)) |uri| {
+                        if (self.scheduled_checks.getKey(uri)) |scheduled_uri| {
+                            try self.checkScheduledDocument(scheduled_uri, .uncancelable);
+                        }
+                    }
+                }
                 try handler.call(self, id, maybe_params);
                 return;
             }
@@ -361,25 +403,82 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             });
         }
 
-        pub fn onDocumentChanged(self: *Self, uri: []const u8) (Allocator.Error || error{WriteFailed})!void {
-            self.runSyntaxCheck(uri) catch |err| {
-                switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.WriteFailed => return error.WriteFailed,
-                    else => log.err("syntax check failed for {s}: {s}", .{ uri, @errorName(err) }),
-                }
-            };
+        /// The `textDocument.uri` a request names, if any.
+        fn requestDocumentUri(maybe_params: ?std.json.Value) ?[]const u8 {
+            const params = maybe_params orelse return null;
+            if (params != .object) return null;
+            const text_document = params.object.get("textDocument") orelse return null;
+            if (text_document != .object) return null;
+            const uri = text_document.object.get("uri") orelse return null;
+            if (uri != .string) return null;
+            return uri.string;
         }
 
-        fn runSyntaxCheck(self: *Self, uri: []const u8) RunSyntaxCheckError!void {
+        /// Schedule a check of the document, which runs once no message is
+        /// pending, or before a semantic request about it.
+        pub fn onDocumentChanged(self: *Self, uri: []const u8) Allocator.Error!void {
             if (!self.client.trusted_workspace) return;
+            if (self.scheduled_checks.contains(uri)) return;
+            const owned = try self.allocator.dupe(u8, uri);
+            errdefer self.allocator.free(owned);
+            try self.scheduled_checks.put(self.allocator, owned, {});
+        }
+
+        /// Drop the document's scheduled check, if any.
+        pub fn unscheduleCheck(self: *Self, uri: []const u8) void {
+            const removed = self.scheduled_checks.fetchOrderedRemove(uri) orelse return;
+            self.allocator.free(removed.key);
+        }
+
+        fn hasScheduledChecks(self: *const Self) bool {
+            return self.state == .running and self.scheduled_checks.count() != 0;
+        }
+
+        /// Check the earliest scheduled document, canceling the check if a
+        /// message that makes it stale arrives meanwhile.
+        fn runScheduledCheck(self: *Self) (Allocator.Error || error{WriteFailed})!void {
+            const uri = self.scheduled_checks.keys()[0];
+            if (!self.inbox.beginCheck(uri)) return;
+            try self.checkScheduledDocument(uri, .cancelable);
+        }
+
+        /// Check a scheduled document and publish its diagnostics. `uri` is
+        /// the key in `scheduled_checks`, which stays scheduled only when the
+        /// check is canceled: the message that canceled it has yet to be
+        /// handled, and it schedules or drops the document again. A
+        /// cancelable check is one `inbox.beginCheck` started.
+        fn checkScheduledDocument(
+            self: *Self,
+            uri: []const u8,
+            cancelation: enum { cancelable, uncancelable },
+        ) (Allocator.Error || error{WriteFailed})!void {
+            const cancel_request: ?*const std.atomic.Value(bool) = switch (cancelation) {
+                .cancelable => &self.inbox.cancel_request,
+                .uncancelable => null,
+            };
+            const result = self.runSyntaxCheck(uri, cancel_request);
+            // The reader task stops reading `uri` before it is freed below.
+            if (cancelation == .cancelable) self.inbox.endCheck();
+            result catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.WriteFailed => return error.WriteFailed,
+                error.Canceled => switch (cancelation) {
+                    .cancelable => return,
+                    .uncancelable => log.err("syntax check failed for {s}: {s}", .{ uri, @errorName(err) }),
+                },
+                else => log.err("syntax check failed for {s}: {s}", .{ uri, @errorName(err) }),
+            };
+            self.unscheduleCheck(uri);
+        }
+
+        fn runSyntaxCheck(self: *Self, uri: []const u8, cancel_request: ?*const std.atomic.Value(bool)) RunSyntaxCheckError!void {
             const doc = self.doc_store.get(uri);
             const root_path = if (self.client.root_uri) |root_uri|
                 try uri_util.uriToPath(self.allocator, root_uri)
             else
                 null;
             defer if (root_path) |p| self.allocator.free(p);
-            const publish_sets = try self.syntax_checker.check(uri, if (doc) |d| d.text else null, root_path);
+            const publish_sets = try self.syntax_checker.check(uri, if (doc) |d| d.text else null, root_path, cancel_request);
             defer {
                 for (publish_sets) |*set| set.deinit(self.allocator);
                 self.allocator.free(publish_sets);
