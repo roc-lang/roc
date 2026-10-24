@@ -69,7 +69,7 @@ const PublishSets = struct {
 };
 
 fn checkDocument(checker: *SyntaxChecker, client_uri: []const u8, source: []const u8) integration_spec.SpecError!PublishSets {
-    return .{ .sets = try checker.check(client_uri, source, null) };
+    return .{ .sets = try checker.check(client_uri, source, null, null) };
 }
 
 /// Checks `client_uri` and requires the last publish for exactly that URI to

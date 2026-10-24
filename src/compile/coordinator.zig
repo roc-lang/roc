@@ -91,7 +91,7 @@ const ParsedResult = messages.ParsedResult;
 const CanonicalizedResult = messages.CanonicalizedResult;
 
 /// Operational errors returned before the frontend can be considered complete.
-pub const CoordinatorError = messages.WorkerOperationError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound };
+pub const CoordinatorError = messages.WorkerOperationError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, Canceled };
 const TypeCheckWorkerError = Allocator.Error || compile_package.TypeCheckModuleError;
 const CheckedModuleCacheRunError = CoordinatorError || eval.BuiltinModules.InitError || Allocator.Error || std.Thread.SpawnError || Coordinator.AppDiscoveryError || compile_package.PublishError || PatternExtractionRegionStatsError || error{
     UnsupportedBuiltinAnnotationOnly,
@@ -1546,6 +1546,10 @@ pub const Coordinator = struct {
     /// checking sets this: compile-time evaluation, lowering, and evaluation
     /// reports read checked artifacts, regions, and source, never solver types.
     release_checked_solver_types: bool = false,
+    /// Set by an embedder that abandons builds whose result it no longer
+    /// needs (the LSP, when a newer edit arrives). The coordinator reads it
+    /// between units of work and returns `error.Canceled` once it is set.
+    cancel_request: ?*const std.atomic.Value(bool) = null,
     /// Name of the registered platform package, set via markPlatformPackage.
     /// App-root type checks wait for this package's root module to finish
     /// checking, so platform existence comes from explicit registration data
@@ -2320,6 +2324,7 @@ pub const Coordinator = struct {
         var finalization_timer = startStageTimer(self.roc_ctx.std_io);
         defer self.program_finalization_ns += readStageTimer(self.roc_ctx.std_io, &finalization_timer);
         if (!self.frontend_complete) coordinatorInvariant("checked program finalization preceded frontend completion", .{});
+        try self.checkCancelRequest();
         if (self.release_checked_solver_types) try self.releaseCheckedSolverTypes();
         self.checked_program = mode == .executable_artifacts and self.appRootChecked();
         if (self.checked_program and self.findRootModule(.platform) != null) {
@@ -2362,6 +2367,12 @@ pub const Coordinator = struct {
             self.runtime_output_cached = try probe.cached(probe.context, root);
         };
         return self.evaluatePreparedModules(true, null, extra_cached, program_root);
+    }
+
+    /// Return `error.Canceled` when the embedder has asked to abandon this build.
+    fn checkCancelRequest(self: *const Coordinator) error{Canceled}!void {
+        const request = self.cancel_request orelse return;
+        if (request.load(.acquire)) return error.Canceled;
     }
 
     /// Whether the last checked-program finalization published a program.
@@ -2848,6 +2859,7 @@ pub const Coordinator = struct {
             // A worker thread ran out of memory while producing a result. It
             // cannot return the error itself, so it recorded the OOM here.
             if (self.worker_oom.load(.acquire)) return error.OutOfMemory;
+            try self.checkCancelRequest();
 
             var made_progress = false;
 
@@ -3133,6 +3145,7 @@ pub const Coordinator = struct {
         } else .{};
         var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing);
         options.post_check_executor = self.postCheckExecutor();
+        options.cancel_request = self.cancel_request;
         options.object_cache = self.compile_time_object_cache;
         options.keep_artifacts = self.compile_time_object_cache != null or self.keep_compile_time_artifacts;
         options.cached_debug_modules = cached_debug_modules.items;
@@ -6634,6 +6647,7 @@ pub const Coordinator = struct {
                 .module_name = task.module_name,
                 .cause = .{ .type_check = e },
             } },
+            error.Canceled => coordinatorInvariant("a module's type check canceled compile-time evaluation it was given no cancel request for", .{}),
         };
     }
 

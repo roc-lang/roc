@@ -346,6 +346,9 @@ used_patterns: collections.DenseMap(Pattern.Idx, void),
 globally_resolvable_patterns: collections.DenseMap(Pattern.Idx, void),
 /// Builtin types that are automatically available in every non-Builtin module.
 builtin_auto_imported_types: collections.DenseMap(Ident.Idx, AutoImportedType),
+/// Auto-imported builtin type names that some type declaration in this
+/// source also declares. Only these can yield to a source declaration.
+builtin_type_names_declared_in_source: collections.DenseMap(Ident.Idx, void),
 /// Map from module identifier to Import.Idx for tracking unique imports.
 import_indices: collections.DenseMap(Ident.Idx, Import.Idx),
 /// Canonicalization state for parser-owned type declarations.
@@ -545,6 +548,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .used_patterns = .keyed,
     .globally_resolvable_patterns = .keyed,
     .builtin_auto_imported_types = .input,
+    .builtin_type_names_declared_in_source = .input,
     .import_indices = .keyed,
     .parser_type_decl_states = .keyed,
     .forward_prepared_type_decls = .keyed,
@@ -981,6 +985,7 @@ pub fn deinit(
     self.used_patterns.deinit();
     self.globally_resolvable_patterns.deinit();
     self.builtin_auto_imported_types.deinit();
+    self.builtin_type_names_declared_in_source.deinit();
     self.parser_type_decl_states.deinit();
     self.forward_prepared_type_decls.deinit(gpa);
     self.forward_type_scope_eligibility.deinit();
@@ -1083,6 +1088,7 @@ fn initInternal(
         .active_decl_import_aliases = .init(gpa),
         .exposed_idents = .init(gpa),
         .builtin_auto_imported_types = .init(gpa),
+        .builtin_type_names_declared_in_source = .init(gpa),
         .alias_cycle_references = .init(gpa),
         .alias_cycle_scopes = .init(gpa),
         .value_forward_references = std.AutoHashMapUnmanaged(ValueForwardKey, Scope.ForwardReference){},
@@ -1127,6 +1133,7 @@ fn initInternal(
                 context.builtin_types.builtin_indices,
             );
             try result.setupAutoImportedBuiltinTypes(env, gpa);
+            try result.recordBuiltinTypeNamesDeclaredInSource();
         }
     }
 
@@ -1849,6 +1856,23 @@ pub fn populateModuleEnvs(
             .qualified_type_ident = qualified_ident,
             .import_identity = .compiler_builtin,
         });
+    }
+}
+
+fn recordBuiltinTypeNamesDeclaredInSource(self: *Self) std.mem.Allocator.Error!void {
+    const decl_index = &self.parse_ir.decl_index;
+    for (decl_index.type_paths.items) |path| {
+        if (self.builtin_auto_imported_types.contains(path.name)) {
+            try self.builtin_type_names_declared_in_source.put(path.name, {});
+        }
+    }
+    for (decl_index.scopes.items, 0..) |_, scope_pos| {
+        const scope_idx: AST.DeclIndex.ScopeIdx = @fromBackingInt(@intCast(scope_pos));
+        for (decl_index.scopeNames(scope_idx, .type)) |name| {
+            if (self.builtin_auto_imported_types.contains(name.ident)) {
+                try self.builtin_type_names_declared_in_source.put(name.ident, {});
+            }
+        }
     }
 }
 
@@ -2960,6 +2984,15 @@ fn registerTypeDecl(
     // E.g., when introducing "Builtin.Bool", also add "Bool" -> "Builtin.Bool"
     // This allows nested scopes (like Str's or Num.U8's associated blocks) to find Bool via scope lookup
     if (parent_name != null) {
+        // The unqualified name shadows an auto-imported builtin type wherever
+        // it is visible. Its bindings carry no diagnostics, so the declaration
+        // reports that once, here.
+        if (!is_redeclaration and self.lookupBuiltinAutoImportedType(type_header.name) != null) {
+            try self.env.pushDiagnostic(Diagnostic{ .builtin_type_shadowed_warning = .{
+                .name = type_header.name,
+                .region = region,
+            } });
+        }
         try self.introduceAssociatedTypeAliasInScope(
             self.scopes.items.len - 1,
             type_header.name,
@@ -6802,6 +6835,32 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
 fn externalTypeBindingIsCompilerBuiltin(self: *const Self, external: Scope.ExternalTypeBinding) bool {
     const import_idx = external.import_idx orelse return false;
     return self.importIsCompilerBuiltin(import_idx);
+}
+
+/// The builtin type annotation a compiler-owned auto-import binding denotes,
+/// for the builtins that annotations lower directly rather than by declaration.
+fn builtinTypeAnnoForBinding(self: *const Self, external: Scope.ExternalTypeBinding) ?TypeAnno.Builtin {
+    if (!self.externalTypeBindingIsCompilerBuiltin(external)) return null;
+    const ident = external.original_ident;
+    if (ident.eql(self.env.idents.list)) return .list;
+    if (ident.eql(self.env.idents.box)) return .box;
+    const num_kind = self.env.idents.numKindFromTypeIdent(ident) orelse return null;
+    return switch (num_kind) {
+        .num_unbound, .int_unbound => null,
+        .u8 => .u8,
+        .i8 => .i8,
+        .u16 => .u16,
+        .i16 => .i16,
+        .u32 => .u32,
+        .i32 => .i32,
+        .u64 => .u64,
+        .i64 => .i64,
+        .u128 => .u128,
+        .i128 => .i128,
+        .f32 => .f32,
+        .f64 => .f64,
+        .dec => .dec,
+    };
 }
 
 fn importIsCompilerBuiltin(self: *const Self, import_idx: CIR.Import.Idx) bool {
@@ -19359,108 +19418,111 @@ fn resolveTypePath(
     const type_name_region = self.parse_ir.tokens.resolve(token);
 
     if (qualifier_toks.len == 0) {
-        // First, check if the type is a builtin type
-        // There are always automatically in-scope
-        const type_text = self.env.getIdentText(type_name_ident);
-        if (TypeAnno.Builtin.fromBytes(type_text)) |builtin_type| {
-            return .{ .name = type_name_ident, .target = .{ .builtin = builtin_type } };
-        } else {
-            // If it's not a builtin, look up in scope using unified type bindings
-            if (try self.scopeLookupOrPrepareTypeBinding(type_name_ident)) |binding_location| {
-                const binding = binding_location.binding.*;
-                return switch (binding) {
-                    .local_nominal => |stmt| .{ .name = type_name_ident, .target = .{ .local = stmt } },
-                    .local_alias, .local_where_alias => |stmt| .{ .name = type_name_ident, .target = .{ .local = stmt } },
-                    .associated_nominal => |stmt| .{ .name = type_name_ident, .target = .{ .local = stmt } },
-                    .external_nominal => |external| .{
-                        .name = type_name_ident,
-                        .target = switch (resolveExternalTypeBinding(external, type_name_ident, .type_anno_lookup, type_name_region)) {
-                            // A binding the compiler installed for its own baked
-                            // Builtin module already carries its target.
-                            .external => |found| ext: {
-                                const builtin_type = self.lookupBuiltinAutoImportedType(external.module_ident) orelse
-                                    self.lookupBuiltinAutoImportedType(external.original_ident);
-                                break :ext .{ .external = .{
-                                    .import_idx = found.import_idx,
-                                    .target_node_idx = found.target_node_idx,
-                                    .env = if (builtin_type) |info| info.env else null,
-                                } };
-                            },
-                            .deferred => |ref| .{ .deferred = ref },
-                            .malformed => |diagnostic| .{ .malformed = diagnostic },
-                        },
-                    },
-                };
+        // A module without auto-imported builtin types (the Builtin module
+        // itself) names these builtins directly. Everywhere else they are
+        // ordinary scope bindings, so a user type of the same name shadows them.
+        if (self.builtin_auto_imported_types.count() == 0) {
+            if (TypeAnno.Builtin.fromBytes(self.env.getIdentText(type_name_ident))) |builtin_type| {
+                return .{ .name = type_name_ident, .target = .{ .builtin = builtin_type } };
             }
-
-            // Check if this is an auto-imported type from module_envs
-            if (self.lookupBuiltinAutoImportedType(type_name_ident)) |auto_imported_type| {
-                // This is an auto-imported type like Bool or Try
-                // We need to create an import for it and return the type annotation
-                const import_idx = try self.getOrCreateAutoImportedTypeImport(auto_imported_type);
-
-                // Get the target node index using the pre-computed statement_idx
-                const stmt_idx = auto_imported_type.statement_idx orelse {
-                    // Str doesn't have a statement_idx because it's a primitive builtin type
-                    // It should be detected as a builtin type before reaching this code path
-                    // Return malformed type annotation with diagnostic
-                    const module_name_text = auto_imported_type.env.module_name;
-                    const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
-                    return .{ .name = type_name_ident, .target = .{ .malformed = .{ .nested_type_not_found = .{
-                        .parent_name = module_ident,
-                        .nested_name = type_name_ident,
-                        .region = region,
-                    } } } };
-                };
-                const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
-                    // Failed to find exposed node - return malformed type annotation with diagnostic
-                    const module_name_text = auto_imported_type.env.module_name;
-                    const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
-                    return .{ .name = type_name_ident, .target = .{ .malformed = .{ .nested_type_not_found = .{
-                        .parent_name = module_ident,
-                        .nested_name = type_name_ident,
-                        .region = region,
-                    } } } };
-                };
-
-                return .{ .name = type_name_ident, .target = .{ .external = .{
-                    .import_idx = import_idx,
-                    .target_node_idx = target_node_idx,
-                    .env = auto_imported_type.env,
-                } } };
-            }
-
-            // Not in type_decls, check if it's an exposed item from an imported module
-            if (self.scopeLookupExposedItem(type_name_ident)) |exposed_info| {
-                return .{ .name = type_name_ident, .target = .{ .deferred = .{
-                    .import_idx = exposed_info.import_idx,
-                    .kind = .type_anno_lookup,
-                    .path = exposed_info.original_name,
-                    .module_name = exposed_info.module_name,
-                    .item_name = type_name_ident,
-                    .parent_name = exposed_info.module_name,
-                    .qualified_name = type_name_ident,
-                    .missing_module_failure = .type_from_missing_module,
-                    .not_found_failure = .type_not_exposed,
-                    .names_import_main_type = exposed_info.names_import_main_type,
-                    .diagnostic_region = type_name_region,
-                } } };
-            }
-
-            // Check if this is a type variable in scope (e.g., R1, R2 from requires { R1, R2 })
-            switch (self.scopeLookupTypeVar(type_name_ident)) {
-                .found => |found_anno_idx| {
-                    // Found a type variable with this name - create a reference to it
-                    return .{ .name = type_name_ident, .target = .{ .rigid_var = found_anno_idx } };
-                },
-                .not_found => {},
-            }
-
-            return .{ .name = type_name_ident, .target = .{ .malformed = .{ .undeclared_type = .{
-                .name = type_name_ident,
-                .region = type_name_region,
-            } } } };
         }
+        if (try self.scopeLookupOrPrepareTypeBinding(type_name_ident)) |binding_location| {
+            const binding = binding_location.binding.*;
+            return switch (binding) {
+                .local_nominal => |stmt| .{ .name = type_name_ident, .target = .{ .local = stmt } },
+                .local_alias, .local_where_alias => |stmt| .{ .name = type_name_ident, .target = .{ .local = stmt } },
+                .associated_nominal => |stmt| .{ .name = type_name_ident, .target = .{ .local = stmt } },
+                .external_nominal => |external| if (self.builtinTypeAnnoForBinding(external)) |builtin_type| .{
+                    .name = type_name_ident,
+                    .target = .{ .builtin = builtin_type },
+                } else .{
+                    .name = type_name_ident,
+                    .target = switch (resolveExternalTypeBinding(external, type_name_ident, .type_anno_lookup, type_name_region)) {
+                        // A binding the compiler installed for its own baked
+                        // Builtin module already carries its target.
+                        .external => |found| ext: {
+                            const builtin_type = self.lookupBuiltinAutoImportedType(external.module_ident) orelse
+                                self.lookupBuiltinAutoImportedType(external.original_ident);
+                            break :ext .{ .external = .{
+                                .import_idx = found.import_idx,
+                                .target_node_idx = found.target_node_idx,
+                                .env = if (builtin_type) |info| info.env else null,
+                            } };
+                        },
+                        .deferred => |ref| .{ .deferred = ref },
+                        .malformed => |diagnostic| .{ .malformed = diagnostic },
+                    },
+                },
+            };
+        }
+
+        // Check if this is an auto-imported type from module_envs
+        if (self.lookupBuiltinAutoImportedType(type_name_ident)) |auto_imported_type| {
+            // This is an auto-imported type like Bool or Try
+            // We need to create an import for it and return the type annotation
+            const import_idx = try self.getOrCreateAutoImportedTypeImport(auto_imported_type);
+
+            // Get the target node index using the pre-computed statement_idx
+            const stmt_idx = auto_imported_type.statement_idx orelse {
+                // Str doesn't have a statement_idx because it's a primitive builtin type
+                // It should be detected as a builtin type before reaching this code path
+                // Return malformed type annotation with diagnostic
+                const module_name_text = auto_imported_type.env.module_name;
+                const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
+                return .{ .name = type_name_ident, .target = .{ .malformed = .{ .nested_type_not_found = .{
+                    .parent_name = module_ident,
+                    .nested_name = type_name_ident,
+                    .region = region,
+                } } } };
+            };
+            const target_node_idx = auto_imported_type.env.getExposedNodeIndexByStatementIdx(stmt_idx) orelse {
+                // Failed to find exposed node - return malformed type annotation with diagnostic
+                const module_name_text = auto_imported_type.env.module_name;
+                const module_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
+                return .{ .name = type_name_ident, .target = .{ .malformed = .{ .nested_type_not_found = .{
+                    .parent_name = module_ident,
+                    .nested_name = type_name_ident,
+                    .region = region,
+                } } } };
+            };
+
+            return .{ .name = type_name_ident, .target = .{ .external = .{
+                .import_idx = import_idx,
+                .target_node_idx = target_node_idx,
+                .env = auto_imported_type.env,
+            } } };
+        }
+
+        // Not in type_decls, check if it's an exposed item from an imported module
+        if (self.scopeLookupExposedItem(type_name_ident)) |exposed_info| {
+            return .{ .name = type_name_ident, .target = .{ .deferred = .{
+                .import_idx = exposed_info.import_idx,
+                .kind = .type_anno_lookup,
+                .path = exposed_info.original_name,
+                .module_name = exposed_info.module_name,
+                .item_name = type_name_ident,
+                .parent_name = exposed_info.module_name,
+                .qualified_name = type_name_ident,
+                .missing_module_failure = .type_from_missing_module,
+                .not_found_failure = .type_not_exposed,
+                .names_import_main_type = exposed_info.names_import_main_type,
+                .diagnostic_region = type_name_region,
+            } } };
+        }
+
+        // Check if this is a type variable in scope (e.g., R1, R2 from requires { R1, R2 })
+        switch (self.scopeLookupTypeVar(type_name_ident)) {
+            .found => |found_anno_idx| {
+                // Found a type variable with this name - create a reference to it
+                return .{ .name = type_name_ident, .target = .{ .rigid_var = found_anno_idx } };
+            },
+            .not_found => {},
+        }
+
+        return .{ .name = type_name_ident, .target = .{ .malformed = .{ .undeclared_type = .{
+            .name = type_name_ident,
+            .region = type_name_region,
+        } } } };
     } else {
         const qualified_name_ident = try self.qualifiedNameIdent(qualifiers, token);
         return switch (try self.resolveQualifiedTypeName(qualifiers, token, qualified_name_ident, region)) {
@@ -20602,6 +20664,13 @@ fn scopeLookupTypeBindingInCanonicalScopes(self: *Self, ident_idx: Ident.Idx) ?T
     return null;
 }
 
+fn typeBindingIsAutoImportedBuiltin(binding: Scope.TypeBinding) bool {
+    return switch (binding) {
+        .external_nominal => |external| external.is_compiler_builtin,
+        .local_nominal, .local_alias, .local_where_alias, .associated_nominal => false,
+    };
+}
+
 fn typeBindingIsDefiningAssocAlias(self: *const Self, binding: Scope.TypeBinding) bool {
     const defining = self.defining_assoc_alias orelse return false;
     const stmt_idx = typeBindingStatement(binding) orelse return false;
@@ -20628,7 +20697,14 @@ fn scopeLookupOrPrepareTypeDecl(self: *Self, ident_idx: Ident.Idx) std.mem.Alloc
 }
 
 fn scopeLookupOrPrepareTypeBinding(self: *Self, ident_idx: Ident.Idx) std.mem.Allocator.Error!?TypeBindingLocation {
-    if (self.scopeLookupTypeBindingInCanonicalScopes(ident_idx)) |binding| return binding;
+    if (self.scopeLookupTypeBindingInCanonicalScopes(ident_idx)) |binding| {
+        // An auto-imported builtin yields to a source declaration of the same
+        // name that is visible here but not canonicalized yet.
+        if (!typeBindingIsAutoImportedBuiltin(binding.binding.*)) return binding;
+        if (!self.builtin_type_names_declared_in_source.contains(ident_idx)) return binding;
+        if (try self.ensureParserTypeBinding(ident_idx)) |declared| return declared;
+        return binding;
+    }
     if (try self.ensureParserTypeBinding(ident_idx)) |binding| return binding;
 
     // A platform or package header's own signatures may name a module the

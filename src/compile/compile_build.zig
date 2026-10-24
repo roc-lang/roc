@@ -255,6 +255,11 @@ pub const BuildEnv = struct {
     /// types after compiling, such as documentation and editor tooling, leave
     /// this off.
     release_checked_solver_types: bool = false,
+    /// Set by an embedder that abandons builds whose result it no longer
+    /// needs (the LSP, when a newer edit arrives). Compilation reads it
+    /// between units of work and fails with `error.Canceled` once it is set;
+    /// a canceled build environment is only ever deinitialized.
+    cancel_request: ?*const std.atomic.Value(bool) = null,
 
     /// Whether `compileDiscovered` validates that the selected platform target's
     /// declared link files exist before type checking.
@@ -698,6 +703,13 @@ pub const BuildEnv = struct {
         }
     }
 
+    /// Set or clear the request that cancels this environment's builds (see
+    /// `cancel_request`).
+    pub fn setCancelRequest(self: *BuildEnv, request: ?*const std.atomic.Value(bool)) void {
+        self.cancel_request = request;
+        if (self.coordinator) |coord| coord.cancel_request = request;
+    }
+
     /// Build `root_file`, using package aliases from an owning app/package/platform
     /// `main.roc` when the checked file is a child module.
     ///
@@ -888,6 +900,7 @@ pub const BuildEnv = struct {
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
         coord.setReleaseCheckedSolverTypes(self.release_checked_solver_types);
+        coord.cancel_request = self.cancel_request;
         coord.runtime_lowering = self.runtime_lowering;
         coord.runtime_output_probe = self.runtime_output_probe;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);

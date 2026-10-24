@@ -853,11 +853,6 @@ const Lowerer = struct {
     /// `Lifted.Program.fnLayoutKeyedSourceDigest` per lifted function,
     /// borrowed for the whole lowering; see `layoutKeyedIdentity`.
     layout_keyed_source_digests: []const ?proc_identity.Identity = &.{},
-    /// Content digests of committed layouts, for layout-keyed procedure
-    /// identities. Rebuilt whenever the layout store interns another
-    /// recursive graph, since a new graph key can rename an existing layout.
-    layout_digests: ?layout.Digests = null,
-    layout_digests_recursive_graphs: usize = 0,
     post_check_executor: ?base.post_check_task_executor.Executor,
     types: Type.Store,
     result: LirProgram.Result,
@@ -1470,7 +1465,6 @@ const Lowerer = struct {
         self.capture_types.deinit();
         self.source_symbols.deinit();
         self.identity_memo.deinit();
-        if (self.layout_digests) |*digests| digests.deinit();
         self.fn_reach_queue.deinit(self.allocator);
         self.kept_spec_fns.deinit(self.allocator);
         self.served_member_fns.deinit(self.allocator);
@@ -6170,23 +6164,10 @@ const Lowerer = struct {
         hasher.update(&[_]u8{ @truncate(arg_count), @truncate(arg_count >> 8), @truncate(arg_count >> 16), @truncate(arg_count >> 24) });
         for (0..arg_count) |i| {
             const arg_ty = GuardedList.at(self.types.span(args), i);
-            hasher.update(&try self.layoutDigest(try self.layoutOfType(arg_ty)));
+            hasher.update(&try self.result.layouts.contentDigest(try self.layoutOfType(arg_ty)));
         }
-        hasher.update(&try self.layoutDigest(try self.layoutOfType(ret_ty)));
+        hasher.update(&try self.result.layouts.contentDigest(try self.layoutOfType(ret_ty)));
         return .{ .bytes = hasher.finalResult() };
-    }
-
-    fn layoutDigest(self: *Lowerer, layout_idx: layout.Idx) std.mem.Allocator.Error!layout.LayoutDigest {
-        const recursive_graphs = self.result.layouts.interned_recursive_graphs.count();
-        if (self.layout_digests != null and self.layout_digests_recursive_graphs != recursive_graphs) {
-            self.layout_digests.?.deinit();
-            self.layout_digests = null;
-        }
-        if (self.layout_digests == null) {
-            self.layout_digests = try layout.Digests.init(self.allocator, &self.result.layouts);
-            self.layout_digests_recursive_graphs = recursive_graphs;
-        }
-        return try self.layout_digests.?.get(layout_idx);
     }
 
     /// Identity of a specialization procedure, from its lifted source and the

@@ -39,8 +39,10 @@ pub const Digests = struct {
     allocator: Allocator,
     store: *const Store,
     memo: collections.DenseMap(Idx, Digest),
-    /// Canonical recursive-graph key of every cyclic committed layout.
+    /// Recursive-graph key of every cyclic committed layout.
     recursive_keys: collections.DenseMap(Idx, RecursiveKey),
+    /// How many of the store's `recursiveLayoutKeys` are in `recursive_keys`.
+    recursive_keys_absorbed: usize = 0,
     /// Layouts whose structural digest is being computed, to turn an
     /// unexpected cycle into a diagnostic rather than unbounded recursion.
     visiting: collections.DenseMap(Idx, void),
@@ -50,26 +52,28 @@ pub const Digests = struct {
     const RecursiveKey = [32]u8;
     const Pending = struct { idx: Idx, expanded: bool = false };
 
-    pub fn init(allocator: Allocator, store: *const Store) Allocator.Error!Digests {
-        var recursive_keys = collections.DenseMap(Idx, RecursiveKey).init(allocator);
-        errdefer recursive_keys.deinit();
-        try recursive_keys.ensureTotalCapacity(store.interned_recursive_graphs.count());
-        var it = store.interned_recursive_graphs.iterator();
-        while (it.next()) |entry| {
-            // Hash-map iteration order is not canonical; if several keys ever
-            // name one layout, the smallest key wins so the digest is stable.
-            const gop = recursive_keys.getOrPutAssumeCapacity(entry.value_ptr.*);
-            if (!gop.found_existing or bytesLessThan(entry.key_ptr, gop.value_ptr)) {
-                gop.value_ptr.* = entry.key_ptr.*;
-            }
-        }
+    pub fn init(allocator: Allocator, store: *const Store) Digests {
         return .{
             .allocator = allocator,
             .store = store,
             .memo = collections.DenseMap(Idx, Digest).init(allocator),
-            .recursive_keys = recursive_keys,
+            .recursive_keys = collections.DenseMap(Idx, RecursiveKey).init(allocator),
             .visiting = collections.DenseMap(Idx, void).init(allocator),
         };
+    }
+
+    /// Take in the keys the store recorded since the last query. A key is
+    /// recorded only with the layout its commit created, so no memoized
+    /// digest depends on a layout that gains a key here.
+    fn absorbRecursiveKeys(self: *Digests) Allocator.Error!void {
+        const entries = self.store.recursiveLayoutKeys();
+        while (self.recursive_keys_absorbed < entries.len) : (self.recursive_keys_absorbed += 1) {
+            const entry = entries[self.recursive_keys_absorbed];
+            std.debug.assert(!self.memo.contains(entry.layout));
+            const gop = try self.recursive_keys.getOrPut(entry.layout);
+            std.debug.assert(!gop.found_existing);
+            gop.value_ptr.* = entry.key;
+        }
     }
 
     pub fn deinit(self: *Digests) void {
@@ -84,6 +88,7 @@ pub const Digests = struct {
     /// explicit stack, so layout nesting never becomes native call depth.
     pub fn get(self: *Digests, idx: Idx) Allocator.Error!Digest {
         if (self.memo.get(idx)) |digest| return digest;
+        try self.absorbRecursiveKeys();
         const pending = &self.pending;
         pending.clearRetainingCapacity();
         errdefer for (pending.items) |item| {
@@ -202,10 +207,6 @@ pub const DigestCache = struct {
     /// Number of shared holders, or `exclusive` while one writer holds it.
     lock_state: std.atomic.Value(u32) = .init(0),
     digests: ?Digests = null,
-    /// `interned_recursive_graphs.count()` when `digests` was built. A new
-    /// recursive-graph key can name an already-digested layout, so a change
-    /// rebuilds the memo.
-    recursive_graph_count: usize = 0,
 
     const exclusive = std.math.maxInt(u32);
 
@@ -237,29 +238,22 @@ pub const DigestCache = struct {
     }
 
     pub fn get(self: *DigestCache, store: *const Store, idx: Idx) Allocator.Error!Digest {
-        const recursive_graph_count = store.interned_recursive_graphs.count();
-        if (self.memoizedDigest(recursive_graph_count, idx)) |digest| return digest;
+        if (self.memoizedDigest(idx)) |digest| return digest;
 
         self.lockExclusive();
         defer self.lock_state.store(0, .release);
-        if (self.digests != null and self.recursive_graph_count != recursive_graph_count) self.invalidate();
-        if (self.digests == null) {
-            self.digests = try Digests.init(store.allocator, store);
-            self.recursive_graph_count = recursive_graph_count;
-        }
+        if (self.digests == null) self.digests = Digests.init(store.allocator, store);
         const digests = &self.digests.?;
         // The store may have moved since the memo was built.
         digests.store = store;
         return try digests.get(idx);
     }
 
-    /// The memoized digest of `idx` in a memo that is still current, read
-    /// under the shared lock.
-    fn memoizedDigest(self: *DigestCache, recursive_graph_count: usize, idx: Idx) ?Digest {
+    /// The memoized digest of `idx`, read under the shared lock.
+    fn memoizedDigest(self: *DigestCache, idx: Idx) ?Digest {
         self.lockShared();
         defer _ = self.lock_state.fetchSub(1, .release);
         const digests = if (self.digests) |*current| current else return null;
-        if (self.recursive_graph_count != recursive_graph_count) return null;
         return digests.memo.get(idx);
     }
 
@@ -301,13 +295,6 @@ fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
     hasher.update(&buffer);
 }
 
-fn bytesLessThan(left: *const [32]u8, right: *const [32]u8) bool {
-    for (left, right) |l, r| {
-        if (l != r) return l < r;
-    }
-    return false;
-}
-
 fn digestsEqual(left: Digest, right: Digest) bool {
     for (left, right) |l, r| {
         if (l != r) return false;
@@ -319,7 +306,7 @@ test "scalar layouts digest stably and distinctly" {
     const testing = std.testing;
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var digests = try Digests.init(testing.allocator, &store);
+    var digests = Digests.init(testing.allocator, &store);
     defer digests.deinit();
 
     try testing.expect(digestsEqual(try digests.get(.u8), try digests.get(.u8)));
@@ -351,9 +338,9 @@ test "layout digests do not depend on commit order" {
     const second_list = try second.insertList(second_struct);
     try testing.expect(first_list != second_list);
 
-    var first_digests = try Digests.init(testing.allocator, &first);
+    var first_digests = Digests.init(testing.allocator, &first);
     defer first_digests.deinit();
-    var second_digests = try Digests.init(testing.allocator, &second);
+    var second_digests = Digests.init(testing.allocator, &second);
     defer second_digests.deinit();
     try testing.expect(digestsEqual(try first_digests.get(first_struct), try second_digests.get(second_struct)));
     try testing.expect(digestsEqual(try first_digests.get(first_list), try second_digests.get(second_list)));
@@ -389,13 +376,55 @@ test "recursive layouts digest through their recursive-graph keys" {
     const second_root = try commitConsList(&second);
     try testing.expect(first_root != second_root);
 
-    var first_digests = try Digests.init(testing.allocator, &first);
+    var first_digests = Digests.init(testing.allocator, &first);
     defer first_digests.deinit();
-    var second_digests = try Digests.init(testing.allocator, &second);
+    var second_digests = Digests.init(testing.allocator, &second);
     defer second_digests.deinit();
     const first_digest = try first_digests.get(first_root);
     try testing.expect(digestsEqual(first_digest, try second_digests.get(second_root)));
     // The boxed payload inside the cycle digests too, and differs from its union.
     const box_idx = first.getTagUnionVariants(first.getTagUnionData(first.getLayout(first_root).getTagUnion().idx)).get(1).payload_layout;
     try testing.expect(!digestsEqual(first_digest, try first_digests.get(box_idx)));
+}
+
+fn commitBinaryTree(store: *Store) Allocator.Error!Idx {
+    // `Tree := [Leaf, Branch(Box(Tree), Box(Tree))]`.
+    var graph = graph_mod.Graph{};
+    defer graph.deinit(std.testing.allocator);
+    const union_node = try graph.reserveNode(std.testing.allocator);
+    const box_node = try graph.reserveNode(std.testing.allocator);
+    const branch_node = try graph.reserveNode(std.testing.allocator);
+    graph.setNode(box_node, .{ .box = .{ .local = union_node } });
+    graph.setNode(branch_node, .{ .struct_ = try graph.appendFields(std.testing.allocator, &[_]graph_mod.Field{
+        .{ .index = 0, .child = .{ .local = box_node } },
+        .{ .index = 1, .child = .{ .local = box_node } },
+    }) });
+    graph.setNode(union_node, .{ .tag_union = try graph.appendRefs(std.testing.allocator, &[_]graph_mod.Ref{
+        .{ .canonical = .zst },
+        .{ .local = branch_node },
+    }) });
+    var commit = try store.commitGraph(&graph, .{ .local = union_node });
+    defer commit.deinit(std.testing.allocator);
+    return commit.root_idx;
+}
+
+test "memoized digests stay valid across later recursive commits" {
+    const testing = std.testing;
+    // Digest a recursive layout, then commit another one into the same store.
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+    const list_root = try commitConsList(&store);
+    const list_digest = try store.contentDigest(list_root);
+    const tree_root = try commitBinaryTree(&store);
+    const tree_digest = try store.contentDigest(tree_root);
+
+    // A store that commits the two in the other order, digesting only at the end.
+    var reordered = try Store.init(testing.allocator, .u64);
+    defer reordered.deinit();
+    const reordered_tree = try commitBinaryTree(&reordered);
+    const reordered_list = try commitConsList(&reordered);
+    try testing.expect(digestsEqual(list_digest, try reordered.contentDigest(reordered_list)));
+    try testing.expect(digestsEqual(tree_digest, try reordered.contentDigest(reordered_tree)));
+    try testing.expect(digestsEqual(list_digest, try store.contentDigest(list_root)));
+    try testing.expect(!digestsEqual(list_digest, tree_digest));
 }

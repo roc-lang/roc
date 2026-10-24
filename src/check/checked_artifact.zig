@@ -641,6 +641,9 @@ pub const PublishInputs = struct {
 pub const CompileTimeFinalizer = struct {
     pub const Error = Allocator.Error || std.Thread.SpawnError || error{
         RuntimeError,
+        /// The embedder abandoned the compilation (see `Options.cancel_request`
+        /// in compile-time finalization).
+        Canceled,
         EmptyCode,
         MmapFailed,
         MprotectFailed,

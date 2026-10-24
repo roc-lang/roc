@@ -126,6 +126,7 @@ fn runSingleTest(io: std.Io, allocator: Allocator, spec: integration.Spec, _: u6
         error.BufferUnderrun,
         error.BuiltinArtifactVersionMismatch,
         error.Canceled,
+        error.ConcurrencyUnavailable,
         error.ConnectionResetByPeer,
         error.CorruptArtifact,
         error.CorruptBuiltinArtifact,

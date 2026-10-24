@@ -127,6 +127,27 @@ receives an explicit trust-required error. Request registrations declare
 whether they require trust. This gate precedes compiler entry; it does not skip
 stages or produce partially checked modules as checked module data.
 
+## LSP document checks
+
+Opening or editing a document schedules a check of it rather than checking it
+on the spot. A reader task receives client messages while the server handles
+them, and the server runs scheduled checks only when no message is pending and
+the reader has consumed all buffered input. A burst of edits (undo, multi-cursor
+edits, fast typing) is therefore checked once, against its final text, with no
+delay added when input is quiet. A request that needs checked types runs its
+document's scheduled check first, since it answers from that build. Shutdown
+drops scheduled checks; the end of client input runs them.
+
+A message that makes the check in progress stale (an edit to, reopening of, or
+closing of the checked document, or shutdown or exit) sets the build's cancel
+request. `BuildEnv.cancel_request` is read between coordinator tasks, before
+checked-program finalization, and between the phases and evaluation levels of
+compile-time finalization; once it is set the build fails with
+`error.Canceled`. A canceled build is only ever deinitialized: the LSP retains
+no build, content hash, or diagnostics from it, and the document stays
+scheduled until the message that canceled it is handled. Cancellation is an
+explicit input from the embedder, never inferred from timing or progress.
+
 ## Core Principles
 
 Compiler stages after parsing and error reporting must not use workarounds,
@@ -17770,7 +17791,7 @@ Direct LIR lowering renders the identity of the plain procedure of a marked
 specialization (finite ABI, no captures, no erased return reuse, not a
 SpecConstr clone) from the template's source identity without its Monotype
 type (`Lifted.Program.fnLayoutKeyedSourceDigest`), followed by the content
-digests (`layout.Digests`) of its argument layouts and its result layout.
+digests (`layout.Store.contentDigest`) of its argument layouts and its result layout.
 Every other ABI of the same specialization keeps its type-keyed identity. The
 existing interning of procedures by identity then gives specializations whose
 layouts agree one procedure: the first one reached owns the body, the rest call
@@ -21771,6 +21792,15 @@ is a proper part of its root's layout, so the order is acyclic and each
 deferred read is settled exactly once.
 A root therefore never commits a take on a read that is emitted as an alias of
 a container already holding the root's unit.
+The borrow solve runs before dismantle, so the solution adopts each
+materialized alias before emission: a borrowed alias borrows through its
+representative as a pure same-value alias, and it and every borrow anchored
+through it join the representative's liveness group. When the representative
+is a take binding solved owned, the alias therefore leaves the root's group,
+and the take binding's unit stays live through the alias's uses while the
+root's residual shell dies at its own last use. Only the groups an alias leaves
+are re-resolved, so a program whose aliases all stay in their group pays one
+pass over its aliases.
 Dominance is computed from the explicit statement-successor graph with a
 synthetic entry for all procedure roots. Every path from that entry to a
 statement starts at the body of a procedure that reaches the statement and
@@ -24182,6 +24212,16 @@ columns with its supplied scratch allocator, and owns those reconstructed
 columns until `deinit`. The mapped bytes and the scratch allocator must both
 outlive the view. Format version 15 introduced the portable columns; version 16
 added `LirProcSpec.ret_desc`.
+
+A viewed layout store answers every read-only query the producing store
+answers, including `contentDigest`, which backends use to name refcount
+helpers. The image therefore carries `Store.recursive_layout_keys`, the
+recursive-graph key of every cyclic committed layout, as an ordinary array;
+the digest of a cyclic layout hashes that key. The view leaves the interning
+tables empty, since a view never commits layouts. A commit records a key only
+together with the layout it creates, so a layout has at most one key and a
+memoized digest never depends on a key recorded after it: digest memos live
+for their store's whole lifetime and take in newly recorded keys as they go.
 
 The producer of a copied LirImage states which of two byte contracts the image
 has. A *persisted* image is one whose bytes are written into a file that

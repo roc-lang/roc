@@ -619,7 +619,17 @@ pub const SyntaxChecker = struct {
         }
     }
 
-    pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) CheckError![]Diagnostics.PublishDiagnostics {
+    /// Check the document and return the diagnostics to publish, grouped by
+    /// URI. Once `cancel_request` is set the build is abandoned and this
+    /// returns `error.Canceled`, leaving every retained build, content hash,
+    /// and published-URI record as it was before the call.
+    pub fn check(
+        self: *SyntaxChecker,
+        uri: []const u8,
+        override_text: ?[]const u8,
+        workspace_root: ?[]const u8,
+        cancel_request: ?*const std.atomic.Value(bool),
+    ) CheckError![]Diagnostics.PublishDiagnostics {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
 
@@ -633,15 +643,18 @@ pub const SyntaxChecker = struct {
         }
 
         // Check if content has changed using hash comparison BEFORE building.
-        // This avoids unnecessary rebuilds on focus/blur events.
+        // This avoids unnecessary rebuilds on focus/blur events. The new hash
+        // is recorded only once the build completes, so a canceled build
+        // never makes the next check of the same text skip.
+        var hashed_path: ?[:0]u8 = null;
+        defer if (hashed_path) |a| self.allocator.free(a);
         if (override_text) |text| {
             const path = try uri_util.uriToPath(self.allocator, uri);
             defer self.allocator.free(path);
 
-            const abs_path: ?[:0]u8 = try self.realAbsolutePath(path);
-            defer if (abs_path) |a| self.allocator.free(a);
+            hashed_path = try self.realAbsolutePath(path);
 
-            if (abs_path) |ap| {
+            if (hashed_path) |ap| {
                 const new_hash = contentHash(text);
                 const old_hash = self.content_hashes.get(ap);
 
@@ -666,23 +679,33 @@ pub const SyntaxChecker = struct {
                         new_hash[0..4].*,
                     });
                 }
-
-                const entry = try self.content_hashes.getOrPut(self.allocator, ap);
-                if (!entry.found_existing) {
-                    entry.key_ptr.* = self.allocator.dupe(u8, ap) catch |err| {
-                        self.content_hashes.removeByPtr(entry.key_ptr);
-                        return err;
-                    };
-                }
-                entry.value_ptr.* = new_hash;
             }
         }
 
-        const env_handle = try self.createFreshBuildEnv();
+        const env_handle = try self.createBuildEnv();
+        var env_handle_installed = false;
+        errdefer if (!env_handle_installed) env_handle.release(owner_build);
         const env = env_handle.envPtr();
+        env.setCancelRequest(cancel_request);
 
         var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text, self.workspace_root);
         defer session.deinit();
+        // The flag is reused for later checks, which this build, once
+        // retained for queries, must not observe.
+        env.setCancelRequest(null);
+
+        self.installBuildEnv(env_handle);
+        env_handle_installed = true;
+        if (hashed_path) |ap| {
+            const entry = try self.content_hashes.getOrPut(self.allocator, ap);
+            if (!entry.found_existing) {
+                entry.key_ptr.* = self.allocator.dupe(u8, ap) catch |err| {
+                    self.content_hashes.removeByPtr(entry.key_ptr);
+                    return err;
+                };
+            }
+            entry.value_ptr.* = contentHash(override_text.?);
+        }
 
         const absolute_path = session.absolute_path;
         try self.recordClientDocument(uri, absolute_path);
@@ -824,9 +847,14 @@ pub const SyntaxChecker = struct {
     /// Creates a fresh BuildEnv for a new build.
     /// The previous build_env is moved to previous_build_env for module lookups.
     fn createFreshBuildEnv(self: *SyntaxChecker) SyntaxBuildEnvError!*BuildEnvHandle {
-        self.logDebug(.build, "createFreshBuildEnv: prev_build_env={any} build_env={any}", .{ self.previous_build_env != null, self.build_env != null });
+        const handle = try self.createBuildEnv();
+        self.installBuildEnv(handle);
+        return handle;
+    }
 
-        // Release the previous_build_env owner first.
+    /// Make `handle`, created by `createBuildEnv`, the current build_env.
+    /// The current one becomes previous_build_env for module lookups.
+    fn installBuildEnv(self: *SyntaxChecker, handle: *BuildEnvHandle) void {
         if (self.previous_build_env) |old_prev| {
             old_prev.release(owner_previous);
             self.previous_build_env = null;
@@ -837,7 +865,20 @@ pub const SyntaxChecker = struct {
             current.retain(owner_previous);
             current.release(owner_build);
             self.previous_build_env = current;
-            self.build_env = null;
+        }
+        self.build_env = handle;
+    }
+
+    /// Create a fresh BuildEnv owned under `owner_build` but not yet
+    /// installed. previous_build_env is released first, since installing
+    /// the new one replaces it, so at most two builds are retained while
+    /// this one runs.
+    fn createBuildEnv(self: *SyntaxChecker) SyntaxBuildEnvError!*BuildEnvHandle {
+        self.logDebug(.build, "createBuildEnv: prev_build_env={any} build_env={any}", .{ self.previous_build_env != null, self.build_env != null });
+
+        if (self.previous_build_env) |old_prev| {
+            old_prev.release(owner_previous);
+            self.previous_build_env = null;
         }
 
         // Create a fresh BuildEnv. The LSP reuses one pre-published Builtin
@@ -866,9 +907,7 @@ pub const SyntaxChecker = struct {
         }
 
         const debug_handles = self.debug.build or self.debug.syntax or self.debug.server;
-        const handle = try BuildEnvHandle.create(self.allocator, env, cwd, owner_build, debug_handles);
-        self.build_env = handle;
-        return handle;
+        return BuildEnvHandle.create(self.allocator, env, cwd, owner_build, debug_handles);
     }
 
     fn sharedBuiltinModules(self: *SyntaxChecker) (Allocator.Error || eval.BuiltinModules.InitError)!*eval.BuiltinModules {

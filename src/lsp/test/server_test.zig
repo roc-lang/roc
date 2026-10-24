@@ -10,7 +10,7 @@ const frame = helpers.frame;
 const collectResponses = helpers.collectResponses;
 const uriFromPath = helpers.uriFromPath;
 
-const ExpectSingleErrorResponseError = helpers.HelperError || std.json.ParseError(std.json.Scanner) || error{
+const ExpectSingleErrorResponseError = helpers.HelperError || std.json.ParseError(std.json.Scanner) || std.Io.ConcurrentError || error{
     MissingCode,
     MissingError,
     MissingId,
@@ -392,7 +392,7 @@ test "server tracks documents on didOpen/didChange" {
     server.state = .running;
     server.client.trusted_workspace = true;
     try server.run();
-    try std.testing.expectEqual(@as(usize, 2), server.syntax_checker.check_calls);
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.check_calls);
 
     const maybe_doc = server.getDocumentForTesting(file_uri);
     try std.testing.expect(maybe_doc != null);
@@ -478,7 +478,7 @@ test "server applies sequential incremental changes in a single didChange" {
     server.state = .running;
     server.client.trusted_workspace = true;
     try server.run();
-    try std.testing.expectEqual(@as(usize, 2), server.syntax_checker.check_calls);
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.check_calls);
 
     const maybe_doc = server.getDocumentForTesting(file_uri);
     try std.testing.expect(maybe_doc != null);
@@ -557,13 +557,177 @@ test "server handles burst of incremental didChange messages" {
     server.state = .running;
     server.client.trusted_workspace = true;
     try server.run();
-    try std.testing.expectEqual(@as(usize, 4), server.syntax_checker.check_calls);
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.check_calls);
 
     const maybe_doc = server.getDocumentForTesting(file_uri);
     try std.testing.expect(maybe_doc != null);
     const doc = maybe_doc.?;
     try std.testing.expectEqualStrings("abc DEF\nline!\nDONE", doc.text);
     try std.testing.expectEqual(@as(i64, 4), doc.version);
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12537
+// didChange notifications that arrive back-to-back (undo/redo, fast typing,
+// multi-cursor edits) are coalesced into a single re-check of the final text,
+// rather than re-checking the document once per notification.
+test "server coalesces rapid consecutive didChange messages into one check" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "test.roc" });
+    defer allocator.free(file_path);
+    const file_uri = try uriFromPath(allocator, file_path);
+    defer allocator.free(file_uri);
+
+    const open_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":""}}}}}}
+    , .{file_uri});
+    defer allocator.free(open_body);
+    const open_msg = try frame(allocator, open_body);
+    defer allocator.free(open_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, open_msg);
+
+    const edits = [_][]const u8{ "a", "b", "c" };
+    for (edits, 0..) |edit, i| {
+        const change_body = try std.fmt.allocPrint(allocator,
+            \\{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"{s}","version":{d}}},"contentChanges":[{{"text":"{s}","range":{{"start":{{"line":0,"character":{d}}},"end":{{"line":0,"character":{d}}}}}}}]}}}}
+        , .{ file_uri, i + 2, edit, i, i });
+        defer allocator.free(change_body);
+        const change_msg = try frame(allocator, change_body);
+        defer allocator.free(change_msg);
+        try builder.appendSlice(allocator, change_msg);
+    }
+
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [8192]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    var server = try TestServer(std.Io.Reader, std.Io.Writer).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    defer server.deinit();
+    server.state = .running;
+    server.client.trusted_workspace = true;
+    try server.run();
+
+    const maybe_doc = server.getDocumentForTesting(file_uri);
+    try std.testing.expect(maybe_doc != null);
+    const doc = maybe_doc.?;
+    try std.testing.expectEqualStrings("abc", doc.text);
+    try std.testing.expectEqual(@as(i64, 4), doc.version);
+
+    // At most one check for the didOpen plus one for the whole didChange burst.
+    if (server.syntax_checker.check_calls > 2) {
+        std.debug.print("expected at most 2 checks, got {d}\n", .{server.syntax_checker.check_calls});
+        return error.TestUnexpectedResult;
+    }
+}
+
+/// Client input a test hands over piece by piece: reads wait until the test
+/// sends more bytes or closes the input.
+const GatedInput = struct {
+    io: std.Io,
+    mutex: std.Io.Mutex = .init,
+    arrived: std.Io.Condition = .init,
+    bytes: std.ArrayList(u8) = .empty,
+    read_offset: usize = 0,
+    closed: bool = false,
+    buffer: [256]u8 = undefined,
+
+    /// The server's reader of this input. Only one may exist at a time.
+    const Reader = struct {
+        input: *GatedInput,
+        interface: std.Io.Reader,
+    };
+
+    fn reader(self: *GatedInput) Reader {
+        return .{
+            .input = self,
+            .interface = .{ .vtable = &.{ .stream = stream }, .buffer = &self.buffer, .seek = 0, .end = 0 },
+        };
+    }
+
+    fn deinit(self: *GatedInput, allocator: std.mem.Allocator) void {
+        self.bytes.deinit(allocator);
+    }
+
+    fn send(self: *GatedInput, allocator: std.mem.Allocator, data: []const u8) std.mem.Allocator.Error!void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        try self.bytes.appendSlice(allocator, data);
+        self.arrived.broadcast(self.io);
+    }
+
+    fn close(self: *GatedInput) void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        self.closed = true;
+        self.arrived.broadcast(self.io);
+    }
+
+    fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+        const gated: *Reader = @alignCast(@fieldParentPtr("interface", r));
+        const self = gated.input;
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        while (self.read_offset == self.bytes.items.len) {
+            if (self.closed) return error.EndOfStream;
+            self.arrived.wait(self.io, &self.mutex) catch return error.ReadFailed;
+        }
+        const available = limit.slice(self.bytes.items[self.read_offset..]);
+        const written = try w.write(available);
+        self.read_offset += written;
+        return written;
+    }
+};
+
+test "server cancels a check that an edit to its document makes stale" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const file_uri = "file:///tmp/cancel.roc";
+
+    const open_msg = try frame(allocator,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/cancel.roc","version":1,"text":"a"}}}
+    );
+    defer allocator.free(open_msg);
+    const change_msg = try frame(allocator,
+        \\{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/cancel.roc","version":2},"contentChanges":[{"text":"ab"}]}}
+    );
+    defer allocator.free(change_msg);
+
+    var input: GatedInput = .{ .io = io };
+    defer input.deinit(allocator);
+    try input.send(allocator, open_msg);
+
+    var writer_buffer: [8192]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+    const Server = TestServer(GatedInput.Reader, std.Io.Writer);
+    var server = try Server.init(allocator, io, input.reader(), writer_stream, null, .{});
+    defer server.deinit();
+    server.state = .running;
+    server.client.trusted_workspace = true;
+    var gate: TestSyntaxDriver.CancelGate = .{ .io = io };
+    server.syntax_checker.cancel_gate = &gate;
+
+    var run = try io.concurrent(Server.run, .{&server});
+    defer run.cancel(io) catch {};
+    gate.started.waitUncancelable(io);
+    try input.send(allocator, change_msg);
+    input.close();
+    try run.await(io);
+
+    // The stale check of "a" was canceled; "ab" was checked once its edit
+    // was handled.
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.canceled_checks);
+    try std.testing.expectEqual(@as(usize, 2), server.syntax_checker.check_calls);
+    const doc = server.getDocumentForTesting(file_uri).?;
+    try std.testing.expectEqualStrings("ab", doc.text);
 }
 
 test "server responds to semantic tokens request" {
@@ -898,7 +1062,7 @@ test "workspace trust gates document builds and all semantic requests" {
         defer server.deinit();
         try server.run();
         try std.testing.expectEqual(trusted, server.client.trusted_workspace);
-        try std.testing.expectEqual(@as(usize, if (trusted) 2 else 0), server.syntax_checker.check_calls);
+        try std.testing.expectEqual(@as(usize, if (trusted) 1 else 0), server.syntax_checker.check_calls);
         const doc = server.getDocumentForTesting("file:///tmp/untrusted.roc").?;
         try std.testing.expectEqualStrings("module [x]\nx = 2\n", doc.text);
         if (!trusted) {
