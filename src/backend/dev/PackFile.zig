@@ -22,7 +22,7 @@ const RelocationMod = @import("Relocation.zig");
 const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
-/// Format version; bump whenever the encoding or excerpt contents change.
+/// Format version; bump whenever the encoding or artifact contents change.
 pub const format_version: u32 = 16;
 
 /// One specialization the pack can serve: its reservation-time key, the
@@ -157,6 +157,14 @@ pub fn writeWithNames(allocator: Allocator, set: *const CodeExcerpt.Set, specs: 
                 .inline_call => 2,
             });
             try writer.word(ref.veneer orelse std.math.maxInt(u32));
+            switch (ref.binding) {
+                .unresolved => try writer.byte(0),
+                .absent => try writer.byte(1),
+                .local => |index| {
+                    try writer.byte(2);
+                    try writer.word(index);
+                },
+            }
             switch (ref.target) {
                 .proc => |identity| {
                     try writer.byte(0);
@@ -368,6 +376,16 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
                     const value = try reader.word();
                     break :veneer if (value == std.math.maxInt(u32)) null else value;
                 },
+                .binding = switch (try reader.byte()) {
+                    0 => .unresolved,
+                    1 => .absent,
+                    2 => binding: {
+                        const index = try reader.word();
+                        if (index >= artifact_count) return error.MalformedPack;
+                        break :binding .{ .local = index };
+                    },
+                    else => return error.MalformedPack,
+                },
                 .target = switch (try reader.byte()) {
                     0 => .{ .proc = .{ .bytes = (try reader.raw(32))[0..32].* } },
                     1 => .{ .rc_helper = try reader.str() },
@@ -499,7 +517,18 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
         }
     }
 
-    const specs = try readSpecs(&reader, arena_allocator, spec_count, excerpt_count);
+    for (artifacts) |artifact| for (artifact.symbolic_refs) |ref| {
+        if (ref.binding != .local) continue;
+        const kind = artifacts[ref.binding.local].kind;
+        const matches = switch (ref.target) {
+            .proc => |identity| kind == .proc and std.meta.eql(identity, kind.proc),
+            .boxy_thunk => |identity| kind == .boxy_thunk and std.meta.eql(identity, kind.boxy_thunk),
+            .rc_helper => |name| kind == .rc_helper and std.mem.eql(u8, name, kind.rc_helper),
+        };
+        if (!matches) return error.MalformedPack;
+    };
+
+    const specs = try readSpecs(&reader, arena_allocator, spec_count, artifact_count);
     if (reader.offset != bytes.len) return error.MalformedPack;
 
     return .{

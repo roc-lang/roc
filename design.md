@@ -933,6 +933,38 @@ corrupt or incompatible optional entries are misses, never a reason to compile
 a missing body after admission. Publication uses only the code actually emitted
 for required tests, and complete result hits never enter this runtime consumer.
 
+### Native publication analysis ownership
+
+Offer collection owns one analysis of the frozen LIR store for each program.
+It records direct call edges, literal rejection sites and copied site code in
+one statement walk per procedure. Linked-entry reachability propagates over
+all direct call edges; copied site code propagates only across the existing
+unkeyed-procedure boundary. Worklists mark each procedure at most once per
+property, including cycles. These facts expire with that LIR graph; they are
+never reused across a mutation or inferred from native instructions.
+
+Native offer admission similarly propagates program-local and literal-conversion
+restrictions over the exact splice graph once. Publication gathers the union
+of selected roots in a single traversal. Neither boolean query materializes a
+transitive closure per candidate. Explicit closures needed by persisted records
+are accounted separately from eligibility analysis.
+
+Native payload provenance is an owned reference to validated immutable record
+bytes, not a remembered digest. Acquisitions retain the shared artifact catalog generation lease, and
+cache maintenance respects that lease before removing these records. A
+compilation and its captured artifact sets share the acquisition owner; the
+last owner releases its locks and bytes. A retained record can be referenced
+without another read only inside the same procedure namespace. Optional
+storage failures remain publication failures or lookup misses.
+
+Splicing records the immutable payload on the assembled code region. Extraction
+of that region consumes the producer's canonical code and ordered carried data;
+placement patches only the separate relocation representation. Source-file and
+set-local reference rebinding change metadata, not the payload. Newly generated
+regions have no persisted identity. Deep copies and canonical assembly retain
+the acquisition owner explicitly. This contract never identifies code by
+inspecting instructions or equating paths, lengths or timestamps.
+
 ### Object Cache Store
 
 The store uses explicit logical scopes in the indexed artifact catalog.
@@ -955,37 +987,60 @@ same provider capability (`CodeProvision`).
 Within the procedure domain, catalog variants separate offers, metadata,
 payloads, completion markers and interface summaries. Offers are grouped by
 specialization key and keyed by the digest of their complete record. Each
-record contains the explicit provider identity followed by a `ROFFER02`
-record naming a shared metadata digest, specialization ordinal, and explicit
-origin and module identity owning its storage. Provider visibility and rank are supplied
-by the checked program, root first. A lookup probes one key bucket per origin,
-filters candidates against that provider map, then sorts by provider rank and
-content digest. It never probes every visible module or enumerates unrelated
-specialization keys. Concurrent writers publish independent immutable records,
-so they cannot overwrite another writer's additions.
+record carries the explicit provider identity followed by a `ROFFER03` selection
+record naming an immutable component digest and root ordinal, exact procedure
+identity, specialization key, compile-time reads and ARC interface. Provider
+visibility and rank come from the checked program, root first. Lookup probes
+one key bucket per origin, filters by provider and sorts by rank and digest.
+Concurrent writers publish independent immutable records.
 
-One `ROFMETA1` metadata record per producer holds the union of its offered
-closures: one payload digest per artifact and a payload-free `PackFile` with
-all specialization entries. It is indexed by origin, owner and metadata digest. Source/debug locations, explicit local and symbolic references,
-relocations, failure meanings, compile-time reads and ARC interfaces are
-serialized once for all of that producer's offers. The record is read and
-decoded once per loader, and shared across hits. Metadata granularity is a
-producer's offered union, not a single artifact: selecting an offer can read
-metadata for other offers in that producer, but does not read their code/data
-or any unrelated producer history. Different producer records can still carry
-overlapping descriptions. Cycles remain explicit set-local references; there
-is no recursive hash scheme that attempts to infer graph identity.
+The exact native splice graph is partitioned into strongly connected
+components once per publication. Each `ROFCOMP1` metadata record holds one
+component's payload digests and payload-free `PackFile` metadata. Internal
+edges name component-local ordinals; external edges name a dependency's
+content digest and ordinal. Dependencies publish first. No recursive hashing
+is needed for cycles, and shared dependency metadata is emitted once. An
+unrelated offer's insertion, removal or ordering cannot change a component.
+Acquired components retain their producer's member order; new components use
+the current assembly's explicit order. Reuse checks each member's current
+metadata and direct dependency endpoints against its owned producer record.
+Payload identities are never retained across payload mutation.
 
-Code/data payloads remain independently addressed `RPAYLD01` records indexed
-by origin, owner and payload digest. Each record contains length-prefixed
-code and carried data slices. Publication deduplicates payload digests within
-the producer. Before replacing an existing immutable record, the writer reads
-and compares it with the known producer bytes: verified equal bytes need no
-write; corrupt or missing records are repaired through staging and atomic
-rename. This adds an unsuccessful read on an empty cache, and a verification
-read on a warm cache, in exchange for avoiding repeated writes. It never scans
-historical records. Payloads and shared metadata publish before their offers;
-the `ROCINDEX01` completion marker publishes last.
+A loader appends each acquired component once to its coordinator-owned native
+graph. Existing indices and dependency bindings remain immutable; explicit
+symbolic bindings prevent historical definitions from capturing each other's
+references. Only the coordinator extends this graph, before assembly consumes
+it. Source eligibility and linked-entry facts extend over the appended suffix,
+using settled dependency facts. Decoded component owners and validated record
+leases outlive every captured set that refers to their provenance.
+
+Payloads and metadata share content-addressed catalog storage under the
+local zero-provider identity within the procedure domain. They are independent of the producing module and obey the
+local native-cache retention window. Offers still route to their explicit
+local or package provider, preserving provider precedence. `RPAYLD01` holds
+length-prefixed canonical code and ordered carried data. A newly generated
+payload is encoded and hashed once in a publication. A retained immutable
+payload is referenced directly, without encoding, hashing or rereading it;
+publication to another namespace uses its validated bytes and establishes
+availability there independently.
+
+For an unchanged offer, publication checks the already admitted spec's exact
+ARC/read interface, provider and component reference, then references its owned
+offer without encoding or rereading it. New content retains the existing
+compare-and-repair catalog publication protocol, including corruption handling.
+Payloads become available before metadata, metadata before offers, and the
+`ROCINDEX01` producer completion marker comes last. It records successful
+publication, not immunity from later optional-cache eviction. Held generations
+cannot be evicted by cleanup. Catalog locks cover only bounded metadata transactions;
+encoding and hashing run outside those locks.
+
+Publication counters distinguish changed/reused offers, encoded payloads and
+bytes, hashed bytes, encoded metadata, validation reads, published records and
+bytes, reused validated references, graph nodes/edges, closure queries and peak
+encoded scratch bytes. Acquisition remains separately accounted by loader
+counters. Catalog leases protect acquired generations until the last captured set owner
+releases them. Cross-store publication uses the explicit rooted catalog identity,
+never equality of code domains alone, to establish availability.
 
 `LoadedPacks` memoizes misses under the specialization key, code-provision
 policy, and exact program-module digest. Its index snapshot lasts until
@@ -1050,6 +1105,12 @@ also reports metadata/payload bytes and elapsed wall-clock nanoseconds.
 print none of these diagnostics. Performance comparisons use a ReleaseFast
 compiler with developer diagnostics enabled, `roc build --opt=dev`, wall time
 and peak RSS; cold publication is measured separately from lookup.
+`test/cli/pack_publication_bench.py` measures build and test publication
+independently on many callers of shared code, bypassing only the temporary
+fixture's completed-command records. It reports cold, unchanged and one-caller
+edit costs, including acquisition and publication bytes and peak process RSS.
+Runtime tests that publish no offers are reported separately and provide no
+evidence of publication improvement.
 
 A pack entry's code is a function of the procedure alone: every reference
 from it into code placed with it, and every reference by identity to code

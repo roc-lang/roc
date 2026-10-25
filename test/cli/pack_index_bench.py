@@ -75,7 +75,7 @@ main! = |args| {
             stats = {}
             publication_ns = 0
             for line in completed.stderr.splitlines():
-                if line.startswith("pack index publication:"):
+                if line.startswith("pack publication:"):
                     publication_ns += int(re.search(r"wall_ns=(\d+)", line)[1])
                 if not line.startswith("pack index:"):
                     continue
@@ -99,19 +99,18 @@ main! = |args| {
         templates = sorted(cache.rglob("*.rpi"))
         template = templates[0]
         offer_template = template.read_bytes()
-        assert offer_template[:8] == b"ROFFER02" and len(offer_template) == 77
+        assert offer_template[:8] == b"ROFFER03"
         namespace = template.parents[3]
-        origin = ("local", "pkg")[offer_template[44]]
-        owner = namespace / origin / offer_template[45:77].hex()
+        owner = namespace / "local" / ("00" * 32)
         metadata_dir = owner / "metadata"
         payload_dir = owner / "payload"
         metadata = (metadata_dir / (offer_template[8:40].hex() + ".rpm")).read_bytes()
-        assert metadata[:8] == b"ROFMETA1"
+        assert metadata[:8] == b"ROFCOMP1"
         assert struct.unpack_from("<I", metadata, 8)[0] > 0
         original_payload = (payload_dir / (metadata[12:44].hex() + ".rpa")).read_bytes()
         assert original_payload[:8] == b"RPAYLD01"
         code_len = struct.unpack_from("<Q", original_payload, 8)[0]
-        spec_offset = metadata.rindex(bytes.fromhex(template.parent.name))
+        spec_offset = offer_template.rindex(bytes.fromhex(template.parent.name))
         metadata_growth = payload_growth = 0
         for i in range(args.history):
             key = hashlib.sha256(f"unrequested-specialization-{i}".encode()).digest()
@@ -122,11 +121,11 @@ main! = |args| {
             (payload_dir / (digest + ".rpa")).write_bytes(payload)
             shared = bytearray(metadata)
             shared[12:44] = bytes.fromhex(digest)
-            shared[spec_offset:spec_offset + 32] = key
             shared_hash = sha(shared)
             (metadata_dir / (shared_hash + ".rpm")).write_bytes(shared)
             offer = bytearray(offer_template)
             offer[8:40] = bytes.fromhex(shared_hash)
+            offer[spec_offset:spec_offset + 32] = key
             bucket = template.parent.parent / key.hex()
             bucket.mkdir()
             (bucket / (template.name[:65] + sha(offer) + ".rpi")).write_bytes(offer)
