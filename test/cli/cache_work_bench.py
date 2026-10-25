@@ -5,6 +5,11 @@ Pass --platform pointing to a built fx-open platform, and --work under TMPDIR.
 The URL platform is seeded locally; no download or external project is used.
 Each measured command is roc build --opt=dev. Logs retain phase timings and
 cache counters. Optional strace runs are separate from wall-time measurements.
+Use --sample-memory in separate profiling runs to sample anonymous versus total
+resident memory; its wall times include sampling overhead. RSS includes resident
+executable pages and can differ even for byte-identical binaries depending on
+file-cache state. Stage comparison binaries identically and inspect anonymous
+memory before attributing an RSS difference to compiler allocations.
 """
 import argparse
 import os
@@ -13,7 +18,48 @@ import re
 import shutil
 import statistics
 import subprocess
+import tempfile
 import time
+
+
+def run_memory_profile(cmd, env):
+    """Sample the compiler child of /usr/bin/time; retain its exact max RSS too.
+
+    Component peaks are sampled independently, so they must not be added
+    together. Short-lived peaks can be missed between samples.
+    """
+    peak_rss = peak_anon = nonanon_at_peak = samples = 0
+    with tempfile.TemporaryFile(mode="w+t") as stdout, tempfile.TemporaryFile(mode="w+t") as stderr:
+        with subprocess.Popen(cmd, env=env, stdout=stdout, stderr=stderr, text=True) as process:
+            children = Path(f"/proc/{process.pid}/task/{process.pid}/children")
+            compiler = None
+            while process.poll() is None:
+                try:
+                    if compiler is None:
+                        pids = children.read_text().split()
+                        if pids:
+                            compiler = Path(f"/proc/{pids[0]}/smaps_rollup")
+                    if compiler is not None:
+                        fields = dict(re.findall(r"^(\w+):\s+(\d+) kB$", compiler.read_text(), re.MULTILINE))
+                        rss, anon = int(fields["Rss"]), int(fields["Anonymous"])
+                        samples += 1
+                        peak_anon = max(peak_anon, anon)
+                        if rss > peak_rss:
+                            peak_rss, nonanon_at_peak = rss, rss - anon
+                except (FileNotFoundError, ProcessLookupError):
+                    pass  # The child can exit between discovering its PID and reading it.
+                time.sleep(0.001)
+        stdout.seek(0)
+        stderr.seek(0)
+        result = subprocess.CompletedProcess(cmd, process.returncode, stdout.read(), stderr.read())
+    if not samples:
+        raise RuntimeError("No compiler memory samples collected")
+    return result, {
+        "memory_samples": samples,
+        "sampled_peak_rss_kib": peak_rss,
+        "sampled_peak_anon_kib": peak_anon,
+        "nonanon_at_sampled_peak_kib": nonanon_at_peak,
+    }
 
 
 def main():
@@ -26,6 +72,7 @@ def main():
     p.add_argument("--functions", type=int, default=4)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--trace", action="store_true")
+    p.add_argument("--sample-memory", action="store_true", help="Profile RSS components separately; wall times include sampling overhead")
     a = p.parse_args()
     roc = a.roc.resolve()
     work = a.work.resolve()
@@ -76,7 +123,12 @@ main! = |args| {{
                     f.unlink()
             cmd = [str(roc), "build", "--opt=dev", "--jobs=1", "--timings", str(source / "main.roc"), f"--output={run_dir / 'app'}"]
             start = time.perf_counter_ns()
-            r = subprocess.run(["/usr/bin/time", "-f", "%M", "-o", str(run_dir / "rss"), *cmd], env=env, capture_output=True, text=True)
+            measured_cmd = ["/usr/bin/time", "-f", "%M", "-o", str(run_dir / "rss"), *cmd]
+            memory = {}
+            if a.sample_memory:
+                r, memory = run_memory_profile(measured_cmd, env)
+            else:
+                r = subprocess.run(measured_cmd, env=env, capture_output=True, text=True)
             elapsed = (time.perf_counter_ns() - start) / 1e6
             (run_dir / f"{phase}.log").write_text(r.stdout + r.stderr)
             if r.returncode:
@@ -100,6 +152,8 @@ main! = |args| {{
             results.setdefault(phase, []).append((elapsed, rss, publication / 1e6))
             files = [f for f in cache.rglob("*") if f.suffix in (".rpi", ".rpa", ".rpm", ".ris")]
             print(a.label, repeat, phase, f"wall_ms={elapsed:.3f} rss_kib={rss} publication_ms={publication / 1e6:.3f} records={len(files)} bytes={sum(f.stat().st_size for f in files)}", stats, flush=True)
+            if a.sample_memory:
+                print(a.label, repeat, phase, "memory_profile", memory, flush=True)
         if a.trace and repeat == 0:
             (source / "main.roc").write_text(app.replace("+ 10", "+ 12"))
             for path, contents in module_sources.items():
