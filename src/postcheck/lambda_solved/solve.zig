@@ -197,13 +197,13 @@ pub const WorkCounters = struct {
     compatibility_cycles: u64 = 0,
     compatibility_hits: u64 = 0,
     compatibility_invalidations: u64 = 0,
-    compatibility_peak_facts: u64 = 0,
+    compatibility_peak_proven: u64 = 0,
     /// Input member counts of rows offered to merging.
     row_members: u64 = 0,
     lambda_members: u64 = 0,
     lambda_copies: u64 = 0,
     /// Members offered to final ordering, including already ordered spans.
-    canonical_members: u64 = 0,
+    ordered_members: u64 = 0,
 };
 
 /// Solve lambda-set relationships in a lifted Monotype program.
@@ -240,7 +240,7 @@ pub fn run(
 const Solver = struct {
     counters: ?*WorkCounters = null,
     /// Scratch and the last completed successful compatibility traversal.
-    /// Replacing facts bounds retained state by one traversal, not all queries.
+    /// Replacing the proven pairs bounds retained state by one traversal, not all queries.
     compatibility_work: std.ArrayList(UnifyPair) = .empty,
     compatibility_visited: UnifyPairSet.Unmanaged = .empty,
     compatibility_proven: UnifyPairSet.Unmanaged = .empty,
@@ -709,7 +709,7 @@ const Solver = struct {
     /// already sorted. Sets sharing a start are prefixes of one another, so a
     /// set is never sorted in place.
     fn canonicalMemberSpan(self: *Solver, members: Type.Span, sorted: *std.ArrayList(Type.FnMember)) Allocator.Error!?Type.Span {
-        self.countWork(.canonical_members, members.count());
+        self.countWork(.ordered_members, members.count());
         if (members.count() < 2) return null;
         const types = &self.program.types;
         const ascending = for (1..members.count()) |index| {
@@ -2252,7 +2252,7 @@ const Solver = struct {
         const root_a = self.program.types.rootCompressed(a);
         const root_b = self.program.types.rootCompressed(b);
         if (root_a == root_b) return true;
-        self.invalidateCompatibilityFacts();
+        self.invalidateCompatibilityProofs();
         if (self.compatibility_proven.contains(UnifyPair.init(root_a, root_b))) {
             self.countWork(.compatibility_hits, 1);
             return true;
@@ -2275,7 +2275,7 @@ const Solver = struct {
             if (raw_left == .mono and raw_right == .mono and raw_left.mono.id == raw_right.mono.id) continue;
             if (try self.canLinkUntouchedLeafToInstance(left, raw_left, pair.second, right)) continue;
             if (try self.canLinkUntouchedLeafToInstance(right, raw_right, pair.first, left)) continue;
-            self.invalidateCompatibilityFacts();
+            self.invalidateCompatibilityProofs();
             const key = UnifyPair.init(left, right);
             if ((try visited.getOrPut(self.allocator, key)).found_existing) {
                 self.countWork(.compatibility_cycles, 1);
@@ -2349,18 +2349,18 @@ const Solver = struct {
             }
         }
         // All visited pairs now hold, including mutually recursive ones.
-        // A failed or graph-mutating walk never publishes assumptions.
+        // A failed or graph-mutating walk never retains its assumptions.
         if (epoch == self.program.types.mutation_epoch) {
             std.mem.swap(UnifyPairSet.Unmanaged, &self.compatibility_proven, visited);
             self.compatibility_epoch = epoch;
             if (comptime @import("builtin").is_test or diagnostics.available) {
-                if (self.counters) |counters| counters.compatibility_peak_facts = @max(counters.compatibility_peak_facts, self.compatibility_proven.count());
+                if (self.counters) |counters| counters.compatibility_peak_proven = @max(counters.compatibility_peak_proven, self.compatibility_proven.count());
             }
         }
         return true;
     }
 
-    fn invalidateCompatibilityFacts(self: *Solver) void {
+    fn invalidateCompatibilityProofs(self: *Solver) void {
         const epoch = self.program.types.mutation_epoch;
         if (self.compatibility_epoch == epoch) return;
         if (self.compatibility_proven.count() != 0) self.countWork(.compatibility_invalidations, 1);
@@ -5756,7 +5756,10 @@ test "issue 12595 shared recursive row payload compatibility work" {
             solver.counters = &counts;
             const types = &program.types;
             const value = try types.add(.{ .primitive = .u64 });
-            const captures = try types.addCaptures(&.{.{ .local = @fromBackingInt(0), .symbol = @fromBackingInt(0), .binder = null, .ty = value }});
+            // The captured symbol is distinct from every lambda symbol here.
+            const captured_local: Lifted.LocalId = @fromBackingInt(1);
+            const captured_symbol: Common.Symbol = @fromBackingInt(4);
+            const captures = try types.addCaptures(&.{.{ .local = captured_local, .symbol = captured_symbol, .binder = null, .ty = value }});
             const common: Type.FnMember = .{ .lambda = @fromBackingInt(3), .captures = captures };
             const left_callable = try types.add(.{ .lambda_set = try types.addMembers(&.{ common, .{ .lambda = @fromBackingInt(2), .captures = .empty() } }) });
             const right_callable = try types.add(.{ .lambda_set = try types.addMembers(&.{ .{ .lambda = @fromBackingInt(1), .captures = .empty() }, common }) });
@@ -5798,12 +5801,12 @@ test "issue 12595 shared recursive row payload compatibility work" {
             try std.testing.expectEqual(depth + 1, counts.compatibility_pairs);
             try std.testing.expectEqual(width - 1, counts.compatibility_hits);
             try std.testing.expectEqual(@as(u64, 1), counts.compatibility_cycles);
-            try std.testing.expectEqual(depth + 1, counts.compatibility_peak_facts);
+            try std.testing.expectEqual(depth + 1, counts.compatibility_peak_proven);
         }
     }
 }
 
-test "issue 12595 compatibility facts invalidate on mutation but not compression" {
+test "issue 12595 compatibility proofs invalidate on mutation but not compression" {
     var allocations = std.testing.FailingAllocator.init(std.testing.allocator, .{});
     const allocator = allocations.allocator();
     var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
@@ -5844,7 +5847,7 @@ test "issue 12595 compatibility facts invalidate on mutation but not compression
     try std.testing.expectEqual(@as(u64, 2), counts.compatibility_invalidations);
 }
 
-test "issue 12595 failed cyclic compatibility publishes no assumptions" {
+test "issue 12595 failed cyclic compatibility retains no assumptions" {
     const allocator = std.testing.allocator;
     var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
     defer program.deinit();
@@ -5869,7 +5872,7 @@ test "issue 12595 failed cyclic compatibility publishes no assumptions" {
     try std.testing.expectEqual(@as(u64, 0), counts.compatibility_hits);
 }
 
-test "issue 12595 compatibility that expands lazy types publishes no facts" {
+test "issue 12595 compatibility that expands lazy types retains no proofs" {
     const allocator = std.testing.allocator;
     var lifted = emptyLiftedProgramForTest(allocator);
     const mono_number = try lifted.types.add(.{ .primitive = .u64 });
@@ -5890,7 +5893,7 @@ test "issue 12595 compatibility that expands lazy types publishes no facts" {
     try std.testing.expect(solver.compatibility_proven.count() > 0);
 }
 
-test "issue 12595 completed compatibility replaces facts and still propagates erasure" {
+test "issue 12595 completed compatibility replaces proofs and still propagates erasure" {
     const allocator = std.testing.allocator;
     var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
     defer program.deinit();
@@ -5898,14 +5901,17 @@ test "issue 12595 completed compatibility replaces facts and still propagates er
     defer solver.deinit();
     const types = &program.types;
     const number = try types.add(.{ .primitive = .u64 });
-    // Disjoint queries in one epoch cannot accumulate retained facts.
+    // Disjoint queries in one epoch cannot accumulate retained proofs.
     for (0..100) |_| {
         const a = try types.add(.{ .list = number });
         const b = try types.add(.{ .list = number });
         try std.testing.expect(try solver.typesCompatible(a, b));
         try std.testing.expectEqual(@as(usize, 1), solver.compatibility_proven.count());
     }
-    const captures = try types.addCaptures(&.{.{ .local = @fromBackingInt(0), .symbol = @fromBackingInt(0), .binder = null, .ty = number }});
+    // Erasure digests the capture symbol, so it is distinct from the lambda symbol.
+    const captured_local: Lifted.LocalId = @fromBackingInt(1);
+    const captured_symbol: Common.Symbol = @fromBackingInt(2);
+    const captures = try types.addCaptures(&.{.{ .local = captured_local, .symbol = captured_symbol, .binder = null, .ty = number }});
     const callable = try types.add(.{ .lambda_set = try types.addMembers(&.{.{ .lambda = @fromBackingInt(1), .captures = captures }}) });
     const empty = try types.add(.{ .lambda_set = .empty() });
     const a = try types.add(.{ .func = .{ .args = .empty(), .callable = callable, .ret = number } });
