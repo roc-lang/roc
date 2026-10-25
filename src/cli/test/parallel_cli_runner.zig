@@ -503,6 +503,7 @@ const CustomCase = enum {
     build_interpreter_owns_intermediates,
     build_glibc_target_non_linux_error,
     build_windows_shared_library,
+    native_test_artifact_reuse,
     cache_passing_results,
     cache_failing_results,
     cache_invalidated_by_source_change,
@@ -2999,6 +3000,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11439: errors outside tests prevent success even with no expects", .body = .{ .command = .{ .args = &.{ "test", "--no-cache", "--no-color" }, .roc_file = "test/cli/has_type_error_annotation.roc", .exit = .{ .code = 1 }, .stdout_exact = "", .contains = &.{ .{ .stream = .stderr, .text = "Ran 0 tests" }, .{ .stream = .stderr, .text = "0 passed" }, .{ .stream = .stderr, .text = "0 failed" }, .{ .stream = .stderr, .text = "0 compiler errors" }, .{ .stream = .stderr, .text = "Compilation failed with 1 error." } }, .not_contains = &.{ .{ .stream = .stderr, .text = "All (" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "transparent alias locals satisfy alias and backing requests", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/TransparentAliasLocalRequests.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "related local and request had no exact nominal backing path" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test skips a downloaded dependency's expects", .body = .{ .custom = .roc_test_skips_url_dependency_expects } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12591: native test artifacts survive result invalidation", .backend = .dev, .body = .{ .custom = .native_test_artifact_reuse } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test runs a path dependency's expects and caches them by source", .body = .{ .custom = .roc_test_caches_local_dependency_expects } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11439: blocked expects remain counted with cached results and disappear after a fix", .body = .{ .custom = .roc_test_counts_checking_errors_with_cached_results } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test runs an app's expects without its platform entrypoint", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/AppWithoutEntrypoint.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "exposed but not defined" }, .{ .stream = .stderr, .text = "missing platform required definition" }, .{ .stream = .stderr, .text = "compile time crash" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -5270,6 +5272,7 @@ fn runCustomCase(
         .build_interpreter_owns_intermediates => customBuildInterpreterOwnsIntermediates(io, allocator, &env, &timer, timeout_ms),
         .build_glibc_target_non_linux_error => customGlibcTargetNonLinux(io, allocator, &env, &timer, timeout_ms),
         .build_windows_shared_library => customWindowsSharedLibrary(io, allocator, &env, &timer, timeout_ms),
+        .native_test_artifact_reuse => customNativeTestArtifactReuse(io, allocator, &env, &timer, timeout_ms),
         .cache_passing_results => customCachePassingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_failing_results => customCacheFailingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_invalidated_by_source_change => customCacheInvalidated(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
@@ -13526,6 +13529,191 @@ fn customPipelineParitySharedCache(io: std.Io, allocator: Allocator, env: *const
         if (after != expected_entries) {
             return customFailure(allocator, timer, "`roc {s}` did not reuse the shared checked-module cache: expected {d} entries, found {d}", .{ step.name, expected_entries, after });
         }
+    }
+    return null;
+}
+
+fn customNativeTestArtifactReuse(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    var traced = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone native test environment: {}", .{err}),
+    };
+    defer traced.env_map.deinit();
+    if (comptime build_options.dev_diagnostics) traced.env_map.put("ROC_PACK_TRACE", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable native admission trace: {}", .{err});
+    const helper =
+        \\Helper := [].{
+        \\    double : I64 -> I64
+        \\    double = |x| {
+        \\        dbg x
+        \\        x * 2
+        \\    }
+        \\    observed : I64 -> I64
+        \\    observed = |x| {
+        \\        expect x > 0
+        \\        double(x)
+        \\    }
+        \\    handlers : List(Box((I64 -> I64)))
+        \\    handlers = {
+        \\        base = 42
+        \\        [Box.box(|x| x + base)]
+        \\    }
+        \\    greeters : List(Box(({} -> Str)))
+        \\    greeters = {
+        \\        name = "a greeting long enough to live on the heap"
+        \\        [Box.box(|{}| name)]
+        \\    }
+        \\    sum : I64 -> I64
+        \\    sum = |x| List.fold(handlers, 0, |total, f| total + Box.unbox(f)(x))
+        \\    greet : {} -> Str
+        \\    greet = |{}| List.fold(greeters, "", |text, f| Str.concat(text, Box.unbox(f)({})))
+        \\}
+        \\expect Helper.double(10) == 20
+        \\
+    ;
+    const numeric_test =
+        \\expect {
+        \\    a = Helper.double(20)
+        \\    b = Helper.double(21)
+        \\    expect b > 0
+        \\    a + b == 82
+        \\}
+        \\
+    ;
+    const constant_tests =
+        \\expect Helper.sum(3) == 45
+        \\expect Helper.greet({}) == "a greeting long enough to live on the heap"
+        \\
+    ;
+    const header = "Main := {}\nimport Helper\n";
+    const observed_test = "expect Helper.observed(3) == 6\n";
+    const main_source = header ++ numeric_test ++ observed_test ++ constant_tests;
+    if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "Helper.roc", helper)) |failure| return failure;
+    if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "Main.roc", main_source)) |failure| return failure;
+    const app = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "Main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to name native artifact fixture: {}", .{err});
+    defer allocator.free(app);
+    var emitted_cold: u64 = 0;
+    var failure_transcript: ?[]const u8 = null;
+    defer if (failure_transcript) |transcript| allocator.free(transcript);
+    for (0..10) |pass| {
+        if (pass == 2) {
+            if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "Main.roc", "# invalidate only this module's results\n" ++ main_source)) |failure| return failure;
+        }
+        if (pass == 4) {
+            if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "Main.roc", header ++ observed_test ++ numeric_test ++ constant_tests)) |failure| return failure;
+        }
+        if (pass == 5) {
+            if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "Helper.roc", "# change source provenance\n" ++ helper)) |failure| return failure;
+        }
+        if (pass == 6 or pass == 7) {
+            const updated_helper = std.mem.replaceOwned(u8, allocator, helper, if (pass == 6) "base = 42" else "expect x > 0", if (pass == 6) "base = 43" else "expect x < 0") catch |err|
+                return customInfraFailure(allocator, timer, "failed to edit native test helper: {}", .{err});
+            defer allocator.free(updated_helper);
+            const updated_main = std.mem.replaceOwned(u8, allocator, main_source, "== 45", if (pass == 6) "== 46" else "== 45") catch |err|
+                return customInfraFailure(allocator, timer, "failed to edit native test expectation: {}", .{err});
+            defer allocator.free(updated_main);
+            if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "Helper.roc", updated_helper)) |failure| return failure;
+            if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "Main.roc", updated_main)) |failure| return failure;
+        }
+        const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "native test artifact fixture timed out");
+        const args: []const []const u8 = if (pass == 3 or pass == 9)
+            &.{ "test", "--opt=dev", "--no-cache", "--jobs=4", "--timings" }
+        else if (pass == 4 or pass == 8)
+            &.{ "test", "--opt=dev", "--jobs=4", "--timings" }
+        else
+            &.{ "test", "--opt=dev", "--jobs=1", "--timings" };
+        const run = runRocInEnv(io, allocator, &traced, args, app, .relative, &.{}, null, remaining) catch |err|
+            return customInfraFailure(allocator, timer, "native test spawn failed: {}", .{err});
+        if (pass < 7 and (!processSucceeded(run.term) or std.mem.find(u8, run.stdout, "All (7) tests passed") == null))
+            return failureFromRun(allocator, timer, run, "native artifact test failed");
+        if (std.mem.count(u8, run.stderr, "[dbg]") != 4)
+            return failureFromRun(allocator, timer, run, "native artifact execution or replay lost debug observations");
+        const debug_lines: []const []const u8 = if (pass == 4 or pass == 5)
+            &.{ "[dbg] 3\n", "[dbg] 20\n", "[dbg] 21\n", "[dbg] 10\n" }
+        else
+            &.{ "[dbg] 20\n", "[dbg] 21\n", "[dbg] 3\n", "[dbg] 10\n" };
+        var debug_cursor: usize = 0;
+        for (debug_lines) |line| {
+            const position = std.mem.findPos(u8, run.stderr, debug_cursor, line) orelse
+                return failureFromRun(allocator, timer, run, "native debug observations changed order or attribution");
+            debug_cursor = position + line.len;
+        }
+        if (pass >= 7) {
+            if (exitCode(run.term) != 1 or std.mem.find(u8, run.stderr, "1 failed") == null or std.mem.find(u8, run.stderr, "expect x < 0") == null)
+                return failureFromRun(allocator, timer, run, "inline failure changed its status or source diagnostic");
+            const first_debug = std.mem.find(u8, run.stderr, "[dbg]").?;
+            const summary_start = std.mem.findPos(u8, run.stderr, first_debug, "Ran ") orelse
+                return failureFromRun(allocator, timer, run, "missing failed test summary");
+            const transcript = run.stderr[first_debug..summary_start];
+            if (failure_transcript) |expected| {
+                if (!std.mem.eql(u8, expected, transcript)) return failureFromRun(allocator, timer, run, "warm or uncached failure observations changed");
+            } else failure_transcript = allocator.dupe(u8, transcript) catch |err|
+                return customInfraFailure(allocator, timer, "failed to retain failure transcript: {}", .{err});
+            continue;
+        }
+        if (pass == 1) {
+            if (std.mem.find(u8, run.stdout, "(cached)") == null or timingCounter(run.stderr, "Native test artifact cache", "Payloads read") != null)
+                return failureFromRun(allocator, timer, run, "complete result hits entered native artifact loading");
+            continue;
+        }
+        const emitted = timingCounter(run.stderr, "Native test procedures", "Emitted") orelse
+            return failureFromRun(allocator, timer, run, "missing native emission counters");
+        const spliced = timingCounter(run.stderr, "Native test procedures", "Spliced") orelse
+            return failureFromRun(allocator, timer, run, "missing native splice counters");
+        if (pass == 0) {
+            emitted_cold = emitted;
+        } else if (pass == 2 and (spliced == 0 or emitted >= emitted_cold)) {
+            return failureFromRun(allocator, timer, run, "edited test did not reuse native procedures and reduce emission");
+        } else if (pass == 3 and spliced != 0) {
+            return failureFromRun(allocator, timer, run, "cache-disabled native test spliced artifacts");
+        }
+        if (comptime build_options.dev_diagnostics) {
+            if (pass == 2 and std.mem.find(u8, run.stderr, "skipped plain=true cached=true") == null)
+                return failureFromRun(allocator, timer, run, "native helper was not admitted before source-body lowering");
+        }
+    }
+    // A fresh store proves the test consumes code published by `check`, not
+    // an earlier test run. Both commands use the same declared app and
+    // imported helper provenance.
+    const cross_body =
+        \\import Helper
+        \\initial : I64
+        \\initial = Helper.double(9)
+        \\main! = || {}
+        \\expect Helper.double(20) == 40
+        \\
+    ;
+    const platform_absolute = absoluteFromProjectRoot(allocator, "test/fx/platform/main.roc") catch |err|
+        return customInfraFailure(allocator, timer, "failed to name cross-command platform: {}", .{err});
+    defer allocator.free(platform_absolute);
+    const platform_relative = std.fs.path.relative(allocator, project_root_path, null, env.dirs.work_dir, platform_absolute) catch |err|
+        return customInfraFailure(allocator, timer, "failed to locate cross-command platform: {}", .{err});
+    defer allocator.free(platform_relative);
+    if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, platform_relative, '\\', '/');
+    const cross_source = std.fmt.allocPrint(allocator, "app [main!] {{ pf: platform \"{s}\" }}\n{s}", .{ platform_relative, cross_body }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to prepare cross-command source: {}", .{err});
+    defer allocator.free(cross_source);
+    if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "Cross.roc", cross_source)) |failure| return failure;
+    const cross_app = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "Cross.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to name cross-command app: {}", .{err});
+    defer allocator.free(cross_app);
+    const cross_cache = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "cross-cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to name cross-command cache: {}", .{err});
+    defer allocator.free(cross_cache);
+    traced.env_map.put("ROC_CACHE_DIR", cross_cache) catch |err|
+        return customInfraFailure(allocator, timer, "failed to isolate cross-command cache: {}", .{err});
+    for (0..2) |pass| {
+        const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "cross-command native reuse timed out");
+        const args: []const []const u8 = if (pass == 0) &.{ "check", "--jobs=1" } else &.{ "test", "--opt=dev", "--jobs=4", "--timings" };
+        const run = runRocInEnv(io, allocator, &traced, args, cross_app, .relative, &.{}, null, remaining) catch |err|
+            return customInfraFailure(allocator, timer, "cross-command spawn failed: {}", .{err});
+        if (!processSucceeded(run.term)) return failureFromRun(allocator, timer, run, "cross-command native fixture failed");
+        if (pass == 1 and ((timingCounter(run.stderr, "Native test procedures", "Spliced") orelse 0) == 0 or std.mem.find(u8, run.stdout, "All (2) tests passed") == null))
+            return failureFromRun(allocator, timer, run, "test did not consume the generic native helper published by check");
     }
     return null;
 }

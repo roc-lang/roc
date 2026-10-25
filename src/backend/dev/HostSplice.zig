@@ -142,7 +142,7 @@ pub const HostSplice = struct {
     /// evaluator's own code names one where it takes a hosted function as a
     /// value. Runs after every procedure is compiled and before the image
     /// is finished.
-    pub fn generateHostedStubs(self: *HostSplice, codegen: *HostLirCodeGen, boxy_native_fns: *const BoxyNativeFnTable) Allocator.Error!void {
+    pub fn generateHostedStubs(self: *HostSplice, codegen: *HostLirCodeGen, boxy_native_fns: ?*const BoxyNativeFnTable) Allocator.Error!void {
         var code_symbols = std.StringHashMap(usize).init(self.allocator);
         defer {
             var keys = code_symbols.keyIterator();
@@ -185,7 +185,7 @@ pub const HostSplice = struct {
     /// Map the finished image executable: copy the code, give every function
     /// of the compiler it calls a stub, define the carried data, and patch
     /// every relocation.
-    pub fn link(self: *HostSplice, codegen: *HostLirCodeGen, boxy_native_fns: *const BoxyNativeFnTable) LinkError!ExecutableMemory {
+    pub fn link(self: *HostSplice, codegen: *HostLirCodeGen, boxy_native_fns: ?*const BoxyNativeFnTable) LinkError!ExecutableMemory {
         const code = codegen.getGeneratedCode();
         const names = codegen.getSymbolNames();
 
@@ -312,7 +312,7 @@ const Binding = enum { compiler_function, image, unresolved };
 /// Resolves relocation names against the compiler and the image.
 const Binder = struct {
     splice: *HostSplice,
-    boxy_native_fns: *const BoxyNativeFnTable,
+    boxy_native_fns: ?*const BoxyNativeFnTable,
     code_symbols: *const std.StringHashMap(usize),
     stub_targets: *std.AutoArrayHashMapUnmanaged(usize, void),
     allocator: Allocator,
@@ -372,13 +372,16 @@ const Binder = struct {
 /// of the in-process host, a boxy runtime function, or a compiler-rt or C
 /// routine. The dict seed is the compile-time evaluator's fixed zero, as it
 /// is in the evaluator's own code.
-fn compilerFunction(name: []const u8, boxy_native_fns: *const BoxyNativeFnTable) ?usize {
+fn compilerFunction(name: []const u8, boxy_native_fns: ?*const BoxyNativeFnTable) ?usize {
     if (BuiltinFn.fromSymbolName(name)) |builtin_fn| {
         if (builtin_fn == .dict_pseudo_seed) return @intFromPtr(&comptimeDictSeed);
         return builtin_fn.wrapperAddress();
     }
     if (builtins.in_process_host.Symbol.fromName(name)) |symbol| return symbol.address();
-    if (BoxyBuiltinFn.fromSymbolName(name)) |boxy_fn| return boxy_native_fns[@backingInt(boxy_fn)];
+    if (BoxyBuiltinFn.fromSymbolName(name)) |boxy_fn| {
+        const table = boxy_native_fns orelse @import("base").invariant("native splice requires its declared Boxy runtime capability", .{});
+        return table[@backingInt(boxy_fn)];
+    }
     return builtins.native_runtime_libcalls.resolve(name);
 }
 

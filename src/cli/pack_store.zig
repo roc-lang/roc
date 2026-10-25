@@ -167,7 +167,10 @@ pub const Store = struct {
     pub fn has(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8) Allocator.Error!bool {
         const path = try self.packPath(origin, identity, key);
         defer self.allocator.free(path);
-        return self.roc_ctx.fileExists(path);
+        if (self.roc_ctx.fileExists(path)) return true;
+        const index_path = try std.fmt.allocPrint(self.allocator, "{s}.idx", .{path});
+        defer self.allocator.free(index_path);
+        return self.roc_ctx.fileExists(index_path);
     }
 
     /// Stage the pack beside its final path and rename it into place. A
@@ -179,19 +182,63 @@ pub const Store = struct {
         try self.writePath(path, bytes);
     }
 
+    /// Publish immutable procedure bytes before their key index. Readers admit
+    /// a hit only after loading and verifying the complete referenced payload.
+    pub fn writeIndexed(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
+        var pack = PackFile.read(self.allocator, bytes) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => base.invariant("procedure publication must supply an encoded native pack", .{}),
+        };
+        defer pack.deinit();
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+        const path = try self.packPath(origin, identity, digest);
+        defer self.allocator.free(path);
+        try self.writeIndexedPath(path, bytes);
+        const key_path = try self.packPath(origin, identity, key);
+        defer self.allocator.free(key_path);
+        const index_path = try std.fmt.allocPrint(self.allocator, "{s}.idx", .{key_path});
+        defer self.allocator.free(index_path);
+        var index = std.ArrayList(u8).empty;
+        defer index.deinit(self.allocator);
+        try index.appendSlice(self.allocator, "RPI1");
+        try index.appendSlice(self.allocator, &digest);
+        for (pack.specs) |spec| try index.appendSlice(self.allocator, &spec.key);
+        try self.writeIndexedPath(index_path, index.items);
+    }
+
+    /// Corruption is an optional-cache failure, including when publication
+    /// encounters it after admission rejected the old bytes. Repair through
+    /// the same atomic publication boundary; equal bytes retain their file.
+    fn writeIndexedPath(self: *const Store, path: []const u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
+        const previous = self.roc_ctx.readFile(path, self.allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => null,
+        };
+        if (previous) |existing| {
+            defer self.allocator.free(existing);
+            if (std.mem.eql(u8, existing, bytes)) return;
+        }
+        try self.publishPath(path, bytes);
+    }
+
     /// Stage `bytes` in a file only this writer owns, beside `path`, and
     /// rename it into place, so a reader or another writer never sees a
     /// partly written file.
     fn writePath(self: *const Store, path: []const u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
+        if (self.roc_ctx.fileExists(path)) {
+            if (std.debug.runtime_safety) try self.verifyCollision(path, bytes);
+            return;
+        }
+        try self.publishPath(path, bytes);
+    }
+
+    fn publishPath(self: *const Store, path: []const u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
         const dir = std.fs.path.dirname(path).?;
         self.roc_ctx.makePath(dir) catch |err| {
             self.reportWriteFailure("create directory", dir, bytes.len, err);
             return error.PackWriteFailed;
         };
-        if (self.roc_ctx.fileExists(path)) {
-            if (std.debug.runtime_safety) try self.verifyCollision(path, bytes);
-            return;
-        }
         const temp_path = self.roc_ctx.writeTempFile(self.allocator, path, bytes) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => |write_err| {
@@ -234,7 +281,7 @@ pub const Store = struct {
     pub fn loadIdentity(self: *const Store, io: std.Io, packs: *LoadedPacks, origin: compile.BuildEnv.PackOrigin, identity: [32]u8) LoadedPacks.LoadError!void {
         const dir = try self.identityDir(origin, identity);
         defer self.allocator.free(dir);
-        try packs.loadDirInto(io, dir, .cache_offers);
+        try packs.loadIndexedDir(io, dir);
     }
 
     /// Read the discovery summary files filed under a module identity.
@@ -657,7 +704,7 @@ pub const LinkedStores = struct {
                 hasher.update(path);
                 hasher.update(&.{0});
             }
-            const placement = optimizedPackPlacement(build_env, root_artifact) orelse continue;
+            const placement = programPackPlacement(build_env, root_artifact) orelse continue;
             const input_key = try store.optimizedInputKey(placement.identity) orelse continue;
             const path = try store.optimizedPackPath(placement.identity);
             defer allocator.free(path);
@@ -671,11 +718,11 @@ pub const LinkedStores = struct {
     }
 };
 
-/// The placement whose identity names the optimized pack of the program
-/// whose root module is `root_artifact`: the app's when the program has one,
-/// since every app of a platform shares the platform as its root, and
-/// otherwise the root's.
-pub fn optimizedPackPlacement(build_env: *compile.BuildEnv, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) ?compile.BuildEnv.PackPlacement {
+/// The placement for program-wide packs: the app's when the program has one,
+/// otherwise the root's. Every app of a platform shares its executable root;
+/// tests need not even load that platform. The app is the common declared owner
+/// for native CTFE packs and optimized program packs across these commands.
+pub fn programPackPlacement(build_env: *compile.BuildEnv, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) ?compile.BuildEnv.PackPlacement {
     if (build_env.getAppSemanticData()) |app| {
         if (app.checked_artifact) |artifact| return build_env.packPlacementForArtifactKey(artifact.key);
     }
@@ -769,6 +816,9 @@ pub const Pending = struct {
     linked_stores: ?*const LinkedStores = null,
     io: std.Io,
     build_env: *compile.BuildEnv,
+    /// Explicit-root commands have no executable root. Checking supplies their
+    /// complete module set before any specialization asks for an artifact.
+    explicit_artifacts: []const *const check.CheckedArtifact.CheckedModuleArtifact = &.{},
 };
 
 /// The command whose compile-time evaluation filed a compile-time pack, and
@@ -825,6 +875,13 @@ pub fn encodeDiscovery(allocator: Allocator, summaries: []const lir.CheckedPipel
 /// identity. Files load in name order so the indexes are deterministic when
 /// two packs carry the same entry.
 pub const LoadedPacks = struct {
+    const IndexedPayload = struct {
+        path: []const u8,
+        digest: [32]u8,
+        io: std.Io,
+        attempted: bool = false,
+        pack: ?*PackFile.Pack = null,
+    };
     const LinkedOffer = struct {
         hit: Common.SpecCacheHit,
         pack: u32,
@@ -864,6 +921,11 @@ pub const LoadedPacks = struct {
     artifacts_served: u64 = 0,
     /// Bytes read from procedure, discovery and linked-object files.
     bytes_loaded: u64 = 0,
+    lookups: u64 = 0,
+    payloads_read: u64 = 0,
+    indexed_payloads: std.ArrayList(IndexedPayload) = .empty,
+    payloads_by_path: std.StringHashMapUnmanaged(u32) = .empty,
+    indexed_keys: std.AutoHashMapUnmanaged([32]u8, std.ArrayList(u32)) = .empty,
     /// Set until `indexPacks` runs; lookups before that load the pending
     /// store's packs for the modules in view first.
     pending: ?Pending = null,
@@ -896,6 +958,93 @@ pub const LoadedPacks = struct {
             .linked_specs = std.AutoHashMap([32]u8, LinkedOffer).init(allocator),
             .discovery_arena = std.heap.ArenaAllocator.init(allocator),
         };
+    }
+
+    /// Read compact key directories, not historical machine-code payloads.
+    /// All names and key lists are command-owned; an index is only an offer.
+    fn loadIndexedDir(self: *LoadedPacks, io: std.Io, path: []const u8) LoadError!void {
+        var dir = std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch return;
+        defer dir.close(io);
+        var names = std.ArrayList([]u8).empty;
+        defer {
+            for (names.items) |name| self.allocator.free(name);
+            names.deinit(self.allocator);
+        }
+        var iterator = dir.iterate();
+        while (iterator.next(io) catch return) |entry| {
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".rpk.idx")) continue;
+            const name = try self.allocator.dupe(u8, entry.name);
+            errdefer self.allocator.free(name);
+            try names.append(self.allocator, name);
+        }
+        std.mem.sort([]u8, names.items, {}, nameLessThan);
+        for (names.items) |name| {
+            const bytes = dir.readFileAlloc(io, name, self.allocator, .limited(64 * 1024 * 1024)) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => continue,
+            };
+            defer self.allocator.free(bytes);
+            self.bytes_loaded +|= bytes.len;
+            if (bytes.len < 36 or (bytes.len - 36) % 32 != 0 or !std.mem.eql(u8, bytes[0..4], "RPI1")) continue;
+            const digest = bytes[4..36].*;
+            const payload_path = try std.fmt.allocPrint(self.discovery_arena.allocator(), "{s}/{s}.rpk", .{ path, std.fmt.bytesToHex(digest, .lower) });
+            const payload_entry = try self.payloads_by_path.getOrPut(self.allocator, payload_path);
+            if (!payload_entry.found_existing) {
+                payload_entry.value_ptr.* = std.math.cast(u32, self.indexed_payloads.items.len) orelse return error.OutOfMemory;
+                try self.indexed_payloads.append(self.allocator, .{ .path = payload_path, .digest = digest, .io = io });
+            }
+            const payload_index = payload_entry.value_ptr.*;
+            var offset: usize = 36;
+            while (offset < bytes.len) : (offset += 32) {
+                const entry = try self.indexed_keys.getOrPut(self.allocator, bytes[offset..][0..32].*);
+                if (!entry.found_existing) entry.value_ptr.* = .empty;
+                if (std.mem.findScalar(u32, entry.value_ptr.items, payload_index) == null)
+                    try entry.value_ptr.append(self.allocator, payload_index);
+            }
+        }
+    }
+
+    fn loadIndexedKey(self: *LoadedPacks, key: [32]u8, takes: Common.SpecCacheTakes, modules: Common.ProgramModules) Allocator.Error!void {
+        const candidates = self.indexed_keys.get(key) orelse return;
+        for (candidates.items) |index| {
+            const payload = &self.indexed_payloads.items[index];
+            if (!payload.attempted) {
+                payload.attempted = true;
+                var arena = base.SingleThreadArena.init(self.allocator);
+                const bytes = std.Io.Dir.cwd().readFileAlloc(payload.io, payload.path, arena.allocator(), .limited(1024 * 1024 * 1024)) catch |err| {
+                    arena.deinit();
+                    switch (err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        else => continue,
+                    }
+                };
+                self.bytes_loaded +|= bytes.len;
+                self.payloads_read +|= 1;
+                var actual: [32]u8 = undefined;
+                std.crypto.hash.sha2.Sha256.hash(bytes, &actual, .{});
+                if (!std.mem.eql(u8, &actual, &payload.digest)) {
+                    arena.deinit();
+                    continue;
+                }
+                self.appendPack(arena, bytes) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => continue,
+                };
+                payload.pack = self.packs.items[self.packs.items.len - 1];
+            }
+            const pack = payload.pack orelse continue;
+            for (pack.specs) |spec| {
+                if (!std.mem.eql(u8, &key, &spec.key)) continue;
+                if (takes == .test_dev_code and !spec.test_compatible) continue;
+                const located: backend.dev.LocatedArtifact = .{ .set = &pack.set, .index = spec.artifact };
+                if (self.artifactLinesOutsideProgram(located, modules)) continue;
+                self.indexSpec(pack, spec) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => continue,
+                };
+                return;
+            }
+        }
     }
 
     /// Load every `.rpk` file in `dir_path` and index the result.
@@ -1101,28 +1250,31 @@ pub const LoadedPacks = struct {
     }
 
     fn indexPack(self: *LoadedPacks, pack: *const PackFile.Pack) LoadError!void {
-        for (pack.specs) |spec| {
-            const root = pack.set.artifacts[spec.artifact];
-            const identity = switch (root.kind) {
-                .proc => |identity| identity,
-                .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => return error.MalformedPack,
-            };
-            if (self.specs.contains(spec.key)) continue;
-            try self.artifacts.ensureUnusedCapacity(1);
-            try self.specs.ensureUnusedCapacity(1);
-            self.artifacts.putAssumeCapacityNoClobber(spec.key, .{ .set = &pack.set, .index = spec.artifact });
-            self.specs.putAssumeCapacityNoClobber(spec.key, .{
-                .identity = identity.bytes,
-                .comptime_root_reads = spec.comptime_root_reads,
-                .rc_borrowed_params = spec.rc_borrowed_params,
-                .rc_ret_borrowed = spec.rc_ret_borrowed,
-                .rc_ret_lenders = spec.rc_ret_lenders,
-                .rc_read_only_params = spec.rc_read_only_params,
-                .rc_ret_unique = spec.rc_ret_unique,
-                .rc_ret_unique_fields = spec.rc_ret_unique_fields,
-                .rc_ret_conditions = spec.rc_ret_conditions,
-            });
-        }
+        for (pack.specs) |spec| try self.indexSpec(pack, spec);
+    }
+
+    fn indexSpec(self: *LoadedPacks, pack: *const PackFile.Pack, spec: PackFile.SpecEntry) LoadError!void {
+        const root = pack.set.artifacts[spec.artifact];
+        const identity = switch (root.kind) {
+            .proc => |identity| identity,
+            .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => return error.MalformedPack,
+        };
+        if (self.specs.contains(spec.key)) return;
+        try self.artifacts.ensureUnusedCapacity(1);
+        try self.specs.ensureUnusedCapacity(1);
+        self.artifacts.putAssumeCapacityNoClobber(spec.key, .{ .set = &pack.set, .index = spec.artifact });
+        self.specs.putAssumeCapacityNoClobber(spec.key, .{
+            .identity = identity.bytes,
+            .test_compatible = spec.test_compatible,
+            .comptime_root_reads = spec.comptime_root_reads,
+            .rc_borrowed_params = spec.rc_borrowed_params,
+            .rc_ret_borrowed = spec.rc_ret_borrowed,
+            .rc_ret_lenders = spec.rc_ret_lenders,
+            .rc_read_only_params = spec.rc_read_only_params,
+            .rc_ret_unique = spec.rc_ret_unique,
+            .rc_ret_unique_fields = spec.rc_ret_unique_fields,
+            .rc_ret_conditions = spec.rc_ret_conditions,
+        });
     }
 
     /// Index every loaded object pack, in load order: the first pack to
@@ -1178,7 +1330,7 @@ pub const LoadedPacks = struct {
     fn loadLinked(self: *LoadedPacks, pending: Pending, stores: *const LinkedStores, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
         const modules = try packageModules(self.allocator, pending.build_env, root_artifact);
         defer self.allocator.free(modules);
-        const root_placement = optimizedPackPlacement(pending.build_env, root_artifact);
+        const root_placement = programPackPlacement(pending.build_env, root_artifact);
         for (&stores.stores) |*store| {
             for (modules) |module| {
                 const path = try store.packagePackPath(module.identity, module.key);
@@ -1201,6 +1353,14 @@ pub const LoadedPacks = struct {
     fn ensureLoaded(self: *LoadedPacks) void {
         if (self.state != .pending) return;
         const pending = self.pending orelse return;
+        if (pending.explicit_artifacts.len != 0) {
+            self.loadExplicitModules(pending, false) catch |err| {
+                self.unavailable(err);
+                return;
+            };
+            self.indexPacks() catch |err| self.unavailable(err);
+            return;
+        }
         // The first lookups come from the compile-time evaluator's program,
         // which lowers inside checking, after the root module's artifact
         // exists and before the build has declared its artifacts final.
@@ -1221,6 +1381,14 @@ pub const LoadedPacks = struct {
     fn ensureDiscoveryLoaded(self: *LoadedPacks) void {
         if (self.discovery_state != .pending) return;
         const pending = self.pending orelse return;
+        if (pending.explicit_artifacts.len != 0) {
+            self.loadExplicitModules(pending, true) catch {
+                self.discovery_state = .unavailable;
+                return;
+            };
+            self.discovery_state = .ready;
+            return;
+        }
         const root_semantic = pending.build_env.getExecutableRootSemanticData() orelse return;
         const root_artifact = root_semantic.checked_artifact orelse return;
         self.loadPendingDiscovery(pending, root_artifact) catch |err| {
@@ -1229,6 +1397,18 @@ pub const LoadedPacks = struct {
             return;
         };
         self.discovery_state = .ready;
+    }
+
+    fn loadExplicitModules(self: *LoadedPacks, pending: Pending, discovery: bool) LoadError!void {
+        const store = pending.store orelse return;
+        for (pending.explicit_artifacts) |artifact| {
+            const placement = pending.build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
+            if (discovery) {
+                try store.loadIdentityDiscovery(pending.io, self, placement.origin, placement.identity);
+            } else {
+                try store.loadIdentity(pending.io, self, placement.origin, placement.identity);
+            }
+        }
     }
 
     fn loadPendingDiscovery(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
@@ -1264,6 +1444,11 @@ pub const LoadedPacks = struct {
     }
 
     pub fn deinit(self: *LoadedPacks) void {
+        var indexed = self.indexed_keys.valueIterator();
+        while (indexed.next()) |list| list.deinit(self.allocator);
+        self.indexed_keys.deinit(self.allocator);
+        self.payloads_by_path.deinit(self.allocator);
+        self.indexed_payloads.deinit(self.allocator);
         var settlements = self.discovery.valueIterator();
         while (settlements.next()) |list| list.deinit(self.allocator);
         self.discovery.deinit(self.allocator);
@@ -1330,6 +1515,7 @@ pub const LoadedPacks = struct {
 
     fn findSpec(context: *anyopaque, key: [32]u8, takes: Common.SpecCacheTakes, modules: Common.ProgramModules) ?Common.SpecCacheHit {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
+        self.lookups +|= 1;
         self.ensureLoaded();
         if (self.state != .ready) return null;
         // An optimized object serves a consumer whose code is linked ahead
@@ -1342,7 +1528,9 @@ pub const LoadedPacks = struct {
             }
         }
         if (!takes.takesDevCode()) return null;
+        if (!self.specs.contains(key)) self.loadIndexedKey(key, takes, modules) catch return null;
         const hit = self.specs.get(key) orelse return null;
+        if (takes == .test_dev_code and !hit.test_compatible) return null;
         // An entry whose splice would place a line or a location in a module
         // version the asking program does not lower against would place lines
         // that differ from the procedure's own; the program compiles it.
@@ -1365,6 +1553,10 @@ pub const LoadedPacks = struct {
     /// location in a module version outside `modules`.
     fn linesOutsideProgram(self: *LoadedPacks, key: [32]u8, modules: Common.ProgramModules) bool {
         const located = self.artifacts.get(key) orelse return false;
+        return self.artifactLinesOutsideProgram(located, modules);
+    }
+
+    fn artifactLinesOutsideProgram(self: *LoadedPacks, located: backend.dev.LocatedArtifact, modules: Common.ProgramModules) bool {
         const set = located.set;
         var all_present = true;
         for (set.source_files) |identity| all_present = all_present and Common.programHasModule(modules, identity);
@@ -1438,6 +1630,85 @@ pub const LoadedPacks = struct {
 
 fn nameLessThan(_: void, lhs: []u8, rhs: []u8) bool {
     return std.mem.order(u8, lhs, rhs) == .lt;
+}
+
+test "native test indexed admission pins verified payloads and rejects observation ABI mismatches" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root);
+    var store = try Store.init(a, .{ .cache_dir = root, .roc_ctx = CoreCtx.default(a, a, io) }, RocTarget.detectNative(), "dev");
+    defer store.deinit();
+    const identity: [32]u8 = @splat(7);
+    const key: [32]u8 = @splat(11);
+    const set: backend.dev.ProcArtifact.Set = .{
+        .arena = undefined,
+        .artifacts = &.{.{ .kind = .{ .proc = lir.ProcIdentity.forTest(1) }, .code = "\xc3", .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} }},
+    };
+    var spec: PackFile.SpecEntry = .{
+        .key = key,
+        .artifact = 0,
+        .test_compatible = true,
+        .rc_borrowed_params = 0,
+        .rc_ret_borrowed = false,
+        .rc_ret_lenders = 0,
+        .rc_read_only_params = 0,
+        .rc_ret_unique = false,
+        .rc_ret_unique_fields = 0,
+        .rc_ret_conditions = &.{},
+    };
+    for ([_]bool{ true, false }) |compatible| {
+        spec.test_compatible = compatible;
+        spec.key = if (compatible) key else @splat(12);
+        const bytes = try PackFile.write(a, &set, &.{spec});
+        defer a.free(bytes);
+        try store.writeIndexed(.local, identity, spec.key, bytes);
+        // Repeated publication reuses both immutable files.
+        try store.writeIndexed(.local, identity, spec.key, bytes);
+    }
+    var packs = LoadedPacks.init(a);
+    defer packs.deinit();
+    try store.loadIdentity(io, &packs, .local, identity);
+    try packs.indexPacks();
+    try std.testing.expectEqual(@as(u64, 0), packs.payloads_read);
+    const lookup = packs.specCacheLookup();
+    try std.testing.expect(lookup.lookup(@splat(99), .test_dev_code, &.{}) == null);
+    try std.testing.expectEqual(@as(u64, 0), packs.payloads_read);
+    try std.testing.expect(lookup.lookup(@splat(12), .test_dev_code, &.{}) == null);
+    try std.testing.expect(lookup.lookup(@splat(12), .dev_code, &.{}) != null);
+    try std.testing.expect(lookup.lookup(key, .test_dev_code, &.{}) != null);
+    try std.testing.expectEqual(@as(u64, 2), packs.payloads_read);
+    // Eviction cannot revoke a promise already made to specialization.
+    for (packs.indexed_payloads.items) |payload| try std.Io.Dir.cwd().deleteFile(io, payload.path);
+    const source = packs.spliceSource();
+    try std.testing.expect(source.find(source.context, key) != null);
+    try std.testing.expect(lookup.lookup(key, .test_dev_code, &.{}) != null);
+    var missing = LoadedPacks.init(a);
+    defer missing.deinit();
+    try store.loadIdentity(io, &missing, .local, identity);
+    try missing.indexPacks();
+    try std.testing.expect(missing.specCacheLookup().lookup(key, .test_dev_code, &.{}) == null);
+
+    const bytes = try PackFile.write(a, &set, &.{spec});
+    defer a.free(bytes);
+    try store.writeIndexed(.local, identity, spec.key, bytes);
+    var corrupt = LoadedPacks.init(a);
+    defer corrupt.deinit();
+    try store.loadIdentity(io, &corrupt, .local, identity);
+    try corrupt.indexPacks();
+    for (corrupt.indexed_payloads.items) |payload| {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = payload.path, .data = "interrupted payload" });
+    }
+    try std.testing.expect(corrupt.specCacheLookup().lookup(spec.key, .dev_code, &.{}) == null);
+    try std.testing.expectEqual(@as(u64, 0), corrupt.hits);
+    try store.writeIndexed(.local, identity, spec.key, bytes);
+    var repaired = LoadedPacks.init(a);
+    defer repaired.deinit();
+    try store.loadIdentity(io, &repaired, .local, identity);
+    try repaired.indexPacks();
+    try std.testing.expect(repaired.specCacheLookup().lookup(spec.key, .dev_code, &.{}) != null);
 }
 
 test "discovery summaries round-trip and a file of another version is no offer" {

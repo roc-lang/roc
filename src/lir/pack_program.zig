@@ -696,6 +696,65 @@ pub fn literalConvertingProcs(allocator: Allocator, store: *const LirStore) Allo
     return converts;
 }
 
+/// Local bodies whose native code needs no test observation ABI. External
+/// bodies are opaque here; publication never guesses what they observe.
+/// The pack producer closes these facts over its explicit procedure graph.
+pub fn observationIndependentProcs(allocator: Allocator, store: *const LirStore) Allocator.Error![]bool {
+    const independent = try allocator.alloc(bool, store.procSpecCount());
+    errdefer allocator.free(independent);
+    var seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
+    defer seen.deinit(allocator);
+    var visited = std.ArrayList(LIR.CFStmtId).empty;
+    defer visited.deinit(allocator);
+    var work = std.ArrayList(LIR.CFStmtId).empty;
+    defer work.deinit(allocator);
+    for (store.getProcSpecs(), independent) |proc, *result| {
+        result.* = false;
+        const body = proc.body orelse continue;
+        for (visited.items) |stmt| seen.unset(@backingInt(stmt));
+        visited.clearRetainingCapacity();
+        work.clearRetainingCapacity();
+        result.* = true;
+        try work.append(allocator, body);
+        while (work.pop()) |id| {
+            if (seen.isSet(@backingInt(id))) continue;
+            seen.set(@backingInt(id));
+            try visited.append(allocator, id);
+            const stmt = store.getCFStmtImmediate(id).*;
+            if (stmt == .expect or stmt == .expect_err) {
+                result.* = false;
+                break;
+            }
+            try BodyClone.appendSuccessors(store, &work, id, allocator);
+        }
+    }
+    return independent;
+}
+
+test "native test eligibility distinguishes generic debug code from expect instrumentation and external bodies" {
+    const a = std.testing.allocator;
+    var store = LirStore.init(a);
+    defer store.deinit();
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+    const debug = try store.addCFStmt(.{ .debug = .{ .message = value, .next = ret } }, .test_fixture);
+    const expect = try store.addCFStmt(.{ .expect = .{ .condition = value, .next = ret, .site = null } }, .test_fixture);
+    const observed = try store.addCFStmt(.{ .expect = .{ .condition = value, .next = ret, .site = @fromBackingInt(7) } }, .test_fixture);
+    for ([_]?LIR.CFStmtId{ ret, debug, expect, observed, null }, 0..) |body, index| {
+        _ = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(@intCast(index)),
+            .args = try store.addLocalSpan(&.{}),
+            .body = body,
+            .frame_locals = try store.addLocalSpan(&.{}),
+            .ret_layout = .u64,
+        }, .none);
+    }
+    const eligible = try observationIndependentProcs(a, &store);
+    defer a.free(eligible);
+    try std.testing.expectEqualSlices(bool, &.{ true, true, false, false, false }, eligible);
+}
+
 /// Convert an intentional fixture-table position while preserving enum inference.
 fn fixtureTableIndex(comptime index: u32) u32 {
     return index;

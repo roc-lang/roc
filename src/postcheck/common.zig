@@ -450,6 +450,8 @@ pub const SpecCacheHit = struct {
     /// The entry is a linked object reached through its C-ABI entry rather
     /// than spliced code (`LIR.LirProcSpec.c_abi_entry`).
     c_abi_entry: bool = false,
+    /// Producer proved that the complete closure needs no expect instrumentation.
+    test_compatible: bool = false,
     /// Producer-owned demand summary: the compile-time roots the procedure's
     /// code reads, through every procedure it reaches. A program that takes
     /// the hit demands them as if it had lowered the body (design.md
@@ -489,6 +491,8 @@ pub const DiscoverySettlement = struct {
 pub const SpecCacheTakes = enum {
     /// Dev code only: the consumer splices code and links nothing.
     dev_code,
+    /// Native tests require a closure with no uninstrumented expects.
+    test_dev_code,
     /// Dev code only, for a producer shared with a consumer whose code is
     /// linked: no dev entry whose code includes a procedure a linked object
     /// provides, since that consumer takes the procedure from the object.
@@ -503,7 +507,7 @@ pub const SpecCacheTakes = enum {
 
     pub fn takesLinkedObjects(self: SpecCacheTakes) bool {
         return switch (self) {
-            .dev_code, .dev_code_beside_linked_objects => false,
+            .dev_code, .test_dev_code, .dev_code_beside_linked_objects => false,
             .dev_code_and_linked_objects, .linked_objects => true,
         };
     }
@@ -514,7 +518,7 @@ pub const SpecCacheTakes = enum {
     /// program through a splice.
     pub fn refusesDevCodeOfLinkedProcs(self: SpecCacheTakes) bool {
         return switch (self) {
-            .dev_code, .linked_objects => false,
+            .dev_code, .test_dev_code, .linked_objects => false,
             .dev_code_beside_linked_objects, .dev_code_and_linked_objects => true,
         };
     }

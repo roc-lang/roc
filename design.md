@@ -679,16 +679,72 @@ Same-program retained fragments remain exact-target for now. Their separate
 `rejected_target` metric exposes this limitation; revision, transferred LIR and
 layout ownership, CPU, static-data and runtime-context checks are unchanged.
 
+Native dev tests consume this domain through the same heap-owned lookup and
+splice provider as CTFE. They emit object-mode procedures, link symbolic
+references through `HostSplice`, and generate invocation wrappers separately.
+The native target and CPU floor, specialized calling convention, shared-thread
+ARC signatures, hot-reload capture prefix, dev inlining policy, dictionary seed,
+and readonly constant representation are the ordinary native dev contracts.
+The final runtime continuation supplies normalized stored compile-time values;
+evaluation-stage code is never published as the test runtime's code.
+
+Test observation eligibility is an additional explicit capability. A pack offer
+records whether its complete LIR call closure contains an expect or an opaque
+external body. Only a closure proven free of both can serve a test consumer.
+An ordinary dev expect reports failure but does not count success; a test expect
+uses a command-local site index. Neither is interchangeable with the other.
+Test-instrumented closures are not published, and their bodies remain available
+for the current plan's counters. Generic `dbg` calls use the invocation's host
+hooks and remain shareable. Shared specialization intersects this capability
+with CTFE's provision and still requires the identical provider on both sides.
+Frozen constants containing function relocations retain the existing pack
+withholding rule; the test image resolves their current procedures and explicit
+RC helpers before executing any root.
+Program-local erased-callable runtime references remain ineligible for packs.
+The test runner supplies the existing erased-callable runtime only when the
+producer's explicit tables or procedure ABI require it; ordinary specialized
+procedures neither initialize that runtime nor construct its function table.
+
+The test runner retains admitted pack bytes, carried immutable data, generated
+code, source maps and executable memory until all workers finish. Every call
+owns its observation state. Cache admission happens before body elision; missing,
+corrupt or incompatible optional entries are misses, never a reason to compile
+a missing body after admission. Publication uses only the code actually emitted
+for required tests, and complete result hits never enter this runtime consumer.
+
 ### Object Cache Store
 
+Native procedure publication writes a SHA-256-addressed `.rpk` payload and then
+an immutable `.rpk.idx` offer file under the existing module placement. The
+versioned `RPI1` index contains the payload digest followed by specialization
+keys; it shares one payload and producer table across all those keys. Publication
+stages and renames each file independently, payload first. Existing equal files
+are not rewritten. A missing payload, an interrupted publication, an incompatible
+pack, or a digest mismatch is an optional-cache miss. Index files alone never
+authorize body elision. Republication repairs corrupt bytes through the same
+atomic boundary instead of treating damaged optional storage as an invariant.
+
+Loading a module's procedure offers reads only these compact indexes. A key
+lookup loads candidate payloads lazily, checks the digest and pack format, and
+checks observation eligibility and source provenance before installing the hit.
+All accepted payload bytes and decoded tables remain owned by `LoadedPacks`
+until execution is finished; eviction after admission cannot revoke the code.
+Different source-provenance candidates are tested independently. Native test
+publication retains only the union of offered code closures, excluding wrappers
+and test-instrumented code, and names carried constants by content.
+Program-wide CTFE packs use the app's placement when an app is present, as
+optimized program packs do. The app is shared by checking, building and testing;
+an implicit executable platform need not be loaded by a test command. Standalone
+test modules supply their checked artifacts explicitly to the provider.
+
 Dev packs live under `<cache root>/<compiler version>/objects-v<pack format>/
-proc-<domain>-dev/<local|pkg>/<module identity>/<key>.rpk`, and the pack an
+proc-<domain>-dev/<local|pkg>/<module identity>/<payload digest>.rpk`, with
+offers at `<publication key>.rpk.idx`. The pack an
 optimized build files for its program, which each optimized build of the
-program replaces, under `<target>-<opt>/optimized/<identity>.rpk`. Every
-other pack's path is a function of its content, so a writer stages it beside its path in a file it
-alone created (`CoreCtx.writeTempFile`), so two writers never share a partly
-written file, renames it into place, and leaves a pack already present alone; builds with runtime
-safety compare the bytes they would have written with the pack in place. The
+program replaces, lives under `<target>-<opt>/optimized/<identity>.rpk`.
+A writer stages bytes beside their path in a file it alone created
+(`CoreCtx.writeTempFile`) and renames it into place, so two writers never share
+a partly written file. Equal native payloads and indexes retain their files. The
 background sweep (`cache_cleanup.sweep`) deletes every `objects-v*` namespace
 of a format other than the compiler's own, ages the current namespace's
 `local/` packs (rewritten by every edit) and recorded program outputs
@@ -2440,8 +2496,9 @@ sets are combined. Each stage's offers, with everything about its procedures
 they depend on, are gathered as soon as the stage has run, and the stage's
 code is then released: later stages and a runtime consumer read only its
 completed values and their representation metadata, so the levels' code
-never accumulates. The pack is filed beside the root module's
-dev packs under a key derived from the root module's code-generation key,
+never accumulates. The pack is filed under the program's app placement, or
+the root module's placement when there is no app, with an index key derived
+from the root module's code-generation key,
 which covers every module the program's code comes from and no runtime pack
 uses, so an edited program files a new pack beside the old one. The key also
 names the command and the optimization level its program is specialized for:
