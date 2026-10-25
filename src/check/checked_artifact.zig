@@ -37448,10 +37448,11 @@ pub fn inferenceKeyFromModuleEnv(
     platform_requirement_owner: ?u32,
     explicit_roots: []const ExplicitRootRequestInput,
     validation: can.Can.Validation,
+    source_pin_validation: [32]u8,
     missing_public_types: []const []const u8,
 ) [32]u8 {
     var hasher = base.Sha256.init(.{});
-    hasher.update("roc-inference-inputs-v1");
+    hasher.update("roc-inference-inputs-v2");
     hasher.update(&hashModuleSourceInputs(module_env));
     hasher.update(&scope_hash);
     hashByteSlice(&hasher, module_env.module_name);
@@ -37462,6 +37463,7 @@ pub fn inferenceKeyFromModuleEnv(
         hashU32(&hasher, owner);
     } else hasher.update(&.{0});
     hashByteSlice(&hasher, @tagName(validation));
+    hasher.update(&source_pin_validation);
     hashU32(&hasher, @intCast(explicit_roots.len));
     for (explicit_roots) |root| hashExplicitRootRequestInput(&hasher, root);
     const imports = module_env.imports.imports.items.items;

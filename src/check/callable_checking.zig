@@ -1,4 +1,4 @@
-//! Producer-owned stored-constant eligibility of global callables.
+//! Producer-owned stored-constant eligibility of callable definitions.
 //! A rejection propagates to every caller, including every member of a cycle.
 
 const std = @import("std");
@@ -20,6 +20,7 @@ pub const Graph = struct {
     edges: std.ArrayList(Edge) = .empty,
     rejected: std.ArrayList(Id) = .empty,
 
+    /// A graph over `count` callables, all eligible until rejected.
     pub fn init(allocator: Allocator, count: usize) Allocator.Error!Graph {
         if (count > std.math.maxInt(u32)) return error.OutOfMemory;
         const heads = try allocator.alloc(u32, count);
@@ -33,6 +34,7 @@ pub const Graph = struct {
         return .{ .allocator = allocator, .heads = heads, .allowed = allowed, .rejected = rejected };
     }
 
+    /// Free the graph's storage.
     pub fn deinit(self: *Graph) void {
         self.allocator.free(self.heads);
         self.allocator.free(self.allowed);
@@ -40,6 +42,7 @@ pub const Graph = struct {
         self.rejected.deinit(self.allocator);
     }
 
+    /// Record that `caller`'s body reaches `callee`.
     pub fn addDependency(self: *Graph, caller: Id, callee: Id) Allocator.Error!void {
         const index = std.math.cast(u32, self.edges.items.len) orelse return error.OutOfMemory;
         if (index == none) return error.OutOfMemory;
@@ -47,6 +50,7 @@ pub const Graph = struct {
         self.heads[@backingInt(callee)] = index;
     }
 
+    /// Mark a callable whose own body is ineligible.
     pub fn reject(self: *Graph, id: Id) void {
         if (!self.allowed[@backingInt(id)]) return;
         self.allowed[@backingInt(id)] = false;
@@ -68,6 +72,7 @@ pub const Graph = struct {
         }
     }
 
+    /// The settled eligibility of `id`; valid after `finish`.
     pub fn allowsStoredConst(self: *const Graph, id: Id) bool {
         if (self.rejected.items.len > self.allowed.len) base.invariant("a callable eligibility vertex is rejected at most once", .{});
         return self.allowed[@backingInt(id)];
@@ -97,9 +102,12 @@ test "callable checking propagates observations through cycles and preserves ind
 test "callable checking preserves an unobserved recursive component" {
     var graph = try Graph.init(std.testing.allocator, 2);
     defer graph.deinit();
-    try graph.addDependency(@fromBackingInt(0), @fromBackingInt(1));
-    try graph.addDependency(@fromBackingInt(1), @fromBackingInt(0));
+    // The graph's two definitions, which depend on each other.
+    const first_def: u32 = 0;
+    const second_def: u32 = 1;
+    try graph.addDependency(@fromBackingInt(first_def), @fromBackingInt(second_def));
+    try graph.addDependency(@fromBackingInt(second_def), @fromBackingInt(first_def));
     graph.finish();
-    try std.testing.expect(graph.allowsStoredConst(@fromBackingInt(0)));
-    try std.testing.expect(graph.allowsStoredConst(@fromBackingInt(1)));
+    try std.testing.expect(graph.allowsStoredConst(@fromBackingInt(first_def)));
+    try std.testing.expect(graph.allowsStoredConst(@fromBackingInt(second_def)));
 }

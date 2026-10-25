@@ -5359,6 +5359,7 @@ pub const Coordinator = struct {
                 .platform_requirements = platform_surface,
                 .explicit_roots = explicit_roots,
                 .validation = mod.validation,
+                .source_pin_validation = canonicalized_cache_entry.pinValidationHash(mod.has_source_version_pin, self.source_pin_version),
             },
         });
     }
@@ -6738,6 +6739,7 @@ pub const Coordinator = struct {
             if (task.platform_requirements) |surface| surface.context else null,
             task.explicit_roots,
             task.validation,
+            task.source_pin_validation,
             ctfe_options,
             .{ .explicit = task.deferred_imports },
             task.missing_public_types,
@@ -10348,11 +10350,18 @@ test "Coordinator corrupt checked module cache entries compile from source" {
     defer allocator.free(checked_module_cache_dir);
     const overwritten = try overwriteFilesUnderDir(allocator, checked_module_cache_dir, "not a checked module cache entry");
     try std.testing.expect(overwritten > 0);
+    // Inference entries also restore checked environments; corrupting them as
+    // well leaves source as the only admissible input.
+    const inference_cache_dir = try config.getInferenceCacheDir(allocator);
+    defer allocator.free(inference_cache_dir);
+    const overwritten_inference = try overwriteFilesUnderDir(allocator, inference_cache_dir, "not an inference cache entry");
+    try std.testing.expect(overwritten_inference > 0);
 
     const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
     try std.testing.expectEqual(@as(u32, 0), second.build.cache_hits);
     try std.testing.expect(second.build.modules_compiled > 0);
     try std.testing.expect(second.cache.invalidations > 0);
+    try std.testing.expect(second.cache.inference_invalidations > 0);
 }
 
 test "Coordinator corrupt checked module cache env relocations compile from source" {
@@ -10371,6 +10380,12 @@ test "Coordinator corrupt checked module cache env relocations compile from sour
     defer allocator.free(checked_module_cache_dir);
     const corrupted = try corruptCheckedModuleEnvIdentBytesLens(allocator, checked_module_cache_dir);
     try std.testing.expect(corrupted > 0);
+    // Inference entries also restore checked environments; corrupting them as
+    // well leaves source as the only admissible input.
+    const inference_cache_dir = try config.getInferenceCacheDir(allocator);
+    defer allocator.free(inference_cache_dir);
+    const overwritten_inference = try overwriteFilesUnderDir(allocator, inference_cache_dir, "not an inference cache entry");
+    try std.testing.expect(overwritten_inference > 0);
 
     const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
     try std.testing.expect(second.build.modules_compiled > 0);

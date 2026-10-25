@@ -13890,13 +13890,20 @@ const callable_checking = @import("callable_checking.zig");
 /// The declaration/body producer establishes foreign-callable eligibility.
 /// Only local callee edges enter the fixed point; imported callees already
 /// have completed facts. The scan does no inference or type-graph mutation.
+///
+/// A callable reference resolves either to a module-global definition or,
+/// through a resolved associated lookup, to a method binding's definition,
+/// which a block-local nominal type owns inside a body. Both are vertices.
 fn publishCallableCheckingFacts(self: *Self) Allocator.Error!void {
-    const defs = self.cir.store.sliceDefs(self.cir.global_value_defs);
-    var graph = try callable_checking.Graph.init(self.gpa, defs.len);
-    defer graph.deinit();
+    var domain: std.ArrayList(CIR.Def.Idx) = .empty;
+    defer domain.deinit(self.gpa);
     var ids = collections.DenseMap(CIR.Def.Idx, callable_checking.Id).init(self.gpa);
     defer ids.deinit();
-    for (defs, 0..) |def, i| try ids.put(def, @fromBackingInt(@as(u32, @intCast(i))));
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def| try self.addCallableCheckingVertex(&domain, &ids, def);
+    for (self.cir.method_defs.entries.items) |entry| try self.addCallableCheckingVertex(&domain, &ids, entry.value.def_idx);
+    const defs = domain.items;
+    var graph = try callable_checking.Graph.init(self.gpa, defs.len);
+    defer graph.deinit();
 
     var context = HoistedDependencyContext{};
     defer context.deinit(self.gpa);
@@ -13930,6 +13937,18 @@ fn publishCallableCheckingFacts(self: *Self) Allocator.Error!void {
     }.lessThan);
     self.cir.callable_checking_facts.deinit(self.cir.gpa);
     self.cir.callable_checking_facts = facts;
+}
+
+fn addCallableCheckingVertex(
+    self: *Self,
+    domain: *std.ArrayList(CIR.Def.Idx),
+    ids: *collections.DenseMap(CIR.Def.Idx, callable_checking.Id),
+    def: CIR.Def.Idx,
+) Allocator.Error!void {
+    const entry = try ids.getOrPut(def);
+    if (entry.found_existing) return;
+    entry.value_ptr.* = @fromBackingInt(std.math.cast(u32, domain.items.len) orelse return error.OutOfMemory);
+    try domain.append(self.gpa, def);
 }
 
 fn hoistedRootCalleeAllowsStoredConst(
@@ -14003,7 +14022,7 @@ const StoredConstScan = struct {
                 }
                 if (scan.publication) |publication| {
                     const callee = publication.ids.get(callable_def.def) orelse
-                        base.invariant("a callable dependency resolves to a published global definition", .{});
+                        base.invariant("a callable dependency resolves to a published callable definition", .{});
                     try publication.graph.addDependency(publication.caller, callee);
                     return .{ .value = true };
                 }

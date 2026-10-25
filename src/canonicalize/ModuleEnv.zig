@@ -888,8 +888,9 @@ pub const BindingScheme = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
-/// Import-facing eligibility of a module-global callable for stored constants.
-/// Checking publishes one row per global definition, ordered by definition id.
+/// Import-facing eligibility of a callable definition for stored constants.
+/// Checking publishes one row per module-global definition and per method
+/// binding's definition, ordered by definition id.
 /// The body and its transitive callee dependencies are owned by that checker.
 pub const CallableCheckingFact = extern struct {
     def: CIR.Def.Idx,
@@ -1069,7 +1070,7 @@ top_level_demand_dependencies_ready: bool,
 /// Demand"): functions whose bodies can, and definitions holding values.
 /// Checking produces it with the strict-demand relation; importers read it.
 invoking_defs: collections.SafeList(CIR.Def.Idx),
-/// Exact stored-constant eligibility of each global callable, published after
+/// Exact stored-constant eligibility of each global or method callable, published after
 /// checking settles its body. Importers consume this instead of scanning CIR.
 callable_checking_facts: CallableCheckingFact.SafeList,
 checking_dependency: CheckingDependency,
@@ -1664,8 +1665,9 @@ pub fn defInvokes(self: *const Self, def_idx: CIR.Def.Idx) bool {
     return false;
 }
 
-/// Import-facing stored-constant eligibility. Every global definition has a
-/// producer row, including rejected definitions; absence is a compiler bug.
+/// Import-facing stored-constant eligibility. Every global definition and every
+/// method binding's definition has a producer row, including rejected
+/// definitions; absence is a compiler bug.
 pub fn callableAllowsStoredConst(self: *const Self, def_idx: CIR.Def.Idx) bool {
     const facts = self.callable_checking_facts.items.items;
     var low: usize = 0;
@@ -1680,7 +1682,7 @@ pub fn callableAllowsStoredConst(self: *const Self, def_idx: CIR.Def.Idx) bool {
             return facts[mid].allows_stored_const != 0;
         }
     }
-    base.invariant("checked global callable has no producer-owned stored-constant eligibility", .{});
+    base.invariant("checked callable definition has no producer-owned stored-constant eligibility", .{});
 }
 
 /// Return the producer-authored low-level implementation for `def_idx`.
