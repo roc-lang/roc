@@ -6607,7 +6607,10 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
             try self.emitFunctionTableIndexConst(table_idx)
         else
             try self.emitNullPtr();
-        try self.emitBoxyCall("roc_boxy_caller_drives");
+        if (self.store.runtime_contract == .specialized)
+            try self.emitBuiltinCall(.native_callable_caller_drives)
+        else
+            try self.emitBoxyCall("roc_boxy_caller_drives");
         try self.emitLocalSet(flag);
         self.caller_drives_local = flag;
     }
@@ -6841,6 +6844,7 @@ fn registerBoxySymbol(self: *Self, name: []const u8, params: []const ValType, re
 /// may already define these symbols in a surgically merged module; relocatable
 /// app objects receive imports that the final wasm link resolves instead.
 pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
+    if (self.store.runtime_contract == .specialized) return;
     try self.registerBoxySymbol("roc_boxy_init_embedded", &.{.i32}, &.{});
     try self.registerBoxySymbol("roc_boxy_static_desc", &.{.i32}, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_static_dict", &.{.i32}, &.{.i32});
@@ -6888,6 +6892,7 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
 }
 
 fn emitBoxyCall(self: *Self, name: []const u8) Allocator.Error!void {
+    if (self.store.runtime_contract != .boxy) wasmInvariantFmt("specialized code requested a Boxy runtime dependency", .{});
     const target = self.tables().boxy_symbol_targets.get(name) orelse wasmInvariantFmt(
         "WASM/codegen invariant violated: Boxy symbol {s} was not registered before proc compilation",
         .{name},
@@ -8820,6 +8825,32 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
         }
     }
 
+    const ret_size = try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(c.ret_layout));
+    const ret_offset = if (ret_size == 0) null else try self.allocStackMemory(ret_size, try self.layoutStorageByteAlign(c.ret_layout));
+    if (self.store.runtime_contract == .specialized) {
+        try self.emitLocalGet(fn_ptr);
+        if (c.deferred) {
+            try self.emitLocalGet(payload_ptr);
+            if (args_ptr) |offset| try self.emitFpOffset(offset) else try self.emitNullPtr();
+            try self.emitI32Const(@intCast(plan.size));
+            try self.emitBuiltinCall(.native_callable_defer);
+        } else {
+            if (ret_offset) |offset| try self.emitFpOffset(offset) else try self.emitNullPtr();
+            if (args_ptr) |offset| try self.emitFpOffset(offset) else try self.emitNullPtr();
+            try self.emitLocalGet(capture_ptr);
+            if (c.reuse_closure) try self.emitLocalGet(payload_ptr) else try self.emitNullPtr();
+            try self.emitBuiltinCall(.native_callable_call);
+        }
+        if (ret_size == 0 or c.deferred) {
+            try self.emitZeroValue(try self.resolveValType(c.ret_layout));
+        } else if (try self.isCompositeLayout(c.ret_layout)) {
+            try self.emitFpOffset(ret_offset.?);
+        } else {
+            try self.emitFpOffset(ret_offset.?);
+            try self.emitLoadOpSized(try self.resolveValType(c.ret_layout), ret_size, 0);
+        }
+        return;
+    }
     const arg_descs_ptr = if (arg_desc_refs.len == 0)
         null
     else
@@ -8837,8 +8868,6 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
         }
     }
 
-    const ret_size = try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(c.ret_layout));
-    const ret_offset = if (ret_size == 0) null else try self.allocStackMemory(ret_size, try self.layoutStorageByteAlign(c.ret_layout));
     if (c.deferred) {
         // The runtime records the call; whoever awaits this procedure's
         // result makes it, so the value pushed here is never read.
@@ -8928,7 +8957,7 @@ fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx
     }
     // The descriptor a pending call returns replaces the statement's own,
     // which stays in place when nothing is pending.
-    const out_desc_ptr = try self.allocBoxyOutDescPtr();
+    const out_desc_ptr = if (self.store.runtime_contract == .boxy) try self.allocBoxyOutDescPtr() else 0;
     if (out_desc) |desc_local| {
         try self.emitProcLocal(desc_local);
         try self.emitStoreToMemSized(out_desc_ptr, 0, .i32, 4);
@@ -8943,10 +8972,14 @@ fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx
         self.currentCode().append(self.allocator, @backingInt(BlockType.void)) catch return error.OutOfMemory;
     }
     if (slot_local) |slot| try self.emitLocalGet(slot) else try self.emitNullPtr();
-    try self.emitLocalGet(out_desc_ptr);
-    if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.emitI32Const(@intCast(@backingInt(runtime_layout)));
-    try self.emitBoxyCall("roc_boxy_drive_pending");
+    if (self.store.runtime_contract == .specialized) {
+        try self.emitBuiltinCall(.native_callable_drive);
+    } else {
+        try self.emitLocalGet(out_desc_ptr);
+        if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
+        try self.emitI32Const(@intCast(@backingInt(runtime_layout)));
+        try self.emitBoxyCall("roc_boxy_drive_pending");
+    }
     if (drive == .unless_caller_drives) {
         self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     }
@@ -9000,7 +9033,7 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
         );
     };
     const on_drop_table_idx = try self.erasedCallableOnDropTableIndex(c.on_drop);
-    const metadata_offset: u32 = @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size));
+    const metadata_offset: u32 = if (self.store.runtime_contract == .boxy) @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size)) else 0;
     const payload_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     if (c.reuse) |reuse| {
         const reuse_ptr = try self.emitProcLocalToNewLocal(reuse, .i32);
@@ -9069,15 +9102,16 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
         }
     }
 
-    try self.emitLocalGet(payload_ptr);
-    if (c.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.emitStoreOpSized(
-        .i32,
-        4,
-        @intCast(builtins.erased_callable.capture_offset + metadata_offset + @offsetOf(builtins.erased_callable.CompilerMetadata, "result_desc")),
-    );
-    try self.emitErasedProcRegistration(c.proc, table_idx, metadata_offset);
-
+    if (self.store.runtime_contract == .boxy) {
+        try self.emitLocalGet(payload_ptr);
+        if (c.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
+        try self.emitStoreOpSized(
+            .i32,
+            4,
+            @intCast(builtins.erased_callable.capture_offset + metadata_offset + @offsetOf(builtins.erased_callable.CompilerMetadata, "result_desc")),
+        );
+        try self.emitErasedProcRegistration(c.proc, table_idx, metadata_offset);
+    }
     try self.emitLocalGet(payload_ptr);
 }
 
@@ -9085,6 +9119,7 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
 /// metadata with the Boxy runtime under its function table index, the value
 /// stored at an erased callable's function-pointer field.
 fn emitErasedProcRegistration(self: *Self, proc_id: LIR.LirProcSpecId, table_idx: u32, metadata_offset: u32) Allocator.Error!void {
+    if (self.store.runtime_contract == .specialized) return;
     const proc_spec = self.store.getProcSpec(proc_id);
     try self.emitFunctionTableIndexConst(table_idx);
     try self.emitI32Const(@intCast(@backingInt(self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout))));
@@ -9150,7 +9185,7 @@ fn boxyCaptureDropTableIndex(self: *Self, capture_layout: layout.Idx, desc_field
 }
 
 fn emitFreshErasedCallablePayload(self: *Self, payload_ptr: u32, capture_size: u32) Allocator.Error!void {
-    const payload_size = builtins.erased_callable.compilerPayloadSize(capture_size);
+    const payload_size = if (self.store.runtime_contract == .boxy) builtins.erased_callable.compilerPayloadSize(capture_size) else builtins.erased_callable.payloadSize(capture_size);
     try self.emitHeapAllocWithRefcountConst(
         @intCast(payload_size),
         builtins.erased_callable.payload_alignment,
@@ -17849,6 +17884,7 @@ test "a metadata-only descriptor out local binds once and reads back that slot" 
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
     defer store.deinit();
+    store.runtime_contract = .boxy;
     var layouts = try layout.Store.init(allocator, .u32);
     defer layouts.deinit();
 

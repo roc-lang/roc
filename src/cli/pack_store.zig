@@ -103,12 +103,21 @@ pub const Store = struct {
         };
     }
 
-    /// Record the runtime output of the program `key` names. A record
-    /// already present holds the same output, and is left alone.
+    /// Atomically record the runtime output of the program `key` names.
+    /// This also replaces a corrupt record after a cache miss.
     pub fn writeProgram(self: *const Store, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
         const path = try self.programPath(key);
         defer self.allocator.free(path);
-        try self.writePath(path, bytes);
+        self.roc_ctx.makePath(std.fs.path.dirname(path).?) catch return error.PackWriteFailed;
+        const staging = self.roc_ctx.writeTempFile(self.allocator, path, bytes) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.PackWriteFailed,
+        };
+        defer self.allocator.free(staging);
+        defer self.roc_ctx.deleteFile(staging) catch {};
+        // Records are small checksummed manifests. Replacing a corrupt record
+        // repairs a miss, and never changes the immutable object it names.
+        self.roc_ctx.rename(staging, path) catch return error.PackWriteFailed;
     }
 
     /// The object pack an optimized build of the program whose root module

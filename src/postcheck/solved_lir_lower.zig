@@ -305,6 +305,13 @@ pub fn runBorrowed(
     try lowerer.writeRuntimeSchemas();
     lowerer.result.finishExpectSites();
 
+    // This boundary checks producer-owned columns, never scans the program.
+    inline for (@typeInfo(LirProgram.Result).@"struct".field_names) |field_name| {
+        if (comptime std.mem.startsWith(u8, field_name, "boxy_") and !std.mem.eql(u8, field_name, "boxy_frozen_method_origins")) {
+            if (@field(lowerer.result, field_name).items.len != 0) Common.invariant("LSS constructed a Boxy side table");
+        }
+    }
+    if (lowerer.result.boxy_frozen_method_origins.count() != 0) Common.invariant("LSS constructed Boxy frozen callable metadata");
     return lowerer.finish();
 }
 
@@ -516,10 +523,8 @@ const CompletedFnBodyShard = struct {
     features: WorkerBodyFeatures,
     discovered_fns: []Type.FnId,
     folded_map_matches: []Lifted.FoldedMatch,
-    erased_arg_layouts: std.ArrayList(layout.Idx),
 
     fn deinit(self: *CompletedFnBodyShard) void {
-        self.erased_arg_layouts.deinit(self.allocator);
         self.allocator.free(self.folded_map_matches);
         self.allocator.free(self.discovered_fns);
         self.store.deinit();
@@ -1936,7 +1941,6 @@ const Lowerer = struct {
         worker.allocator = allocator;
         worker.post_check_executor = null;
         worker.result.store = store;
-        worker.result.boxy_erased_arg_layouts = .empty;
         worker.inline_scope_rebases = workspace.inline_scope_rebases;
         worker.folded_map_matches = .empty;
         worker.captures = workspace.captures;
@@ -1989,7 +1993,6 @@ const Lowerer = struct {
     fn deinitFnBodyWorker(self: *Lowerer, workspace: *FnBodyWorkspace, deinit_store: bool) void {
         self.deinitPackedPlans();
         self.expr_context_tys.deinit();
-        self.result.boxy_erased_arg_layouts.deinit(self.allocator);
         self.worker_discovered_fns.deinit(self.allocator);
         self.folded_map_matches.deinit(self.allocator);
         self.inline_scope_rebases.clearRetainingCapacity();
@@ -2091,9 +2094,7 @@ const Lowerer = struct {
             .features = worker.worker_features,
             .discovered_fns = discovered_fns,
             .folded_map_matches = folded_map_matches,
-            .erased_arg_layouts = worker.result.boxy_erased_arg_layouts,
         };
-        worker.result.boxy_erased_arg_layouts = .empty;
         return context;
     }
 
@@ -2745,12 +2746,10 @@ const Lowerer = struct {
             metrics.worker_loop_tasks_committed +|= @intFromBool(shard.features.loop);
         }
         try self.erased_owner_states.ensureUnusedCapacity(self.allocator, body_local_count);
-        try self.result.boxy_erased_arg_layouts.ensureUnusedCapacity(self.allocator, shard.erased_arg_layouts.items.len);
         const appended = self.result.store.appendBodyShard(
             .{
                 .store = &shard.store,
                 .prefix = shard.prefix,
-                .erased_arg_layout_base = @intCast(self.result.boxy_erased_arg_layouts.items.len),
             },
             shard.body,
             shard.frame_locals,
@@ -2760,7 +2759,6 @@ const Lowerer = struct {
             error.UnsupportedShardMetadata => Common.invariant("validated Solved-LIR body shard gained unsupported metadata"),
             error.InvalidBodyPrefix => Common.invariant("validated Solved-LIR body shard lost its frozen prefix"),
         };
-        self.result.boxy_erased_arg_layouts.appendSliceAssumeCapacity(shard.erased_arg_layouts.items);
         for (0..body_local_count) |_| {
             self.erased_owner_states.appendAssumeCapacity(.pending);
         }
@@ -3308,10 +3306,6 @@ const Lowerer = struct {
         };
         const args_span = try self.result.store.addLocalSpan(arg_locals);
         const ret_layout = try self.layoutOfType(entry.ret);
-        const erased_arg_layouts = if (spec.abi == .erased)
-            try self.appendErasedArgumentLayouts(arg_locals[0..lifted_args.len])
-        else
-            LIR.BoxySpan.empty();
         const erased_reuse_arg = switch (spec.abi) {
             .erased => arg_locals[lifted_args.len + 1],
             .finite => if (spec.return_reuse.enabled())
@@ -3335,7 +3329,6 @@ const Lowerer = struct {
                 null,
             .body = null,
             .ret_layout = ret_layout,
-            .erased_arg_layouts = erased_arg_layouts,
             .erased_capture_arg = if (spec.abi == .erased) arg_locals[lifted_args.len] else null,
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
@@ -3399,19 +3392,6 @@ const Lowerer = struct {
         entry.proc_owner = fn_id;
         self.fn_entries.items[index] = entry;
         return proc;
-    }
-
-    fn appendErasedArgumentLayouts(self: *Lowerer, args: []const LIR.LocalId) Common.LowerError!LIR.BoxySpan {
-        if (args.len == 0) return .{};
-        const start = self.result.boxy_erased_arg_layouts.items.len;
-        for (args) |arg| {
-            const local_layout = self.result.store.getLocal(arg).layout_idx;
-            try self.result.boxy_erased_arg_layouts.append(
-                self.allocator,
-                self.result.layouts.runtimeRepresentationLayoutIdx(local_layout),
-            );
-        }
-        return .{ .start = @intCast(start), .len = @intCast(args.len) };
     }
 
     fn sourceFnForSymbol(self: *const Lowerer, symbol: Common.Symbol) Lifted.FnId {
@@ -9161,7 +9141,6 @@ const Lowerer = struct {
             .data = try self.result.store.addStmtRow(LIR.ErasedCallData, .{
                 .closure = callee,
                 .args = try self.result.store.addLocalSpan(args.ids),
-                .arg_layouts = try self.appendErasedArgumentLayouts(args.ids),
                 .arg_plan = try self.erasedCallArgsPlan(args.ids),
                 .reuse_closure = reuse_closure,
                 .reuse_source = if (reuse_closure) callee else null,

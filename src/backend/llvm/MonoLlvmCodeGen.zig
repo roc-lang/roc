@@ -2876,7 +2876,10 @@ pub const MonoLlvmCodeGen = struct {
             // The runtime names the callable it invokes by the function
             // pointer callable values hold, which is this procedure's.
             const own_fn = self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
-            const flag = try self.callBoxy("roc_boxy_caller_drives", .i8, &.{try self.ptrType()}, &.{own_fn.toValue(builder)});
+            const flag = if (self.store.runtime_contract == .specialized)
+                try self.callBuiltin(.native_callable_caller_drives, .i8, &.{try self.ptrType()}, &.{own_fn.toValue(builder)})
+            else
+                try self.callBoxy("roc_boxy_caller_drives", .i8, &.{try self.ptrType()}, &.{own_fn.toValue(builder)});
             _ = wip.store(.normal, flag, flag_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
             self.caller_drives_flag = flag_ptr;
         }
@@ -4606,6 +4609,7 @@ pub const MonoLlvmCodeGen = struct {
         args: []const LlvmBuilder.Value,
     ) Error!LlvmBuilder.Value {
         const builder, const wip = try self.builderAndWip();
+        if (self.store.runtime_contract != .boxy) llvmInvariantFmt("specialized code requested a Boxy runtime dependency", .{});
         self.boxy_runtime_used = true;
         const fn_ty = builder.fnType(ret_type, param_types, .normal) catch return error.OutOfMemory;
         const func = try self.declareExternSymbol(name, fn_ty);
@@ -5249,7 +5253,7 @@ pub const MonoLlvmCodeGen = struct {
         const reuse_ptr = if (reuse_closure) closure_ptr else builder.nullValue(ptr_ty) catch return error.OutOfMemory;
         const arg_locals = self.store.getLocalSpan(args);
         const arg_desc_locals = self.store.getLocalSpan(arg_descs);
-        if (arg_locals.len != arg_layouts.len) {
+        if (self.store.runtime_contract == .boxy and arg_locals.len != arg_layouts.len) {
             llvmInvariantFmt(
                 "erased call passed {d} arguments but {d} runtime layouts",
                 .{ arg_locals.len, arg_layouts.len },
@@ -5284,6 +5288,15 @@ pub const MonoLlvmCodeGen = struct {
             try self.packErasedArgsFromLocals(buf, arg_locals, source_layouts, offsets);
             break :blk buf;
         };
+        if (self.store.runtime_contract == .specialized) {
+            if (deferred) {
+                try self.callBuiltinVoid(.native_callable_defer, &.{ ptr_ty, ptr_ty, ptr_ty, self.ptrSizedIntType() }, &.{ fn_ptr, closure_ptr, args_buf, try self.boxyInt(self.ptrSizedIntType(), self.store.getErasedCallArgsPlan(arg_plan).size) });
+            } else {
+                const ret_ptr = if (self.slot(target).size == 0) try self.boxyNullPtr() else self.slot(target).ptr;
+                try self.callBuiltinVoid(.native_callable_call, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{ fn_ptr, ret_ptr, args_buf, capture_ptr, reuse_ptr });
+            }
+            return;
+        }
         const arg_descs_ptr = if (arg_desc_locals.len == 0)
             builder.nullValue(ptr_ty) catch return error.OutOfMemory
         else blk: {
@@ -5371,14 +5384,6 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
-        const result_desc_ptr = if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr();
-        // The descriptor a pending call returns replaces the statement's
-        // own, which stays in place when nothing is pending.
-        const out_desc_ptr = if (out_desc) |desc_local|
-            self.slot(desc_local).ptr
-        else
-            try self.boxyOutDescPtr("boxy_driven_result_desc");
-
         var done_block: ?LlvmBuilder.Function.Block.Index = null;
         if (drive == .unless_caller_drives) {
             const flag_ptr = self.caller_drives_flag orelse
@@ -5394,16 +5399,28 @@ pub const MonoLlvmCodeGen = struct {
             builder.nullValue(ptr_ty) catch return error.OutOfMemory
         else
             self.slot(target).ptr;
-        try self.callBoxyVoid(
-            "roc_boxy_drive_pending",
-            &.{ ptr_ty, ptr_ty, ptr_ty, .i32 },
-            &.{
-                ret_ptr,
-                out_desc_ptr,
-                result_desc_ptr,
-                try self.boxyInt(.i32, @backingInt(self.layouts().runtimeRepresentationLayoutIdx(self.localLayout(target)))),
-            },
-        );
+        if (self.store.runtime_contract == .specialized) {
+            try self.callBuiltinVoid(.native_callable_drive, &.{ptr_ty}, &.{ret_ptr});
+        } else {
+            const result_desc_ptr = if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr();
+            // The descriptor a pending call returns replaces the statement's
+            // own, which stays in place when nothing is pending.
+            const out_desc_ptr = if (out_desc) |desc_local|
+                self.slot(desc_local).ptr
+            else
+                try self.boxyOutDescPtr("boxy_driven_result_desc");
+
+            try self.callBoxyVoid(
+                "roc_boxy_drive_pending",
+                &.{ ptr_ty, ptr_ty, ptr_ty, .i32 },
+                &.{
+                    ret_ptr,
+                    out_desc_ptr,
+                    result_desc_ptr,
+                    try self.boxyInt(.i32, @backingInt(self.layouts().runtimeRepresentationLayoutIdx(self.localLayout(target)))),
+                },
+            );
+        }
         if (done_block) |block| {
             _ = wip.br(block) catch return error.OutOfMemory;
             wip.cursor = .{ .block = block };
@@ -5427,8 +5444,8 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
         const capture_size = if (capture_layout) |idx| self.layoutByteSize(idx) else 0;
-        const metadata_offset: u32 = @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size));
-        const total_capture_size: u32 = metadata_offset + @sizeOf(builtins.erased_callable.CompilerMetadata);
+        const metadata_offset: u32 = if (self.store.runtime_contract == .boxy) @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size)) else 0;
+        const total_capture_size: u32 = if (self.store.runtime_contract == .boxy) metadata_offset + @sizeOf(builtins.erased_callable.CompilerMetadata) else capture_size;
         const proc_fn = self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
         const null_ptr = builder.nullValue(ptr_ty) catch return error.OutOfMemory;
         const on_drop_value = switch (on_drop) {
@@ -5461,10 +5478,12 @@ pub const MonoLlvmCodeGen = struct {
                     try self.copyBytes(capture_src, self.slot(capture_local).ptr, capture_size, self.alignmentForLayout(capture_layout.?));
                 }
             }
-            try self.storePointer(
-                try self.offsetPtr(capture_src, metadata_offset + @offsetOf(builtins.erased_callable.CompilerMetadata, "result_desc")),
-                metadata_desc,
-            );
+            if (self.store.runtime_contract == .boxy) {
+                try self.storePointer(
+                    try self.offsetPtr(capture_src, metadata_offset + @offsetOf(builtins.erased_callable.CompilerMetadata, "result_desc")),
+                    metadata_desc,
+                );
+            }
             const update_mode = if (reuse_unique) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
             break :blk try self.callBuiltin(
                 .erased_callable_repack,
@@ -5480,7 +5499,7 @@ pub const MonoLlvmCodeGen = struct {
                 },
             );
         } else blk: {
-            const payload_size: u64 = builtins.erased_callable.compilerPayloadSize(capture_size);
+            const payload_size: u64 = if (self.store.runtime_contract == .boxy) builtins.erased_callable.compilerPayloadSize(capture_size) else builtins.erased_callable.payloadSize(capture_size);
             const fresh_ptr = try self.callBuiltin(
                 .allocate_with_refcount,
                 ptr_ty,
@@ -5499,10 +5518,12 @@ pub const MonoLlvmCodeGen = struct {
                     try self.copyBytes(capture_dst, self.slot(capture_local).ptr, capture_size, self.alignmentForLayout(capture_layout.?));
                 }
             }
-            try self.storePointer(
-                try self.offsetPtr(fresh_ptr, builtins.erased_callable.capture_offset + metadata_offset + @offsetOf(builtins.erased_callable.CompilerMetadata, "result_desc")),
-                metadata_desc,
-            );
+            if (self.store.runtime_contract == .boxy) {
+                try self.storePointer(
+                    try self.offsetPtr(fresh_ptr, builtins.erased_callable.capture_offset + metadata_offset + @offsetOf(builtins.erased_callable.CompilerMetadata, "result_desc")),
+                    metadata_desc,
+                );
+            }
             break :blk fresh_ptr;
         };
         try self.emitErasedProcRegistration(proc_id, proc_fn, metadata_offset);
@@ -5513,6 +5534,7 @@ pub const MonoLlvmCodeGen = struct {
     /// metadata with the Boxy runtime under its code address, the value stored
     /// at an erased callable's function-pointer field.
     fn emitErasedProcRegistration(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc_fn: LlvmBuilder.Function.Index, metadata_offset: u32) Error!void {
+        if (self.store.runtime_contract == .specialized) return;
         const builder = self.builder orelse return error.CompilationFailed;
         const proc_spec = self.store.getProcSpec(proc_id);
         try self.callBoxyVoid(
