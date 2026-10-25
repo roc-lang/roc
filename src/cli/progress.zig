@@ -51,9 +51,10 @@ const row_marker_width: usize = 4;
 /// Maximum number of top-level phases a single operation reports.
 const max_phases: usize = 16;
 const max_subphases: usize = 25;
-// Shared lowering and a runtime continuation each report eight lowering groups
-// and native emission; tests also report result-cache counts.
-const max_counter_groups: usize = 2 * 9 + 1;
+// Shared lowering and a runtime continuation each report nine lowering groups
+// and native emission. Also reserve compile-time roots, test result admission,
+// and dev test emission.
+const max_counter_groups: usize = 2 * 10 + 3;
 const max_counters_per_group: usize = 32;
 /// Rows in the ranked timing list printed after the phases.
 const max_ranked_timings: usize = 10;
@@ -1012,12 +1013,16 @@ test "counter capacity includes shared runtime native and test groups" {
     });
     defer reporter.deinit();
     reporter.start();
-    // Eight lowering groups plus native emission for each consumer.
-    for (0..18) |_| reporter.recordCounters("Compiler work", &.{.{ .name = "Count", .count = 1 }});
+    // Nine lowering groups plus native emission for each consumer.
+    for (0..20) |_| reporter.recordCounters("Compiler work", &.{.{ .name = "Count", .count = 1 }});
+    reporter.recordCounters("Compile-time roots", &.{.{ .name = "Evaluated", .count = 2 }});
     reporter.recordCounters("Final test cache", &.{.{ .name = "Hits", .count = 7 }});
+    reporter.recordCounters("Dev test emission", &.{.{ .name = "Procedures emitted", .count = 3 }});
     reporter.finish();
-    try testing.expectEqual(@as(usize, 18), std.mem.count(u8, buf.written(), "Compiler work"));
+    try testing.expectEqual(@as(usize, 20), std.mem.count(u8, buf.written(), "Compiler work"));
     try testing.expect(std.mem.find(u8, buf.written(), "Final test cache") != null);
+    try testing.expect(std.mem.find(u8, buf.written(), "Compile-time roots") != null);
+    try testing.expect(std.mem.find(u8, buf.written(), "Dev test emission") != null);
 }
 
 test "static breakdown lists every phase with the timings flag" {

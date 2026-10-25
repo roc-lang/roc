@@ -23692,6 +23692,45 @@ tested root reaches into a dependency is compiled and linked the same way.
 
 ## Optimized Test Execution
 
+Result-cache admission precedes runtime root construction and checked-program
+finalization. The complete ordered reporting plan remains command-owned; its
+execution subset contains only roots of modules whose structured result bundle
+missed admission. Subset request positions are distinct from original result
+slots. Each request retains its checked module identity, original module index,
+source root index and order, and result slot through `RootTestPlanMetadata`.
+Consumers select module roots by that explicit module index, never by ranges
+of result slots or generated symbol names.
+
+The explicit subset is also the runtime demand of compile-time finalization,
+including its normalization specialization from completed stored values. A
+validated cached result discharges that test's runtime observation obligation;
+it does not discharge non-test compile-time obligations. The finalizer still
+evaluates pending compile-time roots and replays stored diagnostics and debug
+observations under the checking contract, even when the subset is empty. An
+explicit empty subset has no runtime consumer and performs no test runtime
+preparation. It must not turn back into the program's default root set.
+A source file with no test plan keeps ordinary checking without installing a
+runtime configuration; a plain type module need not have an executable owner.
+
+Cached test roots remain explicit compile-time discovery obligations, separate
+from execution demand. The established `LiteralDemand` analysis selects only
+those that can register specialization-dependent literal conversions. These
+follow runtime requests as discovery roots in the shared producer, with no
+test-plan execution metadata. Their literal conversions still report rejected
+literals and replay compile-time observations; the cached test entrypoints
+never run. Both initial evaluation and normalization use this separation.
+Runtime continuation selects only execution-subset positions, so discovery
+bodies cannot enlarge its LIR or native image. Discovery analysis over checked
+metadata is reported separately from specialized bodies and emitted code.
+
+Only the subset's required closure reaches runtime LIR, ARC, frozen static
+data and native emission. All uncached modules borrow one program and image;
+their expect-counter partitions retain the subset program's source-site table.
+Cached observations retain their original source identities and combine with
+fresh observations only during the existing deterministic reporting merge.
+Work counters distinguish the complete reporting plan and cache admission
+from the procedures and entrypoints actually emitted for execution.
+
 `roc test --opt=size` and `roc test --opt=speed` use one command-level test
 plan for all discovered test roots in the app and its imports. The plan is
 explicit compiler data. It owns the stable source-order display order, the
