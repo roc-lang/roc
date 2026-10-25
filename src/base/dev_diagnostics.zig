@@ -36,6 +36,8 @@ pub const Var = enum {
     dev_artifact_roundtrip,
     /// Append one record to the named file per in-process LLVM object compile.
     test_llvm_object_compile_count_file,
+    /// Print deterministic work counters for one test command.
+    test_command_work,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
@@ -50,9 +52,32 @@ pub const Var = enum {
             .dev_pack_hits => "ROC_DEV_PACK_HITS",
             .dev_artifact_roundtrip => "ROC_DEV_ARTIFACT_ROUNDTRIP",
             .test_llvm_object_compile_count_file => "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE",
+            .test_command_work => "ROC_TEST_COMMAND_WORK",
         };
     }
 };
+
+/// Stage-owned counters used to prove complete-command reuse skips producers.
+pub const TestWork = enum {
+    specialization,
+    ctfe_execution,
+    second_specialization,
+    runtime_lir,
+    arc,
+    static_data,
+    native_test_procedures,
+    test_root_execution,
+};
+var test_work: [@typeInfo(TestWork).@"enum".field_names.len]std.atomic.Value(u64) = @splat(.init(0));
+
+pub fn countTestWork(counter: TestWork, amount: usize) void {
+    if (!isSet(.test_command_work)) return;
+    _ = test_work[@backingInt(counter)].fetchAdd(amount, .monotonic);
+}
+
+pub fn testWorkCount(counter: TestWork) u64 {
+    return test_work[@backingInt(counter)].load(.monotonic);
+}
 
 /// The variable's value, or null when it is unset or this compiler does not
 /// read developer diagnostics.
