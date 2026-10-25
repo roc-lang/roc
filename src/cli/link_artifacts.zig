@@ -69,7 +69,7 @@ pub const Objects = struct {
     fn findKnown(self: *Objects, id: Identity, expected: ?[]const u8) Allocator.Error!?[]const u8 {
         const cache_path = try self.cachePath(id) orelse return null;
         const path = try std.fs.path.join(self.arena, &.{ self.scratch, try self.name(id) });
-        std.Io.Dir.cwd().hardLink(cache_path, .cwd(), path, self.core.std_io, .{}) catch |err| switch (err) {
+        self.core.hardLink(cache_path, path) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return null,
         };
@@ -132,7 +132,7 @@ pub const Objects = struct {
             // Each invocation's scratch directory gives its staging name a
             // unique identity, even when many writers publish the same object.
             const staging = try std.fmt.allocPrint(self.arena, "{s}.{s}.tmp", .{ cache_path, std.fs.path.basename(self.scratch) });
-            std.Io.Dir.cwd().hardLink(path, .cwd(), staging, self.core.std_io, .{}) catch return path;
+            self.core.hardLink(path, staging) catch return path;
             defer self.core.deleteFile(staging) catch {};
             self.core.rename(staging, cache_path) catch return path;
         }

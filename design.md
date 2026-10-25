@@ -2737,7 +2737,9 @@ namespace: manifests and raw final-link objects both use the output store root.
 Before validating a cached object's length and digest, a build hard-links it
 into its unique scratch directory on the cache filesystem. Those names pin the
 objects through linking and output finalization, independently of cache
-eviction. The invocation holds `link.lock` in that scratch directory; scratch
+eviction. On Windows a pin is a second NTFS name added through
+`FileLinkInformation` without replacement, opened with no data access and every
+sharing mode, so pinning never conflicts with readers or replaces a name. The invocation holds `link.lock` in that scratch directory; scratch
 cleanup skips a held lock, and an abandoned directory ages out after the OS
 releases its owner's lock. Missing, corrupt or incompatible objects are cache
 misses. Manifests publish atomically after the object. The executable is always
