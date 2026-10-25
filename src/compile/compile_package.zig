@@ -497,6 +497,7 @@ pub fn typeCheckModule(
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey,
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
     validation: Can.Validation,
+    source_pin_validation: [32]u8,
     ctfe_options: eval.CompileTimeFinalization.Options,
     deferred_imports: can.ImportResolution.Imports,
     missing_public_types: []const []const u8,
@@ -543,7 +544,7 @@ pub fn typeCheckModule(
         checking_scope.ordinal(requirements.env.contentIdentityHash().?.*)
     else
         null;
-    const inference_key = CheckedArtifact.inferenceKeyFromModuleEnv(env, checking_scope.digest(), requirement_owner, explicit_roots, validation, missing_public_types);
+    const inference_key = CheckedArtifact.inferenceKeyFromModuleEnv(env, checking_scope.digest(), requirement_owner, explicit_roots, validation, source_pin_validation, missing_public_types);
     const loaded = if (inference_cache) |cache| try cache.load(inference_key, env, &checking_scope) else null;
     defer if (loaded) |capsule| capsule.deinit();
 

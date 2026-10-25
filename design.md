@@ -5401,8 +5401,9 @@ the explicitly rejected edges described under Module Completion Boundary.
 
 The inference-result cache stores the solved source environment together with
 the checker-selected publication inputs, before evaluation. Its key includes
-the module's own source inputs, validation and resolution context, and the
-checking dependencies it consumed. Serialized references retain their explicit
+the module's own source inputs, validation (including the source-pin
+validation input canonicalization reported against) and resolution context,
+and the checking dependencies it consumed. Serialized references retain their explicit
 owner and declaration bindings; admission must establish those bindings against
 the current dependency publications. Equality of a signature, a name or an
 incidental node index is never a license to substitute a declaration. Source
@@ -5440,7 +5441,9 @@ publication, reference binding and artifact publication, so interface creation
 cannot hide a second checking pass.
 
 Stored-constant eligibility of a foreign callable is a producer fact. Checking
-scans each module-global definition's own body once, records the exact local
+scans the own body of each module-global definition and of each method
+binding's definition (block-local nominal types own method definitions inside
+bodies, and resolved associated lookups reach them) once, records the exact local
 callee edges and current imported eligibility facts, and propagates rejection
 backwards through those edges to a fixed point. A recursive component with no
 rejected body or outgoing dependency is eligible. Importers consume the
