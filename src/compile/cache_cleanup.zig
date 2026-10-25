@@ -28,6 +28,7 @@ pub const Demand = union(enum) {
 
 var active: std.atomic.Value(?*Session) = .init(null);
 
+/// Command-owned maintenance admission state, registered at coordinator safe points.
 pub const Session = struct {
     store: artifacts.Store,
     limits: Limits,

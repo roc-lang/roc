@@ -99,8 +99,8 @@ const CheckedModuleCacheRunError = CoordinatorError || eval.BuiltinModules.InitE
     LowLevelOperationsNotFound,
     TestUnexpectedResult,
 };
-const OverwriteFilesUnderDirError = @import("artifact_store.zig").Error || Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || std.Io.Dir.WriteFileError;
-const CorruptCheckedModuleCacheError = @import("artifact_store.zig").Error || Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || std.Io.Dir.ReadFileAllocError || std.Io.Dir.WriteFileError || error{FileNotFound};
+const OverwriteFilesUnderDirError = @import("artifact_store.zig").Error || Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || CoreCtx.WriteError;
+const CorruptCheckedModuleCacheError = @import("artifact_store.zig").Error || Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || CoreCtx.ReadError || CoreCtx.WriteError || error{FileNotFound};
 const TypeCheckedResult = messages.TypeCheckedResult;
 const DiscoveredLocalImport = messages.DiscoveredLocalImport;
 const DiscoveredExternalImport = messages.DiscoveredExternalImport;
@@ -9966,7 +9966,8 @@ fn overwriteFilesUnderDir(allocator: Allocator, root: []const u8, scope: []const
         for (paths) |path| allocator.free(path);
         allocator.free(paths);
     }
-    for (paths) |path| try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = contents });
+    const filesystem = CoreCtx.os(allocator, allocator, std.testing.io);
+    for (paths) |path| try filesystem.writeFile(path, contents);
     return paths.len;
 }
 
@@ -9978,11 +9979,12 @@ fn truncateFilesUnderDir(allocator: Allocator, root: []const u8, scope: []const 
         allocator.free(paths);
     }
     var truncated: usize = 0;
+    const filesystem = CoreCtx.os(allocator, allocator, std.testing.io);
     for (paths) |path| {
-        const contents = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .unlimited);
+        const contents = try filesystem.readFile(path, allocator);
         defer allocator.free(contents);
         if (contents.len == 0) continue;
-        try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = contents[0 .. contents.len - 1] });
+        try filesystem.writeFile(path, contents[0 .. contents.len - 1]);
         truncated += 1;
     }
     return truncated;
@@ -9998,7 +10000,7 @@ fn corruptCheckedModuleEnvIdentBytesLens(allocator: Allocator, root: []const u8,
         @offsetOf(collections.SafeList(u8).Serialized, "len");
 
     const io = std.testing.io;
-    const dir = std.Io.Dir.cwd();
+    const filesystem = CoreCtx.os(allocator, allocator, io);
     const paths = try testCachePaths(allocator, root, checked_module_cache_dir, .checked);
     defer {
         for (paths) |path| allocator.free(path);
@@ -10006,12 +10008,12 @@ fn corruptCheckedModuleEnvIdentBytesLens(allocator: Allocator, root: []const u8,
     }
     var corrupted: usize = 0;
     for (paths) |path| {
-        const bytes = try dir.readFileAlloc(io, path, allocator, .limited(@import("cache_config.zig").Constants.MAX_CACHE_SIZE));
+        const bytes = try filesystem.readFile(path, allocator);
         defer allocator.free(bytes);
         if (bytes.len < env_ident_bytes_len_offset + @sizeOf(u64)) continue;
 
         std.mem.writeInt(u64, bytes[env_ident_bytes_len_offset..][0..8], std.math.maxInt(u64), .little);
-        try dir.writeFile(io, .{ .sub_path = path, .data = bytes });
+        try filesystem.writeFile(path, bytes);
         corrupted += 1;
     }
 

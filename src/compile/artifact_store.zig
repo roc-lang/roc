@@ -10,9 +10,13 @@ const Allocator = std.mem.Allocator;
 const put = catalog.put;
 const get = catalog.get;
 
+/// Storage-format namespace shared by all compiler compatibility identities.
 pub const format_directory = "artifacts-v1";
+/// Fixed number of independently coordinated catalogs.
 pub const shard_count = 16;
+/// One minute in the timestamp units used by retention.
 pub const minute_ns: i64 = 60 * std.time.ns_per_s;
+/// One day in the timestamp units used by retention.
 pub const day_ns: i64 = 24 * 60 * minute_ns;
 
 /// Exhaustive retention policy for compiler-owned artifacts. Sources materialized
@@ -58,7 +62,7 @@ pub const Family = enum(u8) {
     pub fn isPack(self: Family) bool {
         return switch (self) {
             .local_pack, .package_pack, .optimized_pack, .local_discovery, .package_discovery, .program_output => true,
-            else => false,
+            .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .scratch => false,
         };
     }
 
@@ -67,6 +71,7 @@ pub const Family = enum(u8) {
     }
 };
 
+/// Explicit semantic identity, independent of physical payload placement.
 pub const Identity = struct {
     namespace: [32]u8,
     family: Family,
@@ -89,16 +94,20 @@ pub const Identity = struct {
     }
 };
 
+/// Recoverable storage, coordination, and allocation failures.
 pub const Error = catalog.Error || error{ Busy, Missing, Changed, InvalidArtifact, PathTooLong, OutOfMemory };
 
+/// Hash explicit identity components with SHA-256.
 pub fn hashBytes(bytes: []const u8) [32]u8 {
     var result: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(bytes, &result, .{});
     return result;
 }
 
+/// Publication and reclamation phases of an owned physical slot.
 pub const State = enum(u8) { staging, published, retiring };
 
+/// Persisted ownership, retention, and accounting for one payload generation.
 pub const Metadata = struct {
     state: State,
     family: Family,
@@ -161,6 +170,7 @@ pub const Metadata = struct {
     }
 };
 
+/// Shared artifact namespace; operations acquire individual shard ownership.
 pub const Store = struct {
     allocator: Allocator,
     io: Io,
@@ -290,12 +300,12 @@ pub const Store = struct {
         const stem = try slotStem(&stem_buffer, metadata.slot);
         var lease_buffer: [140]u8 = undefined;
         const relative_lease = std.fmt.bufPrint(&lease_buffer, "{s}.lease", .{stem}) catch return error.PathTooLong;
-        const lease = leaseFile(shard.dir, self.io, relative_lease, true, false) catch |err| {
-            if (err == error.Missing or err == error.Busy) {
+        const lease = leaseFile(shard.dir, self.io, relative_lease, true, false) catch |err| switch (err) {
+            error.Missing, error.Busy => {
                 self.allocator.free(path);
                 return null;
-            }
-            return err;
+            },
+            else => return err,
         };
         errdefer lease.close(self.io);
         const file = Dir.cwd().openFile(self.io, path, .{}) catch |err| {
@@ -397,12 +407,10 @@ fn leaseFile(dir: Dir, io: Io, path: []const u8, shared: bool, create: bool) Err
         var status: w.IO_STATUS_BLOCK = undefined;
         var handle: w.HANDLE = undefined;
         const result = w.ntdll.NtCreateFile(&handle, .{ .STANDARD = .{ .SYNCHRONIZE = true }, .GENERIC = .{ .READ = true, .WRITE = !shared } }, &.{ .RootDirectory = dir.handle, .ObjectName = @constCast(&w.UNICODE_STRING.init(wide[0..path.len])) }, &status, null, .{ .NORMAL = true }, if (shared) .{ .READ = true } else .{}, if (create) .OPEN_IF else .OPEN, .{ .NON_DIRECTORY_FILE = true, .IO = .SYNCHRONOUS_NONALERT }, null, 0);
-        return switch (result) {
-            .SUCCESS => .{ .handle = handle, .flags = .{ .nonblocking = false } },
-            .SHARING_VIOLATION => error.Busy,
-            .OBJECT_NAME_NOT_FOUND, .OBJECT_PATH_NOT_FOUND => error.Missing,
-            else => error.IoFailure,
-        };
+        if (result == .SUCCESS) return .{ .handle = handle, .flags = .{ .nonblocking = false } };
+        if (result == .SHARING_VIOLATION) return error.Busy;
+        if (result == .OBJECT_NAME_NOT_FOUND or result == .OBJECT_PATH_NOT_FOUND) return error.Missing;
+        return error.IoFailure;
     } else {
         return (if (create)
             dir.createFile(io, path, .{ .read = true, .truncate = false, .lock = .exclusive, .lock_nonblocking = true })
@@ -415,6 +423,7 @@ fn leaseFile(dir: Dir, io: Io, path: []const u8, shared: bool, create: bool) Err
     }
 }
 
+/// A catalog and its held kernel coordination lock.
 pub const Shard = struct {
     io: Io,
     dir: Dir,
@@ -498,6 +507,7 @@ pub const Shard = struct {
     }
 };
 
+/// Registered unpublished payload whose exclusive lease pins its slot.
 pub const Staging = struct {
     store: *const Store,
     key: catalog.Key,
@@ -549,6 +559,7 @@ pub const Staging = struct {
     }
 };
 
+/// Acquired payload file and shared lease, both owned until deinit.
 pub const Artifact = struct {
     store: *const Store,
     file: Io.File,
@@ -729,7 +740,7 @@ fn drainScratch(shard: *Shard, stem: []const u8, generation: u64) Error!bool {
                 error.FileNotFound => {},
                 else => return error.IoFailure,
             };
-            relative = if (std.mem.lastIndexOfScalar(u8, relative, '/')) |index| relative[0..index] else "";
+            relative = if (std.mem.findScalarLast(u8, relative, '/')) |index| relative[0..index] else "";
         }
     }
     put(u64, &cursor, 8, generation);
@@ -743,6 +754,7 @@ fn drainScratch(shard: *Shard, stem: []const u8, generation: u64) Error!bool {
     return false;
 }
 
+/// Encode a physical slot in a fixed-depth directory fanout.
 pub fn slotStem(buffer: *[128]u8, slot: u64) Error![]const u8 {
     var bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &bytes, slot, .big);
@@ -751,12 +763,14 @@ pub fn slotStem(buffer: *[128]u8, slot: u64) Error![]const u8 {
     }) catch return error.PathTooLong;
 }
 
+/// Order allocation generations lexicographically for resumable traversal.
 pub fn storageKey(generation: u64) catalog.Key {
     var key: catalog.Key = @splat(0);
     std.mem.writeInt(u64, key[0..8], generation, .big);
     return key;
 }
 
+/// Advance a fixed-width ordered cursor; false means the key space ended.
 pub fn advanceKey(key: *catalog.Key) bool {
     var index: usize = key.len;
     while (index != 0) {

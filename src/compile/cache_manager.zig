@@ -161,7 +161,10 @@ pub const CacheManager = struct {
         };
         defer store.deinit();
         var stage = store.reserve(identity(family, key, scope), size, store.now()) catch |err| {
-            if (err == error.Busy) return;
+            switch (err) {
+                error.Busy => return,
+                else => {},
+            }
             self.verboseLog(allocator, "Failed to reserve {s} cache entry for {s}: {}\n", .{ @tagName(kind), name, err });
             self.recordStoreFailureFor(kind);
             return;
@@ -177,7 +180,10 @@ pub const CacheManager = struct {
             return;
         };
         stage.publish() catch |err| {
-            if (err == error.Busy) return;
+            switch (err) {
+                error.Busy => return,
+                else => {},
+            }
             self.verboseLog(allocator, "Failed to publish {s} cache entry for {s}: {}\n", .{ @tagName(kind), name, err });
             self.recordStoreFailureFor(kind);
             return;
@@ -206,7 +212,10 @@ pub const CacheManager = struct {
         var stage = store.reserve(identity(.checked, key, scope), size, store.now()) catch |err| {
             store.deinit();
             self.allocator.destroy(store);
-            if (err != error.Busy) self.recordStoreFailure();
+            switch (err) {
+                error.Busy => {},
+                else => self.recordStoreFailure(),
+            }
             return null;
         };
         self.roc_ctx.writeFileStream(stage.path, stream) catch |err| {

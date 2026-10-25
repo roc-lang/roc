@@ -61,7 +61,7 @@ pub const Store = struct {
         var hash = std.crypto.hash.sha2.Sha256.init(.{});
         hash.update(switch (family) {
             .local_pack, .package_pack, .local_discovery, .package_discovery => self.procedure_root,
-            else => self.root,
+            .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .optimized_pack, .program_output, .scratch => self.root,
         });
         hash.update(&module);
         hash.final(&result.group);
@@ -154,8 +154,10 @@ pub const Store = struct {
             var arena = base.SingleThreadArena.init(self.allocator);
             const bytes = artifact.read(arena.allocator()) catch |err| {
                 arena.deinit();
-                if (err == error.OutOfMemory) return error.OutOfMemory;
-                continue;
+                switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => continue,
+                }
             };
             packs.bytes_loaded +|= bytes.len;
             if (files == .discovery) {
@@ -718,11 +720,11 @@ pub const LoadedPacks = struct {
             var arena = base.SingleThreadArena.init(allocator);
             const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, arena.allocator(), .limited(1024 * 1024 * 1024)) catch |err| {
                 arena.deinit();
-                if (err == error.FileNotFound and input == .cache_offers) continue;
-                return switch (err) {
-                    error.OutOfMemory => error.OutOfMemory,
-                    else => error.PackDirectoryUnreadable,
-                };
+                switch (err) {
+                    error.FileNotFound => if (input == .cache_offers) continue else return error.PackDirectoryUnreadable,
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.PackDirectoryUnreadable,
+                }
             };
             self.bytes_loaded +|= bytes.len;
             switch (files) {

@@ -172,9 +172,6 @@ test "issue 11961: streamed cache publication preserves the old entry on write f
             }
             try writer.writeAll("entry");
         }
-        fn rejectRename(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.RenameError!void {
-            return error.AccessDenied;
-        }
     };
     const gpa = testing.allocator;
     const io = testing.io;
@@ -209,14 +206,14 @@ const FailingCacheFilesystem = struct {
     base: CoreCtx,
     stage: enum { directory, write, publish },
 
-    fn writeFile(ctx: ?*anyopaque, io: std.Io, path: []const u8, bytes: []const u8) CoreCtx.WriteError!void {
+    fn writeFile(ctx: ?*anyopaque, _: std.Io, path: []const u8, bytes: []const u8) CoreCtx.WriteError!void {
         const self: *@This() = @ptrCast(@alignCast(ctx.?));
         if (self.stage == .write) return error.FileTooBig;
         try self.base.writeFile(path, bytes);
         if (self.stage == .publish) {
             const blocked = std.fmt.allocPrint(self.capture.allocator, "{s}.data", .{path[0 .. path.len - ".pending".len]}) catch return error.IoError;
             defer self.capture.allocator.free(blocked);
-            std.Io.Dir.cwd().createDirPath(io, blocked) catch return error.IoError;
+            self.base.makePath(blocked) catch return error.IoError;
         }
     }
 
