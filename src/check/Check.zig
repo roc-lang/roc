@@ -7280,6 +7280,7 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
                 base.invariant("type checker invariant violated: a reported mismatch did not record its root operands", .{});
             mismatch.str_conversion = try self.strConversionFor(mismatch.context, roots.expected, roots.actual);
             try self.noteInterpolationTie(problem_idx);
+            try self.refineMethodTypeMismatch(problem_idx);
         },
         .unified, .suppressed_by_error, .mismatch => {},
     }
@@ -7527,7 +7528,26 @@ fn appendTypeMismatch(
     } });
     try unifier.poisonMethodConflictReceivers(&unify_env);
     try self.noteInterpolationTie(problem_idx);
+    try self.refineMethodTypeMismatch(problem_idx);
     return problem_idx;
+}
+
+/// A method's type that does not match a dispatch obligation is reported as
+/// the method conflict when relating two requirements of one method deferred
+/// the obligation (`relateSameMethodRequirements`), and at the use when the
+/// obligation is a copy a use made out of another definition's type. Only
+/// failures ask.
+fn refineMethodTypeMismatch(self: *Self, problem_idx: problem.Problem.Idx) Allocator.Error!void {
+    const ctx = self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.context;
+    if (ctx != .method_type) return;
+    const requirement_fn_var = ctx.method_type.requirement_fn_var orelse return;
+    if (self.merged_method_obligations.get(requirement_fn_var)) |merged| {
+        self.problems.problems.items[@backingInt(problem_idx)] = try self.methodConflictProblem(merged, requirement_fn_var);
+        return;
+    }
+    const requirement = self.instantiatedDispatchCopy(requirement_fn_var) orelse return;
+    const failure = try self.copiedRequirementFailure(requirement, ctx.method_type.owner_expr) orelse return;
+    self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.context.method_type.copied = failure.copied;
 }
 
 /// The expression whose type variable is `var_`, when it is one.
@@ -14786,6 +14806,18 @@ fn instantiatedConstraintUseExpr(self: *const Self, constraint: StaticDispatchCo
     return null;
 }
 
+/// The dispatch constraint whose callable is `fn_var` when it is a copy an
+/// instantiation made out of a generalized scheme (see
+/// `instantiatedConstraintUseExpr`). Only failure paths ask.
+fn instantiatedDispatchCopy(self: *const Self, fn_var: Var) ?StaticDispatchConstraint {
+    for (self.instantiation_dispatchers.items) |dispatcher| {
+        for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |copied| {
+            if (copied.fn_var == fn_var) return copied;
+        }
+    }
+    return null;
+}
+
 /// Whether this constraint is a copy an instantiation made out of a
 /// generalized scheme (see `instantiatedConstraintUseExpr`). Only failure
 /// paths ask.
@@ -14802,6 +14834,169 @@ fn constraintWasInstantiated(self: *const Self, constraint: StaticDispatchConstr
         }
     }
     return false;
+}
+
+/// What the report of a failed obligation says when the obligation is a copy
+/// a use made out of another definition's type: the use it fails at (the
+/// obligation's owner, or else the use that copied it), the
+/// expression in that definition that introduced it, the uses of one method
+/// that definition's type made one requirement when they relate this one's
+/// types, and, for a string literal's conversion, the literal it converts.
+/// Only failure paths ask.
+const CopiedRequirementFailure = struct {
+    copied: problem.CopiedRequirement,
+    string_literal_region: ?Region = null,
+};
+
+fn copiedRequirementFailure(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+    owner_expr: ?CIR.Expr.Idx,
+) Allocator.Error!?CopiedRequirementFailure {
+    const use_expr = self.instantiatedConstraintUseExpr(constraint) orelse return null;
+    const source = self.schemeRequirementOfCopy(use_expr, constraint);
+    // A function stored where it is written copies its own type, not
+    // another definition's.
+    if (source) |copy| if (copy.slot == .nested_function_use) return null;
+    var failure: CopiedRequirementFailure = .{ .copied = .{
+        .use_region = self.cir.store.getExprRegion(owner_expr orelse use_expr),
+        .requirement_region = if (constraintIntroExpr(constraint)) |intro_expr|
+            self.cir.store.getExprRegion(intro_expr)
+        else
+            null,
+    } };
+    const scheme_requirement = source orelse return failure;
+
+    var scheme_vars = collections.DenseMap(Var, void).init(self.gpa);
+    defer scheme_vars.deinit();
+    try self.collectReachableVars(scheme_requirement.scheme_root, &scheme_vars);
+    var requirement_vars = collections.DenseMap(Var, void).init(self.gpa);
+    defer requirement_vars.deinit();
+    try self.collectTypeVariablesOf(scheme_requirement.fn_var, &requirement_vars);
+
+    const source_fn_root = self.types.resolveVar(scheme_requirement.fn_var).var_;
+    var receivers = scheme_vars.constKeyIterator();
+    while (receivers.next()) |receiver| {
+        const constraints_range = contentConstraintRange(self.types.resolveVar(receiver).desc.content) orelse continue;
+        for (self.types.sliceStaticDispatchConstraints(constraints_range)) |scheme_constraint| {
+            const fn_root = self.types.resolveVar(scheme_constraint.fn_var).var_;
+            if (fn_root == source_fn_root) {
+                failure.string_literal_region = self.stringLiteralRegionForDispatcher(scheme_constraint, receiver);
+                continue;
+            }
+            if (failure.copied.shared_method != null) continue;
+            if (self.constraintIsLiteralConversion(scheme_constraint)) continue;
+            if (!try self.callableRelatesTypeVariables(scheme_constraint.fn_var, receiver, &requirement_vars)) continue;
+            failure.copied.shared_method = self.sharedMethodUses(scheme_constraint.fn_name, fn_root);
+        }
+    }
+    return failure;
+}
+
+/// The scheme a use instantiated, how it used it, and the scheme-side
+/// callable of a requirement that instantiation copied, from the use's
+/// recorded substitution, which pairs every copied requirement's callable
+/// with its copy.
+fn schemeRequirementOfCopy(
+    self: *const Self,
+    use_expr: CIR.Expr.Idx,
+    constraint: StaticDispatchConstraint,
+) ?struct { slot: ModuleEnv.SchemeUseRecord.Slot, scheme_root: Var, fn_var: Var } {
+    const pairs = self.cir.scheme_use_pairs.items.items;
+    for (self.cir.scheme_uses.items.items) |record| {
+        if (record.node_idx != @backingInt(use_expr)) continue;
+        for (pairs[record.pairs_start..][0..record.pairs_len]) |pair| {
+            if (pair.fresh_var != @backingInt(constraint.fn_var)) continue;
+            return .{
+                .slot = @fromBackingInt(@intCast(record.slot_kind)),
+                .scheme_root = @fromBackingInt(@intCast(record.scheme_root)),
+                .fn_var = @fromBackingInt(@intCast(pair.old_var)),
+            };
+        }
+    }
+    return null;
+}
+
+/// Collect the type variables `var_`'s type mentions, without following
+/// their requirements.
+fn collectTypeVariablesOf(self: *Self, var_: Var, out: *collections.DenseMap(Var, void)) Allocator.Error!void {
+    var visited = collections.DenseMap(Var, void).init(self.gpa);
+    defer visited.deinit();
+    var pending: std.ArrayList(Var) = .empty;
+    defer pending.deinit(self.gpa);
+    try pending.append(self.gpa, var_);
+    while (pending.pop()) |next| {
+        const resolved = self.types.resolveVar(next);
+        if ((try visited.getOrPut(resolved.var_)).found_existing) continue;
+        switch (resolved.desc.content) {
+            .flex, .rigid => try out.put(resolved.var_, {}),
+            .err, .field_presence => {},
+            .alias => |alias| try pending.append(self.gpa, self.types.getAliasBackingVar(alias)),
+            .structure => |flat| switch (flat) {
+                .tuple => |tuple| try pending.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .nominal_type => |nominal| try pending.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try pending.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try pending.append(self.gpa, func.ret);
+                },
+                .record => |record| {
+                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                        try pending.append(self.gpa, presence.typeVar());
+                    }
+                    try pending.append(self.gpa, record.ext);
+                },
+                .tag_union => |tag_union| {
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args| {
+                        try pending.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                    }
+                    try pending.append(self.gpa, tag_union.ext);
+                },
+                .empty_record, .empty_tag_union => {},
+            },
+        }
+    }
+}
+
+/// Whether the type of a requirement's callable mentions one of `vars`
+/// other than the requirement's own receiver.
+fn callableRelatesTypeVariables(
+    self: *Self,
+    fn_var: Var,
+    receiver: Var,
+    vars: *const collections.DenseMap(Var, void),
+) Allocator.Error!bool {
+    var callable_vars = collections.DenseMap(Var, void).init(self.gpa);
+    defer callable_vars.deinit();
+    try self.collectTypeVariablesOf(fn_var, &callable_vars);
+    const receiver_root = self.types.resolveVar(receiver).var_;
+    var iter = callable_vars.constKeyIterator();
+    while (iter.next()) |var_| {
+        if (var_ != receiver_root and vars.contains(var_)) return true;
+    }
+    return false;
+}
+
+/// The first two uses, in source order, of the method whose requirement's
+/// callable is `fn_root`, when more than one use's own dispatch shares it.
+fn sharedMethodUses(self: *Self, method_name: Ident.Idx, fn_root: Var) ?problem.SharedMethodUses {
+    var first: ?Region = null;
+    var second: ?Region = null;
+    var uses = self.own_dispatch_exprs.constIterator();
+    while (uses.next()) |use| {
+        if (self.types.resolveVar(use.key_ptr.*).var_ != fn_root) continue;
+        const region = self.cir.store.getExprRegion(use.value_ptr.*);
+        if (first == null or region.start.offset < first.?.start.offset) {
+            second = first;
+            first = region;
+        } else if (second == null or region.start.offset < second.?.start.offset) {
+            second = region;
+        }
+    }
+    return .{
+        .method_name = method_name,
+        .first_region = first orelse return null,
+        .second_region = second orelse return null,
+    };
 }
 
 /// Constraint provenance can name only expressions. A statement or definition
@@ -40286,7 +40481,11 @@ fn methodConflict(self: *Self, first: StaticDispatchConstraint, second: StaticDi
 }
 
 fn appendMethodConflict(self: *Self, merged: MergedMethodObligation, second_fn_var: Var) Allocator.Error!void {
-    _ = try self.problems.appendProblem(.{ .type_mismatch = .{
+    _ = try self.problems.appendProblem(try self.methodConflictProblem(merged, second_fn_var));
+}
+
+fn methodConflictProblem(self: *Self, merged: MergedMethodObligation, second_fn_var: Var) Allocator.Error!problem.Problem {
+    return .{ .type_mismatch = .{
         .types = .{
             .expected_var = merged.first_fn_var,
             .expected_snapshot = try self.snapshotVarForError(merged.first_fn_var),
@@ -40294,7 +40493,7 @@ fn appendMethodConflict(self: *Self, merged: MergedMethodObligation, second_fn_v
             .actual_snapshot = try self.snapshotVarForError(second_fn_var),
         },
         .method_conflict = merged.conflict,
-    } });
+    } };
 }
 
 /// Where a method conflict is reported: at the use that introduced the second
@@ -41027,18 +41226,28 @@ fn assertSchemeRequirementBoundaryDecided(self: *const Self, roots: []const Boun
     }
 }
 
-/// Close every record row in the value shape of a pending derived `parser_for`
-/// or `encoder_for` relation, when this boundary owns the row's flexible
-/// extension and no boundary root's interface reaches it. Nothing outside the
-/// definition can name such an extension, so no later use can add a field: the
-/// fields the row has are the fields it gets, exactly as at module
-/// finalization. Closing it
-/// here lets the codec produce its constraints, including its error row,
-/// before generalization publishes the definition's type; deferring it to
-/// module finalization would add errors to a scheme that callers have already
-/// instantiated. A codec whose open row the interface does reach is rejected
-/// by `reportDerivedCodecOpenRecord` instead.
-fn closeBoundaryLocalDerivedCodecRecordRows(
+/// Settle every record in the value shape of a pending derived `parser_for`
+/// or `encoder_for` relation whose open parts this boundary owns and no
+/// boundary root's interface reaches. Nothing outside the definition can name
+/// such a part, so no later use can refine it, exactly as at module
+/// finalization:
+///
+/// - A flexible row extension closes: the fields the row has are the fields
+///   it gets. A codec whose open row the interface does reach is rejected by
+///   `reportDerivedCodecOpenRecord` instead.
+/// - An undetermined field kind (a record literal's) commits to `required`,
+///   the kind module finalization would commit it to. A kind that a pending
+///   `.?` access or unset is waiting on is left for that judgment, which
+///   runs later at this boundary and pins it `optional`. A kind the interface
+///   reaches stays undetermined: a caller may still pin it either way, so the
+///   codec stays a requirement of the definition's scheme.
+///
+/// Settling here lets the codec produce its constraints, including its error
+/// row, before generalization publishes the definition's type, instead of
+/// adding a codec requirement to the scheme that every use must resolve again;
+/// deferring it to module finalization would add errors to a scheme that
+/// callers have already instantiated.
+fn settleBoundaryLocalDerivedCodecRecords(
     self: *Self,
     roots: []const BoundaryRoot,
     env: *Env,
@@ -41046,12 +41255,16 @@ fn closeBoundaryLocalDerivedCodecRecordRows(
     const rank = env.rank();
     var exts = std.ArrayList(Var).empty;
     defer exts.deinit(self.gpa);
+    var kinds = std.ArrayList(Var).empty;
+    defer kinds.deinit(self.gpa);
     var interface_vars = collections.DenseMap(Var, void).init(self.gpa);
     defer interface_vars.deinit();
     var interface_collected = false;
 
     var shape_exts = std.ArrayList(Var).empty;
     defer shape_exts.deinit(self.gpa);
+    var shape_kinds = std.ArrayList(Var).empty;
+    defer shape_kinds.deinit(self.gpa);
 
     var open_in_interface = std.ArrayList(OpenRecordCodec).empty;
     defer open_in_interface.deinit(self.gpa);
@@ -41067,14 +41280,16 @@ fn closeBoundaryLocalDerivedCodecRecordRows(
         } else continue;
 
         shape_exts.clearRetainingCapacity();
-        try self.collectDerivedCodecOpenRecordExts(deferred.var_, &shape_exts);
+        shape_kinds.clearRetainingCapacity();
+        try self.collectDerivedCodecOpenRecordParts(deferred.var_, &shape_exts, &shape_kinds);
+        if (shape_exts.items.len == 0 and shape_kinds.items.len == 0) continue;
+        if (!interface_collected) {
+            for (roots) |root| try self.collectReachableVars(root.interface, &interface_vars);
+            interface_collected = true;
+        }
         const local_start = exts.items.len;
         const reaches_interface = for (shape_exts.items) |ext| {
             if (self.types.resolveVar(ext).desc.rank != rank) continue;
-            if (!interface_collected) {
-                for (roots) |root| try self.collectReachableVars(root.interface, &interface_vars);
-                interface_collected = true;
-            }
             if (interface_vars.contains(ext)) break true;
             try exts.append(self.gpa, ext);
         } else false;
@@ -41082,19 +41297,69 @@ fn closeBoundaryLocalDerivedCodecRecordRows(
             exts.shrinkRetainingCapacity(local_start);
             try open_in_interface.append(self.gpa, .{ .deferred = deferred, .constraint = codec_constraint });
         }
+        try self.appendBoundaryLocalKinds(shape_kinds.items, &interface_vars, rank, &kinds);
+    }
+
+    // A final codec relation the boundary's own definitions created waits on
+    // the owner's candidate chain rather than in the deferred queue. Its
+    // record kinds settle the same way, so capture can see its inputs settled.
+    for (roots) |root| {
+        const owner_chain = self.scheme_requirement_candidate_chains_by_owner.get(root.owner) orelse continue;
+        var candidate_idx = owner_chain.first;
+        while (candidate_idx != SchemeRequirementCandidate.none) : (candidate_idx = self.scheme_requirement_candidates.items[candidate_idx].next_of_owner) {
+            const candidate = self.scheme_requirement_candidates.items[candidate_idx];
+            if (self.final_codec_dispatch_constraint_fns.get(candidate.constraint.fn_var) != .final) continue;
+            shape_kinds.clearRetainingCapacity();
+            try self.collectDerivedCodecOpenRecordParts(candidate.receiver_var, null, &shape_kinds);
+            if (shape_kinds.items.len == 0) continue;
+            if (!interface_collected) {
+                for (roots) |interface_root| try self.collectReachableVars(interface_root.interface, &interface_vars);
+                interface_collected = true;
+            }
+            try self.appendBoundaryLocalKinds(shape_kinds.items, &interface_vars, rank, &kinds);
+        }
     }
 
     for (open_in_interface.items) |open| {
         try self.reportDerivedCodecOpenRecord(open.deferred, open.constraint, env);
     }
-    if (exts.items.len == 0) return;
+    if (exts.items.len == 0 and kinds.items.len == 0) return;
 
     for (exts.items) |ext| {
         if (self.types.resolveVar(ext).desc.content != .flex) continue;
         try self.unifyWith(ext, .{ .structure = .empty_record }, env);
     }
+    if (kinds.items.len != 0) {
+        var optional_judged = collections.DenseMap(Var, void).init(self.gpa);
+        defer optional_judged.deinit();
+        for (self.optional_field_accesses.items) |access| {
+            try optional_judged.put(self.types.resolveVar(access.presence_var).var_, {});
+        }
+        for (kinds.items) |kind| {
+            const resolved = self.types.resolveVar(kind);
+            if (resolved.desc.content != .flex) continue;
+            if (optional_judged.contains(resolved.var_)) continue;
+            try self.unifyWith(resolved.var_, .{ .field_presence = .required }, env);
+        }
+    }
     try self.checkStaticDispatchConstraints(env, false);
     try self.checkAllConstraints(env);
+}
+
+/// Append each of `candidates` that a boundary at `rank` owns and whose
+/// interface does not reach it.
+fn appendBoundaryLocalKinds(
+    self: *Self,
+    candidates: []const Var,
+    interface_vars: *const collections.DenseMap(Var, void),
+    rank: Rank,
+    out: *std.ArrayList(Var),
+) Allocator.Error!void {
+    for (candidates) |kind| {
+        if (self.types.resolveVar(kind).desc.rank != rank) continue;
+        if (interface_vars.contains(kind)) continue;
+        try out.append(self.gpa, kind);
+    }
 }
 
 /// The expression whose checking instantiated the scheme that introduced this
@@ -41191,7 +41456,7 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     try self.relateSameMethodRequirementsAtBoundary(roots, env);
     try self.relateUndischargedInterpolationParts(env);
 
-    try self.closeBoundaryLocalDerivedCodecRecordRows(roots, env);
+    try self.settleBoundaryLocalDerivedCodecRecords(roots, env);
 
     // Generalization publishes a complete scheme: its root type plus every
     // unresolved method relation the definition owns. Capture those relations
@@ -48230,6 +48495,8 @@ inline fn processDeferredDispatchEntry(
                         .constraint_var = deferred_constraint.var_,
                         .dispatcher_name = nominal_type.ident.ident_idx,
                         .method_name = constraint.fn_name,
+                        .requirement_fn_var = constraint.fn_var,
+                        .owner_expr = failure_expr,
                     },
                 };
                 // A receiver whose type a default chose fails as an
@@ -48323,6 +48590,17 @@ inline fn processDeferredDispatchEntry(
                         }
                         try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
                         try self.markStaticDispatchRejected(constraint);
+                        // An obligation relating two requirements of one
+                        // method deferred was reported as that method
+                        // conflict (`refineMethodTypeMismatch`), and the
+                        // definition whose type the relation produced is
+                        // poisoned with it.
+                        if (fn_result == .problem) {
+                            if (self.merged_method_obligations.get(constraint.fn_var)) |merged| {
+                                self.types.assertNoSavepointActive();
+                                try self.types.poisonOnMismatch(merged.definition_var, merged.definition_var);
+                            }
+                        }
                     },
                 }
             }
@@ -50429,41 +50707,57 @@ fn satisfyImplicitCodecConstraint(
     }
 }
 
-/// Collect, in variable order, the flexible extension of every record a
-/// derived codec's value shape reaches as data. A literal-carrying extension
-/// is not one: a pending literal can still add information to it.
-fn collectDerivedCodecOpenRecordExts(
+/// Collect, in variable order, the open parts of every record a derived
+/// codec's value shape reaches as data: into `exts`, each flexible extension
+/// (a literal-carrying extension is not one: a pending literal can still add
+/// information to it), and into `kinds`, each field kind that is still
+/// undetermined.
+fn collectDerivedCodecOpenRecordParts(
     self: *Self,
     root: Var,
-    out: *std.ArrayList(Var),
+    exts: ?*std.ArrayList(Var),
+    kinds: ?*std.ArrayList(Var),
 ) Allocator.Error!void {
     var reachable = collections.DenseMap(Var, void).init(self.gpa);
     defer reachable.deinit();
     try self.collectDataReachableVars(root, &reachable);
 
-    const start = out.items.len;
+    const exts_start = if (exts) |out| out.items.len else 0;
+    const kinds_start = if (kinds) |out| out.items.len else 0;
     var iter = reachable.keyIterator();
     while (iter.next()) |var_| {
         const content = self.types.resolveVar(var_.*).desc.content;
         if (content != .structure or content.structure != .record) continue;
-        const ext = self.types.resolveVar(content.structure.record.ext);
-        if (ext.desc.content != .flex) continue;
-        if (self.varLiteralKind(ext.var_) != null) continue;
-        try out.append(self.gpa, ext.var_);
+        if (kinds) |out| {
+            const fields = self.types.getRecordFieldsSlice(content.structure.record.fields);
+            for (fields.items(.presence)) |presence| {
+                const presence_var = presence.presenceVar() orelse continue;
+                const kind = self.types.resolveVar(presence_var);
+                if (kind.desc.content != .flex) continue;
+                try out.append(self.gpa, kind.var_);
+            }
+        }
+        if (exts) |out| {
+            const ext = self.types.resolveVar(content.structure.record.ext);
+            if (ext.desc.content != .flex) continue;
+            if (self.varLiteralKind(ext.var_) != null) continue;
+            try out.append(self.gpa, ext.var_);
+        }
     }
-    std.mem.sort(Var, out.items[start..], {}, varLessThan);
+    if (exts) |out| std.mem.sort(Var, out.items[exts_start..], {}, varLessThan);
+    if (kinds) |out| std.mem.sort(Var, out.items[kinds_start..], {}, varLessThan);
 }
 
 fn varLessThan(_: void, a: Var, b: Var) bool {
     return @backingInt(a) < @backingInt(b);
 }
 
-/// Close every flexible record extension `collectDerivedCodecOpenRecordExts`
+/// Close every flexible record extension `collectDerivedCodecOpenRecordParts`
 /// finds in `root`'s shape. Reports whether there was any to close.
 fn closeDerivedCodecOpenRecordExts(self: *Self, root: Var, env: *Env) Allocator.Error!bool {
     var exts = std.ArrayList(Var).empty;
     defer exts.deinit(self.gpa);
-    try self.collectDerivedCodecOpenRecordExts(root, &exts);
+    try self.collectDerivedCodecOpenRecordParts(root, &exts, null);
     if (exts.items.len == 0) return false;
     for (exts.items) |ext| {
         if (self.types.resolveVar(ext).desc.content != .flex) continue;
@@ -57604,6 +57898,14 @@ fn reportConstraintErrorAt(
 
     const snapshot = try self.snapshotVarForError(dispatcher_var);
     const owner_region = self.constraintOwnerRegion(owner_expr);
+    // A copy's dispatcher is the use's fresh variable, which no literal of
+    // this module converts; the literal is the one the definition converts.
+    const copied_failure = try self.copiedRequirementFailure(constraint, owner_expr);
+    const string_literal_region = if (copied_failure) |failure|
+        failure.string_literal_region
+    else
+        self.stringLiteralRegionForDispatcher(constraint, dispatcher_var);
+    const copied: ?problem.CopiedRequirement = if (copied_failure) |failure| failure.copied else null;
     const constraint_problem = switch (kind) {
         .missing_method => |dispatcher_type| problem.Problem{
             .static_dispatch = .{
@@ -57616,7 +57918,8 @@ fn reportConstraintErrorAt(
                     .origin = constraint.origin,
                     .owner_region = owner_region,
                     .num_literal = self.types.constraintNumeralInfo(constraint),
-                    .string_literal_region = self.stringLiteralRegionForDispatcher(constraint, dispatcher_var),
+                    .string_literal_region = string_literal_region,
+                    .copied = copied,
                     .str_conversion = if (constraint.origin.literalKind() == .numeral)
                         try self.numeralDispatcherStrConversion(dispatcher_var)
                     else
@@ -57638,7 +57941,8 @@ fn reportConstraintErrorAt(
                 .origin = constraint.origin,
                 .owner_region = owner_region,
                 .num_literal = self.types.constraintNumeralInfo(constraint),
-                .string_literal_region = self.stringLiteralRegionForDispatcher(constraint, dispatcher_var),
+                .string_literal_region = string_literal_region,
+                .copied = copied,
             },
         } },
     };

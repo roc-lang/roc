@@ -2934,6 +2934,59 @@ object is linked with the platform's current inputs. A build that reports an err
 does a program that links Boxy runtime inputs or optimized pack objects,
 which the record does not carry.
 
+#### Native link preparation
+
+A recorded program is a checksummed binary manifest of link facts and the
+content digest and length of its separately addressable object, not an envelope
+containing another copy of that object. Native objects, including compiler-owned
+builtins, startup and support objects, live beside these manifests in the same
+compiler/format/actual-target/optimization namespace. Their names are BLAKE3
+content digests. A cold build writes the backend's bytes once and publishes a
+directory entry atomically. No writer truncates a published inode.
+
+Embedded runtime-object digests and the fixed Windows stack-probe object are
+computed when the compiler is built, rather than regenerated for each link.
+Cached objects are still validated against their content identity (or against
+the embedded bytes already retained by the compiler), so same-size corruption
+cannot authorize a hit. Procedure-domain sharing never changes this full-target
+namespace: manifests and raw final-link objects both use the output store root.
+
+Before validating a cached object's length and digest, a build hard-links it
+into its unique scratch directory on the cache filesystem. Those names pin the
+objects through linking and output finalization, independently of cache
+eviction. On Windows a pin is a second NTFS name added through
+`FileLinkInformation` without replacement, opened with no data access and every
+sharing mode, so pinning never conflicts with readers or replaces a name. The invocation holds `link.lock` in that scratch directory; scratch
+cleanup skips a held lock, and an abandoned directory ages out after the OS
+releases its owner's lock. Missing, corrupt or incompatible objects are cache
+misses. Manifests publish atomically after the object. The executable is always
+linked anew, even when it already exists.
+
+Local platform inputs have no content identity supplied by their publisher.
+They are inspected on every build; path, size and timestamps never key symbol
+metadata. Inspection reads bounded object headers and symbol/string tables with
+positional reads, retaining their bytes only for the current archive member.
+It does not map mutable local files: truncation must produce an incomplete scan,
+never a mapping fault. Verification stops precisely when its required-symbol
+set is empty, including within object symbol tables. Export discovery visits
+every member, sharing the same retained ranges with verification. Unsupported
+formats leave missing-symbol results non-authoritative, as before; the linker
+still validates the actual inputs.
+
+Platform publishers must atomically replace complete inputs. A build checks
+file identity, size and change/modification state before inspection, before LLD,
+and after linking; a change fails the build. These checks detect concurrent
+publication, not authorize cross-build reuse. In-place mutation while LLD is
+reading an input is outside the supported publication contract. Link order,
+roots, exports, lazy archives, ABI and LLD parallelism are unchanged.
+
+Requested timing output separates platform input validation, object
+materialization, host inspection, argument preparation, embedded LLD and output
+finalization. These are wall times, not summed linker worker times. Counters
+report object bytes written/reused/validated, host bytes copied, peak retained
+host bytes, and archive members and symbol tables visited. Ordinary successful
+builds produce no new diagnostic output.
+
 ### Demand-Driven Compile-Time Evaluation
 
 A build evaluates only the compile-time roots its program demands. A root is
@@ -11207,6 +11260,22 @@ instantiated, so callers' exhaustiveness and annotation checks would run
 against an incomplete error row. An extension owned by an enclosing scope or
 by a non-generalized value binding waits for its owner.
 
+The same boundary commits the undetermined field kinds of those records (a
+record literal's fields, Field Kinds below) to `required` when the boundary
+owns the kind and no boundary root's interface reaches it. Such a kind is just
+as invisible to callers as a boundary-local extension, and `required` is the
+kind module finalization would commit it to. A record's codec depends on its
+field kinds, so an undetermined kind would keep the codec from producing its
+constraints at the boundary. If the codec relation also reached a type
+variable of the definition's interface (the implicitly open error row of
+`encode : Doc -> Try(Str, [Infinity, NaN, NegativeInfinity])`), the definition's
+scheme would gain a codec requirement that every use resolves again, although
+no use can change the codec. A kind that a pending `.?` access or unset is
+waiting on is left to that judgment, which pins it `optional` later at the same
+boundary. A kind an interface reaches (a returned record literal) stays
+undetermined, because a caller may pin it either way, and its codec stays a
+requirement of the scheme.
+
 A row whose extension the boundary owns and an interface does reach (a record
 parameter, or a returned record) rejects the derived codec with a "Record
 Fields Not Known" report at the codec call. Callers could use such a record
@@ -13381,13 +13450,16 @@ Other solved-graph mutations:
   as data that was inferred from use sites closes its unconstrained flexible
   extension to the empty record through ordinary unification; rigid
   extensions remain rejected.
-- `closeBoundaryLocalDerivedCodecRecordRows`—policy: Derived Structural
+- `settleBoundaryLocalDerivedCodecRecords`—policy: Derived Structural
   Codec Record-Row Closure (above). At a generalization boundary, each record
   row in a pending derived codec relation's value shape whose flexible
   extension the boundary owns and no boundary interface reaches closes to the
   empty record through ordinary unification before scheme capture. A row
   whose extension an interface reaches is rejected instead
-  (`reportDerivedCodecOpenRecord`), never closed.
+  (`reportDerivedCodecOpenRecord`), never closed. Each undetermined field
+  kind of those records that the boundary owns, no boundary interface
+  reaches, and no pending `.?` judgment waits on is unified with `required`
+  before scheme capture.
 - `closeValueRowTailsCarryingDerivations`—policy: Derived Equality And
   Hashing Over Open Rows (above). After the module solves, a walk over each
   non-function top-level value's data positions collects open row tails; one
@@ -13616,6 +13688,31 @@ selects the code-generation backend and optimization family. The
 `--specialize` flag selects how checked data becomes LIR before ARC and code
 generation.
 
+The opt-in is transitive. An `.lss` compilation performs no Boxy planning,
+descriptor construction, runtime initialization, registration, or sidecar
+work. Its code and cached artifacts have no Boxy dependencies. LIR carries an
+explicit runtime contract, set by its producer and retained by images; only a
+Boxy producer can authorize descriptor operations. Store construction enforces
+this contract, and consumers use it without discovering a strategy by scanning
+procedures. CTFE always carries the specialized contract.
+
+Erasure in LSS erases the identity of a callable, not its argument and result
+representations. Lambda Solved's `abi_fn` supplies those exact types; direct
+LIR lowering converts inputs and outputs at typed boundaries. An erased worker
+therefore implements the same packed-argument and result-pointer ABI its caller
+uses. Its native call needs no descriptors, runtime layout indices, worker
+registration, or polymorphic value adaptation. Captures and their explicit ARC
+drop helper remain in the ordinary erased-callable allocation, including the
+existing hot-reload prefix when requested.
+
+Specialized deferred calls use a descriptor-free native trampoline. A pending
+call contains only its function pointer, owned closure, and packed argument
+bytes. ARC explicitly transfers that closure ownership to the pending call;
+the trampoline releases it after invocation. Tail-drive marks determine where
+to drive the trampoline, just as for ordinary calls. Specialized results pass
+unchanged through these tail positions; representation conversions execute as
+LIR before returning, never as runtime descriptor operations.
+
 Compile-time evaluation is not a runtime lowering-strategy selection. CTFE
 always uses `.lss`, including when the enclosing runtime compilation explicitly
 selects `.boxy`. Runtime strategy flags, cache entries, and host wrappers must
@@ -13631,7 +13728,8 @@ stored in every lowered-output cache key. It is not recovered from the backend,
 optimization level, target, root set, or whether a later stage asks for an
 interpreter image. Backends receive ARC-complete LIR and do not know whether the
 LIR came from `.lss` or `.boxy` except through ordinary LIR statements,
-layouts, descriptor tables, and root metadata.
+layouts, descriptor tables, root metadata, and the producer-owned runtime
+contract.
 
 ### `.lss` Runtime Lowering
 
@@ -16926,7 +17024,11 @@ requires the type to have two different methods of that name and shows both
 method types, at the use that introduced the second requirement, or at the
 definition when another definition introduced it; the receiver is poisoned so
 it reports nothing further. An annotation that declares two such requirements
-is the same mismatch, reported at the second requirement. A relation folded into a retained one selects no target of its own,
+is the same mismatch, reported at the second requirement. A requirement a
+use copies out of a definition's type fails at that use, not inside the
+definition: its report shows the code in the definition that introduced it,
+and, when its type shares a variable with a requirement this boundary related
+from two uses of one method, both of those uses. A relation folded into a retained one selects no target of its own,
 yet its dispatch site still outputs a plan. The unifier journals each fold as
 an exact (dropped, retained) pair of raw constraint function vars, and checking
 outputs `ModuleEnv.dispatch_relation_merges`, mapping every folded relation

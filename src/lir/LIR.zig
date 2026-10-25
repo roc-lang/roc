@@ -18,6 +18,11 @@ const hosted = @import("hosted.zig");
 const StringLiteral = base.StringLiteral;
 const names = check.CheckedNames;
 
+/// Capability established by lowering, preserved by artifacts, and consumed
+/// mechanically by execution backends. Only explicit Boxy lowering enables
+/// descriptor operations; specialized indirect calls have an exact native ABI.
+pub const RuntimeContract = enum(u8) { specialized, boxy };
+
 /// Global identifier (opaque 64-bit id).
 pub const Symbol = packed struct(u64) {
     id: u64,
@@ -1408,8 +1413,8 @@ pub const BoxyDynamicFracLiteral = struct {
 pub const ErasedCallData = struct {
     closure: LocalId,
     args: LocalSpan,
-    /// Ordered runtime layouts of the explicit arguments packed into the
-    /// erased-call argument buffer.
+    /// Boxy-only layouts for runtime argument adaptation. Specialized calls
+    /// use their locals and `arg_plan` and leave this span empty.
     arg_layouts: BoxySpan = BoxySpan.empty(),
     /// Exact descriptors for descriptor-bearing explicit arguments, in
     /// the callee function representation's traversal order.
@@ -2044,8 +2049,8 @@ pub const LirProcSpec = struct {
     /// Keyed byte offsets of hidden descriptor fields in this erased worker's
     /// capture value, in increasing (argument, descriptor) key order.
     erased_arg_desc_offsets: BoxySpan = .{},
-    /// Ordered runtime layouts expected in this erased worker's explicit
-    /// argument buffer.
+    /// Boxy-only layouts for runtime argument adaptation. Specialized workers
+    /// carry their exact ABI in argument locals and `erased_call_args`.
     erased_arg_layouts: BoxySpan = .{},
     /// Hidden descriptor parameters supplied for this erased invocation, in
     /// increasing (argument, descriptor) key order.
