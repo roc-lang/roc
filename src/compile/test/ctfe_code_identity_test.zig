@@ -104,8 +104,19 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
         \\names = ["alpha", "beta"].map(|s| Str.concat(s, "!"))
         \\lookup : Dict(Str, U64)
         \\lookup = Dict.empty().insert("a", 1).insert("b", total)
+        \\measure : U64 -> { large : U128, ratio : F64, text : Str }
+        \\measure = |n| {
+        \\    var $i = n
+        \\    while $i > 0 { $i = $i - 1 }
+        \\    { large: n.to_u128() * 18446744073709551617, ratio: n.to_f64() / 2.0, text: "a long string carried by both native procedure consumers" }
+        \\}
+        \\measured = measure(3)
         \\main! = |args| {
         \\    lengths = List.map(args, |arg| arg.to_utf8().len())
+        \\    increment = args.len().to_u64()
+        \\    Echo.line!(Str.inspect(lengths.map(|n| n + increment)))
+        \\    Echo.line!(Str.inspect(measured))
+        \\    Echo.line!(Str.inspect(measure(args.len())))
         \\    Echo.line!(describe(args.len()))
         \\    Echo.line!(bigger)
         \\    Echo.line!(Str.inspect(names.map(|s| Str.concat(s, "!"))))
@@ -197,6 +208,36 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
     );
     defer compiled.deinit();
     const built = &(compiled.artifacts orelse return error.TestUnexpectedResult);
+    // The same checked/LIR program emits identical normalized procedure packs
+    // for the declared libc pair. Compare every byte of code, relocations,
+    // carried data, source locations and artifact metadata at each CPU floor.
+    if (roc_target.RocTarget.detectNative().toCpuArch() == .x86_64) {
+        for ([_][2]roc_target.RocTarget{ .{ .x64musl, .x64glibc }, .{ .x64v1musl, .x64v1glibc } }) |pair| {
+            var expected: ?[]u8 = null;
+            defer if (expected) |bytes| allocator.free(bytes);
+            for (pair) |target| {
+                var pair_compiler = backend.ObjectFileCompiler.initForPack(allocator);
+                pair_compiler.emit_object = false;
+                var result = try pair_compiler.compileToObjectFile(
+                    &runtime.lir_result.store,
+                    &runtime.lir_result.layouts,
+                    &.{},
+                    image,
+                    runtime.lir_result.store.getProcSpecs(),
+                    runtime.lir_result.boxy_erased_arg_desc_offsets.items,
+                    runtime.lir_result.boxy_erased_arg_desc_params.items,
+                    runtime.lir_result.boxy_worker_procs.items,
+                    target,
+                );
+                defer result.deinit();
+                const bytes = try backend.dev.PackFile.write(allocator, &result.artifacts.?, &.{});
+                if (expected) |prior| {
+                    defer allocator.free(bytes);
+                    try std.testing.expectEqualSlices(u8, prior, bytes);
+                } else expected = bytes;
+            }
+        }
+    }
 
     var built_names = try ProcArtifact.ContentNames.init(allocator, built);
     defer built_names.deinit();
