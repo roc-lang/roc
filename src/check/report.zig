@@ -44,6 +44,7 @@ const Store = problem_mod.Store;
 // Type mismatch types
 const TypePair = problem_mod.TypePair;
 const MethodConflict = problem_mod.MethodConflict;
+const CopiedRequirement = problem_mod.CopiedRequirement;
 
 // Static dispatch errors
 const DispatcherNotNominal = problem_mod.DispatcherNotNominal;
@@ -2563,6 +2564,18 @@ pub const ReportBuilder = struct {
         }, self, report, &report.headline);
     }
 
+    fn renderCopiedObligationMissingMethodHeadline(
+        self: *Self,
+        report: *Report,
+        method_name: Ident.Idx,
+    ) Allocator.Error!void {
+        try D.renderSliceInto(&.{
+            D.bytes("This use needs the"),
+            D.ident(method_name).withAnnotation(.inline_code),
+            D.bytes("method, but the type being used doesn't have that method."),
+        }, self, report, &report.headline);
+    }
+
     /// Highlight where a static dispatch constraint failed: at the expression
     /// that owns the failed obligation when there is one, and otherwise at the
     /// constraint's own provenance.
@@ -2589,12 +2602,15 @@ pub const ReportBuilder = struct {
             .dispatcher_snapshot = data.dispatcher_snapshot,
             .num_literal = data.num_literal,
             .string_literal_region = data.string_literal_region,
+            .copied = data.copied,
         })) |report| return report;
 
         var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
         errdefer report.deinit();
         if (data.owner_region != null and data.origin == .where_clause) {
             try self.renderOwnedObligationMissingMethodHeadline(&report, data.method_name);
+        } else if (data.copied != null) {
+            try self.renderCopiedObligationMissingMethodHeadline(&report, data.method_name);
         } else {
             try D.renderSliceInto(&.{
                 D.bytes("This"),
@@ -2615,6 +2631,7 @@ pub const ReportBuilder = struct {
         }, self, &report);
         try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
+        if (data.copied) |copied| try self.addCopiedRequirementNotes(&report, copied);
 
         return report;
     }
@@ -2639,17 +2656,68 @@ pub const ReportBuilder = struct {
         data: DispatcherDoesNotImplMethod,
     ) Allocator.Error!Report {
         if (data.origin.literalKind() != null) {
-            return try self.buildLiteralMismatchReport(data.origin, .{
+            if (try self.buildLiteralMismatchReport(data.origin, .{
                 .dispatcher_var = data.dispatcher_var,
                 .dispatcher_snapshot = data.dispatcher_snapshot,
                 .num_literal = data.num_literal,
                 .string_literal_region = data.string_literal_region,
-            }) orelse try self.buildStaticDispatchMissingMethod(data);
+                .copied = data.copied,
+            })) |report| return report;
+        } else if (data.row_extension_of) |row_extension| {
+            return self.buildRowExtensionMissingMethod(data, row_extension);
         }
 
-        if (data.row_extension_of) |row_extension| return self.buildRowExtensionMissingMethod(data, row_extension);
+        var report = try self.buildStaticDispatchMissingMethod(data);
+        errdefer report.deinit();
+        if (data.copied) |copied| try self.addCopiedRequirementNotes(&report, copied);
+        return report;
+    }
 
-        return self.buildStaticDispatchMissingMethod(data);
+    /// What a report of a failed requirement that a use copied out of another
+    /// definition's type adds after its own explanation: the code in that
+    /// definition that needs the requirement, and the uses of one method that
+    /// the definition's type made one requirement when they relate its types.
+    fn addCopiedRequirementNotes(self: *Self, report: *Report, copied: CopiedRequirement) Allocator.Error!void {
+        const region = copied.requirement_region orelse return self.addSharedMethodNote(report, copied, .after_text);
+        try report.document.addLineBreaks(2);
+        try D.renderSlice(&.{
+            D.bytes("This use needs that because of this code in the definition it uses:"),
+        }, self, report);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(report, region);
+        try self.addSharedMethodNote(report, copied, .after_source);
+    }
+
+    /// The uses of one method that the definition's type made one
+    /// requirement, when they relate the failed requirement's types. A
+    /// source highlight already ends with a blank line.
+    fn addSharedMethodNote(
+        self: *Self,
+        report: *Report,
+        copied: CopiedRequirement,
+        comptime follows: enum { after_text, after_source },
+    ) Allocator.Error!void {
+        const shared = copied.shared_method orelse return;
+        switch (follows) {
+            .after_text => try report.document.addLineBreaks(2),
+            .after_source => try report.document.addLineBreak(),
+        }
+        try D.renderSlice(&.{
+            D.bytes("These"),
+            D.ident(shared.method_name).withAnnotation(.inline_code),
+            D.bytes("calls share one"),
+            D.ident(shared.method_name).withAnnotation(.inline_code),
+            D.bytes("type, because the type of the value they are called on is not known where they are:"),
+        }, self, report);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(report, shared.first_region);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(report, shared.second_region);
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("Giving that value a type annotation lets each call have its own type."),
+        }, self, report);
     }
 
     /// A derived `is_eq`/`to_hash` over a record or tag union whose `..`
@@ -2770,6 +2838,8 @@ pub const ReportBuilder = struct {
             }, self, &report, &report.headline);
         } else if (data.owner_region != null and data.origin == .where_clause) {
             try self.renderOwnedObligationMissingMethodHeadline(&report, data.method_name);
+        } else if (data.copied != null) {
+            try self.renderCopiedObligationMissingMethodHeadline(&report, data.method_name);
         } else {
             try D.renderSliceInto(&.{
                 D.bytes("This"),
@@ -3069,6 +3139,7 @@ pub const ReportBuilder = struct {
         dispatcher_snapshot: SnapshotContentIdx,
         num_literal: ?types_mod.NumeralInfo,
         string_literal_region: ?Region,
+        copied: ?CopiedRequirement = null,
     };
 
     /// Report a literal used where a type lacking its `from_*` conversion
@@ -3098,10 +3169,17 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: LiteralMismatch,
     ) Allocator.Error!Report {
+        if (data.copied) |copied| {
+            var report = try Report.init(self.gpa, "Type Mismatch", "This use needs a string literal in the definition it uses to have a non-string type.", .runtime_error);
+            errdefer report.deinit();
+            try self.addCopiedLiteralHighlights(&report, copied, data.string_literal_region, "The string literal is here:");
+            try self.addDeterminedType(&report, data.dispatcher_snapshot);
+            try self.addSharedMethodNote(&report, copied, .after_text);
+            return report;
+        }
+
         var report = try Report.init(self.gpa, "Type Mismatch", "This string literal is being used where a non-string type is needed.", .runtime_error);
         errdefer report.deinit();
-
-        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
         const literal_region = data.string_literal_region orelse
             (if (self.getRegionSafe(@fromBackingInt(@intCast(@backingInt(data.dispatcher_var))))) |r| r.* else Region.zero());
@@ -3110,13 +3188,37 @@ pub const ReportBuilder = struct {
         try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
-        try D.renderSlice(&.{
-            D.bytes("The type was determined to be:"),
-        }, self, &report);
-        try report.document.addLineBreaks(2);
-        try report.document.addCodeBlock(snapshot_str);
+        try self.addDeterminedType(&report, data.dispatcher_snapshot);
 
         return report;
+    }
+
+    fn addDeterminedType(self: *Self, report: *Report, determined: SnapshotContentIdx) Allocator.Error!void {
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(determined));
+        try D.renderSlice(&.{
+            D.bytes("The type was determined to be:"),
+        }, self, report);
+        try report.document.addLineBreaks(2);
+        try report.document.addCodeBlock(snapshot_str);
+    }
+
+    /// The use a copied literal conversion fails at, then the literal in the
+    /// definition it uses.
+    fn addCopiedLiteralHighlights(
+        self: *Self,
+        report: *Report,
+        copied: CopiedRequirement,
+        literal_region: ?Region,
+        literal_label: []const u8,
+    ) Allocator.Error!void {
+        try self.addSourceHighlightRegion(report, copied.use_region);
+        try report.document.addLineBreak();
+        if (literal_region) |region| {
+            try D.renderSlice(&.{D.bytes(literal_label)}, self, report);
+            try report.document.addLineBreak();
+            try self.addSourceHighlightRegion(report, region);
+            try report.document.addLineBreak();
+        }
     }
 
     /// Build a report for when a number literal is used where a non-number type is expected
@@ -3124,6 +3226,15 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: LiteralMismatch,
     ) Allocator.Error!Report {
+        if (data.copied) |copied| {
+            var report = try Report.init(self.gpa, "Type Mismatch", "This use needs a number in the definition it uses to have a non-number type.", .runtime_error);
+            errdefer report.deinit();
+            try self.addCopiedLiteralHighlights(&report, copied, data.num_literal.?.region, "The number is here:");
+            try self.addDeterminedType(&report, data.dispatcher_snapshot);
+            try self.addSharedMethodNote(&report, copied, .after_text);
+            return report;
+        }
+
         var report = try Report.init(self.gpa, "Type Mismatch", "This number is being used where a non-number type is needed.", .runtime_error);
         errdefer report.deinit();
 
@@ -3675,8 +3786,10 @@ pub const ReportBuilder = struct {
     ) Allocator.Error!Report {
         // Note: The unifier's actual/expected are opposite to display order.
         // We want to show "type has X" (from expected_snapshot) then "expected Y" (from actual_snapshot)
-        return try self.makeMismatchReport(
-            if (ctx.source_region) |region|
+        var report = try self.makeMismatchReport(
+            if (ctx.copied) |copied|
+                .{ .direct = copied.use_region }
+            else if (ctx.source_region) |region|
                 .{ .direct = region }
             else
                 .{ .simple = regionIdxFrom(ctx.constraint_var) },
@@ -3699,6 +3812,9 @@ pub const ReportBuilder = struct {
                 // TODO: Once we have nicer type diff hints, use them here
             },
         );
+        errdefer report.deinit();
+        if (ctx.copied) |copied| try self.addCopiedRequirementNotes(&report, copied);
+        return report;
     }
 
     /// Build a typo suggestions report for when a record field is not found.
