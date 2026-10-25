@@ -335,7 +335,7 @@ const CompileTimeObjectCache = struct {
 
 /// The offers of this command's compile-time pack, gathered from each
 /// evaluation level while its code exists (`eval.CompileTimeFinalization.StageSink`);
-/// the pack's code is the code evaluation ran (`CompletedStages.artifacts`).
+/// the pack's code is the code evaluation ran (`CompletedStages.excerpts`).
 const CompileTimePackParts = struct {
     offers: PackOffers,
     /// The command the pack is published by, which its key names.
@@ -6259,7 +6259,7 @@ fn writeDevRunImageToSharedMemory(
         const proc_specs = store.getProcSpecs();
         // The object-cache entries this program was served are placed first,
         // with the data their code carries.
-        var spliced_data = std.ArrayList(backend.dev.ProcArtifact.DataItem).empty;
+        var spliced_data = std.ArrayList(backend.dev.CodeExcerpt.DataItem).empty;
         defer spliced_data.deinit(ctx.gpa);
         if (splice_source) |source| {
             var external_procs = std.ArrayList(lir.LIR.LirProcSpecId).empty;
@@ -6851,7 +6851,7 @@ const RunPackageObjects = struct {
             object.* = pack.object;
             for (pack.specs) |spec| {
                 var buffer: [lir.ProcIdentity.symbol_name_len]u8 = undefined;
-                const name = try arena.dupe(u8, pack.identities[spec.artifact].writeCAbiEntryName(&buffer));
+                const name = try arena.dupe(u8, pack.identities[spec.excerpt].writeCAbiEntryName(&buffer));
                 if ((try seen.getOrPut(name)).found_existing) continue;
                 try symbols.append(arena, name);
             }
@@ -8340,7 +8340,7 @@ fn writePackObjects(
         backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, pack.compiled.object_bytes) catch {
             return error.NativeCompilationFailed;
         };
-        if (pack.compiled.artifacts) |*set| {
+        if (pack.compiled.excerpts) |*set| {
             const pack_bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
             defer ctx.gpa.free(pack_bytes);
             const pack_path = try std.fmt.allocPrint(ctx.arena, "{s}.pack.{s}.rpk", .{ final_output_path, file_name });
@@ -8552,7 +8552,7 @@ fn writePackageDevPacksToStore(
         }
         var pack = try compileModulePack(ctx, build_env, root_artifact, imports, relations, artifact, roots, .dev, .lss, RocTarget.detectNative(), false);
         defer pack.deinit();
-        const set = &pack.compiled.artifacts.?;
+        const set = &pack.compiled.excerpts.?;
         const bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
         defer ctx.gpa.free(bytes);
         // Offer before filing: a provider whose first lookup happens here
@@ -8585,7 +8585,7 @@ fn writePacksToStore(
     app_imports: []const check.CheckedArtifact.ImportedModuleView,
     app_relations: []const check.CheckedArtifact.ImportedModuleView,
     app_lowered: *const lir.CheckedPipeline.LoweredProgram,
-    app_artifacts: ?*const backend.dev.ProcArtifact.Set,
+    app_excerpts: ?*const backend.dev.CodeExcerpt.Set,
     args: cli_args.BuildArgs,
     target: RocTarget,
 ) CliMainError!void {
@@ -8607,7 +8607,7 @@ fn writePacksToStore(
             std.debug.print("compiled {x} {x:0>16} {s}\n", .{ &spec_proc.key, fingerprint, program_store.procDebugName(spec_proc.proc) orelse "" });
         }
     }
-    if (app_artifacts) |set| {
+    if (app_excerpts) |set| {
         if (build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
             if (!try store.has(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes)) {
                 const bytes = try packFileBytes(ctx.gpa, set, app_lowered);
@@ -8643,7 +8643,7 @@ fn writePacksToStore(
         }
         var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args.opt, currentRuntimeSpecializationStrategy(args.specialization_strategy), target, false);
         defer pack.deinit();
-        const set = &(pack.compiled.artifacts orelse continue);
+        const set = &(pack.compiled.excerpts orelse continue);
         const bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
         defer ctx.gpa.free(bytes);
         store.write(origin, identity, artifact.codeGenerationKey().bytes, bytes) catch |err| {
@@ -9027,7 +9027,7 @@ fn objectPackBytes(
         };
         try specs.append(ctx.gpa, .{
             .key = candidate.key,
-            .artifact = identity_index,
+            .excerpt = identity_index,
             .comptime_root_reads = candidate.reads.reads,
             .rc_borrowed_params = proc.rc_borrowed_params,
             .rc_ret_borrowed = proc.rc_ret_borrowed,
@@ -9044,7 +9044,7 @@ fn objectPackBytes(
     if (specs.items.len == 0) return null;
 
     // Every constant the object carries is weak data under its content name.
-    var data_names = try backend.dev.ProcArtifact.ContentNames.initObjectData(ctx.gpa, static_data_exports);
+    var data_names = try backend.dev.CodeExcerpt.ContentNames.initObjectData(ctx.gpa, static_data_exports);
     defer data_names.deinit();
     const pack_data_names = try arena.alloc([]const u8, static_data_exports.len);
     for (static_data_exports, pack_data_names) |data_export, *name| name.* = data_names.of(data_export.symbol_name);
@@ -9237,7 +9237,7 @@ fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) Allocator.Error!vo
 
     // The pack holds the code evaluation ran: each stage of the evaluation is
     // its own program, and the pack offers the procedures of all of them.
-    var combined = try completed.combinedArtifacts(ctx.gpa);
+    var combined = try completed.combinedExcerpts(ctx.gpa);
     defer combined.deinit();
     const bytes = try parts.offers.encode(ctx.gpa, &combined);
     defer ctx.gpa.free(bytes);
@@ -9289,7 +9289,7 @@ fn procReachesLinkedEntry(allocator: Allocator, store: *const lir.LirStore, root
 /// signature ARC solved for it.
 fn packFileBytes(
     allocator: Allocator,
-    set: *const backend.dev.ProcArtifact.Set,
+    set: *const backend.dev.CodeExcerpt.Set,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
 ) Allocator.Error![]u8 {
     const comptime_reads = if (lowered.spec_comptime_reads) |*reads| reads else {
@@ -9446,18 +9446,18 @@ const PackOffers = struct {
 
     /// Encode `set`, compiled from the gathered programs, with the spec table
     /// of every procedure they offer.
-    fn encode(self: *const PackOffers, allocator: Allocator, set: *const backend.dev.ProcArtifact.Set) Allocator.Error![]u8 {
+    fn encode(self: *const PackOffers, allocator: Allocator, set: *const backend.dev.CodeExcerpt.Set) Allocator.Error![]u8 {
         var specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
         defer specs.deinit(allocator);
         const trace = dev_diagnostics.isSet(.pack_trace);
         var withheld: usize = 0;
-        var converting_artifacts = try literalConvertingArtifacts(allocator, set, &self.literal_converters);
-        defer converting_artifacts.deinit(allocator);
+        var converting_excerpts = try literalConvertingExcerpts(allocator, set, &self.literal_converters);
+        defer converting_excerpts.deinit(allocator);
         var closure = try SpliceClosure.init(allocator, set);
         defer closure.deinit();
         for ([_][]const Candidate{ self.keyed.items, self.by_identity.items }, [_]bool{ false, true }) |candidates, by_identity| {
             for (candidates) |offer| {
-                const artifact = closure.offeredProcArtifact(offer.identity) orelse continue;
+                const excerpt = closure.offeredProcExcerpt(offer.identity) orelse continue;
                 if (offer.withheld) {
                     withheld += 1;
                     continue;
@@ -9466,8 +9466,8 @@ const PackOffers = struct {
                 // and a constant holding a code pointer names code the pack
                 // may not carry; an entry that reaches either cannot be
                 // linked elsewhere, so it is not offered.
-                const placed = try closure.of(artifact);
-                if (closureNamesProgramLocalSymbols(set, placed) or closureConvertsLiteral(&converting_artifacts, placed)) {
+                const placed = try closure.of(excerpt);
+                if (closureNamesProgramLocalSymbols(set, placed) or closureConvertsLiteral(&converting_excerpts, placed)) {
                     withheld += 1;
                     continue;
                 }
@@ -9476,7 +9476,7 @@ const PackOffers = struct {
                 };
                 try specs.append(allocator, .{
                     .key = offer.key,
-                    .artifact = artifact,
+                    .excerpt = excerpt,
                     .comptime_root_reads = offer.reads.reads,
                     .rc_borrowed_params = offer.rc_borrowed_params,
                     .rc_ret_borrowed = offer.rc_ret_borrowed,
@@ -9489,7 +9489,7 @@ const PackOffers = struct {
             }
         }
         if (trace) {
-            std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld\n", .{ set.artifacts.len, specs.items.len, withheld });
+            std.debug.print("pack: {d} excerpts, {d} specs offered, {d} withheld\n", .{ set.excerpts.len, specs.items.len, withheld });
         }
         return backend.dev.PackFile.write(allocator, set, specs.items);
     }
@@ -9503,37 +9503,37 @@ fn procFingerprint(allocator: Allocator, lowered: *const lir.CheckedPipeline.Low
     };
 }
 
-/// The artifacts a splice of one entry places (`ProcArtifact.splice`): the
+/// The excerpts a splice of one entry places (`CodeExcerpt.splice`): the
 /// entry, and everything it reaches through set-local references and stable
 /// references to definitions in the same set. The set's definitions are
 /// indexed once; each query reuses the walk's storage.
 const SpliceClosure = struct {
     allocator: Allocator,
-    set: *const backend.dev.ProcArtifact.Set,
-    procs: std.AutoHashMap(lir.ProcIdentity, ProcArtifacts),
+    set: *const backend.dev.CodeExcerpt.Set,
+    procs: std.AutoHashMap(lir.ProcIdentity, ProcExcerpts),
     thunks: std.AutoHashMap(lir.ProcIdentity, u32),
     helpers: std.StringHashMap(u32),
-    /// Artifacts the current query reached; exactly the indices in `order`.
+    /// Excerpts the current query reached; exactly the indices in `order`.
     seen: std.DynamicBitSetUnmanaged,
     order: std.ArrayList(u32) = .empty,
 
-    /// The artifacts of one procedure identity: a splice reaches the first,
+    /// The excerpts of one procedure identity: a splice reaches the first,
     /// and a pack offers the last.
-    const ProcArtifacts = struct { first: u32, last: u32 };
+    const ProcExcerpts = struct { first: u32, last: u32 };
 
-    fn init(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set) Allocator.Error!SpliceClosure {
+    fn init(allocator: Allocator, set: *const backend.dev.CodeExcerpt.Set) Allocator.Error!SpliceClosure {
         var self = SpliceClosure{
             .allocator = allocator,
             .set = set,
-            .procs = std.AutoHashMap(lir.ProcIdentity, ProcArtifacts).init(allocator),
+            .procs = std.AutoHashMap(lir.ProcIdentity, ProcExcerpts).init(allocator),
             .thunks = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator),
             .helpers = std.StringHashMap(u32).init(allocator),
             .seen = .{},
         };
         errdefer self.deinit();
-        self.seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, set.artifacts.len);
-        for (set.artifacts, 0..) |artifact, index| {
-            switch (artifact.kind) {
+        self.seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, set.excerpts.len);
+        for (set.excerpts, 0..) |excerpt, index| {
+            switch (excerpt.kind) {
                 .proc => |identity| {
                     const entry = try self.procs.getOrPut(identity);
                     if (!entry.found_existing) entry.value_ptr.first = @intCast(index);
@@ -9547,10 +9547,10 @@ const SpliceClosure = struct {
         return self;
     }
 
-    /// The artifact a pack offers for the procedure `identity`.
-    fn offeredProcArtifact(self: *const SpliceClosure, identity: lir.ProcIdentity) ?u32 {
-        const artifacts = self.procs.get(identity) orelse return null;
-        return artifacts.last;
+    /// The excerpt a pack offers for the procedure `identity`.
+    fn offeredProcExcerpt(self: *const SpliceClosure, identity: lir.ProcIdentity) ?u32 {
+        const excerpts = self.procs.get(identity) orelse return null;
+        return excerpts.last;
     }
 
     fn deinit(self: *SpliceClosure) void {
@@ -9561,7 +9561,7 @@ const SpliceClosure = struct {
         self.procs.deinit();
     }
 
-    /// Indices of the artifacts a splice of `root` places, valid until the
+    /// Indices of the excerpts a splice of `root` places, valid until the
     /// next query.
     fn of(self: *SpliceClosure, root: u32) Allocator.Error![]const u32 {
         for (self.order.items) |index| self.seen.unset(index);
@@ -9569,11 +9569,11 @@ const SpliceClosure = struct {
         try self.visit(root);
         var cursor: usize = 0;
         while (cursor < self.order.items.len) : (cursor += 1) {
-            const artifact = self.set.artifacts[self.order.items[cursor]];
-            for (artifact.refs) |ref| try self.visit(ref.target);
-            for (artifact.symbolic_refs) |ref| {
+            const excerpt = self.set.excerpts[self.order.items[cursor]];
+            for (excerpt.refs) |ref| try self.visit(ref.target);
+            for (excerpt.symbolic_refs) |ref| {
                 const target = switch (ref.target) {
-                    .proc => |identity| if (self.procs.get(identity)) |artifacts| artifacts.first else null,
+                    .proc => |identity| if (self.procs.get(identity)) |excerpts| excerpts.first else null,
                     .boxy_thunk => |identity| self.thunks.get(identity),
                     .rc_helper => |name| self.helpers.get(name),
                 };
@@ -9590,16 +9590,16 @@ const SpliceClosure = struct {
     }
 };
 
-/// The artifacts of `set` whose procedure converts a specialized custom
+/// The excerpts of `set` whose procedure converts a specialized custom
 /// literal when it runs (`PackProgram.procConvertsLiteralAtRuntime`).
-fn literalConvertingArtifacts(
+fn literalConvertingExcerpts(
     allocator: Allocator,
-    set: *const backend.dev.ProcArtifact.Set,
+    set: *const backend.dev.CodeExcerpt.Set,
     literal_converters: *const std.AutoHashMap(lir.ProcIdentity, void),
 ) Allocator.Error!std.DynamicBitSetUnmanaged {
-    var converting = try std.DynamicBitSetUnmanaged.initEmpty(allocator, set.artifacts.len);
+    var converting = try std.DynamicBitSetUnmanaged.initEmpty(allocator, set.excerpts.len);
     if (literal_converters.count() == 0) return converting;
-    for (set.artifacts, 0..) |artifact, index| switch (artifact.kind) {
+    for (set.excerpts, 0..) |excerpt, index| switch (excerpt.kind) {
         .proc => |identity| if (literal_converters.contains(identity)) converting.set(index),
         .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
     };
@@ -9608,50 +9608,50 @@ fn literalConvertingArtifacts(
 
 /// Whether any procedure a splice places converts a specialized custom
 /// literal when it runs.
-fn closureConvertsLiteral(converting_artifacts: *const std.DynamicBitSetUnmanaged, placed: []const u32) bool {
+fn closureConvertsLiteral(converting_excerpts: *const std.DynamicBitSetUnmanaged, placed: []const u32) bool {
     for (placed) |index| {
-        if (converting_artifacts.isSet(index)) return true;
+        if (converting_excerpts.isSet(index)) return true;
     }
     return false;
 }
 
-/// Whether any artifact a splice places refers to something only its own
+/// Whether any excerpt a splice places refers to something only its own
 /// program defines: a program-scope symbol it does not carry, such as the Boxy
 /// runtime, whose calls index this program's descriptor sidecar, or a constant
 /// holding a code pointer.
-fn closureNamesProgramLocalSymbols(set: *const backend.dev.ProcArtifact.Set, placed: []const u32) bool {
+fn closureNamesProgramLocalSymbols(set: *const backend.dev.CodeExcerpt.Set, placed: []const u32) bool {
     for (placed) |index| {
-        const artifact = set.artifacts[index];
+        const excerpt = set.excerpts[index];
         // The Boxy runtime's table numbers are the writing program's own.
-        if (artifact.runtime_refs.len != 0) return true;
-        for (artifact.relocations) |relocation| {
-            if (relocation.scope == .program and !carriesData(artifact, relocation.name)) return true;
+        if (excerpt.runtime_numbers.len != 0) return true;
+        for (excerpt.relocations) |relocation| {
+            if (relocation.scope == .program and !carriesData(excerpt, relocation.name)) return true;
         }
-        for (artifact.data) |item| {
+        for (excerpt.data) |item| {
             for (item.relocations) |relocation| if (relocation.function) return true;
         }
     }
     return false;
 }
 
-fn carriesData(artifact: backend.dev.ProcArtifact.Artifact, name: []const u8) bool {
-    for (artifact.data) |item| {
+fn carriesData(excerpt: backend.dev.CodeExcerpt.Excerpt, name: []const u8) bool {
+    for (excerpt.data) |item| {
         if (std.mem.eql(u8, item.name, name)) return true;
     }
     return false;
 }
 
 /// Test helper: whether the entry at `root` is withheld for program-local symbols.
-fn testNamesProgramLocalSymbols(set: *const backend.dev.ProcArtifact.Set, root: u32) Allocator.Error!bool {
+fn testNamesProgramLocalSymbols(set: *const backend.dev.CodeExcerpt.Set, root: u32) Allocator.Error!bool {
     var closure = try SpliceClosure.init(std.testing.allocator, set);
     defer closure.deinit();
     return closureNamesProgramLocalSymbols(set, try closure.of(root));
 }
 
 test "pack withholds an entry whose stable references reach a constant holding a code pointer" {
-    const ProcArtifact = backend.dev.ProcArtifact;
+    const CodeExcerpt = backend.dev.CodeExcerpt;
     const callee = lir.ProcIdentity.forTest(2);
-    const artifacts = [_]ProcArtifact.Artifact{
+    const excerpts = [_]CodeExcerpt.Excerpt{
         .{
             .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
             .code = "call",
@@ -9679,15 +9679,15 @@ test "pack withholds an entry whose stable references reach a constant holding a
             }},
         },
     };
-    const set = ProcArtifact.Set{ .arena = base.SingleThreadArena.init(std.testing.allocator), .artifacts = &artifacts };
+    const set = CodeExcerpt.Set{ .arena = base.SingleThreadArena.init(std.testing.allocator), .excerpts = &excerpts };
     try std.testing.expect(try testNamesProgramLocalSymbols(&set, 0));
     try std.testing.expect(try testNamesProgramLocalSymbols(&set, 1));
 }
 
 test "pack withholds an entry whose stable references reach a literal-converting procedure" {
-    const ProcArtifact = backend.dev.ProcArtifact;
+    const CodeExcerpt = backend.dev.CodeExcerpt;
     const converter = lir.ProcIdentity.forTest(2);
-    const artifacts = [_]ProcArtifact.Artifact{
+    const excerpts = [_]CodeExcerpt.Excerpt{
         .{
             .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
             .code = "call",
@@ -9700,20 +9700,20 @@ test "pack withholds an entry whose stable references reach a literal-converting
         },
         .{ .kind = .{ .proc = converter }, .code = "conv", .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} },
     };
-    const set = ProcArtifact.Set{ .arena = base.SingleThreadArena.init(std.testing.allocator), .artifacts = &artifacts };
+    const set = CodeExcerpt.Set{ .arena = base.SingleThreadArena.init(std.testing.allocator), .excerpts = &excerpts };
     var converters = std.AutoHashMap(lir.ProcIdentity, void).init(std.testing.allocator);
     defer converters.deinit();
     try converters.put(converter, {});
-    var converting_artifacts = try literalConvertingArtifacts(std.testing.allocator, &set, &converters);
-    defer converting_artifacts.deinit(std.testing.allocator);
+    var converting_excerpts = try literalConvertingExcerpts(std.testing.allocator, &set, &converters);
+    defer converting_excerpts.deinit(std.testing.allocator);
     var closure = try SpliceClosure.init(std.testing.allocator, &set);
     defer closure.deinit();
-    try std.testing.expect(closureConvertsLiteral(&converting_artifacts, try closure.of(0)));
+    try std.testing.expect(closureConvertsLiteral(&converting_excerpts, try closure.of(0)));
 }
 
 test "pack offers an entry that carries its program data and withholds one that calls the Boxy runtime" {
-    const ProcArtifact = backend.dev.ProcArtifact;
-    const artifacts = [_]ProcArtifact.Artifact{
+    const CodeExcerpt = backend.dev.CodeExcerpt;
+    const excerpts = [_]CodeExcerpt.Excerpt{
         .{
             .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
             .code = "read",
@@ -9742,7 +9742,7 @@ test "pack offers an entry that carries its program data and withholds one that 
             .data = &.{},
         },
     };
-    const set = ProcArtifact.Set{ .arena = base.SingleThreadArena.init(std.testing.allocator), .artifacts = &artifacts };
+    const set = CodeExcerpt.Set{ .arena = base.SingleThreadArena.init(std.testing.allocator), .excerpts = &excerpts };
     try std.testing.expect(!try testNamesProgramLocalSymbols(&set, 0));
     try std.testing.expect(try testNamesProgramLocalSymbols(&set, 1));
 }
@@ -10056,7 +10056,7 @@ fn lirResultNeedsBoxyRuntime(result: *const lir.Program.Result) bool {
 /// link. The runtime object provides the `roc_boxy_*` wrappers and
 /// `roc_boxy_init_embedded`; a companion data object carries the sidecar those
 /// symbols read (the descriptor tables, layout store, and string store the
-/// program's boxy statements index). A canonical dev image's code numbers
+/// program's boxy statements index). A arranged dev image's code numbers
 /// those tables as `canonical_order` does, so its sidecar holds exactly what
 /// that order names; an LLVM image's indexes the program's own tables.
 fn appendBoxyRuntimeLinkInputs(
@@ -10081,7 +10081,7 @@ fn appendBoxyRuntimeLinkInputs(
     };
 
     var sidecar_blob = (if (canonical_order) |order|
-        lir.LirImage.buildCanonicalSidecarBlob(ctx.gpa, lir_result, order)
+        lir.LirImage.buildArrangedSidecarBlob(ctx.gpa, lir_result, order)
     else
         lir.LirImage.buildSidecarBlob(ctx.gpa, lir_result)) catch {
         return error.NativeCompilationFailed;
@@ -10694,7 +10694,7 @@ fn staticDataLinkRootSymbols(
 
 /// The static data a dev object's link must keep: each constant the host binds
 /// by name. A dev object defines only its host-visible constants under their
-/// own names (design.md "Canonical Dev Images"); every other constant is named
+/// own names (design.md "Deterministic Dev Images"); every other constant is named
 /// by its content and reached through the code that names it, so a program's
 /// own name for it (such as a static-data slot's) is not a symbol of the
 /// object. A link told to keep such a name fails where a forced undefined
@@ -11923,7 +11923,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         for (lowered.lir_result.store.getProcSpecs()) |proc| {
             if (proc.c_abi_entry) linked_procs += 1;
         }
-        std.debug.print("pack hits: {d} external procs: {d} linked procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, external_procs, linked_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count() });
+        std.debug.print("pack hits: {d} external procs: {d} linked procs: {d} evaluator excerpts: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, external_procs, linked_procs, packs.excerpts_served, packs.packs.items.len, packs.specs.count() });
     }
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
@@ -11965,9 +11965,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     object_compiler.timing = &backend_timing;
     object_compiler.post_check_executor = build_env.postCheckExecutor();
     if (loaded_packs) |packs| object_compiler.splice_source = packs.spliceSource();
-    object_compiler.capture_artifacts = object_cache_enabled;
+    object_compiler.capture_excerpts = object_cache_enabled;
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
-    defer if (object_compiler.captured_artifacts) |*set| set.deinit();
+    defer if (object_compiler.captured_excerpts) |*set| set.deinit();
 
     const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
@@ -12006,7 +12006,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // and so skip its diagnostic, so a build with errors writes no packs.
     if (object_store != null and diag.errors == 0) {
         const store = object_store.?;
-        try writePacksToStore(ctx, &build_env, store, root_artifact, imported_artifacts, relation_artifacts, &lowered, if (object_compiler.captured_artifacts) |*set| set else null, args, target);
+        try writePacksToStore(ctx, &build_env, store, root_artifact, imported_artifacts, relation_artifacts, &lowered, if (object_compiler.captured_excerpts) |*set| set else null, args, target);
     }
 
     const link_facts: ProgramOutput.LinkFacts = .{

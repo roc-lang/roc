@@ -443,7 +443,7 @@ const CustomCase = enum {
     edited_lambda_object_cache,
     edited_nominal_object_cache,
     edited_method_object_cache,
-    native_build_artifact_round_trip,
+    native_build_excerpt_round_trip,
     native_build_pack_objects,
     native_build_pack_hits,
     early_ctfe_cache,
@@ -588,7 +588,7 @@ const forced_ice_skip: Skip = if (builtin.mode == .debug) .never else .{ .always
 /// here sets one of them and checks what it changes or prints.
 const dev_diagnostics_cases = [_]CustomCase{
     .package_dev_packs,
-    .native_build_artifact_round_trip,
+    .native_build_excerpt_round_trip,
     .native_build_pack_objects,
     .native_build_pack_hits,
     .early_ctfe_cache,
@@ -3211,7 +3211,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "object cache: spliced procedures keep the debug lines of the cold build", .timeout_ms = 600_000, .body = .{ .custom = .spliced_procedure_debug_lines } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: exports taking and returning boxed closures are offered and served warm", .timeout_ms = 600_000, .body = .{ .custom = .boxed_closure_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev writes identical object-cache packs across thread counts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_store_thread_count_reproducible } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output assembled from its own procedure artifacts is identical", .timeout_ms = 600_000, .body = .{ .custom = .native_build_artifact_round_trip } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output assembled from its own procedure excerpts is identical", .timeout_ms = 600_000, .body = .{ .custom = .native_build_excerpt_round_trip } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev pack programs are deterministic and round-trip through artifacts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_objects } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11673: imported callable identity survives cold warm and sibling builds", .timeout_ms = 600_000, .body = .{ .custom = .issue_11673_callable_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: cached recursive callbacks retain method result rows", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_recursive_callback_cache } },
@@ -5194,7 +5194,7 @@ fn runCustomCase(
         .edited_lambda_object_cache => customEditedLambdaObjectCache(io, allocator, &env, &timer, timeout_ms),
         .edited_nominal_object_cache => customEditedNominalObjectCache(io, allocator, &env, &timer, timeout_ms),
         .edited_method_object_cache => customEditedMethodObjectCache(io, allocator, &env, &timer, timeout_ms),
-        .native_build_artifact_round_trip => customNativeBuildArtifactRoundTrip(io, allocator, &env, &timer, timeout_ms),
+        .native_build_excerpt_round_trip => customNativeBuildExcerptRoundTrip(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_objects => customNativeBuildPackObjects(io, allocator, &env, &timer, timeout_ms),
         .issue_11673_callable_cache => customIssue11673CallableCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11678_recursive_callback_cache => customIssue11678RecursiveCallbackCache(io, allocator, &env, &timer, timeout_ms),
@@ -9254,12 +9254,12 @@ fn customSplicedProcedureDebugLines(
     return null;
 }
 
-/// Every dev object compile under `ROC_DEV_ARTIFACT_ROUNDTRIP` also assembles
-/// the program from its own procedure artifacts and panics on any difference
-/// in code bytes, relocations, or unwind records (`ProcArtifact.verifyRoundTrip`
-/// in `src/backend/dev/ProcArtifact.zig`). A build that panics fails the
+/// Every dev object compile under `ROC_DEV_EXCERPT_ROUNDTRIP` also assembles
+/// the program from its own procedure excerpts and panics on any difference
+/// in code bytes, relocations, or unwind records (`CodeExcerpt.verifyRoundTrip`
+/// in `src/backend/dev/CodeExcerpt.zig`). A build that panics fails the
 /// "successfully building" check.
-fn customNativeBuildArtifactRoundTrip(
+fn customNativeBuildExcerptRoundTrip(
     io: std.Io,
     allocator: Allocator,
     env: *const CaseEnv,
@@ -9272,11 +9272,11 @@ fn customNativeBuildArtifactRoundTrip(
             return customInfraFailure(allocator, timer, "failed to clone artifact round-trip environment: {}", .{err}),
     };
     defer round_trip_env.env_map.deinit();
-    round_trip_env.env_map.put("ROC_DEV_ARTIFACT_ROUNDTRIP", "1") catch |err|
-        return customInfraFailure(allocator, timer, "failed to enable the artifact round trip: {}", .{err});
+    round_trip_env.env_map.put("ROC_DEV_EXCERPT_ROUNDTRIP", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable the excerpt round trip: {}", .{err});
 
     for (thread_count_reproducible_apps, 0..) |roc_file, app_index| {
-        const output_path = std.fmt.allocPrint(allocator, "{s}/artifact_round_trip_{d}", .{ env.dirs.work_dir, app_index }) catch |err|
+        const output_path = std.fmt.allocPrint(allocator, "{s}/excerpt_round_trip_{d}", .{ env.dirs.work_dir, app_index }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
         const out_arg = outputArg(allocator, output_path) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
@@ -9294,8 +9294,8 @@ fn customNativeBuildArtifactRoundTrip(
 /// module's closed exports as a pack program and write one object and one
 /// manifest per module next to the output (`writePackObjects` in
 /// `src/cli/main.zig`). Two builds must write identical pack files, the
-/// platform and app packs must have roots, and with the artifact round trip
-/// enabled every pack object must assemble from its own artifacts.
+/// platform and app packs must have roots, and with the excerpt round trip
+/// enabled every pack object must assemble from its own excerpts.
 fn customNativeBuildPackObjects(
     io: std.Io,
     allocator: Allocator,
@@ -9311,8 +9311,8 @@ fn customNativeBuildPackObjects(
     defer pack_env.env_map.deinit();
     pack_env.env_map.put("ROC_DEV_PACK_OBJECTS", "1") catch |err|
         return customInfraFailure(allocator, timer, "failed to enable pack objects: {}", .{err});
-    pack_env.env_map.put("ROC_DEV_ARTIFACT_ROUNDTRIP", "1") catch |err|
-        return customInfraFailure(allocator, timer, "failed to enable the artifact round trip: {}", .{err});
+    pack_env.env_map.put("ROC_DEV_EXCERPT_ROUNDTRIP", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable the excerpt round trip: {}", .{err});
 
     const roc_file = "test/fx/hello_world.roc";
     const suffixes = [_][]const u8{ "pack_a", "pack_b" };
@@ -11447,7 +11447,7 @@ fn storeBuildsBehaveIdentically(
     expect: StoreExpectations,
 ) ?TestResult {
     const hits_marker = "pack hits: ";
-    const evaluator_marker = "evaluator artifacts: ";
+    const evaluator_marker = "evaluator excerpts: ";
     var stats_env = CaseEnv{
         .dirs = env.dirs,
         .env_map = env.env_map.clone(allocator) catch |err|
@@ -11531,7 +11531,7 @@ fn storeBuildsBehaveIdentically(
             }
             if (expect.evaluator_artifacts) {
                 const evaluator_at = std.mem.find(u8, built.stderr, evaluator_marker) orelse
-                    return failureFromRun(allocator, timer, built, "build with the object cache did not report evaluator artifacts");
+                    return failureFromRun(allocator, timer, built, "build with the object cache did not report evaluator excerpts");
                 if (countAfterMarker(built.stderr[evaluator_at + evaluator_marker.len ..]) == 0) return failureFromRun(allocator, timer, built, "the compile-time evaluator spliced no object-cache entry");
             }
         }

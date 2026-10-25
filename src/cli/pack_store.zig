@@ -236,9 +236,9 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
     defer tmp.cleanup();
     const identity = lir.ProcIdentity.forTest(43);
     const key = @as([32]u8, @splat(41));
-    const set = backend.dev.ProcArtifact.Set{
+    const set = backend.dev.CodeExcerpt.Set{
         .arena = @import("base").SingleThreadArena.init(allocator),
-        .artifacts = &.{.{
+        .excerpts = &.{.{
             .kind = .{ .proc = identity },
             .code = "\xc3",
             .entry = 0,
@@ -250,7 +250,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
     };
     const bytes = try PackFile.write(allocator, &set, &.{.{
         .key = key,
-        .artifact = 0,
+        .excerpt = 0,
         .rc_borrowed_params = 1,
         .rc_ret_borrowed = false,
         .rc_ret_lenders = 0,
@@ -275,10 +275,10 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
             const hit = packs.specCacheLookup().lookup(expected_key, .dev_code, &.{}) orelse return error.TestUnexpectedResult;
             try std.testing.expectEqualSlices(u8, &expected_identity.bytes, &hit.identity);
             try std.testing.expectEqual(@as(u64, 1), hit.rc_borrowed_params);
-            // A consumer that cannot splice is never served dev artifacts.
+            // A consumer that cannot splice is never served dev excerpts.
             try std.testing.expect(packs.specCacheLookup().lookup(expected_key, .linked_objects, &.{}) == null);
             const located = packs.spliceSource().find(packs.spliceSource().context, expected_key) orelse return error.TestUnexpectedResult;
-            try std.testing.expectEqual(expected_identity, located.set.artifacts[located.index].kind.proc);
+            try std.testing.expectEqual(expected_identity, located.set.excerpts[located.index].kind.proc);
         }
 
         fn rejected(packs: *LoadedPacks, key_to_find: [32]u8, err: LoadedPacks.LoadError) (LoadedPacks.LoadError || error{ TestExpectedEqual, TestUnexpectedResult, TestExpectedError, TestUnexpectedError })!void {
@@ -290,7 +290,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
             const splice = packs.spliceSource();
             try std.testing.expect(splice.find(splice.context, key_to_find) == null);
             try std.testing.expectEqual(@as(u64, 0), packs.hits);
-            try std.testing.expectEqual(@as(u64, 0), packs.artifacts_served);
+            try std.testing.expectEqual(@as(u64, 0), packs.excerpts_served);
             return err;
         }
     };
@@ -322,18 +322,18 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
     try std.testing.expect(malformed.spliceSource().find(malformed.spliceSource().context, key) == null);
 }
 
-test "object cache accepts new offers after indexing without moving served artifacts" {
+test "object cache accepts new offers after indexing without moving served excerpts" {
     const allocator = std.testing.allocator;
     var packs = LoadedPacks.init(allocator);
     defer packs.deinit();
     try packs.indexPacks();
-    var first: ?backend.dev.LocatedArtifact = null;
+    var first: ?backend.dev.LocatedExcerpt = null;
     for (0..32) |index| {
         const identity = lir.ProcIdentity.forTest(@intCast(index));
         const key = @as([32]u8, @splat(@intCast(index)));
-        const set = backend.dev.ProcArtifact.Set{
+        const set = backend.dev.CodeExcerpt.Set{
             .arena = @import("base").SingleThreadArena.init(allocator),
-            .artifacts = &.{.{
+            .excerpts = &.{.{
                 .kind = .{ .proc = identity },
                 .code = "\xc3",
                 .entry = 0,
@@ -345,7 +345,7 @@ test "object cache accepts new offers after indexing without moving served artif
         };
         const bytes = try PackFile.write(allocator, &set, &.{.{
             .key = key,
-            .artifact = 0,
+            .excerpt = 0,
             .rc_borrowed_params = 0,
             .rc_ret_borrowed = false,
             .rc_ret_lenders = 0,
@@ -360,10 +360,10 @@ test "object cache accepts new offers after indexing without moving served artif
         try std.testing.expectEqualSlices(u8, &identity.bytes, &hit.identity);
         const splice = packs.spliceSource();
         const located = splice.find(splice.context, key) orelse return error.TestUnexpectedResult;
-        try std.testing.expectEqual(identity, located.set.artifacts[located.index].kind.proc);
+        try std.testing.expectEqual(identity, located.set.excerpts[located.index].kind.proc);
         if (first) |served| {
             try std.testing.expectEqual(&packs.packs.items[0].set, served.set);
-            try std.testing.expectEqual(lir.ProcIdentity.forTest(0), served.set.artifacts[served.index].kind.proc);
+            try std.testing.expectEqual(lir.ProcIdentity.forTest(0), served.set.excerpts[served.index].kind.proc);
         } else first = located;
     }
 }
@@ -650,10 +650,10 @@ pub fn programBindingKey(allocator: Allocator, build_env: *compile.BuildEnv, roo
 /// A dev pack as a program asks for its entries: the pack's artifact set and
 /// a digest of the program's modules (`Common.ProgramModules`).
 const ProgramPack = struct {
-    set: *const backend.dev.ProcArtifact.Set,
+    set: *const backend.dev.CodeExcerpt.Set,
     modules: [32]u8,
 
-    fn of(set: *const backend.dev.ProcArtifact.Set, modules: Common.ProgramModules) ProgramPack {
+    fn of(set: *const backend.dev.CodeExcerpt.Set, modules: Common.ProgramModules) ProgramPack {
         var hasher = std.crypto.hash.Blake3.init(.{});
         for (modules) |identity| hasher.update(&identity);
         var digest: [32]u8 = undefined;
@@ -770,8 +770,8 @@ pub const LoadedPacks = struct {
     allocator: Allocator,
     packs: std.ArrayList(*PackFile.Pack),
     specs: std.AutoHashMap([32]u8, Common.SpecCacheHit),
-    /// The artifact of each entry `specs` holds, by the same key.
-    artifacts: std.AutoHashMap([32]u8, backend.dev.LocatedArtifact),
+    /// The excerpt of each entry `specs` holds, by the same key.
+    excerpts: std.AutoHashMap([32]u8, backend.dev.LocatedExcerpt),
     /// Object packs, whose entries only a consumer whose code is linked takes.
     object_packs: std.ArrayList(PackFile.ObjectPack) = .empty,
     linked_specs: std.AutoHashMap([32]u8, LinkedOffer),
@@ -782,8 +782,8 @@ pub const LoadedPacks = struct {
     /// Per dev pack, by its artifact set, whether a splice of each artifact
     /// would place code for a procedure an object pack offers
     /// (`linked_identities`).
-    dev_reaches_linked: std.AutoHashMapUnmanaged(*const backend.dev.ProcArtifact.Set, []bool) = .empty,
-    /// Per dev pack and asking program, whether a splice of each artifact
+    dev_reaches_linked: std.AutoHashMapUnmanaged(*const backend.dev.CodeExcerpt.Set, []bool) = .empty,
+    /// Per dev pack and asking program, whether a splice of each excerpt
     /// would place a line or a location in a module version the program does
     /// not lower against (`linesOutsideProgram`).
     lines_outside: std.AutoHashMapUnmanaged(ProgramPack, []bool) = .empty,
@@ -798,7 +798,7 @@ pub const LoadedPacks = struct {
     /// Specializations served so far.
     hits: u64 = 0,
     /// Artifacts handed to a splice so far.
-    artifacts_served: u64 = 0,
+    excerpts_served: u64 = 0,
     /// Set until `indexPacks` runs; lookups before that load the pending
     /// store's packs for the modules in view first.
     pending: ?Pending = null,
@@ -827,7 +827,7 @@ pub const LoadedPacks = struct {
             .allocator = allocator,
             .packs = .empty,
             .specs = std.AutoHashMap([32]u8, Common.SpecCacheHit).init(allocator),
-            .artifacts = std.AutoHashMap([32]u8, backend.dev.LocatedArtifact).init(allocator),
+            .excerpts = std.AutoHashMap([32]u8, backend.dev.LocatedExcerpt).init(allocator),
             .linked_specs = std.AutoHashMap([32]u8, LinkedOffer).init(allocator),
             .discovery_arena = std.heap.ArenaAllocator.init(allocator),
         };
@@ -1035,15 +1035,15 @@ pub const LoadedPacks = struct {
 
     fn indexPack(self: *LoadedPacks, pack: *const PackFile.Pack) LoadError!void {
         for (pack.specs) |spec| {
-            const root = pack.set.artifacts[spec.artifact];
+            const root = pack.set.excerpts[spec.excerpt];
             const identity = switch (root.kind) {
                 .proc => |identity| identity,
                 .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => return error.MalformedPack,
             };
             if (self.specs.contains(spec.key)) continue;
-            try self.artifacts.ensureUnusedCapacity(1);
+            try self.excerpts.ensureUnusedCapacity(1);
             try self.specs.ensureUnusedCapacity(1);
-            self.artifacts.putAssumeCapacityNoClobber(spec.key, .{ .set = &pack.set, .index = spec.artifact });
+            self.excerpts.putAssumeCapacityNoClobber(spec.key, .{ .set = &pack.set, .index = spec.excerpt });
             self.specs.putAssumeCapacityNoClobber(spec.key, .{
                 .identity = identity.bytes,
                 .comptime_root_reads = spec.comptime_root_reads,
@@ -1064,13 +1064,13 @@ pub const LoadedPacks = struct {
     fn indexObjectPacks(self: *LoadedPacks, program_key: [32]u8) LoadError!void {
         for (self.object_packs.items, 0..) |*pack, pack_index| {
             for (pack.specs) |spec| {
-                if (!pack.servesProgram(spec.artifact, program_key)) continue;
-                const linked = try self.linked_identities.getOrPut(self.allocator, pack.identities[spec.artifact]);
+                if (!pack.servesProgram(spec.excerpt, program_key)) continue;
+                const linked = try self.linked_identities.getOrPut(self.allocator, pack.identities[spec.excerpt]);
                 if (!linked.found_existing) linked.value_ptr.* = @intCast(pack_index);
                 const gop = try self.linked_specs.getOrPut(spec.key);
                 if (!gop.found_existing) gop.value_ptr.* = .{
                     .hit = .{
-                        .identity = pack.identities[spec.artifact].bytes,
+                        .identity = pack.identities[spec.excerpt].bytes,
                         .c_abi_entry = true,
                         .comptime_root_reads = spec.comptime_root_reads,
                         .rc_borrowed_params = spec.rc_borrowed_params,
@@ -1212,7 +1212,7 @@ pub const LoadedPacks = struct {
         for (self.object_packs.items) |*pack| pack.deinit();
         self.object_packs.deinit(self.allocator);
         self.object_packs_used.deinit(self.allocator);
-        self.artifacts.deinit();
+        self.excerpts.deinit();
         self.specs.deinit();
         for (self.packs.items) |pack| {
             pack.deinit();
@@ -1297,7 +1297,7 @@ pub const LoadedPacks = struct {
     /// Whether a splice of the dev entry under `key` would place a line or a
     /// location in a module version outside `modules`.
     fn linesOutsideProgram(self: *LoadedPacks, key: [32]u8, modules: Common.ProgramModules) bool {
-        const located = self.artifacts.get(key) orelse return false;
+        const located = self.excerpts.get(key) orelse return false;
         const set = located.set;
         var all_present = true;
         for (set.source_files) |identity| all_present = all_present and Common.programHasModule(modules, identity);
@@ -1309,7 +1309,7 @@ pub const LoadedPacks = struct {
         const present = self.allocator.alloc(bool, set.source_files.len) catch return true;
         defer self.allocator.free(present);
         for (set.source_files, present) |identity, *is_present| is_present.* = Common.programHasModule(modules, identity);
-        const marks = backend.dev.ProcArtifact.reachingAbsentFiles(self.allocator, set, present) catch return true;
+        const marks = backend.dev.CodeExcerpt.reachingAbsentFiles(self.allocator, set, present) catch return true;
         self.lines_outside.put(self.allocator, program_pack, marks) catch {
             const outside = marks[located.index];
             self.allocator.free(marks);
@@ -1323,11 +1323,11 @@ pub const LoadedPacks = struct {
     /// procedure, or one its code reaches through the pack.
     fn devEntryReachesLinked(self: *LoadedPacks, key: [32]u8) bool {
         if (self.linked_identities.count() == 0) return false;
-        const located = self.artifacts.get(key) orelse return false;
+        const located = self.excerpts.get(key) orelse return false;
         const marks = self.dev_reaches_linked.get(located.set) orelse marks: {
             // Refusing the entry is always sound: the program compiles the
             // procedure itself.
-            const computed = backend.dev.ProcArtifact.reachingIdentities(self.allocator, located.set, &self.linked_identities) catch return true;
+            const computed = backend.dev.CodeExcerpt.reachingIdentities(self.allocator, located.set, &self.linked_identities) catch return true;
             self.dev_reaches_linked.put(self.allocator, located.set, computed) catch {
                 const reaches = computed[located.index];
                 self.allocator.free(computed);
@@ -1359,12 +1359,12 @@ pub const LoadedPacks = struct {
         return list.items;
     }
 
-    fn findArtifact(context: *anyopaque, key: [32]u8) ?backend.dev.LocatedArtifact {
+    fn findArtifact(context: *anyopaque, key: [32]u8) ?backend.dev.LocatedExcerpt {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
         self.ensureLoaded();
         if (self.state != .ready) return null;
-        const located = self.artifacts.get(key) orelse return null;
-        self.artifacts_served += 1;
+        const located = self.excerpts.get(key) orelse return null;
+        self.excerpts_served += 1;
         return located;
     }
 };
@@ -1415,10 +1415,10 @@ test "loaded packs offer no entry whose lines name a missing module version or t
     const caller = lir.ProcIdentity.forTest(61);
     const callee = lir.ProcIdentity.forTest(62);
     const stale = lir.ProcIdentity.forTest(63);
-    const frame: backend.dev.ProcArtifact.Frame = .{ .prologue_size = 1, .stack_alloc = 0, .frame_size = 0, .callee_saved_mask = 0, .epilogue_offset = 1, .uses_frame_pointer = true };
-    const set = backend.dev.ProcArtifact.Set{
+    const frame: backend.dev.CodeExcerpt.Frame = .{ .prologue_size = 1, .stack_alloc = 0, .frame_size = 0, .callee_saved_mask = 0, .epilogue_offset = 1, .uses_frame_pointer = true };
+    const set = backend.dev.CodeExcerpt.Set{
         .arena = base_mod.SingleThreadArena.init(allocator),
-        .artifacts = &.{
+        .excerpts = &.{
             .{ .kind = .{ .proc = caller }, .code = "\xe8\x00\x00\x00\x00\xc3", .entry = 0, .frame = frame, .refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }}, .relocations = &.{}, .data = &.{}, .loc = .{ .file = 0, .line = 1, .column = 1 } },
             .{ .kind = .{ .proc = callee }, .code = "\xc3", .entry = 0, .frame = frame, .refs = &.{}, .relocations = &.{}, .data = &.{}, .loc = .{ .file = 0, .line = 2, .column = 1 } },
             .{ .kind = .{ .proc = stale }, .code = "\xc3", .entry = 0, .frame = frame, .refs = &.{}, .relocations = &.{}, .data = &.{}, .lines = &.{.{ .offset = 0, .loc = .{ .file = 1, .line = 7, .column = 1 }, .region = base_mod.Region.zero() }} },
@@ -1428,7 +1428,7 @@ test "loaded packs offer no entry whose lines name a missing module version or t
     const Spec = PackFile.SpecEntry;
     const spec = struct {
         fn of(key: u8, artifact: u32) Spec {
-            return .{ .key = @splat(key), .artifact = artifact, .rc_borrowed_params = 0, .rc_ret_borrowed = false, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique = false, .rc_ret_unique_fields = 0, .rc_ret_conditions = &.{} };
+            return .{ .key = @splat(key), .excerpt = artifact, .rc_borrowed_params = 0, .rc_ret_borrowed = false, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique = false, .rc_ret_unique_fields = 0, .rc_ret_conditions = &.{} };
         }
     }.of;
     const bytes = try PackFile.write(allocator, &set, &.{ spec(1, 0), spec(2, 1), spec(3, 2) });
@@ -1468,7 +1468,7 @@ test "object packs serve in load order, and app-bound entries serve only the pro
     const Spec = PackFile.SpecEntry;
     const spec = struct {
         fn of(key: u8, artifact: u32) Spec {
-            return .{ .key = @splat(key), .artifact = artifact, .rc_borrowed_params = 0, .rc_ret_borrowed = false, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique = false, .rc_ret_unique_fields = 0, .rc_ret_conditions = &.{} };
+            return .{ .key = @splat(key), .excerpt = artifact, .rc_borrowed_params = 0, .rc_ret_borrowed = false, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique = false, .rc_ret_unique_fields = 0, .rc_ret_conditions = &.{} };
         }
     }.of;
     // The first pack offers `shared`, and the program's own code bound to
@@ -1501,7 +1501,7 @@ test "an object pack that offers nothing is no offer and contributes no object t
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const offered = lir.ProcIdentity.forTest(81);
-    const spec: PackFile.SpecEntry = .{ .key = @splat(3), .artifact = 0, .rc_borrowed_params = 0, .rc_ret_borrowed = false, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique = false, .rc_ret_unique_fields = 0, .rc_ret_conditions = &.{} };
+    const spec: PackFile.SpecEntry = .{ .key = @splat(3), .excerpt = 0, .rc_borrowed_params = 0, .rc_ret_borrowed = false, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique = false, .rc_ret_unique_fields = 0, .rc_ret_conditions = &.{} };
     const offering = try PackFile.writeObject(allocator, "object", &.{offered}, &.{spec}, .{ .app_bound = &.{false} });
     defer allocator.free(offering);
     // What an optimized build files when its program's code could not be a
