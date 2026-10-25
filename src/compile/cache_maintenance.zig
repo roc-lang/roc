@@ -9,7 +9,9 @@ const Dir = Io.Dir;
 const put = catalog.put;
 const get = catalog.get;
 
+/// Current pack format and eventual payload-size target.
 pub const Limits = struct { object_pack_format_version: u32, max_size_bytes: u64 };
+/// Completed work and actual catalog I/O for one maintenance admission.
 pub const Stats = struct {
     units: usize = 0,
     records: usize = 0,
@@ -19,6 +21,7 @@ pub const Stats = struct {
     io: catalog.Counters = .{},
 };
 
+/// Shared cadence and operation-count budgets for maintenance grants.
 pub const Policy = struct {
     pub const interval: i64 = 5 * artifacts.minute_ns;
     pub const overdue: i64 = artifacts.minute_ns;
@@ -27,10 +30,12 @@ pub const Policy = struct {
     pub const pressure_units: usize = 8;
 };
 
+/// Capacity offered by the caller, subject to the shared-root grant policy.
 pub const Admission = enum { optional, compulsory };
 const Phase = enum(u8) { boundaries, age, candidates, evict };
 const state_size = 2048;
 
+/// Fixed-size resumable traversal hints, revalidated before reclamation.
 pub const Checkpoint = struct {
     due: i64 = 0,
     next_grant: i64 = 0,
@@ -168,10 +173,13 @@ fn step(store: *const artifacts.Store, limits: Limits, now: i64, checkpoint: *Ch
     if (checkpoint.phase == .evict) return evict(store, limits, now, checkpoint, stats);
     const number: u4 = @intCast(checkpoint.shard);
     var shard = artifacts.Shard.open(store, number, false, &stats.io) catch |err| {
-        if (err != error.Missing and err != error.Busy) stats.errors += 1;
-        if (err == error.Missing) {
-            checkpoint.bytes[number] = 0;
-            checkpoint.boundaries[number] = 0;
+        switch (err) {
+            error.Missing => {
+                checkpoint.bytes[number] = 0;
+                checkpoint.boundaries[number] = 0;
+            },
+            error.Busy => {},
+            else => stats.errors += 1,
         }
         checkpoint.candidates[number] = null;
         checkpoint.nextShard(switch (checkpoint.phase) {
@@ -256,7 +264,11 @@ fn evict(store: *const artifacts.Store, limits: Limits, now: i64, checkpoint: *C
     };
     var shard = artifacts.Shard.open(store, number, false, &stats.io) catch |err| {
         checkpoint.candidates[number] = null;
-        if (err == error.Missing) checkpoint.bytes[number] = 0 else if (err != error.Busy) stats.errors += 1;
+        switch (err) {
+            error.Missing => checkpoint.bytes[number] = 0,
+            error.Busy => {},
+            else => stats.errors += 1,
+        }
         return;
     };
     defer shard.close();
@@ -297,7 +309,7 @@ const Fixture = struct {
     tmp: std.testing.TmpDir,
     store: artifacts.Store,
 
-    fn init() !Fixture {
+    fn init() (std.Io.Dir.RealPathFileAllocError || artifacts.Error)!Fixture {
         var tmp = std.testing.tmpDir(.{});
         errdefer tmp.cleanup();
         const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);

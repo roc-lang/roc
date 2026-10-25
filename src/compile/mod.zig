@@ -1,7 +1,6 @@
 //! Compilation-related types and functionality, such as cache management and package building.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const threading_mod = @import("threading.zig");
 
 pub const package = @import("compile_package.zig");

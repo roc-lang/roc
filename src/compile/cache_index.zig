@@ -10,18 +10,26 @@ const std = @import("std");
 const Io = std.Io;
 const Dir = Io.Dir;
 
+/// Bytes per catalog record, including its checksum.
 pub const record_size = 512;
+/// Fixed-width key ordered lexicographically by the crit-bit indexes.
 pub const Key = [64]u8;
+/// Opaque fixed-width payload stored in a leaf.
 pub const Value = [384]u8;
+/// Maximum branch depth for any lookup.
 pub const key_bits = @bitSizeOf(Key);
+/// Maximum number of changed records in a redo transaction.
 pub const max_changes = 24;
+/// Physical record number; zero denotes a missing node.
 pub const RecordId = u64;
+/// Independent indexes sharing one record allocator and transaction.
 pub const Tree = enum(u2) { artifacts, recency, owners, spare };
 const Record = [record_size]u8;
 const magic = "ROCIDX01";
 const transaction_magic = "ROCTXN01";
 const redo_size = 24 + record_size + max_changes * (8 + record_size);
 
+/// Storage failures and invalid on-disk catalog data.
 pub const Error = error{ IoFailure, CorruptCatalog, CapacityExceeded };
 
 /// Observable work, including recovery. Tests assert bounds on actual I/O.
@@ -32,6 +40,7 @@ pub const Counters = struct {
     written_bytes: usize = 0,
 };
 
+/// Index roots, allocation state, and store accounting persisted in record zero.
 pub const Header = struct {
     roots: [4]RecordId = @splat(0),
     next: RecordId = 1,
@@ -67,6 +76,7 @@ pub const Header = struct {
     }
 };
 
+/// Decoded branch, leaf, or free-list record.
 pub const Node = struct {
     pub const Kind = enum(u8) { free, leaf, branch };
     kind: Kind = .free,
@@ -103,6 +113,7 @@ pub const Node = struct {
     }
 };
 
+/// Open catalog with bounded recovery and positional record access.
 pub const Index = struct {
     dir: Dir,
     io: Io,
@@ -192,6 +203,7 @@ pub const Index = struct {
     }
 };
 
+/// A bounded set of node changes committed through one redo record.
 pub const Transaction = struct {
     pub const Entry = struct { id: RecordId, key: Key, value: Value };
     index: *Index,
@@ -439,10 +451,12 @@ fn firstDifference(a: Key, b: Key) u16 {
     unreachable; // putValue handles equal keys before finding their first differing bit
 }
 
+/// Encode an integer at a fixed byte offset in little-endian order.
 pub fn put(comptime T: type, bytes: []u8, offset: usize, value: T) void {
     std.mem.writeInt(T, bytes[offset..][0..@sizeOf(T)], value, .little);
 }
 
+/// Decode an integer from a fixed byte offset in little-endian order.
 pub fn get(comptime T: type, bytes: []const u8, offset: usize) T {
     return std.mem.readInt(T, bytes[offset..][0..@sizeOf(T)], .little);
 }

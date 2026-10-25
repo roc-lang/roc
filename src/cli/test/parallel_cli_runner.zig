@@ -8198,7 +8198,7 @@ const PackStoreFiles = struct {
             if (entry.state != .published) continue;
             switch (entry.family) {
                 .local_pack, .package_pack, .optimized_pack => {},
-                else => continue,
+                .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .local_discovery, .package_discovery, .program_output, .scratch => continue,
             }
             const path = try allocator.dupe(u8, &std.fmt.bytesToHex(entry.key, .lower));
             result.paths.append(allocator, path) catch |err| {
