@@ -496,6 +496,7 @@ const GroupLivenessIndex = struct {
 
 /// Public `insert` function.
 pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: InsertOptions) ResourceError!void {
+    @import("base").dev_diagnostics.countTestWork(.arc, 1);
     if (options.metrics_out) |metrics| metrics.* = .{};
     var inserter = Inserter{
         .store = store,

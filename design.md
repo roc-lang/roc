@@ -24051,6 +24051,51 @@ fresh observations only during the existing deterministic reporting merge.
 Work counters distinguish the complete reporting plan and cache admission
 from the procedures and entrypoints actually emitted for execution.
 
+### Completed dev test commands
+
+A completed `roc test --opt=dev` outcome is an orchestration result, independent
+of checked graphs and lowering sessions. After resolving the current package
+graph, the command can validate its recorded consumed source and imported-file
+contents and replay the complete outcome before loading checked modules. The
+test command has its own identity domain, including compiler compatibility,
+root selection, checking context, resolved package graph and execution policy.
+Neither a build nor a check publishes a test-command outcome.
+
+The early input plan is producer data: the source and file-import reads of a
+completed compilation, including missing-file facts, and the physical source
+paths admitted by import resolution. Validation hashes bytes and revalidates
+those physical paths, never timestamps. Resolution runs before admission, so
+package sidecars, replacement requests and resolution failures retain their
+ordinary semantics.
+An input plan only locates a content-addressed outcome; changing its inputs
+cannot admit the previous outcome. Older outcomes remain reusable when those
+inputs are restored. A changed dependency closure may replace the input plan
+and conservatively miss an older outcome with a different closure.
+
+The command owns ordered compile-time debug observations and structured
+diagnostic documents. Test observations remain in the existing per-module
+result payloads, referenced by digest rather than copied into the command
+record. Each observation has exactly one replay owner. Source reporting uses
+current validated source bytes and paths; it requires no `PreparedSolved`, CIR
+or type store. Presentation settings and elapsed time are never cached.
+
+Publication follows completed execution and durable referenced payloads; an
+atomic manifest publishes the outcome last. Passes, failed expects and Roc
+crashes qualify. Commands with semantic compilation errors or transient backend
+failures do not publish complete outcomes. Missing, incompatible, truncated or
+corrupt records and evicted payloads are misses. A complete hit returns before
+runtime demand construction, specialization, CTFE, LIR/ARC, static data,
+native test code generation and execution. It does not load procedure packs.
+
+The command envelope and per-module result payloads carry content checksums.
+Command source paths and diagnostic path elements are relative to the current
+working directory and are rebound only after validation. Compilation diagnostics
+are replayed from their document elements, before test observations; color,
+verbosity and terminal width are current renderer inputs. The command's arena
+owns validated source bytes and lightweight source environments throughout replay.
+
+### Command-level execution
+
 `roc test --opt=size` and `roc test --opt=speed` use one command-level test
 plan for all discovered test roots in the app and its imports. The plan is
 explicit compiler data. It owns the stable source-order display order, the
@@ -24207,12 +24252,12 @@ results use the same ordering path. Diagnostics, `dbg`, `expect` failures,
 `expect_err` regions, crashes, and backend compiler errors stay attached to
 their test-plan entries until rendering and cache writes replay the plan order.
 
-Checked test-result cache entries use the same checked module cache identity
-as `roc check`. There is no second test-result cache key.
-The test-result bundle may carry its own payload format and compiler-version
-admission data, but those fields decide whether the decoded bundle can be used;
-they do not extend the checked module cache identity. The result cache key does not
-include selected optimization mode, backend, worker count, color mode,
+Checked test-result cache entries derive their source identity from the same
+checked module identity as `roc check`. The result key additionally covers its
+payload format, compiler compatibility, specialization strategy and execution
+mode: a completed outcome records that execution policy's resource behavior.
+These inputs do not change checked module identity. The result cache key does not
+include worker count, color mode,
 verbosity, terminal width, terminal style, elapsed time, final summary text,
 test-run completion order, test-root identity, or test-root order. Test-root
 identity and order are explicit checked module data and payload shape, not
@@ -25837,6 +25882,11 @@ since the release compiler binary shares its modules with the development one. C
 cases that set one of these variables skip against a compiler without them.
 Performance work that needs them on an optimized compiler builds it with
 `zig build roc -Doptimize=ReleaseFast -Ddev-diagnostics`.
+
+`ROC_TEST_COMMAND_WORK` prints deterministic test-command counters at exit.
+The specialization, evaluation, runtime LIR, ARC, static-data and native test
+execution producers increment their own counters. A complete result hit leaves
+every counter zero. This variable uses the same developer-only gate.
 
 
 ## Integer SIMD Builtins

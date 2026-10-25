@@ -1492,6 +1492,7 @@ pub const Coordinator = struct {
     completion_capture_ns: u64 = 0,
     completion_observations: std.ArrayList([]const u8) = .empty,
     completion_demand: std.ArrayList(completed.Demand) = .empty,
+    debug_observer: ?eval.CompileTimeFinalization.DebugObserver = null,
     compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
     /// Keep the code compile-time evaluation ran as artifacts even without
     /// an object cache to publish it to, so a test can compare it with a
@@ -3336,6 +3337,7 @@ pub const Coordinator = struct {
         if (self.runtime_lowering) |config| options.discovery_roots = config.compile_time_discovery_roots;
         options.defer_debug_replay = !replay_cached_debug;
         if (self.completion_arena != null) options.completion_sink = .{ .context = self, .demand = captureDemand, .debug = captureDebug };
+        options.debug_observer = self.debug_observer;
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;
         // An explicitly empty test execution subset has no runtime consumer.
         // Checking still finalizes every pending compile-time obligation.
