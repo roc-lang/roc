@@ -20,13 +20,13 @@ const SnapshotContentIdx = snapshot.SnapshotContentIdx;
 pub const Context = context_mod.Context;
 pub const Category = context_mod.Category;
 
-const ByteListRange = struct { start: usize, count: usize };
+const ByteListRange = struct { start: u64, count: u64 };
 
 /// Alias into the Store.extra_strings_backing array
 pub const ExtraStringIdx = ByteListRange;
 
 /// A range of patterns
-pub const MissingPatternsRange = struct { start: usize, count: usize };
+pub const MissingPatternsRange = struct { start: u64, count: u64 };
 
 /// The checker relation that recorded a problem, or whose unification queued
 /// a dispatch obligation whose problems then belong to it, unless the

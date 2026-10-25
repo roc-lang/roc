@@ -13,7 +13,7 @@ const Hash = base.ModuleIdentity.Hash;
 
 /// Domain-separated checking identity format. Its version is also folded into
 /// inference-cache admission; it is never an implementation-artifact key.
-pub const format_version: u32 = 1;
+pub const format_version: u32 = 2;
 
 /// Encode an interface scalar in fixed-width little-endian order.
 pub fn hashU32(hasher: *base.Sha256, value: u32) void {
@@ -34,6 +34,8 @@ pub fn hashBytes(hasher: *base.Sha256, bytes: []const u8) Allocator.Error!void {
 pub const Scope = struct {
     allocator: Allocator,
     owners: std.ArrayList(Hash) = .empty,
+    imported: []const *const ModuleEnv = &.{},
+    environments: std.AutoHashMapUnmanaged(Hash, *const ModuleEnv) = .empty,
     ordinals: std.AutoHashMapUnmanaged(Hash, u32) = .empty,
     hasher: base.Sha256 = base.Sha256.init(.{}),
 
@@ -48,6 +50,7 @@ pub const Scope = struct {
     pub fn deinit(self: *Scope) void {
         self.owners.deinit(self.allocator);
         self.ordinals.deinit(self.allocator);
+        self.environments.deinit(self.allocator);
     }
 
     pub fn appendOwner(self: *Scope, identity: Hash) Allocator.Error!u32 {
@@ -65,6 +68,7 @@ pub const Scope = struct {
     pub fn appendDependency(self: *Scope, env: *const ModuleEnv) Allocator.Error!void {
         const identity = env.contentIdentityHash() orelse
             base.invariant("checking dependency owners have finalized content identities", .{});
+        try self.environments.put(self.allocator, identity.*, env);
         const owner_ordinal = try self.appendOwner(identity.*);
         hashU32(&self.hasher, owner_ordinal);
         if (!env.checking_dependency.published) {

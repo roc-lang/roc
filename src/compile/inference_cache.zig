@@ -32,8 +32,8 @@ pub const Cache = struct {
     };
 
     /// Cache decoding is optional and fully precedes replacement of current
-    /// source. Successful admission binds the dense owner table; it does not
-    /// rewrite source indices, solved types, or dispatch-plan records.
+    /// source. Successful admission relocates explicit foreign locators and
+    /// binds the dense owner table without changing solved relations.
     pub fn load(self: Cache, key: [32]u8, env: *ModuleEnv, scope: *const check.CheckingDependencies.Scope) Allocator.Error!?Loaded {
         const data = self.manager.loadRawBytesMappedIn(env.gpa, .inference, key, self.directory) orelse return null;
         var owned = true;
@@ -42,10 +42,22 @@ pub const Cache = struct {
             self.manager.recordInvalidationFor(.inference);
             return null;
         };
+        if (!bodies.metadata.outcome.sourcesMatch(scope)) {
+            self.manager.recordInvalidationFor(.inference);
+            return null;
+        }
         const serialized: *const ModuleEnv.Serialized = @ptrCast(@alignCast(bodies.env.ptr));
         const cached = try serialized.deserializeOwned(@intFromPtr(bodies.env.ptr), env.gpa, env.common.source, env.module_name);
         defer env.gpa.destroy(cached);
         errdefer cached.deinit();
+        bodies.metadata.bindReferences(cached, scope) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.IncompatibleReferences => {
+                cached.deinit();
+                self.manager.recordInvalidationFor(.inference);
+                return null;
+            },
+        };
         try check.CheckingDependencies.bindOwners(cached, scope);
         cached.qualified_module_name = env.qualified_module_name;
         env.deinit();
@@ -54,19 +66,17 @@ pub const Cache = struct {
         return .{ .data = data, .metadata = bodies.metadata, .allocator = env.gpa };
     }
 
-    /// Only diagnostic-free inference is stored. Source/canonicalization
-    /// reports have already run against current inputs, and evaluation reports
-    /// are generated anew after publication, including on inference hits.
-    pub fn store(self: Cache, key: [32]u8, env: *const ModuleEnv, checker: *const check.Check) void {
-        if (checker.problems.problems.items.len != 0 or env.diagnosticCount() != 0) return;
-        self.storeFallible(key, env, checker) catch self.manager.recordStoreFailureFor(.inference);
+    /// Store the complete pre-evaluation outcome. Evaluation reports are
+    /// generated anew after publication, including on inference hits.
+    pub fn store(self: Cache, key: [32]u8, env: *const ModuleEnv, checker: *const check.Check, scope: *const check.CheckingDependencies.Scope) void {
+        self.storeFallible(key, env, checker, scope) catch self.manager.recordStoreFailureFor(.inference);
     }
 
-    fn storeFallible(self: Cache, key: [32]u8, env: *const ModuleEnv, checker: *const check.Check) Allocator.Error!void {
+    fn storeFallible(self: Cache, key: [32]u8, env: *const ModuleEnv, checker: *const check.Check, scope: *const check.CheckingDependencies.Scope) Allocator.Error!void {
         var arena = base.SingleThreadArena.init(env.gpa);
         defer arena.deinit();
         const allocator = arena.allocator();
-        const output = try check.InferenceOutput.fromChecker(allocator, checker);
+        const output = try check.InferenceOutput.fromChecker(allocator, checker, scope);
         const buffer = try encode(allocator, key, env, &output);
         self.manager.storeRawBytesIn(env.gpa, .inference, key, buffer, self.directory, env.module_name);
     }

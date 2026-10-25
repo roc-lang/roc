@@ -7,6 +7,8 @@ const collections = @import("collections");
 const can = @import("can");
 const types = @import("types");
 const roots = @import("hoist_roots.zig");
+const dependencies = @import("checking_dependencies.zig");
+const base = @import("base");
 const requirement = @import("requirement_solution.zig");
 const serde = @import("artifact_serialize.zig");
 
@@ -24,6 +26,11 @@ pub const Solution = struct {
     identities_len: u32,
 };
 
+/// One producer-owned slot and its source index in the stored dependency.
+pub const ForeignReference = extern struct { owner: u32, node: u32, slot: u32 };
+
+outcome: @import("checking_outcome.zig") = .{},
+foreign_references: []const ForeignReference = &.{},
 hoisted_roots: []const roots.SelectedHoistedRoot = &.{},
 promoted_local_procedures: []const roots.PromotedLocalProcedure = &.{},
 solutions: []const Solution = &.{},
@@ -31,6 +38,8 @@ identity_vars: []const types.Var = &.{},
 
 /// Independently relocatable inference publication metadata.
 pub const Serialized = extern struct {
+    outcome: @import("checking_outcome.zig").Serialized = .{},
+    foreign_references: serde.SerializedSlice(ForeignReference) = .{},
     hoisted_roots: serde.SerializedSlice(roots.SelectedHoistedRoot) = .{},
     promoted_local_procedures: serde.SerializedSlice(roots.PromotedLocalProcedure) = .{},
     solutions: serde.SerializedSlice(Solution) = .{},
@@ -44,7 +53,16 @@ pub const Serialized = extern struct {
 
 /// The caller supplies an arena; the root slices borrow the checker until the
 /// capsule has been written, while solution rows flatten their identity lists.
-pub fn fromChecker(allocator: Allocator, checker: anytype) Allocator.Error!Self {
+pub fn fromChecker(allocator: Allocator, checker: anytype, scope: *const dependencies.Scope) Allocator.Error!Self {
+    var references = std.ArrayList(ForeignReference).empty;
+    for (scope.owners.items, 0..) |hash, owner| {
+        if (owner == 0 or scope.ordinal(hash) != owner) continue;
+        const env = scope.environments.get(hash) orelse
+            base.invariant("foreign reference tables belong to explicit dependency environments", .{});
+        for (env.checking_dependency.references.items.items, 0..) |node, slot| {
+            try references.append(allocator, .{ .owner = @intCast(owner), .node = node, .slot = @intCast(slot) });
+        }
+    }
     var solutions = std.ArrayList(Solution).empty;
     var identities = std.ArrayList(types.Var).empty;
     for (checker.platformRequirementSolutions()) |solution| {
@@ -60,6 +78,8 @@ pub fn fromChecker(allocator: Allocator, checker: anytype) Allocator.Error!Self 
         try identities.appendSlice(allocator, solution.identity_vars);
     }
     return .{
+        .outcome = try @import("checking_outcome.zig").capture(allocator, checker, scope),
+        .foreign_references = references.items,
         .hoisted_roots = checker.selectedHoistedRoots(),
         .promoted_local_procedures = checker.promotedLocalProcedures(),
         .solutions = solutions.items,
@@ -69,6 +89,7 @@ pub fn fromChecker(allocator: Allocator, checker: anytype) Allocator.Error!Self 
 
 /// Validate side-list ranges before installing untrusted cache metadata.
 pub fn validate(self: Self) error{CorruptArtifact}!void {
+    try self.outcome.validate();
     for (self.solutions) |solution| {
         if (@as(u64, solution.identities_start) + solution.identities_len > self.identity_vars.len)
             return error.CorruptArtifact;
@@ -77,8 +98,23 @@ pub fn validate(self: Self) error{CorruptArtifact}!void {
 
 /// Restore the owning stage's explicit outputs. Initializing the checker only
 /// provides diagnostics/publication services; checkFile is never called on a hit.
-pub fn install(self: Self, checker: anytype) Allocator.Error!void {
+pub fn install(self: Self, checker: anytype, scope: *const dependencies.Scope) Allocator.Error!void {
     const allocator = checker.gpa;
+    try self.outcome.install(checker);
+    var binding = self.makeBinding(checker.cir, scope) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.IncompatibleReferences => base.invariant("admitted inference references remain valid during diagnostic installation", .{}),
+    };
+    defer binding.references.deinit(allocator);
+    for (0..checker.snapshots.record_fields.len()) |i| {
+        const id = @as(snapshotFieldIndex(), @fromBackingInt(@as(u32, @intCast(i))));
+        var field = checker.snapshots.record_fields.get(id);
+        types.store.rebindSourceReferenceValue(&field, &binding) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.IncompatibleReferences => base.invariant("admission established snapshot default correspondence", .{}),
+        };
+        checker.snapshots.record_fields.set(id, field);
+    }
     try checker.selected_hoisted_roots.appendSlice(allocator, self.hoisted_roots);
     try checker.promoted_local_procedures.appendSlice(allocator, self.promoted_local_procedures);
     for (self.solutions) |solution| {
@@ -93,4 +129,97 @@ pub fn install(self: Self, checker: anytype) Allocator.Error!void {
             .identity_vars = identities,
         });
     }
+}
+
+/// Admission is complete before the restored source replaces the live source.
+/// A missing correspondence rejects the optional cache entry, never a compiler
+/// invariant or a guessed mapping.
+pub fn bindReferences(self: Self, env: *can.ModuleEnv, scope: *const dependencies.Scope) (Allocator.Error || error{IncompatibleReferences})!void {
+    var binding = try self.makeBinding(env, scope);
+    defer binding.references.deinit(env.gpa);
+    for (self.outcome.record_fields) |record| {
+        var field = record;
+        try types.store.rebindSourceReferenceValue(&field, &binding);
+    }
+    try @import("reference_binding.zig").source(env, &binding);
+}
+
+fn makeBinding(self: Self, env: *can.ModuleEnv, scope: *const dependencies.Scope) Binding.Error!Binding {
+    var binding = Binding{ .env = env, .scope = scope };
+    errdefer binding.references.deinit(env.gpa);
+    for (self.foreign_references) |reference| {
+        if (reference.owner >= scope.owners.items.len) return error.IncompatibleReferences;
+        const current = scope.environments.get(scope.owners.items[reference.owner]) orelse return error.IncompatibleReferences;
+        if (reference.slot >= current.checking_dependency.references.items.items.len) return error.IncompatibleReferences;
+        const entry = try binding.references.getOrPut(env.gpa, .{ .owner = reference.owner, .node = reference.node });
+        if (entry.found_existing) return error.IncompatibleReferences;
+        entry.value_ptr.* = current.checking_dependency.references.items.items[reference.slot];
+    }
+    return binding;
+}
+
+fn snapshotFieldIndex() type {
+    return @import("snapshot.zig").SnapshotRecordFieldSafeList.Idx;
+}
+
+const Binding = struct {
+    pub const Error = Allocator.Error || error{IncompatibleReferences};
+    const Key = struct { owner: u32, node: u32 };
+    env: *can.ModuleEnv,
+    scope: *const dependencies.Scope,
+    references: std.AutoHashMapUnmanaged(Key, u32) = .empty,
+
+    pub fn importNode(self: *Binding, env: *const can.ModuleEnv, import_idx: u32, raw: u32) Error!u32 {
+        const resolved = env.imports.getResolvedModule(@fromBackingInt(import_idx)) orelse return error.IncompatibleReferences;
+        if (resolved >= self.scope.imported.len) return error.IncompatibleReferences;
+        const current = self.scope.imported[resolved];
+        if (current.module_role == .builtin) return raw;
+        return self.references.get(.{ .owner = self.scope.ordinal(current.contentIdentityHash().?.*), .node = raw }) orelse error.IncompatibleReferences;
+    }
+
+    pub fn node(self: *Binding, owner: base.ModuleIdentity.Idx, raw: u32) Error!u32 {
+        if (owner == self.env.selfModuleIdentity()) return raw;
+        const old = self.env.moduleIdentityHash(owner);
+        const previous = self.env.checking_dependency.owners.items.items;
+        const ordinal = for (previous, 0..) |hash, i| {
+            if (base.ModuleIdentity.eql(&hash, old)) break i;
+        } else return error.IncompatibleReferences;
+        if (ordinal >= self.scope.owners.items.len) return error.IncompatibleReferences;
+        const current = self.scope.environments.get(self.scope.owners.items[ordinal]) orelse return error.IncompatibleReferences;
+        if (current.module_role == .builtin) return raw;
+        return self.references.get(.{ .owner = @intCast(ordinal), .node = raw }) orelse error.IncompatibleReferences;
+    }
+};
+
+test "inference references require exact producer slots" {
+    const allocator = std.testing.allocator;
+    var env = try can.ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    try env.initCIRFields("Importer");
+    try env.setContentIdentity(@splat(1));
+    const foreign = try env.internModuleIdentity(&@as(base.ModuleIdentity.Hash, @splat(2)), base.Ident.Idx.NONE);
+    var dependency = try can.ModuleEnv.init(allocator, "");
+    defer dependency.deinit();
+    try dependency.initCIRFields("Dependency");
+    try dependency.setContentIdentity(@splat(2));
+    dependency.checking_dependency.published = true;
+    _ = try dependency.checking_dependency.references.append(allocator, 42);
+    var scope = try dependencies.Scope.init(allocator, @splat(1));
+    defer scope.deinit();
+    try scope.appendDependency(&dependency);
+    env.checking_dependency.owners = try scope.copyOwners(allocator);
+
+    var references = [_]ForeignReference{.{ .owner = 1, .node = 17, .slot = 0 }};
+    const output = Self{ .foreign_references = &references };
+    var binding = try output.makeBinding(&env, &scope);
+    defer binding.references.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 42), try binding.node(foreign, 17));
+    try std.testing.expectError(error.IncompatibleReferences, binding.node(foreign, 42));
+    references[0].slot = 1;
+    try std.testing.expectError(error.IncompatibleReferences, output.makeBinding(&env, &scope));
+    references[0] = .{ .owner = 2, .node = 17, .slot = 0 };
+    try std.testing.expectError(error.IncompatibleReferences, output.makeBinding(&env, &scope));
+    references[0] = .{ .owner = 1, .node = 17, .slot = 0 };
+    const duplicates = Self{ .foreign_references = &.{ references[0], references[0] } };
+    try std.testing.expectError(error.IncompatibleReferences, duplicates.makeBinding(&env, &scope));
 }

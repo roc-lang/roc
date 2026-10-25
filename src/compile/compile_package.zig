@@ -176,6 +176,8 @@ pub const TypeCheckOutput = struct {
     publication_owned: bool = true,
     inference_reused: bool = false,
     owner_bindings: u32 = 0,
+    reference_bindings: u32 = 0,
+    diagnostics_replayed: u32 = 0,
 
     pub fn deinit(self: *TypeCheckOutput) void {
         if (self.publication_owned) self.publication.deinit(self.publication.canonical_names.allocator);
@@ -567,10 +569,10 @@ pub fn typeCheckModule(
     // constrained by platform types (e.g., I64) before defaulting to Dec.
     // TODO: re-enable defer_numeric_defaults once ModuleEnv has the field
     if (loaded) |capsule| {
-        try capsule.metadata.install(&checker);
+        try capsule.metadata.install(&checker, &checking_scope);
     } else {
         try checker.checkFile();
-        if (inference_cache) |cache| cache.store(inference_key, env, &checker);
+        if (inference_cache) |cache| cache.store(inference_key, env, &checker, &checking_scope);
     }
 
     module_envs_map.deinit();
@@ -605,6 +607,8 @@ pub fn typeCheckModule(
         .publication = checked_artifact,
         .inference_reused = loaded != null,
         .owner_bindings = if (loaded != null) @intCast(env.module_identities.count()) else 0,
+        .reference_bindings = if (loaded) |capsule| std.math.cast(u32, capsule.metadata.foreign_references.len) orelse return error.OutOfMemory else 0,
+        .diagnostics_replayed = if (loaded) |capsule| std.math.cast(u32, capsule.metadata.outcome.problems.len + env.diagnosticCount()) orelse return error.OutOfMemory else 0,
     };
 }
 

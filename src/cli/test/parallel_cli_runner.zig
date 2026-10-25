@@ -16772,7 +16772,7 @@ fn customIssue12592(io: std.Io, allocator: Allocator, env: *CaseEnv, timer: *har
         \\}
     )) |failure| return failure;
     const a_body = "A := {}.{ value : {} -> I64\n value = |_| 7\n}\n";
-    const a_changed = "A := {}.{ value : {} -> I64\n value = |_| 8\n}\n";
+    const a_changed = "A := {}.{ value : {} -> I64\n value = |_| { shifted = 8\n shifted }\n}\n";
     const c_body = "import B\nC := {}.{ value : {} -> I64\n value = |arg| B.value(arg)\n}\n";
     const edits = [_]struct { a: []const u8, c: []const u8, passes: bool, failed_expect: []const u8 = "" }{
         .{ .a = a_body ++ "expect A.value({}) == 7\n", .c = c_body ++ "expect C.value({}) == 7\n", .passes = true },
@@ -16780,6 +16780,8 @@ fn customIssue12592(io: std.Io, allocator: Allocator, env: *CaseEnv, timer: *har
         .{ .a = a_body ++ "expect A.value({}) == 8\n", .c = c_body ++ "expect C.value({}) == 7\n", .passes = false, .failed_expect = "expect A.value({}) == 8" },
         .{ .a = a_changed ++ "expect A.value({}) == 8\n", .c = c_body ++ "expect C.value({}) == 7\n", .passes = false, .failed_expect = "expect C.value({}) == 7" },
         .{ .a = a_changed ++ "expect A.value({}) == 8\n", .c = c_body ++ "expect C.value({}) == 8\n", .passes = true },
+        .{ .a = "expect A.value({}) == 8\n" ++ a_changed, .c = c_body ++ "expect C.value({}) == 7\n", .passes = false, .failed_expect = "expect C.value({}) == 7" },
+        .{ .a = "expect A.value({}) == 8\n" ++ a_changed, .c = c_body ++ "expect C.value({}) == 8\n", .passes = true },
         .{ .a = a_body ++ "expect A.value({}) == 7\n", .c = c_body ++ "expect C.value({}) == 8\n", .passes = false, .failed_expect = "expect C.value({}) == 8" },
         .{ .a = a_body ++ "expect A.value({}) == 7\n", .c = c_body ++ "expect C.value({}) == 7\n", .passes = true },
     };
