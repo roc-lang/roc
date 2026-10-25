@@ -29,30 +29,9 @@ pub const app_header = @import("app_header.zig");
 pub const key = @import("cache_key.zig");
 pub const config = @import("cache_config.zig");
 pub const manager = @import("cache_manager.zig");
-pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.zig") else struct {
-    pub const CleanupStats = struct {
-        temp_dirs_deleted: u32 = 0,
-        temp_files_deleted: u32 = 0,
-        cache_files_deleted: u32 = 0,
-        stale_namespaces_deleted: u32 = 0,
-        evicted_files_deleted: u32 = 0,
-        empty_dirs_deleted: u32 = 0,
-        errors: u32 = 0,
-    };
-
-    pub const CleanupThread = struct {};
-
-    pub const Limits = struct {
-        object_pack_format_version: u32,
-        max_size_bytes: u64,
-    };
-
-    pub fn startBackgroundCleanup(_: []const u8, _: std.Io, _: Limits) Allocator.Error!?CleanupThread {
-        return null;
-    }
-
-    pub fn deleteTempDir(_: std.Io, _: []const u8) void {}
-};
+pub const artifacts = @import("artifact_store.zig");
+pub const maintenance = @import("cache_maintenance.zig");
+pub const cleanup = @import("cache_cleanup.zig");
 
 pub const CacheManager = manager.CacheManager;
 pub const CacheConfig = config.CacheConfig;
@@ -85,6 +64,8 @@ pub const CoreCtx = @import("ctx").CoreCtx;
 test "compile tests" {
     if (!threading_mod.is_freestanding) {
         std.testing.refAllDecls(@import("cache_cleanup.zig"));
+        std.testing.refAllDecls(artifacts);
+        std.testing.refAllDecls(maintenance);
     }
     std.testing.refAllDecls(@import("cache_config.zig"));
     std.testing.refAllDecls(@import("cache_key.zig"));

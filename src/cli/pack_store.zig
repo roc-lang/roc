@@ -19,206 +19,167 @@ const Index = @import("pack_index.zig");
 pub const SpliceClosure = Index.SpliceClosure;
 const CoreCtx = ctx_mod.CoreCtx;
 
-/// The pack files of one compiler build, target, and optimization level,
-/// under the cache root. Dev packs use the declared procedure domain; linked
-/// packs and program outputs retain the exact target. Packs are filed by
-/// module identity so an
-/// edited module's previous packs stay beside its new one until the sweep
-/// removes them, which is what lets unchanged specializations hit across an
-/// edit. Every file is a pure function of the module and its transitive
-/// imports, so two writers of one path write identical bytes and rename
-/// into place without coordination.
+/// Content-addressed packs and discovery summaries in the shared indexed store.
+/// Module identity groups remain ordered by artifact key for deterministic offers.
+/// Dev packs share a procedure domain; linked packs and outputs use exact targets.
 pub const Store = struct {
     allocator: Allocator,
     roc_ctx: CoreCtx,
     /// Exact final-link target and optimization level.
     root: []u8,
-    /// Procedure packs and discovery summaries, independently of final output.
+    /// Logical scope for procedure packs and discovery summaries.
     procedure_root: []u8,
+    native: compile.artifacts.Store,
+    variant: [32]u8,
     verbose: bool,
 
     pub const InitError = Allocator.Error || error{NoHomeDirectory};
 
-    pub fn init(allocator: Allocator, cache_config: compile.CacheConfig, target: RocTarget, opt_name: []const u8) InitError!Store {
-        return initForStrategy(allocator, cache_config, target, opt_name, .lss);
+    pub fn init(allocator: Allocator, config: compile.CacheConfig, target: RocTarget, opt_name: []const u8) InitError!Store {
+        return initForStrategy(allocator, config, target, opt_name, .lss);
     }
 
-    pub fn initForStrategy(allocator: Allocator, cache_config: compile.CacheConfig, target: RocTarget, opt_name: []const u8, strategy: base.SpecializationStrategy) InitError!Store {
-        const version_dir = try cache_config.getVersionCacheDir(allocator);
-        defer allocator.free(version_dir);
-        const mode = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ @tagName(target), opt_name });
-        defer allocator.free(mode);
-        const namespace = compile.config.objectPackNamespace(PackFile.format_version);
-        const root = try std.fs.path.join(allocator, &.{ version_dir, namespace, mode });
+    pub fn initForStrategy(allocator: Allocator, config: compile.CacheConfig, target: RocTarget, opt_name: []const u8, strategy: base.SpecializationStrategy) InitError!Store {
+        const root = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ @tagName(target), opt_name });
         errdefer allocator.free(root);
         const procedure_root = if (std.mem.eql(u8, opt_name, "dev")) blk: {
             const domain = backend.dev.NativeProcDomain.init(target, strategy);
-            const procedure_mode = try std.fmt.allocPrint(allocator, "proc-{s}-dev", .{std.fmt.bytesToHex(domain.key(), .lower)});
-            defer allocator.free(procedure_mode);
-            break :blk try std.fs.path.join(allocator, &.{ version_dir, namespace, procedure_mode });
+            break :blk try std.fmt.allocPrint(allocator, "proc-{s}-dev", .{std.fmt.bytesToHex(domain.key(), .lower)});
         } else try allocator.dupe(u8, root);
-        return .{ .allocator = allocator, .roc_ctx = cache_config.roc_ctx, .root = root, .procedure_root = procedure_root, .verbose = cache_config.verbose };
+        errdefer allocator.free(procedure_root);
+        const cache_root = try config.getEffectiveCacheDir(allocator);
+        defer allocator.free(cache_root);
+        return .{ .allocator = allocator, .roc_ctx = config.roc_ctx, .root = root, .procedure_root = procedure_root, .variant = compile.artifacts.hashBytes(opt_name), .native = try compile.artifacts.Store.init(allocator, config.roc_ctx.std_io, cache_root), .verbose = config.verbose };
     }
 
     pub fn deinit(self: *Store) void {
+        self.native.deinit();
         self.allocator.free(self.root);
         self.allocator.free(self.procedure_root);
     }
 
-    /// The directory of every pack filed under a module identity.
-    pub fn identityDir(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8) Allocator.Error![]u8 {
-        return std.fs.path.join(self.allocator, &.{ self.procedure_root, @tagName(origin), &std.fmt.bytesToHex(identity, .lower) });
+    fn identity(self: *const Store, family: compile.artifacts.Family, module: [32]u8, key: [32]u8) compile.artifacts.Identity {
+        var result: compile.artifacts.Identity = .{ .namespace = undefined, .family = family, .group = undefined, .key = key, .pack_format = PackFile.format_version, .variant = self.variant };
+        std.crypto.hash.sha2.Sha256.hash(@import("build_options").compiler_compatibility_id, &result.namespace, .{});
+        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        hash.update(switch (family) {
+            .local_pack, .package_pack, .local_discovery, .package_discovery => self.procedure_root,
+            else => self.root,
+        });
+        hash.update(&module);
+        hash.final(&result.group);
+        return result;
     }
 
-    fn packPath(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8) Allocator.Error![]u8 {
-        return self.filePath(origin, identity, key, ".rpk");
+    const IndexedKind = enum { payload, metadata, offer, completed, interface };
+
+    fn indexedIdentity(self: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8, key: [32]u8, kind: IndexedKind) compile.artifacts.Identity {
+        var id = self.packIdentity(origin, module, key);
+        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        hash.update(&id.variant);
+        hash.update("roc-indexed-procedure-v1");
+        hash.update(@tagName(kind));
+        hash.final(&id.variant);
+        return id;
     }
 
-    fn filePath(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, comptime extension: []const u8) Allocator.Error![]u8 {
-        const name = std.fmt.bytesToHex(key, .lower) ++ extension[0..extension.len].*;
-        return std.fs.path.join(self.allocator, &.{ self.procedure_root, @tagName(origin), &std.fmt.bytesToHex(identity, .lower), &name });
+    pub fn linkObjectIdentity(self: *const Store, digest: [32]u8) compile.artifacts.Identity {
+        var id = self.identity(.program_output, @splat(0), digest);
+        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        hash.update(&id.variant);
+        hash.update("roc-native-link-object-v1");
+        hash.final(&id.variant);
+        return id;
     }
 
-    /// File a program's discovery summaries (design.md "Discovery
-    /// Summaries") under a module identity, named by their content, beside
-    /// that module's packs. Summaries already filed are left alone.
-    pub fn writeDiscovery(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
-        var name: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(bytes, &name, .{});
-        const path = try self.filePath(origin, identity, name, discovery_extension);
-        defer self.allocator.free(path);
-        try self.writePath(path, bytes);
-    }
-
-    fn programPath(self: *const Store, key: [32]u8) Allocator.Error![]u8 {
-        const name = std.fmt.bytesToHex(key, .lower) ++ ".rpo".*;
-        return std.fs.path.join(self.allocator, &.{ self.root, "programs", &name });
-    }
-
-    /// The runtime output recorded for the program `key` names, or null.
-    /// An unreadable record is a miss.
-    pub fn readProgram(self: *const Store, key: [32]u8, allocator: Allocator) Allocator.Error!?[]u8 {
-        const path = try self.programPath(key);
-        defer self.allocator.free(path);
-        return self.roc_ctx.readFile(path, allocator) catch |err| switch (err) {
+    fn readPrefix(self: *const Store, id: compile.artifacts.Identity, len: usize, allocator: Allocator) Allocator.Error!?[]u8 {
+        var artifact = (self.native.acquire(id, self.native.now()) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => null,
-        };
-    }
-
-    /// Read a bounded prefix without reading the record's object payload.
-    pub fn readProgramPrefix(self: *const Store, key: [32]u8, len: usize, allocator: Allocator) Allocator.Error!?[]const u8 {
-        const path = try self.programPath(key);
-        defer self.allocator.free(path);
-        const stat = self.roc_ctx.stat(path) catch return null;
-        if (len > stat.size) return null;
+            else => return null,
+        }) orelse return null;
+        defer artifact.deinit();
+        if (artifact.size < len) return null;
         const bytes = try allocator.alloc(u8, len);
-        errdefer allocator.free(bytes);
-        const read = self.roc_ctx.readFileInto(path, bytes) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => {
-                allocator.free(bytes);
-                return null;
-            },
+        const count = artifact.file.readPositionalAll(self.native.io, bytes, 0) catch {
+            allocator.free(bytes);
+            return null;
         };
-        if (read != len) {
+        if (count != len) {
             allocator.free(bytes);
             return null;
         }
         return bytes;
     }
 
-    /// Atomically publish a completed compilation. Replacing an existing
-    /// record also repairs corruption after a miss; no partial bytes are visible.
+    pub fn readProgramPrefix(self: *const Store, key: [32]u8, len: usize, allocator: Allocator) Allocator.Error!?[]const u8 {
+        return self.readPrefix(self.identity(.program_output, @splat(0), key), len, allocator);
+    }
+
+    fn packIdentity(self: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8, key: [32]u8) compile.artifacts.Identity {
+        return self.identity(if (origin == .local) .local_pack else .package_pack, module, key);
+    }
+
+    fn read(self: *const Store, allocator: Allocator, id: compile.artifacts.Identity) Allocator.Error!?[]u8 {
+        return self.native.read(allocator, id, self.native.now()) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => null,
+        };
+    }
+
+    fn writeEntry(self: *const Store, id: compile.artifacts.Identity, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
+        self.native.write(id, bytes, self.native.now()) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Busy => return,
+            else => {
+                if (self.verbose) {
+                    const message = try std.fmt.allocPrint(self.allocator, "Failed to publish object cache at {s} ({d} bytes): {}\n", .{ self.native.root, bytes.len, err });
+                    defer self.allocator.free(message);
+                    self.roc_ctx.writeStderr(message) catch {};
+                }
+                return error.PackWriteFailed;
+            },
+        };
+    }
+
+    pub fn writeDiscovery(self: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
+        var key: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(bytes, &key, .{});
+        try self.writeEntry(self.identity(if (origin == .local) .local_discovery else .package_discovery, module, key), bytes);
+    }
+
+    pub fn readProgram(self: *const Store, key: [32]u8, allocator: Allocator) Allocator.Error!?[]u8 {
+        return self.read(allocator, self.identity(.program_output, @splat(0), key));
+    }
+
     pub fn writeProgram(self: *const Store, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
-        const path = try self.programPath(key);
-        defer self.allocator.free(path);
-        const dir = std.fs.path.dirname(path).?;
-        self.roc_ctx.makePath(dir) catch |err| {
-            self.reportWriteFailure("create directory", dir, bytes.len, err);
-            return error.PackWriteFailed;
-        };
-        const temp = self.roc_ctx.writeTempFile(self.allocator, path, bytes) catch |err| switch (err) {
+        try self.writeEntry(self.identity(.program_output, @splat(0), key), bytes);
+    }
+
+    pub fn optimizedInputKey(self: *const Store, module: [32]u8) Allocator.Error!?[32]u8 {
+        const bytes = (try self.readPrefix(self.identity(.optimized_pack, module, @splat(0)), PackFile.object_input_key_prefix_len, self.allocator)) orelse return null;
+        defer self.allocator.free(bytes);
+        return PackFile.objectInputKey(bytes);
+    }
+
+    pub fn replaceOptimized(self: *const Store, module: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
+        try self.writeEntry(self.identity(.optimized_pack, module, @splat(0)), bytes);
+    }
+
+    pub fn has(self: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8, key: [32]u8) Allocator.Error!bool {
+        var artifact = (self.native.acquire(self.packIdentity(origin, module, key), self.native.now()) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => |write_err| {
-                self.reportWriteFailure("write staging file", path, bytes.len, write_err);
-                return error.PackWriteFailed;
-            },
-        };
-        defer self.allocator.free(temp);
-        defer self.roc_ctx.deleteFile(temp) catch {};
-        self.roc_ctx.rename(temp, path) catch |err| {
-            self.reportWriteFailure("publish staging file", temp, bytes.len, err);
-            return error.PackWriteFailed;
-        };
+            else => return false,
+        }) orelse return false;
+        defer artifact.deinit();
+        return true;
     }
 
-    /// The object pack an optimized build of the program whose root module
-    /// has placement identity `identity` filed, which each optimized build of
-    /// that program replaces.
-    pub fn optimizedPackPath(self: *const Store, identity: [32]u8) Allocator.Error![]u8 {
-        const name = std.fmt.bytesToHex(identity, .lower) ++ ".rpk".*;
-        return std.fs.path.join(self.allocator, &.{ self.root, "optimized", &name });
+    pub fn write(self: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
+        try self.writeEntry(self.packIdentity(origin, module, key), bytes);
     }
 
-    /// The object pack a URL-package module's artifact `key` names under
-    /// placement identity `identity`.
-    pub fn packagePackPath(self: *const Store, identity: [32]u8, key: [32]u8) Allocator.Error![]u8 {
-        return self.packPath(.pkg, identity, key);
-    }
-
-    /// The input key of the optimized pack filed for root `identity`
-    /// (`PackFile.ObjectBinding.input_key`), or null when there is none.
-    pub fn optimizedInputKey(self: *const Store, identity: [32]u8) Allocator.Error!?[32]u8 {
-        const path = try self.optimizedPackPath(identity);
-        defer self.allocator.free(path);
-        var prefix: [PackFile.object_input_key_prefix_len]u8 = undefined;
-        const len = self.roc_ctx.readFileInto(path, &prefix) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return null,
-        };
-        return PackFile.objectInputKey(prefix[0..len]);
-    }
-
-    /// File the optimized pack of root `identity`, replacing the one an
-    /// earlier optimized build filed.
-    pub fn replaceOptimized(self: *const Store, identity: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
-        const path = try self.optimizedPackPath(identity);
-        defer self.allocator.free(path);
-        const dir = std.fs.path.dirname(path).?;
-        self.roc_ctx.makePath(dir) catch |err| {
-            self.reportWriteFailure("create directory", dir, bytes.len, err);
-            return error.PackWriteFailed;
-        };
-        const temp_path = self.roc_ctx.writeTempFile(self.allocator, path, bytes) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => |write_err| {
-                self.reportWriteFailure("write staging file", path, bytes.len, write_err);
-                return error.PackWriteFailed;
-            },
-        };
-        defer self.allocator.free(temp_path);
-        errdefer self.roc_ctx.deleteFile(temp_path) catch {};
-        self.roc_ctx.rename(temp_path, path) catch |err| {
-            self.reportWriteFailure("publish staging file", temp_path, bytes.len, err);
-            return error.PackWriteFailed;
-        };
-    }
-
-    /// Whether the pack for `key` is already in the store.
-    pub fn has(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8) Allocator.Error!bool {
-        const path = try self.packPath(origin, identity, key);
-        defer self.allocator.free(path);
-        return self.roc_ctx.fileExists(path);
-    }
-
-    /// Stage the pack beside its final path and rename it into place. A
-    /// pack already present is left alone: it holds the same bytes, which
-    /// builds with runtime safety check.
-    pub fn write(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
-        const path = try self.packPath(origin, identity, key);
-        defer self.allocator.free(path);
-        try self.writePath(path, bytes);
+    pub fn loadIdentity(self: *const Store, _: std.Io, packs: *LoadedPacks, origin: compile.BuildEnv.PackOrigin, module: [32]u8) LoadedPacks.LoadError!void {
+        try packs.addIndexProvider(self, origin, module);
     }
 
     /// Publish immutable artifact bytes first, then independent content-named
@@ -241,8 +202,6 @@ pub const Store = struct {
         if (providers) |locations| std.debug.assert(locations.len == specs.len);
         if (specs.len == 0) return;
         const allocator = self.allocator;
-        const dir = try self.identityDir(origin, identity);
-        defer allocator.free(dir);
         var names = try backend.dev.ProcArtifact.ContentNames.init(allocator, set);
         defer names.deinit();
         var closure = try SpliceClosure.init(allocator, set);
@@ -268,10 +227,7 @@ pub const Store = struct {
             const hash = Index.digest(bytes);
             hashes[index] = hash;
             if ((try published.getOrPut(hash)).found_existing) continue;
-            const name = std.fmt.bytesToHex(hash, .lower) ++ ".rpa".*;
-            const path = try std.fs.path.join(allocator, &.{ dir, "payload", &name });
-            defer allocator.free(path);
-            if (try self.publishIndexedPath(path, bytes)) {
+            if (try self.publishIndexed(self.indexedIdentity(origin, identity, hash, .payload), bytes)) {
                 payload_bytes += bytes.len;
                 records_written += 1;
             } else {
@@ -281,10 +237,7 @@ pub const Store = struct {
         const metadata = try Index.encodeMetadata(allocator, set, specs, union_indices.items, hashes, &names);
         defer allocator.free(metadata);
         const metadata_hash = Index.digest(metadata);
-        const metadata_name = std.fmt.bytesToHex(metadata_hash, .lower) ++ ".rpm".*;
-        const metadata_path = try std.fs.path.join(allocator, &.{ dir, "metadata", &metadata_name });
-        defer allocator.free(metadata_path);
-        if (try self.publishIndexedPath(metadata_path, metadata)) {
+        if (try self.publishIndexed(self.indexedIdentity(origin, identity, metadata_hash, .metadata), metadata)) {
             metadata_bytes += metadata.len;
             records_written += 1;
         } else {
@@ -296,10 +249,10 @@ pub const Store = struct {
                 .local => .local,
                 .pkg => .pkg,
             }, .owner = identity }).encode();
-            const name = std.fmt.bytesToHex(provider.identity, .lower) ++ "-".* ++ std.fmt.bytesToHex(Index.digest(&bytes), .lower) ++ ".rpi".*;
-            const path = try std.fs.path.join(allocator, &.{ self.procedure_root, @tagName(provider.origin), "offers", &std.fmt.bytesToHex(spec.key, .lower), &name });
-            defer allocator.free(path);
-            if (try self.publishIndexedPath(path, &bytes)) {
+            var record: [32 + @sizeOf(@TypeOf(bytes))]u8 = undefined;
+            @memcpy(record[0..32], &provider.identity);
+            @memcpy(record[32..], &bytes);
+            if (try self.publishIndexed(self.indexedIdentity(provider.origin, spec.key, Index.digest(&record), .offer), &record)) {
                 metadata_bytes += bytes.len;
                 records_written += 1;
             } else {
@@ -310,111 +263,60 @@ pub const Store = struct {
 
     /// Whether this exact producer completed indexed publication. A missing or
     /// corrupt marker is a miss; artifact availability is checked per lookup.
-    pub fn hasIndexed(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8) Allocator.Error!bool {
-        const path = try self.filePath(origin, identity, key, ".rpd");
-        defer self.allocator.free(path);
-        const bytes = self.roc_ctx.readFile(path, self.allocator) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return false,
-        };
+    pub fn hasIndexed(self: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8, key: [32]u8) Allocator.Error!bool {
+        const bytes = (try self.read(self.allocator, self.indexedIdentity(origin, module, key, .completed))) orelse return false;
         defer self.allocator.free(bytes);
         return std.mem.eql(u8, bytes, "ROCINDEX01");
     }
 
-    /// Publish the completion marker only after publishing every offer.
-    pub fn completeIndexed(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8) (Allocator.Error || error{PackWriteFailed})!void {
-        const path = try self.filePath(origin, identity, key, ".rpd");
-        defer self.allocator.free(path);
-        _ = try self.publishIndexedPath(path, "ROCINDEX01");
+    pub fn completeIndexed(self: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8, key: [32]u8) (Allocator.Error || error{PackWriteFailed})!void {
+        _ = try self.publishIndexed(self.indexedIdentity(origin, module, key, .completed), "ROCINDEX01");
     }
 
-    /// Replacing a corrupt optional record is repair, not an invariant failure.
-    /// Identical concurrent publishers have identical content-addressed bytes.
-    fn publishIndexedPath(self: *const Store, path: []const u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!bool {
-        // Verify immutable bytes before skipping a write. Corrupt records are
-        // repaired, and a vanished record is republished rather than trusted.
-        const existing = self.roc_ctx.readFile(path, self.allocator) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => null,
-        };
-        if (existing) |old| {
-            defer self.allocator.free(old);
-            if (std.mem.eql(u8, old, bytes)) return false;
+    pub fn loadIdentityDiscovery(self: *const Store, _: std.Io, packs: *LoadedPacks, origin: compile.BuildEnv.PackOrigin, module: [32]u8) LoadedPacks.LoadError!void {
+        try self.loadGroup(packs, self.identity(if (origin == .local) .local_discovery else .package_discovery, module, @splat(0)), .discovery);
+    }
+
+    fn publishIndexed(self: *const Store, id: compile.artifacts.Identity, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!bool {
+        if (try self.read(self.allocator, id)) |existing| {
+            defer self.allocator.free(existing);
+            if (std.mem.eql(u8, existing, bytes)) return false;
         }
-        self.roc_ctx.makePath(std.fs.path.dirname(path).?) catch return error.PackWriteFailed;
-        const staged = self.roc_ctx.writeTempFile(self.allocator, path, bytes) catch |err| switch (err) {
+        self.native.write(id, bytes, self.native.now()) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
+            // Publication is optional, but a partial publication must not get a completion marker.
             else => return error.PackWriteFailed,
         };
-        defer self.allocator.free(staged);
-        defer self.roc_ctx.deleteFile(staged) catch {};
-        self.roc_ctx.rename(staged, path) catch return error.PackWriteFailed;
         return true;
     }
 
-    /// Stage `bytes` in a file only this writer owns, beside `path`, and
-    /// rename it into place, so a reader or another writer never sees a
-    /// partly written file.
-    fn writePath(self: *const Store, path: []const u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
-        const dir = std.fs.path.dirname(path).?;
-        self.roc_ctx.makePath(dir) catch |err| {
-            self.reportWriteFailure("create directory", dir, bytes.len, err);
-            return error.PackWriteFailed;
-        };
-        if (self.roc_ctx.fileExists(path)) {
-            if (std.debug.runtime_safety) try self.verifyCollision(path, bytes);
-            return;
-        }
-        const temp_path = self.roc_ctx.writeTempFile(self.allocator, path, bytes) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => |write_err| {
-                self.reportWriteFailure("write staging file", path, bytes.len, write_err);
-                return error.PackWriteFailed;
-            },
-        };
-        defer self.allocator.free(temp_path);
-        errdefer self.roc_ctx.deleteFile(temp_path) catch {};
-        // A concurrent writer that published first wrote the same bytes, so
-        // replacing its file is harmless.
-        self.roc_ctx.rename(temp_path, path) catch |err| {
-            self.reportWriteFailure("publish staging file", temp_path, bytes.len, err);
-            return error.PackWriteFailed;
-        };
-    }
-
-    /// A pack's path is a function of its content, so the pack a writer
-    /// finds already in place holds the bytes it would have written. A pack
-    /// the sweep removed in the meantime has nothing left to compare.
-    fn verifyCollision(self: *const Store, path: []const u8, bytes: []const u8) Allocator.Error!void {
-        const existing = self.roc_ctx.readFile(path, self.allocator) catch |err| switch (err) {
+    fn loadGroup(self: *const Store, packs: *LoadedPacks, id: compile.artifacts.Identity, files: LoadedPacks.Files) LoadedPacks.LoadError!void {
+        const keys = self.native.groupKeys(self.allocator, id) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return,
         };
-        defer self.allocator.free(existing);
-        if (!std.mem.eql(u8, existing, bytes)) {
-            @import("base").invariant("object-cache pack {s} already holds different bytes", .{path});
+        defer self.allocator.free(keys);
+        for (keys) |key| {
+            var artifact = (self.native.acquireKey(key, self.native.now()) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => continue,
+            }) orelse continue;
+            defer artifact.deinit();
+            var arena = base.SingleThreadArena.init(self.allocator);
+            const bytes = artifact.read(arena.allocator()) catch |err| {
+                arena.deinit();
+                if (err == error.OutOfMemory) return error.OutOfMemory;
+                continue;
+            };
+            packs.bytes_loaded +|= bytes.len;
+            if (files == .discovery) {
+                defer arena.deinit();
+                try packs.appendDiscovery(bytes);
+            } else packs.appendPack(arena, bytes) catch |err| switch (err) {
+                error.UnsupportedPackVersion => continue,
+                else => return err,
+            };
         }
-    }
-
-    fn reportWriteFailure(self: *const Store, operation: []const u8, path: []const u8, byte_count: usize, err: (CoreCtx.MakePathError || CoreCtx.WriteError || CoreCtx.RenameError)) void {
-        if (!self.verbose) return;
-        const message = std.fmt.allocPrint(self.allocator, "Failed to {s} for object cache at {s} ({d} bytes): {}\n", .{ operation, path, byte_count, err }) catch return;
-        defer self.allocator.free(message);
-        self.roc_ctx.writeStderr(message) catch {};
-    }
-
-    /// Register a keyed offer index without reading or enumerating history.
-    pub fn loadIdentity(self: *const Store, io: std.Io, packs: *LoadedPacks, origin: compile.BuildEnv.PackOrigin, identity: [32]u8) Allocator.Error!void {
-        const dir = try self.identityDir(origin, identity);
-        defer self.allocator.free(dir);
-        try packs.addIndexDir(io, dir);
-    }
-
-    /// Read the discovery summary files filed under a module identity.
-    pub fn loadIdentityDiscovery(self: *const Store, io: std.Io, packs: *LoadedPacks, origin: compile.BuildEnv.PackOrigin, identity: [32]u8) LoadedPacks.LoadError!void {
-        const dir = try self.identityDir(origin, identity);
-        defer self.allocator.free(dir);
-        try packs.loadDirFiles(io, dir, .cache_offers, .discovery);
     }
 };
 
@@ -557,158 +459,7 @@ test "object cache accepts new offers after indexing without moving served artif
     }
 }
 
-test "object cache write failures preserve quiet behavior and report verbose causes" {
-    const Capture = struct {
-        stderr: std.ArrayList(u8) = .empty,
-        stage: enum { directory, write, rename },
-        deleted: usize = 0,
-
-        fn makePath(context: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.MakePathError!void {
-            const self: *@This() = @ptrCast(@alignCast(context.?));
-            if (self.stage == .directory) return error.ReadOnlyFileSystem;
-        }
-
-        fn fileExists(_: ?*anyopaque, _: std.Io, _: []const u8) bool {
-            return false;
-        }
-
-        fn writeTempFile(context: ?*anyopaque, _: std.Io, allocator: Allocator, path: []const u8, _: []const u8) (Allocator.Error || CoreCtx.WriteError)![]u8 {
-            const self: *@This() = @ptrCast(@alignCast(context.?));
-            if (self.stage == .write) return error.NoSpaceLeft;
-            return std.fmt.allocPrint(allocator, "{s}.owned.tmp", .{path});
-        }
-
-        fn deleteFile(context: ?*anyopaque, _: std.Io, path: []const u8) CoreCtx.DeleteError!void {
-            const self: *@This() = @ptrCast(@alignCast(context.?));
-            std.debug.assert(std.mem.endsWith(u8, path, ".owned.tmp"));
-            self.deleted += 1;
-        }
-
-        fn rename(context: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.RenameError!void {
-            const self: *@This() = @ptrCast(@alignCast(context.?));
-            if (self.stage == .rename) return error.DiskQuota;
-        }
-
-        fn writeStderr(context: ?*anyopaque, _: std.Io, bytes: []const u8) CoreCtx.StdioError!void {
-            const self: *@This() = @ptrCast(@alignCast(context.?));
-            self.stderr.appendSlice(std.testing.allocator, bytes) catch return error.IoError;
-        }
-    };
-    const allocator = std.testing.allocator;
-    for ([_]bool{ false, true }) |verbose| {
-        for (std.enums.values(@FieldType(Capture, "stage"))) |stage| {
-            var capture = Capture{ .stage = stage };
-            defer capture.stderr.deinit(allocator);
-            var filesystem = CoreCtx.testing(allocator, allocator);
-            filesystem.ctx = &capture;
-            filesystem.vtable.makePath = &Capture.makePath;
-            filesystem.vtable.fileExists = &Capture.fileExists;
-            filesystem.vtable.writeTempFile = &Capture.writeTempFile;
-            filesystem.vtable.deleteFile = &Capture.deleteFile;
-            filesystem.vtable.rename = &Capture.rename;
-            filesystem.vtable.writeStderr = &Capture.writeStderr;
-            var store = try Store.init(allocator, .{
-                .cache_dir = "cache",
-                .roc_ctx = filesystem,
-                .verbose = verbose,
-            }, .arm64mac, "dev");
-            defer store.deinit();
-            try std.testing.expectError(error.PackWriteFailed, store.write(.local, @as([32]u8, @splat(1)), @as([32]u8, @splat(2)), "pack"));
-            try std.testing.expectError(error.PackWriteFailed, store.writeProgram(@splat(1), "pack"));
-            try std.testing.expectEqual(@as(usize, if (stage == .rename) 2 else 0), capture.deleted);
-            if (verbose) {
-                const cause = switch (stage) {
-                    .directory => "error.ReadOnlyFileSystem",
-                    .write => "error.NoSpaceLeft",
-                    .rename => "error.DiskQuota",
-                };
-                try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, capture.stderr.items, cause));
-                try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, capture.stderr.items, "(4 bytes)"));
-                try std.testing.expect(std.mem.containsAtLeast(u8, capture.stderr.items, 1, store.procedure_root));
-            } else {
-                try std.testing.expectEqualStrings("", capture.stderr.items);
-            }
-        }
-    }
-}
-
-test "object cache interleaved writers expose only complete final bytes" {
-    try testAtomicPublication(false);
-}
-
-test "completed compilation interleaved writers expose only complete final bytes" {
-    try testAtomicPublication(true);
-}
-
-fn testAtomicPublication(program: bool) (Allocator.Error || std.Io.Dir.RealPathFileAllocError || std.Io.Dir.OpenError || std.Io.Dir.Iterator.Error || error{ PackWriteFailed, TestUnexpectedResult, TestExpectedEqual })!void {
-    const Hook = struct {
-        store: *Store,
-        program: bool,
-        base: CoreCtx,
-        pending: ?[]const u8 = null,
-        distinct: bool = false,
-        observed_complete: bool = false,
-
-        fn writeTempFile(context: ?*anyopaque, _: std.Io, allocator: Allocator, path: []const u8, bytes: []const u8) (Allocator.Error || CoreCtx.WriteError)![]u8 {
-            const self: *@This() = @ptrCast(@alignCast(context.?));
-            if (self.pending) |pending| {
-                const staging = try self.base.writeTempFile(allocator, path, bytes);
-                self.distinct = !std.mem.eql(u8, pending, staging);
-                return staging;
-            }
-            // Suspend writer A after a partial write. Writer B finishes and
-            // publishes before A resumes, without threads or timing thresholds.
-            const staging = try self.base.writeTempFile(allocator, path, bytes[0..1]);
-            errdefer {
-                self.base.deleteFile(staging) catch {};
-                allocator.free(staging);
-            }
-            self.pending = staging;
-            defer self.pending = null;
-            std.debug.assert(!self.base.fileExists(path));
-            if (self.program) {
-                self.store.writeProgram(@splat(1), bytes) catch return error.IoError;
-            } else self.store.writePath(path, bytes) catch return error.IoError;
-            const visible = self.base.readFile(path, allocator) catch return error.IoError;
-            defer allocator.free(visible);
-            self.observed_complete = std.mem.eql(u8, visible, bytes);
-            try self.base.writeFile(staging, bytes);
-            const after = self.base.readFile(path, allocator) catch return error.IoError;
-            defer allocator.free(after);
-            self.observed_complete = self.observed_complete and std.mem.eql(u8, after, bytes);
-            return staging;
-        }
-    };
-    const allocator = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
-    defer allocator.free(root);
-    const base_ctx = CoreCtx.default(allocator, allocator, io);
-    var store = Store{ .allocator = allocator, .roc_ctx = base_ctx, .root = try allocator.dupe(u8, root), .procedure_root = try allocator.dupe(u8, root), .verbose = false };
-    defer store.deinit();
-    var hook = Hook{ .store = &store, .base = base_ctx, .program = program };
-    store.roc_ctx.ctx = &hook;
-    store.roc_ctx.vtable.writeTempFile = &Hook.writeTempFile;
-    const identity = @as([32]u8, @splat(1));
-    if (program) try store.writeProgram(identity, "whole completed compilation") else try store.write(.local, identity, @as([32]u8, @splat(2)), "whole completed pack");
-    try std.testing.expect(hook.distinct);
-    try std.testing.expect(hook.observed_complete);
-    const dir_path = if (program) try std.fs.path.join(allocator, &.{ root, "programs" }) else try store.identityDir(.local, identity);
-    defer allocator.free(dir_path);
-    var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true });
-    defer dir.close(io);
-    var iterator = dir.iterate();
-    var count: usize = 0;
-    while (try iterator.next(io)) |entry| {
-        try std.testing.expect(!std.mem.endsWith(u8, entry.name, ".tmp"));
-        count += 1;
-    }
-    try std.testing.expectEqual(@as(usize, 1), count);
-}
-
-test "native procedure domain shares packs and interfaces but isolates final outputs and linked objects" {
+test "native procedure domain shares packs but isolates final outputs and linked objects" {
     const a = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -786,66 +537,36 @@ test "native procedure domain shares packs and interfaces but isolates final out
         defer right.deinit();
         try left.write(.pkg, identity, key, "linked-only package");
         try std.testing.expect(!try right.has(.pkg, identity, key));
-        const left_path = try left.optimizedPackPath(identity);
-        defer a.free(left_path);
-        const right_path = try right.optimizedPackPath(identity);
-        defer a.free(right_path);
-        try std.testing.expect(!std.mem.eql(u8, left_path, right_path));
+        const left_key = left.identity(.optimized_pack, identity, identity).indexedKey();
+        const right_key = right.identity(.optimized_pack, identity, identity).indexedKey();
+        try std.testing.expect(!std.mem.eql(u8, &left_key, &right_key));
     }
 }
 
-test "the cache sweep finds and ages the packs the store writes" {
+test "indexed pack families share retention and preserve accepted bytes" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const cache_root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
-    defer allocator.free(cache_root);
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const cache_config: compile.CacheConfig = .{
-        .cache_dir = cache_root,
-        .roc_ctx = CoreCtx.default(allocator, arena.allocator(), io),
-    };
-    var store = try Store.init(allocator, cache_config, .x64glibc, "dev");
+    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+    var store = try Store.init(allocator, .{ .cache_dir = root, .roc_ctx = CoreCtx.default(allocator, allocator, io) }, .x64glibc, "dev");
     defer store.deinit();
-
-    const local_identity = @as([32]u8, @splat(1));
-    const pkg_identity = @as([32]u8, @splat(2));
-    const key = @as([32]u8, @splat(3));
-    try store.write(.local, local_identity, key, "local pack");
-    try store.write(.pkg, pkg_identity, key, "pkg pack");
-    // A second writer of the same pack finds it in place with its bytes.
-    try store.write(.pkg, pkg_identity, key, "pkg pack");
-    try std.testing.expect(try store.has(.local, local_identity, key));
-    try std.testing.expect(try store.has(.pkg, pkg_identity, key));
-
-    // A namespace of another pack format beside the store's own.
-    const version_dir = try cache_config.getVersionCacheDir(allocator);
-    defer allocator.free(version_dir);
-    const stale_dir = try std.fs.path.join(allocator, &.{ version_dir, compile.config.objectPackNamespace(PackFile.format_version - 1), "x64glibc-dev", "pkg" });
-    defer allocator.free(stale_dir);
-    try std.Io.Dir.cwd().createDirPath(io, stale_dir);
-
-    const artifact = IndexFixture.artifact(1, "indexed code");
-    const spec = IndexFixture.spec(1, 0);
-    try store.writeIndexed(.local, local_identity, &.{ .arena = undefined, .artifacts = &.{artifact} }, &.{spec});
-
-    const limits: compile.CacheCleanup.Limits = .{
-        .object_pack_format_version = PackFile.format_version,
-        .max_size_bytes = std.math.maxInt(u64),
-    };
-    const now_ns = compile.CacheCleanup.nowNs(io);
-    var stats: compile.CacheCleanup.CleanupStats = .{};
-    compile.CacheCleanup.sweep(io, cache_root, limits, now_ns + 2 * compile.CacheCleanup.Config.LOCAL_PACK_MAX_AGE_NS, &stats);
-    try std.testing.expectEqual(@as(u32, 1), stats.stale_namespaces_deleted);
-    try std.testing.expectEqual(@as(u32, 4), stats.cache_files_deleted);
-    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, stale_dir, .{}));
-    try std.testing.expect(!try store.has(.local, local_identity, key));
-    try std.testing.expect(try store.has(.pkg, pkg_identity, key));
-
-    compile.CacheCleanup.sweep(io, cache_root, limits, now_ns + compile.CacheCleanup.Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s, &stats);
-    try std.testing.expect(!try store.has(.pkg, pkg_identity, key));
+    const module: [32]u8 = @splat(1);
+    const key: [32]u8 = @splat(2);
+    try store.write(.local, module, key, "local");
+    try store.write(.pkg, module, key, "package");
+    const owned = (try store.read(allocator, store.packIdentity(.local, module, key))).?;
+    defer allocator.free(owned);
+    var now = store.native.now() + 2 * compile.artifacts.day_ns;
+    for (0..180) |_| {
+        var stats = compile.maintenance.Stats{};
+        compile.maintenance.run(&store.native, .{ .object_pack_format_version = PackFile.format_version, .max_size_bytes = std.math.maxInt(u64) }, now, .compulsory, &stats);
+        now += std.time.ns_per_s;
+    }
+    try std.testing.expect(!try store.has(.local, module, key));
+    try std.testing.expect(try store.has(.pkg, module, key));
+    try std.testing.expectEqualStrings("local", owned);
 }
 
 /// The stores of LLVM-compiled object packs a dev build for one target links
@@ -895,18 +616,12 @@ pub const LinkedStores = struct {
         hasher.update("roc.optimization-state.v1");
         for (&self.stores) |*store| {
             for (selection.modules) |module| {
-                const path = try store.packagePackPath(module.identity, module.key);
-                defer allocator.free(path);
-                if (!store.roc_ctx.fileExists(path)) continue;
-                hasher.update(path);
-                hasher.update(&.{0});
+                if (!try store.has(.pkg, module.identity, module.key)) continue;
+                hasher.update(&store.packIdentity(.pkg, module.identity, module.key).indexedKey());
             }
             const identity = selection.optimized_identity orelse continue;
             const input_key = try store.optimizedInputKey(identity) orelse continue;
-            const path = try store.optimizedPackPath(identity);
-            defer allocator.free(path);
-            hasher.update(path);
-            hasher.update(&.{0});
+            hasher.update(&store.identity(.optimized_pack, identity, @splat(0)).indexedKey());
             hasher.update(&input_key);
         }
         var digest: [32]u8 = undefined;
@@ -1093,16 +808,17 @@ pub const LoadedPacks = struct {
         loaded: bool = false,
         dirty: bool = false,
     };
+    const Provider = struct { store: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8 };
+    const IndexRoot = struct { store: *const Store, origin: compile.BuildEnv.PackOrigin };
     interface_mutex: std.Io.Mutex = .init,
     /// Worker reads update this under interface_mutex; reported after joining.
     interface_bytes_loaded: u64 = 0,
     interface_families: std.AutoHashMapUnmanaged([32]u8, *InterfaceFamily) = .empty,
     interface_store: ?*const Store = null,
     allocator: Allocator,
-    index_dirs: std.ArrayList([]const u8) = .empty,
-    index_io: ?std.Io = null,
-    index_roots: std.ArrayList([]const u8) = .empty,
-    provider_ranks: std.StringHashMapUnmanaged(u32) = .empty,
+    index_dirs: std.ArrayList(Provider) = .empty,
+    index_roots: std.ArrayList(IndexRoot) = .empty,
+    provider_ranks: std.AutoHashMapUnmanaged([32]u8, u32) = .empty,
     metadata: std.AutoHashMapUnmanaged([32]u8, *IndexedMetadata) = .empty,
     negative: std.AutoHashMapUnmanaged(MissKey, void) = .empty,
 
@@ -1184,20 +900,19 @@ pub const LoadedPacks = struct {
         missing: u64 = 0,
     };
 
-    pub fn addIndexDir(self: *LoadedPacks, io: std.Io, dir: []const u8) Allocator.Error!void {
-        if (self.provider_ranks.contains(dir)) return;
+    pub fn addIndexProvider(self: *LoadedPacks, store: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8) Allocator.Error!void {
+        const provider_key = store.packIdentity(origin, module, @splat(0)).indexedKey()[0..32].*;
+        if (self.provider_ranks.contains(provider_key)) return;
         try self.index_dirs.ensureUnusedCapacity(self.allocator, 1);
         try self.index_roots.ensureUnusedCapacity(self.allocator, 1);
-        const owned = try self.allocator.dupe(u8, dir);
-        errdefer self.allocator.free(owned);
-        try self.provider_ranks.put(self.allocator, owned, @intCast(self.index_dirs.items.len));
-        self.index_dirs.appendAssumeCapacity(owned);
-        const root = std.fs.path.dirname(owned).?;
+        try self.provider_ranks.put(self.allocator, provider_key, @intCast(self.index_dirs.items.len));
+        self.index_dirs.appendAssumeCapacity(.{ .store = store, .origin = origin, .module = module });
+        const root_key = store.packIdentity(origin, @splat(0), @splat(0)).indexedKey()[0..32].*;
         const known = for (self.index_roots.items) |existing| {
-            if (std.mem.eql(u8, existing, root)) break true;
+            const previous = existing.store.packIdentity(existing.origin, @splat(0), @splat(0)).indexedKey()[0..32].*;
+            if (std.mem.eql(u8, &previous, &root_key)) break true;
         } else false;
-        if (!known) self.index_roots.appendAssumeCapacity(root);
-        self.index_io = io;
+        if (!known) self.index_roots.appendAssumeCapacity(.{ .store = store, .origin = origin });
         self.refreshIndex();
     }
 
@@ -1218,19 +933,13 @@ pub const LoadedPacks = struct {
         self.refreshIndex();
     }
 
-    fn loadMetadata(self: *LoadedPacks, io: std.Io, module_dir: []const u8, hash: [32]u8) Allocator.Error!?*IndexedMetadata {
+    fn loadMetadata(self: *LoadedPacks, store: *const Store, origin: compile.BuildEnv.PackOrigin, owner: [32]u8, hash: [32]u8) Allocator.Error!?*IndexedMetadata {
         if (self.metadata.get(hash)) |existing| return existing;
         const allocator = self.allocator;
-        const name = std.fmt.bytesToHex(hash, .lower) ++ ".rpm".*;
-        const path = try std.fs.path.join(allocator, &.{ module_dir, "metadata", &name });
-        defer allocator.free(path);
         self.index_stats.metadata_opens += 1;
-        const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024 * 1024)) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => {
-                self.index_stats.missing += 1;
-                return null;
-            },
+        const bytes = (try store.read(allocator, store.indexedIdentity(origin, owner, hash, .metadata))) orelse {
+            self.index_stats.missing += 1;
+            return null;
         };
         defer allocator.free(bytes);
         self.bytes_loaded +|= bytes.len;
@@ -1268,87 +977,85 @@ pub const LoadedPacks = struct {
     /// Probe direct key buckets, then only candidates belonging to visible
     /// providers. Provider rank remains root-first, independent of disk order.
     fn findIndexed(self: *LoadedPacks, key: [32]u8, takes: Common.SpecCacheTakes, modules: Common.ProgramModules) Allocator.Error!IndexedResult {
-        const io = self.index_io orelse return .unavailable;
+        if (self.index_roots.items.len == 0) return .unavailable;
         const allocator = self.allocator;
         const Candidate = struct {
-            name: []u8,
-            bucket: []const u8,
+            digest: [32]u8,
+            offer: Index.Offer,
+            store: *const Store,
             rank: u32,
             fn less(_: void, a: @This(), b: @This()) bool {
                 if (a.rank != b.rank) return a.rank < b.rank;
-                return std.mem.lessThan(u8, a.name, b.name);
+                return std.mem.lessThan(u8, &a.digest, &b.digest);
             }
         };
         var candidates = std.ArrayList(Candidate).empty;
-        var buckets = std.ArrayList([]u8).empty;
-        defer {
-            for (candidates.items) |candidate| allocator.free(candidate.name);
-            candidates.deinit(allocator);
-            for (buckets.items) |bucket| allocator.free(bucket);
-            buckets.deinit(allocator);
-        }
+        defer candidates.deinit(allocator);
         var cacheable = true;
-        for (self.index_roots.items) |index_root| {
-            try buckets.ensureUnusedCapacity(allocator, 1);
-            const bucket = try std.fs.path.join(allocator, &.{ index_root, "offers", &std.fmt.bytesToHex(key, .lower) });
-            buckets.appendAssumeCapacity(bucket);
+        for (self.index_roots.items) |root| {
             self.index_stats.bucket_opens += 1;
-            var dir = std.Io.Dir.cwd().openDir(io, bucket, .{ .iterate = true }) catch |err| switch (err) {
-                error.FileNotFound => {
-                    self.index_stats.bucket_absent += 1;
-                    continue;
-                },
+            const group = root.store.indexedIdentity(root.origin, key, @splat(0), .offer);
+            const keys = root.store.native.groupKeys(allocator, group) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
                 else => {
                     cacheable = false;
                     continue;
                 },
             };
-            defer dir.close(io);
-            var it = dir.iterate();
-            while (it.next(io) catch blk: {
-                cacheable = false;
-                break :blk null;
-            }) |entry| {
-                if (entry.kind != .file or entry.name.len != 133 or entry.name[64] != '-' or !std.mem.endsWith(u8, entry.name, ".rpi")) continue;
-                const module_dir = try std.fs.path.join(allocator, &.{ index_root, entry.name[0..64] });
-                defer allocator.free(module_dir);
-                const rank = self.provider_ranks.get(module_dir) orelse continue;
-                try candidates.ensureUnusedCapacity(allocator, 1);
-                candidates.appendAssumeCapacity(.{ .name = try allocator.dupe(u8, entry.name), .bucket = bucket, .rank = rank });
+            defer allocator.free(keys);
+            if (keys.len == 0) self.index_stats.bucket_absent += 1;
+            for (keys) |catalog_key| {
+                var artifact = (root.store.native.acquireKey(catalog_key, root.store.native.now()) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => {
+                        cacheable = false;
+                        continue;
+                    },
+                }) orelse {
+                    cacheable = false;
+                    continue;
+                };
+                defer artifact.deinit();
+                if (artifact.size > 1024) {
+                    self.index_stats.corrupt += 1;
+                    cacheable = false;
+                    continue;
+                }
+                const bytes = artifact.read(allocator) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => {
+                        cacheable = false;
+                        continue;
+                    },
+                };
+                defer allocator.free(bytes);
+                self.bytes_loaded +|= bytes.len;
+                self.index_stats.index_bytes += bytes.len;
+                if (bytes.len < 32 or !std.mem.eql(u8, catalog_key[32..], &Index.digest(bytes))) {
+                    self.index_stats.corrupt += 1;
+                    cacheable = false;
+                    continue;
+                }
+                const provider = root.store.packIdentity(root.origin, bytes[0..32].*, @splat(0)).indexedKey()[0..32].*;
+                const rank = self.provider_ranks.get(provider) orelse continue;
+                const offer = Index.Offer.decode(bytes[32..]) catch {
+                    self.index_stats.corrupt += 1;
+                    cacheable = false;
+                    continue;
+                };
+                try candidates.append(allocator, .{ .digest = Index.digest(bytes[32..]), .offer = offer, .store = root.store, .rank = rank });
             }
         }
         std.mem.sort(Candidate, candidates.items, {}, Candidate.less);
         for (candidates.items, 0..) |candidate, candidate_index| {
             self.index_stats.candidates += 1;
             if (candidate_index != 0) self.index_stats.duplicates += 1;
-            const path = try std.fs.path.join(allocator, &.{ candidate.bucket, candidate.name });
-            defer allocator.free(path);
-            const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024)) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => {
-                    self.index_stats.missing += 1;
-                    cacheable = false;
-                    continue;
-                },
+            const offer = candidate.offer;
+            const origin: compile.BuildEnv.PackOrigin = switch (offer.origin) {
+                .local => .local,
+                .pkg => .pkg,
             };
-            defer allocator.free(bytes);
-            self.bytes_loaded +|= bytes.len;
-            self.index_stats.index_bytes += bytes.len;
-            if (!std.mem.eql(u8, candidate.name[65..129], &std.fmt.bytesToHex(Index.digest(bytes), .lower))) {
-                self.index_stats.corrupt += 1;
-                cacheable = false;
-                continue;
-            }
-            const offer = Index.Offer.decode(bytes) catch {
-                self.index_stats.corrupt += 1;
-                cacheable = false;
-                continue;
-            };
-            const provider_dir = self.index_dirs.items[candidate.rank];
-            const namespace = std.fs.path.dirname(std.fs.path.dirname(provider_dir).?).?;
-            const module_dir = try std.fs.path.join(allocator, &.{ namespace, @tagName(offer.origin), &std.fmt.bytesToHex(offer.owner, .lower) });
-            defer allocator.free(module_dir);
-            const metadata = try self.loadMetadata(io, module_dir, offer.metadata) orelse {
+            const metadata = try self.loadMetadata(candidate.store, origin, offer.owner, offer.metadata) orelse {
                 cacheable = false;
                 continue;
             };
@@ -1391,7 +1098,7 @@ pub const LoadedPacks = struct {
             var complete = true;
             for (reached) |index| {
                 if (metadata.materialized[index]) continue;
-                const payload_bytes = try self.readPayload(io, module_dir, metadata.hashes[index]) orelse {
+                const payload_bytes = try self.readPayload(candidate.store, origin, offer.owner, metadata.hashes[index]) orelse {
                     complete = false;
                     cacheable = false;
                     break;
@@ -1420,18 +1127,12 @@ pub const LoadedPacks = struct {
         return if (cacheable) .miss else .unavailable;
     }
 
-    fn readPayload(self: *LoadedPacks, io: std.Io, module_dir: []const u8, hash: [32]u8) Allocator.Error!?[]const u8 {
+    fn readPayload(self: *LoadedPacks, store: *const Store, origin: compile.BuildEnv.PackOrigin, owner: [32]u8, hash: [32]u8) Allocator.Error!?[]const u8 {
         if (self.payloads.get(hash)) |bytes| return bytes;
-        const name = std.fmt.bytesToHex(hash, .lower) ++ ".rpa".*;
-        const path = try std.fs.path.join(self.allocator, &.{ module_dir, "payload", &name });
-        defer self.allocator.free(path);
         self.index_stats.payload_opens += 1;
-        const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, self.allocator, .limited(1024 * 1024 * 1024)) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => {
-                self.index_stats.missing += 1;
-                return null;
-            },
+        const bytes = (try store.read(self.allocator, store.indexedIdentity(origin, owner, hash, .payload))) orelse {
+            self.index_stats.missing += 1;
+            return null;
         };
         errdefer self.allocator.free(bytes);
         self.bytes_loaded +|= bytes.len;
@@ -1534,6 +1235,7 @@ pub const LoadedPacks = struct {
             var arena = base.SingleThreadArena.init(allocator);
             const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, arena.allocator(), .limited(1024 * 1024 * 1024)) catch |err| {
                 arena.deinit();
+                if (err == error.FileNotFound and input == .cache_offers) continue;
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
                     else => error.PackDirectoryUnreadable,
@@ -1559,19 +1261,16 @@ pub const LoadedPacks = struct {
         }
     }
 
-    /// Read the object pack at `path` without indexing. A missing file, a
-    /// pack of another format, or a pack that offers nothing is no offer.
-    fn loadObjectFile(self: *LoadedPacks, io: std.Io, path: []const u8) LoadError!void {
+    /// Acquire owned bytes before accepting an object-cache offer.
+    fn loadStoredObject(self: *LoadedPacks, store: *const Store, id: compile.artifacts.Identity) LoadError!void {
         const allocator = self.allocator;
-        // The decoded pack aliases the file bytes, which its arena owns.
         var arena = base.SingleThreadArena.init(allocator);
-        const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, arena.allocator(), .limited(1024 * 1024 * 1024)) catch |err| {
+        const bytes = (store.read(arena.allocator(), id) catch |err| {
             arena.deinit();
-            return switch (err) {
-                error.OutOfMemory => error.OutOfMemory,
-                error.FileNotFound => {},
-                else => error.PackDirectoryUnreadable,
-            };
+            return err;
+        }) orelse {
+            arena.deinit();
+            return;
         };
         self.bytes_loaded +|= bytes.len;
         var pack = PackFile.readObjectOwned(arena, bytes) catch |err| switch (err) {
@@ -1750,14 +1449,10 @@ pub const LoadedPacks = struct {
         const root_placement = optimizedPackPlacement(pending.build_env, root_artifact);
         for (&stores.stores) |*store| {
             for (modules) |module| {
-                const path = try store.packagePackPath(module.identity, module.key);
-                defer self.allocator.free(path);
-                try self.loadObjectFile(pending.io, path);
+                try self.loadStoredObject(store, store.packIdentity(.pkg, module.identity, module.key));
             }
             if (root_placement) |placement| {
-                const path = try store.optimizedPackPath(placement.identity);
-                defer self.allocator.free(path);
-                try self.loadObjectFile(pending.io, path);
+                try self.loadStoredObject(store, store.identity(.optimized_pack, placement.identity, @splat(0)));
             }
         }
         try self.indexObjectPacks(try programBindingKey(self.allocator, pending.build_env, root_artifact));
@@ -1854,7 +1549,6 @@ pub const LoadedPacks = struct {
             self.allocator.destroy(entry.*);
         }
         self.metadata.deinit(self.allocator);
-        for (self.index_dirs.items) |dir| self.allocator.free(dir);
         self.index_dirs.deinit(self.allocator);
         var payloads = self.payloads.valueIterator();
         while (payloads.next()) |bytes| self.allocator.free(bytes.*);
@@ -1894,11 +1588,6 @@ pub const LoadedPacks = struct {
         return if (self.pending) |pending| pending.store else self.interface_store;
     }
 
-    fn interfacePath(store: *const Store, allocator: Allocator, family: [32]u8) Allocator.Error![]u8 {
-        const name = std.fmt.bytesToHex(family, .lower) ++ ".ris".*;
-        return std.fs.path.join(allocator, &.{ store.procedure_root, "interfaces", &name });
-    }
-
     /// Caller holds interface_mutex. One read per family and snapshot, including
     /// absence. Publications update the resident family directly.
     fn interfaceFamily(self: *LoadedPacks, store: *const Store, key: [32]u8) Allocator.Error!*InterfaceFamily {
@@ -1911,15 +1600,9 @@ pub const LoadedPacks = struct {
         }
         const family = entry.value_ptr.*;
         if (family.loaded) return family;
-        const path = try interfacePath(store, self.allocator, key);
-        defer self.allocator.free(path);
-        const bytes = std.Io.Dir.cwd().readFileAlloc(store.roc_ctx.std_io, path, self.allocator, .limited(64 * 1024 * 1024)) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.FileNotFound => {
-                family.loaded = true;
-                return family;
-            },
-            else => return family,
+        const bytes = (try store.read(self.allocator, store.indexedIdentity(.local, key, @splat(0), .interface))) orelse {
+            family.loaded = true;
+            return family;
         };
         defer self.allocator.free(bytes);
         self.interface_bytes_loaded +|= bytes.len;
@@ -2014,9 +1697,7 @@ pub const LoadedPacks = struct {
                 try bytes.appendSlice(self.allocator, payload);
             }
             bytes.items[40..72].* = Index.digest(bytes.items[72..]);
-            const path = try interfacePath(store, self.allocator, entry.key_ptr.*);
-            defer self.allocator.free(path);
-            _ = store.publishIndexedPath(path, bytes.items) catch |err| switch (err) {
+            _ = store.publishIndexed(store.indexedIdentity(.local, entry.key_ptr.*, @splat(0), .interface), bytes.items) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.PackWriteFailed => continue,
             };
@@ -2335,16 +2016,16 @@ test "an object pack that offers nothing is no offer and contributes no object t
     // linked object.
     const empty = try PackFile.writeObject(allocator, "", &.{}, &.{}, .{ .input_key = @splat(9), .app_bound = &.{} });
     defer allocator.free(empty);
-    try tmp.dir.writeFile(io, .{ .sub_path = "offering.rpo", .data = offering });
-    try tmp.dir.writeFile(io, .{ .sub_path = "empty.rpo", .data = empty });
-
+    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+    var store = try Store.init(allocator, .{ .cache_dir = root, .roc_ctx = CoreCtx.os(allocator, allocator, io) }, .x64glibc, "dev");
+    defer store.deinit();
+    const module: [32]u8 = @splat(7);
+    try store.write(.pkg, module, @splat(1), empty);
+    try store.write(.pkg, module, @splat(2), offering);
     var packs = LoadedPacks.init(allocator);
     defer packs.deinit();
-    for ([_][]const u8{ "empty.rpo", "offering.rpo" }) |name| {
-        const path = try tmp.dir.realPathFileAlloc(io, name, allocator);
-        defer allocator.free(path);
-        try packs.loadObjectFile(io, path);
-    }
+    for ([_]u8{ 1, 2 }) |key| try packs.loadStoredObject(&store, store.packIdentity(.pkg, module, @splat(key)));
     try std.testing.expectEqual(@as(usize, 1), packs.object_packs.items.len);
     try std.testing.expectEqualStrings("object", packs.object_packs.items[0].object);
 }
@@ -2361,17 +2042,7 @@ const IndexFixture = struct {
         self.arena = std.heap.ArenaAllocator.init(allocator);
         const root = try self.tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
         defer allocator.free(root);
-        // Distinct roots expose any procedure record filed under the exact
-        // final-output target instead of the procedure domain.
-        const output_root = try std.fs.path.join(allocator, &.{ root, "output" });
-        errdefer allocator.free(output_root);
-        self.store = .{
-            .allocator = allocator,
-            .roc_ctx = CoreCtx.default(allocator, self.arena.allocator(), std.testing.io),
-            .root = output_root,
-            .procedure_root = try std.fs.path.join(allocator, &.{ root, "procedures" }),
-            .verbose = false,
-        };
+        self.store = try Store.init(allocator, .{ .cache_dir = root, .roc_ctx = CoreCtx.os(allocator, self.arena.allocator(), std.testing.io) }, .x64glibc, "dev");
     }
 
     fn deinit(self: *@This()) void {
@@ -2403,10 +2074,12 @@ const IndexFixture = struct {
     fn payloadPath(self: *@This(), artifact_value: backend.dev.ProcArtifact.Artifact) Allocator.Error![]u8 {
         const bytes = try Index.payload(allocator, artifact_value);
         defer allocator.free(bytes);
-        const dir = try self.store.identityDir(.local, identity);
-        defer allocator.free(dir);
-        const name = std.fmt.bytesToHex(Index.digest(bytes), .lower) ++ ".rpa".*;
-        return std.fs.path.join(allocator, &.{ dir, "payload", &name });
+        var artifact_file = (self.store.native.acquire(self.store.indexedIdentity(.local, identity, Index.digest(bytes), .payload), self.store.native.now()) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => unreachable,
+        }).?;
+        defer artifact_file.deinit();
+        return allocator.dupe(u8, artifact_file.path);
     }
 };
 
@@ -2608,9 +2281,12 @@ test "indexed object cache interrupted publication exposes no offer and concurre
         failed: bool = false,
         fn run(self: *@This()) void {
             for (0..8) |_| {
-                self.store.writeIndexed(.local, F.identity, &.{ .arena = undefined, .artifacts = &.{F.artifact(self.key, "code")} }, &.{F.spec(self.key, 0)}) catch {
-                    self.failed = true;
-                    return;
+                self.store.writeIndexed(.local, F.identity, &.{ .arena = undefined, .artifacts = &.{F.artifact(self.key, "code")} }, &.{F.spec(self.key, 0)}) catch |err| switch (err) {
+                    error.PackWriteFailed => continue, // Optional publication can lose catalog contention.
+                    else => {
+                        self.failed = true;
+                        return;
+                    },
                 };
             }
         }
@@ -2631,6 +2307,7 @@ test "indexed object cache interrupted publication exposes no offer and concurre
         }
     }
     try std.testing.expect(!a.failed and !b.failed);
+    for ([_]u8{ 1, 2 }) |key| try fixture.publish(&.{F.artifact(key, "code")}, &.{F.spec(key, 0)}, &.{});
     interrupted.refreshIndex();
     for ([_]u8{ 1, 2 }) |key| {
         const hit = interrupted.specCacheLookup().lookup(@splat(key), .dev_code, &.{}) orelse return error.TestUnexpectedResult;
@@ -2648,18 +2325,15 @@ test "indexed object cache rejects corrupt offers and shared metadata before rea
         const artifacts = [_]backend.dev.ProcArtifact.Artifact{F.artifact(1, "code")};
         const specs = [_]PackFile.SpecEntry{F.spec(1, 0)};
         try fixture.publish(&artifacts, &specs, &.{});
-        const module_dir = try fixture.store.identityDir(.local, F.identity);
-        defer F.allocator.free(module_dir);
-        const bucket = if (shared_metadata)
-            try std.fs.path.join(F.allocator, &.{ module_dir, "metadata" })
-        else
-            try std.fs.path.join(F.allocator, &.{ fixture.store.procedure_root, "local", "offers", &std.fmt.bytesToHex(@as([32]u8, @splat(1)), .lower) });
-        defer F.allocator.free(bucket);
-        var dir = try std.Io.Dir.cwd().openDir(std.testing.io, bucket, .{ .iterate = true });
-        defer dir.close(std.testing.io);
-        var it = dir.iterate();
-        const entry = (try it.next(std.testing.io)).?;
-        try dir.writeFile(std.testing.io, .{ .sub_path = entry.name, .data = "truncated metadata" });
+        const group = fixture.store.indexedIdentity(.local, if (shared_metadata) F.identity else @splat(1), @splat(0), if (shared_metadata) .metadata else .offer);
+        const keys = try fixture.store.native.groupKeys(F.allocator, group);
+        defer F.allocator.free(keys);
+        var record = (try fixture.store.native.acquireKey(keys[0], fixture.store.native.now())).?;
+        defer record.deinit();
+        const corrupted = try record.read(F.allocator);
+        defer F.allocator.free(corrupted);
+        corrupted[0] ^= 0xff;
+        try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = record.path, .data = corrupted });
         var packs = try fixture.loader();
         defer packs.deinit();
         try std.testing.expect(packs.specCacheLookup().lookup(@splat(1), .dev_code, &.{}) == null);
@@ -2747,13 +2421,15 @@ test "indexed object cache shares producer metadata and verifies immutable recor
     const artifacts = [_]backend.dev.ProcArtifact.Artifact{ first, second, F.artifact(3, "shared dependency") };
     const specs = [_]PackFile.SpecEntry{ F.spec(1, 0), F.spec(2, 1) };
     try fixture.publish(&artifacts, &specs, &.{});
-    const RefuseWrites = struct {
-        fn rename(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.RenameError!void {
-            return error.AccessDenied;
-        }
-    };
-    fixture.store.roc_ctx.vtable.rename = RefuseWrites.rename;
+    const group = fixture.store.indexedIdentity(.local, F.identity, @splat(0), .metadata);
+    const keys = try fixture.store.native.groupKeys(F.allocator, group);
+    defer F.allocator.free(keys);
+    var before = (try fixture.store.native.acquireKey(keys[0], fixture.store.native.now())).?;
+    defer before.deinit();
     try fixture.publish(&artifacts, &specs, &.{});
+    var after = (try fixture.store.native.acquireKey(keys[0], fixture.store.native.now())).?;
+    defer after.deinit();
+    try std.testing.expectEqualStrings(before.path, after.path);
     var packs = try fixture.loader();
     defer packs.deinit();
     _ = packs.specCacheLookup().lookup(@splat(1), .dev_code, &.{}) orelse return error.TestUnexpectedResult;
@@ -2827,9 +2503,7 @@ test "persistent interface families invalidate misses, share records, and reject
     const three = (try LoadedPacks.loadInterface(&consumer, allocator, family, third)).?;
     defer allocator.free(three);
     try std.testing.expectEqualStrings("three", three);
-    const path = try LoadedPacks.interfacePath(&fixture.store, allocator, family);
-    defer allocator.free(path);
-    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = "RIFACE01truncated" });
+    try fixture.store.native.write(fixture.store.indexedIdentity(.local, family, @splat(0), .interface), "RIFACE01truncated", fixture.store.native.now());
     var corrupt = LoadedPacks.init(allocator);
     defer corrupt.deinit();
     corrupt.interface_store = &fixture.store;

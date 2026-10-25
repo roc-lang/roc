@@ -1032,107 +1032,30 @@ fn createExecutableSharedMemory(io: std.Io, page_size: usize) error{ CreateFileM
     return SharedMemoryAllocator.createExecutableWithMinSize(io, SHARED_MEMORY_SIZE, SHARED_MEMORY_MIN_SIZE, page_size);
 }
 
-/// Cross-platform hardlink creation
-fn createHardlink(ctx: *CliCtx, source: []const u8, dest: []const u8) (Allocator.Error || error{ InvalidUtf8, PathAlreadyExists, Unexpected })!void {
-    if (comptime builtin.target.os.tag == .windows) {
-        // On Windows, use CreateHardLinkW
-        const source_w = try std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, source);
-        const dest_w = try std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, dest);
-
-        // Declare CreateHardLinkW since it's not in all versions of std
-        const kernel32 = struct {
-            extern "kernel32" fn CreateHardLinkW(
-                lpFileName: [*:0]const u16,
-                lpExistingFileName: [*:0]const u16,
-                lpSecurityAttributes: ?*anyopaque,
-            ) callconv(.winapi) std.os.windows.BOOL;
-        };
-
-        if (kernel32.CreateHardLinkW(dest_w, source_w, null) == .FALSE) {
-            const err = std.os.windows.GetLastError();
-            if (err == .ALREADY_EXISTS) return error.PathAlreadyExists;
-            return error.Unexpected;
-        }
-    } else {
-        // On POSIX systems, use the link system call
-        const source_c = try ctx.arena.dupeSentinel(u8, source, 0);
-        const dest_c = try ctx.arena.dupeSentinel(u8, dest, 0);
-
-        const result = c.link(source_c, dest_c);
-        if (result != 0) {
-            const errno = c._errno().*;
-            switch (errno) {
-                17 => return error.PathAlreadyExists, // EEXIST
-                else => return error.Unexpected,
-            }
-        }
-    }
-}
-
-/// Generate a cryptographically secure random ASCII string for directory names
-fn generateRandomSuffix(ctx: *CliCtx) Allocator.Error![]u8 {
-    // TODO: Consider switching to a library like https://github.com/abhinav/temp.zig
-    // for more robust temporary file/directory handling
-    const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-
-    const suffix = try ctx.arena.alloc(u8, 32);
-
-    // Fill with cryptographically secure random bytes
-    ctx.io.std_io.random(suffix);
-
-    // Convert to ASCII characters from our charset
-    for (suffix) |*byte| {
-        byte.* = charset[byte.* % charset.len];
-    }
-
-    return suffix;
-}
-
-/// Create a unique scratch directory under {cache}/{version}/tmp/{random}/.
+/// Reserve a unique, leased scratch generation in the indexed cache store.
 /// Returns the path to the directory (allocated from arena, no need to free).
 pub fn createUniqueTempDir(ctx: *CliCtx) (Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.CreateDirError || error{ FailedToCreateUniqueTempDir, NoHomeDirectory })![]const u8 {
-    const cache_config = cache_config_mod.CacheConfig{ .roc_ctx = ctx.coreCtx() };
-    const scratch_dir = try cache_config.getScratchDir(ctx.arena);
+    const config = CacheConfig{ .roc_ctx = ctx.coreCtx() };
+    const root = try config.getEffectiveCacheDir(ctx.arena);
+    var scratch = compile.artifacts.Scratch.create(ctx.gpa, ctx.io.std_io, root, compile.artifacts.hashBytes(build_options.compiler_compatibility_id)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.FailedToCreateUniqueTempDir,
+    };
+    errdefer scratch.deinit();
+    // The caller's arena path remains valid after explicitly releasing the lease.
+    const path = try ctx.arena.dupe(u8, scratch.path());
+    try ctx.scratch.append(ctx.gpa, scratch);
+    return path;
+}
 
-    // createDirPath treats an already-existing directory as success
-    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, scratch_dir);
-
-    // Try to create a unique subdirectory with random suffix
-    var attempt: u8 = 0;
-    while (attempt < 6) : (attempt += 1) {
-        const random_suffix = try generateRandomSuffix(ctx);
-        const dir_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, random_suffix });
-
-        // Try to create the directory
-        std.Io.Dir.cwd().createDir(ctx.io.std_io, dir_path, .default_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {
-                // Directory already exists, try again with a new random suffix
-                continue;
-            },
-            error.AccessDenied,
-            error.BadPathName,
-            error.Canceled,
-            error.DiskQuota,
-            error.FileNotFound,
-            error.LinkQuotaExceeded,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NoDevice,
-            error.NoSpaceLeft,
-            error.NotDir,
-            error.PermissionDenied,
-            error.ReadOnlyFileSystem,
-            error.SymLinkLoop,
-            error.SystemResources,
-            error.Unexpected,
-            => return err,
-        };
-
-        return dir_path;
+fn releaseScratchDir(ctx: *CliCtx, path: []const u8) void {
+    for (ctx.scratch.items, 0..) |*scratch, index| {
+        if (std.mem.eql(u8, scratch.path(), path)) {
+            scratch.deinit();
+            _ = ctx.scratch.swapRemove(index);
+            return;
+        }
     }
-
-    // Failed after 6 attempts
-    return error.FailedToCreateUniqueTempDir;
 }
 
 /// Write shared memory coordination file (.txt) next to the executable.
@@ -1290,43 +1213,20 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
     }
 }
 
-fn parsedArgsStartBackgroundCleanup(args: cli_args.CliArgs) bool {
+fn parsedArgsUseCache(args: cli_args.CliArgs) bool {
     return switch (args) {
         .run, .build, .check, .test_cmd, .docs, .deps, .bump, .glue, .install, .experimental_lsp => true,
         .fmt, .bundle, .unbundle, .repl, .version, .help, .licenses, .problem => false,
     };
 }
 
-fn startBackgroundCacheCleanup(gpa: Allocator, arena: Allocator, std_io: std.Io) void {
-    // Start background cache cleanup on a separate thread.
-    // This is a fire-and-forget thread that:
-    // - Cleans up stale scratch directories (>5 min old)
-    // - Cleans up old persistent cache files (>30 days old)
-    // - Exits automatically when done
-    //
-    // We intentionally don't join the thread. If the main process exits before
-    // cleanup completes, the OS will automatically terminate the cleanup thread.
-    // This ensures cleanup never delays compilation or execution.
-    //
-    // Resolve the cache root here using the same resolver the cache writer
-    // uses, so cleanup can never target a different directory than where
-    // artifacts are written. The background thread itself is CoreCtx-free and
-    // allocation-free; it only borrows this path (copied in by value).
-    const cleanup_ctx = CoreCtx.default(gpa, arena, std_io);
-    const cfg = cache_config_mod.CacheConfig{ .roc_ctx = cleanup_ctx };
-    const cache_base: []const u8 = cfg.getEffectiveCacheDir(arena) catch "";
-    if (cache_base.len != 0) {
-        const limits: compile.CacheCleanup.Limits = .{
-            .object_pack_format_version = backend.dev.PackFile.format_version,
-            .max_size_bytes = @as(u64, cfg.max_size_mb) * 1024 * 1024,
-        };
-        if (compile.CacheCleanup.startBackgroundCleanup(cache_base, std_io, limits)) |_| {
-            // Thread started successfully, will run in background.
-        } else |_| {
-            // Non-fatal: cleanup failure shouldn't prevent compilation.
-            std.log.debug("Failed to start background cleanup thread", .{});
-        }
-    }
+fn initCacheMaintenance(gpa: Allocator, arena: Allocator, std_io: std.Io) ?compile.CacheCleanup.Session {
+    const cfg = cache_config_mod.CacheConfig{ .roc_ctx = CoreCtx.default(gpa, arena, std_io) };
+    const root = cfg.getEffectiveCacheDir(arena) catch return null;
+    return compile.CacheCleanup.Session.init(gpa, std_io, root, .{
+        .object_pack_format_version = backend.dev.PackFile.format_version,
+        .max_size_bytes = @as(u64, cfg.max_size_mb) * 1024 * 1024,
+    }) catch null;
 }
 
 fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: std.Io) CliMainError!void {
@@ -1347,9 +1247,9 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
 
     const parsed = try cli_args.parseWithGlobalOptions(arena, std_io, args[1..]);
     const parsed_args = parsed.command;
-    if (parsedArgsStartBackgroundCleanup(parsed_args)) {
-        startBackgroundCacheCleanup(gpa, arena, std_io);
-    }
+    var maintenance = if (parsedArgsUseCache(parsed_args)) initCacheMaintenance(gpa, arena, std_io) else null;
+    if (maintenance) |*session| session.start();
+    defer if (maintenance) |*session| session.deinit();
 
     // Determine command for context
     const command: Command = switch (parsed_args) {
@@ -1710,28 +1610,6 @@ fn generatePlatformHostShim(
         default_run_start,
         debug,
     );
-}
-
-/// Removes a cached executable, if one exists, so a fresh link can take its place.
-fn deleteExistingCacheFile(ctx: *CliCtx, exe_cache_path: []const u8) void {
-    std.Io.Dir.cwd().deleteFile(ctx.io.std_io, exe_cache_path) catch |err| switch (err) {
-        error.FileNotFound => {},
-        error.AccessDenied,
-        error.BadPathName,
-        error.Canceled,
-        error.FileBusy,
-        error.FileSystem,
-        error.IsDir,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NotDir,
-        error.PermissionDenied,
-        error.ReadOnlyFileSystem,
-        error.SymLinkLoop,
-        error.SystemResources,
-        error.Unexpected,
-        => std.log.debug("Could not delete existing cache file: {}", .{err}),
-    };
 }
 
 fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) std.Io.Dir.CreateDirPathError!void {
@@ -2859,10 +2737,6 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
 
-    ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| {
-        return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
-    };
-
     // The final executable name seen in `ps` is the roc filename (e.g., "app.roc")
     const exe_display_name = std.fs.path.basename(args.path);
 
@@ -3037,27 +2911,8 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
 
-    // Check if the interpreter executable already exists in cache
-    const cache_exists = if (args.no_cache) false else blk: {
-        std.Io.Dir.cwd().access(ctx.io.std_io, exe_cache_path, .{}) catch {
-            break :blk false;
-        };
-        break :blk true;
-    };
-
-    if (cache_exists) {
-        // Cached executable exists - hardlink from cache to temp dir
+    if (!args.no_cache and restoreCachedFile(ctx, .executable, exe_cache_path, exe_path)) {
         std.log.debug("Using cached executable: {s}", .{exe_cache_path});
-        createHardlink(ctx, exe_cache_path, exe_path) catch |err| {
-            // If hardlinking fails, fall back to copying
-            std.log.debug("Hardlink from cache failed, copying: {}", .{err});
-            std.Io.Dir.cwd().copyFile(exe_cache_path, std.Io.Dir.cwd(), exe_path, ctx.io.std_io, .{}) catch |copy_err| {
-                return ctx.fail(.{ .file_write_failed = .{
-                    .path = exe_path,
-                    .err = copy_err,
-                } });
-            };
-        };
     } else {
 
         // Extract shim library to temp dir to avoid race conditions
@@ -3248,18 +3103,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             return failLink(ctx, err, @tagName(platform_link.target));
         };
 
-        // After building, hardlink to cache for future runs
-        // Force-hardlink (delete existing first) since hash collision means identical content
-        std.log.debug("Caching executable to: {s}", .{exe_cache_path});
-        deleteExistingCacheFile(ctx, exe_cache_path);
-        createHardlink(ctx, exe_path, exe_cache_path) catch |err| {
-            // If hardlinking fails, fall back to copying
-            std.log.debug("Hardlink to cache failed, copying: {}", .{err});
-            std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, ctx.io.std_io, .{}) catch |copy_err| {
-                // Non-fatal - just means future runs won't be cached
-                std.log.debug("Failed to copy to cache: {}", .{copy_err});
-            };
-        };
+        if (!args.no_cache) publishCachedFile(ctx, .executable, exe_cache_path, exe_path);
     }
 
     if (args.opt == .dev) {
@@ -3312,7 +3156,7 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, _: []const u8) CliMa
     };
     var cleanup_temp_dir = true;
     defer if (cleanup_temp_dir) {
-        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir);
+        releaseScratchDir(ctx, temp_dir);
     };
 
     const output_filename = try compiledRunOutputFilename(ctx, args.path);
@@ -3340,7 +3184,7 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, _: []const u8) CliMa
 
     const term = try runCompiledExecutable(ctx, build_result.output_path, args.path, args.app_args);
 
-    compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir);
+    releaseScratchDir(ctx, temp_dir);
     cleanup_temp_dir = false;
 
     try finishCompiledRun(ctx, build_result.output_path, term, build_result.diagnostics);
@@ -3721,16 +3565,13 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
     const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
-    ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| {
-        return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
-    };
 
     const temp_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
     var cleanup_temp_dir = true;
     defer if (cleanup_temp_dir) {
-        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir);
+        releaseScratchDir(ctx, temp_dir);
     };
 
     const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, default_app.platform_dir_name });
@@ -3799,15 +3640,8 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
         try ctx.arena.dupe(u8, exe_display_name);
     const exe_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, exe_display_name_with_ext });
 
-    const cache_exists = if (args.no_cache) false else blk: {
-        std.Io.Dir.cwd().access(ctx.io.std_io, exe_cache_path, .{}) catch break :blk false;
-        break :blk true;
-    };
-
-    if (cache_exists) {
-        createHardlink(ctx, exe_cache_path, exe_path) catch {
-            try std.Io.Dir.cwd().copyFile(exe_cache_path, std.Io.Dir.cwd(), exe_path, ctx.io.std_io, .{});
-        };
+    if (!args.no_cache and restoreCachedFile(ctx, .executable, exe_cache_path, exe_path)) {
+        std.log.debug("Using cached executable: {s}", .{exe_cache_path});
     } else {
         const shim_filename = if (builtin.target.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a";
         const shim_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, shim_filename });
@@ -3862,12 +3696,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
             return failLink(ctx, err, @tagName(selected_target));
         };
 
-        deleteExistingCacheFile(ctx, exe_cache_path);
-        createHardlink(ctx, exe_path, exe_cache_path) catch {
-            std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, ctx.io.std_io, .{}) catch |copy_err| {
-                std.log.debug("Failed to copy default run executable to cache: {}", .{copy_err});
-            };
-        };
+        if (!args.no_cache) publishCachedFile(ctx, .executable, exe_cache_path, exe_path);
     }
 
     // Default apps never hot reload—they compile through throwaway synthetic
@@ -4066,7 +3895,7 @@ fn runWithWindowsHandleInheritance(
     // On Windows, clean up temp files after the child process exits.
     // (Unlike Unix, Windows locks files while they're being executed)
     if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir_path);
+        releaseScratchDir(ctx, temp_dir_path);
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
@@ -4169,7 +3998,7 @@ fn runWithPosixFdInheritance(
     // file to find the shared memory before it can run.
     // The background cleanup thread will also clean up old temp directories.
     if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir_path);
+        releaseScratchDir(ctx, temp_dir_path);
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
@@ -5136,7 +4965,7 @@ fn runHotReloadDevShim(
     }
 
     if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir_path);
+        releaseScratchDir(ctx, temp_dir_path);
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
@@ -7534,15 +7363,9 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
     }
 }
 
-/// Path of a complete copy of the selected shim library that the calling build
-/// may link: `cache_path` or `staged_path`.
-///
-/// `cache_path` names the library's content-addressed entry in the shared
-/// build cache. An entry is published by writing it in full at `staged_path`,
-/// which must lie in a directory only the calling build writes to, and
-/// renaming it into the cache, so a build that finds the entry never reads one
-/// that is still being written. When the rename is refused, the staged copy
-/// is itself complete and is the path returned.
+/// Materialize a complete shim library in this invocation's leased scratch
+/// directory. Shared cache publication and acquisition use logical identity;
+/// the linker always owns the returned path for its lifetime.
 fn publishedShimLibraryPath(
     ctx: *CliCtx,
     kind: ShimLibraryKind,
@@ -7550,15 +7373,41 @@ fn publishedShimLibraryPath(
     cache_path: []const u8,
     staged_path: []const u8,
 ) (std.Io.File.OpenError || std.Io.File.Writer.Error)![]const u8 {
-    const published = blk: {
-        std.Io.Dir.cwd().access(ctx.io.std_io, cache_path, .{}) catch break :blk false;
-        break :blk true;
-    };
-    if (published) return cache_path;
-
+    if (restoreCachedFile(ctx, .executable, cache_path, staged_path)) return staged_path;
     try extractShimLibrary(ctx, kind, staged_path, target);
-    std.Io.Dir.cwd().rename(staged_path, std.Io.Dir.cwd(), cache_path, ctx.io.std_io) catch return staged_path;
-    return cache_path;
+    publishCachedFile(ctx, .executable, cache_path, staged_path);
+    return staged_path;
+}
+
+/// Logical names identify artifacts; returned files belong to this invocation's
+/// leased scratch directory, so subsequent linker/process opens cannot race GC.
+fn cachedFileIdentity(family: compile.artifacts.Family, name: []const u8) compile.artifacts.Identity {
+    var id: compile.artifacts.Identity = .{ .namespace = undefined, .family = family, .key = undefined };
+    std.crypto.hash.sha2.Sha256.hash(build_options.compiler_compatibility_id, &id.namespace, .{});
+    std.crypto.hash.sha2.Sha256.hash(name, &id.key, .{});
+    return id;
+}
+
+fn fileArtifactStore(ctx: *CliCtx) ?compile.artifacts.Store {
+    const cfg = cache_config_mod.CacheConfig{ .roc_ctx = ctx.coreCtx() };
+    const root = cfg.getEffectiveCacheDir(ctx.gpa) catch return null;
+    defer ctx.gpa.free(root);
+    return compile.artifacts.Store.init(ctx.gpa, ctx.io.std_io, root) catch null;
+}
+
+fn restoreCachedFile(ctx: *CliCtx, family: compile.artifacts.Family, name: []const u8, destination: []const u8) bool {
+    var store = fileArtifactStore(ctx) orelse return false;
+    defer store.deinit();
+    var artifact = (store.acquire(cachedFileIdentity(family, name), store.now()) catch return false) orelse return false;
+    defer artifact.deinit();
+    std.Io.Dir.cwd().copyFile(artifact.path, std.Io.Dir.cwd(), destination, ctx.io.std_io, .{}) catch return false;
+    return true;
+}
+
+fn publishCachedFile(ctx: *CliCtx, family: compile.artifacts.Family, name: []const u8, source: []const u8) void {
+    var store = fileArtifactStore(ctx) orelse return;
+    defer store.deinit();
+    store.importFile(cachedFileIdentity(family, name), source) catch return;
 }
 
 /// Extract the selected embedded shim library to the specified path for the given target.
@@ -9053,7 +8902,7 @@ fn objectPackBytes(
     defer bitcode.deinit();
 
     const scratch_dir = try createUniqueTempDir(ctx);
-    defer compile.CacheCleanup.deleteTempDir(ctx.io.std_io, scratch_dir);
+    defer releaseScratchDir(ctx, scratch_dir);
     const bitcode_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, "pack.bc" });
     const object_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, "pack.o" });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, bitcode_path, std.mem.sliceAsBytes(bitcode.bitcode)) catch |err| {
@@ -10575,7 +10424,7 @@ fn rocBuildWasm(
     const scratch_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
-    defer if (!args.keep_temp) compile.CacheCleanup.deleteTempDir(ctx.io.std_io, scratch_dir);
+    defer if (!args.keep_temp) releaseScratchDir(ctx, scratch_dir);
 
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
@@ -11426,6 +11275,9 @@ fn buildCommandStaticData(
 
 /// Reports that `--keep-temp` kept the temporary directory `dir`.
 fn reportKeptTempDir(ctx: *CliCtx, dir: []const u8) Allocator.Error!void {
+    for (ctx.scratch.items) |*scratch| {
+        if (std.mem.eql(u8, scratch.path(), dir)) scratch.keep_until_expired = true;
+    }
     const config = ctx.reportConfig(.stderr);
     const palette = reporting.ColorUtils.getPaletteForConfig(config);
     var report = try reporting.Report.initWithPath(ctx.arena, "Kept Temporary Directory", "Kept temporary directory: ", dir, ".", .warning);
@@ -11680,16 +11532,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
 
     const output_path = try buildOutputBasePath(ctx, args);
 
-    const cache_config = CacheConfig{
-        .enabled = !args.no_cache,
-        .verbose = args.verbose,
-        .roc_ctx = ctx.coreCtx(),
-    };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
-    const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
-    const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
-    try ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir);
-
     var build_env = try initBuildCommandEnv(ctx, args);
     defer build_env.deinit();
     if (!args.no_cache and args.opt == .dev and currentRuntimeSpecializationStrategy(args.specialization_strategy) == .lss) build_env.setWatchInputTracking(true);
@@ -11818,8 +11660,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
-    defer compile.CacheCleanup.deleteTempDir(ctx.io.std_io, build_scratch_dir);
-    var link_objects = link_artifacts.Objects.init(ctx.coreCtx(), ctx.arena, if (object_store) |store| store.root else null, build_scratch_dir) catch return error.NativeCompilationFailed;
+    defer releaseScratchDir(ctx, build_scratch_dir);
+    var link_objects = link_artifacts.Objects.init(ctx.coreCtx(), ctx.arena, if (object_store) |store| .{ .store = store.native, .identity = store.linkObjectIdentity(@splat(0)) } else null, build_scratch_dir) catch return error.NativeCompilationFailed;
     defer link_objects.deinit();
     var program_probe: ?ProgramOutputProbe = null;
     if (object_store) |store| if (target_arch != .wasm32 and args.opt == .dev and runtime_lowering.target.specialization_strategy == .lss and !dev_diagnostics.isSet(.dev_pack_objects)) {
@@ -12304,7 +12146,7 @@ test "native link objects remain isolated by final target and CPU floor" {
         defer store.deinit();
         try tmp.dir.createDir(io, @tagName(target), .default_dir);
         const scratch = try std.fs.path.join(scratch_allocator, &.{ root, @tagName(target) });
-        var objects = try link_artifacts.Objects.init(core, scratch_allocator, store.root, scratch);
+        var objects = try link_artifacts.Objects.init(core, scratch_allocator, .{ .store = store.native, .identity = store.linkObjectIdentity(@splat(0)) }, scratch);
         defer objects.deinit();
         try std.testing.expect(try objects.find(id) == null);
         _ = try objects.materializeKnown(bytes, id);
@@ -12685,7 +12527,6 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
-    try ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir);
 
     var build_env = try initBuildCommandEnv(ctx, args);
     defer build_env.deinit();
@@ -12786,7 +12627,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
     if (args.keep_temp) try reportKeptTempDir(ctx, build_scratch_dir);
-    defer if (!args.keep_temp) compile.CacheCleanup.deleteTempDir(ctx.io.std_io, build_scratch_dir);
+    defer if (!args.keep_temp) releaseScratchDir(ctx, build_scratch_dir);
 
     const shim_filename = try shimLibraryCacheFilename(ctx, .lir, target);
     const shim_path = publishedShimLibraryPath(
@@ -13334,7 +13175,7 @@ fn storeCliTestResultsInCache(
 
     const entries_dir = try manager.config.getTestCacheDir(ctx.gpa);
     defer ctx.gpa.free(entries_dir);
-    manager.storeRawBytes(cliTestCacheKey(artifact.key, specialization_strategy, opt), bytes.items, entries_dir, artifact.moduleEnvConst().module_name);
+    manager.storeFamilyBytes(.test_result, cliTestCacheKey(artifact.key, specialization_strategy, opt), bytes.items, entries_dir, artifact.moduleEnvConst().module_name);
 }
 
 fn loadCliTestTranscriptEvents(
@@ -13401,7 +13242,7 @@ fn loadCachedCliTestResults(
 
     const entries_dir = try manager.config.getTestCacheDir(ctx.gpa);
     defer ctx.gpa.free(entries_dir);
-    const data = manager.loadRawBytes(cliTestCacheKey(artifact.key, specialization_strategy, opt), entries_dir) orelse return null;
+    const data = manager.loadFamilyBytes(.test_result, cliTestCacheKey(artifact.key, specialization_strategy, opt), entries_dir) orelse return null;
     defer ctx.gpa.free(data);
 
     var offset: usize = 0;

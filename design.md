@@ -666,11 +666,10 @@ is made portable by this contract. Linked-only LLVM objects remain exact-target
 inputs and cannot serve CTFE. Source-location, transitive code/data closure,
 compile-time reads and demand/observation eligibility checks still apply.
 
-Dev procedure records (the indexed offers, metadata, payloads and completion
-markers of "Object Cache Store") and discovery records live under
-`proc-<domain>-dev` within the versioned object namespace. Program outputs stay under `<target>-dev`, and
-optimized packs stay under their exact target and optimization level. Both
-publication and lookup use the procedure namespace. A compatible runtime build
+Dev procedure packs and discovery records use `proc-<domain>-dev` as their
+logical group scope in the indexed artifact store. Program outputs use
+`<target>-dev`, and optimized packs retain their exact target and optimization
+level. Both publication and lookup use the procedure scope. A compatible runtime build
 owns its target-specific Store while borrowing CTFE's heap-owned LoadedPacks
 for both specialization lookup and splicing; that owner outlives lowering and
 emission. Shared body elision still requires the exact same provider capability.
@@ -750,7 +749,7 @@ relation. Thus a fresh value and a restored value enter the same normalization
 path, and unused failing roots remain undemanded.
 
 Persistent records are batched by checked module and context in
-`interfaces/<provider>.ris` under the object store's procedure domain.
+interface records in the indexed artifact catalog under the object store's procedure domain.
 Different procedures remain separate request keys. Compatible native procedure
 domains share them; specialization strategies and incompatible targets stay
 separate. The binary container validates its provider, lengths and payload
@@ -764,16 +763,116 @@ expose partial records or change correctness. No historical providers are scanne
 `ROC_DISABLE_PERSISTENT_INTERFACES` is a developer-diagnostic-only comparison
 switch, read solely through `base.dev_diagnostics`.
 
+### Indexed cache storage and maintenance
+
+Cache storage and cache maintenance share one publication protocol. The native
+store uses a new storage-format namespace; it neither imports nor scans legacy
+cache directories. Compiler compatibility is part of artifact identity, not
+maintenance ownership: one nonblocking, kernel-managed lock at the shared cache
+root elects the maintenance owner across all compiler compatibility namespaces.
+The coordination file is permanent and is never replaced or unlinked. Its
+existence does not mean that a process owns the lock. Process death releases
+kernel ownership; no PID timeout or persistent lock marker establishes liveness.
+
+The store has sixteen shard files with 512-byte metadata records and fixed-width
+crit-bit indexes for logical artifacts, allocation generations, and recency. A
+lookup visits at most 512 branch records regardless of cache size. Lookups and
+updates use positional I/O, not whole-catalog reads or rewrites. Transactions
+have at most 24 changed records in one checksummed redo record, published before
+changing catalog records. Recovery
+finishes that transaction before admitting readers. There is no accumulating
+log to replay at startup. Payload generation and streaming happen outside
+catalog locks. A corrupt record or an I/O failure is an ordinary cache failure,
+never a compiler invariant. Corrupt catalogs disable that shard rather than
+trusting its paths or scanning all payloads during a foreground operation.
+These are process-interruption guarantees, not a promise of power-loss durability.
+Freed metadata slots are reused; catalog capacity and stable lease files remain
+at their historical high-water mark, so no unbounded compaction is hidden in GC.
+
+Every staging artifact is registered before its payload is created. Stable
+slot IDs and reuse generations identify reserved, published, and retiring
+artifacts. Atomic publication exposes complete payloads only. Retirement is
+idempotent: an interrupted deletion can be repeated, and a generation check
+prevents a stale checkpoint from deleting a replacement. Scratch ownership is
+an OS-backed lease, not an inference from age. Native child consumers inherit scratch leases. POSIX uses open-file-description
+locks; Windows uses file-sharing denial, which survives handle inheritance
+unlike process-owned byte-range locks. Closing the parent's handle does not
+release a lease still owned by a child.
+
+Artifact acquisition opens storage and a shared lease under the shard lock,
+then releases the shard lock before reading payloads. It returns owned bytes or
+retained storage. A pathname that
+another consumer will open later must be pinned for that consumer's lifetime.
+An artifact disappearing before acquisition is a cache miss. Existing cache
+header, key, layout, and dependency-closure validation remains authoritative;
+maintenance metadata never makes an otherwise invalid cache hit acceptable.
+
+Maintenance checkpoints name logical slots and operation phases, never opaque
+filesystem directory positions. A pass captures a finite allocation boundary;
+new allocations cannot extend that pass indefinitely, and reused slots behind
+the cursor are covered by the next pass. Each unit bounds metadata I/O,
+enumeration, index maintenance, and deletion work. Namespace retirement,
+recovery, and reclamation obey the same units; none contains recursive tree
+deletion, whole-store inventory, sorting, or compaction. Accounting and eviction
+indexes are persisted and reconciled incrementally with missing payloads and
+interrupted publications. A scratch step examines at most one directory entry
+and deletes at most one leaf or empty directory. Its checksummed relative-path
+cursor has a platform-path-length bound; every ancestor is opened without
+following symlinks. Restarting after a lost cursor is safe because all remaining
+leaves of an unowned scratch directory are eligible.
+
+Optional maintenance runs as one synchronous task immediately before a
+coordinator waits for a result, only when its declared queued-plus-executing
+worker demand is below its configured budget and that budget exceeds one.
+The maintenance task occupies the otherwise waiting coordinator's slot. Serial
+coordination and linking do not grant optional capacity. No compiler scheduling
+lock spans filesystem work. Returning foreground demand stops subsequent
+admissions, not a unit already executing. There is no detached worker and no
+owner waiting for capacity while holding maintenance ownership.
+
+A completed pass sets its next due time five minutes ahead. An unfinished pass
+keeps its due time. Once a pass is one minute overdue, every successful grant
+completes and checkpoints one compulsory unit synchronously at command startup,
+completed-task safe points, or command shutdown. Missing state starts overdue.
+The checkpoint permits at most one compulsory grant per second per shared root,
+so parallel invocations share that allowance. A one-worker build receives the
+same compulsory allowance. Individual invocations inside that one-second
+window need not do work; continued invocations spanning subsequent windows
+advance a finite pass. Persisted pressure raises each grant to eight units.
+
+Retention keeps the five-minute abandoned-scratch, one-day local-pack/program,
+and thirty-day persistent/package-pack windows. Artifact family and eligibility
+are explicit metadata. Cache use is recorded on acquisition, independently of
+filesystem access-time policy. Published, reserved, and retiring payload bytes
+are accounted separately from scratch. Publishers update shard counters in the
+same transaction as their records. Each maintenance unit refreshes one shard's
+observed total, and age traversal reconciles external payload removal. Pressure
+is based on this persisted, incrementally refreshed observation, not a new
+inventory. Eviction merges one persisted recency candidate per shard; candidates
+are revalidated under shard ownership, and live leases are skipped for this pass.
+The limit is eventual for a finite, unpinned workload: publication can outpace
+maintenance indefinitely, and pinned files, metadata, scratch, external changes,
+and delayed reclamation also consume storage. Optional cache publication skips
+busy shards instead of waiting; required scratch reservation waits for its short
+metadata transaction. OS failures stop the current attempt rather than create
+retry loops. Continued successful invocations and filesystem operations
+guarantee progress through a finite workload; process termination and absence
+of future invocations do not.
+
+These are operation-count guarantees, not wall-clock deadlines. A single OS
+operation may block. Spare capacity in participating builds also does not prove
+that unrelated applications have left the machine idle. Compulsory maintenance
+intentionally consumes a bounded amount of foreground capacity.
+
 ### Object Cache Store
 
-The store has two namespaces under `<cache root>/<compiler version>/
-objects-v<pack format>/`. Every dev procedure record (offers, shared metadata,
-payloads, completion markers, discovery summaries and interface summaries) lives
-in the procedure namespace `proc-<domain>-dev/` of the build's `NativeProcDomain` (see "Native
-dev procedure compatibility"), so publication and lookup both use it, and a
-musl and a glibc build at the same CPU floor read each other's records. The
-exact-target namespace `<target>-<opt>/` holds recorded program outputs
-(`programs/`) and, at optimized levels, object packs. Compiler compatibility,
+The store uses explicit logical scopes in the indexed artifact catalog.
+Every dev procedure record (offers, shared metadata, payloads, completion
+markers, discovery summaries and interface summaries) uses the build's
+`NativeProcDomain` (see "Native dev procedure compatibility"). A musl and a
+glibc build at the same CPU floor share these records. Recorded program
+outputs, immutable raw link objects and optimized object packs retain the
+exact final-link target. Compiler compatibility,
 procedure domain (pack format, target contract, CPU floor, specialization
 strategy, representation revision and execution capability), optimization
 policy and schema isolation are explicit key and namespace contracts. A
@@ -784,11 +883,12 @@ domain. The index broadens no compatibility beyond the declared domain, and a
 record from a shared domain elides a body only for a consumer with the exact
 same provider capability (`CodeProvision`).
 
-Within the procedure namespace, dev offers live under
-`<local|pkg>/offers/<specialization key>/
-<provider identity>-<offer SHA-256>.rpi`. The `ROFFER02` binary record names a
-shared metadata digest, a specialization ordinal, and the explicit origin and
-module identity owning its storage. Provider visibility and rank are supplied
+Within the procedure domain, catalog variants separate offers, metadata,
+payloads, completion markers and interface summaries. Offers are grouped by
+specialization key and keyed by the digest of their complete record. Each
+record contains the explicit provider identity followed by a `ROFFER02`
+record naming a shared metadata digest, specialization ordinal, and explicit
+origin and module identity owning its storage. Provider visibility and rank are supplied
 by the checked program, root first. A lookup probes one key bucket per origin,
 filters candidates against that provider map, then sorts by provider rank and
 content digest. It never probes every visible module or enumerates unrelated
@@ -797,8 +897,7 @@ so they cannot overwrite another writer's additions.
 
 One `ROFMETA1` metadata record per producer holds the union of its offered
 closures: one payload digest per artifact and a payload-free `PackFile` with
-all specialization entries. It is stored at `<origin>/<owner>/metadata/
-<digest>.rpm`. Source/debug locations, explicit local and symbolic references,
+all specialization entries. It is indexed by origin, owner and metadata digest. Source/debug locations, explicit local and symbolic references,
 relocations, failure meanings, compile-time reads and ARC interfaces are
 serialized once for all of that producer's offers. The record is read and
 decoded once per loader, and shared across hits. Metadata granularity is a
@@ -808,8 +907,8 @@ or any unrelated producer history. Different producer records can still carry
 overlapping descriptions. Cycles remain explicit set-local references; there
 is no recursive hash scheme that attempts to infer graph identity.
 
-Code/data payloads remain independently addressed `RPAYLD01` records at
-`<origin>/<owner>/payload/<digest>.rpa`. Each record contains length-prefixed
+Code/data payloads remain independently addressed `RPAYLD01` records indexed
+by origin, owner and payload digest. Each record contains length-prefixed
 code and carried data slices. Publication deduplicates payload digests within
 the producer. Before replacing an existing immutable record, the writer reads
 and compares it with the known producer bytes: verified equal bytes need no
@@ -861,13 +960,13 @@ Unrelated history does not enter its key. Retaining historical artifacts is
 independent of eagerly reading them. A pack-format change selects new
 namespaces without a migration scan.
 
-Optimized object packs live in the exact-target namespace: a package
-artifact's `<artifact key>.rpk` and the program's `optimized/<identity>.rpk`. Explicit
-pack export/import for developer diagnostics still uses complete `PackFile`
-records. The background sweep deletes obsolete `objects-v*` namespaces and
-recursively ages each current namespace's `local/` files and recorded
-`programs/` outputs on one day, and `pkg/` and `optimized/` files on thirty,
-using `max(atime, mtime)`.
+Optimized object packs use the exact-target catalog scope. Explicit pack
+export/import for developer diagnostics still uses complete `PackFile` records.
+All persistent records and raw objects participate in the indexed maintenance
+protocol above; there is no directory sweep. Local procedure records and
+program outputs use the one-day policy; package and optimized records use
+thirty days. Scratch hard links retain inodes through a link while their
+registered scratch lease prevents maintenance from reclaiming the directory.
 Size eviction also includes indexed metadata and payloads. Either may be
 removed first: a stale reference is detected before a hit, and live readers own
 their bytes. Unused historical payloads remain available until eviction.
