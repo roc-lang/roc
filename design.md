@@ -15631,6 +15631,41 @@ row or primitive never gives an uninhabited source a value. This includes the
 If Monotype lowering cannot construct a closed monomorphic type from checked
 data, that is a compiler bug.
 
+### Monotype completion and inhabitation analysis reuse
+
+Each body context owns request-completion answers keyed by the exact ordered
+pair of resolved graph nodes, and uninhabitedness answers keyed by resolved
+node in separate inspectable-only and runtime-layout maps. These identities
+belong to that context's one instantiation graph; answers never cross a graph
+reset, another body, or a worker boundary. Memo capacity is proportional to the
+analysis states queried in the current graph epoch, not one graph per query.
+Completion path, operation, and frame storage and inhabitation evaluation
+storage are reused between queries and released with the context.
+
+Answers are valid only at the graph's structure epoch. Every class union,
+content replacement (including backing authority/use changes), and lazy leaf
+expansion advances that epoch. Tag-head reordering also advances it: the
+completion relation compares entries in stored order, even though sorting
+preserves type meaning. Marking an already sorted head, allocating an unconnected
+node, and path compression do not change existing answers. Evidence matters here
+only through the explicit node content/backing it produces; analysis does not
+read external evidence tables. Immutable finished-type inhabitation answers
+remain owned by the graph's type analysis and survive graph mutations.
+
+Every completion child entry consults the same memo as top-level queries.
+Lazy expansion can change the epoch during a query: an answer is recorded only
+if its entire traversal used one epoch, and every lookup first retires answers
+from older epochs. Invalidated queries may revisit structure; diagnostics count
+those invalidations separately from graph visits and memo hits.
+
+Both walkers preserve their existing active-path cycle rule. A completion
+cycle assumes `unchanged`; an inhabitation cycle supplies no proof of emptiness.
+Each frame records the cycle counter at entry. Only a frame that finishes
+without a new cycle assumption may publish a reusable answer. Cycle-dependent
+frames are deliberately revisited, with those assumptions counted explicitly;
+no provisional recursive answer becomes a durable fact. This changes analysis
+reuse only, never typing, relation production, row policy, or reachability.
+
 ### Row, Nominal, Alias, And Opaque Authority
 
 Monotype lowering is the sole owner of turning checked type data into closed

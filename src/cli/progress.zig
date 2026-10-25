@@ -54,7 +54,7 @@ const max_subphases: usize = 25;
 // Shared lowering and a runtime continuation each report eight lowering groups
 // and native emission; tests also report result-cache counts.
 const max_counter_groups: usize = 2 * 9 + 1;
-const max_counters_per_group: usize = 32;
+const max_counters_per_group: usize = 40;
 /// Rows in the ranked timing list printed after the phases.
 const max_ranked_timings: usize = 10;
 /// Bytes reserved for copies of the ranked rows' names, which the caller's
