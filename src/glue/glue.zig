@@ -599,7 +599,7 @@ fn runGlueSpecPlugin(
 
     var lib = blk: {
         const first = plugin.?;
-        break :blk loadVerifiedGluePlugin(gpa, stderr, first, &stamp, args.no_cache) catch |err| {
+        break :blk loadVerifiedGluePlugin(gpa, stderr, first, &stamp, lowered.lir_result.store.runtime_contract, args.no_cache) catch |err| {
             switch (err) {
                 error.GluePluginUnavailable, error.GluePluginStampMismatch => {},
                 error.BuildEnvInit,
@@ -625,7 +625,7 @@ fn runGlueSpecPlugin(
             plugin = null;
 
             plugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, executable_identity, stamp, args, roc_ctx, std_io);
-            break :blk try loadVerifiedGluePlugin(gpa, stderr, plugin.?, &stamp, true);
+            break :blk try loadVerifiedGluePlugin(gpa, stderr, plugin.?, &stamp, lowered.lir_result.store.runtime_contract, true);
         };
     };
     defer lib.deinit();
@@ -638,7 +638,7 @@ fn runGlueSpecPlugin(
     defer crash_boundary.deinit();
 
     const boxy_tables = eval_mod.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result);
-    const boxy_runtime = if (boxy_tables.needsRuntimeForStore(&lowered.lir_result.store))
+    const boxy_runtime = if (eval_mod.boxy_runtime.storeNeedsRuntime(&lowered.lir_result.store))
         try eval_mod.boxy_abi.createRuntimeFromStores(
             gpa,
             &lowered.lir_result.store,
@@ -801,9 +801,10 @@ fn loadVerifiedGluePlugin(
     stderr: *std.Io.Writer,
     plugin: BuiltGluePlugin,
     expected: *const GluePluginStampV1,
+    runtime_contract: lir.LIR.RuntimeContract,
     report_errors: bool,
 ) GlueError!eval_mod.object_image.Image {
-    var image = eval_mod.object_image.load(gpa, plugin.bytes) catch |err| switch (err) {
+    var image = eval_mod.object_image.load(gpa, plugin.bytes, runtime_contract) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedObject,
         error.MalformedObject,

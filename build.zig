@@ -5969,6 +5969,8 @@ fn addMainExe(
     const copy_builtins_extern = embedded_assets;
     const host_builtins_extern_filename = if (target.result.os.tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
     _ = copy_builtins_extern.addCopyFile(builtins_extern_obj.getEmittedBin(), b.pathJoin(&.{ "", host_builtins_extern_filename }));
+    embedded_digests.addArg("builtins_extern_native");
+    embedded_digests.addFileArg(builtins_extern_obj.getEmittedBin());
 
     // Add tracy support (required by parse/can/check modules)
     add_tracy(b, roc_modules.build_options, interpreter_shim_lib, b.graph.host, false, flag_enable_tracy);
@@ -6073,6 +6075,8 @@ fn addMainExe(
 
         const builtins_extern_ext = if (cross_target.query.os_tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
         const copy_cross_builtins_extern = embedded_assets;
+        embedded_digests.addArg(b.fmt("builtins_extern_{s}", .{cross_target.name}));
+        embedded_digests.addFileArg(cross_builtins_extern_obj.getEmittedBin());
         _ = copy_cross_builtins_extern.addCopyFile(
             cross_builtins_extern_obj.getEmittedBin(),
             b.pathJoin(&.{ "targets", cross_target.name, builtins_extern_ext }),
@@ -6094,6 +6098,8 @@ fn addMainExe(
                 cross_boxy_runtime_obj.getEmittedBin();
             const boxy_runtime_ext = if (cross_target.query.os_tag == .windows) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
             const copy_cross_boxy_runtime = embedded_assets;
+            embedded_digests.addArg(b.fmt("boxy_runtime_{s}", .{cross_target.name}));
+            embedded_digests.addFileArg(boxy_runtime_artifact);
             _ = copy_cross_boxy_runtime.addCopyFile(
                 boxy_runtime_artifact,
                 b.pathJoin(&.{ "targets", cross_target.name, boxy_runtime_ext }),
@@ -6208,6 +6214,8 @@ fn addMainExe(
             configureBackend(default_platform_executable_obj, cross_resolved_target);
 
             const copy_default_platform_executable = embedded_assets;
+            embedded_digests.addArg(b.fmt("default_platform_{s}", .{cross_target.name}));
+            embedded_digests.addFileArg(default_platform_executable_obj.getEmittedBin());
             const default_platform_ext = if (cross_target.query.os_tag == .windows) "roc_default_platform.obj" else "roc_default_platform.o";
             _ = copy_default_platform_executable.addCopyFile(
                 default_platform_executable_obj.getEmittedBin(),

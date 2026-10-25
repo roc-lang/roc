@@ -181,6 +181,19 @@ fn cleanupScratchDirs(std_io: Io, cache_base: []const u8, now_ns: i128, maybe_st
                 const mtime = mtimeNs(scratch_dir, std_io, entry.name) orelse continue;
                 if (now_ns - mtime <= Config.TEMP_MAX_AGE_NS) continue;
 
+                // A link's hard links are its lifetime pins. The owner holds
+                // this lock until LLD and output finalization finish. A crashed
+                // owner's lock is released by the OS and ages out normally.
+                var candidate = scratch_dir.openDir(std_io, entry.name, .{}) catch continue;
+                defer candidate.close(std_io);
+                const lease: ?std.Io.File = candidate.openFile(std_io, "link.lock", .{ .lock = .exclusive, .lock_nonblocking = true }) catch |err| switch (err) {
+                    error.FileNotFound => null,
+                    else => continue,
+                };
+                // Close before deletion for Windows. Having acquired the lock
+                // proves the original invocation has finished; this unique
+                // scratch directory is never reused by another invocation.
+                if (lease) |file| file.close(std_io);
                 scratch_dir.deleteTree(std_io, entry.name) catch {
                     if (maybe_stats) |stats| stats.errors += 1;
                     continue;
@@ -944,4 +957,21 @@ test "size bound evicts least recently used files across families until under th
     try std.testing.expectError(error.FileNotFound, pack.access(std.testing.io, "middle.rpk", .{}));
     try exe.access(std.testing.io, "newest", .{});
     try exe.access(std.testing.io, "newest.lock", .{});
+}
+
+test "scratch cleanup preserves a live link lease and removes an abandoned one" {
+    const io = std.testing.io;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "version/tmp/link");
+    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+    var lease = try tmp.dir.createFile(io, "version/tmp/link/link.lock", .{ .read = true, .lock = .exclusive });
+    const future = nowNs(io) + Config.TEMP_MAX_AGE_NS + std.time.ns_per_s;
+    cleanupScratchDirs(io, root, future, null);
+    try tmp.dir.access(io, "version/tmp/link", .{});
+    lease.close(io);
+    cleanupScratchDirs(io, root, future, null);
+    try std.testing.expectError(error.FileNotFound, tmp.dir.access(io, "version/tmp/link", .{}));
 }

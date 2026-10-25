@@ -89,6 +89,8 @@ pub fn run(
     options: Options,
 ) Common.LowerError!Output {
     var result = try LirProgram.Result.init(allocator, options.target_usize);
+    result.store.runtime_contract = .boxy;
+    base.dev_diagnostics.traceBoxyWork("metadata");
     errdefer result.deinit();
     {
         var source_files = std.ArrayList(base.SourceFileEntry).empty;
@@ -45283,6 +45285,7 @@ test "descriptor materialization captures close over recursive template graphs" 
     const gpa = std.testing.allocator;
     var result = try LirProgram.Result.init(gpa, .native);
     defer result.deinit();
+    result.store.runtime_contract = .boxy;
 
     const captured = try result.store.addLocal(.{ .layout_idx = .opaque_ptr });
     const target = try result.store.addLocal(.{ .layout_idx = .opaque_ptr });
