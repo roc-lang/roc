@@ -11387,7 +11387,7 @@ fn typeCheckBuildCommand(
     try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), reporter, build_env.getTimingInfo());
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
-    if (diag.errors == 0) try preparePackageDevPacks(ctx, build_env, null);
+    if (diag.errors == 0 and !build_env.runtimeOutputCached()) try preparePackageDevPacks(ctx, build_env, null);
     const total_warning_count = diag.warnings + try optimizedDbgWarningsForBuild(ctx, build_env, args.opt);
     const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
         try renderProblem(ctx, .{
@@ -11862,7 +11862,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // A build of a program whose runtime output is recorded links that output
     // and lowers no runtime program. Debug pack emission reads the lowering.
     var program_probe: ?ProgramOutputProbe = null;
-    if (object_store) |store| if (target_arch != .wasm32 and !dev_diagnostics.isSet(.dev_pack_objects)) {
+    if (object_store) |store| if (target_arch != .wasm32 and args.opt == .dev and runtime_lowering.target.specialization_strategy == .lss and !dev_diagnostics.isSet(.dev_pack_objects)) {
         program_probe = .{
             .arena = ctx.arena,
             .gpa = ctx.gpa,
@@ -11877,10 +11877,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     build_env.setDetailedLoweringTiming(args.timings);
     const diag, const resolved_targets_config = try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
 
-    const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     if (build_env.runtimeOutputCached()) {
         const output = program_probe.?.found.?;
-        reporter.begin(code_generation_phase_name);
+        reporter.begin("Restoring Completed Objects");
         const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
             return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
         };
@@ -11892,9 +11891,17 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         };
         reporter.end();
         reporter.begin("Preparing Link Inputs");
-        try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, obj_path, &.{}, output.facts);
+        var extra_objects = std.ArrayList([]const u8).empty;
+        for (output.additional_objects, 0..) |object, index| {
+            const path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, try std.fmt.allocPrint(ctx.arena, "roc_pack_{d}.o", .{index}) });
+            backend.writeFileWindowsAvSafe(ctx.io.std_io, path, object) catch return error.NativeCompilationFailed;
+            try extra_objects.append(ctx.arena, path);
+        }
+        recordCompletionCounters(&reporter, &build_env, &program_probe.?, true);
+        try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, obj_path, extra_objects.items, output.facts);
         return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
     }
+    const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
@@ -11996,6 +12003,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         std.log.err("Native compilation failed: {}", .{err});
         return error.NativeCompilationFailed;
     };
+    if (program_probe) |*probe| probe.runtime_emissions += 1;
     defer written.runtime_tables.deinit(ctx.gpa);
     const uses_boxy = written.uses_boxy;
     reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
@@ -12016,13 +12024,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     };
     // The optimized object packs that served this program's specializations.
     const linked_objects: []const []const u8 = if (loaded_packs) |packs| try packs.linkedObjects(ctx.arena) else &.{};
-    // Boxy runtime inputs are read from the lowered program at link time, and
-    // linked pack objects from the object cache, so only a program without
-    // either records its output.
-    if (program_probe) |*probe| if (probe.key) |key| if (diag.errors == 0 and !uses_boxy and linked_objects.len == 0) {
-        try probe.record(key, obj_path, link_facts);
+    // The record retains every selected object. LSS records never carry
+    // Boxy runtime inputs; those remain exclusive to the ordinary Boxy path.
+    if (program_probe) |*probe| if (probe.key) |key| if (diag.errors == 0 and !uses_boxy) {
+        try probe.record(key, obj_path, linked_objects, link_facts, resolved_targets_config);
     };
 
+    if (program_probe) |*probe| recordCompletionCounters(&reporter, &build_env, probe, false);
     reporter.begin("Preparing Link Inputs");
     var extra_objects = std.array_list.Managed([]const u8).init(ctx.arena);
     for (linked_objects, 0..) |object, index| {
@@ -12125,85 +12133,47 @@ fn linkNativeBuild(
     reporter.end();
 }
 
-/// The runtime output of one exact checked program: its Roc object and the
-/// facts linking reads from that program's lowering.
+/// Final normalized compiler artifacts and their completed semantic outcome.
+/// Linking always validates and consumes the platform's current host inputs.
 const ProgramOutput = struct {
     object: []const u8,
+    additional_objects: []const []const u8 = &.{},
     facts: LinkFacts,
+    outcome: compile.completed_compilation.Outcome = .{},
 
     const LinkFacts = struct {
         hosted_symbols: []const []const u8,
         link_root_symbols: []const []const u8,
         app_export_symbols: []const []const u8,
     };
-
-    const magic = "ROCPRGO1";
+    const magic = "ROCCOMP1";
+    const header_len = magic.len + 32;
 
     fn encode(allocator: Allocator, output: ProgramOutput) Allocator.Error![]u8 {
-        var bytes = std.ArrayList(u8).empty;
-        errdefer bytes.deinit(allocator);
-        try bytes.appendSlice(allocator, magic);
-        try appendBytes(allocator, &bytes, output.object);
-        inline for (.{ output.facts.hosted_symbols, output.facts.link_root_symbols, output.facts.app_export_symbols }) |names| {
-            try appendWord(allocator, &bytes, names.len);
-            for (names) |name| try appendBytes(allocator, &bytes, name);
-        }
-        return bytes.toOwnedSlice(allocator);
+        var out: std.Io.Writer.Allocating = .init(allocator);
+        defer out.deinit();
+        var header: [header_len]u8 = @splat(0);
+        @memcpy(header[0..magic.len], magic);
+        out.writer.writeAll(&header) catch return error.OutOfMemory;
+        compile.completed_compilation.write(ProgramOutput, &out.writer, output) catch return error.OutOfMemory;
+        const bytes = try out.toOwnedSlice();
+        std.crypto.hash.Blake3.hash(bytes[header_len..], bytes[magic.len..header_len], .{});
+        return bytes;
     }
 
-    fn appendWord(allocator: Allocator, bytes: *std.ArrayList(u8), value: usize) Allocator.Error!void {
-        var word: [8]u8 = undefined;
-        std.mem.writeInt(u64, &word, value, .little);
-        try bytes.appendSlice(allocator, &word);
-    }
-
-    fn appendBytes(allocator: Allocator, bytes: *std.ArrayList(u8), value: []const u8) Allocator.Error!void {
-        try appendWord(allocator, bytes, value.len);
-        try bytes.appendSlice(allocator, value);
-    }
-
-    /// The output a record holds, borrowing its bytes; null for a record
-    /// this compiler did not write.
     fn decode(arena: Allocator, bytes: []const u8) Allocator.Error!?ProgramOutput {
-        var reader = Reader{ .bytes = bytes };
-        const head = reader.take(magic.len) orelse return null;
-        if (!std.mem.eql(u8, head, magic)) return null;
-        const object = reader.slice() orelse return null;
-        var lists: [3][]const []const u8 = undefined;
-        for (&lists) |*list| {
-            const count = reader.word() orelse return null;
-            if (count > bytes.len) return null;
-            const names = try arena.alloc([]const u8, count);
-            for (names) |*name| name.* = reader.slice() orelse return null;
-            list.* = names;
-        }
-        if (reader.offset != bytes.len) return null;
-        return .{ .object = object, .facts = .{
-            .hosted_symbols = lists[0],
-            .link_root_symbols = lists[1],
-            .app_export_symbols = lists[2],
-        } };
+        if (bytes.len < header_len or !std.mem.eql(u8, bytes[0..magic.len], magic)) return null;
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.Blake3.hash(bytes[header_len..], &digest, .{});
+        if (!std.mem.eql(u8, &digest, bytes[magic.len..header_len])) return null;
+        var reader = compile.completed_compilation.Reader{ .bytes = bytes[header_len..], .arena = arena, .remaining = (bytes.len - header_len) *| 4 };
+        const result = reader.read(ProgramOutput) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidRecord => return null,
+        };
+        if (reader.offset != reader.bytes.len) return null;
+        return result;
     }
-
-    const Reader = struct {
-        bytes: []const u8,
-        offset: usize = 0,
-
-        fn take(self: *Reader, len: usize) ?[]const u8 {
-            if (len > self.bytes.len - self.offset) return null;
-            defer self.offset += len;
-            return self.bytes[self.offset..][0..len];
-        }
-
-        fn word(self: *Reader) ?usize {
-            const raw = self.take(8) orelse return null;
-            return std.math.cast(usize, std.mem.readInt(u64, raw[0..8], .little));
-        }
-
-        fn slice(self: *Reader) ?[]const u8 {
-            return self.take(self.word() orelse return null);
-        }
-    };
 };
 
 test "program output records round-trip and reject foreign bytes" {
@@ -12226,11 +12196,47 @@ test "program output records round-trip and reject foreign bytes" {
     try std.testing.expect(try ProgramOutput.decode(arena.allocator(), "ROCPRGO0") == null);
 }
 
-/// Finds the recorded runtime output of a build's exact checked program.
-/// Its key covers every checked module the program lowers against, the
-/// build's output policy, and the optimization state (the object packs the
-/// program would load); the store's namespace covers the target, compiler
-/// and optimization level.
+test "program output records preserve observations and reject corrupt artifacts and lengths" {
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const key: [32]u8 = @splat(7);
+    var headline = [_]reporting.DocumentElement{.{ .reflowing_text = "A warning" }};
+    var body = [_]reporting.DocumentElement{.{ .source_location = .{ .filename = "/old/main.roc", .line = 3, .column = 2 } }};
+    const output: ProgramOutput = .{
+        .object = "final normalized object",
+        .additional_objects = &.{"selected optimized object"},
+        .facts = .{ .hosted_symbols = &.{"roc_host"}, .link_root_symbols = &.{"data"}, .app_export_symbols = &.{"main"} },
+        .outcome = .{
+            .modules = &.{.{ .key = key, .path = "/old/main.roc" }},
+            .observations = &.{ "first", "second", "second" },
+            .diagnostics = &.{.{ .module = key, .title = "Warning", .severity = .warning, .file = null, .headline = &headline, .body = &body }},
+            .targets = .{ .inputs_dir = "targets", .targets = &.{} },
+        },
+    };
+    const bytes = try ProgramOutput.encode(gpa, output);
+    defer gpa.free(bytes);
+    const restored = (try ProgramOutput.decode(arena.allocator(), bytes)).?;
+    try std.testing.expectEqualStrings(output.additional_objects[0], restored.additional_objects[0]);
+    try std.testing.expectEqual(@as(usize, 3), restored.outcome.observations.len);
+    try std.testing.expectEqualStrings("second", restored.outcome.observations[2]);
+    const diagnostic = restored.outcome.diagnostics[0];
+    try std.testing.expectEqual(reporting.Severity.warning, diagnostic.severity);
+    compile.completed_compilation.rebindElements(diagnostic.body, restored.outcome.modules, &.{.{ .key = key, .path = "/new/main.roc" }});
+    try std.testing.expectEqualStrings("/new/main.roc", diagnostic.body[0].source_location.filename.?);
+    for (0..bytes.len) |len| try std.testing.expect(try ProgramOutput.decode(arena.allocator(), bytes[0..len]) == null);
+    bytes[ProgramOutput.header_len + 9] ^= 1;
+    try std.testing.expect(try ProgramOutput.decode(arena.allocator(), bytes) == null);
+    // Even a well-checksummed envelope cannot claim more object bytes than it contains.
+    @memset(bytes[ProgramOutput.header_len..][0..8], 255);
+    std.crypto.hash.Blake3.hash(bytes[ProgramOutput.header_len..], bytes[ProgramOutput.magic.len..ProgramOutput.header_len], .{});
+    try std.testing.expect(try ProgramOutput.decode(arena.allocator(), bytes) == null);
+}
+
+/// Finds a completed compilation using the content-validated frontend
+/// closure before evaluation. Explicit optimization state is relevant;
+/// incidental dev packs and evaluated-root state are not. The store namespace
+/// covers compiler compatibility, target/ABI/CPU contract and optimization.
 const ProgramOutputProbe = struct {
     arena: Allocator,
     gpa: Allocator,
@@ -12240,54 +12246,105 @@ const ProgramOutputProbe = struct {
     linked_stores: ?*const pack_store.LinkedStores,
     key: ?[32]u8 = null,
     found: ?ProgramOutput = null,
+    bytes_read: usize = 0,
+    bytes_written: usize = 0,
+    publication_ns: u64 = 0,
+    runtime_emissions: u64 = 0,
 
     fn runtimeOutputProbe(self: *ProgramOutputProbe) compile.build.RuntimeOutputProbe {
         return .{ .context = self, .cached = cached };
     }
 
-    fn cached(context: *anyopaque, root: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!bool {
+    fn cached(context: *anyopaque, root: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!?*const compile.completed_compilation.Outcome {
         const self: *ProgramOutputProbe = @ptrCast(@alignCast(context));
-        const imports = try self.build_env.collectImportedArtifactViews(self.gpa, root);
-        defer self.gpa.free(imports);
-        const relations = try self.build_env.collectRelationArtifactViews(self.gpa, root);
-        defer self.gpa.free(relations);
+        const coord = self.build_env.coordinator.?;
+        const modules = try coord.compilationModules(self.gpa);
+        defer self.gpa.free(modules);
         var hasher = std.crypto.hash.Blake3.init(.{});
-        hasher.update("roc.program-output.v2");
+        hasher.update("roc.completed-build.v1");
         hasher.update(&self.policy);
-        if (self.linked_stores) |stores| hasher.update(&try stores.stateDigest(self.build_env, root));
+        const pin = coord.source_pin_version orelse "";
+        var pin_len: [8]u8 = undefined;
+        std.mem.writeInt(u64, &pin_len, pin.len, .little);
+        hasher.update(&pin_len);
+        hasher.update(pin);
         hasher.update(&root.key.bytes);
-        hasher.update(&root.codeGenerationKey().bytes);
-        inline for (.{ imports, relations }) |views| {
-            var count: [8]u8 = undefined;
-            std.mem.writeInt(u64, &count, views.len, .little);
-            hasher.update(&count);
-            for (views) |view| {
-                hasher.update(&view.key.bytes);
-                hasher.update(&(view.code_generation_key orelse view.key).bytes);
-            }
+        hasher.update(&coord.appRootCheckedArtifact().key.bytes);
+        for (modules) |module| {
+            hasher.update(&module.key);
+            // Native crash/debug metadata embeds source paths as codegen input.
+            var path_len: [8]u8 = undefined;
+            std.mem.writeInt(u64, &path_len, module.identity_path.len, .little);
+            hasher.update(&path_len);
+            hasher.update(module.identity_path);
+        }
+        // Only explicitly selected optimized stores affect output. Dev packs,
+        // checked values and this build's own cache writes do not change it.
+        if (self.linked_stores) |stores| {
+            hasher.update(&try stores.stateDigest(self.build_env, root));
+            hasher.update(&try stores.stateDigest(self.build_env, coord.appRootCheckedArtifact()));
         }
         var key: [32]u8 = undefined;
         hasher.final(&key);
         self.key = key;
-        const bytes = try self.store.readProgram(key, self.arena) orelse return false;
+        const bytes = try self.store.readProgram(key, self.arena) orelse return null;
+        self.bytes_read = bytes.len;
         self.found = try ProgramOutput.decode(self.arena, bytes);
-        return self.found != null;
+        const found = if (self.found) |*value| value else return null;
+        // Every manifest member is validated by the current content-based
+        // frontend. Equality includes cardinality so a new dependency misses.
+        if (found.outcome.modules.len != modules.len) return null;
+        for (found.outcome.modules, modules) |recorded, current| {
+            if (!std.mem.eql(u8, &recorded.key, &current.key)) return null;
+        }
+        if (found.outcome.targets == null) return null;
+        for (found.outcome.diagnostics) |diagnostic| {
+            if (diagnostic.severity.isError()) return null;
+            var known = false;
+            for (modules) |module| if (std.mem.eql(u8, &diagnostic.module, &module.key)) {
+                known = true;
+                break;
+            };
+            if (!known) return null;
+        }
+        return &found.outcome;
     }
 
-    fn record(self: *ProgramOutputProbe, key: [32]u8, obj_path: []const u8, facts: ProgramOutput.LinkFacts) CliMainError!void {
+    fn record(self: *ProgramOutputProbe, key: [32]u8, obj_path: []const u8, objects: []const []const u8, facts: ProgramOutput.LinkFacts, targets: roc_target.TargetsConfig) CliMainError!void {
+        const started = std.Io.Timestamp.now(self.store.roc_ctx.std_io, .awake).nanoseconds;
+        defer self.publication_ns = @intCast(std.Io.Timestamp.now(self.store.roc_ctx.std_io, .awake).nanoseconds - started);
         const object = self.store.roc_ctx.readFile(obj_path, self.gpa) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return,
         };
         defer self.gpa.free(object);
-        const bytes = try ProgramOutput.encode(self.gpa, .{ .object = object, .facts = facts });
+        var outcome = self.build_env.coordinator.?.completion_outcome;
+        outcome.targets = targets;
+        const bytes = try ProgramOutput.encode(self.gpa, .{ .object = object, .additional_objects = objects, .facts = facts, .outcome = outcome });
         defer self.gpa.free(bytes);
         self.store.writeProgram(key, bytes) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.PackWriteFailed => {},
+            error.PackWriteFailed => return,
         };
+        self.bytes_written = bytes.len;
     }
 };
+
+/// These counters count producer work, independently of phase labels.
+fn recordCompletionCounters(reporter: *progress.Reporter, build_env: *BuildEnv, probe: *const ProgramOutputProbe, hit: bool) void {
+    const timing = build_env.coordinator.?.ctfe_timing.snapshot();
+    reporter.recordCounters("Completed compilation", &.{
+        .{ .name = "Completed result hits", .count = @intFromBool(hit) },
+        .{ .name = "Demand specialization passes", .count = timing.specialization_passes - timing.respecialization_passes },
+        .{ .name = "Post-CTFE specialization passes", .count = timing.respecialization_passes },
+        .{ .name = "Fresh CTFE roots", .count = timing.roots_evaluated },
+        .{ .name = "CTFE execution ns", .count = timing.execution_ns },
+        .{ .name = "Runtime object emissions", .count = probe.runtime_emissions },
+        .{ .name = "Completed bytes read", .count = probe.bytes_read },
+        .{ .name = "Completed bytes written", .count = probe.bytes_written },
+        .{ .name = "Completed publication ns", .count = probe.publication_ns + build_env.coordinator.?.completion_capture_ns },
+    });
+}
 
 /// The build output policy a program's recorded output depends on beyond its
 /// modules and the store's namespace.
@@ -12304,6 +12361,16 @@ fn programOutputPolicy(args: cli_args.BuildArgs, link_type: roc_target.OutputKin
     var digest: [32]u8 = undefined;
     hasher.final(&digest);
     return digest;
+}
+
+test "completed compilation policy separates codegen choices from presentation" {
+    const baseline = programOutputPolicy(.{}, .exe);
+    try std.testing.expectEqual(baseline, programOutputPolicy(.{ .specialization_strategy = .lss }, .exe));
+    try std.testing.expectEqual(baseline, programOutputPolicy(.{ .timings = true, .verbose = true, .output = "elsewhere" }, .exe));
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &programOutputPolicy(.{ .specialization_strategy = .boxy }, .exe)));
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &programOutputPolicy(.{ .debug = true }, .exe)));
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &programOutputPolicy(.{ .synthetic_default_platform = true }, .exe)));
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &programOutputPolicy(.{}, .shared)));
 }
 
 /// Build a standalone binary with the interpreter and an embedded LIR image.

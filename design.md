@@ -2701,21 +2701,46 @@ reference counts.
 
 #### Recorded Program Output
 
-A dev build also records its program's runtime output: the Roc object it
-linked and the link inputs it read from the lowering (hosted symbols, link
-roots and app exports), filed under a key covering every checked module the
-program lowers against, with their code-generation keys, the build's output
-policy, and a digest of the optimization state (the object packs the program
-would load, named by their paths and input keys), inside the store's namespace for the target, compiler and
-optimization level. Once a later build's program is checked and before it is
-evaluated, the build asks for that key. On a hit the program is evaluated
-exactly as a build without the record evaluates it: its specialization decides
-the demanded compile-time roots ("Demand-Driven Compile-Time Evaluation"), so
-it reports the same diagnostics and evaluates no root a build without the
-record would leave alone. No runtime program is lowered, and the recorded
-object is linked with the platform's current inputs. A build that reports an error records nothing, and neither
-does a program that links Boxy runtime inputs or optimized pack objects,
-which the record does not carry.
+A specialized native dev build records a completed compilation, an explicit
+alternative to a live evaluation/lowering session. After the ordinary frontend
+has resolved and content-validated the complete dependency closure, it probes
+before platform evaluation or app/platform pairing. The identity covers the
+compiler and record format, target/ABI/CPU contract, build output and codegen
+policy, specialization strategy, synthetic header policy, source-pin validation
+version, app/platform identities, every checked module identity, native source
+paths (using the original path of staged app sources and logical module names
+for compiler-owned platforms), and the
+explicitly selected optimized object stores. Checked identities cover source,
+transitive imports and imported assets; resolution and pin validation still run
+on every invocation. Neither evaluated-root state nor historical dev-pack
+population is an input to this identity.
+
+The record retains the original build's demanded checked roots, their transitive
+reads, literal source/value identities, and observations, followed by the final
+normalized Roc object, additional selected optimized objects, resolved target
+configuration, hosted symbols, link roots and app exports. Checking owns its
+ordinary diagnostics; the completed record owns finalization diagnostics and
+compile-time debug observations. Diagnostics retain structured documents and
+source identities, so replay uses current source paths and presentation options.
+An unused root evaluated by another command never joins the recorded demand.
+
+An exact hit consumes this finished result: it neither creates a program session
+nor marks prepared checked modules finalized. It performs no shared demand
+specialization, CTFE, post-CTFE specialization, runtime lowering or object
+emission, and does not load procedure packs to reconstruct the result. A miss
+performs ordinary evaluation and normalization. Only a compilation with no
+semantic errors publishes; warning-only successes are eligible. Boxy builds
+are separate and this record never admits Boxy runtime dependencies into LSS.
+
+The length-prefixed binary record carries an integrity digest, and publication
+uses a temporary file and atomic rename. Incompatible, truncated, corrupt or
+missing records miss. Additional objects are retained in the same validated
+record rather than referenced through scratch paths. Publication failure leaves
+the live compilation intact. The record certifies compilation, not a linked
+executable: every invocation revalidates current platform link inputs and links
+the retained artifacts, even if an output executable already exists. Timings
+separately report hits, bytes read/written, publication time and skipped producer
+work.
 
 ### Demand-Driven Compile-Time Evaluation
 
@@ -2732,6 +2757,10 @@ compilation stored, or one of the reads an object-cache entry records for the
 body it stands in for; each demands the root. The set is computed over the
 specialized program itself, so it is a function of the checked program and
 the build's roots, never of what any cache holds.
+
+A completed-compilation hit reuses these semantic decisions and replays their
+observations without recomputing demand. This is equivalent to the live path,
+not check-style evaluation of every root.
 
 Demand-driven evaluation applies to a compilation whose LSS runtime consumer
 continues the evaluation's specialization, that runs no tests, and whose
@@ -24092,8 +24121,12 @@ a constant (static data named by content, a short string as its literal, a
 construction as its parts), and no runtime program declares a slot, a
 failure record, or a guard for a compile-time root that completed.
 
-The point at which this holds is explicit: the end of the program's
-evaluation (`finalizeProgram`). The specialization evaluation made declared
+A completed-compilation record retains only artifacts generated after this
+normalization. Reusing those final artifacts preserves the same rule without
+reconstructing either specialization or the values they consumed.
+
+The point at which this holds for a live compilation is explicit: the end of the
+program's evaluation (`finalizeProgram`). The specialization evaluation made declared
 each pending root's read as a slot read, because the value did not exist
 yet, so when that evaluation completed any compile-time root the program
 demands, its Solved program is not the one a runtime consumer continues.

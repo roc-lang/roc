@@ -34,6 +34,7 @@
 //! ```
 
 const std = @import("std");
+const completed = @import("completed_compilation.zig");
 const builtin = @import("builtin");
 const threading = @import("threading.zig");
 const can = @import("can");
@@ -765,6 +766,9 @@ pub const ModuleState = struct {
     external_dependents: std.ArrayList(ModuleRef),
     /// Diagnostic reports
     reports: std.ArrayList(Report),
+    completion_report_start: usize = 0,
+    /// Diagnostic ownership before app/platform pairing replaces an artifact.
+    completion_module_key: ?[32]u8 = null,
     /// Reports already present when type checking began: parsing and
     /// canonicalization produced them, and their own caches reproduce them.
     pre_check_report_count: usize = 0,
@@ -1462,9 +1466,14 @@ pub const Coordinator = struct {
     checked_program: bool = false,
     runtime_lowering: ?compile_build.RuntimeLoweringConfig = null,
     runtime_output_probe: ?compile_build.RuntimeOutputProbe = null,
-    /// Set by checked-program finalization when the probe found this exact
-    /// program's runtime output recorded, so no runtime program was lowered.
-    runtime_output_cached: bool = false,
+    /// A completed result owns the semantic outcome independently of checked
+    /// modules, which can remain prepared when no live finalization is needed.
+    compilation_result: union(enum) { live, recorded: *const completed.Outcome } = .live,
+    completion_arena: ?*base.SingleThreadArena = null,
+    completion_outcome: completed.Outcome = .{},
+    completion_capture_ns: u64 = 0,
+    completion_observations: std.ArrayList([]const u8) = .empty,
+    completion_demand: std.ArrayList(completed.Demand) = .empty,
     compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
     /// Keep the code compile-time evaluation ran as artifacts even without
     /// an object cache to publish it to, so a test can compare it with a
@@ -1732,6 +1741,12 @@ pub const Coordinator = struct {
             }
         }
 
+        if (self.completion_arena) |arena| {
+            self.completion_demand.deinit(self.gpa);
+            self.completion_observations.deinit(self.gpa);
+            arena.deinit();
+            self.gpa.destroy(arena);
+        }
         if (self.program_session) |*session| session.deinit();
         self.program_session = null;
         for (self.program_literal_values.items) |entry| {
@@ -2327,6 +2342,17 @@ pub const Coordinator = struct {
         try self.checkCancelRequest();
         if (self.release_checked_solver_types) try self.releaseCheckedSolverTypes();
         self.checked_program = mode == .executable_artifacts and self.appRootChecked();
+        if (self.checked_program and self.runtime_lowering != null and !self.hasUserErrors()) {
+            if (self.runtime_output_probe) |probe| {
+                if (try probe.cached(probe.context, self.executableRootCheckedArtifact())) |outcome| {
+                    try self.replayCompleted(outcome);
+                    self.compilation_result = .{ .recorded = outcome };
+                    return;
+                }
+                try self.beginCompletion();
+            }
+        }
+
         if (self.checked_program and self.findRootModule(.platform) != null) {
             const platform_root = self.findRootModule(.platform).?;
             const platform = platform_root.mod.checkedArtifact().?;
@@ -2352,21 +2378,152 @@ pub const Coordinator = struct {
             const program_root = if (self.checked_program) self.executableRootCheckedArtifact() else null;
             try self.evaluateProgram(null, program_root);
         }
+        if (self.completion_arena != null) try self.captureCompletionReports();
     }
 
-    /// Evaluate the checked program. A build whose runtime output for exactly
-    /// this program is recorded evaluates the same compile-time roots a build
-    /// without the record does, since its program's specialization decides
-    /// which roots are demanded, and its consumer lowers no runtime program.
+    /// Evaluate only the live alternative. Recorded compilations return before
+    /// platform evaluation, pairing and shared demand discovery.
     fn evaluateProgram(
         self: *Coordinator,
         extra_cached: ?*const CheckedArtifact.CheckedModuleArtifact,
         program_root: ?*const CheckedArtifact.CheckedModuleArtifact,
     ) CoordinatorError!void {
-        if (self.runtime_lowering != null) if (program_root) |root| if (self.runtime_output_probe) |probe| {
-            self.runtime_output_cached = try probe.cached(probe.context, root);
-        };
         return self.evaluatePreparedModules(true, null, extra_cached, program_root);
+    }
+
+    /// Full checked closure after resolution and content validation, before any
+    /// evaluation or app/platform pairing. Physical paths serve diagnostic
+    /// rebinding; identity paths exclude compiler-owned staging directories.
+    pub fn compilationModules(self: *Coordinator, allocator: Allocator) Allocator.Error![]completed.Module {
+        var modules = std.ArrayList(completed.Module).empty;
+        errdefer modules.deinit(allocator);
+        var packages = self.packages.iterator();
+        while (packages.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            const compiler_source = std.mem.eql(u8, pkg.name, package_identity.synthetic_platform_identity) or compiler_platforms.fromIdentity(pkg.name) != null;
+            for (pkg.modules.items) |*mod| {
+                if (mod.checkedArtifact()) |artifact| try modules.append(allocator, .{
+                    .key = artifact.key.bytes,
+                    .path = mod.path,
+                    // Compiler-owned platform locations are logical names;
+                    // their materialization directory is not a program input.
+                    .identity_path = if (compiler_source) mod.name else self.crashReportPath(mod.path),
+                });
+            }
+        }
+        std.mem.sort(completed.Module, modules.items, {}, struct {
+            fn lessThan(_: void, a: completed.Module, b: completed.Module) bool {
+                const order = std.mem.order(u8, &a.key, &b.key);
+                return if (order == .eq) std.mem.lessThan(u8, a.identity_path, b.identity_path) else order == .lt;
+            }
+        }.lessThan);
+        return modules.toOwnedSlice(allocator);
+    }
+
+    fn beginCompletion(self: *Coordinator) Allocator.Error!void {
+        const started = std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds;
+        defer self.completion_capture_ns += @intCast(std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds - started);
+        const arena = try self.gpa.create(base.SingleThreadArena);
+        arena.* = base.SingleThreadArena.init(self.gpa);
+        self.completion_arena = arena;
+        self.completion_outcome.modules = try self.compilationModules(arena.allocator());
+        var packages = self.packages.iterator();
+        while (packages.next()) |entry| for (entry.value_ptr.*.modules.items) |*mod| {
+            mod.completion_report_start = mod.reports.items.len;
+            mod.completion_module_key = if (mod.checkedArtifact()) |artifact| artifact.key.bytes else null;
+        };
+    }
+
+    fn captureDebug(context: *anyopaque, message: []const u8) Allocator.Error!void {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        const started = std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds;
+        defer self.completion_capture_ns += @intCast(std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds - started);
+        try self.completion_observations.append(self.gpa, try self.completion_arena.?.allocator().dupe(u8, message));
+    }
+
+    fn captureDemand(context: *anyopaque, demand: lir.CheckedPipeline.ComptimeDemand, roots: []const lir.CheckedPipeline.MonotypeRoot, modules: []const CheckedArtifact.ModuleId, literals: []const lir.CheckedPipeline.MonotypeLiteralRoot) Allocator.Error!void {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        const started = std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds;
+        defer self.completion_capture_ns += @intCast(std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds - started);
+        const allocator = self.completion_arena.?.allocator();
+        const evaluated = try allocator.alloc(completed.RootDemand, roots.len);
+        for (roots, evaluated, 0..) |root, *out, i| out.* = .{
+            .root = .{ .module = modules[@backingInt(root.owner)].bytes, .root = @backingInt(root.request.compile_time_root.?) },
+            .reads = try copyCompletionRoots(allocator, demand.rootReads(i)),
+        };
+        const literal_demands = try allocator.alloc(completed.LiteralDemand, demand.literals.len);
+        for (demand.literals, literals, literal_demands) |literal, source, *out| out.* = .{
+            .module = source.module.bytes,
+            .checked_expr = source.site.checked_expr,
+            .kind = source.site.kind,
+            .identity = literal.identity,
+            .reads = try copyCompletionRoots(allocator, demand.reads[literal.reads.start..][0..literal.reads.len]),
+        };
+        try self.completion_demand.append(self.gpa, .{
+            .evaluated = evaluated,
+            .stored = try copyCompletionRoots(allocator, demand.stored),
+            .literals = literal_demands,
+        });
+    }
+
+    fn copyCompletionRoots(allocator: Allocator, roots: []const lir.CheckedPipeline.ComptimeDemandRoot) Allocator.Error![]const completed.Root {
+        const result = try allocator.alloc(completed.Root, roots.len);
+        for (roots, result) |root, *out| out.* = .{ .module = root.module.bytes, .root = @backingInt(root.root) };
+        return result;
+    }
+
+    fn captureCompletionReports(self: *Coordinator) Allocator.Error!void {
+        const started = std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds;
+        defer self.completion_capture_ns += @intCast(std.Io.Timestamp.now(self.roc_ctx.std_io, .awake).nanoseconds - started);
+        const allocator = self.completion_arena.?.allocator();
+        var diagnostics = std.ArrayList(completed.Diagnostic).empty;
+        var packages = self.packages.iterator();
+        while (packages.next()) |entry| for (entry.value_ptr.*.modules.items) |*mod| {
+            const module_key = mod.completion_module_key orelse continue;
+            for (mod.reports.items[mod.completion_report_start..]) |report| try diagnostics.append(allocator, .{
+                .module = module_key,
+                .title = report.title,
+                .severity = report.severity,
+                .file = report.file,
+                .headline = report.headline.elements.items,
+                .body = report.document.elements.items,
+            });
+        };
+        // Reports move to the build's sink after finalization; retain structured
+        // copies before their owner can render and release them.
+        const bytes = try completed.encode(allocator, diagnostics.items);
+        var reader = completed.Reader{ .bytes = bytes, .arena = allocator, .remaining = bytes.len * 4 };
+        self.completion_outcome.diagnostics = reader.read([]completed.Diagnostic) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidRecord => coordinatorInvariant("the completion writer produced an invalid diagnostic record", .{}),
+        };
+        self.completion_outcome.observations = self.completion_observations.items;
+        self.completion_outcome.demand = self.completion_demand.items;
+    }
+
+    fn replayCompleted(self: *Coordinator, outcome: *const completed.Outcome) Allocator.Error!void {
+        const modules = try self.compilationModules(self.gpa);
+        defer self.gpa.free(modules);
+        for (outcome.diagnostics) |diagnostic| {
+            const location = self.checked_artifact_index.get(diagnostic.module) orelse
+                coordinatorInvariant("validated completion diagnostic omitted its checked module", .{});
+            const mod = location.module();
+            var report = try Report.init(self.gpa, diagnostic.title, "", diagnostic.severity);
+            errdefer report.deinit();
+            report.title = try report.addOwnedString(diagnostic.title);
+            // The record's arena outlives all reports emitted by this build.
+            completed.rebindElements(diagnostic.headline, outcome.modules, modules);
+            completed.rebindElements(diagnostic.body, outcome.modules, modules);
+            try report.headline.elements.appendSlice(diagnostic.headline);
+            try report.document.elements.appendSlice(diagnostic.body);
+            if (completed.rebindPath(diagnostic.file, outcome.modules, modules)) |path| try report.setFile(path);
+            try mod.reports.append(self.gpa, report);
+        }
+        for (outcome.observations) |message| {
+            self.roc_ctx.writeStderr("[dbg] ") catch {};
+            self.roc_ctx.writeStderr(message) catch {};
+            self.roc_ctx.writeStderr("\n") catch {};
+        }
     }
 
     /// Return `error.Canceled` when the embedder has asked to abandon this build.
@@ -3150,6 +3307,7 @@ pub const Coordinator = struct {
         options.keep_artifacts = self.compile_time_object_cache != null or self.keep_compile_time_artifacts;
         options.cached_debug_modules = cached_debug_modules.items;
         options.defer_debug_replay = !replay_cached_debug;
+        if (self.completion_arena != null) options.completion_sink = .{ .context = self, .demand = captureDemand, .debug = captureDebug };
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;
         if (runtime_target) |*target| target.post_check_executor = self.postCheckExecutor();
         var unfinalized = UnfinalizedReportDestinations{ .coordinator = self, .program_root = root.key.digest() };

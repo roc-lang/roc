@@ -79,6 +79,12 @@ pub const StageSink = struct {
         comptime_reads: *const lir.CheckedPipeline.SpecComptimeReads,
     ) Allocator.Error!void,
 };
+/// Observes the completed semantic decisions while their producer owns them.
+pub const CompletionSink = struct {
+    context: *anyopaque,
+    demand: *const fn (*anyopaque, lir.CheckedPipeline.ComptimeDemand, []const lir.CheckedPipeline.MonotypeRoot, []const checked.ModuleId, []const lir.CheckedPipeline.MonotypeLiteralRoot) Allocator.Error!void,
+    debug: *const fn (*anyopaque, []const u8) Allocator.Error!void,
+};
 /// Runtime options for compile-time finalization.
 pub const Options = struct {
     pub const StderrWriter = struct {
@@ -99,6 +105,7 @@ pub const Options = struct {
     stderr: ?StderrWriter = null,
     event_callback: ?EventCallback = null,
     debug_events: ?*DebugEvents = null,
+    completion_sink: ?CompletionSink = null,
     /// Artifact copies store results independently; shared slots publish once.
     publish_shared_slots: bool = true,
     /// A coordinator may persist an early dependency batch, then replay all
@@ -1269,6 +1276,7 @@ pub fn finalizeProgram(
         var quiet_options = options;
         quiet_options.stderr = null;
         quiet_options.event_callback = null;
+        quiet_options.completion_sink = null;
         quiet_options.keep_artifacts = false;
         quiet_options.unfinalized_reports = if (options.unfinalized_reports != null) quiet_unfinalized.reports() else null;
         // The evaluation's run verified the program's restored literal
@@ -1278,6 +1286,7 @@ pub fn finalizeProgram(
         if (quiet_options.object_cache) |*cache| cache.stage_sink = null;
         var quiet_events = DebugEvents{ .allocator = allocator };
         defer quiet_events.deinit();
+        if (options.timing) |timing| timing.respecialization_passes.add(1);
         var respecialized = try specializeAndEvaluate(
             allocator,
             quiet_modules,
@@ -1506,6 +1515,7 @@ fn specializeAndEvaluate(
     }
     if (options.object_cache != null) host_target.spec_comptime_reads = true;
     try options.checkCancelRequest();
+    if (options.timing) |timing| timing.specialization_passes.add(1);
     var monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.HostedFunctionNotBound => finalizationInvariant("compile-time evaluation required every hosted procedure to be bound"),
@@ -1518,6 +1528,7 @@ fn specializeAndEvaluate(
     if (!demand_driven and compile_time_root_count != requested_root_count)
         finalizationInvariant("compile-time evaluation published a different count of compile-time roots than it requested");
     if (options.timing) |timing| timing.recordRoots(demand.?);
+    if (options.completion_sink) |sink| try sink.demand(sink.context, demand.?, monotype.program.rootsView()[0..compile_time_root_count], monotype.program.view().lowering_modules, monotype.program.view().literal_roots);
     try published.init(allocator, modules, monotype.program.rootsView()[0..compile_time_root_count], monotype.program.view().lowering_modules);
     if (demand_driven) if (stored_demand) |stored| try stored.fill(allocator, demand.?.stored);
     // An LSS runtime consumer continues this Solved program.
@@ -2622,6 +2633,8 @@ pub const Timing = struct {
     store_results_ns: TimingCounter = .{},
     /// Compile-time roots the shared program declared, and how many of them
     /// it published for evaluation.
+    specialization_passes: TimingCounter = .{},
+    respecialization_passes: TimingCounter = .{},
     roots_declared: TimingCounter = .{},
     roots_evaluated: TimingCounter = .{},
     /// Process footprint range observed at burst boundaries. Compile-time
@@ -2651,6 +2664,8 @@ pub const Timing = struct {
             .code_generation_ns = self.code_generation_ns.load(),
             .execution_ns = self.execution_ns.load(),
             .store_results_ns = self.store_results_ns.load(),
+            .specialization_passes = self.specialization_passes.load(),
+            .respecialization_passes = self.respecialization_passes.load(),
             .roots_declared = self.roots_declared.load(),
             .roots_evaluated = self.roots_evaluated.load(),
             .mem_min = self.mem_min.load(),
@@ -2673,6 +2688,8 @@ pub const Timing = struct {
         self.code_generation_ns.add(snapshot_value.code_generation_ns);
         self.execution_ns.add(snapshot_value.execution_ns);
         self.store_results_ns.add(snapshot_value.store_results_ns);
+        self.specialization_passes.add(snapshot_value.specialization_passes);
+        self.respecialization_passes.add(snapshot_value.respecialization_passes);
         self.roots_declared.add(snapshot_value.roots_declared);
         self.roots_evaluated.add(snapshot_value.roots_evaluated);
         if (snapshot_value.mem_min != std.math.maxInt(u64)) self.mem_min.min(snapshot_value.mem_min);
@@ -2727,6 +2744,8 @@ pub const TimingSnapshot = struct {
     code_generation_ns: u64 = 0,
     execution_ns: u64 = 0,
     store_results_ns: u64 = 0,
+    specialization_passes: u64 = 0,
+    respecialization_passes: u64 = 0,
     roots_declared: u64 = 0,
     roots_evaluated: u64 = 0,
     mem_min: u64 = std.math.maxInt(u64),
@@ -5610,6 +5629,7 @@ fn reportDebugMessage(allocator: Allocator, options: Options, module: checked.Mo
 }
 
 fn emitDebugMessage(allocator: Allocator, options: Options, is_repl: bool, message: []const u8) Allocator.Error!void {
+    if (options.completion_sink) |sink| try sink.debug(sink.context, message);
     if (is_repl) {
         if (options.event_callback) |callback| callback.notify(callback.context, .{ .dbg = message });
     }

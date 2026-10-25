@@ -5,6 +5,7 @@ const Allocator = std.mem.Allocator;
 const threading_mod = @import("threading.zig");
 
 pub const package = @import("compile_package.zig");
+pub const completed_compilation = @import("completed_compilation.zig");
 pub const build = @import("compile_build.zig");
 pub const targets_config = @import("targets_config.zig");
 pub const TargetsConfig = targets_config.TargetsConfig;

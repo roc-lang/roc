@@ -21,11 +21,12 @@ const lir = @import("lir");
 const unbundle = if (is_freestanding) struct {} else @import("unbundle");
 const CoreCtx = @import("ctx").CoreCtx;
 
-/// Asks a build, once its executable program is checked and before it is
-/// evaluated, whether that exact program's runtime output is recorded.
+/// Probes a completed compilation after frontend validation, before any
+/// platform evaluation or app pairing. The returned outcome is an explicit
+/// alternative to a live evaluation session, owned by the build driver.
 pub const RuntimeOutputProbe = struct {
     context: *anyopaque,
-    cached: *const fn (*anyopaque, *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!bool,
+    cached: *const fn (*anyopaque, *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!?*const @import("completed_compilation.zig").Outcome,
 };
 
 /// Runtime demand fixed before post-check finalization. Explicit plans may be
@@ -522,6 +523,10 @@ pub const BuildEnv = struct {
 
     /// Get the TargetsConfig from the platform package, if any.
     pub fn getPlatformTargetsConfig(self: *const BuildEnv) ?targets_config_mod.TargetsConfig {
+        if (self.coordinator) |coord| switch (coord.compilation_result) {
+            .recorded => |outcome| return outcome.targets,
+            .live => {},
+        };
         const name = self.selected_platform_package_name orelse return null;
         const platform = self.packages.get(name) orelse return null;
         std.debug.assert(platform.kind == .platform);
@@ -937,11 +942,11 @@ pub const BuildEnv = struct {
         self.runtime_output_probe = probe;
     }
 
-    /// Whether checked-program finalization found the program's runtime
-    /// output recorded and so lowered no runtime program.
+    /// Whether the driver is consuming a completed compilation instead of a
+    /// live program session. No module evaluation state is changed by a hit.
     pub fn runtimeOutputCached(self: *const BuildEnv) bool {
         const coordinator = self.coordinator orelse return false;
-        return coordinator.runtime_output_cached;
+        return coordinator.compilation_result == .recorded;
     }
 
     pub fn setRuntimeLowering(self: *BuildEnv, config: RuntimeLoweringConfig) void {
@@ -1343,9 +1348,9 @@ pub const BuildEnv = struct {
             self.emitAccumulatedReportsForError();
             return err;
         };
-        self.executable_artifacts_finalized = coord.hasCheckedProgram();
+        self.executable_artifacts_finalized = coord.hasCheckedProgram() and !self.runtimeOutputCached();
 
-        try self.resolvePlatformTargetConfigConstants();
+        if (!self.runtimeOutputCached()) try self.resolvePlatformTargetConfigConstants();
 
         try self.emitCoordinatorReports();
 

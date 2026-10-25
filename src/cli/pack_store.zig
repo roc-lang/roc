@@ -87,12 +87,29 @@ pub const Store = struct {
         };
     }
 
-    /// Record the runtime output of the program `key` names. A record
-    /// already present holds the same output, and is left alone.
+    /// Atomically publish a completed compilation. Replacing an existing
+    /// record also repairs corruption after a miss; no partial bytes are visible.
     pub fn writeProgram(self: *const Store, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
         const path = try self.programPath(key);
         defer self.allocator.free(path);
-        try self.writePath(path, bytes);
+        const dir = std.fs.path.dirname(path).?;
+        self.roc_ctx.makePath(dir) catch |err| {
+            self.reportWriteFailure("create directory", dir, bytes.len, err);
+            return error.PackWriteFailed;
+        };
+        const temp = self.roc_ctx.writeTempFile(self.allocator, path, bytes) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => |write_err| {
+                self.reportWriteFailure("write staging file", path, bytes.len, write_err);
+                return error.PackWriteFailed;
+            },
+        };
+        defer self.allocator.free(temp);
+        defer self.roc_ctx.deleteFile(temp) catch {};
+        self.roc_ctx.rename(temp, path) catch |err| {
+            self.reportWriteFailure("publish staging file", temp, bytes.len, err);
+            return error.PackWriteFailed;
+        };
     }
 
     /// The object pack an optimized build of the program whose root module
@@ -114,12 +131,12 @@ pub const Store = struct {
     pub fn optimizedInputKey(self: *const Store, identity: [32]u8) Allocator.Error!?[32]u8 {
         const path = try self.optimizedPackPath(identity);
         defer self.allocator.free(path);
-        const bytes = self.roc_ctx.readFile(path, self.allocator) catch |err| switch (err) {
+        var prefix: [PackFile.object_input_key_prefix_len]u8 = undefined;
+        const len = self.roc_ctx.readFileInto(path, &prefix) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return null,
         };
-        defer self.allocator.free(bytes);
-        return PackFile.objectInputKey(bytes);
+        return PackFile.objectInputKey(prefix[0..len]);
     }
 
     /// File the optimized pack of root `identity`, replacing the one an
@@ -424,9 +441,8 @@ test "object cache write failures preserve quiet behavior and report verbose cau
                 .verbose = verbose,
             }, .arm64mac, "dev");
             defer store.deinit();
-            for (0..2) |_| {
-                try std.testing.expectError(error.PackWriteFailed, store.write(.local, @as([32]u8, @splat(1)), @as([32]u8, @splat(2)), "pack"));
-            }
+            try std.testing.expectError(error.PackWriteFailed, store.write(.local, @as([32]u8, @splat(1)), @as([32]u8, @splat(2)), "pack"));
+            try std.testing.expectError(error.PackWriteFailed, store.writeProgram(@splat(1), "pack"));
             try std.testing.expectEqual(@as(usize, if (stage == .rename) 2 else 0), capture.deleted);
             if (verbose) {
                 const cause = switch (stage) {
@@ -445,8 +461,17 @@ test "object cache write failures preserve quiet behavior and report verbose cau
 }
 
 test "object cache interleaved writers expose only complete final bytes" {
+    try testAtomicPublication(false);
+}
+
+test "completed compilation interleaved writers expose only complete final bytes" {
+    try testAtomicPublication(true);
+}
+
+fn testAtomicPublication(program: bool) !void {
     const Hook = struct {
         store: *Store,
+        program: bool,
         base: CoreCtx,
         pending: ?[]const u8 = null,
         distinct: bool = false,
@@ -469,7 +494,9 @@ test "object cache interleaved writers expose only complete final bytes" {
             self.pending = staging;
             defer self.pending = null;
             std.debug.assert(!self.base.fileExists(path));
-            self.store.writePath(path, bytes) catch return error.IoError;
+            if (self.program) {
+                self.store.writeProgram(@splat(1), bytes) catch return error.IoError;
+            } else self.store.writePath(path, bytes) catch return error.IoError;
             const visible = self.base.readFile(path, allocator) catch return error.IoError;
             defer allocator.free(visible);
             self.observed_complete = std.mem.eql(u8, visible, bytes);
@@ -489,14 +516,14 @@ test "object cache interleaved writers expose only complete final bytes" {
     const base_ctx = CoreCtx.default(allocator, allocator, io);
     var store = Store{ .allocator = allocator, .roc_ctx = base_ctx, .root = try allocator.dupe(u8, root), .verbose = false };
     defer store.deinit();
-    var hook = Hook{ .store = &store, .base = base_ctx };
+    var hook = Hook{ .store = &store, .base = base_ctx, .program = program };
     store.roc_ctx.ctx = &hook;
     store.roc_ctx.vtable.writeTempFile = &Hook.writeTempFile;
     const identity = @as([32]u8, @splat(1));
-    try store.write(.local, identity, @as([32]u8, @splat(2)), "whole completed pack");
+    if (program) try store.writeProgram(identity, "whole completed compilation") else try store.write(.local, identity, @as([32]u8, @splat(2)), "whole completed pack");
     try std.testing.expect(hook.distinct);
     try std.testing.expect(hook.observed_complete);
-    const dir_path = try store.identityDir(.local, identity);
+    const dir_path = if (program) try std.fs.path.join(allocator, &.{ root, "programs" }) else try store.identityDir(.local, identity);
     defer allocator.free(dir_path);
     var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true });
     defer dir.close(io);
