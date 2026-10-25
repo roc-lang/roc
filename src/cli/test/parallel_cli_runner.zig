@@ -11305,7 +11305,7 @@ fn customCtfeCachePublication(
                 .result => |run| run,
                 .failure => |failure| return failure,
             };
-            if (std.mem.count(u8, run.stderr, "CTFE publication observation") != 1) {
+            if (std.mem.count(u8, run.stderr, "[dbg] \"CTFE publication observation\"") != 1) {
                 return failureFromRun(allocator, timer, run, "command did not preserve its compile-time observation exactly once");
             }
             // Every command files the code its compile-time evaluation ran,

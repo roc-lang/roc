@@ -11914,6 +11914,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             backend.writeFileWindowsAvSafe(ctx.io.std_io, path, object) catch return error.NativeCompilationFailed;
             try extra_objects.append(ctx.arena, path);
         }
+        if (loaded_packs) |packs| printPackStats(packs, output.pack_links);
         recordCompletionCounters(&reporter, &build_env, &program_probe.?, true);
         try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, obj_path, extra_objects.items, output.facts);
         return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
@@ -11933,22 +11934,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // The program links the objects defining the entries it took, and no
     // other.
     if (loaded_packs) |packs| packs.settleLinkedObjects(lowered.lir_result.store.getProcSpecs());
-    // Cache statistics are diagnostic output. Ordinary successful builds must
-    // leave stderr empty so build runners do not report false warnings.
-    if (loaded_packs != null and dev_diagnostics.isSet(.pack_stats)) {
-        const packs = loaded_packs.?.*;
-        var external_procs: usize = 0;
-        for (lowered.lir_result.store.getProcSpecs()) |proc| {
-            if (proc.external) external_procs += 1;
-        }
-        // The compile-time evaluator has already spliced its entries; the
-        // object compiler asks for the runtime program's afterwards.
-        var linked_procs: usize = 0;
-        for (lowered.lir_result.store.getProcSpecs()) |proc| {
-            if (proc.c_abi_entry) linked_procs += 1;
-        }
-        std.debug.print("pack hits: {d} external procs: {d} linked procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, external_procs, linked_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count() });
-    }
+    const pack_links = programPackLinks(lowered.lir_result.store.getProcSpecs());
+    if (loaded_packs) |packs| printPackStats(packs, pack_links);
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
@@ -12044,7 +12031,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // The record retains every selected object. LSS records never carry
     // Boxy runtime inputs; those remain exclusive to the ordinary Boxy path.
     if (program_probe) |*probe| if (probe.key) |key| if (diag.errors == 0 and !uses_boxy) {
-        try probe.record(key, obj_path, linked_objects, link_facts, resolved_targets_config);
+        try probe.record(key, obj_path, linked_objects, link_facts, pack_links, resolved_targets_config);
     };
 
     if (program_probe) |*probe| recordCompletionCounters(&reporter, &build_env, probe, false);
@@ -12158,12 +12145,19 @@ const ProgramOutput = struct {
     object: []const u8,
     additional_objects: []const []const u8 = &.{},
     facts: LinkFacts,
+    pack_links: PackLinks = .{},
     outcome: compile.completed_compilation.Outcome = .{},
 
     const LinkFacts = struct {
         hosted_symbols: []const []const u8,
         link_root_symbols: []const []const u8,
         app_export_symbols: []const []const u8,
+    };
+    /// How many of the lowered program's procedures come from outside its
+    /// Roc object, and how many of those linked pack objects define.
+    const PackLinks = struct {
+        external_procs: u64 = 0,
+        linked_procs: u64 = 0,
     };
     const OptimizationInput = struct {
         selection: pack_store.LinkedStores.Selection,
@@ -12178,6 +12172,7 @@ const ProgramOutput = struct {
         object: []const u8,
         additional_objects: []const []const u8,
         facts: LinkFacts,
+        pack_links: PackLinks,
         outcome: compile.completed_compilation.Outcome,
         diagnostics: []const compile.completed_compilation.Diagnostic,
     };
@@ -12198,6 +12193,7 @@ const ProgramOutput = struct {
             .object = output.object,
             .additional_objects = output.additional_objects,
             .facts = output.facts,
+            .pack_links = output.pack_links,
             .outcome = output.outcome,
             .diagnostics = output.diagnostics,
         }) catch return error.OutOfMemory;
@@ -12241,6 +12237,7 @@ const ProgramOutput = struct {
             .object = payload.object,
             .additional_objects = payload.additional_objects,
             .facts = payload.facts,
+            .pack_links = payload.pack_links,
             .outcome = payload.outcome,
             .diagnostics = payload.diagnostics,
         };
@@ -12494,7 +12491,7 @@ const ProgramOutputProbe = struct {
         return &found.outcome;
     }
 
-    fn record(self: *ProgramOutputProbe, key: [32]u8, obj_path: []const u8, objects: []const []const u8, facts: ProgramOutput.LinkFacts, targets: roc_target.TargetsConfig) CliMainError!void {
+    fn record(self: *ProgramOutputProbe, key: [32]u8, obj_path: []const u8, objects: []const []const u8, facts: ProgramOutput.LinkFacts, pack_links: ProgramOutput.PackLinks, targets: roc_target.TargetsConfig) CliMainError!void {
         const started = std.Io.Timestamp.now(self.store.roc_ctx.std_io, .awake).nanoseconds;
         defer self.publication_ns = @intCast(std.Io.Timestamp.now(self.store.roc_ctx.std_io, .awake).nanoseconds - started);
         const object = self.store.roc_ctx.readFile(obj_path, self.gpa) catch |err| switch (err) {
@@ -12511,6 +12508,7 @@ const ProgramOutputProbe = struct {
             .object = object,
             .additional_objects = objects,
             .facts = facts,
+            .pack_links = pack_links,
             .outcome = outcome,
         });
         defer self.gpa.free(bytes);
@@ -12522,6 +12520,28 @@ const ProgramOutputProbe = struct {
         self.manager.storePlacementPointer(self.request, key);
     }
 };
+
+/// The procedures of a lowered program that its Roc object does not define:
+/// external ones, and of those the ones linked pack objects define. The
+/// compile-time evaluator has already spliced its own entries; the object
+/// compiler asks for the runtime program's afterwards.
+fn programPackLinks(procs: []const lir.LIR.LirProcSpec) ProgramOutput.PackLinks {
+    var links: ProgramOutput.PackLinks = .{};
+    for (procs) |proc| {
+        if (proc.external) links.external_procs += 1;
+        if (proc.c_abi_entry) links.linked_procs += 1;
+    }
+    return links;
+}
+
+/// Print this session's pack statistics with the program's pack links,
+/// which a completed compilation carries from the build that lowered it.
+/// Cache statistics are diagnostic output. Ordinary successful builds must
+/// leave stderr empty so build runners do not report false warnings.
+fn printPackStats(packs: *const pack_store.LoadedPacks, links: ProgramOutput.PackLinks) void {
+    if (!dev_diagnostics.isSet(.pack_stats)) return;
+    std.debug.print("pack hits: {d} external procs: {d} linked procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, links.external_procs, links.linked_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count() });
+}
 
 /// These counters count producer work, independently of phase labels.
 fn recordCompletionCounters(reporter: *progress.Reporter, build_env: *BuildEnv, probe: *const ProgramOutputProbe, hit: bool) void {
