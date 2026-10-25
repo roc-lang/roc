@@ -154,6 +154,7 @@ const cli_args = @import("cli_args.zig");
 const default_app = @import("default_app.zig");
 const install_store = @import("install.zig");
 const host_symbols = @import("host_symbols.zig");
+const link_artifacts = @import("link_artifacts.zig");
 const roc_target = @import("target.zig");
 const target_selection = @import("target_selection.zig");
 pub const targets_validator = @import("targets_validator.zig");
@@ -180,6 +181,7 @@ comptime {
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
         std.testing.refAllDecls(pack_store);
+        std.testing.refAllDecls(link_artifacts);
         std.testing.refAllDecls(@import("builder.zig"));
         std.testing.refAllDecls(@import("host_symbols.zig"));
         std.testing.refAllDecls(@import("test/platform_config.zig"));
@@ -624,6 +626,12 @@ fn embeddedDigest(comptime name: []const u8) [32]u8 {
     return @field(@import("embedded_digests"), name);
 }
 
+/// Content identity for native immutable objects, computed at compiler build time.
+fn embeddedBlake3(comptime name: []const u8) [32]u8 {
+    if (builtin.is_test) return comptime link_artifacts.Identity.of(&.{}).digest;
+    return @field(@import("embedded_digests"), name ++ "_blake3");
+}
+
 /// The digest of `shimLibraryBytes(kind, target)`.
 fn shimLibraryBytesDigest(kind: ShimLibraryKind, _: ?RocTarget) [32]u8 {
     return switch (kind) {
@@ -663,10 +671,12 @@ const EmbeddedTargetObjects = struct {
     /// symbols (the symbol ABI) instead of RocOps vtable calls. Used by
     /// `roc build --opt=dev` to link the app object with builtins.
     builtins_extern: []const u8,
+    builtins_extern_digest: [32]u8,
     /// The default platform's runtime library object.
     default_runtime: ?[]const u8 = null,
     /// The default platform's executable object.
     default_platform: ?[]const u8 = null,
+    default_platform_link_digest: ?[32]u8 = null,
     default_runtime_digest: ?[32]u8 = null,
     /// The default platform's compiler-rt carrier: compiler-rt and the C math
     /// and memory routines code generation calls, for the targets whose
@@ -675,12 +685,14 @@ const EmbeddedTargetObjects = struct {
     /// runtime, which does, and has no carrier.
     default_compiler_rt: ?[]const u8 = null,
     default_compiler_rt_digest: ?[32]u8 = null,
+    default_compiler_rt_link_digest: ?[32]u8 = null,
     /// Prebuilt boxy runtime object (the `roc_boxy_*` C-ABI wrappers plus
     /// `roc_boxy_init_embedded`), linked by `roc build --opt=dev` into
     /// programs that emit boxy statements. Shipped for every target that
     /// carries its own builtins, so a standalone dev build of a generic
     /// program works wherever a standalone dev build works at all.
     boxy_runtime: ?[]const u8 = null,
+    boxy_runtime_digest: ?[32]u8 = null,
 
     const DefaultPlatform = enum { none, runtime, runtime_and_compiler_rt };
 
@@ -689,6 +701,7 @@ const EmbeddedTargetObjects = struct {
     }
 
     const native: EmbeddedTargetObjects = .{
+        .builtins_extern_digest = embeddedBlake3("builtins_extern_native"),
         .builtins_extern = embedded(if (builtin.os.tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o"),
     };
 
@@ -698,6 +711,8 @@ const EmbeddedTargetObjects = struct {
         const ext = if (target.isWindows()) ".obj" else ".o";
         var objects: EmbeddedTargetObjects = .{
             .builtins_extern = embedded(dir ++ "roc_builtins_extern" ++ ext),
+            .builtins_extern_digest = embeddedBlake3("builtins_extern_" ++ name),
+            .boxy_runtime_digest = embeddedBlake3("boxy_runtime_" ++ name),
             .boxy_runtime = embedded(dir ++ "roc_boxy_runtime" ++ ext),
         };
         switch (default_platform) {
@@ -705,6 +720,7 @@ const EmbeddedTargetObjects = struct {
             .runtime, .runtime_and_compiler_rt => {
                 objects.default_runtime = embedded(dir ++ "roc_default_runtime" ++ ext);
                 objects.default_platform = embedded(dir ++ "roc_default_platform" ++ ext);
+                objects.default_platform_link_digest = embeddedBlake3("default_platform_" ++ name);
                 objects.default_runtime_digest = embeddedDigest("default_runtime_" ++ name);
             },
         }
@@ -713,6 +729,7 @@ const EmbeddedTargetObjects = struct {
             .runtime_and_compiler_rt => {
                 objects.default_compiler_rt = embedded(dir ++ "roc_default_compiler_rt.o");
                 objects.default_compiler_rt_digest = embeddedDigest("default_compiler_rt_" ++ name);
+                objects.default_compiler_rt_link_digest = embeddedBlake3("default_compiler_rt_" ++ name);
             },
         }
         return objects;
@@ -723,6 +740,7 @@ const EmbeddedTargetObjects = struct {
     fn linuxAlias(comptime glibc: EmbeddedTargetObjects) EmbeddedTargetObjects {
         var objects = glibc;
         objects.builtins_extern = native.builtins_extern;
+        objects.builtins_extern_digest = native.builtins_extern_digest;
         return objects;
     }
 
@@ -9983,6 +10001,7 @@ fn appendBoxyRuntimeLinkInputs(
     target: RocTarget,
     lir_result: *const lir.Program.Result,
     canonical_order: ?*const lir.RuntimeTables.Order,
+    objects: ?*link_artifacts.Objects,
 ) CliMainError!void {
     lir_result.store.requireBoxy();
     base.dev_diagnostics.traceBoxyWork("link-inputs");
@@ -9994,9 +10013,12 @@ fn appendBoxyRuntimeLinkInputs(
         return error.UnsupportedTarget;
     };
 
-    const runtime_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, EmbeddedTargetObjects.filename("roc_boxy_runtime", target) });
-    backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, runtime_bytes) catch {
-        return error.NativeCompilationFailed;
+    const runtime_path = if (objects) |store|
+        store.materializeKnown(runtime_bytes, .{ .digest = EmbeddedTargetObjects.forTarget(target).boxy_runtime_digest.?, .size = runtime_bytes.len }) catch return error.NativeCompilationFailed
+    else blk: {
+        const path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, EmbeddedTargetObjects.filename("roc_boxy_runtime", target) });
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, path, runtime_bytes) catch return error.NativeCompilationFailed;
+        break :blk path;
     };
 
     var sidecar_blob = (if (canonical_order) |order|
@@ -11571,7 +11593,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
             try appendDefaultPlatformLinkInputs(ctx, &object_files, app_object.artifact_dir, target);
         }
         if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) {
-            try appendBoxyRuntimeLinkInputs(ctx, &object_files, app_object.artifact_dir, target, &lowered.lir_result, null);
+            try appendBoxyRuntimeLinkInputs(ctx, &object_files, app_object.artifact_dir, target, &lowered.lir_result, null, null);
         }
         reporter.end();
 
@@ -11793,6 +11815,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     build_env.setRuntimeLowering(runtime_lowering);
     // A build of a program whose runtime output is recorded links that output
     // and lowers no runtime program. Debug pack emission reads the lowering.
+    const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    defer compile.CacheCleanup.deleteTempDir(ctx.io.std_io, build_scratch_dir);
+    var link_objects = link_artifacts.Objects.init(ctx.coreCtx(), ctx.arena, if (object_store) |store| store.root else null, build_scratch_dir) catch return error.NativeCompilationFailed;
+    defer link_objects.deinit();
     var program_probe: ?ProgramOutputProbe = null;
     if (object_store) |store| if (target_arch != .wasm32 and args.opt == .dev and runtime_lowering.target.specialization_strategy == .lss and !dev_diagnostics.isSet(.dev_pack_objects)) {
         program_probe = .{
@@ -11803,6 +11831,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             .manager = &cache_manager,
             .policy = programOutputPolicy(args, link_type),
             .linked_stores = if (linked_stores) |*stores| stores else null,
+            .objects = &link_objects,
         };
     };
     if (program_probe) |*probe| {
@@ -11833,29 +11862,16 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         break :early try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
     };
 
+    if (program_probe) |probe| if (probe.lookup_ns != 0) {
+        reporter.recordCompletedWithBreakdown("Object reuse (during checking)", probe.lookup_ns, .{}, &.{});
+    };
     if (build_env.runtimeOutputCached()) {
         const output = program_probe.?.found.?;
-        reporter.begin("Restoring Completed Objects");
-        const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
-            return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
-        };
-        defer compile.CacheCleanup.deleteTempDir(ctx.io.std_io, build_scratch_dir);
-        const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
-        const obj_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, obj_filename });
-        backend.writeFileWindowsAvSafe(ctx.io.std_io, obj_path, output.object) catch {
-            return error.NativeCompilationFailed;
-        };
-        reporter.end();
+        const obj_path = program_probe.?.object_path.?;
         reporter.begin("Preparing Link Inputs");
-        var extra_objects = std.ArrayList([]const u8).empty;
-        for (output.additional_objects, 0..) |object, index| {
-            const path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, try std.fmt.allocPrint(ctx.arena, "roc_pack_{d}.o", .{index}) });
-            backend.writeFileWindowsAvSafe(ctx.io.std_io, path, object) catch return error.NativeCompilationFailed;
-            try extra_objects.append(ctx.arena, path);
-        }
         if (loaded_packs) |packs| printPackStats(packs, output.pack_links);
         recordCompletionCounters(&reporter, &build_env, &program_probe.?, true);
-        try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, obj_path, extra_objects.items, output.facts);
+        try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, &link_objects, obj_path, program_probe.?.additional_object_paths, output.facts);
         return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
     }
     const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
@@ -11924,17 +11940,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     defer if (object_compiler.captured_artifacts) |*set| set.deinit();
 
-    const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
-        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
-    };
-    const cleanup_build_scratch_dir = true;
-    defer if (cleanup_build_scratch_dir) {
-        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, build_scratch_dir);
-    };
-
-    const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
-    const obj_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, obj_filename });
-    var written = object_compiler.compileToObjectFileAndWrite(
+    var written = object_compiler.compileToObjectFile(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         entrypoints,
@@ -11944,15 +11950,17 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         lowered.lir_result.boxy_erased_arg_desc_params.items,
         lowered.lir_result.boxy_worker_procs.items,
         target,
-        obj_path,
-        ctx.coreCtx(),
     ) catch |err| {
         reporter.fail();
         std.log.err("Native compilation failed: {}", .{err});
         return error.NativeCompilationFailed;
     };
     if (program_probe) |*probe| probe.runtime_emissions += 1;
-    defer written.runtime_tables.deinit(ctx.gpa);
+    defer written.deinit();
+    if (object_compiler.capture_artifacts) {
+        object_compiler.captured_artifacts = written.artifacts;
+        written.artifacts = null;
+    }
     const uses_boxy = written.uses_boxy;
     reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
     reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
@@ -11968,6 +11976,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         reporter.end();
     }
 
+    reporter.begin("Object Materialization");
+    const object_identity = link_artifacts.Identity.of(written.object_bytes);
+    const obj_path = link_objects.materializeKnown(written.object_bytes, object_identity) catch return error.NativeCompilationFailed;
+    ctx.gpa.free(written.object_bytes);
+    written.object_bytes = &.{};
     const link_facts: ProgramOutput.LinkFacts = .{
         .hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
         .link_root_symbols = try devObjectLinkRootSymbols(ctx.arena, static_data_exports),
@@ -11975,31 +11988,30 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     };
     // The optimized object packs that served this program's specializations.
     const linked_objects: []const []const u8 = if (loaded_packs) |packs| try packs.linkedObjects(ctx.arena) else &.{};
+    const additional_object_ids = try ctx.arena.alloc(link_artifacts.Identity, linked_objects.len);
+    var extra_objects = std.array_list.Managed([]const u8).init(ctx.arena);
+    for (linked_objects, additional_object_ids) |object, *identity| {
+        identity.* = link_artifacts.Identity.of(object);
+        try extra_objects.append(link_objects.materializeKnown(object, identity.*) catch return error.NativeCompilationFailed);
+    }
+    reporter.end();
     // The record retains every selected object. LSS records never carry
     // Boxy runtime inputs; those remain exclusive to the ordinary Boxy path.
     if (program_probe) |*probe| if (probe.key) |key| if (diag.errors == 0 and !uses_boxy) {
         reporter.begin("Publishing Output Cache");
-        try probe.record(key, obj_path, linked_objects, link_facts, pack_links, resolved_targets_config);
+        try probe.record(key, object_identity, additional_object_ids, link_facts, pack_links, resolved_targets_config);
         reporter.end();
     };
 
     if (program_probe) |*probe| recordCompletionCounters(&reporter, &build_env, probe, false);
     reporter.begin("Preparing Link Inputs");
-    var extra_objects = std.array_list.Managed([]const u8).init(ctx.arena);
-    for (linked_objects, 0..) |object, index| {
-        const object_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, try std.fmt.allocPrint(ctx.arena, "roc_pack_{d}.o", .{index}) });
-        backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, object) catch {
-            return error.NativeCompilationFailed;
-        };
-        try extra_objects.append(object_path);
-    }
     // Boxy programs reference the `roc_boxy_*` runtime and, in their
     // entrypoints, call `roc_boxy_init_embedded`. Link the boxy runtime object
     // and a data object carrying the sidecar those symbols read.
     if (uses_boxy) {
-        try appendBoxyRuntimeLinkInputs(ctx, &extra_objects, build_scratch_dir, target, &lowered.lir_result, &written.runtime_tables);
+        try appendBoxyRuntimeLinkInputs(ctx, &extra_objects, build_scratch_dir, target, &lowered.lir_result, &written.runtime_tables, &link_objects);
     }
-    try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, obj_path, extra_objects.items, link_facts);
+    try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, &link_objects, obj_path, extra_objects.items, link_facts);
 
     return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
 }
@@ -12016,43 +12028,74 @@ fn linkNativeBuild(
     platform_dir: []const u8,
     targets_config: roc_target.TargetsConfig,
     build_scratch_dir: []const u8,
+    objects: *link_artifacts.Objects,
     obj_path: []const u8,
     extra_objects: []const []const u8,
     facts: ProgramOutput.LinkFacts,
 ) CliMainError!void {
     const target_os = target.toOsTag();
     const target_arch = target.toCpuArch();
+    const paths_started = std.Io.Timestamp.now(ctx.io.std_io, .awake);
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
 
-    const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, EmbeddedTargetObjects.filename("roc_builtins_extern", target) });
-    backend.writeFileWindowsAvSafe(ctx.io.std_io, builtins_path, EmbeddedTargetObjects.forTarget(target).builtins_extern) catch {
-        return error.BuiltinsExtractionFailed;
-    };
+    const host_paths = try hostInputPaths(ctx, link_inputs);
+    const input_states = try ctx.arena.alloc(std.Io.File.Stat, host_paths.len);
+    for (host_paths, input_states) |path, *state| {
+        state.* = std.Io.Dir.cwd().statFile(ctx.io.std_io, path, .{}) catch return failLink(ctx, error.InvalidArguments, link_inputs.target_name);
+    }
+    const objects_started = std.Io.Timestamp.now(ctx.io.std_io, .awake);
+    const paths_ns: u64 = @intCast(objects_started.nanoseconds - paths_started.nanoseconds);
+    const embedded = EmbeddedTargetObjects.forTarget(target);
+    const builtins_path = objects.materializeKnown(embedded.builtins_extern, .{ .digest = embedded.builtins_extern_digest, .size = embedded.builtins_extern.len }) catch return error.BuiltinsExtractionFailed;
 
     var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
     if (args.synthetic_default_platform) {
-        try appendDefaultPlatformLinkInputs(ctx, &object_files, build_scratch_dir, target);
+        const startup = embedded.default_platform orelse return error.UnsupportedTarget;
+        try object_files.append(objects.materializeKnown(startup, .{ .digest = embedded.default_platform_link_digest.?, .size = startup.len }) catch return error.NativeCompilationFailed);
+        if (embedded.default_compiler_rt) |bytes| try object_files.append(objects.materializeKnown(bytes, .{ .digest = embedded.default_compiler_rt_link_digest.?, .size = bytes.len }) catch return error.NativeCompilationFailed);
     }
     try object_files.appendSlice(extra_objects);
-    reporter.end();
+    const objects_ns: u64 = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - objects_started.nanoseconds);
+    reporter.endWithParentBreakdown(&.{
+        .{ .name = "Platform input validation", .ns = paths_ns },
+        .{ .name = "Runtime object materialization", .ns = objects_ns },
+    });
     reporter.begin("Linking");
+    var timing: linker.Timing = .{};
+    var inspection_ns: u64 = 0;
+    var inspection_counters: host_symbols.Counters = .{};
     if (link_type == .archive) {
+        const started = std.Io.Timestamp.now(ctx.io.std_io, .awake);
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
+        timing.finalization_ns = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - started.nanoseconds);
     } else {
-        try verifyHostInputSymbols(
-            ctx,
-            try hostInputPaths(ctx, link_inputs),
-            facts.hosted_symbols,
-            link_inputs.target_name,
-            args.synthetic_default_platform,
-        );
-
+        const inspection_started = std.Io.Timestamp.now(ctx.io.std_io, .awake);
+        var needed: std.ArrayList([]const u8) = .empty;
+        if (!(host_paths.len == 0 and args.synthetic_default_platform)) {
+            try needed.appendSlice(ctx.arena, &host_symbols.runtime_symbols);
+            try needed.appendSlice(ctx.arena, facts.hosted_symbols);
+        }
+        const inspected = try host_symbols.inspect(ctx.arena, ctx.io.std_io, host_paths, needed.items, link_type == .shared);
+        inspection_counters = inspected.counters;
+        try validateLinkInputStates(ctx, host_paths, input_states, link_inputs.target_name);
+        if (inspected.all_inputs_scanned and inspected.missing.len > 0) {
+            return ctx.fail(.{ .missing_host_symbols = .{ .symbols = inspected.missing, .target = link_inputs.target_name } });
+        }
+        var exports = std.array_list.Managed([]const u8).init(ctx.arena);
+        if (link_type == .shared) {
+            var seen = std.StringHashMap(void).init(ctx.arena);
+            for (facts.app_export_symbols) |name| try appendUniqueSharedLibraryExport(&seen, &exports, name);
+            for (inspected.exports) |name| try appendUniqueSharedLibraryExport(&seen, &exports, name);
+        }
+        inspection_ns = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - inspection_started.nanoseconds);
         const force_undefined_symbols = facts.link_root_symbols;
-        const export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, facts.app_export_symbols);
+        const export_symbols = exports.items;
 
         const link_config = linker.LinkConfig{
+            .timing = &timing,
+            .immutable_objects = objects,
             .target_format = linker.TargetFormat.detectFromOs(target_os),
             .target_abi = buildLinkAbi(target, args.synthetic_default_platform),
             .target_os = target_os,
@@ -12083,7 +12126,32 @@ fn linkNativeBuild(
             return failLink(ctx, err, link_inputs.target_name);
         };
     }
-    reporter.end();
+    try validateLinkInputStates(ctx, host_paths, input_states, link_inputs.target_name);
+    reporter.endWithParentBreakdown(&.{
+        .{ .name = "Host symbols and exports", .ns = inspection_ns },
+        .{ .name = "Link arguments", .ns = timing.arguments_ns },
+        .{ .name = "Embedded LLD", .ns = timing.lld_ns },
+        .{ .name = "Output finalization", .ns = timing.finalization_ns },
+    });
+    reporter.recordCounters("Link preparation", &.{
+        .{ .name = "Object bytes written", .count = objects.counters.written },
+        .{ .name = "Object bytes reused", .count = objects.counters.reused },
+        .{ .name = "Object bytes validated", .count = objects.counters.validated },
+        .{ .name = "Host bytes copied", .count = inspection_counters.copied_bytes },
+        .{ .name = "Peak host bytes retained", .count = inspection_counters.peak_retained_bytes },
+        .{ .name = "Archive members visited", .count = inspection_counters.archive_members },
+        .{ .name = "Symbol tables visited", .count = inspection_counters.symbol_tables },
+    });
+}
+
+fn validateLinkInputStates(ctx: *CliCtx, paths: []const []const u8, states: []const std.Io.File.Stat, target_name: []const u8) CliMainError!void {
+    for (paths, states) |path, state| {
+        const current = std.Io.Dir.cwd().statFile(ctx.io.std_io, path, .{}) catch return failLink(ctx, error.InvalidArguments, target_name);
+        if (!host_symbols.sameFileState(state, current)) {
+            std.log.err("Platform link input changed during this build: {s}", .{path});
+            return failLink(ctx, error.InvalidArguments, target_name);
+        }
+    }
 }
 
 /// Final normalized compiler artifacts and their completed semantic outcome.
@@ -12091,8 +12159,8 @@ fn linkNativeBuild(
 const ProgramOutput = struct {
     manifest: Manifest = .{},
     diagnostics: []const compile.completed_compilation.Diagnostic = &.{},
-    object: []const u8,
-    additional_objects: []const []const u8 = &.{},
+    object: link_artifacts.Identity,
+    additional_objects: []const link_artifacts.Identity = &.{},
     facts: LinkFacts,
     pack_links: PackLinks = .{},
     outcome: compile.completed_compilation.Outcome = .{},
@@ -12118,14 +12186,14 @@ const ProgramOutput = struct {
         optimizations: []const OptimizationInput = &.{},
     };
     const Payload = struct {
-        object: []const u8,
-        additional_objects: []const []const u8,
+        object: link_artifacts.Identity,
+        additional_objects: []const link_artifacts.Identity,
         facts: LinkFacts,
         pack_links: PackLinks,
         outcome: compile.completed_compilation.Outcome,
         diagnostics: []const compile.completed_compilation.Diagnostic,
     };
-    const magic = "ROCCOMP2";
+    const magic = "ROCCOMP3";
     const header_len = magic.len + 8 + 32 + 32;
     const manifest_digest_offset = magic.len + 8;
     const payload_digest_offset = manifest_digest_offset + 32;
@@ -12201,19 +12269,47 @@ test "program output records round-trip and reject foreign bytes" {
         .link_root_symbols = &.{"roc__main_for_host_1_exposed"},
         .app_export_symbols = &.{},
     };
-    const bytes = try ProgramOutput.encode(std.testing.allocator, .{ .object = "object bytes", .facts = facts });
+    const bytes = try ProgramOutput.encode(std.testing.allocator, .{ .object = link_artifacts.Identity.of("object bytes"), .facts = facts });
     defer std.testing.allocator.free(bytes);
     const prefix = bytes[0..ProgramOutput.manifestEnd(bytes).?];
     try std.testing.expect((try ProgramOutput.decodeManifest(arena.allocator(), prefix)) != null);
     try std.testing.expect((try ProgramOutput.decode(arena.allocator(), prefix)) == null);
     const decoded = (try ProgramOutput.decode(arena.allocator(), bytes)).?;
-    try std.testing.expectEqualStrings("object bytes", decoded.object);
+    try std.testing.expectEqualDeep(link_artifacts.Identity.of("object bytes"), decoded.object);
     try std.testing.expectEqual(@as(usize, 2), decoded.facts.hosted_symbols.len);
     try std.testing.expectEqualStrings("roc_fx_tcp_connect", decoded.facts.hosted_symbols[1]);
     try std.testing.expectEqualStrings("roc__main_for_host_1_exposed", decoded.facts.link_root_symbols[0]);
     try std.testing.expectEqual(@as(usize, 0), decoded.facts.app_export_symbols.len);
     try std.testing.expect(try ProgramOutput.decode(arena.allocator(), bytes[0 .. bytes.len - 1]) == null);
     try std.testing.expect(try ProgramOutput.decode(arena.allocator(), "ROCPRGO0") == null);
+    bytes[10] ^= 1;
+    try std.testing.expect(try ProgramOutput.decode(arena.allocator(), bytes) == null);
+}
+
+test "native link objects remain isolated by final target and CPU floor" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const scratch_allocator = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", scratch_allocator);
+    const core = CoreCtx.default(a, scratch_allocator, io);
+    const config: CacheConfig = .{ .cache_dir = root, .roc_ctx = core };
+    const bytes = "target-specific object";
+    const id = link_artifacts.Identity.of(bytes);
+    for ([_]RocTarget{ .x64musl, .x64glibc, .x64v1musl, .x64win }) |target| {
+        var store = try pack_store.Store.init(a, config, target, "dev");
+        defer store.deinit();
+        try tmp.dir.createDir(io, @tagName(target), .default_dir);
+        const scratch = try std.fs.path.join(scratch_allocator, &.{ root, @tagName(target) });
+        var objects = try link_artifacts.Objects.init(core, scratch_allocator, store.root, scratch);
+        defer objects.deinit();
+        try std.testing.expect(try objects.find(id) == null);
+        _ = try objects.materializeKnown(bytes, id);
+        try std.testing.expect(try objects.find(id) != null);
+    }
 }
 
 test "program output records preserve observations and reject corrupt artifacts and lengths" {
@@ -12224,8 +12320,8 @@ test "program output records preserve observations and reject corrupt artifacts 
     var headline = [_]reporting.DocumentElement{.{ .reflowing_text = "A warning" }};
     var body = [_]reporting.DocumentElement{.{ .source_location = .{ .filename = "/old/main.roc", .line = 3, .column = 2 } }};
     const output: ProgramOutput = .{
-        .object = "final normalized object",
-        .additional_objects = &.{"selected optimized object"},
+        .object = link_artifacts.Identity.of("final normalized object"),
+        .additional_objects = &.{link_artifacts.Identity.of("selected optimized object")},
         .facts = .{ .hosted_symbols = &.{"roc_host"}, .link_root_symbols = &.{"data"}, .app_export_symbols = &.{"main"} },
         .outcome = .{
             .modules = &.{.{ .key = key, .path = "/old/main.roc" }},
@@ -12237,7 +12333,7 @@ test "program output records preserve observations and reject corrupt artifacts 
     const bytes = try ProgramOutput.encode(gpa, output);
     defer gpa.free(bytes);
     const restored = (try ProgramOutput.decode(arena.allocator(), bytes)).?;
-    try std.testing.expectEqualStrings(output.additional_objects[0], restored.additional_objects[0]);
+    try std.testing.expectEqualDeep(output.additional_objects[0], restored.additional_objects[0]);
     try std.testing.expectEqual(@as(usize, 3), restored.outcome.observations.len);
     try std.testing.expectEqualStrings("second", restored.outcome.observations[2]);
     const diagnostic = restored.outcome.diagnostics[0];
@@ -12247,10 +12343,10 @@ test "program output records preserve observations and reject corrupt artifacts 
     for (0..bytes.len) |len| try std.testing.expect(try ProgramOutput.decode(arena.allocator(), bytes[0..len]) == null);
     bytes[ProgramOutput.header_len + 9] ^= 1;
     try std.testing.expect(try ProgramOutput.decode(arena.allocator(), bytes) == null);
-    // Even a well-checksummed envelope cannot claim more object bytes than it contains.
+    // Even a well-checksummed envelope cannot claim more object identities than it contains.
     bytes[ProgramOutput.header_len + 9] ^= 1;
     const payload_start = ProgramOutput.manifestEnd(bytes).?;
-    @memset(bytes[payload_start..][0..8], 255);
+    @memset(bytes[payload_start + 32 + 8 ..][0..8], 255);
     std.crypto.hash.Blake3.hash(bytes[payload_start..], bytes[ProgramOutput.payload_digest_offset..][0..32], .{});
     try std.testing.expect(try ProgramOutput.decode(arena.allocator(), bytes) == null);
 }
@@ -12278,6 +12374,10 @@ const ProgramOutputProbe = struct {
     manifest_bytes_read: u64 = 0,
     key: ?[32]u8 = null,
     found: ?ProgramOutput = null,
+    objects: *link_artifacts.Objects,
+    object_path: ?[]const u8 = null,
+    lookup_ns: u64 = 0,
+    additional_object_paths: []const []const u8 = &.{},
     /// Runtime and compile-time providers may be the same collection. A probe
     /// miss enables procedure reuse; a hit needs no procedure-pack discovery.
     code_providers: [2]?*pack_store.LoadedPacks = .{ null, null },
@@ -12293,7 +12393,7 @@ const ProgramOutputProbe = struct {
 
     fn initialize(self: *ProgramOutputProbe, args: cli_args.BuildArgs) Allocator.Error!void {
         const descriptor = .{
-            .domain = @as([]const u8, "roc-completed-request-v2"),
+            .domain = @as([]const u8, "roc-completed-request-v3"),
             .store = @as([]const u8, self.store.root),
             .cwd = self.build_env.cwd,
             .entry = args.synthetic_root_original_path orelse args.path,
@@ -12310,6 +12410,9 @@ const ProgramOutputProbe = struct {
     /// The placement pointer is only a candidate locator. Admission validates
     /// the record's complete input manifest before reading any object bytes.
     fn early(self: *ProgramOutputProbe) Allocator.Error!bool {
+        defer if (!self.early_hit) {
+            self.found = null;
+        };
         const started = std.Io.Timestamp.now(self.store.roc_ctx.std_io, .awake).nanoseconds;
         defer self.validation_ns += @intCast(std.Io.Timestamp.now(self.store.roc_ctx.std_io, .awake).nanoseconds - started);
         const key = self.manager.loadPlacementPointer(self.request) orelse return false;
@@ -12346,6 +12449,7 @@ const ProgramOutputProbe = struct {
             .key = old.key,
             .path = try self.build_env.completionPath(self.arena, path) orelse return false,
         };
+        if (!try self.resolveObjects(output)) return false;
         self.key = key;
         self.early_hit = true;
         self.build_env.recorded_completion = &output.outcome;
@@ -12377,20 +12481,38 @@ const ProgramOutputProbe = struct {
         return .{ .errors = 0, .warnings = warnings };
     }
 
+    /// Every object is pinned and validated before the completed result is admitted.
+    fn resolveObjects(self: *ProgramOutputProbe, output: *const ProgramOutput) Allocator.Error!bool {
+        const started = std.Io.Timestamp.now(self.objects.core.std_io, .awake).nanoseconds;
+        defer self.lookup_ns += @intCast(std.Io.Timestamp.now(self.objects.core.std_io, .awake).nanoseconds - started);
+        const object_path = try self.objects.find(output.object) orelse return false;
+        const paths = try self.arena.alloc([]const u8, output.additional_objects.len);
+        for (output.additional_objects, paths) |identity, *path| {
+            path.* = try self.objects.find(identity) orelse return false;
+        }
+        self.object_path = object_path;
+        self.additional_object_paths = paths;
+        return true;
+    }
+
     fn runtimeOutputProbe(self: *ProgramOutputProbe) compile.build.RuntimeOutputProbe {
         return .{ .context = self, .cached = cached };
     }
 
     fn cached(context: *anyopaque, root: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!?*const compile.completed_compilation.Outcome {
         const self: *ProgramOutputProbe = @ptrCast(@alignCast(context));
-        defer for (self.code_providers) |provider| {
-            if (provider) |packs| packs.defer_code_lookup = self.found != null;
-        };
+        var admitted = false;
+        defer {
+            if (!admitted) self.found = null;
+            for (self.code_providers) |provider| {
+                if (provider) |packs| packs.defer_code_lookup = admitted;
+            }
+        }
         const coord = self.build_env.coordinator.?;
         const modules = try coord.compilationModules(self.gpa);
         defer self.gpa.free(modules);
         var hasher = std.crypto.hash.Blake3.init(.{});
-        hasher.update("roc.completed-build.v2");
+        hasher.update("roc.completed-build.v3");
         hasher.update(&self.request);
         hasher.update(&self.policy);
         const pin = coord.source_pin_version orelse "";
@@ -12442,18 +12564,15 @@ const ProgramOutputProbe = struct {
             };
             if (!known) return null;
         }
+        if (!try self.resolveObjects(found)) return null;
+        admitted = true;
         self.manager.storePlacementPointer(self.request, key);
         return &found.outcome;
     }
 
-    fn record(self: *ProgramOutputProbe, key: [32]u8, obj_path: []const u8, objects: []const []const u8, facts: ProgramOutput.LinkFacts, pack_links: ProgramOutput.PackLinks, targets: roc_target.TargetsConfig) CliMainError!void {
+    fn record(self: *ProgramOutputProbe, key: [32]u8, object: link_artifacts.Identity, objects: []const link_artifacts.Identity, facts: ProgramOutput.LinkFacts, pack_links: ProgramOutput.PackLinks, targets: roc_target.TargetsConfig) CliMainError!void {
         const started = std.Io.Timestamp.now(self.store.roc_ctx.std_io, .awake).nanoseconds;
         defer self.publication_ns = @intCast(std.Io.Timestamp.now(self.store.roc_ctx.std_io, .awake).nanoseconds - started);
-        const object = self.store.roc_ctx.readFile(obj_path, self.gpa) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return,
-        };
-        defer self.gpa.free(object);
         var outcome = self.build_env.coordinator.?.completion_outcome;
         outcome.targets = targets;
         const inputs = try self.build_env.captureCompletionInputs(self.arena, self.resolution, outcome.modules);

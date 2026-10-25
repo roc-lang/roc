@@ -2926,7 +2926,7 @@ it uses the existing placement-pointer storage and is never evidence of validity
 There are no additional per-module manifest files.
 
 The existing completed-output record begins with a separately checksummed input
-manifest, before its object payload. It records consumed source and asset hashes
+manifest, before its completed-outcome payload. It records consumed source and asset hashes
 using the same producer data as watch mode, the resolved package graph, import
 path canonicalization and spelling checks, and the explicit optimized-object
 selection. Validation reads source contents and compact metadata, never checked
@@ -2940,7 +2940,7 @@ still run on every invocation.
 
 The record retains the original build's demanded checked roots, transitive reads,
 literal source/value identities and observations, followed by the final normalized
-Roc object, additional selected optimized objects, resolved target configuration,
+Roc object and additional selected optimized objects by content identity, resolved target configuration,
 hosted symbols, link roots and app exports. It also retains the complete ordered
 frontend and finalization diagnostic documents. An early hit replays these with
 current presentation options and rebound source paths. A later hit, after ordinary
@@ -2958,15 +2958,69 @@ eligible. Boxy builds remain separate, and the record never admits Boxy runtime
 dependencies into LSS.
 
 The length-prefixed binary record validates its manifest independently before
-reading object bytes; the payload has its own integrity digest. Publication uses
+reading the completed outcome; the payload has its own integrity digest. Publication uses
 a temporary file and atomic rename. Incompatible, truncated, corrupt or missing
 records miss, and the build pointer is published only after the complete record.
-Additional objects are retained in the record rather than referenced through
-scratch paths. Publication failure leaves the live compilation intact. Every
+All final objects are retained in immutable content-addressed storage; the record
+names their digests and lengths rather than scratch paths or duplicate object bytes.
+Every object is pinned and validated before admitting either an early or later hit. Publication failure leaves the live compilation intact. Every
 invocation validates current platform link inputs and links the retained
 artifacts, even if an executable already exists. Timings distinguish early hits,
 checked-module loads and compilation, input validation time/bytes, manifest reads,
 publication, and skipped producer work.
+
+#### Native link preparation
+
+A recorded program is a checksummed binary manifest of link facts and the
+content digest and length of its separately addressable object, not an envelope
+containing another copy of that object. Native objects, including compiler-owned
+builtins, startup and support objects, live beside these manifests in the same
+compiler/format/actual-target/optimization namespace. Their names are BLAKE3
+content digests. A cold build writes the backend's bytes once and publishes a
+directory entry atomically. No writer truncates a published inode.
+
+Embedded runtime-object digests and the fixed Windows stack-probe object are
+computed when the compiler is built, rather than regenerated for each link.
+Cached objects are still validated against their content identity (or against
+the embedded bytes already retained by the compiler), so same-size corruption
+cannot authorize a hit. Procedure-domain sharing never changes this full-target
+namespace: manifests and raw final-link objects both use the output store root.
+
+Before validating a cached object's length and digest, a build hard-links it
+into its unique scratch directory on the cache filesystem. Those names pin the
+objects through linking and output finalization, independently of cache
+eviction. On Windows a pin is a second NTFS name added through
+`FileLinkInformation` without replacement, opened with no data access and every
+sharing mode, so pinning never conflicts with readers or replaces a name. The invocation holds `link.lock` in that scratch directory; scratch
+cleanup skips a held lock, and an abandoned directory ages out after the OS
+releases its owner's lock. Missing, corrupt or incompatible objects are cache
+misses. Manifests publish atomically after the object. The executable is always
+linked anew, even when it already exists.
+
+Local platform inputs have no content identity supplied by their publisher.
+They are inspected on every build; path, size and timestamps never key symbol
+metadata. Inspection reads bounded object headers and symbol/string tables with
+positional reads, retaining their bytes only for the current archive member.
+It does not map mutable local files: truncation must produce an incomplete scan,
+never a mapping fault. Verification stops precisely when its required-symbol
+set is empty, including within object symbol tables. Export discovery visits
+every member, sharing the same retained ranges with verification. Unsupported
+formats leave missing-symbol results non-authoritative, as before; the linker
+still validates the actual inputs.
+
+Platform publishers must atomically replace complete inputs. A build checks
+file identity, size and change/modification state before inspection, before LLD,
+and after linking; a change fails the build. These checks detect concurrent
+publication, not authorize cross-build reuse. In-place mutation while LLD is
+reading an input is outside the supported publication contract. Link order,
+roots, exports, lazy archives, ABI and LLD parallelism are unchanged.
+
+Requested timing output separates platform input validation, object
+materialization, host inspection, argument preparation, embedded LLD and output
+finalization. These are wall times, not summed linker worker times. Counters
+report object bytes written/reused/validated, host bytes copied, peak retained
+host bytes, and archive members and symbol tables visited. Ordinary successful
+builds produce no new diagnostic output.
 
 ### Demand-Driven Compile-Time Evaluation
 

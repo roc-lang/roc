@@ -102,8 +102,21 @@ pub const WasmOptimizeMode = enum {
 /// Default WASM stack size: 8MB
 pub const DEFAULT_WASM_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+/// Sequential wall times, not summed LLD worker time.
+pub const Timing = struct {
+    arguments_ns: u64 = 0,
+    lld_ns: u64 = 0,
+    finalization_ns: u64 = 0,
+};
+
+fn now(io: std.Io) i128 {
+    return std.Io.Timestamp.now(io, .awake).nanoseconds;
+}
+
 /// Configuration for the linker, specifying target format, ABI, paths, and linking options.
 pub const LinkConfig = struct {
+    timing: ?*Timing = null,
+    immutable_objects: ?*@import("link_artifacts.zig").Objects = null,
     /// Target format to use for linking
     target_format: TargetFormat = TargetFormat.detectFromSystem(),
 
@@ -704,20 +717,22 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             try args.append("/ignore:4217"); // Ignore locally defined symbol imported warnings
             try args.append("/ignore:4049"); // Ignore locally defined symbol imported warnings
 
-            // Generate and link stack probe object for ___chkstk_ms
+            // Link the prebuilt stack probe object for ___chkstk_ms.
             // This is needed when linking Zig-compiled code (like platform hosts) that uses
             // the MinGW ABI, which requires ___chkstk_ms for functions with large stack frames.
             if (target_arch == .x86_64) {
-                const stack_probe_obj = stack_probe.generateStackProbeObject(ctx.arena) catch return LinkError.OutOfMemory;
+                const stack_probe_obj = &stack_probe.object;
                 // Prefer a per-build scratch dir so parallel `roc build` invocations
                 // don't race on a shared zig-out/bin/stack_probe.obj (truncated
                 // writes from one linker can corrupt what another linker is reading).
                 const probe_dir = config.scratch_dir orelse (std.process.executableDirPathAlloc(ctx.io.std_io, ctx.arena) catch return LinkError.OutOfMemory);
-                const stack_probe_path = std.fs.path.join(ctx.arena, &.{
-                    probe_dir,
-                    "stack_probe.obj",
-                }) catch return LinkError.OutOfMemory;
-                @import("backend").writeFileWindowsAvSafe(ctx.io.std_io, stack_probe_path, stack_probe_obj) catch return LinkError.OutOfMemory;
+                const stack_probe_path = if (config.immutable_objects) |objects|
+                    objects.materializeKnown(stack_probe_obj, .{ .digest = stack_probe.digest, .size = stack_probe_obj.len }) catch return LinkError.LinkFailed
+                else blk: {
+                    const path = std.fs.path.join(ctx.arena, &.{ probe_dir, "stack_probe.obj" }) catch return LinkError.OutOfMemory;
+                    @import("backend").writeFileWindowsAvSafe(ctx.io.std_io, path, stack_probe_obj) catch return LinkError.OutOfMemory;
+                    break :blk path;
+                };
                 try args.append(stack_probe_path);
             }
         },
@@ -973,7 +988,9 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
         return LinkError.LLVMNotAvailable;
     }
 
+    const arguments_start = now(ctx.io.std_io);
     const args = try buildLinkArgs(ctx, config);
+    if (config.timing) |timing| timing.arguments_ns += @intCast(now(ctx.io.std_io) - arguments_start);
 
     // Debug: Print the linker command
     std.log.debug("Linker command:", .{});
@@ -981,10 +998,16 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
         std.log.debug("  {s}", .{arg});
     }
 
+    const lld_start = now(ctx.io.std_io);
     const outcome = try embedded_lld.link(ctx.gpa, config.target_format, args.items, .{
         .can_exit_early = config.can_exit_early,
         .disable_output = config.disable_output,
     });
+    if (config.timing) |timing| timing.lld_ns += @intCast(now(ctx.io.std_io) - lld_start);
+    const finalization_start = now(ctx.io.std_io);
+    defer if (config.timing) |timing| {
+        timing.finalization_ns += @intCast(now(ctx.io.std_io) - finalization_start);
+    };
     defer ctx.gpa.free(outcome.diagnostics);
     try finishLldLink(ctx, config.target_format, outcome);
 
