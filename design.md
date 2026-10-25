@@ -23646,10 +23646,10 @@ runtime demand construction, specialization, CTFE, LIR/ARC, static data,
 native test code generation and execution. It does not load procedure packs.
 
 The command envelope and per-module result payloads carry content checksums.
-Command source paths and diagnostic path elements are relative to the current
-working directory and are rebound only after validation. Compilation diagnostics
-are replayed from their document elements, before test observations; color,
-verbosity and terminal width are current renderer inputs. The command's arena
+Command source paths and the paths inside diagnostics are relative to the
+current working directory and are rebound only after validation. Compilation
+diagnostics are replayed from their structured document content, before test
+observations; color, verbosity and terminal width are current renderer inputs. The command's arena
 owns validated source bytes and lightweight source environments throughout replay.
 
 ### Command-level execution
