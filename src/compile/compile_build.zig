@@ -31,6 +31,8 @@ pub const RuntimeOutputProbe = struct {
 /// Runtime demand fixed before post-check finalization. Explicit plans may be
 /// declared from prepared checked modules after the frontend completes.
 pub const RuntimeLoweringConfig = struct {
+    /// Roots with cached runtime outcomes still owe literal-conversion checking.
+    compile_time_discovery_roots: lir.CheckedPipeline.RootRequestSet = .{},
     explicit_roots: ?lir.CheckedPipeline.RootRequestSet = null,
     root_module: ?*const check.CheckedArtifact.CheckedModuleArtifact = null,
     target: lir.CheckedPipeline.TargetConfig,

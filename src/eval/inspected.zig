@@ -411,6 +411,10 @@ pub const BoolRootModule = struct {
 
 /// Timings for JIT-compiling and running boolean test roots with the dev backend.
 pub const DevBoolRootTimingSnapshot = struct {
+    lir_statements: u64 = 0,
+    emitted_procedures: u64 = 0,
+    emitted_entrypoints: u64 = 0,
+    emitted_code_bytes: u64 = 0,
     static_strings_ns: u64 = 0,
     codegen_setup_ns: u64 = 0,
     procedure_codegen_ns: u64 = 0,
@@ -2367,6 +2371,15 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
 
         const procedure_codegen_started_ns = if (timing) |timings| timings.start() else 0;
         try codegen.compileAllProcSpecs(store.getProcSpecs());
+        if (timing) |timings| {
+            timings.snapshot_value.lir_statements += store.getCFStmts().len;
+            // Count resolved native procedures, excluding reserved static
+            // initializers that compileAllProcSpecs deliberately does not emit.
+            for (0..store.getProcSpecs().len) |index| {
+                if (codegen.compiledProcSymbol(@fromBackingInt(@intCast(index))) != null)
+                    timings.snapshot_value.emitted_procedures += 1;
+            }
+        }
         const static_rc_helpers = try backend.collectRequiredRcHelpers(allocator, module.static_data.exports);
         defer allocator.free(static_rc_helpers);
         try codegen.compileStaticDataRcHelpers(static_rc_helpers);
@@ -2389,6 +2402,10 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
 
         const executable_memory_started_ns = if (timing) |timings| timings.start() else 0;
         try codegen.finishImage();
+        if (timing) |timings| {
+            timings.snapshot_value.emitted_entrypoints += roots.len;
+            timings.snapshot_value.emitted_code_bytes += codegen.getGeneratedCode().len;
+        }
         var executable = try ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
             codegen.getGeneratedCode(),
             0,

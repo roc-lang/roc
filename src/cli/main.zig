@@ -12685,11 +12685,13 @@ const CliTestPlanEntry = struct {
 };
 
 const CliTestPlanModule = struct {
+    /// Index in the complete source module plan, also carried by lowered roots.
+    module_index: u32,
     module: BuildEnv.CompiledModuleInfo,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     test_roots: []check.CheckedArtifact.RootRequest,
-    first_entry_index: u32,
-    entry_count: u32,
+    /// Complete reporting-plan slot for each source root, independent of the subset.
+    result_indices: []u32,
     cached_results: ?[]CliTestResultItem = null,
     cached_summary: CliTestRunSummary = .{},
 
@@ -12714,6 +12716,7 @@ const CliTestPlan = struct {
     fn deinit(self: *CliTestPlan, allocator: Allocator) void {
         for (self.modules) |*module| {
             allocator.free(module.test_roots);
+            allocator.free(module.result_indices);
             if (module.cached_results) |results| {
                 deinitCliTestResultItems(allocator, results);
             }
@@ -12739,7 +12742,7 @@ fn cliTestCacheStats(plan: *const CliTestPlan) CliTestCacheStats {
     for (plan.modules) |module| {
         if (module.cached_results != null) {
             stats.modules_cached += 1;
-            stats.roots_cached += module.entry_count;
+            stats.roots_cached += module.test_roots.len;
         }
     }
     return stats;
@@ -13190,6 +13193,7 @@ fn buildCliTestPlan(
     errdefer {
         for (planned_modules.items) |*module| {
             ctx.gpa.free(module.test_roots);
+            ctx.gpa.free(module.result_indices);
             if (module.cached_results) |results| {
                 deinitCliTestResultItems(ctx.gpa, results);
             }
@@ -13244,9 +13248,11 @@ fn buildCliTestPlan(
             continue;
         }
 
-        const first_entry_index: u32 = @intCast(entries.items.len);
-        for (test_roots, 0..) |root, root_index| {
+        const result_indices = try ctx.gpa.alloc(u32, test_roots.len);
+        errdefer ctx.gpa.free(result_indices);
+        for (test_roots, result_indices, 0..) |root, *result_slot, root_index| {
             const result_index: u32 = @intCast(entries.items.len);
+            result_slot.* = result_index;
             // Named below, once every entry is known.
             try entries.append(ctx.gpa, .{
                 .module_index = @intCast(module_index),
@@ -13259,11 +13265,11 @@ fn buildCliTestPlan(
         }
 
         try planned_modules.append(ctx.gpa, .{
+            .module_index = @intCast(module_index),
             .module = module,
             .artifact = artifact,
             .test_roots = test_roots,
-            .first_entry_index = first_entry_index,
-            .entry_count = @intCast(test_roots.len),
+            .result_indices = result_indices,
         });
     }
 
@@ -13271,6 +13277,7 @@ fn buildCliTestPlan(
     errdefer {
         for (owned_modules) |*module| {
             ctx.gpa.free(module.test_roots);
+            ctx.gpa.free(module.result_indices);
             if (module.cached_results) |results| {
                 deinitCliTestResultItems(ctx.gpa, results);
             }
@@ -13922,8 +13929,7 @@ fn collectCliTestRootRuns(
         const test_plan = metadata.test_plan orelse {
             base.invariant("CLI test invariant violated: lowered test root metadata is missing its explicit test-plan slot", .{});
         };
-        if (test_plan.result_index < planned.first_entry_index or
-            test_plan.result_index >= planned.first_entry_index + planned.entry_count) continue;
+        if (test_plan.module_index != planned.module_index) continue;
         if (test_plan.root_index >= planned.test_roots.len or test_plan.result_index >= plan_entries.len) {
             base.invariant(
                 "CLI test invariant violated: lowered test-plan slot root/result ({d}/{d}) is outside module roots/results ({d}/{d})",
@@ -14889,6 +14895,23 @@ fn coalesceInlineExpectResults(
     }
 }
 
+/// Feed cached roots through the same ordered output coordinator even when
+/// there is no runtime program. Inline observations are merged after all roots.
+fn publishCachedTestModule(live: *CliOptimizedLiveTestOutput, planned: *const CliTestPlanModule) ReportRenderError!void {
+    var root_index: usize = 0;
+    for (planned.cached_results.?) |result| {
+        if (result.inline_expect) continue;
+        live.publishCopiedEntry(
+            planned.result_indices[root_index],
+            planned.module.semantic.env,
+            planned.module.path,
+            result,
+        );
+        root_index += 1;
+    }
+    try live.checkError();
+}
+
 fn runCompiledTestPlan(
     ctx: *CliCtx,
     shared: *lir.CheckedPipeline.LoweredProgram,
@@ -14932,20 +14955,7 @@ fn runCompiledTestPlan(
     for (test_plan.modules, 0..) |*planned, planned_index| {
         if (planned.cached_results != null) {
             summaries[planned_index] = planned.cached_summary;
-            if (live_output) |live| {
-                var root_index: u32 = 0;
-                for (planned.cached_results.?) |result| {
-                    if (result.inline_expect) continue;
-                    live.publishCopiedEntry(
-                        @intCast(planned.first_entry_index + root_index),
-                        planned.module.semantic.env,
-                        planned.module.path,
-                        result,
-                    );
-                    root_index += 1;
-                }
-                try live.checkError();
-            }
+            if (live_output) |live| try publishCachedTestModule(live, planned);
             continue;
         }
 
@@ -16172,6 +16182,27 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     defer test_plan.deinit(ctx.gpa);
 
     const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    for (test_plan.modules) |*planned| {
+        if (try loadCachedCliTestResults(
+            ctx,
+            build_env.cache_manager,
+            planned.artifact,
+            specialization_strategy,
+            args.opt,
+            planned.module,
+            &source_modules,
+            planned.test_roots,
+        )) |cached| {
+            planned.cached_results = cached.results;
+            planned.cached_summary = cached.summary;
+        }
+    }
+    reporter.recordCounters("Test result cache", &cliTestCacheCounters(cliTestCacheStats(&test_plan)));
+
+    var discovery_requests = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+    defer discovery_requests.deinit(ctx.gpa);
+    var discovery_sources = std.ArrayList(check.CheckedArtifact.ModuleId).empty;
+    defer discovery_sources.deinit(ctx.gpa);
     var runtime_requests = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
     defer runtime_requests.deinit(ctx.gpa);
     var runtime_sources = std.ArrayList(check.CheckedArtifact.ModuleId).empty;
@@ -16179,10 +16210,15 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     var runtime_metadata = std.ArrayList(postcheck.Common.RootTestPlanMetadata).empty;
     defer runtime_metadata.deinit(ctx.gpa);
     for (test_plan.modules) |planned| {
+        if (planned.cached_results != null) {
+            try discovery_requests.appendSlice(ctx.gpa, planned.test_roots);
+            try discovery_sources.appendNTimes(ctx.gpa, planned.artifact.key.digest(), planned.test_roots.len);
+            continue;
+        }
         try runtime_requests.appendSlice(ctx.gpa, planned.test_roots);
         try runtime_sources.appendNTimes(ctx.gpa, planned.artifact.key.digest(), planned.test_roots.len);
-        for (planned.test_roots, 0..) |root, root_index| {
-            const entry = test_plan.entries[planned.first_entry_index + root_index];
+        for (planned.test_roots, planned.result_indices) |root, result_index| {
+            const entry = test_plan.entries[result_index];
             try runtime_metadata.append(ctx.gpa, .{
                 .request_index = @intCast(runtime_metadata.items.len),
                 .root_order = root.order,
@@ -16205,8 +16241,15 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         false,
     );
     runtime_config.explicit_roots = runtime_roots;
-    if (runtime_requests.items.len != 0) {
+    runtime_config.compile_time_discovery_roots = .{
+        .requests = discovery_requests.items,
+        .source_modules = discovery_sources.items,
+    };
+    if (test_plan.modules.len != 0) {
         runtime_config.root_module = test_plan.modules[0].artifact;
+        // Even an all-hit plan explicitly supplies empty execution demand.
+        // A file with no test plan instead retains ordinary checking, which
+        // also handles modules that have no executable ownership anchor.
         build_env.setRuntimeLowering(runtime_config);
     }
     build_env.finishCheckedProgram() catch |err| {
@@ -16223,24 +16266,6 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         };
     }
     try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, build_env.getTimingInfo());
-    reporter.begin("Test Planning");
-    for (test_plan.modules) |*planned| {
-        if (try loadCachedCliTestResults(
-            ctx,
-            build_env.cache_manager,
-            planned.artifact,
-            specialization_strategy,
-            args.opt,
-            planned.module,
-            &source_modules,
-            planned.test_roots,
-        )) |cached| {
-            planned.cached_results = cached.results;
-            planned.cached_summary = cached.summary;
-        }
-    }
-    reporter.end();
-    reporter.recordCounters("Test result cache", &cliTestCacheCounters(cliTestCacheStats(&test_plan)));
 
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     if (args.timings) spec_timing.enableDetailedMonotypeBody();
@@ -16269,7 +16294,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     }
 
     const test_mode = cliTestExecutionMode(args.opt);
-    const use_live_optimized_output = runtime_requests.items.len != 0 and switch (test_mode) {
+    const use_live_optimized_output = test_plan.entries.len != 0 and switch (test_mode) {
         .llvm_size, .llvm_speed => true,
         .interpreter, .dev => false,
     };
@@ -16375,7 +16400,17 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
                 total.cached_modules += summary.cached_modules;
             }
         },
-    };
+    } else {
+        for (test_plan.modules) |*planned| {
+            if (live_output) |*live| try publishCachedTestModule(live, planned);
+            const summary = planned.cached_summary;
+            try appendPlannedModuleResult(ctx, &module_results, planned, planned.releaseCachedResults(), true);
+            total.passed += summary.passed;
+            total.failed += summary.failed;
+            total.compiler_errors += summary.compiler_errors;
+            total.cached_modules += summary.cached_modules;
+        }
+    }
     try coalesceInlineExpectResults(ctx.gpa, module_results.items, &total);
     total.modules_with_tests = test_plan.modules_with_tests;
     total.diagnostic_errors = diag.errors;
@@ -17869,6 +17904,12 @@ fn devTestExecutionBreakdown(timing: eval.test_helpers.DevBoolRootTimingSnapshot
 
 fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test_helpers.DevBoolRootTiming) void {
     const snapshot = timing.snapshot();
+    reporter.recordCounters("Dev test emission", &.{
+        .{ .name = "Lowered LIR statements", .count = snapshot.lir_statements },
+        .{ .name = "Procedures emitted", .count = snapshot.emitted_procedures },
+        .{ .name = "Entrypoints emitted", .count = snapshot.emitted_entrypoints },
+        .{ .name = "Code bytes emitted", .count = snapshot.emitted_code_bytes },
+    });
     const total_ns = snapshot.static_strings_ns +|
         snapshot.codegen_setup_ns +|
         snapshot.procedure_codegen_ns +|
