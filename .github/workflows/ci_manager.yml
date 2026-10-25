@@ -862,13 +862,11 @@ jobs:
 
       - name: run hello world
         shell: cpa.sh {0}
-        env:
-          TARGET: ${{ matrix.target }}
         run: |
           set -eu
 
-          chmod +x "./hello_$TARGET"
-          output="$("./hello_$TARGET")"
+          chmod +x ./hello_${{ matrix.target }}
+          output="$(./hello_${{ matrix.target }})"
           echo "$output"
 
           if [ "$output" != "Hello, World!" ]; then
