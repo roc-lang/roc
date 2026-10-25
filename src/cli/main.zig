@@ -180,6 +180,7 @@ comptime {
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
         std.testing.refAllDecls(pack_store);
+        std.testing.refAllDecls(completed_test);
         std.testing.refAllDecls(@import("builder.zig"));
         std.testing.refAllDecls(@import("host_symbols.zig"));
         std.testing.refAllDecls(@import("test/platform_config.zig"));
@@ -12548,6 +12549,8 @@ const CliTestResultItem = struct {
     inline_failed: u64 = 0,
     inline_suppressed: bool = false,
     source_env: ?*const ModuleEnv = null,
+    source_common: ?*const base.CommonEnv = null,
+    source_name: []const u8 = "",
     source_path: ?[]const u8 = null,
     transcript: []const CliTestTranscriptEvent = &.{},
     failure_detail: ?[]const u8,
@@ -12558,13 +12561,20 @@ const CliTestResultItem = struct {
 };
 
 const CliModuleTestResult = struct {
-    env: *const ModuleEnv,
+    env: *const base.CommonEnv,
     path: []const u8,
     results: []const CliTestResultItem,
     cached: bool,
 };
 
-const CliTestSourceModuleMap = std.StringHashMapUnmanaged(BuildEnv.CompiledModuleInfo);
+const CliTestSourceModule = struct {
+    env: ?*const ModuleEnv,
+    common: *const base.CommonEnv,
+    path: []const u8,
+    reports: CliTestReportMap = .{},
+    name: []const u8 = "",
+};
+const CliTestSourceModuleMap = std.AutoHashMapUnmanaged([32]u8, CliTestSourceModule);
 
 const CliTestRunSummary = struct {
     passed: u32 = 0,
@@ -12819,7 +12829,305 @@ fn nameCliTestPlanSymbols(allocator: Allocator, entries: []CliTestPlanEntry) All
     return buffer;
 }
 
-const cli_test_cache_magic = "ROC_TEST_OUTCOMES_V1";
+const completed_test = @import("completed_test.zig");
+
+/// Owned for the command lifetime; finalization supplies semantic payloads in
+/// exactly the order in which it emits them on the ordinary path.
+const CliTestDebugCapture = struct {
+    allocator: Allocator,
+    messages: std.ArrayList([]const u8) = .empty,
+
+    fn observe(context: *anyopaque, message: []const u8) Allocator.Error!void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        try self.messages.append(self.allocator, try self.allocator.dupe(u8, message));
+    }
+};
+
+/// Resolution still runs on a complete hit. Hash the resolver's explicit
+/// graph, rather than discovering a closure from cached checked artifacts.
+fn cliCompletedTestSeed(allocator: Allocator, build: *BuildEnv, args: cli_args.TestArgs) Allocator.Error![32]u8 {
+    const Edge = struct { alias: []const u8, target: []const u8 };
+    const Package = struct { name: []const u8, kind: []const u8, root: []const u8, state: ?compile.watch_inputs.State, edges: []Edge };
+    var packages = try allocator.alloc(Package, build.packages.count());
+    var it = build.packages.valueIterator();
+    var index: usize = 0;
+    while (it.next()) |pkg| : (index += 1) {
+        const edges = try allocator.alloc(Edge, pkg.shorthands.count());
+        var aliases = pkg.shorthands.iterator();
+        var edge_index: usize = 0;
+        while (aliases.next()) |alias| : (edge_index += 1) edges[edge_index] = .{ .alias = alias.key_ptr.*, .target = alias.value_ptr.name };
+        std.mem.sort(Edge, edges, {}, struct {
+            fn less(_: void, a: Edge, b: Edge) bool {
+                return std.mem.lessThan(u8, a.alias, b.alias);
+            }
+        }.less);
+        packages[index] = .{ .name = pkg.name, .kind = @tagName(pkg.kind), .root = pkg.root_file, .state = pkg.root_file_state, .edges = edges };
+    }
+    std.mem.sort(Package, packages, {}, struct {
+        fn less(_: void, a: Package, b: Package) bool {
+            return std.mem.lessThan(u8, a.name, b.name);
+        }
+    }.less);
+    const bytes = try completed_test.encode(allocator, .{
+        .command = @as([]const u8, "test-explicit-owned-roots-v1"),
+        .compiler = @as([]const u8, build_options.compiler_compatibility_id),
+        .strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        .opt = args.opt,
+        .target = RocTarget.detectNative(),
+        .cwd = build.cwd,
+        .root = build.discovered_root_abs,
+        .entry = build.entry_module_abs,
+        .root_url = args.root_source_url,
+        .main_url = args.main_source_url,
+        .packages = packages,
+    });
+    return completed_test.hash(bytes);
+}
+
+/// Locating the test cache directory needs a home directory; the rest of the
+/// completed-test cache work fails only on allocation.
+const CliCompletedTestError = Allocator.Error || error{NoHomeDirectory};
+
+fn cliCompletedTestDir(allocator: Allocator, manager: *CacheManager) CliCompletedTestError![]const u8 {
+    const test_dir = try manager.config.getTestCacheDir(allocator);
+    return std.fs.path.join(allocator, &.{ test_dir, "commands" });
+}
+
+fn cliCompletedTestKey(allocator: Allocator, seed: [32]u8, plan: completed_test.Plan) Allocator.Error![32]u8 {
+    return completed_test.hash(try completed_test.encode(allocator, .{ .seed = seed, .plan = plan }));
+}
+
+/// Read exactly the paths recorded by producers. Retain the bytes used for
+/// hashing so replay cannot bind reporting to a later version of a file.
+fn refreshCliCompletedTestInputs(
+    allocator: Allocator,
+    build: *BuildEnv,
+    plan: completed_test.Plan,
+    sources: *std.StringHashMapUnmanaged([]const u8),
+) Allocator.Error!bool {
+    for (plan.inputs) |*input| {
+        const path = try std.fs.path.resolve(allocator, &.{ build.cwd, input.path });
+        const bytes = build.filesystem.readFile(path, allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.FileNotFound => {
+                input.state = .missing;
+                continue;
+            },
+            error.AccessDenied, error.StreamTooLong, error.IoError => return false,
+        };
+        input.state = .{ .hash = completed_test.hash(bytes) };
+        try sources.put(allocator, input.path, bytes);
+    }
+    for (plan.resolutions) |*resolution| {
+        const path = try std.fs.path.resolve(allocator, &.{ build.cwd, resolution.path });
+        const target = build.filesystem.canonicalize(path, allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.FileNotFound, error.AccessDenied, error.IoError => return false,
+        };
+        resolution.target = try std.fs.path.relative(allocator, build.cwd, null, build.cwd, target);
+    }
+    return true;
+}
+
+/// A semantic outcome at the command boundary, with all payloads admitted and
+/// source lifetimes bound. No producer is run after this value is returned.
+const CliCompletedTest = struct {
+    record: completed_test.Record,
+    inputs: []const completed_test.Input,
+    module_results: []CliModuleTestResult,
+    total: CliTestRunSummary,
+
+    fn deinit(self: *@This(), allocator: Allocator) void {
+        for (self.module_results) |module| deinitCliTestResultItems(allocator, module.results);
+    }
+};
+
+fn loadCliCompletedTest(ctx: *CliCtx, arena: Allocator, build: *BuildEnv, seed: [32]u8) CliCompletedTestError!?CliCompletedTest {
+    const manager = build.cache_manager orelse return null;
+    const directory = try cliCompletedTestDir(arena, manager);
+    const plan_bytes = manager.loadRawBytes(seed, directory) orelse return null;
+    defer ctx.gpa.free(plan_bytes);
+    const plan = (try completed_test.decode(arena, completed_test.Plan, plan_bytes)) orelse return null;
+    var sources = std.StringHashMapUnmanaged([]const u8){};
+    if (!try refreshCliCompletedTestInputs(arena, build, plan, &sources)) return null;
+    const key = try cliCompletedTestKey(arena, seed, plan);
+    const record_bytes = manager.loadRawBytes(key, directory) orelse return null;
+    defer ctx.gpa.free(record_bytes);
+    const record = (try completed_test.decode(arena, completed_test.Record, record_bytes)) orelse return null;
+    if (!std.mem.eql(u8, &key, &record.input_key)) return null;
+
+    var source_modules = CliTestSourceModuleMap{};
+    const bound_sources = try arena.alloc(CliTestSourceModule, record.sources.len);
+    for (record.sources, bound_sources) |source, *bound| {
+        const bytes = sources.get(source.path) orelse return null;
+        const normalized = try base.source_utils.normalizeLineEndingsRealloc(arena, try arena.dupe(u8, bytes));
+        const common = try arena.create(base.CommonEnv);
+        common.* = try base.CommonEnv.init(arena, normalized);
+        try common.calcLineStarts(arena);
+        bound.* = .{ .env = null, .common = common, .path = try std.fs.path.resolve(arena, &.{ build.cwd, source.path }), .name = source.qualified_name, .reports = (try CliTestReportMap.init(arena, source.sites, normalized.len)) orelse return null };
+        const entry = try source_modules.getOrPut(arena, source.name);
+        if (entry.found_existing) return null;
+        entry.value_ptr.* = bound.*;
+    }
+    const test_dir = try manager.config.getTestCacheDir(arena);
+    var results = std.ArrayList(CliModuleTestResult).empty;
+    var accepted = false;
+    defer if (!accepted) {
+        for (results.items) |module| deinitCliTestResultItems(ctx.gpa, module.results);
+    };
+    for (record.modules) |module| {
+        if (module.source >= bound_sources.len) return null;
+        const source = bound_sources[module.source];
+        var merged = std.ArrayList(CliTestResultItem).empty;
+        var transferred = false;
+        defer if (!transferred) {
+            deinitCliTestResultItemPayloads(ctx.gpa, merged.items);
+            merged.deinit(ctx.gpa);
+        };
+        for (module.roots) |root| {
+            if (root.region.start.offset > root.region.end.offset or root.region.end.offset > source.common.source.len) return null;
+            const data = manager.loadRawBytes(root.key, test_dir) orelse return null;
+            defer ctx.gpa.free(data);
+            if (!std.mem.eql(u8, &completed_test.hash(data), &root.payload_hash)) return null;
+            const cached = (try decodeCliTestOutcome(ctx.gpa, data, &source_modules, .{
+                .key = root.key,
+                .order = root.order,
+                .region = root.region,
+                .source = source,
+            })) orelse return null;
+            defer ctx.gpa.free(cached);
+            errdefer deinitCliTestResultItemPayloads(ctx.gpa, cached);
+            try merged.appendSlice(ctx.gpa, cached);
+        }
+        std.mem.sort(CliTestResultItem, merged.items, {}, struct {
+            fn less(_: void, a: CliTestResultItem, b: CliTestResultItem) bool {
+                if (a.inline_expect != b.inline_expect) return !a.inline_expect;
+                if (!a.inline_expect) return a.order < b.order;
+                return cliInlineResultLessThan({}, a, b);
+            }
+        }.less);
+        const owned = try merged.toOwnedSlice(ctx.gpa);
+        errdefer deinitCliTestResultItems(ctx.gpa, owned);
+        transferred = true;
+        try results.append(arena, .{ .env = source.common, .path = source.path, .results = owned, .cached = true });
+    }
+    var total = CliTestRunSummary{ .modules_with_tests = record.modules_with_tests, .cached_modules = record.modules_with_tests };
+    try coalesceInlineExpectResults(ctx.gpa, results.items, &total);
+    for (record.diagnostics) |*diagnostic| {
+        if (diagnostic.severity.isError()) return null;
+        try completed_test.mapDiagnosticPaths(arena, diagnostic, build.cwd, true);
+    }
+    accepted = true;
+    return .{ .record = record, .inputs = plan.inputs, .module_results = results.items, .total = total };
+}
+
+fn storeCliCompletedTest(
+    ctx: *CliCtx,
+    arena: Allocator,
+    build: *BuildEnv,
+    seed: [32]u8,
+    args: cli_args.TestArgs,
+    modules: []const BuildEnv.CompiledModuleInfo,
+    test_plan: *const CliTestPlan,
+    module_results: []const CliModuleTestResult,
+    debug_messages: []const []const u8,
+    diagnostics: []const BuildEnv.DrainedModuleReports,
+) CliCompletedTestError!void {
+    const manager = build.cache_manager orelse return;
+    for (module_results) |module| for (module.results) |result| {
+        if (!result.cacheable or result.result == .compiler_error) return;
+    };
+    const consumed = try build.collectConsumedInputStates(arena);
+    const inputs = try arena.alloc(completed_test.Input, consumed.len);
+    for (inputs, consumed) |*input, source| {
+        if (source.state == .unreadable) return;
+        input.* = .{ .path = try std.fs.path.relative(arena, build.cwd, null, build.cwd, source.path), .state = source.state };
+    }
+    std.mem.sort(completed_test.Input, inputs, {}, struct {
+        fn less(_: void, a: completed_test.Input, b: completed_test.Input) bool {
+            return std.mem.lessThan(u8, a.path, b.path);
+        }
+    }.less);
+    var resolutions = std.ArrayList(completed_test.Resolution).empty;
+    // These are the physical identities the import resolver actually admitted,
+    // not a fresh reconstruction of what checking might have resolved.
+    var packages = build.coordinator.?.packages.valueIterator();
+    while (packages.next()) |pkg| {
+        var paths = pkg.*.physical_module_paths.iterator();
+        while (paths.next()) |path| {
+            for (pkg.*.modules.items) |module| {
+                if (!std.mem.eql(u8, module.name, path.value_ptr.*)) continue;
+                try resolutions.append(arena, .{
+                    .path = try std.fs.path.relative(arena, build.cwd, null, build.cwd, module.path),
+                    .target = try std.fs.path.relative(arena, build.cwd, null, build.cwd, path.key_ptr.*),
+                });
+                break;
+            }
+        }
+    }
+    std.mem.sort(completed_test.Resolution, resolutions.items, {}, struct {
+        fn less(_: void, a: completed_test.Resolution, b: completed_test.Resolution) bool {
+            return std.mem.lessThan(u8, a.path, b.path);
+        }
+    }.less);
+    const plan = completed_test.Plan{ .inputs = inputs, .resolutions = resolutions.items };
+    const key = try cliCompletedTestKey(arena, seed, plan);
+    const plan_bytes = try completed_test.encode(arena, plan);
+    var current_sources = std.StringHashMapUnmanaged([]const u8){};
+    if (!try refreshCliCompletedTestInputs(arena, build, plan, &current_sources)) return;
+    if (!std.mem.eql(u8, &key, &try cliCompletedTestKey(arena, seed, plan))) return;
+
+    const sources = try arena.alloc(completed_test.Source, modules.len);
+    for (sources, modules) |*source, module| source.* = .{
+        .name = completed_test.hash(module.semantic.env.qualifiedModuleName()),
+        .qualified_name = module.semantic.env.qualifiedModuleName(),
+        .sites = if (module.semantic.checked_artifact) |artifact| artifact.compile_time_root_identities.test_report_sites else &.{},
+        .path = try std.fs.path.relative(arena, build.cwd, null, build.cwd, module.path),
+    };
+    const result_modules = try arena.alloc(completed_test.Module, test_plan.modules.len);
+    const test_dir = try manager.config.getTestCacheDir(arena);
+    for (result_modules, test_plan.modules) |*record, planned| {
+        const roots = try arena.alloc(completed_test.Root, planned.test_roots.len);
+        for (roots, planned.test_roots) |*shape, root| {
+            const result_key = cliTestOutcomeKey(planned.artifact, root, currentRuntimeSpecializationStrategy(args.specialization_strategy), args.opt);
+            // Reference only durable, independently validated outcomes.
+            const data = manager.loadRawBytes(result_key, test_dir) orelse return;
+            defer ctx.gpa.free(data);
+            shape.* = .{ .order = root.order, .region = testRootRegion(planned.module.semantic.env, root.source), .key = result_key, .payload_hash = completed_test.hash(data) };
+        }
+        const source_index = for (modules, 0..) |module, i| {
+            if (module.semantic.env == planned.module.semantic.env) break i;
+        } else base.invariant("test plan module absent from command sources", .{});
+        record.* = .{ .source = std.math.cast(u32, source_index) orelse return error.OutOfMemory, .roots = roots };
+    }
+    var reports = std.ArrayList(completed_test.Diagnostic).empty;
+    for (diagnostics) |module| for (module.reports) |*report| {
+        if (report.severity.isError()) return;
+        try reports.append(arena, completed_test.Diagnostic.fromReport(report));
+    };
+    // Clone the structured documents into record storage before rebasing paths.
+    const report_bytes = try completed_test.encode(arena, reports.items);
+    const portable_reports = (try completed_test.decode(arena, []completed_test.Diagnostic, report_bytes)).?;
+    for (portable_reports) |*report| try completed_test.mapDiagnosticPaths(arena, report, build.cwd, false);
+    const record = completed_test.Record{
+        .input_key = key,
+        .sources = sources,
+        .modules = result_modules,
+        .debug_messages = debug_messages,
+        .diagnostics = portable_reports,
+        .modules_with_tests = test_plan.modules_with_tests,
+    };
+    const bytes = try completed_test.encode(arena, record);
+    const directory = try cliCompletedTestDir(arena, manager);
+    manager.storeRawBytes(key, bytes, directory, "completed test command");
+    // Publish the input plan only once its complete outcome is readable.
+    const durable = manager.loadRawBytes(key, directory) orelse return;
+    defer ctx.gpa.free(durable);
+    if (!std.mem.eql(u8, bytes, durable)) return;
+    manager.storeRawBytes(seed, plan_bytes, directory, "test command inputs");
+}
+
+const cli_test_cache_magic = "ROC_TEST_OUTCOMES_V2";
 
 fn appendU32(bytes: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u32) Allocator.Error!void {
     var buf: [4]u8 = undefined;
@@ -12915,19 +13223,48 @@ fn cliTestOutcomeKey(artifact: *const check.CheckedArtifact.CheckedModuleArtifac
     var hasher = base.Sha256.init(.{});
     hasher.update(&identity.value);
     if (artifact.checking_context_identity.platform_app_relation) |relation| hasher.update(&relation.bytes);
-    const region = testRootRegion(artifact.moduleEnvConst(), root.source);
-    var provenance: [8]u8 = undefined;
-    std.mem.writeInt(u32, provenance[0..4], region.start.offset, .little);
-    std.mem.writeInt(u32, provenance[4..8], region.end.offset, .little);
-    hasher.update(&provenance);
+    hasher.update(@tagName(RocTarget.detectNative()));
     return cliTestCacheKey(.{ .bytes = hasher.finalResult() }, strategy, opt);
 }
 
-fn cliTestSourceDigest(env: *const ModuleEnv, end: u32) [32]u8 {
-    var hasher = base.Sha256.init(.{});
-    hasher.update(env.getSourceAll()[0..end]);
-    return hasher.finalResult();
-}
+/// The current checked pass owns both directions. Duplicate identities at
+/// different regions are ambiguous; they never select an arbitrary occurrence.
+const CliTestReportMap = struct {
+    by_region: std.AutoHashMapUnmanaged(base.Region, ?[32]u8) = .empty,
+    by_identity: std.AutoHashMapUnmanaged([32]u8, ?base.Region) = .empty,
+
+    fn init(allocator: Allocator, sites: []const completed_test.ReportSite, source_len: usize) Allocator.Error!?CliTestReportMap {
+        var map = CliTestReportMap{};
+        errdefer map.deinit(allocator);
+        for (sites) |site| {
+            if (site.region().start.offset > site.region().end.offset or site.region().end.offset > source_len) {
+                map.deinit(allocator);
+                return null;
+            }
+            const region = try map.by_region.getOrPut(allocator, site.region());
+            if (!region.found_existing) region.value_ptr.* = site.identity else if (region.value_ptr.*) |old| {
+                if (!std.mem.eql(u8, &old, &site.identity)) region.value_ptr.* = null;
+            }
+            const identity = try map.by_identity.getOrPut(allocator, site.identity);
+            if (!identity.found_existing) identity.value_ptr.* = site.region() else if (identity.value_ptr.*) |old| {
+                if (!old.eq(site.region())) identity.value_ptr.* = null;
+            }
+        }
+        return map;
+    }
+
+    fn deinit(self: *CliTestReportMap, allocator: Allocator) void {
+        self.by_region.deinit(allocator);
+        self.by_identity.deinit(allocator);
+    }
+};
+
+const CliTestOccurrence = struct {
+    key: [32]u8,
+    order: u32,
+    region: base.Region,
+    source: CliTestSourceModule,
+};
 
 fn storeCliTestOutcomeInCache(
     ctx: *CliCtx,
@@ -12937,6 +13274,7 @@ fn storeCliTestOutcomeInCache(
     opt: cli_args.OptLevel,
     root: check.CheckedArtifact.RootRequest,
     results: []const CliTestResultItem,
+    source_modules: *const CliTestSourceModuleMap,
 ) (Allocator.Error || error{NoHomeDirectory})!void {
     const manager = cache_manager orelse return;
     for (results) |result| {
@@ -12949,30 +13287,29 @@ fn storeCliTestOutcomeInCache(
     try bytes.appendSlice(ctx.gpa, cli_test_cache_magic);
     try bytes.appendSlice(ctx.gpa, &outcome_key);
     const root_region = testRootRegion(artifact.moduleEnvConst(), root.source);
-    try appendU32(&bytes, ctx.gpa, root_region.start.offset);
-    try appendU32(&bytes, ctx.gpa, root_region.end.offset);
+
     try appendU32(&bytes, ctx.gpa, std.math.cast(u32, results.len) orelse return error.OutOfMemory);
     for (results) |result| {
         std.debug.assert(!result.inline_suppressed);
         try bytes.append(ctx.gpa, @intFromBool(result.inline_expect));
         try appendU64(&bytes, ctx.gpa, result.inline_passed);
         try appendU64(&bytes, ctx.gpa, result.inline_failed);
-        if (result.inline_expect and result.source_env == null) {
-            base.invariant("inline test cache result has no declaring module", .{});
-        }
-        if (result.source_env) |source_env| {
-            const qualified_name = source_env.qualifiedModuleName();
-            try appendU32(&bytes, ctx.gpa, std.math.cast(u32, qualified_name.len) orelse return error.OutOfMemory);
-            try bytes.appendSlice(ctx.gpa, qualified_name);
+        const source_env = result.source_env orelse artifact.moduleEnvConst();
+        const source_id = completed_test.hash(source_env.qualifiedModuleName());
+        const source = source_modules.get(source_id) orelse return;
+        // Root-relative spans instantiate at this occurrence, including duplicate
+        // bodies. Other sites must resolve through the checked producer's map.
+        const relative = source_env == artifact.moduleEnvConst() and
+            result.region.start.offset >= root_region.start.offset and result.region.end.offset <= root_region.end.offset;
+        try bytes.append(ctx.gpa, @intFromBool(relative));
+        if (relative) {
+            try appendU32(&bytes, ctx.gpa, result.region.start.offset - root_region.start.offset);
+            try appendU32(&bytes, ctx.gpa, result.region.end.offset - root_region.start.offset);
         } else {
-            try appendU32(&bytes, ctx.gpa, 0);
+            const site = (source.reports.by_region.get(result.region) orelse return) orelse return;
+            try bytes.appendSlice(ctx.gpa, &source_id);
+            try bytes.appendSlice(ctx.gpa, &site);
         }
-        try appendU32(&bytes, ctx.gpa, result.region.start.offset);
-        try appendU32(&bytes, ctx.gpa, result.region.end.offset);
-        if (result.source_env) |env| try bytes.appendSlice(ctx.gpa, &cliTestSourceDigest(env, result.region.end.offset));
-        const extended_provenance = !result.inline_expect and !result.region.eq(root_region);
-        try bytes.append(ctx.gpa, @intFromBool(extended_provenance));
-        if (extended_provenance) try bytes.appendSlice(ctx.gpa, &artifact.key.bytes);
         try bytes.append(ctx.gpa, switch (result.result) {
             .passed => 0,
             .failed => 1,
@@ -13071,6 +13408,17 @@ fn loadCachedCliTestOutcome(
     const outcome_key = cliTestOutcomeKey(artifact, root, specialization_strategy, opt);
     const raw_data = manager.loadRawBytes(outcome_key, entries_dir) orelse return null;
     defer ctx.gpa.free(raw_data);
+    const source = source_modules.get(completed_test.hash(module.semantic.env.qualifiedModuleName())) orelse
+        base.invariant("test occurrence has no current source", .{});
+    return decodeCliTestOutcome(ctx.gpa, raw_data, source_modules, .{
+        .key = outcome_key,
+        .order = root.order,
+        .region = testRootRegion(module.semantic.env, root.source),
+        .source = source,
+    });
+}
+
+fn decodeCliTestOutcome(allocator: Allocator, raw_data: []const u8, source_modules: *const CliTestSourceModuleMap, occurrence: CliTestOccurrence) Allocator.Error!?[]CliTestResultItem {
     if (raw_data.len < 32) return null;
     const data = raw_data[0 .. raw_data.len - 32];
     var checksum = base.Sha256.init(.{});
@@ -13082,12 +13430,10 @@ fn loadCachedCliTestOutcome(
     if (!std.mem.eql(u8, data[0..cli_test_cache_magic.len], cli_test_cache_magic)) return null;
     offset += cli_test_cache_magic.len;
     if (data.len - offset < 32) return null;
-    if (!std.mem.eql(u8, data[offset..][0..32], &outcome_key)) return null;
+    if (!std.mem.eql(u8, data[offset..][0..32], &occurrence.key)) return null;
     offset += 32;
-    const root_region = testRootRegion(module.semantic.env, root.source);
-    if ((readU32(data, &offset) orelse return null) != root_region.start.offset) return null;
-    if ((readU32(data, &offset) orelse return null) != root_region.end.offset) return null;
-
+    const root_region = occurrence.region;
+    if (root_region.start.offset > root_region.end.offset or root_region.end.offset > occurrence.source.common.source.len) return null;
     const count = readU32(data, &offset) orelse return null;
     if (count < 1 or count > data.len - offset) return null;
 
@@ -13095,8 +13441,8 @@ fn loadCachedCliTestOutcome(
     var results_owned_by_module = false;
     defer {
         if (!results_owned_by_module) {
-            deinitCliTestResultItemPayloads(ctx.gpa, results.items);
-            results.deinit(ctx.gpa);
+            deinitCliTestResultItemPayloads(allocator, results.items);
+            results.deinit(allocator);
         }
     }
 
@@ -13111,37 +13457,25 @@ fn loadCachedCliTestOutcome(
         const inline_failed = readU64(data, &offset) orelse return null;
         if (inline_expect != (inline_passed +| inline_failed != 0)) return null;
         if (inline_expect and root_index == 0) return null;
-        const source_name_len: usize = @intCast(readU32(data, &offset) orelse return null);
-        if (inline_expect and source_name_len == 0) return null;
-        if (!inline_expect and source_name_len != 0) return null;
-        if (source_name_len > data.len - offset) return null;
-        const source_name = data[offset..][0..source_name_len];
-        offset += source_name_len;
-        var source_env: ?*const ModuleEnv = null;
-        var source_path: ?[]const u8 = null;
-        if (source_name.len != 0) {
-            if (source_modules.get(source_name)) |source_module| {
-                source_env = source_module.semantic.env;
-                source_path = source_module.path;
-            }
-            if (source_env == null) return null;
-        }
-        const order = root.order;
-        const region_start = readU32(data, &offset) orelse return null;
-        const region_end = readU32(data, &offset) orelse return null;
-        if (region_start > region_end) return null;
-        if (source_env) |env| {
-            if (region_end > env.getSourceAll().len or data.len - offset < 32) return null;
-            if (!std.mem.eql(u8, data[offset..][0..32], &cliTestSourceDigest(env, region_end))) return null;
-            offset += 32;
-        }
-        const extended_provenance = readU8(data, &offset) orelse return null;
-        if (extended_provenance > 1) return null;
-        if (extended_provenance == 1) {
-            if (data.len - offset < 32) return null;
-            if (!std.mem.eql(u8, data[offset..][0..32], &artifact.key.bytes)) return null;
-            offset += 32;
-        }
+        const relative = readU8(data, &offset) orelse return null;
+        var source = occurrence.source;
+        const region: base.Region = switch (relative) {
+            1 => blk: {
+                const start = readU32(data, &offset) orelse return null;
+                const end = readU32(data, &offset) orelse return null;
+                if (start > end or end > root_region.end.offset - root_region.start.offset) return null;
+                break :blk base.Region.from_raw_offsets(root_region.start.offset + start, root_region.start.offset + end);
+            },
+            0 => blk: {
+                if (data.len - offset < 64) return null;
+                source = source_modules.get(data[offset..][0..32].*) orelse return null;
+                const site = data[offset + 32 ..][0..32].*;
+                offset += 64;
+                break :blk (source.reports.by_identity.get(site) orelse return null) orelse return null;
+            },
+            else => return null,
+        };
+        const order = occurrence.order;
         if (!inline_expect) {
             if (root_index >= 1) return null;
             root_index += 1;
@@ -13155,17 +13489,16 @@ fn loadCachedCliTestOutcome(
             else => return null,
         };
         if (inline_expect and (result == .failed) != (inline_failed != 0)) return null;
-        const transcript = (try loadCliTestTranscriptEvents(ctx.gpa, data, &offset)) orelse return null;
+        const transcript = (try loadCliTestTranscriptEvents(allocator, data, &offset)) orelse return null;
         var transcript_owned_by_result = false;
         defer {
-            if (!transcript_owned_by_result) deinitCliTestTranscriptEvents(ctx.gpa, transcript);
+            if (!transcript_owned_by_result) deinitCliTestTranscriptEvents(allocator, transcript);
         }
 
         const has_message = readU8(data, &offset) orelse return null;
         if (has_message > 1) return null;
 
-        const region = base.Region.from_raw_offsets(region_start, region_end);
-        if (region.end.offset > (source_env orelse module.semantic.env).getSourceAll().len) return null;
+        if (region.end.offset > source.common.source.len) return null;
 
         var visibility: CliTestFailureDetailVisibility = .always;
         const message = if (has_message == 0) null else blk: {
@@ -13179,13 +13512,13 @@ fn loadCachedCliTestOutcome(
             const message_len = readU32(data, &offset) orelse return null;
             const message_len_usize: usize = @intCast(message_len);
             if (message_len_usize > data.len - offset) return null;
-            const message = try ctx.gpa.dupe(u8, data[offset..][0..message_len_usize]);
+            const message = try allocator.dupe(u8, data[offset..][0..message_len_usize]);
             offset += message_len_usize;
             break :blk message;
         };
 
-        errdefer if (message) |owned| ctx.gpa.free(owned);
-        try results.append(ctx.gpa, .{
+        errdefer if (message) |owned| allocator.free(owned);
+        try results.append(allocator, .{
             .result = result,
             .order = order,
             .region = region,
@@ -13193,8 +13526,10 @@ fn loadCachedCliTestOutcome(
             .inline_expect = inline_expect,
             .inline_passed = inline_passed,
             .inline_failed = inline_failed,
-            .source_env = source_env,
-            .source_path = source_path,
+            .source_env = source.env,
+            .source_common = source.common,
+            .source_name = source.name,
+            .source_path = source.path,
             .transcript = transcript,
             .failure_detail = message,
             .failure_detail_visibility = visibility,
@@ -13204,12 +13539,81 @@ fn loadCachedCliTestOutcome(
     if (root_index != 1) return null;
     if (offset != data.len) return null;
 
-    const owned_results = try results.toOwnedSlice(ctx.gpa);
+    const owned_results = try results.toOwnedSlice(allocator);
     errdefer {
-        deinitCliTestResultItems(ctx.gpa, owned_results);
+        deinitCliTestResultItems(allocator, owned_results);
     }
     results_owned_by_module = true;
     return owned_results;
+}
+
+test "relocatable outcomes bind duplicates and reject incomplete reporting atomically" {
+    const allocator = std.testing.allocator;
+    var common = try base.CommonEnv.init(allocator, "\n\nexpect True\nexpect True\n");
+    defer common.deinit(allocator);
+    const source_id = completed_test.hash("Main");
+    const site_id = completed_test.hash("helper observation");
+    var source = CliTestSourceModule{ .env = null, .common = &common, .path = "current/Main.roc" };
+    source.reports = (try CliTestReportMap.init(allocator, &.{
+        .{ .identity = site_id, .start = 4, .end = 8 },
+        .{ .identity = site_id, .start = 4, .end = 8 },
+    }, common.source.len)).?;
+    defer source.reports.deinit(allocator);
+    var sources = CliTestSourceModuleMap{};
+    defer sources.deinit(allocator);
+    try sources.put(allocator, source_id, source);
+    var bytes = std.ArrayList(u8).empty;
+    defer bytes.deinit(allocator);
+    const key = completed_test.hash("outcome");
+    try bytes.appendSlice(allocator, cli_test_cache_magic);
+    try bytes.appendSlice(allocator, &key);
+    try appendU32(&bytes, allocator, 2);
+    for (0..2) |index| {
+        try bytes.append(allocator, @intFromBool(index == 1));
+        try appendU64(&bytes, allocator, if (index == 1) 1 else 0);
+        try appendU64(&bytes, allocator, 0);
+        try bytes.append(allocator, @intFromBool(index == 0));
+        if (index == 0) {
+            try appendU32(&bytes, allocator, 0);
+            try appendU32(&bytes, allocator, 4);
+        } else {
+            try bytes.appendSlice(allocator, &source_id);
+            try bytes.appendSlice(allocator, &site_id);
+        }
+        try bytes.append(allocator, 0); // passed
+        try appendU32(&bytes, allocator, 1); // one raw dbg event
+        try bytes.appendSlice(allocator, &.{ 0, 1 }); // dbg, stderr
+        const payload = "old/Main.roc:123 is user output";
+        try appendU32(&bytes, allocator, payload.len);
+        try bytes.appendSlice(allocator, payload);
+        try bytes.append(allocator, 0); // no failure detail
+    }
+    const digest = completed_test.hash(bytes.items);
+    try bytes.appendSlice(allocator, &digest);
+    for ([_]u32{ 2, 14 }) |start| {
+        const occurrence = CliTestOccurrence{ .key = key, .order = start, .region = base.Region.from_raw_offsets(start, start + 4), .source = source };
+        const results = (try decodeCliTestOutcome(allocator, bytes.items, &sources, occurrence)).?;
+        defer deinitCliTestResultItems(allocator, results);
+        try std.testing.expectEqual(start, results[0].region.start.offset);
+        try std.testing.expectEqual(start, results[0].order);
+        try std.testing.expectEqual(@as(u32, 4), results[1].region.start.offset);
+        try std.testing.expectEqualStrings("current/Main.roc", results[1].source_path.?);
+        try std.testing.expectEqualStrings("old/Main.roc:123 is user output", results[0].transcript[0].payload);
+    }
+    const occurrence = CliTestOccurrence{ .key = key, .order = 0, .region = base.Region.from_raw_offsets(2, 6), .source = source };
+    for (0..bytes.items.len) |len| try std.testing.expect(try decodeCliTestOutcome(allocator, bytes.items[0..len], &sources, occurrence) == null);
+    // The first result has already been decoded when the second reference
+    // fails; no partially owned result or transcript escapes the decoder.
+    sources.getPtr(source_id).?.reports.by_identity.getPtr(site_id).?.* = null;
+    try std.testing.expect(try decodeCliTestOutcome(allocator, bytes.items, &sources, occurrence) == null);
+    _ = sources.remove(source_id);
+    try std.testing.expect(try decodeCliTestOutcome(allocator, bytes.items, &sources, occurrence) == null);
+    var ambiguous = (try CliTestReportMap.init(allocator, &.{
+        .{ .identity = site_id, .start = 4, .end = 8 },
+        .{ .identity = site_id, .start = 14, .end = 18 },
+    }, common.source.len)).?;
+    defer ambiguous.deinit(allocator);
+    try std.testing.expect(ambiguous.by_identity.get(site_id).? == null);
 }
 
 fn collectTestRootRequests(
@@ -13278,7 +13682,7 @@ fn buildCliTestPlan(
             const results = try checking_results.toOwnedSlice(ctx.gpa);
             errdefer ctx.gpa.free(results);
             try module_results.append(ctx.gpa, .{
-                .env = module.semantic.env,
+                .env = &module.semantic.env.common,
                 .path = module.path,
                 .results = results,
                 .cached = false,
@@ -14162,14 +14566,10 @@ fn copyCliTestResultItem(
         null;
     errdefer if (failure_detail) |message| allocator.free(message);
 
-    return .{
-        .result = result.result,
-        .order = result.order,
-        .region = result.region,
-        .transcript = transcript,
-        .failure_detail = failure_detail,
-        .failure_detail_visibility = result.failure_detail_visibility,
-    };
+    var copied = result;
+    copied.transcript = transcript;
+    copied.failure_detail = failure_detail;
+    return copied;
 }
 
 const CliInterpreterTestHostEnv = struct {
@@ -14454,11 +14854,13 @@ fn appendInlineExpectResults(
         const result: CliTestResult = if (count.failed == 0) .passed else .failed;
         var source_env: ?*const ModuleEnv = null;
         var source_path: ?[]const u8 = null;
+        var source_name: []const u8 = "";
         if (!site.loc.hasLocation()) base.invariant("test expect site has no source location", .{});
         const qualified_name = store.sourceFileQualifiedName(site.loc.file);
-        if (source_modules.get(qualified_name)) |source_module| {
-            source_env = source_module.semantic.env;
+        if (source_modules.get(completed_test.hash(qualified_name))) |source_module| {
+            source_env = source_module.env;
             source_path = source_module.path;
+            source_name = source_module.name;
         }
         if (source_env == null) {
             base.invariant("test expect source module {s} was absent from the checked module plan", .{qualified_name});
@@ -14472,6 +14874,7 @@ fn appendInlineExpectResults(
             .inline_failed = count.failed,
             .source_env = source_env,
             .source_path = source_path,
+            .source_name = source_name,
             .failure_detail = null,
             .failure_detail_visibility = .always,
         });
@@ -14708,7 +15111,7 @@ fn runCheckedArtifactTests(
     }
     summary.modules_with_tests = 1;
 
-    try storeCliRootOutcomes(ctx, cache_manager, planned, specialization_strategy, opt, results.items);
+    try storeCliRootOutcomes(ctx, cache_manager, planned, specialization_strategy, opt, results.items, source_modules);
     const cached = planned.uncachedCount() == 0;
     const merged = try mergeCliRootOutcomes(ctx.gpa, planned, results.items);
     results.clearRetainingCapacity();
@@ -14717,7 +15120,7 @@ fn runCheckedArtifactTests(
     summary.cached_modules = @intFromBool(cached);
 
     try module_results.append(ctx.gpa, .{
-        .env = module.semantic.env,
+        .env = &module.semantic.env.common,
         .path = module.path,
         .results = merged,
         .cached = false,
@@ -14873,6 +15276,13 @@ fn runCompiledLoweredTestModulesOnce(
     }
 }
 
+fn cliInlineResultLessThan(_: void, a: CliTestResultItem, b: CliTestResultItem) bool {
+    const names = std.mem.order(u8, a.source_name, b.source_name);
+    if (names != .eq) return names == .lt;
+    if (a.region.start.offset != b.region.start.offset) return a.region.start.offset < b.region.start.offset;
+    return a.region.end.offset < b.region.end.offset;
+}
+
 fn mergeCliRootOutcomes(allocator: Allocator, planned: *CliTestPlanModule, fresh: []const CliTestResultItem) Allocator.Error![]CliTestResultItem {
     var merged = std.ArrayList(CliTestResultItem).empty;
     errdefer merged.deinit(allocator);
@@ -14902,14 +15312,7 @@ fn mergeCliRootOutcomes(allocator: Allocator, planned: *CliTestPlanModule, fresh
         merged.appendAssumeCapacity(item);
     };
     const inline_start = planned.test_roots.len;
-    std.mem.sort(CliTestResultItem, merged.items[inline_start..], {}, struct {
-        fn lessThan(_: void, a: CliTestResultItem, b: CliTestResultItem) bool {
-            const names = std.mem.order(u8, a.source_env.?.qualifiedModuleName(), b.source_env.?.qualifiedModuleName());
-            if (names != .eq) return names == .lt;
-            if (a.region.start.offset != b.region.start.offset) return a.region.start.offset < b.region.start.offset;
-            return a.region.end.offset < b.region.end.offset;
-        }
-    }.lessThan);
+    std.mem.sort(CliTestResultItem, merged.items[inline_start..], {}, cliInlineResultLessThan);
     const owned = try merged.toOwnedSlice(allocator);
     for (planned.cached_roots) |*slot| if (slot.*) |items| {
         allocator.free(items);
@@ -14918,14 +15321,14 @@ fn mergeCliRootOutcomes(allocator: Allocator, planned: *CliTestPlanModule, fresh
     return owned;
 }
 
-fn storeCliRootOutcomes(ctx: *CliCtx, manager: ?*CacheManager, planned: *const CliTestPlanModule, strategy: base.SpecializationStrategy, opt: cli_args.OptLevel, fresh: []const CliTestResultItem) (Allocator.Error || error{NoHomeDirectory})!void {
+fn storeCliRootOutcomes(ctx: *CliCtx, manager: ?*CacheManager, planned: *const CliTestPlanModule, strategy: base.SpecializationStrategy, opt: cli_args.OptLevel, fresh: []const CliTestResultItem, source_modules: *const CliTestSourceModuleMap) (Allocator.Error || error{NoHomeDirectory})!void {
     var cursor: usize = 0;
     for (planned.test_roots, 0..) |root, index| {
         if (planned.cached_roots[index] != null) continue;
         const start = cursor;
         while (cursor < fresh.len and (fresh[cursor].owner_order orelse fresh[cursor].order) == root.order) : (cursor += 1) {}
         if (cursor == start or fresh[start].inline_expect) base.invariant("completed root has no owned outcome", .{});
-        try storeCliTestOutcomeInCache(ctx, manager, planned.artifact, strategy, opt, root, fresh[start..cursor]);
+        try storeCliTestOutcomeInCache(ctx, manager, planned.artifact, strategy, opt, root, fresh[start..cursor], source_modules);
     }
     if (cursor != fresh.len) base.invariant("fresh outcomes were not partitioned by checked root order", .{});
 }
@@ -14940,7 +15343,7 @@ fn appendPlannedModuleResult(
     var results_owned_by_module = false;
     errdefer if (!results_owned_by_module) deinitCliTestResultItems(ctx.gpa, results);
     try module_results.append(ctx.gpa, .{
-        .env = planned.module.semantic.env,
+        .env = &planned.module.semantic.env.common,
         .path = planned.module.path,
         .results = results,
         .cached = cached,
@@ -14949,7 +15352,7 @@ fn appendPlannedModuleResult(
 }
 
 const InlineExpectResultKey = struct {
-    env: *const ModuleEnv,
+    env: *const base.CommonEnv,
     region_start: u32,
     region_end: u32,
 };
@@ -14968,7 +15371,7 @@ fn coalesceInlineExpectResults(
     for (module_results) |module_result| {
         for (@constCast(module_result.results)) |*result| {
             if (!result.inline_expect) continue;
-            const source_env = result.source_env orelse {
+            const source_env = result.source_common orelse if (result.source_env) |env| &env.common else {
                 base.invariant("inline test result has no declaring module", .{});
             };
             const key: InlineExpectResultKey = .{
@@ -15066,7 +15469,7 @@ fn runCompiledTestPlan(
 
     for (lowered_modules.items) |*lowered_module| {
         const planned = &test_plan.modules[lowered_module.planned_index];
-        try storeCliRootOutcomes(ctx, cache_manager, planned, specialization_strategy, opt, fresh_results[lowered_module.planned_index].?);
+        try storeCliRootOutcomes(ctx, cache_manager, planned, specialization_strategy, opt, fresh_results[lowered_module.planned_index].?, source_modules);
     }
 
     for (test_plan.modules, 0..) |*planned, planned_index| {
@@ -16167,6 +16570,11 @@ fn runWatchCommand(ctx: *CliCtx, arg0: []const u8, command: WatchCommand) WatchC
 }
 
 fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestError!void {
+    defer if (base.dev_diagnostics.isSet(.test_command_work)) {
+        inline for (@typeInfo(base.dev_diagnostics.TestWork).@"enum".field_names) |field| {
+            ctx.io.stderr().print("test-work {s}={d}\n", .{ field, base.dev_diagnostics.testWorkCount(@field(base.dev_diagnostics.TestWork, field)) }) catch {};
+        }
+    };
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -16195,6 +16603,12 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     reporter.start();
     errdefer reporter.fail();
 
+    var command_arena = std.heap.ArenaAllocator.init(ctx.gpa);
+    defer command_arena.deinit();
+    const command_allocator = command_arena.allocator();
+    const complete_cache_enabled = !args.no_cache and args.opt == .dev;
+    var debug_capture = CliTestDebugCapture{ .allocator = command_allocator };
+
     // --- Normal compilation path ---
 
     var build_env = try initCliBuildEnv(ctx, .{
@@ -16203,7 +16617,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         .verbose_cache = args.verbose,
         .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
-        .track_watch_inputs = args.watch_inputs_file != null,
+        .track_watch_inputs = complete_cache_enabled or args.watch_inputs_file != null,
         .release_checked_solver_types = true,
         .compile_time_pack_publisher = .{ .command = .test_run, .opt = @tagName(args.opt) },
         .root_source_url = args.root_source_url,
@@ -16215,6 +16629,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     });
     defer build_env.deinit();
     build_env.defer_post_check = true;
+    if (complete_cache_enabled) build_env.debug_observer = .{ .context = &debug_capture, .observe = CliTestDebugCapture.observe };
 
     // `roc test` runs the file's top-level `expect`s and nothing else, so the
     // file needs no entrypoint: a headerless file that is neither a type module
@@ -16239,6 +16654,48 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     };
     reporter.end();
 
+    const complete_seed = if (complete_cache_enabled) try cliCompletedTestSeed(command_allocator, &build_env, args) else null;
+    if (complete_seed) |seed| {
+        if (try loadCliCompletedTest(ctx, command_allocator, &build_env, seed)) |loaded| {
+            var completed = loaded;
+            defer completed.deinit(ctx.gpa);
+            reporter.recordCounters("Completed test command", &.{.{ .name = "Hits", .count = 1 }});
+            var roots: u64 = 0;
+            for (completed.record.modules) |module| roots += module.roots.len;
+            const counters = cliTestCacheCounters(.{
+                .modules_total = completed.record.modules.len,
+                .modules_cached = completed.record.modules.len,
+                .roots_total = roots,
+                .roots_cached = roots,
+            });
+            reporter.recordCounters("Test result cache", &counters);
+            reporter.finish();
+            for (completed.record.debug_messages) |message| try stderr.print("[dbg] {s}\n", .{message});
+            var warnings: usize = 0;
+            for (completed.record.diagnostics) |diagnostic| {
+                try diagnostic.render(ctx.gpa, stderr, ctx.reportConfig(.stderr));
+                warnings += 1;
+            }
+            try renderTestResultBodies(ctx.gpa, stdout, stderr, completed.module_results, args.verbose, testReportingConfig(ctx));
+            if (args.watch_inputs_file) |path| {
+                const compiler_inputs = try command_allocator.alloc(compile.watch_inputs.Input, completed.inputs.len);
+                for (compiler_inputs, completed.inputs) |*input, stored| input.* = .{
+                    .path = try std.fs.path.resolve(command_allocator, &.{ build_env.cwd, stored.path }),
+                    .state = stored.state,
+                };
+                var input_set = try collectWatchInputSetFromCompilerInputs(ctx, compiler_inputs, extra_paths);
+                defer input_set.deinit(ctx);
+                try writeWatchInputSetFile(ctx, path, &input_set);
+            }
+            const elapsed: u64 = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - start_time);
+            try writeCliTestRunSummary(if (completed.total.allPassed()) stdout else stderr, completed.total, elapsed, true, testReportingConfig(ctx).shouldUseColors());
+            if (!completed.total.allPassed()) return error.TestsFailed;
+            exitOnWarnings(ctx, warnings);
+            return;
+        }
+        reporter.recordCounters("Completed test command", &.{.{ .name = "Misses", .count = 1 }});
+    }
+
     reporter.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
         _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
@@ -16254,14 +16711,21 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     const modules = try build_env.getCompiledModules(ctx.gpa);
     defer ctx.gpa.free(modules);
     var source_modules = CliTestSourceModuleMap{};
-    defer source_modules.deinit(ctx.gpa);
+    defer {
+        var sources = source_modules.valueIterator();
+        while (sources.next()) |source| source.reports.deinit(ctx.gpa);
+        source_modules.deinit(ctx.gpa);
+    }
     for (modules) |module| {
         const qualified_name = module.semantic.env.qualifiedModuleName();
-        const entry = try source_modules.getOrPut(ctx.gpa, qualified_name);
+        const entry = try source_modules.getOrPut(ctx.gpa, completed_test.hash(qualified_name));
         if (entry.found_existing) {
             base.invariant("compiled module plan contains duplicate source module {s}", .{qualified_name});
         }
-        entry.value_ptr.* = module;
+        entry.value_ptr.* = .{ .env = module.semantic.env, .common = &module.semantic.env.common, .path = module.path, .name = qualified_name };
+        const sites = if (module.semantic.checked_artifact) |artifact| artifact.compile_time_root_identities.test_report_sites else &.{};
+        entry.value_ptr.reports = (try CliTestReportMap.init(ctx.gpa, sites, module.semantic.env.getSourceAll().len)) orelse
+            base.invariant("checked producer published invalid report sites", .{});
     }
 
     const report_config = testReportingConfig(ctx);
@@ -16327,7 +16791,13 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
         return err;
     };
-    const diag = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
+    const command_diagnostics = try build_env.drainReports();
+    defer build_env.freeDrainedReports(command_diagnostics);
+    var diag = BuildEnv.RenderDiagnosticsResult{ .errors = 0, .warnings = 0 };
+    for (command_diagnostics) |module| for (module.reports) |*report| {
+        if (report.severity.isError()) diag.errors += 1 else diag.warnings += 1;
+        reporting.renderReportToTerminal(report, stderr, reporting.ColorUtils.getPaletteForConfig(ctx.reportConfig(.stderr)), ctx.reportConfig(.stderr)) catch {};
+    };
     // `roc test` files the code its compile-time evaluation ran for later
     // compilations as a check does, under the module the object cache loads
     // a program's packs from.
@@ -16481,6 +16951,9 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             total.cached_modules += 1;
         }
     }
+    if (complete_seed) |seed| if (diag.errors == 0) {
+        try storeCliCompletedTest(ctx, command_allocator, &build_env, seed, args, modules, &test_plan, module_results.items, debug_capture.messages.items, command_diagnostics);
+    };
     try coalesceInlineExpectResults(ctx.gpa, module_results.items, &total);
     total.modules_with_tests = test_plan.modules_with_tests;
     total.diagnostic_errors = diag.errors;
@@ -16627,7 +17100,7 @@ fn renderCliTestTranscriptEventRecords(
 }
 
 const CliTestRenderEntry = struct {
-    env: *const ModuleEnv,
+    env: *const base.CommonEnv,
     path: []const u8,
     result: *const CliTestResultItem,
 };
@@ -17011,7 +17484,7 @@ const CliOptimizedLiveTestOutput = struct {
         };
         self.owned_results[result_index] = copied;
         self.coordinator.publishFinished(result_index, .{
-            .env = env,
+            .env = &env.common,
             .path = path,
             .result = &self.owned_results[result_index].?,
         }) catch |err| {
@@ -17052,7 +17525,7 @@ const CliOptimizedLiveTestOutput = struct {
 
         self.owned_results[result_index] = result;
         self.coordinator.publishFinished(result_index, .{
-            .env = run.env,
+            .env = &run.env.common,
             .path = run.path,
             .result = &self.owned_results[result_index].?,
         }) catch |err| {
@@ -17123,7 +17596,7 @@ test "test transcript coordinator streams and buffers in plan order" {
     );
     defer coordinator.deinit();
 
-    const dummy_env: *const ModuleEnv = undefined;
+    const dummy_env: *const base.CommonEnv = undefined;
 
     const event_zero = CliTestTranscriptEvent{ .stream = .stderr, .kind = .dbg, .payload = "zero" };
     const event_one_a = CliTestTranscriptEvent{ .stream = .stderr, .kind = .dbg, .payload = "one-a" };
@@ -17174,7 +17647,7 @@ test "test transcript coordinator spills later buffered entries to isolated temp
     var stderr_body = std.Io.Writer.Allocating.init(allocator);
     defer stderr_body.deinit();
 
-    const dummy_env: *const ModuleEnv = undefined;
+    const dummy_env: *const base.CommonEnv = undefined;
     const event_zero = CliTestTranscriptEvent{ .stream = .stderr, .kind = .dbg, .payload = "first" };
     const event_one_spilled = CliTestTranscriptEvent{ .stream = .stderr, .kind = .dbg, .payload = "later-spilled" };
     const event_one_live = CliTestTranscriptEvent{ .stream = .stderr, .kind = .dbg, .payload = "later-live" };
@@ -17236,7 +17709,7 @@ fn renderCliTestResultEntry(
         );
     }
     try renderCliTestTranscriptEvents(stdout_body, stderr_body, entry.result.transcript[transcript_events_already_rendered..]);
-    const source_env = entry.result.source_env orelse entry.env;
+    const source_env = entry.result.source_common orelse if (entry.result.source_env) |env| &env.common else entry.env;
     const source_path = entry.result.source_path orelse entry.path;
     var inline_detail: ?[]u8 = null;
     defer if (inline_detail) |detail| allocator.free(detail);
@@ -17374,7 +17847,7 @@ fn printTestProblem(
     allocator: Allocator,
     stderr: *std.Io.Writer,
     path: []const u8,
-    env: *const ModuleEnv,
+    env: *const base.CommonEnv,
     region_info: base.RegionInfo,
     label: []const u8,
     severity: reporting.Severity,
@@ -17386,7 +17859,7 @@ fn printTestProblem(
     const src = env.getSourceAll();
 
     const doc_comment: ?[]const u8 = blk: {
-        const line_starts = env.getLineStarts();
+        const line_starts = env.getLineStartsAll();
         const curr_line_start_idx = region_info.start_line_idx;
         const curr_line_start = line_starts[curr_line_start_idx];
         const prev_line_start = if (curr_line_start_idx > 0) line_starts[curr_line_start_idx - 1] else break :blk null;
@@ -17414,7 +17887,7 @@ fn printTestProblem(
     var report = try reporting.Report.init(allocator, label, headline, severity);
     defer report.deinit();
 
-    try report.addSourceContext(region_info, path, src, env.getLineStarts());
+    try report.addSourceContext(region_info, path, src, env.getLineStartsAll());
 
     const should_print_detail = switch (failure_detail_visibility) {
         .always => true,

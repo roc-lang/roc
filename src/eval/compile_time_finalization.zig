@@ -51,6 +51,13 @@ pub const EventCallback = struct {
     notify: *const fn (*anyopaque, EventView) void,
 };
 
+/// Observes the ordered semantic debug payloads emitted by finalization.
+/// Unlike REPL events this includes every root, including cached observations.
+pub const DebugObserver = struct {
+    context: *anyopaque,
+    observe: *const fn (*anyopaque, []const u8) Allocator.Error!void,
+};
+
 /// Where the compile-time evaluator splices object-cache entries from.
 pub const SpliceSource = backend.dev.SpliceSource;
 
@@ -98,6 +105,7 @@ pub const Options = struct {
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     stderr: ?StderrWriter = null,
     event_callback: ?EventCallback = null,
+    debug_observer: ?DebugObserver = null,
     debug_events: ?*DebugEvents = null,
     /// Artifact copies store results independently; shared slots publish once.
     publish_shared_slots: bool = true,
@@ -625,6 +633,7 @@ pub const ProgramSession = struct {
         roots: lir.CheckedPipeline.RootRequestSet,
         requested_target: lir.CheckedPipeline.TargetConfig,
     ) RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
+        base.dev_diagnostics.countTestWork(.runtime_lir, 1);
         const configured = self.runtime_target orelse finalizationInvariant("check-only session has no runtime consumer");
         // Whether the program's specializations go to the object cache was
         // decided with the consumer, before the shared program was lowered.
@@ -1268,6 +1277,7 @@ pub fn finalizeProgram(
         var quiet_unfinalized: QuietUnfinalizedReports = .{ .inner = options.unfinalized_reports };
         var quiet_options = options;
         quiet_options.stderr = null;
+        quiet_options.debug_observer = null;
         quiet_options.event_callback = null;
         quiet_options.keep_artifacts = false;
         quiet_options.unfinalized_reports = if (options.unfinalized_reports != null) quiet_unfinalized.reports() else null;
@@ -1278,6 +1288,7 @@ pub fn finalizeProgram(
         if (quiet_options.object_cache) |*cache| cache.stage_sink = null;
         var quiet_events = DebugEvents{ .allocator = allocator };
         defer quiet_events.deinit();
+        base.dev_diagnostics.countTestWork(.second_specialization, 1);
         var respecialized = try specializeAndEvaluate(
             allocator,
             quiet_modules,
@@ -5365,6 +5376,7 @@ fn evalDevProgramRoots(
 }
 
 fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
+    base.dev_diagnostics.countTestWork(.ctfe_execution, 1);
     const job = &context.jobs[item_id];
     job.host.resetForRun();
     if (context.boxy_global_installed) {
@@ -5610,6 +5622,7 @@ fn reportDebugMessage(allocator: Allocator, options: Options, module: checked.Mo
 }
 
 fn emitDebugMessage(allocator: Allocator, options: Options, is_repl: bool, message: []const u8) Allocator.Error!void {
+    if (options.debug_observer) |observer| try observer.observe(observer.context, message);
     if (is_repl) {
         if (options.event_callback) |callback| callback.notify(callback.context, .{ .dbg = message });
     }

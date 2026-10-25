@@ -235,6 +235,7 @@ pub const BuildEnv = struct {
     coordinator: ?*Coordinator = null,
     runtime_lowering: ?RuntimeLoweringConfig = null,
     runtime_output_probe: ?RuntimeOutputProbe = null,
+    debug_observer: ?eval.CompileTimeFinalization.DebugObserver = null,
     /// Instrumentation only; never participates in checked or object identity.
     detailed_monotype_diagnostics: bool = false,
     /// See `eval.CompileTimeFinalization.CompileTimeObjectCache`.
@@ -903,6 +904,7 @@ pub const BuildEnv = struct {
         coord.cancel_request = self.cancel_request;
         coord.runtime_lowering = self.runtime_lowering;
         coord.runtime_output_probe = self.runtime_output_probe;
+        coord.debug_observer = self.debug_observer;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
         coord.compile_time_object_cache = self.compile_time_object_cache;
         if (self.detailed_monotype_diagnostics) coord.ctfe_timing.lowering.enableDetailedMonotypeBody();
@@ -2611,6 +2613,49 @@ pub const BuildEnv = struct {
         }
 
         return inputs.toOwnedSlice(self.gpa);
+    }
+
+    /// Complete-command admission needs fetched sources too. Preserve repeated
+    /// reads: if a source changed between discovery and checking, validation
+    /// must reject publication rather than select one of the observed states.
+    pub fn collectConsumedInputStates(self: *BuildEnv, allocator: Allocator) Allocator.Error![]const watch_inputs.Input {
+        std.debug.assert(self.track_watch_inputs);
+        var inputs = std.ArrayList(watch_inputs.Input).empty;
+        errdefer {
+            for (inputs.items) |input| allocator.free(input.path);
+            inputs.deinit(allocator);
+        }
+        const Owned = struct {
+            fn append(gpa: Allocator, out: *std.ArrayList(watch_inputs.Input), path: []const u8, state: watch_inputs.State) Allocator.Error!void {
+                const owned = try gpa.dupe(u8, path);
+                errdefer gpa.free(owned);
+                try out.append(gpa, .{ .path = owned, .state = state });
+            }
+        };
+        var packages = self.packages.valueIterator();
+        while (packages.next()) |pkg| {
+            try Owned.append(allocator, &inputs, pkg.root_file, pkg.root_file_state.?);
+        }
+        if (self.coordinator) |coord| {
+            var coordinator_packages = coord.packages.valueIterator();
+            while (coordinator_packages.next()) |pkg| {
+                for (pkg.*.modules.items) |*mod| {
+                    try Owned.append(allocator, &inputs, mod.path, mod.source_file_state.?);
+                    if (mod.moduleEnv()) |env| for (env.file_dependencies.items.items) |dep| {
+                        const path = try std.fs.path.resolve(allocator, &.{ mod.canonicalSourceDir(), env.fileDependencyRelativePath(dep) });
+                        defer allocator.free(path);
+                        const state: watch_inputs.State = switch (dep.state) {
+                            .present => .{ .hash = dep.content_hash },
+                            .missing => .missing,
+                            .unreadable => .unreadable,
+                            .pending => base.invariant("completed command has a pending imported file", .{}),
+                        };
+                        try Owned.append(allocator, &inputs, path, state);
+                    };
+                }
+            }
+        }
+        return inputs.toOwnedSlice(allocator);
     }
 
     pub fn hasCompiledModules(self: *BuildEnv) bool {

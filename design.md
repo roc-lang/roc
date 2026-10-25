@@ -23609,6 +23609,50 @@ tested root reaches into a dependency is compiled and linked the same way.
 
 ## Optimized Test Execution
 
+### Completed dev test commands
+
+A completed `roc test --opt=dev` outcome is an orchestration result, independent
+of checked graphs and lowering sessions. After resolving the current package
+graph, the command can validate its recorded consumed source and imported-file
+contents and replay the complete outcome before loading checked modules. The
+test command has its own identity domain, including compiler compatibility,
+root selection, checking context, resolved package graph and execution policy.
+Neither a build nor a check publishes a test-command outcome.
+
+The early input plan is producer data: the source and file-import reads of a
+completed compilation, including missing-file facts, and the physical source
+paths admitted by import resolution. Validation hashes bytes and revalidates
+those physical paths, never timestamps. Resolution runs before admission, so
+package sidecars, replacement requests and resolution failures retain their
+ordinary semantics.
+An input plan only locates a content-addressed outcome; changing its inputs
+cannot admit the previous outcome. Older outcomes remain reusable when those
+inputs are restored. A changed dependency closure may replace the input plan
+and conservatively miss an older outcome with a different closure.
+
+The command owns ordered compile-time debug observations and structured
+diagnostic documents. Test observations remain in individual outcome
+payloads, referenced by digest rather than copied into the command record. Each observation has exactly one replay owner. Source reporting uses
+current validated source bytes and paths; it requires no `PreparedSolved`, CIR
+or type store. Presentation settings and elapsed time are never cached.
+
+Publication follows completed execution and durable referenced payloads; an
+atomic manifest publishes the outcome last. Passes, failed expects and Roc
+crashes qualify. Commands with semantic compilation errors or transient backend
+failures do not publish complete outcomes. Missing, incompatible, truncated or
+corrupt records and evicted payloads are misses. A complete hit returns before
+runtime demand construction, specialization, CTFE, LIR/ARC, static data,
+native test code generation and execution. It does not load procedure packs.
+
+The command envelope and individual outcome payloads carry content checksums.
+Command source paths and diagnostic path elements are relative to the current
+working directory and are rebound only after validation. Compilation diagnostics
+are replayed from their document elements, before test observations; color,
+verbosity and terminal width are current renderer inputs. The command's arena
+owns validated source bytes and lightweight source environments throughout replay.
+
+### Command-level execution
+
 `roc test --opt=size` and `roc test --opt=speed` use one command-level test
 plan for all discovered test roots in the app and its imports. The plan is
 explicit compiler data. It owns the stable source-order display order, the
@@ -23782,6 +23826,18 @@ Imported test-only edits do not change those summaries. Platform/app relation
 identity remains an explicit binding input. This is independent of compile-time
 value reuse's existing identity and portability contract.
 
+Nominal and alias types in test dependency summaries use producer-authored
+`test_declarations` provenance instead of an imported artifact key and an
+incidental declaration number. The provenance covers the declaring module's
+qualified name and declaration bytes; a block-local declaration additionally
+names its checked lexical owner and relative span. A declaration outside that
+ownership graph retains exact version provenance. Imported representation
+references resolve their explicit declaration row and retain the representation
+owner's semantic type/method context, so location independence never removes
+nominal identity, backing declaration validation, or method precedence. This
+contract is specific to outcome identity; ordinary checked type identity and
+compile-time value portability are unchanged.
+
 The execution strategy, execution mode, compiler compatibility and payload
 version partition outcome admission. Rendering settings, elapsed time, root
 order and the whole enclosing module are not semantic identity. Each current
@@ -23792,16 +23848,41 @@ record also contains its expected key and a checksum. Atomic replacement under
 one key can refresh reporting provenance for the same semantic outcome; reads
 still validate that provenance against the current sources.
 
-Source provenance is validated separately from semantics. This format retains
-exact root source regions and validates the declaring source prefix through each
-inline observation before replay. The prefix pins its lexical owner as well as
-its exact site; later unrelated source edits do not invalidate it. Extended
-failure regions, whose owner is not yet carried in the outcome format, retain
-the exact checked artifact as reporting provenance. A moved root or changed inline source
-invalidates that record; no offsets or embedded source details are guessed or
-patched. Results are rebound to the current plan order only after validation.
-Passes and failed expects are equally admissible; compiler errors and incomplete
+Source provenance is validated separately from semantics. Outcome format V2
+contains no absolute root offsets in its key or payload. A root's checked body
+and semantic dependency identity, compiler compatibility, native target,
+specialization strategy and execution policy decide its outcome. Current root
+order, source owner and region form an occurrence, supplied by the current test
+plan. Identical roots may share an outcome, but each occurrence independently
+instantiates that outcome and contributes its observations.
+
+A report inside the unchanged root carries a root-relative span. Other reports
+carry a qualified source owner and a checked producer-authored site identity.
+Checked publication emits `test_report_sites`: each site names its enclosing
+checked declaration's name and body bytes plus its relative span, and carries
+the current absolute region separately. Declaration bodies are hashed once per
+owner. The command builds both directions of this mapping once per source;
+replay never rescans or hashes source prefixes. Multiple current regions for
+one site identity are ambiguous and make that optional outcome unusable.
+Root-relative binding explicitly selects the current occurrence, so duplicate
+root bodies never require matching by old list position or proximity.
+
+The decoder validates every reference, span, counter, event and checksum before
+returning an outcome for merging or rendering. Missing, corrupt, incompatible
+or ambiguous reporting data rejects the entire outcome without emitting a
+partial transcript. Source maps borrow the command's checked sources, or the
+complete-command arena's validated source snapshots, through final rendering.
+Raw `dbg` and crash payload bytes remain semantic output and are never rewritten.
+Failure excerpts of mentioned bindings are covered by checked definition
+identity; primary source excerpts and line numbers render from current sources.
+Passes and failures are equally admissible; compiler errors and incomplete
 execution are not durable outcomes.
+
+Completed-command format V2 references durable individual outcomes and retains
+producer-authored report maps and each occurrence's current region, order and
+key under its exact validated input manifest. Both replay paths call the same
+outcome decoder. After an edit the command manifest misses, and current checking
+supplies fresh maps for individual reuse; a complete hit needs no checked graph.
 
 Admission precedes submission of runtime roots. Only misses enter specialization,
 LIR, code generation and execution. Each executing root owns its inline-expect
@@ -25423,6 +25504,11 @@ since the release compiler binary shares its modules with the development one. C
 cases that set one of these variables skip against a compiler without them.
 Performance work that needs them on an optimized compiler builds it with
 `zig build roc -Doptimize=ReleaseFast -Ddev-diagnostics`.
+
+`ROC_TEST_COMMAND_WORK` prints deterministic test-command counters at exit.
+The specialization, evaluation, runtime LIR, ARC, static-data and native test
+execution producers increment their own counters. A complete result hit leaves
+every counter zero. This variable uses the same developer-only gate.
 
 
 ## Integer SIMD Builtins

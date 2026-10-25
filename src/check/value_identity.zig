@@ -38,6 +38,19 @@ pub const CompileTimeRootIdentity = extern struct {
     site: [32]u8,
 };
 
+/// A producer-authored report site. Identity names its declaration's bytes and
+/// the site's relative span; region is this checked version's reporting location.
+pub const TestReportSite = extern struct {
+    identity: [32]u8,
+    start: u32,
+    end: u32,
+
+    /// The site's absolute region in this checked source version.
+    pub fn region(self: TestReportSite) base.Region {
+        return base.Region.from_raw_offsets(self.start, self.end);
+    }
+};
+
 /// What the identities of one module's roots are computed from.
 pub const Inputs = struct {
     env: *const ModuleEnv,
@@ -73,6 +86,12 @@ pub const ExportIdentity = extern struct {
     value: [32]u8,
 };
 
+/// Stable declaration provenance, indexed by the current checked source node.
+pub const DeclarationIdentity = extern struct {
+    statement: CIR.Statement.Idx,
+    value: [32]u8,
+};
+
 /// A module's value identities: its value context, the identities of its
 /// exports, the platform requirements its methods reach, and every root's
 /// identity.
@@ -98,6 +117,8 @@ pub const ModuleIdentities = struct {
     /// Every root's identity, in root order. Owned.
     roots: []CompileTimeRootIdentity,
     definitions: []DefinitionIdentity,
+    report_sites: []TestReportSite,
+    declarations: []DeclarationIdentity,
 };
 
 /// Compute the module's value context and every root's identity.
@@ -107,8 +128,11 @@ pub fn compute(allocator: Allocator, inputs: Inputs) Allocator.Error!ModuleIdent
 
     var state = try State.init(allocator, inputs);
     defer state.deinit();
-    try state.computeDefinitionIdentities();
     try state.mapExpressionOwners();
+    const declarations = try state.declarationIdentities();
+    errdefer allocator.free(declarations);
+    state.type_walk.declarations = declarations;
+    try state.computeDefinitionIdentities();
     const context = state.moduleContext();
     const type_world = try state.typeWorld();
     const value_context = valueContext(context, type_world);
@@ -150,7 +174,11 @@ pub fn compute(allocator: Allocator, inputs: Inputs) Allocator.Error!ModuleIdent
     for (inputs.roots, identities) |root, *identity| {
         identity.* = try state.rootIdentity(root, context, type_world, &ordinals);
     }
+    const report_sites = if (inputs.test_dependencies) try state.reportSites() else try allocator.alloc(TestReportSite, 0);
+    errdefer allocator.free(report_sites);
     return .{
+        .report_sites = report_sites,
+        .declarations = declarations,
         .context = value_context,
         .exports = exports,
         .method_requires = method_requires,
@@ -391,6 +419,108 @@ const State = struct {
             entry.value_ptr.* = owner;
             try appendExprChildren(self.inputs.env, expr, &stack, self.allocator);
         }
+    }
+
+    fn declarationIdentities(self: *State) Allocator.Error![]DeclarationIdentity {
+        var rows = std.ArrayList(DeclarationIdentity).empty;
+        errdefer rows.deinit(self.allocator);
+        if (!self.inputs.test_dependencies) return rows.toOwnedSlice(self.allocator);
+        const env = self.inputs.env;
+        var owners = collections.DenseMap(CIR.Statement.Idx, Owner).init(self.allocator);
+        defer owners.deinit();
+        var expressions = self.owners.keyIterator();
+        while (expressions.next()) |expr| {
+            if (env.store.getExpr(expr.*) == .e_block) {
+                for (env.store.sliceStatements(env.store.getExpr(expr.*).e_block.stmts)) |statement| {
+                    try owners.put(statement, self.owners.get(expr.*).?);
+                }
+            }
+        }
+        var seen = collections.DenseMap(CIR.Statement.Idx, void).init(self.allocator);
+        defer seen.deinit();
+        var owner_digests = std.AutoHashMapUnmanaged(Owner, [32]u8).empty;
+        defer owner_digests.deinit(self.allocator);
+        for (env.store.sliceStatements(env.type_decls)) |statement| {
+            const entry = try seen.getOrPut(statement);
+            if (entry.found_existing) continue;
+            var hash = Sha256.init(.{});
+            hashTag(&hash, "roc.test-declaration.v1");
+            hashBytes(&hash, env.qualifiedModuleName());
+            const region = env.store.getStatementRegion(statement);
+            hashBytes(&hash, self.regionText(region));
+            if (owners.get(statement)) |owner| {
+                const envelope = switch (owner) {
+                    .def => |def| env.store.getExprRegion(env.store.getDef(def).expr),
+                    .expect => |root| env.store.getStatementRegion(root),
+                };
+                const owner_digest = try owner_digests.getOrPut(self.allocator, owner);
+                if (!owner_digest.found_existing) {
+                    var owner_hash = Sha256.init(.{});
+                    owner_hash.update(&self.ownerKey(owner));
+                    hashBytes(&owner_hash, self.regionText(envelope));
+                    owner_digest.value_ptr.* = owner_hash.finalResult();
+                }
+                hash.update(owner_digest.value_ptr);
+                hashU32(&hash, region.start.offset - envelope.start.offset);
+                hashU32(&hash, region.end.offset - envelope.start.offset);
+            } else if (!self.type_walk.top_level.contains(statement)) {
+                // A declaration outside the expression ownership graph retains
+                // its exact version provenance; no lexical owner is invented.
+                hash.update(&self.inputs.own_identity);
+                hashU32(&hash, @backingInt(statement));
+            }
+            try rows.append(self.allocator, .{ .statement = statement, .value = hash.finalResult() });
+        }
+        std.mem.sort(DeclarationIdentity, rows.items, {}, struct {
+            fn less(_: void, a: DeclarationIdentity, b: DeclarationIdentity) bool {
+                return @backingInt(a.statement) < @backingInt(b.statement);
+            }
+        }.less);
+        return rows.toOwnedSlice(self.allocator);
+    }
+
+    fn reportSites(self: *State) Allocator.Error![]TestReportSite {
+        var sites = std.ArrayList(TestReportSite).empty;
+        errdefer sites.deinit(self.allocator);
+        const env = self.inputs.env;
+        const Anchor = struct { region: base.Region, identity: [32]u8 };
+        var anchors = std.AutoHashMapUnmanaged(Owner, Anchor).empty;
+        defer anchors.deinit(self.allocator);
+        var it = self.owners.keyIterator();
+        while (it.next()) |expr| {
+            const owner = self.owners.get(expr.*).?;
+            const anchor = try anchors.getOrPut(self.allocator, owner);
+            if (!anchor.found_existing) {
+                const region = switch (owner) {
+                    .def => |def| env.store.getExprRegion(env.store.getDef(def).expr),
+                    .expect => |statement| env.store.getStatementRegion(statement),
+                };
+                var hash = Sha256.init(.{});
+                hashTag(&hash, "roc.test-report-owner.v1");
+                hash.update(&self.ownerKey(owner));
+                hashBytes(&hash, self.regionText(region));
+                anchor.value_ptr.* = .{ .region = region, .identity = hash.finalResult() };
+            }
+            const owner_region = anchor.value_ptr.region;
+            const identity = anchor.value_ptr.identity;
+            try self.appendReportSite(&sites, identity, owner_region, env.store.getExprRegion(expr.*));
+            if (env.store.getExpr(expr.*) == .e_block) {
+                for (env.store.sliceStatements(env.store.getExpr(expr.*).e_block.stmts)) |statement| {
+                    try self.appendReportSite(&sites, identity, owner_region, env.store.getStatementRegion(statement));
+                }
+            }
+        }
+        return sites.toOwnedSlice(self.allocator);
+    }
+
+    fn appendReportSite(self: *State, sites: *std.ArrayList(TestReportSite), owner: [32]u8, envelope: base.Region, region: base.Region) Allocator.Error!void {
+        // Generated expressions without a source span have no report site.
+        if (region.start.offset < envelope.start.offset or region.end.offset > envelope.end.offset) return;
+        var hash = Sha256.init(.{});
+        hash.update(&owner);
+        hashU32(&hash, region.start.offset - envelope.start.offset);
+        hashU32(&hash, region.end.offset - envelope.start.offset);
+        try sites.append(self.allocator, .{ .identity = hash.finalResult(), .start = region.start.offset, .end = region.end.offset });
     }
 
     fn importedDefinition(self: *const State, view: checked_artifact.ImportedModuleView, def: CIR.Def.Idx) [32]u8 {
@@ -749,6 +879,7 @@ const TypeDigest = struct {
     /// type that names it would otherwise hash all of it again.
     declaration_digests: collections.DenseMap(CIR.Statement.Idx, [32]u8),
     stack: std.ArrayList(CheckedTypeId) = .empty,
+    declarations: []const DeclarationIdentity = &.{},
 
     fn init(allocator: Allocator, inputs: Inputs) TypeDigest {
         return .{
@@ -801,10 +932,39 @@ const TypeDigest = struct {
         return std.meta.eql(self.inputs.names.moduleIdentityBytes(origin).*, self.inputs.own_identity);
     }
 
+    fn importedView(self: *const TypeDigest, identity: [32]u8, comptime by_artifact: bool) checked_artifact.ImportedModuleView {
+        for (self.inputs.imports) |entry| {
+            const key = if (by_artifact) entry.view.key.bytes else entry.view.module_identity.stable_hash;
+            if (std.meta.eql(key, identity)) return entry.view;
+        }
+        for (self.inputs.available) |view| {
+            const key = if (by_artifact) view.key.bytes else view.module_identity.stable_hash;
+            if (std.meta.eql(key, identity)) return view;
+        }
+        for (self.inputs.relations) |view| {
+            const key = if (by_artifact) view.key.bytes else view.module_identity.stable_hash;
+            if (std.meta.eql(key, identity)) return view;
+        }
+        base.invariant("checked test type has no declaring imported module", .{});
+    }
+
+    fn writeImportedDeclaration(_: *const TypeDigest, hasher: *Sha256, view: checked_artifact.ImportedModuleView, declaration: u32) void {
+        const summary = view.compile_time_root_identities;
+        hashTag(hasher, "imported-test-type");
+        hasher.update(&summary.test_context[0]);
+        hasher.update(&declarationIdentity(summary.test_declarations, declaration));
+    }
+
     /// Names a declaration of the module: a top-level one by its name and
     /// source, any other by version-specific data.
     fn writeOwnDeclaration(self: *TypeDigest, hasher: *Sha256, name: []const u8, source_decl: ?u32) Allocator.Error!void {
         if (source_decl) |raw| {
+            if (self.inputs.test_dependencies) {
+                hashTag(hasher, "own-test-type");
+                hashBytes(hasher, name);
+                hasher.update(&declarationIdentity(self.declarations, raw));
+                return;
+            }
             const statement: CIR.Statement.Idx = @fromBackingInt(raw);
             if (self.top_level.contains(statement)) {
                 hashTag(hasher, "own-top-level");
@@ -857,6 +1017,9 @@ const TypeDigest = struct {
                 const name = names.typeNameText(alias.name);
                 if (self.isOwn(alias.origin_module)) {
                     try self.writeOwnDeclaration(hasher, name, alias.source_decl);
+                } else if (self.inputs.test_dependencies and alias.source_decl != null) {
+                    hashBytes(hasher, name);
+                    self.writeImportedDeclaration(hasher, self.importedView(names.moduleIdentityBytes(alias.origin_module).*, false), alias.source_decl.?);
                 } else {
                     hasher.update(names.moduleIdentityBytes(alias.origin_module));
                     hashBytes(hasher, name);
@@ -871,6 +1034,9 @@ const TypeDigest = struct {
                 const name = names.typeNameText(nominal.name);
                 if (self.isOwn(nominal.origin_module)) {
                     try self.writeOwnDeclaration(hasher, name, nominal.source_decl);
+                } else if (self.inputs.test_dependencies) {
+                    hashBytes(hasher, name);
+                    self.writeImportedDeclaration(hasher, self.importedView(names.moduleIdentityBytes(nominal.origin_module).*, false), nominal.source_decl);
                 } else {
                     hasher.update(names.moduleIdentityBytes(nominal.origin_module));
                     hashBytes(hasher, name);
@@ -882,8 +1048,14 @@ const TypeDigest = struct {
                 switch (nominal.representation) {
                     .builtin => |builtin_nominal| hashBytes(hasher, @tagName(builtin_nominal)),
                     .imported_declaration => |ref| {
-                        hasher.update(&ref.artifact.bytes);
-                        hashU32(hasher, @backingInt(ref.declaration));
+                        if (self.inputs.test_dependencies) {
+                            const owner = self.importedView(ref.artifact.bytes, true);
+                            const declaration = owner.checked_types.nominal_declarations[@backingInt(ref.declaration)];
+                            self.writeImportedDeclaration(hasher, owner, declaration.source_statement);
+                        } else {
+                            hasher.update(&ref.artifact.bytes);
+                            hashU32(hasher, @backingInt(ref.declaration));
+                        }
                     },
                     .imported_box_payload_capability => |ref| {
                         hasher.update(&ref.artifact.bytes);
@@ -954,6 +1126,17 @@ const TypeDigest = struct {
         }
     }
 };
+
+fn declarationIdentity(rows: []const DeclarationIdentity, raw: u32) [32]u8 {
+    var lo: usize = 0;
+    var hi = rows.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const node = @backingInt(rows[mid].statement);
+        if (node < raw) lo = mid + 1 else if (node > raw) hi = mid else return rows[mid].value;
+    }
+    base.invariant("checked test type has no producer-authored declaration identity", .{});
+}
 
 fn expectBody(env: *const ModuleEnv, statement: CIR.Statement.Idx) CIR.Expr.Idx {
     const data = env.store.getStatement(statement);

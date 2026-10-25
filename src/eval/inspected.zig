@@ -2376,6 +2376,7 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
         if (timing) |timings| timings.finish(codegen_setup_started_ns, .codegen_setup);
 
         const procedure_codegen_started_ns = if (timing) |timings| timings.start() else 0;
+        base.dev_diagnostics.countTestWork(.native_test_procedures, store.getProcSpecs().len);
         try codegen.compileAllProcSpecs(store.getProcSpecs());
         const static_rc_helpers = try backend.collectRequiredRcHelpers(allocator, module.static_data.exports);
         defer allocator.free(static_rc_helpers);
@@ -2484,6 +2485,7 @@ fn callBoolRoot(
     expect_passed: []u64,
     expect_failed: []u64,
 ) Error!BoolRootEvalResult {
+    base.dev_diagnostics.countTestWork(.test_root_execution, 1);
     var runtime_env = RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
     var event_forwarder: RuntimeHostEventForwarder = undefined;

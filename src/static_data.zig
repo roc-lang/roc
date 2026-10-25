@@ -1490,6 +1490,7 @@ pub fn buildStaticDataForWidth(
     target_usize: @import("base").target.TargetUsize,
     options: BuildOptions,
 ) MaterializationError![]StaticDataExport {
+    @import("base").dev_diagnostics.countTestWork(.static_data, 1);
     const root = modules.root orelse {
         if (hasProvidedData(modules)) staticDataInvariant("provided data exports require a root checked module");
         if (lowered) |lowered_program| {

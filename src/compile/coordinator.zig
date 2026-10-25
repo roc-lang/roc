@@ -1471,6 +1471,7 @@ pub const Coordinator = struct {
     checked_program: bool = false,
     runtime_lowering: ?compile_build.RuntimeLoweringConfig = null,
     runtime_output_probe: ?compile_build.RuntimeOutputProbe = null,
+    debug_observer: ?eval.CompileTimeFinalization.DebugObserver = null,
     /// Set by checked-program finalization when the probe found this exact
     /// program's runtime output recorded, so no runtime program was lowered.
     runtime_output_cached: bool = false,
@@ -3160,6 +3161,7 @@ pub const Coordinator = struct {
         options.keep_artifacts = self.compile_time_object_cache != null or self.keep_compile_time_artifacts;
         options.cached_debug_modules = cached_debug_modules.items;
         options.defer_debug_replay = !replay_cached_debug;
+        options.debug_observer = self.debug_observer;
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;
         if (runtime_target) |*target| target.post_check_executor = self.postCheckExecutor();
         var unfinalized = UnfinalizedReportDestinations{ .coordinator = self, .program_root = root.key.digest() };

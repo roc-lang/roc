@@ -1515,6 +1515,7 @@ pub fn prepareCheckedModulesMonotype(
                 timing.addDemand(.{ .monotype = demand_counters });
             }
         }
+        base.dev_diagnostics.countTestWork(.specialization, 1);
         if (target.work_metrics) |metrics| metrics.monotype_runs += 1;
         break :monotype try postcheck.Monotype.Lower.run(
             allocator,
