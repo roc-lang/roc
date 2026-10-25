@@ -37,6 +37,7 @@ pub fn makeScope(
         base.invariant("checking interface publication follows module identity finalization", .{});
     var scope = try dependencies.Scope.init(allocator, own.*);
     errdefer scope.deinit();
+    scope.imported = imported;
     if (builtin_env) |builtin_module| {
         if (!base.ModuleIdentity.eql(own, builtin_module.contentIdentityHash().?)) {
             try scope.appendDependency(builtin_module);
@@ -67,14 +68,19 @@ pub fn publish(
 
     // Builtin is compiler-owned input, fixed for the compiler compatibility
     // domain. Its complete content identity is its checking contract.
+    var references: collections.SafeList(u32) = .{};
+    errdefer references.deinit(env.gpa);
     const digest = if (env.module_role == .builtin) env.contentIdentityHash().?.* else blk: {
         var publication = try Publication.init(env, scope);
         defer publication.deinit();
         try publication.writeInterface(classify, binding_owner);
-        break :blk try publication.finish();
+        const result = try publication.finish();
+        references = publication.references;
+        publication.references = .{};
+        break :blk result;
     };
     env.checking_dependency.deinit(env.gpa);
-    env.checking_dependency = .{ .digest = digest, .owners = owners, .published = true };
+    env.checking_dependency = .{ .digest = digest, .owners = owners, .references = references, .published = true };
 }
 
 const Publication = struct {
@@ -84,6 +90,8 @@ const Publication = struct {
     copied: collections.DenseMap(Var, Var),
     seen_nodes: collections.DenseMap(CIR.Node.Idx, void),
     seen_annos: collections.DenseMap(CIR.TypeAnno.Idx, void),
+    slots: collections.DenseMap(CIR.Node.Idx, u32),
+    references: collections.SafeList(u32) = .{},
     annos: std.ArrayList(CIR.TypeAnno.Idx) = .empty,
     hasher: base.Sha256 = base.Sha256.init(.{}),
 
@@ -98,8 +106,9 @@ const Publication = struct {
             .copied = collections.DenseMap(Var, Var).init(env.gpa),
             .seen_nodes = collections.DenseMap(CIR.Node.Idx, void).init(env.gpa),
             .seen_annos = collections.DenseMap(CIR.TypeAnno.Idx, void).init(env.gpa),
+            .slots = collections.DenseMap(CIR.Node.Idx, u32).init(env.gpa),
         };
-        result.hasher.update("roc-checking-interface-v1");
+        result.hasher.update("roc-checking-interface-v2");
         result.hasher.update(&scope.digest());
         return result;
     }
@@ -109,6 +118,8 @@ const Publication = struct {
         self.copied.deinit();
         self.seen_nodes.deinit();
         self.seen_annos.deinit();
+        self.slots.deinit();
+        self.references.deinit(self.env.gpa);
         self.annos.deinit(self.env.gpa);
     }
 
@@ -124,6 +135,23 @@ const Publication = struct {
             try self.bytes(if (data.isNone()) "" else self.env.getIdent(data));
         } else if (T == base.ModuleIdentity.Idx) {
             dependencies.hashU32(&self.hasher, self.scope.ordinal(self.env.moduleIdentityHash(data).*));
+        } else if (T == CIR.TypeAnno.LocalOrExternal) {
+            try self.bytes(@tagName(data));
+            switch (data) {
+                .local => |local| try self.node(local.decl_idx),
+                .external => |external| {
+                    try self.value(external.module_idx);
+                    dependencies.hashU32(&self.hasher, try self.importNode(external.module_idx, external.target_node_idx));
+                },
+                .external_identity => |external| {
+                    try self.value(external.module_identity);
+                    dependencies.hashU32(&self.hasher, try self.foreignNode(external.module_identity, external.target_node_idx));
+                },
+                .builtin => |builtin| try self.value(builtin),
+                .pending => base.invariant("checking interface annotations have resolved imports", .{}),
+            }
+        } else if (T == CIR.Node.Idx or T == CIR.Statement.Idx or T == CIR.Def.Idx or T == CIR.Pattern.Idx or T == CIR.Expr.Idx or T == CIR.TypeAnno.Idx) {
+            try self.node(data);
         } else if (T == Var) {
             try self.ty(data);
         } else switch (@typeInfo(T)) {
@@ -169,8 +197,38 @@ const Publication = struct {
         }
     }
 
-    fn node(self: *Publication, id: anytype) void {
-        dependencies.hashU32(&self.hasher, @backingInt(id));
+    fn slot(self: *Publication, raw: u32) Allocator.Error!u32 {
+        const entry = try self.slots.getOrPut(@fromBackingInt(raw));
+        if (!entry.found_existing) {
+            entry.value_ptr.* = std.math.cast(u32, self.references.items.items.len) orelse return error.OutOfMemory;
+            _ = try self.references.append(self.env.gpa, raw);
+        }
+        return entry.value_ptr.*;
+    }
+
+    fn node(self: *Publication, id: anytype) Allocator.Error!void {
+        dependencies.hashU32(&self.hasher, try self.slot(@backingInt(id)));
+    }
+
+    fn foreignNode(self: *Publication, owner: base.ModuleIdentity.Idx, raw: u32) Allocator.Error!u32 {
+        if (owner == self.env.selfModuleIdentity()) return self.slot(raw);
+        return self.foreignHash(self.env.moduleIdentityHash(owner).*, raw);
+    }
+
+    fn importNode(self: *Publication, import_idx: CIR.Import.Idx, raw: u32) Allocator.Error!u32 {
+        const resolved = self.env.imports.getResolvedModule(import_idx) orelse
+            base.invariant("published external annotation imports are resolved", .{});
+        return self.foreignHash(self.scope.imported[resolved].contentIdentityHash().?.*, raw);
+    }
+
+    fn foreignHash(self: *Publication, hash: base.ModuleIdentity.Hash, raw: u32) Allocator.Error!u32 {
+        const dependency = self.scope.environments.get(hash) orelse
+            base.invariant("checking reference owners belong to the publication scope", .{});
+        if (dependency.module_role == .builtin) return raw;
+        for (dependency.checking_dependency.references.items.items, 0..) |node_id, ordinal| {
+            if (node_id == raw) return @intCast(ordinal);
+        }
+        base.invariant("foreign checking references have producer-published slots", .{});
     }
 
     fn section(self: *Publication, name: []const u8, count: usize) Allocator.Error!void {
@@ -189,11 +247,11 @@ const Publication = struct {
             &self.projected,
             self.env.gpa,
         );
-        self.node(copied);
+        dependencies.hashU32(&self.hasher, @backingInt(copied));
     }
 
     fn scheme(self: *Publication, node_id: CIR.Node.Idx) Allocator.Error!void {
-        self.node(node_id);
+        try self.node(node_id);
         try self.ty(ModuleEnv.varFrom(node_id));
         try self.value(self.env.nodeIsBindingScheme(node_id));
         const requirements = self.env.bindingSchemeCodecRequirementsForNode(node_id);
@@ -212,13 +270,23 @@ const Publication = struct {
     }
 
     fn definition(self: *Publication, id: CIR.Def.Idx, classify: *const fn (*const ModuleEnv, CIR.Def) Definition) Allocator.Error!void {
-        self.node(id);
+        try self.node(id);
         const entry = try self.seen_nodes.getOrPut(ModuleEnv.nodeIdxFrom(id));
         if (entry.found_existing) return;
         const def = self.env.store.getDef(id);
-        self.node(def.pattern);
-        self.node(def.expr);
+        try self.node(def.pattern);
+        try self.node(def.expr);
         try self.value(classify(self.env, def));
+        try self.value(def.annotation != null);
+        if (def.annotation) |annotation_id| {
+            try self.node(annotation_id);
+            const annotation = self.env.store.getAnnotation(annotation_id);
+            try self.value(annotation.erroneous);
+            try self.value(annotation.mentions_type_var);
+            try self.value(annotation.introduces_type_var);
+            try self.value(annotation.contains_underscore);
+            try self.anno(annotation.anno);
+        }
         try self.scheme(ModuleEnv.nodeIdxFrom(def.pattern));
         try self.scheme(ModuleEnv.nodeIdxFrom(id));
         try self.ty(ModuleEnv.varFrom(def.expr));
@@ -228,7 +296,7 @@ const Publication = struct {
     }
 
     fn declaration(self: *Publication, id: CIR.Statement.Idx) Allocator.Error!void {
-        self.node(id);
+        try self.node(id);
         const entry = try self.seen_nodes.getOrPut(ModuleEnv.nodeIdxFrom(id));
         if (entry.found_existing) return;
         const statement = self.env.store.getStatement(id);
@@ -278,13 +346,13 @@ const Publication = struct {
         const annotations = self.env.store.sliceTypeAnnos(span);
         dependencies.hashU32(&self.hasher, std.math.cast(u32, annotations.len) orelse return error.OutOfMemory);
         for (annotations) |annotation| {
-            self.node(annotation);
+            try self.node(annotation);
             try self.annos.append(self.env.gpa, annotation);
         }
     }
 
     fn anno(self: *Publication, annotation: CIR.TypeAnno.Idx) Allocator.Error!void {
-        self.node(annotation);
+        try self.node(annotation);
         if (annotation != .placeholder) try self.annos.append(self.env.gpa, annotation);
     }
 
@@ -293,7 +361,7 @@ const Publication = struct {
             if (id == .placeholder) continue;
             const entry = try self.seen_annos.getOrPut(id);
             if (entry.found_existing) continue;
-            self.node(id);
+            try self.node(id);
             const annotation = self.env.store.getTypeAnno(id);
             try self.bytes(@tagName(annotation));
             switch (annotation) {
@@ -360,7 +428,7 @@ const Publication = struct {
         const exposed = env.common.exposed_items.items.entries.items;
         const order = try env.gpa.alloc(usize, exposed.len);
         defer env.gpa.free(order);
-        for (order, 0..) |*slot, i| slot.* = i;
+        for (order, 0..) |*position, i| position.* = i;
         std.mem.sort(usize, order, env, struct {
             fn lessThan(module: *const ModuleEnv, a: usize, b: usize) bool {
                 const entries = module.common.exposed_items.items.entries.items;
@@ -397,7 +465,7 @@ const Publication = struct {
         for (env.method_defs.entries.items) |entry| {
             const owner = entry.key.ownerIdent();
             if (owner.moduleIdentity()) |identity| try self.value(identity) else dependencies.hashU32(&self.hasher, 0);
-            self.node(owner.owner);
+            dependencies.hashU32(&self.hasher, try self.foreignNode(owner.moduleIdentity() orelse env.selfModuleIdentity(), @backingInt(owner.owner)));
             try self.value(entry.key.methodIdent());
             try self.scheme(entry.value.type_node_idx);
             try self.definition(entry.value.def_idx, classify);
@@ -406,7 +474,7 @@ const Publication = struct {
         for (env.method_idents.entries.items) |entry| {
             const owner = entry.key.ownerIdent();
             if (owner.moduleIdentity()) |identity| try self.value(identity) else dependencies.hashU32(&self.hasher, 0);
-            self.node(owner.owner);
+            dependencies.hashU32(&self.hasher, try self.foreignNode(owner.moduleIdentity() orelse env.selfModuleIdentity(), @backingInt(owner.owner)));
             try self.value(entry.key.methodIdent());
             try self.value(entry.value);
         }
@@ -425,7 +493,12 @@ const Publication = struct {
             try self.value(entry.func_ident);
             try self.bytes(env.getString(entry.symbol));
             try self.value(entry.target_import);
-            try self.value(entry.target_def);
+            try self.value(entry.target_def != null);
+            if (entry.target_def) |def| {
+                if (entry.target_import) |import_idx| {
+                    dependencies.hashU32(&self.hasher, try self.importNode(import_idx, @backingInt(def)));
+                } else try self.node(def);
+            }
             try self.value(entry.target_status);
         }
         try self.bytes("annotations");
@@ -436,6 +509,8 @@ const Publication = struct {
         var arena = base.SingleThreadArena.init(self.env.gpa);
         defer arena.deinit();
         const allocator = arena.allocator();
+        var mapper = ProjectionBinding{ .publication = self };
+        try self.projected.types.rebindSourceReferences(&mapper);
         var writer = CompactWriter.init();
         const root = try writer.appendAlloc(allocator, types.Store.Serialized);
         try root.serialize(&self.projected.types, allocator, &writer);
@@ -449,5 +524,18 @@ const Publication = struct {
             dependencies.hashU32(&self.hasher, self.scope.ordinal(identity.*));
         }
         return self.hasher.finalResult();
+    }
+};
+
+const ProjectionBinding = struct {
+    pub const Error = Allocator.Error;
+    publication: *Publication,
+
+    pub fn node(self: *ProjectionBinding, owner: base.ModuleIdentity.Idx, raw: u32) Error!u32 {
+        const publication = self.publication;
+        const hash = publication.projected.moduleIdentityHash(owner);
+        const original = publication.env.lookupModuleIdentity(hash) orelse
+            base.invariant("projected type ownership was copied from the source environment", .{});
+        return publication.foreignNode(original, raw);
     }
 };

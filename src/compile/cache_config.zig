@@ -345,7 +345,8 @@ pub const Constants = struct {
     /// 161: generated codec derivations record the renaming their snapshot
     ///      applied to every type that holds a variable.
     /// 162: modules publish checking interfaces and imported callable eligibility.
-    pub const CACHE_VERSION = 162;
+    /// 163: producer-owned declaration slots and stored checking diagnostics.
+    pub const CACHE_VERSION = 163;
 };
 
 /// Configuration for the Roc cache system.

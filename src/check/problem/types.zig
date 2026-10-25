@@ -22,13 +22,13 @@ pub const Category = context_mod.Category;
 pub const CopiedRequirement = context_mod.CopiedRequirement;
 pub const SharedMethodUses = context_mod.SharedMethodUses;
 
-const ByteListRange = struct { start: usize, count: usize };
+const ByteListRange = struct { start: u64, count: u64 };
 
 /// Alias into the Store.extra_strings_backing array
 pub const ExtraStringIdx = ByteListRange;
 
 /// A range of patterns
-pub const MissingPatternsRange = struct { start: usize, count: usize };
+pub const MissingPatternsRange = struct { start: u64, count: u64 };
 
 /// The checker relation that recorded a problem, or whose unification queued
 /// a dispatch obligation whose problems then belong to it, unless the

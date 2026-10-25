@@ -905,29 +905,36 @@ pub const CallableCheckingFact = extern struct {
 pub const CheckingDependency = struct {
     digest: [32]u8 = @splat(0),
     owners: collections.SafeList(base.ModuleIdentity.Hash) = .{},
+    /// Producer-owned interface slot to current source node.
+    references: collections.SafeList(u32) = .{},
     published: bool = false,
 
     pub fn deinit(self: *CheckingDependency, allocator: Allocator) void {
         self.owners.deinit(allocator);
+        self.references.deinit(allocator);
     }
 
     pub const Serialized = extern struct {
         digest: [32]u8,
         owners: collections.SafeList(base.ModuleIdentity.Hash).Serialized,
+        references: collections.SafeList(u32).Serialized,
         published: u64,
 
         pub fn serialize(self: *@This(), value: *const CheckingDependency, allocator: Allocator, writer: *CompactWriter) Allocator.Error!void {
             self.digest = value.digest;
             self.published = @intFromBool(value.published);
             try self.owners.serialize(&value.owners, allocator, writer);
+            try self.references.serialize(&value.references, allocator, writer);
         }
 
         pub fn deserializeInto(self: *const @This(), address: usize) CheckingDependency {
-            return .{ .digest = self.digest, .owners = self.owners.deserializeInto(address), .published = self.published != 0 };
+            return .{ .digest = self.digest, .owners = self.owners.deserializeInto(address), .references = self.references.deserializeInto(address), .published = self.published != 0 };
         }
 
         pub fn deserializeWithCopy(self: *const @This(), address: usize, allocator: Allocator) Allocator.Error!CheckingDependency {
-            return .{ .digest = self.digest, .owners = try self.owners.deserializeWithCopy(address, allocator), .published = self.published != 0 };
+            var owners = try self.owners.deserializeWithCopy(address, allocator);
+            errdefer owners.deinit(allocator);
+            return .{ .digest = self.digest, .owners = owners, .references = try self.references.deserializeWithCopy(address, allocator), .published = self.published != 0 };
         }
     };
 };

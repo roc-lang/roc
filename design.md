@@ -5409,18 +5409,36 @@ the current dependency publications. Equality of a signature, a name or an
 incidental node index is never a license to substitute a declaration. Source
 regions that are retained as checking input participate in admission as well.
 
-The first format seals the producer's declaration-reference layout as part of
-its interface: every reachable source declaration/binding/annotation index is
-encoded with the facts it names. A changed layout misses, even if its printed
-types are identical. Admission therefore proves the retained foreign indices
-still name the same published checking facts; it never searches for a matching
-name or guesses an index correspondence. Only the dense module-identity table
-is rebound, using the ordered owner parameters and their equality partition.
-Source indices and solved graphs are not rewritten. The import-facing type
-projection uses the ordinary import graph copier, preserving sharing, cycles,
-descriptor flags, nominal templates and dispatch metadata; names are encoded
-as text and owner identities as parameters. Section lengths, source ordering
-and sorted exposures make the encoding independent of hash-map iteration.
+The producer assigns declaration-reference slots while publishing its checking
+interface. Slots are first-encounter ordinals in the interface's deterministic
+traversal: sorted exposures, declared types and methods, and their binding and
+annotation children. They are scoped to that complete interface, not global
+identities or a name-matching scheme. The publication carries a parallel table
+from slot to current CIR node. The digest encodes slots and their checking facts,
+never the table's incidental CIR indices. Changed traversal structure or checking
+facts changes the interface and invalidates importers. Builtin references remain
+fixed within the compiler compatibility domain.
+
+An inference capsule carries the old dependency reference tables and their owner
+parameters. Admission establishes equal interfaces and owner equality partitions
+before translating each retained foreign reference through old node -> published
+slot -> current node. Translation covers CIR value, associated, nominal, pattern
+and annotation references, suffix and hosted targets, method-owner keys, nominal
+and alias source declarations, record defaults, and their type-store indices.
+Dispatch evidence's type variables and relations are local to the stored solved
+graph and are preserved; only their foreign declaration locators change. A
+reference without a published correspondence rejects the optional capsule. No
+name, printed signature or numerical coincidence supplies a missing mapping.
+This relocation changes no solved type relationship or dispatch decision.
+
+Diagnostic provenance has a separate admission contract. Stored outcomes retain
+checking problems and canonicalization diagnostics in order, together with all
+reporting data they require. Local source is already an exact cache-key input;
+foreign source-dependent diagnostics require explicit current-source validation
+and otherwise miss. Evaluation diagnostics and empirical exhaustiveness outcomes
+are produced after publication against current implementations. Restored checking
+errors follow ordinary reporting and rejection, including publication's erroneous
+code exclusions; a cache hit cannot turn an error into successful executable code.
 
 A hit binds the inference result to current owners and publishes a new checked
 artifact against current imported artifacts. Publication consumes the stored
@@ -5434,10 +5452,12 @@ contract in the existing cache infrastructure. Missing, incompatible or corrupt
 entries are cache misses. Dependency diagnostics are produced by each current
 dependency's ordinary compilation. An inference result with checking reports
 is not admitted unless those reports and their current provenance are explicitly
-part of the stored result. The first format stores only diagnostic-free
-inference, and always reports evaluation diagnostics from current publication.
-Work counters distinguish inference, interface
-publication, reference binding and artifact publication, so interface creation
+part of the stored result. Checking outcomes include snapshots, their formatted
+text, checker regions, and pending static-exhaustiveness recipes. Platform-side
+source regions require an exact current-platform-source digest; otherwise the
+capsule misses. Evaluation diagnostics always come from current publication.
+Work counters distinguish inference, interface publication, owner and declaration
+reference binding, diagnostic replay and artifact publication, so interface creation
 cannot hide a second checking pass.
 
 Stored-constant eligibility of a foreign callable is a producer fact. Checking
@@ -13572,6 +13592,14 @@ site to any family below must classify it here.
   would have copied.
 
 Other solved-graph mutations:
+
+- `Store.rebindSourceReferences`—mechanism: inference-cache declaration
+  relocation (Checking dependencies and inference reuse). Equal producer
+  interfaces establish the declaration correspondence before this store-owned
+  operation translates nominal/alias/default locators and the nominal lookup
+  index. It preserves every variable, equivalence class, descriptor flag,
+  structural edge, and dispatch decision. It also normalizes the private
+  import-facing type projection to producer slots before hashing it.
 
 - `checkConcreteBuiltinNumeral`—mechanism: Concrete Builtin Numeral
   Introduction (above). Uses the existing `unifyWith` descriptor-introduction

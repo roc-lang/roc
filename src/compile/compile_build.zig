@@ -2682,6 +2682,8 @@ pub const BuildEnv = struct {
         checking_interfaces_built: u32 = 0,
         /// Dense owner identities explicitly bound when inference was reused.
         checking_owner_bindings: u32 = 0,
+        checking_reference_bindings: u32 = 0,
+        checking_diagnostics_replayed: u32 = 0,
 
         /// Module compile time tracking (for non-cached modules)
         /// Time is for full module compilation: parse -> canonicalize -> type-check
