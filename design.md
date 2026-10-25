@@ -666,8 +666,9 @@ is made portable by this contract. Linked-only LLVM objects remain exact-target
 inputs and cannot serve CTFE. Source-location, transitive code/data closure,
 compile-time reads and demand/observation eligibility checks still apply.
 
-Dev procedure packs and discovery records live under `proc-<domain>-dev` within
-the versioned object namespace. Program outputs stay under `<target>-dev`, and
+Dev procedure records (the indexed offers, metadata, payloads and completion
+markers of "Object Cache Store") and discovery records live under
+`proc-<domain>-dev` within the versioned object namespace. Program outputs stay under `<target>-dev`, and
 optimized packs stay under their exact target and optimization level. Both
 publication and lookup use the procedure namespace. A compatible runtime build
 owns its target-specific Store while borrowing CTFE's heap-owned LoadedPacks
@@ -679,24 +680,208 @@ Same-program retained fragments remain exact-target for now. Their separate
 `rejected_target` metric exposes this limitation; revision, transferred LIR and
 layout ownership, CPU, static-data and runtime-context checks are unchanged.
 
+### Persistent Specialization Interface Summaries
+
+The earliest reusable result of an open specialization request is its settled
+interface relation, before the callee's body reservation and machine-code
+lookup. Closed interfaces already have a complete checked root and publish no
+persistent record. Checking still supplies the template, dispatch relations and
+evidence; the consumer still instantiates its own request and substitution cells. A
+producer records the relation only after its recursive component has reached
+its fixed point, using the same detached, parametric inputs as in-process
+interface replay. A multi-request recursive component with parametric holes
+has no independently reusable summary.
+
+An interface summary is either an explicit unchanged result or immutable
+constraints over locally numbered nodes and field-kind cells. Persistent
+constraints refer to settled types through the current request's leaf positions
+or explicit primitive types; they do not serialize solver stores or retain
+producer-owned type ids. A producer whose result requires another settled type
+publishes no persistent summary; checked default-expression addresses likewise
+remain unrepresented. Named checked provenance in open constraints
+must still name a currently present exact checked module. Consumers validate
+all indices, tags, lengths and provenance before instantiating fresh nodes.
+Missing, incompatible, corrupt or unrepresentable optional records are misses.
+
+The provider key includes the exact checked callee code-generation key,
+the method scope's checked value context and ordered
+lookup-scope contexts, the program method context, the callee's explicit import
+closure, and lowering
+policy. These use the identities already produced for literal value reuse:
+top modules contribute their checked type/method world and imports; other
+modules contribute exact checked keys. Platform requirements reached from
+methods contribute their exported definition identities. The callee's transitive
+import closure additionally contributes exact code-generation keys and the
+requirement identities reached from those modules' exports. Unrelated exports
+(such as the platform's call to application main) do not become dependencies
+of every imported callee. This retains transitive method/conversion/body
+dependencies without making an
+unrelated top-level application expression part of every imported callee's
+interface key. A scope without that explicit context has no persistent offer.
+Paired platform templates keep their code-generation key, which includes the
+application bindings. The request key includes the procedure/template ordinals,
+the full captured input and
+canonical evidence identity. Evidence views of top modules use the checker's
+explicit value context, which describes their type/method world independently
+of unrelated expression bodies. Procedure targets retain their exact module and
+template identities; local-procedure evidence has no persistent offer because
+its view also owns its body address. Checked callable-type ordinals are
+provenance, not evidence identity; their producer-issued canonical keys remain
+part of that digest, as in `Ast.fnEvidenceDigest`. Compiler, target and optimization namespaces remain those
+of the object store.
+
+This boundary is a type relation, not a code or demand certificate. It neither
+evaluates roots nor publishes their observations, changes demand, or promises
+machine code. Exact callable specialization, compile-time-read demand,
+ownership interfaces, native-only code-provider admission and source/debug
+validation still happen at the existing body/code boundary. Request leaf
+references preserve current-caller type provenance. After an application edit,
+a callee in another unchanged module can reuse the relation;
+changing the callee's own module still changes its identity. Finer reuse within
+that module requires producer-issued template identities and relocatable
+checked provenance, not deletion of its checked-module guard.
+
+The post-evaluation normalization pass remains a specialization against stored
+completed constants. It may consume these immutable interface summaries and
+existing validated normalized machine-code offers, but never reuse the first
+pass's slot-read bodies. Interface relations do not carry compile-time values:
+constant-function evidence and the current request still identify the selected
+relation. Thus a fresh value and a restored value enter the same normalization
+path, and unused failing roots remain undemanded.
+
+Persistent records are batched by checked module and context in
+`interfaces/<provider>.ris` under the object store's procedure domain.
+Different procedures remain separate request keys. Compatible native procedure
+domains share them; specialization strategies and incompatible targets stay
+separate. The binary container validates its provider, lengths and payload
+digest before exposing any request. A build reads each provider once, including
+absent providers; explicit index refresh invalidates that snapshot. Accepted
+coordinator results update the resident provider immediately,
+so local publication invalidates absence. Publication writes each changed
+provider once in the reported runtime-cache phase and leaves identical records
+alone. Concurrent atomic replacements can discard optional variants but cannot
+expose partial records or change correctness. No historical providers are scanned.
+`ROC_DISABLE_PERSISTENT_INTERFACES` is a developer-diagnostic-only comparison
+switch, read solely through `base.dev_diagnostics`.
+
 ### Object Cache Store
 
-Dev packs live under `<cache root>/<compiler version>/objects-v<pack format>/
-proc-<domain>-dev/<local|pkg>/<module identity>/<key>.rpk`, and the pack an
-optimized build files for its program, which each optimized build of the
-program replaces, under `<target>-<opt>/optimized/<identity>.rpk`. Every
-other pack's path is a function of its content, so a writer stages it beside its path in a file it
-alone created (`CoreCtx.writeTempFile`), so two writers never share a partly
-written file, renames it into place, and leaves a pack already present alone; builds with runtime
-safety compare the bytes they would have written with the pack in place. The
-background sweep (`cache_cleanup.sweep`) deletes every `objects-v*` namespace
-of a format other than the compiler's own, ages the current namespace's
-`local/` packs (rewritten by every edit) and recorded program outputs
-(`programs/`, see "Recorded Program Output") on one day and its `pkg/` and
-`optimized/` packs on thirty, by last use (`max(atime, mtime)`), and then deletes the least
-recently used persistent cache files of every family until the cache fits
-`CacheConfig.max_size_mb`. Eviction only deletes files; it never changes what
-a build writes.
+The store has two namespaces under `<cache root>/<compiler version>/
+objects-v<pack format>/`. Every dev procedure record (offers, shared metadata,
+payloads, completion markers, discovery summaries and interface summaries) lives
+in the procedure namespace `proc-<domain>-dev/` of the build's `NativeProcDomain` (see "Native
+dev procedure compatibility"), so publication and lookup both use it, and a
+musl and a glibc build at the same CPU floor read each other's records. The
+exact-target namespace `<target>-<opt>/` holds recorded program outputs
+(`programs/`) and, at optimized levels, object packs. Compiler compatibility,
+procedure domain (pack format, target contract, CPU floor, specialization
+strategy, representation revision and execution capability), optimization
+policy and schema isolation are explicit key and namespace contracts. A
+specialized consumer never acquires Boxy code: offer production rejects
+closures that depend on the program's runtime descriptor tables, indexed
+metadata admission rejects runtime references too, and Boxy has its own
+domain. The index broadens no compatibility beyond the declared domain, and a
+record from a shared domain elides a body only for a consumer with the exact
+same provider capability (`CodeProvision`).
+
+Within the procedure namespace, dev offers live under
+`<local|pkg>/offers/<specialization key>/
+<provider identity>-<offer SHA-256>.rpi`. The `ROFFER02` binary record names a
+shared metadata digest, a specialization ordinal, and the explicit origin and
+module identity owning its storage. Provider visibility and rank are supplied
+by the checked program, root first. A lookup probes one key bucket per origin,
+filters candidates against that provider map, then sorts by provider rank and
+content digest. It never probes every visible module or enumerates unrelated
+specialization keys. Concurrent writers publish independent immutable records,
+so they cannot overwrite another writer's additions.
+
+One `ROFMETA1` metadata record per producer holds the union of its offered
+closures: one payload digest per artifact and a payload-free `PackFile` with
+all specialization entries. It is stored at `<origin>/<owner>/metadata/
+<digest>.rpm`. Source/debug locations, explicit local and symbolic references,
+relocations, failure meanings, compile-time reads and ARC interfaces are
+serialized once for all of that producer's offers. The record is read and
+decoded once per loader, and shared across hits. Metadata granularity is a
+producer's offered union, not a single artifact: selecting an offer can read
+metadata for other offers in that producer, but does not read their code/data
+or any unrelated producer history. Different producer records can still carry
+overlapping descriptions. Cycles remain explicit set-local references; there
+is no recursive hash scheme that attempts to infer graph identity.
+
+Code/data payloads remain independently addressed `RPAYLD01` records at
+`<origin>/<owner>/payload/<digest>.rpa`. Each record contains length-prefixed
+code and carried data slices. Publication deduplicates payload digests within
+the producer. Before replacing an existing immutable record, the writer reads
+and compares it with the known producer bytes: verified equal bytes need no
+write; corrupt or missing records are repaired through staging and atomic
+rename. This adds an unsuccessful read on an empty cache, and a verification
+read on a warm cache, in exchange for avoiding repeated writes. It never scans
+historical records. Payloads and shared metadata publish before their offers;
+the `ROCINDEX01` completion marker publishes last.
+
+`LoadedPacks` memoizes misses under the specialization key, code-provision
+policy, and exact program-module digest. Its index snapshot lasts until
+`refreshIndex`, a new visible provider, or a new compilation. Local producers
+explicitly refresh readers after publication, including publication to an
+already registered provider. Concurrent external publications become visible
+on the next refresh or compilation. Missing/corrupt selected records, transient
+I/O failures, allocation failures, and lookups deferred for a completed-output
+probe are not memoized as absence. Provider registration does not read history.
+For U distinct requests and M visible modules, filesystem probes depend on U
+and the number of cache origins, not U*M or repeated requests. Eligibility
+rejections remain scoped to the exact request context.
+
+Selection uses the existing `reachingAbsentFiles` and `reachingIdentities`
+contracts before payload I/O. Site-named symbolic callees supplied by the
+current program do not invalidate their caller merely because their historical
+source version changed. Linked-object precedence remains intact. The loader
+traverses the producer's explicit dependency graph and pins every required
+payload before promising a body-elision hit. It memoizes materialization per
+artifact and payload bytes by digest. Eviction cannot invalidate a served hit;
+missing or corrupt optional storage is a miss. Available symbolic definitions
+are retained because the consumer's final procedure set is not yet known;
+splicing still gives the current program ownership of its symbolic callees.
+
+Runtime builds publish artifacts from their actual compilation, without
+compiling extra module-export programs to populate the cache. Direct LIR stamps
+`cache_provider_module` from a direct template's checked owner only when
+`fnReachesAppRecord` says it is app-independent. This is producer metadata, not
+a source-location or filename inference. Nested, generated-without-template,
+and app-dependent procedures remain program-scoped; Builtin instantiations
+also belong to the producing program. A reusable offer is routed under its
+checked provider while referencing the producer's shared storage. The existing
+specialization keys, ownership interfaces, source compatibility, runtime-table
+restrictions and compile-time demand rules still govern admission. Publication
+of a runtime subset is not a claim that every export of a module was compiled.
+
+The completed-result probe defers procedure and discovery lookups until its
+result is known. A miss enables indexed reuse; a hit uses source demand and
+cached compile-time values to preserve diagnostics without procedure discovery.
+Unrelated history does not enter its key. Retaining historical artifacts is
+independent of eagerly reading them. A pack-format change selects new
+namespaces without a migration scan.
+
+Optimized object packs live in the exact-target namespace: a package
+artifact's `<artifact key>.rpk` and the program's `optimized/<identity>.rpk`. Explicit
+pack export/import for developer diagnostics still uses complete `PackFile`
+records. The background sweep deletes obsolete `objects-v*` namespaces and
+recursively ages each current namespace's `local/` files and recorded
+`programs/` outputs on one day, and `pkg/` and `optimized/` files on thirty,
+using `max(atime, mtime)`.
+Size eviction also includes indexed metadata and payloads. Either may be
+removed first: a stale reference is detected before a hit, and live readers own
+their bytes. Unused historical payloads remain available until eviction.
+
+`ROC_PACK_STATS`, through the existing gated `base.dev_diagnostics` interface,
+reports direct bucket opens and absences, negative-cache hits, shared metadata
+opens/bytes, candidate/duplicate counts, payload open attempts,
+unique successfully retained payload records, payload bytes, decoded records,
+requests/hits and missing/corrupt/source/linked rejection counts. Publication
+also reports metadata/payload bytes and elapsed wall-clock nanoseconds.
+`test/cli/pack_index_bench.py` supplies the focused synthetic-history benchmark. Normal builds
+print none of these diagnostics. Performance comparisons use a ReleaseFast
+compiler with developer diagnostics enabled, `roc build --opt=dev`, wall time
+and peak RSS; cold publication is measured separately from lookup.
 
 A pack entry's code is a function of the procedure alone: every reference
 from it into code placed with it, and every reference by identity to code
@@ -791,19 +976,16 @@ of its program. The first pack to offer a key or a procedure serves it, so
 which pack serves a procedure two offer, and the order the program links
 them in, are functions of the optimization state alone.
 
-After version resolution selects the final package versions and checking
-publishes their constants, caching check, run, and build commands prepare the URL
-packages' host dev packs under the host procedure domain's `pkg/`. This includes `roc check`,
-so a package checked when downloaded already has its dev packs when its first
-app build starts. Preparation compiles each module's closed exports with the
-ordinary dev pack policy; it neither writes local-module packs nor starts
-background optimization. Existing packs are left alone, and missing or evicted
-packs are rebuilt from the checked modules. A command with errors or
-`--no-cache` prepares none.
-New packs are also offered directly to the command's cache providers, so
-runtime lowering can use them even if compile-time evaluation already loaded
-the store. Decoded packs retain stable addresses as new offers arrive; artifacts
-already handed to evaluation remain valid.
+A caching `roc check` may deliberately prepare URL-package host dev packs,
+under the host procedure domain's `pkg/`, for independent module exports. It excludes modules whose checked context or
+explicit visible dependency closure carries a platform/app relation, so a
+paired platform entrypoint cannot reach into the application for cache warming.
+Normal runtime builds and runs do not perform this extra compilation. Existing
+independent package packs remain usable. Checks with errors and `--no-cache`
+prepare none. The check reporter separates cache preparation/publication from
+frontend time; runtime builds report compile-time and runtime cache publication
+as explicit phases. Publication diagnostics count written/reused records and
+actual bytes written separately from elapsed publication time.
 
 The wasm32 dev backend cannot splice dev code, so a wasm32 dev build
 reads and writes no dev packs and takes only object packs' entries

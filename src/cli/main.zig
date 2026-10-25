@@ -358,7 +358,7 @@ const CompileTimePackParts = struct {
         const root_artifact = root_semantic.checked_artifact orelse return null;
         const placement = build_env.packPlacementForArtifactKey(root_artifact.key) orelse return null;
         const key = pack_store.compileTimePackKey(root_artifact.codeGenerationKey().bytes, publisher);
-        if (try cache.store.has(placement.origin, placement.identity, key)) return null;
+        if (try cache.store.hasIndexed(placement.origin, placement.identity, key)) return null;
         return .{ .placement = placement, .key = key };
     }
 
@@ -6912,7 +6912,6 @@ fn lowerDiscoveredLir(
     };
 
     const counts = try renderDrainedBuildEnvReports(ctx, build_env, display_path);
-    if (counts.errors == 0) try preparePackageDevPacks(ctx, build_env, if (object_cache) |cache| &cache.packs else null);
     const watch_inputs = try build_env.collectWatchInputStates();
     errdefer compile.watch_inputs.deinit(ctx.gpa, watch_inputs);
 
@@ -8550,7 +8549,14 @@ fn writePackageDevPacksToStore(
             std.debug.print("dev pack candidate {s} ({s})\n", .{ artifact.canonical_names.moduleNameText(artifact.module_identity.module_name), @tagName(placement.origin) });
         }
         if (placement.origin != .pkg) continue;
-        if (try store.has(placement.origin, placement.identity, artifact.codeGenerationKey().bytes)) continue;
+        if (artifact.checking_context_identity.platform_app_relation != null) continue;
+        const dependencies = try build_env.collectVisibleArtifacts(ctx.gpa, artifact);
+        defer ctx.gpa.free(dependencies);
+        const paired_dependency = for (dependencies) |dependency| {
+            if (dependency.checking_context_identity.platform_app_relation != null) break true;
+        } else false;
+        if (paired_dependency) continue;
+        if (try store.hasIndexed(placement.origin, placement.identity, artifact.codeGenerationKey().bytes)) continue;
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
         defer ctx.gpa.free(roots);
         if (roots.len == 0) continue;
@@ -8560,41 +8566,22 @@ fn writePackageDevPacksToStore(
         var pack = try compileModulePack(ctx, build_env, root_artifact, imports, relations, artifact, roots, .dev, .lss, RocTarget.detectNative(), false);
         defer pack.deinit();
         const set = &pack.compiled.artifacts.?;
-        const bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
-        defer ctx.gpa.free(bytes);
-        // Offer before filing: a provider whose first lookup happens here
-        // loads the old store, then adds exactly the pack just compiled.
+        try publishDevPack(build_env, store, placement.origin, placement.identity, artifact.codeGenerationKey().bytes, set, &pack.lowered);
         for ([_]?*pack_store.LoadedPacks{ offers, runtime_packs }) |maybe_packs| {
             const packs = maybe_packs orelse continue;
-            packs.offerPack(bytes) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return error.NativeCompilationFailed,
-            };
+            try packs.offerIndexed(store, placement.origin, placement.identity);
         }
-        store.write(placement.origin, placement.identity, artifact.codeGenerationKey().bytes, bytes) catch |err| {
-            std.log.warn("object cache could not store a package's dev pack: {}", .{err});
-        };
     }
 }
 
-/// Write this build's packs into the object cache: the root module's pack
-/// from the artifacts of the program just compiled, and a pack program for
-/// every other module in view whose pack is not in the store yet, except the
-/// app module when the platform is the root, since no other program imports
-/// it. Packs are
-/// filed by module identity and artifact key, so an unchanged module's pack
-/// is found and left alone.
+/// Publish reusable offers from the runtime compilation's own artifacts.
 fn writePacksToStore(
     ctx: *CliCtx,
     build_env: *BuildEnv,
     store: *const pack_store.Store,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    app_imports: []const check.CheckedArtifact.ImportedModuleView,
-    app_relations: []const check.CheckedArtifact.ImportedModuleView,
     app_lowered: *const lir.CheckedPipeline.LoweredProgram,
     app_artifacts: ?*const backend.dev.ProcArtifact.Set,
-    args: cli_args.BuildArgs,
-    target: RocTarget,
 ) CliMainError!void {
     if (dev_diagnostics.isSet(.pack_trace)) {
         // What this program lowered from source: every procedure by identity,
@@ -8616,46 +8603,8 @@ fn writePacksToStore(
     }
     if (app_artifacts) |set| {
         if (build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
-            if (!try store.has(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes)) {
-                const bytes = try packFileBytes(ctx.gpa, set, app_lowered);
-                defer ctx.gpa.free(bytes);
-                store.write(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes, bytes) catch |err| {
-                    std.log.warn("object cache could not store the program's pack: {}", .{err});
-                };
-            }
+            try publishDevPack(build_env, store, placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes, set, app_lowered);
         }
-    }
-    // An app module is never imported, so its procedures only ever link into
-    // builds of that app, which read the pack written above from the
-    // program just compiled. A pack program of its own would only repeat it.
-    const app_key: ?check.CheckedArtifact.CheckedModuleArtifactKey = if (build_env.getAppSemanticData()) |app|
-        if (app.checked_artifact) |app_artifact| app_artifact.key else null
-    else
-        null;
-    const artifacts = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
-    defer ctx.gpa.free(artifacts);
-    for (artifacts) |artifact| {
-        if (app_key) |key| {
-            if (std.meta.eql(artifact.key, key)) continue;
-        }
-        const placement = build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
-        const origin = placement.origin;
-        const identity = placement.identity;
-        if (try store.has(origin, identity, artifact.codeGenerationKey().bytes)) continue;
-        const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
-        defer ctx.gpa.free(roots);
-        if (roots.len == 0) continue;
-        if (dev_diagnostics.isSet(.pack_trace)) {
-            std.debug.print("module pack {s}\n", .{artifact.canonical_names.moduleNameText(artifact.module_identity.module_name)});
-        }
-        var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args.opt, currentRuntimeSpecializationStrategy(args.specialization_strategy), target, false);
-        defer pack.deinit();
-        const set = &(pack.compiled.artifacts orelse continue);
-        const bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
-        defer ctx.gpa.free(bytes);
-        store.write(origin, identity, artifact.codeGenerationKey().bytes, bytes) catch |err| {
-            std.log.warn("object cache could not store a module's pack: {}", .{err});
-        };
     }
 }
 
@@ -9246,12 +9195,9 @@ fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) Allocator.Error!vo
     // its own program, and the pack offers the procedures of all of them.
     var combined = try completed.combinedArtifacts(ctx.gpa);
     defer combined.deinit();
-    const bytes = try parts.offers.encode(ctx.gpa, &combined);
-    defer ctx.gpa.free(bytes);
-    if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("compile-time pack {d} bytes\n", .{bytes.len});
-    store.write(destination.placement.origin, destination.placement.identity, destination.key, bytes) catch |err| {
-        std.log.warn("object cache could not store the compile-time pack: {}", .{err});
-    };
+    if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("compile-time pack {d} artifacts\n", .{combined.artifacts.len});
+    try parts.offers.publish(build_env, store, destination.placement.origin, destination.placement.identity, destination.key, &combined);
+    cache.packs.refreshIndex();
 }
 
 /// File the discovery summaries of a compilation that reported no error beside
@@ -9308,6 +9254,14 @@ fn packFileBytes(
     return offers.encode(allocator, set);
 }
 
+fn publishDevPack(build_env: *const BuildEnv, store: *const pack_store.Store, origin: BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, set: *const backend.dev.ProcArtifact.Set, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!void {
+    const reads = if (lowered.spec_comptime_reads) |*reads| reads else base.invariant("a dev pack producer recorded compile-time reads", .{});
+    var offers = PackOffers.init(store.allocator, false);
+    defer offers.deinit();
+    try offers.addProgram(lowered, reads);
+    try offers.publish(build_env, store, origin, identity, key, set);
+}
+
 /// The procedures a pack may offer, gathered from the programs it is written
 /// from, all lowered from one Solved program. Everything an offer needs from
 /// its program's code is decided and copied here, so the offers outlive that
@@ -9331,7 +9285,7 @@ const PackOffers = struct {
     /// Every key gathered. A key two programs offer names one procedure,
     /// offered once, from the first program; identity keys are hashed apart
     /// from specialization keys, so the two kinds never share one.
-    keys: std.AutoHashMap([32]u8, void),
+    keys: std.AutoHashMap([32]u8, ?[32]u8),
 
     const Candidate = struct {
         key: [32]u8,
@@ -9357,7 +9311,7 @@ const PackOffers = struct {
             .arena = base.SingleThreadArena.init(allocator),
             .evaluation = evaluation,
             .literal_converters = std.AutoHashMap(lir.ProcIdentity, void).init(allocator),
-            .keys = std.AutoHashMap([32]u8, void).init(allocator),
+            .keys = std.AutoHashMap([32]u8, ?[32]u8).init(allocator),
         };
     }
 
@@ -9381,7 +9335,9 @@ const PackOffers = struct {
             if (converts) try self.literal_converters.put(proc.identity, {});
         }
         for (lowered.lir_result.spec_procs.items) |spec_proc| {
-            if ((try self.keys.getOrPut(spec_proc.key)).found_existing) continue;
+            const key_entry = try self.keys.getOrPut(spec_proc.key);
+            if (key_entry.found_existing) continue;
+            key_entry.value_ptr.* = store.getProcSpecImmediate(spec_proc.proc).cache_provider_module;
             try self.keyed.append(self.arena.allocator(), try self.candidate(lowered, spec_proc.proc, spec_proc.key, comptime_reads.get(spec_proc.key)));
         }
         const carriers = try lir.PackProgram.siteCodeCarriers(allocator, store);
@@ -9396,7 +9352,9 @@ const PackOffers = struct {
             // pack carries with it.
             if (carries_site_code) continue;
             const key = postcheck.Common.procIdentityCacheKey(if (proc.code_key) |code| code else proc.identity.bytes);
-            if ((try self.keys.getOrPut(key)).found_existing) continue;
+            const key_entry = try self.keys.getOrPut(key);
+            if (key_entry.found_existing) continue;
+            key_entry.value_ptr.* = proc.cache_provider_module;
             try self.by_identity.append(self.arena.allocator(), try self.candidate(lowered, id, key, comptime_reads.fnReads(source_fn)));
         }
     }
@@ -9453,9 +9411,9 @@ const PackOffers = struct {
 
     /// Encode `set`, compiled from the gathered programs, with the spec table
     /// of every procedure they offer.
-    fn encode(self: *const PackOffers, allocator: Allocator, set: *const backend.dev.ProcArtifact.Set) Allocator.Error![]u8 {
+    fn entries(self: *const PackOffers, allocator: Allocator, set: *const backend.dev.ProcArtifact.Set) Allocator.Error![]backend.dev.PackFile.SpecEntry {
         var specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
-        defer specs.deinit(allocator);
+        errdefer specs.deinit(allocator);
         const trace = dev_diagnostics.isSet(.pack_trace);
         var withheld: usize = 0;
         var converting_artifacts = try literalConvertingArtifacts(allocator, set, &self.literal_converters);
@@ -9498,7 +9456,40 @@ const PackOffers = struct {
         if (trace) {
             std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld\n", .{ set.artifacts.len, specs.items.len, withheld });
         }
-        return backend.dev.PackFile.write(allocator, set, specs.items);
+        return specs.toOwnedSlice(allocator);
+    }
+
+    fn encode(self: *const PackOffers, allocator: Allocator, set: *const backend.dev.ProcArtifact.Set) Allocator.Error![]u8 {
+        const specs = try self.entries(allocator, set);
+        defer allocator.free(specs);
+        return backend.dev.PackFile.write(allocator, set, specs);
+    }
+
+    fn publish(self: *const PackOffers, build_env: *const BuildEnv, store: *const pack_store.Store, origin: BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, set: *const backend.dev.ProcArtifact.Set) Allocator.Error!void {
+        const specs = try self.entries(store.allocator, set);
+        defer store.allocator.free(specs);
+        const providers = try store.allocator.alloc(BuildEnv.PackPlacement, specs.len);
+        defer store.allocator.free(providers);
+        for (specs, providers) |spec, *provider| {
+            provider.* = .{ .origin = origin, .identity = identity };
+            if (self.keys.get(spec.key).?) |module| {
+                // Builtin instantiations belong to the producer; every other
+                // stamped module has a checked provider in this compilation.
+                if (!std.mem.eql(u8, &module, &build_env.builtin_modules.checked_artifact.key.bytes)) {
+                    provider.* = build_env.packPlacementForArtifactKey(.{ .bytes = module }) orelse
+                        base.invariant("a cache offer's checked source module has a provider", .{});
+                }
+            }
+        }
+        store.writeIndexedForProviders(origin, identity, set, specs, providers) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.PackWriteFailed => return,
+        };
+        // A completion marker is published only after all independent offers.
+        store.completeIndexed(origin, identity, key) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.PackWriteFailed => {},
+        };
     }
 };
 
@@ -9514,88 +9505,7 @@ fn procFingerprint(allocator: Allocator, lowered: *const lir.CheckedPipeline.Low
 /// entry, and everything it reaches through set-local references and stable
 /// references to definitions in the same set. The set's definitions are
 /// indexed once; each query reuses the walk's storage.
-const SpliceClosure = struct {
-    allocator: Allocator,
-    set: *const backend.dev.ProcArtifact.Set,
-    procs: std.AutoHashMap(lir.ProcIdentity, ProcArtifacts),
-    thunks: std.AutoHashMap(lir.ProcIdentity, u32),
-    helpers: std.StringHashMap(u32),
-    /// Artifacts the current query reached; exactly the indices in `order`.
-    seen: std.DynamicBitSetUnmanaged,
-    order: std.ArrayList(u32) = .empty,
-
-    /// The artifacts of one procedure identity: a splice reaches the first,
-    /// and a pack offers the last.
-    const ProcArtifacts = struct { first: u32, last: u32 };
-
-    fn init(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set) Allocator.Error!SpliceClosure {
-        var self = SpliceClosure{
-            .allocator = allocator,
-            .set = set,
-            .procs = std.AutoHashMap(lir.ProcIdentity, ProcArtifacts).init(allocator),
-            .thunks = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator),
-            .helpers = std.StringHashMap(u32).init(allocator),
-            .seen = .{},
-        };
-        errdefer self.deinit();
-        self.seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, set.artifacts.len);
-        for (set.artifacts, 0..) |artifact, index| {
-            switch (artifact.kind) {
-                .proc => |identity| {
-                    const entry = try self.procs.getOrPut(identity);
-                    if (!entry.found_existing) entry.value_ptr.first = @intCast(index);
-                    entry.value_ptr.last = @intCast(index);
-                },
-                .boxy_thunk => |identity| _ = try self.thunks.getOrPutValue(identity, @intCast(index)),
-                .rc_helper => |name| _ = try self.helpers.getOrPutValue(name, @intCast(index)),
-                .entrypoint, .message_pool_run, .branch_island => {},
-            }
-        }
-        return self;
-    }
-
-    /// The artifact a pack offers for the procedure `identity`.
-    fn offeredProcArtifact(self: *const SpliceClosure, identity: lir.ProcIdentity) ?u32 {
-        const artifacts = self.procs.get(identity) orelse return null;
-        return artifacts.last;
-    }
-
-    fn deinit(self: *SpliceClosure) void {
-        self.order.deinit(self.allocator);
-        self.seen.deinit(self.allocator);
-        self.helpers.deinit();
-        self.thunks.deinit();
-        self.procs.deinit();
-    }
-
-    /// Indices of the artifacts a splice of `root` places, valid until the
-    /// next query.
-    fn of(self: *SpliceClosure, root: u32) Allocator.Error![]const u32 {
-        for (self.order.items) |index| self.seen.unset(index);
-        self.order.clearRetainingCapacity();
-        try self.visit(root);
-        var cursor: usize = 0;
-        while (cursor < self.order.items.len) : (cursor += 1) {
-            const artifact = self.set.artifacts[self.order.items[cursor]];
-            for (artifact.refs) |ref| try self.visit(ref.target);
-            for (artifact.symbolic_refs) |ref| {
-                const target = switch (ref.target) {
-                    .proc => |identity| if (self.procs.get(identity)) |artifacts| artifacts.first else null,
-                    .boxy_thunk => |identity| self.thunks.get(identity),
-                    .rc_helper => |name| self.helpers.get(name),
-                };
-                if (target) |index| try self.visit(index);
-            }
-        }
-        return self.order.items;
-    }
-
-    fn visit(self: *SpliceClosure, index: u32) Allocator.Error!void {
-        if (self.seen.isSet(index)) return;
-        try self.order.append(self.allocator, index);
-        self.seen.set(index);
-    }
-};
+const SpliceClosure = pack_store.SpliceClosure;
 
 /// The artifacts of `set` whose procedure converts a specialized custom
 /// literal when it runs (`PackProgram.procConvertsLiteralAtRuntime`).
@@ -11396,7 +11306,6 @@ fn typeCheckBuildCommand(
     try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), reporter, build_env.getTimingInfo());
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
-    if (diag.errors == 0 and !build_env.runtimeOutputCached()) try preparePackageDevPacks(ctx, build_env, null);
     const total_warning_count = diag.warnings + try optimizedDbgWarningsForBuild(ctx, build_env, args.opt);
     const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
         try renderProblem(ctx, .{
@@ -11582,7 +11491,11 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     // A build files the code its compile-time evaluation ran for later
     // compilations as a check does, before the runtime program takes the
     // shared Solved program.
-    if (diag.errors == 0) try publishCompileTimeResults(ctx, &build_env, root_artifact);
+    if (diag.errors == 0) {
+        reporter.begin("Publishing Compile-Time Cache");
+        try publishCompileTimeResults(ctx, &build_env, root_artifact);
+        reporter.end();
+    }
     var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, null, .source_bodies);
     defer lowered.deinit();
 
@@ -11894,6 +11807,14 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     };
     if (program_probe) |*probe| {
         try probe.initialize(args);
+        probe.code_providers[0] = loaded_packs;
+        if (build_env.compile_time_object_cache_owner) |owner| {
+            const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(owner.context));
+            probe.code_providers[1] = &cache.packs;
+        }
+        for (probe.code_providers) |provider| if (provider) |packs| {
+            packs.defer_code_lookup = true;
+        };
         build_env.setRuntimeOutputProbe(probe.runtimeOutputProbe());
         build_env.diagnostic_observer = .{ .context = probe, .record = ProgramOutputProbe.observeDiagnostic };
     }
@@ -11946,7 +11867,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // A build files the code its compile-time evaluation ran for later
     // compilations as a check does, before the runtime program takes the
     // shared Solved program.
-    if (diag.errors == 0) try publishCompileTimeResults(ctx, &build_env, root_artifact);
+    if (diag.errors == 0) {
+        reporter.begin("Publishing Compile-Time Cache");
+        try publishCompileTimeResults(ctx, &build_env, root_artifact);
+        if (loaded_packs) |packs| packs.refreshIndex();
+        reporter.end();
+    }
     var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (loaded_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_stores != null, currentRuntimeSpecializationStrategy(args.specialization_strategy)));
     defer lowered.deinit();
     // The program links the objects defining the entries it took, and no
@@ -12036,7 +11962,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // and so skip its diagnostic, so a build with errors writes no packs.
     if (object_store != null and diag.errors == 0) {
         const store = object_store.?;
-        try writePacksToStore(ctx, &build_env, store, root_artifact, imported_artifacts, relation_artifacts, &lowered, if (object_compiler.captured_artifacts) |*set| set else null, args, target);
+        reporter.begin("Publishing Runtime Cache");
+        if (loaded_packs) |packs| try packs.publishInterfaces();
+        try writePacksToStore(ctx, &build_env, store, root_artifact, &lowered, if (object_compiler.captured_artifacts) |*set| set else null);
+        reporter.end();
     }
 
     const link_facts: ProgramOutput.LinkFacts = .{
@@ -12049,7 +11978,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // The record retains every selected object. LSS records never carry
     // Boxy runtime inputs; those remain exclusive to the ordinary Boxy path.
     if (program_probe) |*probe| if (probe.key) |key| if (diag.errors == 0 and !uses_boxy) {
+        reporter.begin("Publishing Output Cache");
         try probe.record(key, obj_path, linked_objects, link_facts, pack_links, resolved_targets_config);
+        reporter.end();
     };
 
     if (program_probe) |*probe| recordCompletionCounters(&reporter, &build_env, probe, false);
@@ -12347,6 +12278,9 @@ const ProgramOutputProbe = struct {
     manifest_bytes_read: u64 = 0,
     key: ?[32]u8 = null,
     found: ?ProgramOutput = null,
+    /// Runtime and compile-time providers may be the same collection. A probe
+    /// miss enables procedure reuse; a hit needs no procedure-pack discovery.
+    code_providers: [2]?*pack_store.LoadedPacks = .{ null, null },
     bytes_read: usize = 0,
     bytes_written: usize = 0,
     publication_ns: u64 = 0,
@@ -12449,6 +12383,9 @@ const ProgramOutputProbe = struct {
 
     fn cached(context: *anyopaque, root: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!?*const compile.completed_compilation.Outcome {
         const self: *ProgramOutputProbe = @ptrCast(@alignCast(context));
+        defer for (self.code_providers) |provider| {
+            if (provider) |packs| packs.defer_code_lookup = self.found != null;
+        };
         const coord = self.build_env.coordinator.?;
         const modules = try coord.compilationModules(self.gpa);
         defer self.gpa.free(modules);
@@ -12558,7 +12495,7 @@ fn programPackLinks(procs: []const lir.LIR.LirProcSpec) ProgramOutput.PackLinks 
 /// leave stderr empty so build runners do not report false warnings.
 fn printPackStats(packs: *const pack_store.LoadedPacks, links: ProgramOutput.PackLinks) void {
     if (!dev_diagnostics.isSet(.pack_stats)) return;
-    std.debug.print("pack hits: {d} external procs: {d} linked procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d} cache bytes loaded: {d}\n", .{ packs.hits, links.external_procs, links.linked_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count(), packs.bytes_loaded });
+    std.debug.print("pack hits: {d} external procs: {d} linked procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d} cache bytes loaded: {d}\n", .{ packs.hits, links.external_procs, links.linked_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count(), packs.bytes_loaded +| packs.interface_bytes_loaded });
 }
 
 /// These counters count producer work, independently of phase labels.
@@ -14057,7 +13994,7 @@ fn checkedRuntimeLoweringConfig(
             .scalarize_joins = optimizeLirForOpt(opt),
             .reuse_boxes = optimizeLirForOpt(opt),
             .thread_confined_rc = optimizeLirForOpt(opt),
-            .proc_debug_names = proc_debug_names,
+            .proc_debug_names = proc_debug_names or dev_diagnostics.isSet(.pack_trace),
         },
     };
 }
@@ -18274,10 +18211,15 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [28]
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [31]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Interface summary hits", .count = diagnostics.specialization.interface_summary_hits },
+        .{ .name = "Persistent interface hits", .count = diagnostics.specialization.interface_persistent_hits },
+        .{ .name = "Persistent interface misses", .count = diagnostics.specialization.interface_persistent_misses },
+        .{ .name = "Persistent interface invalid", .count = diagnostics.specialization.interface_persistent_invalid },
+        .{ .name = "Persistent interface records", .count = diagnostics.specialization.interface_persistent_records },
+        .{ .name = "Persistent interface unrepresentable", .count = diagnostics.specialization.interface_persistent_unrepresentable },
         .{ .name = "Interface summary expansions", .count = diagnostics.specialization.interface_summary_expansions },
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
         .{ .name = "Type instantiation scopes", .count = body.instantiation_scopes_created },
@@ -18764,7 +18706,16 @@ test "timings display every Monotype graph counter" {
 /// Packages without a shorthand are labeled by their path, which is shown
 /// relative to `config`'s working directory.
 fn finishFrontEndPhase(gpa: Allocator, config: reporting.ReportingConfig, reporter: *progress.Reporter, timing: anytype) Allocator.Error!void {
-    reporter.endWithBreakdownExcluding(&frontEndBreakdown(timing), timing.program_finalization_ns);
+    return finishFrontEndPhaseExcluding(gpa, config, reporter, timing, 0);
+}
+
+fn finishCheckFrontEndPhase(gpa: Allocator, config: reporting.ReportingConfig, reporter: *progress.Reporter, result: *const CheckResult) Allocator.Error!void {
+    try finishFrontEndPhaseExcluding(gpa, config, reporter, result.timing, result.cache_preparation_ns);
+    reporter.recordCompletedWithBreakdown("Preparing Cache", result.cache_preparation_ns, .{}, &.{});
+}
+
+fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfig, reporter: *progress.Reporter, timing: anytype, extra_excluded_ns: u64) Allocator.Error!void {
+    reporter.endWithBreakdownExcluding(&frontEndBreakdown(timing), timing.program_finalization_ns + extra_excluded_ns);
     const slowest = timing.slowest_type_checks.slice();
     var names = std.heap.ArenaAllocator.init(gpa);
     defer names.deinit();
@@ -19127,6 +19078,7 @@ fn handleProcessFileError(err: ProcessFileError, stderr: anytype, path: []const 
 
 /// Result from checking a file using BuildEnv
 const CheckResult = struct {
+    cache_preparation_ns: u64 = 0,
     reports: []DrainedReport,
     timing: CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) .{} else .{
         .tokenize_parse_ns = 0,
@@ -19441,6 +19393,7 @@ fn collectCheckResult(
             if (report.severity.isError()) error_count += 1 else warning_count += 1;
         }
     }
+    const cache_start = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
     if (error_count == 0) {
         if (build_env.getExecutableRootSemanticData()) |root_semantic| if (root_semantic.checked_artifact) |root_artifact| {
             try publishCompileTimeResults(ctx, build_env, root_artifact);
@@ -19448,6 +19401,7 @@ fn collectCheckResult(
         try preparePackageDevPacks(ctx, build_env, null);
     }
 
+    const cache_preparation_ns: u64 = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - cache_start);
     var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
     for (drained, 0..) |mod, i| {
         reports[i] = .{
@@ -19458,6 +19412,7 @@ fn collectCheckResult(
 
     const cache_stats = build_env.getBuildStats();
     var result = CheckResult{
+        .cache_preparation_ns = cache_preparation_ns,
         .reports = reports,
         .error_count = error_count,
         .warning_count = warning_count,
@@ -19704,7 +19659,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             if (builtin.target.cpu.arch == .wasm32) {
                 reporter.end();
             } else {
-                try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, check_result.timing);
+                try finishCheckFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, check_result);
             }
             reporter.finish();
 
@@ -19737,7 +19692,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
         if (builtin.target.cpu.arch == .wasm32) {
             reporter.end();
         } else {
-            try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, check_result.timing);
+            try finishCheckFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, check_result);
         }
         reporter.finish();
 
@@ -19774,7 +19729,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
     if (builtin.target.cpu.arch == .wasm32) {
         reporter.end();
     } else {
-        try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, check_result.timing);
+        try finishCheckFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, &check_result);
     }
     reporter.finish();
 

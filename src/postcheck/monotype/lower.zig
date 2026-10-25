@@ -293,6 +293,7 @@ pub const Options = struct {
     /// linked, so a linked-object entry (`Common.SpecCacheHit.c_abi_entry`)
     /// can, and whether its emitter splices dev code.
     spec_cache_takes: Common.SpecCacheTakes = .dev_code,
+    interface_cache: ?Common.InterfaceSummaryCache = null,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -1570,6 +1571,7 @@ const ModuleViewData = struct {
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     method_registry: *const static_dispatch.MethodRegistry,
     method_lookup_scope: []const checked.ModuleId,
+    direct_import_module_keys: []const checked.CheckedModuleArtifactKey,
     resolved_refs: *const checked.ResolvedValueTable,
     nested_proc_sites: *const checked.NestedProcSiteTable,
     exported_procedure_bindings: checked.ExportedProcedureBindingView,
@@ -4902,6 +4904,7 @@ const SpecJobWorkerInputs = struct {
     proc_debug_names: bool,
     interface_summaries: *const SharedSummaries,
     interface_summary_end: usize,
+    interface_cache: ?Common.InterfaceSummaryCache,
     collect_counters: bool,
     collect_diagnostics: bool,
     inline_expects: InlineExpectMode,
@@ -5319,6 +5322,7 @@ const Builder = struct {
     field_kind_scope_pool: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
     /// The object cache consulted for closed specializations, if any.
     spec_cache: ?Common.SpecCacheLookup,
+    interface_cache: ?Common.InterfaceSummaryCache,
     spec_cache_takes: Common.SpecCacheTakes,
     /// The module identities of the checked modules this lowering reads, which
     /// the object cache serves entries for (`Common.ProgramModules`); built
@@ -5343,6 +5347,8 @@ const Builder = struct {
     /// The program's literal value context, once computed; see
     /// `literalProgramContext`.
     literal_program_context: ??[32]u8 = null,
+    interface_program_context: ??[32]u8 = null,
+    interface_callee_contexts: std.AutoHashMapUnmanaged([32]u8, ?[32]u8) = .empty,
     /// See `literalTopModules`; outer null until computed.
     literal_top_modules: ??std.AutoHashMapUnmanaged([32]u8, [32]u8) = null,
     /// Top-level statements of each top module whose types a literal value
@@ -5652,6 +5658,7 @@ const Builder = struct {
             .current_region = program.current_region,
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
+            .interface_cache = options.interface_cache orelse if (options.spec_cache) |cache| cache.interfaces else null,
             .spec_cache_takes = options.spec_cache_takes,
             .counters = counters,
             .diagnostics = options.diagnostics,
@@ -5821,6 +5828,7 @@ const Builder = struct {
             .comptime_value_reads = inputs.comptime_value_reads,
             .literal_roots = inputs.literal_roots,
             .replay_interface_summaries = inputs.replay_interface_summaries,
+            .interface_cache = inputs.interface_cache,
             .post_check_executor = null,
             .timing = null,
         });
@@ -5956,6 +5964,7 @@ const Builder = struct {
         if (self.shared_summaries) |*summaries| summaries.deinit();
         self.worker_inputs.deinit(self.allocator);
         self.interface_summaries.deinit();
+        self.interface_callee_contexts.deinit(self.allocator);
         self.spec_store.deinit();
         self.pending_spec_jobs.deinit(self.allocator);
         self.parked_spec_jobs.deinit(self.allocator);
@@ -6162,14 +6171,152 @@ const Builder = struct {
         defer scratch.deinit();
         for (entries) |entry| {
             _ = scratch.reset(.retain_capacity);
-            _ = try self.interface_summaries.insertRelocated(
+            const summary = try self.interface_summaries.insertRelocated(
                 &self.program.types,
                 &self.program.names,
                 entry,
                 try entry.request.copy(scratch.allocator(), relocation),
                 relocation,
             );
+            try self.recordPersistentInterface(.{ .address = entry.address, .evidence = entry.evidence, .request = try entry.request.copy(scratch.allocator(), relocation), .summary = summary }, &self.program.types, &self.program.names);
         }
+    }
+
+    const PersistentInterfaceFamily = struct { provider: [32]u8, procedure: [8]u8 };
+
+    fn persistentInterfaceFamily(self: *Builder, address: InterfaceReplayAddress) Allocator.Error!?PersistentInterfaceFamily {
+        if (self.interface_cache == null or address.kind != .procedure) return null;
+        const callee = self.moduleForKeyBytes(address.family.module) orelse return null;
+        const template = callee.templates.get(@fromBackingInt(address.family.template));
+        // Checking already supplies the complete relation of a closed
+        // interface; it has no callee relation program to reconstruct.
+        if (templateInterfaceIsClosed(callee, &template)) return null;
+        const scope = self.moduleForKeyBytes(address.family.method_scope) orelse return null;
+        const scope_context = scope.compile_time_root_identities.valueContext() orelse return null;
+        const program_context = (try self.programValueContext(false)) orelse return null;
+        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        hash.update("roc.interface-provider.v1");
+        hash.update(&(callee.code_generation_key orelse callee.key).bytes);
+        hash.update(&scope_context);
+        // Method lookup order is producer data too; a sorted module set does
+        // not establish the precedence of an ordered lookup scope.
+        var scope_count: [4]u8 = undefined;
+        std.mem.writeInt(u32, &scope_count, @intCast(scope.method_lookup_scope.len), .little);
+        hash.update(&scope_count);
+        const top = (try self.literalTopModules()).?;
+        for (scope.method_lookup_scope) |module| {
+            if (top.get(module.bytes)) |context| {
+                hash.update(&.{1});
+                hash.update(&context);
+            } else {
+                hash.update(&.{0});
+                hash.update(&module.bytes);
+            }
+        }
+        hash.update(&program_context);
+        hash.update(&((try self.interfaceCalleeContext(callee)) orelse return null));
+        var ordinals: [8]u8 = undefined;
+        std.mem.writeInt(u32, ordinals[0..4], address.family.proc_base, .little);
+        std.mem.writeInt(u32, ordinals[4..8], address.family.template, .little);
+        hash.update(@tagName(self.inline_expects));
+        hash.update(&.{ @intFromBool(self.static_data_literals), @intFromBool(self.comptime_value_reads), @intFromBool(self.literal_roots) });
+        const family = hash.finalResult();
+        if (base.dev_diagnostics.isSet(.pack_trace)) std.debug.print("interface family module={s} proc={d} template={d} code={x} scope={x} program={x} family={x}\n", .{ callee.module_env.module_name, address.family.proc_base, address.family.template, (callee.code_generation_key orelse callee.key).bytes, scope_context, program_context, family });
+        return .{ .provider = family, .procedure = ordinals };
+    }
+
+    /// Explicit import closure and requirement identities supplied by checking.
+    /// Unlike the literal-value program context this does not include exports
+    /// of unrelated modules (in particular the platform's call to app main).
+    fn interfaceCalleeContext(self: *Builder, callee: ModuleView) Allocator.Error!?[32]u8 {
+        if (self.interface_callee_contexts.get(callee.key.bytes)) |known| return known;
+        const top = (try self.literalTopModules()).?;
+        var visited = std.AutoHashMap([32]u8, void).init(self.allocator);
+        defer visited.deinit();
+        var pending = std.ArrayList(ModuleView).empty;
+        defer pending.deinit(self.allocator);
+        var dependencies = std.ArrayList([32]u8).empty;
+        defer dependencies.deinit(self.allocator);
+        var requirements = std.ArrayList([64]u8).empty;
+        defer requirements.deinit(self.allocator);
+        try pending.append(self.allocator, callee);
+        while (pending.pop()) |view| {
+            const seen = try visited.getOrPut(view.key.bytes);
+            if (seen.found_existing) continue;
+            try dependencies.append(self.allocator, (view.code_generation_key orelse view.key).bytes);
+            for (view.direct_import_module_keys) |key| {
+                const imported = self.moduleForKeyBytes(key.bytes) orelse {
+                    // A type-only dependency need not be in the lowering's
+                    // module set. Without its explicit context no record is offered.
+                    try self.interface_callee_contexts.put(self.allocator, callee.key.bytes, null);
+                    return null;
+                };
+                try pending.append(self.allocator, imported);
+            }
+            const identities = view.compile_time_root_identities;
+            for ([_][]const [32]u8{ identities.method_requires, identities.export_requires }) |required| for (required) |name| {
+                var providers = top.keyIterator();
+                while (providers.next()) |key| {
+                    const provider = self.moduleForKeyBytes(key.*) orelse Common.invariant("interface requirement has no checked provider view");
+                    for (provider.compile_time_root_identities.exports) |exported| {
+                        if (!std.mem.eql(u8, &name, &exported.name)) continue;
+                        var pair: [64]u8 = undefined;
+                        pair[0..32].* = name;
+                        pair[32..].* = exported.value;
+                        try requirements.append(self.allocator, pair);
+                    }
+                }
+            };
+        }
+        const Order = struct {
+            fn dependency(_: void, a: [32]u8, b: [32]u8) bool {
+                return std.mem.order(u8, &a, &b) == .lt;
+            }
+            fn requirement(_: void, a: [64]u8, b: [64]u8) bool {
+                return std.mem.order(u8, &a, &b) == .lt;
+            }
+        };
+        std.mem.sort([32]u8, dependencies.items, {}, Order.dependency);
+        std.mem.sort([64]u8, requirements.items, {}, Order.requirement);
+        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        hash.update("roc.interface-dependencies.v1");
+        var counts: [8]u8 = undefined;
+        std.mem.writeInt(u32, counts[0..4], @intCast(dependencies.items.len), .little);
+        std.mem.writeInt(u32, counts[4..8], @intCast(requirements.items.len), .little);
+        hash.update(&counts);
+        for (dependencies.items) |key| hash.update(&key);
+        hash.update("requirements");
+        for (requirements.items) |pair| hash.update(&pair);
+        const digest = hash.finalResult();
+        try self.interface_callee_contexts.put(self.allocator, callee.key.bytes, digest);
+        return digest;
+    }
+
+    fn recordPersistentInterface(self: *Builder, entry: InterfaceSummaryEntry, types_: *Type.Store, ns: *const names.NameStore) Allocator.Error!void {
+        const family = (try self.persistentInterfaceFamily(entry.address)) orelse return;
+        const summary: PersistentInterface.Summary = switch (entry.summary) {
+            .unchanged => .unchanged,
+            .constraints => |c| .{ .constraints = c },
+        };
+        const bytes = PersistentInterface.encode(self.allocator, types_, ns, entry.request.leaves, summary) catch |err| switch (err) {
+            error.NotRepresentable => {
+                self.count("interface_persistent_unrepresentable");
+                return;
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        defer self.allocator.free(bytes);
+        const evidence = (try self.persistentInterfaceEvidence(entry.evidence)) orelse return;
+        const key = PersistentInterface.requestKey(entry.request, evidence, family.procedure);
+        const cache = self.interface_cache.?;
+        try cache.record(cache.context, family.provider, key, bytes);
+        self.count("interface_persistent_records");
+    }
+
+    fn persistentInterfaceEvidence(self: *Builder, evidence: StoredConstFnEvidence) Allocator.Error!?[32]u8 {
+        for (evidence.entries.targets) |target| if (target.method.kind == .local_proc) return null;
+        const contexts = (try self.literalTopModules()) orelse return null;
+        return Ast.fnEvidenceContextDigest(evidence.entries, evidence.frames, evidence.head, contexts).bytes;
     }
 
     fn addDigestStats(self: *Builder, stats: Type.Store.DigestStats) void {
@@ -6750,21 +6897,30 @@ const Builder = struct {
     /// module's methods, or from an imported module's exports, looks up.
     /// Null when a top module has no value context.
     fn literalProgramContext(self: *Builder) Allocator.Error!?[32]u8 {
-        if (self.literal_program_context) |known| return known;
+        return self.programValueContext(true);
+    }
+
+    fn programValueContext(self: *Builder, comptime include_export_requires: bool) Allocator.Error!?[32]u8 {
+        const cached = if (include_export_requires) &self.literal_program_context else &self.interface_program_context;
+        if (cached.*) |known| return known;
         const top = (try self.literalTopModules()) orelse {
-            self.literal_program_context = @as(?[32]u8, null);
+            cached.* = @as(?[32]u8, null);
             return null;
         };
         var names_list = std.ArrayList([33]u8).empty;
         defer names_list.deinit(self.allocator);
-        for (self.program.view().lowering_modules) |module| {
+        // Workers borrow module views, not the coordinator's output tables.
+        // Persistent interfaces must name the same input set in both domains.
+        const module_count = if (include_export_requires) self.program.view().lowering_modules.len else self.moduleViews().len;
+        for (0..module_count) |index| {
+            const key = if (include_export_requires) self.program.view().lowering_modules[index].bytes else self.moduleViews()[index].key.bytes;
             var name: [33]u8 = undefined;
-            if (top.get(module.bytes)) |context| {
+            if (top.get(key)) |context| {
                 name[0] = 1;
                 name[1..].* = context;
             } else {
                 name[0] = 0;
-                name[1..].* = module.bytes;
+                name[1..].* = key;
             }
             try names_list.append(self.allocator, name);
         }
@@ -6781,7 +6937,7 @@ const Builder = struct {
         defer required.deinit(self.allocator);
         for (self.moduleViews()) |*requirer| {
             const identities = requirer.compile_time_root_identities;
-            const export_requires = if (top.contains(requirer.key.bytes)) &[_][32]u8{} else identities.export_requires;
+            const export_requires = if (!include_export_requires or top.contains(requirer.key.bytes)) &[_][32]u8{} else identities.export_requires;
             for ([_][]const [32]u8{ identities.method_requires, export_requires }) |requirements| for (requirements) |name| {
                 var providers = top.keyIterator();
                 while (providers.next()) |provider_key| {
@@ -6802,13 +6958,13 @@ const Builder = struct {
             }
         }.lessThan);
         var hasher = TypeDigestHasher.init();
-        hasher.update("roc.literal-value.program-context.v1");
+        hasher.update(if (include_export_requires) "roc.literal-value.program-context.v1" else "roc.interface-method-context.v1");
         hashU32(&hasher, @intCast(names_list.items.len));
         for (names_list.items) |name| hasher.update(&name);
         hashU32(&hasher, @intCast(required.items.len));
         for (required.items) |pair| hasher.update(&pair);
         const digest = hasher.finalResult();
-        self.literal_program_context = @as(?[32]u8, digest);
+        cached.* = @as(?[32]u8, digest);
         return digest;
     }
 
@@ -7314,6 +7470,7 @@ const Builder = struct {
             .proc_debug_names = self.proc_debug_names,
             .interface_summaries = &self.shared_summaries.?,
             .interface_summary_end = self.shared_summaries.?.count,
+            .interface_cache = self.interface_cache,
             .replay_interface_summaries = self.replay_interface_summaries,
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
@@ -7526,6 +7683,7 @@ const Builder = struct {
             .proc_debug_names = self.proc_debug_names,
             .interface_summaries = &self.shared_summaries.?,
             .interface_summary_end = self.shared_summaries.?.count,
+            .interface_cache = self.interface_cache,
             .collect_counters = self.counters != null,
             .collect_diagnostics = self.diagnostics != null,
             .inline_expects = self.inline_expects,
@@ -9664,6 +9822,7 @@ const Builder = struct {
                             .proc_debug_names = self.proc_debug_names,
                             .interface_summaries = &self.shared_summaries.?,
                             .interface_summary_end = self.shared_summaries.?.count,
+                            .interface_cache = self.interface_cache,
                             .collect_counters = self.counters != null,
                             .collect_diagnostics = self.diagnostics != null,
                             .inline_expects = self.inline_expects,
@@ -21626,6 +21785,8 @@ const ActiveConstBindingScope = struct {
     entered: bool = false,
 };
 
+const PersistentInterface = @import("interface_summary.zig");
+
 const InterfaceReplayStatus = enum { expanding, expanded, ready };
 
 const InterfaceReplayAddress = struct {
@@ -27773,6 +27934,47 @@ const BodyContext = struct {
 
     fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity) Allocator.Error!?FoundInterfaceSummary {
         if (!self.builder.replay_interface_summaries.enabled()) return null;
+        if (try self.findMemoryInterfaceSummary(address, evidence, request)) |found| return found;
+        const family = (try self.builder.persistentInterfaceFamily(address)) orelse return null;
+        const cache = self.builder.interface_cache.?;
+        const evidence_key = (try self.builder.persistentInterfaceEvidence(evidence)) orelse return null;
+        const key = PersistentInterface.requestKey(request, evidence_key, family.procedure);
+        const bytes = (try cache.load(cache.context, self.allocator, family.provider, key)) orelse {
+            self.builder.count("interface_persistent_misses");
+            return null;
+        };
+        defer self.allocator.free(bytes);
+        const decoded = PersistentInterface.decode(self.graph.arena(), self.typeStore(), self.nameStoreMut(), request.leaves, bytes, PersistentProvenance{ .builder = self.builder }) catch |err| switch (err) {
+            error.InvalidSummary => {
+                self.builder.count("interface_persistent_invalid");
+                return null;
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        const summary: InterfaceSummary = switch (decoded) {
+            .unchanged => .unchanged,
+            .constraints => |c| .{ .constraints = c },
+        };
+        self.builder.count("interface_persistent_hits");
+        // This cache owns the record independently of the graph arena. Worker
+        // records cross to the coordinator only with their accepted shard.
+        return .{ .summary = try self.insertInterfaceSummary(.{ .address = address, .evidence = evidence, .request = request, .summary = summary }), .domain = .graph };
+    }
+
+    const PersistentProvenance = struct {
+        builder: *Builder,
+        pub fn validModuleIdentity(self: PersistentProvenance, identity: [32]u8) bool {
+            return self.builder.moduleForIdentityHash(&identity) != null;
+        }
+        pub fn validNamedType(self: PersistentProvenance, named: Type.NamedType) bool {
+            if (self.builder.moduleForKeyBytes(named.module.bytes) == null) return false;
+            const occurrence = self.builder.moduleForKeyBytes(named.ty_module.bytes) orelse return false;
+            return @backingInt(named.ty) < occurrence.types.payloadCount();
+        }
+    };
+
+    fn findMemoryInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity) Allocator.Error!?FoundInterfaceSummary {
+        if (!self.builder.replay_interface_summaries.enabled()) return null;
         const local = self.interfaceSummaryCache().cache;
         if (try local.find(address, evidence, request, self.typeStore(), self.nameStore())) |summary| {
             return .{ .summary = summary, .domain = .graph };
@@ -27839,7 +28041,9 @@ const BodyContext = struct {
         const binding = self.interfaceSummaryCache();
         if (binding.types_are_durable) {
             // Coordinator leaves already belong to permanent program storage.
-            return try binding.cache.insert(self.typeStore(), self.nameStore(), entry);
+            const summary = try binding.cache.insert(self.typeStore(), self.nameStore(), entry);
+            try self.builder.recordPersistentInterface(.{ .address = entry.address, .evidence = entry.evidence, .request = entry.request, .summary = summary }, self.typeStore(), self.nameStore());
+            return summary;
         }
         // Retain only settled leaves; open cells remain explicit constraints.
         var sealer = GraphTypeFinals.initRetainedTypeView(self.graph);
@@ -68362,6 +68566,7 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .static_dispatch_plans = view.static_dispatch_plans,
         .method_registry = view.method_registry,
         .method_lookup_scope = view.method_lookup_scope,
+        .direct_import_module_keys = view.direct_import_module_keys,
         .resolved_refs = view.resolved_value_refs,
         .nested_proc_sites = view.nested_proc_sites,
         .exported_procedure_bindings = view.exported_procedure_bindings,

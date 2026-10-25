@@ -26,6 +26,8 @@ pub const Var = enum {
     pack_trace,
     /// Print how many procedures a dev build served from cached packs.
     pack_stats,
+    /// Measure specialization with persistent interface replay disabled.
+    disable_persistent_interfaces,
     /// Print every compile-time demand decision.
     ctfe_demand_trace,
     /// Print what each module's compile-time evaluation reused, verified, and stored.
@@ -47,6 +49,7 @@ pub const Var = enum {
             .spec_census => "ROC_SPEC_CENSUS",
             .pack_trace => "ROC_PACK_TRACE",
             .pack_stats => "ROC_PACK_STATS",
+            .disable_persistent_interfaces => "ROC_DISABLE_PERSISTENT_INTERFACES",
             .ctfe_demand_trace => "ROC_CTFE_DEMAND_TRACE",
             .ctfe_reuse_trace => "ROC_CTFE_REUSE_TRACE",
             .dev_pack_objects => "ROC_DEV_PACK_OBJECTS",

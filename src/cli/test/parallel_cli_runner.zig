@@ -449,6 +449,7 @@ const CustomCase = enum {
     native_build_pack_objects,
     native_build_pack_hits,
     early_ctfe_cache,
+    persistent_interface_cache,
     check_compile_time_pack,
     discovery_summaries,
     ctfe_cache_publication,
@@ -597,6 +598,7 @@ const dev_diagnostics_cases = [_]CustomCase{
     .native_build_pack_hits,
     .early_ctfe_cache,
     .compatible_native_procedure_cache,
+    .persistent_interface_cache,
     .shared_early_object_cache,
     .issue_11627_static_data_names_cache,
     .issue_11673_callable_cache,
@@ -3240,6 +3242,7 @@ const subcommand_cases = [_]CliCase{
     // repro for https://github.com/roc-lang/roc/issues/12400: a compiler without developer diagnostics must not print pack statistics for ROC_PACK_STATS.
     .{ .id = 0, .suite = .subcommands, .name = "issue 12400: roc run --opt=dev ignores ROC_PACK_STATS without developer diagnostics", .backend = .dev, .skip = without_dev_diagnostics_skip, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/fx/hello_world.roc", .env = &.{.{ .name = "ROC_PACK_STATS", .value = "1" }}, .stdout_exact = "Hello, world!\n", .not_contains = &.{.{ .stream = .stderr, .text = "pack hits:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev serves closed specializations from a previous build's packs", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_hits } },
+    .{ .id = 0, .suite = .subcommands, .name = "persistent interface summaries survive an app edit without changing compile-time demand", .timeout_ms = 600_000, .body = .{ .custom = .persistent_interface_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build early CTFE cache skips Monotype bodies on an app-only rebuild", .timeout_ms = 600_000, .body = .{ .custom = .early_ctfe_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check reuses the compile-time pack an earlier check published", .timeout_ms = 600_000, .body = .{ .custom = .check_compile_time_pack } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check parks settled discovery and still reports an edited literal", .timeout_ms = 600_000, .body = .{ .custom = .discovery_summaries } },
@@ -5226,6 +5229,7 @@ fn runCustomCase(
         .issue_11627_static_data_names_cache => customIssue11627StaticDataNamesCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
         .early_ctfe_cache => customEarlyCtfeCache(io, allocator, &env, &timer, timeout_ms),
+        .persistent_interface_cache => customPersistentInterfaceCache(io, allocator, &env, &timer, timeout_ms),
         .check_compile_time_pack => customCheckCompileTimePack(io, allocator, &env, &timer, timeout_ms),
         .issue_12569_specialized_callables => customSpecializedCallables(io, allocator, &env, &timer, timeout_ms),
         .issue_12569_wasm_callables => customSpecializedWasmCallables(io, allocator, &env, &timer, timeout_ms),
@@ -8142,7 +8146,7 @@ const PackStoreFiles = struct {
         var walker = try cache.walk(allocator);
         defer walker.deinit();
         while (try walker.next(io)) |entry| {
-            if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".rpk")) continue;
+            if (entry.kind != .file or !(std.mem.endsWith(u8, entry.basename, ".rpk") or std.mem.endsWith(u8, entry.basename, ".rpi") or std.mem.endsWith(u8, entry.basename, ".rpa") or std.mem.endsWith(u8, entry.basename, ".rpd") or std.mem.endsWith(u8, entry.basename, ".rpm"))) continue;
             const path = try allocator.dupe(u8, entry.path);
             result.paths.append(allocator, path) catch |err| {
                 allocator.free(path);
@@ -8689,9 +8693,9 @@ fn customPackageDevPacks(
     defer prepared.deinit(allocator);
     const commands = [_][]const []const u8{
         &.{ "check", "--no-cache" },
-        &.{"check"},
-        &.{"check"},
-        &.{ "build", "--opt=dev", out_arg },
+        &.{ "check", "--timings" },
+        &.{ "check", "--timings" },
+        &.{ "build", "--opt=dev", "--timings", out_arg },
     };
     for (commands, 0..) |args, index| {
         const command_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
@@ -8707,6 +8711,12 @@ fn customPackageDevPacks(
         if (index == 0) {
             if (files.paths.items.len != 0) return failureFromRun(allocator, timer, ran, "--no-cache check wrote an object pack");
             continue;
+        }
+        if (index != 0) {
+            const phase = if (index == 3) "Publishing Runtime Cache" else "Preparing Cache";
+            if (std.mem.find(u8, ran.stdout, phase) == null and std.mem.find(u8, ran.stderr, phase) == null) {
+                return failureFromRun(allocator, timer, ran, "cache preparation/publication has no explicit timing phase");
+            }
         }
         if (index == 1) {
             if (std.mem.find(u8, ran.stderr, "package dev pack Numeric") == null) {
@@ -9475,12 +9485,41 @@ fn customNativeBuildPackHits(
         .{ .roc_file = "test/cli/pack_values/PackValues.roc", .prefix = "values" },
         .{ .roc_file = "test/cli/pack_constants/PackConstants.roc", .prefix = "constants" },
         .{ .roc_file = "test/cli/pack_literal_roots/PackLiteralRoots.roc", .prefix = "literal_roots" },
-        .{ .roc_file = comptime_app, .prefix = "comptime", .expect = .{ .edit_between_builds = true, .evaluator_artifacts = true } },
+        .{ .roc_file = comptime_app, .prefix = "comptime", .expect = .{ .edit_between_builds = true, .source_edit = .{ .from = "Shapes.sides_of(\"hexagon\")", .to = "Shapes.sides_of(\"square\") + 2" }, .evaluator_artifacts = true } },
     };
     for (store_apps) |app| {
         if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app.roc_file, warm_dir, app.prefix, app.expect)) |failure| return failure;
     }
     return null;
+}
+
+/// Reuse interfaces across runtime-only and compile-time application edits.
+fn customPersistentInterfaceCache(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    var app: []const u8 = undefined;
+    if (stageEditableApp(io, allocator, env, timer, .{
+        .dir_name = "persistent_interface_cache",
+        .platform = "test/fx-open/platform/main.roc",
+        .platform_spelling = "../../fx-open/platform/main.roc",
+        .sources = &.{ "test/cli/persistent_interface_cache/Generic.roc", "test/cli/persistent_interface_cache/main.roc" },
+        .app_name = "main.roc",
+    }, &app)) |failure| return failure;
+    if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app, env.dirs.work_dir, "interfaces", .{
+        .edit_between_builds = true,
+        .source_edit = .{ .from = "Generic.f7(args.len().to_u64() + 10)", .to = "Generic.f7(args.len().to_u64() + 9) + 1" },
+        .persistent_interface_reuse = true,
+        .compile_debug = "[dbg] \"persistent interface observation\"",
+        .uncached_baseline = true,
+        .stdout = "29\n",
+    })) |failure| return failure;
+    // Now force fresh compile-time evaluation and normalization too. The
+    // unchanged callees must reuse their settled interfaces in both paths.
+    return storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app, env.dirs.work_dir, "runtime_interfaces", .{
+        .edit_between_builds = true,
+        .source_edit = .{ .from = "Generic.f7(2)", .to = "Generic.f7(1) + 1" },
+        .persistent_interface_reuse = true,
+        .compile_debug = "[dbg] \"persistent interface observation\"",
+        .stdout = "29\n",
+    });
 }
 
 /// A real checked-artifact/object-store workflow, with a changed app so the
@@ -9497,23 +9536,34 @@ fn customEarlyCtfeCache(
         .dir_name = "early_ctfe_cache",
         .platform = "test/fx/platform/main.roc",
         .platform_spelling = "../../fx/platform/main.roc",
-        .sources = &.{ "test/cli/pack_comptime/Shapes.roc", "test/cli/pack_comptime/PackComptime.roc" },
+        .sources = &.{ "test/cli/pack_comptime/Shapes.roc", "test/cli/pack_comptime/PackComptime.roc", "test/cli/ctfe_cache_publication/Closed.roc" },
         .app_name = "PackComptime.roc",
     }, &app)) |failure| return failure;
     const source = std.Io.Dir.cwd().readFileAlloc(io, app, allocator, .limited(1024 * 1024)) catch |err|
         return customInfraFailure(allocator, timer, "failed to read CTFE app: {}", .{err});
+    // This loop has a reusable closed interface. The higher-order Shapes
+    // operations also exercised below can legitimately be withheld by the
+    // offer eligibility rules, so they cannot certify an early specialization hit.
+    const with_import = std.mem.replaceOwned(u8, allocator, source, "import Shapes", "import Shapes\nimport Closed") catch |err|
+        return customInfraFailure(allocator, timer, "failed to import the CTFE helper: {}", .{err});
+    const with_helper = std.mem.replaceOwned(u8, allocator, with_import, "Shapes.sides_of(\"hexagon\")", "Closed.total(4)") catch |err|
+        return customInfraFailure(allocator, timer, "failed to select the CTFE helper: {}", .{err});
     const with_debug = std.fmt.allocPrint(
         allocator,
         "{s}\nreplayed = {{\n    dbg \"early ctfe replay\"\n    hexagon_sides\n}}\nexpect replayed == hexagon_sides\n",
-        .{source},
+        .{with_helper},
     ) catch |err| return customInfraFailure(allocator, timer, "failed to allocate CTFE app: {}", .{err});
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = with_debug }) catch |err|
         return customInfraFailure(allocator, timer, "failed to write CTFE app: {}", .{err});
     if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app, env.dirs.work_dir, "early_ctfe", .{
+        // Body-context counts include speculative worker work. Compare the
+        // same sequential schedule before and after the edit.
+        .extra_args = &.{"--jobs=1"},
         .edit_between_builds = true,
+        .source_edit = .{ .from = "Closed.total(4)", .to = "Closed.total(3) + 3" },
         .evaluator_artifacts = true,
         .monotype_body_reduction = true,
-        .pack_hit_proc = "Shapes.sides_of",
+        .pack_hit_proc = "Closed.total",
         .compile_debug = "[dbg] \"early ctfe replay\"",
         .stdout = "triangle:3 square:4 pentagon:5 hexagon:6 28 5 4.5\n",
     })) |failure| return failure;
@@ -10157,13 +10207,15 @@ fn customIssue11673CallableCache(
 }
 
 // Repro for https://github.com/roc-lang/roc/issues/11710: Primer and Repro
-// import Lib and build under one object cache. Primer never calls Lib, so the
-// pack its build writes for Lib comes from Lib's own pack program, which lowers
-// Lib's closed exports alone; Repro's program joins Lib's function values into
-// different callable sets. Each cached procedure's identity must not depend on
-// the callable sets its value joins, or Repro's build finds one specialization
-// key naming two procedure identities. Repro gets no pack hits without Primer,
-// so its hits here come from Primer's pack.
+// import Lib and build under one object cache. A runtime build offers only the
+// procedures its own program compiled, routing each app-independent Lib
+// procedure to Lib's provider, so Primer calls Lib.parse and Lib.query_pairs
+// on a path its run never takes. Primer's program shapes Lib's function values
+// differently from Repro's, which calls Lib.parse alone. Each cached
+// procedure's identity must not depend on the callable sets its value joins,
+// or Repro's build finds one specialization key naming two procedure
+// identities. Repro gets no pack hits without Primer, so its hits here come
+// from the Lib offers Primer's build published.
 fn customIssue11710SharedObjectCache(
     io: std.Io,
     allocator: Allocator,
@@ -10944,6 +10996,8 @@ fn customRecordedProgramOutput(
         return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
     isolated.env_map.put("ROC_CACHE_DIR", cache) catch |err|
         return customInfraFailure(allocator, timer, "failed to isolate the cache: {}", .{err});
+    if (build_options.dev_diagnostics) isolated.env_map.put("ROC_PACK_STATS", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable cache statistics: {}", .{err});
     const steps = [_]struct { source: []const u8, specializes: bool, stdout: []const u8 }{
         .{ .source = source, .specializes = true, .stdout = "45 155\n" },
         .{ .source = source, .specializes = false, .stdout = "45 155\n" },
@@ -10981,6 +11035,18 @@ fn customRecordedProgramOutput(
             if ((completionCounter(output, "Input bytes validated") orelse 0) == 0) return failureFromRun(allocator, timer, run, "early hit skipped source content validation");
         }
         if (std.mem.count(u8, run.stderr, "CTFE publication observation") != 1) return failureFromRun(allocator, timer, run, "completed compilation changed debug observation multiplicity");
+        if (build_options.dev_diagnostics and !step.specializes) {
+            var lines = std.mem.splitScalar(u8, run.stderr, '\n');
+            var observed = false;
+            while (lines.next()) |line| {
+                if (!std.mem.startsWith(u8, line, "pack index:")) continue;
+                observed = true;
+                if (std.mem.find(u8, line, "index_bytes=0 ") == null or std.mem.find(u8, line, "payload_opens=0 ") == null) {
+                    return failureFromRun(allocator, timer, run, "recorded output hit consulted procedure offers or payloads");
+                }
+            }
+            if (!observed) return failureFromRun(allocator, timer, run, "missing procedure index statistics");
+        }
         if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
             .args = &.{},
             .stdout_exact = step.stdout,
@@ -11370,6 +11436,7 @@ fn customCtfeCachePublication(
         &.{ "test", "check" },
         &.{ "check", "test" },
     };
+    var named_hits: usize = 0;
     for (sequences, 0..) |commands, sequence| {
         var traced = CaseEnv{
             .dirs = env.dirs,
@@ -11406,6 +11473,8 @@ fn customCtfeCachePublication(
             const testing = std.mem.eql(u8, command, "test");
             const llvm = !checking and !dev and !testing;
             const args: []const []const u8 = if (checking) &.{ "check", "--verbose", "--no-color" } else if (testing) &.{ "test", "--no-color" } else if (dev) &.{ "build", "--opt=dev", out_arg } else &.{ "build", out_arg };
+            // Exercise procedure reuse; completed-output reuse has its own test.
+            if (dev) if (forgetRecordedProgramOutputs(io, allocator, &traced, timer)) |failure| return failure;
             // Optimized builds deliberately warn about the fixture's dbg;
             // code 2 is the documented warning exit, not a compilation crash.
             const run = switch (captureRocRun(io, allocator, &traced, timer, timeout_ms, .{
@@ -11419,12 +11488,16 @@ fn customCtfeCachePublication(
             if (std.mem.count(u8, run.stderr, "[dbg] \"CTFE publication observation\"") != 1) {
                 return failureFromRun(allocator, timer, run, "command did not preserve its compile-time observation exactly once");
             }
-            // Every command files the code its compile-time evaluation ran,
-            // so every later command of the sequence reuses the helpers. The
-            // unchanged repeat check reuses its checked modules instead.
-            if (step > 0 and !(sequence == 0 and step == 1)) {
+            // A demanded helper reuses its code. Reusing a completed value can
+            // avoid requesting that helper altogether, which also avoids its
+            // body. The unchanged repeat check reuses its checked modules.
+            // The test-plan consumer requires source bodies; its next check
+            // still verifies that evaluation published reusable native code.
+            if (step > 0 and !testing and !(sequence == 0 and step == 1)) {
                 for ([_][]const u8{ "Closed.total", "Closed.checked_scale" }) |procedure| {
+                    if (namedProcBody(run.stderr, procedure) == null) continue;
                     if (!hasNamedPackHit(run.stderr, procedure)) return failureFromRun(allocator, timer, run, "warm finalization did not reuse its named CTFE helper");
+                    named_hits += 1;
                     if (!llvm and namedProcBody(run.stderr, procedure) == true) return failureFromRun(allocator, timer, run, "warm native finalization reconstructed the CTFE helper body");
                 }
             }
@@ -11533,6 +11606,7 @@ fn customCtfeCachePublication(
             }
         }
     }
+    if (named_hits == 0) return customFailure(allocator, timer, "no command reused a demanded CTFE helper", .{});
     return null;
 }
 
@@ -11712,10 +11786,15 @@ const StoreExpectations = struct {
     /// Append a comment to the app between the builds, so the second build
     /// checks it again instead of reusing its cached checked artifact.
     edit_between_builds: bool = false,
+    /// Change an evaluated expression as well as the comment. A comment alone
+    /// can reuse stored values and never demand the procedure being tested.
+    source_edit: ?struct { from: []const u8, to: []const u8 } = null,
     /// The compile-time evaluator spliced at least one entry.
     evaluator_artifacts: bool = false,
     /// Require less Monotype body construction, not merely less native emission.
     monotype_body_reduction: bool = false,
+    /// Reuse settled interfaces before reconstructing the callee relation.
+    persistent_interface_reuse: bool = false,
     /// Root debug output must appear once on every build, including cache reuse.
     compile_debug: ?[]const u8 = null,
     /// An undemanded root must produce no observation.
@@ -11779,12 +11858,17 @@ fn storeBuildsBehaveIdentically(
         if (last and expect.edit_between_builds) {
             const source = std.Io.Dir.cwd().readFileAlloc(io, roc_file, allocator, .limited(1024 * 1024)) catch |err|
                 return customInfraFailure(allocator, timer, "failed to read {s}: {}", .{ roc_file, err });
-            const edited = std.fmt.allocPrint(allocator, "{s}\n# Edited between builds, so this build checks the app again.\n", .{source}) catch |err|
+            const changed_source = if (expect.source_edit) |edit|
+                std.mem.replaceOwned(u8, allocator, source, edit.from, edit.to) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to edit the compile-time expression: {}", .{err})
+            else
+                source;
+            const edited = std.fmt.allocPrint(allocator, "{s}\n# Edited between builds, so this build checks the app again.\n", .{changed_source}) catch |err|
                 return customInfraFailure(allocator, timer, "failed to allocate the edited app: {}", .{err});
             std.Io.Dir.cwd().writeFile(io, .{ .sub_path = roc_file, .data = edited }) catch |err|
                 return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ roc_file, err });
         }
-        const build_args: []const []const u8 = if (expect.monotype_body_reduction)
+        const build_args: []const []const u8 = if (expect.monotype_body_reduction or expect.persistent_interface_reuse)
             if (expect.uncached_baseline and index == 0) &.{ "build", "--no-cache", "--opt=dev", "--timings", out_arg } else &.{ "build", "--opt=dev", "--timings", out_arg }
         else if (expect.uncached_baseline and index == 0) &.{ "build", "--no-cache", "--opt=dev", out_arg } else &.{ "build", "--opt=dev", out_arg };
         if (forgetRecordedProgramOutputs(io, allocator, env, timer)) |failure| return failure;
@@ -11832,6 +11916,13 @@ fn storeBuildsBehaveIdentically(
                     return failureFromRun(allocator, timer, built, "early CTFE cache did not reduce Monotype body contexts");
                 }
             }
+        }
+        if (last and expect.persistent_interface_reuse) {
+            const hits = timingCounter(built.stderr, "Shared Monotype body + dispatch", "Persistent interface hits") orelse
+                return failureFromRun(allocator, timer, built, "build did not report persistent interface reuse");
+            if (hits == 0) return failureFromRun(allocator, timer, built, "app edit reused no persistent interface summary");
+            if (std.mem.find(u8, built.stderr, "unused failing interface root") != null)
+                return failureFromRun(allocator, timer, built, "interface replay demanded an unused failing root");
         }
         const require_hits = switch (expect.cache_hit_build) {
             .first_cached => index == @intFromBool(expect.uncached_baseline),

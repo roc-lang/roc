@@ -2102,6 +2102,9 @@ pub const LirProcSpec = struct {
     /// (`SpecComptimeReads.fnReads`); null for a procedure no Monotype
     /// function names.
     source_monotype_fn: ?u32 = null,
+    /// Checked defining module for an app-independent direct template offer.
+    /// Null keeps generated, nested, and app-dependent code program-scoped.
+    cache_provider_module: ?[32]u8 = null,
     /// Set on an `external` proc whose cache entry is a linked object rather
     /// than spliced code: callers reach it through its C-ABI entry
     /// (`ProcIdentity.writeCAbiEntryName`), classified from its argument and

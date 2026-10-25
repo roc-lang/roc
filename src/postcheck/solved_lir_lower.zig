@@ -3336,6 +3336,10 @@ const Lowerer = struct {
             .cache_key = cached_key,
             .code_key = code_key,
             .source_monotype_fn = if (source_fn.source) |template| if (template.frozen_fn) |mono_fn| @backingInt(mono_fn) else null else null,
+            .cache_provider_module = if (keyed_offer) if (source_fn.source) |template| switch (template.fn_def) {
+                .local_template, .imported_template, .checked_generated => |owner| owner.artifact.bytes,
+                .nested, .local_hosted, .imported_hosted, .parser_runtime, .encoder_for_runtime => null,
+            } else null else null,
             .c_abi_entry = if (cached) |hit| hit.c_abi_entry else false,
             .rc_borrowed_params = if (cached) |hit| hit.rc_borrowed_params else 0,
             .rc_ret_borrowed = if (cached) |hit| hit.rc_ret_borrowed else false,
