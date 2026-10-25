@@ -817,6 +817,7 @@ pub const LoadedPacks = struct {
     interface_mutex: std.Io.Mutex = .init,
     /// Worker reads update this under interface_mutex; reported after joining.
     interface_bytes_loaded: u64 = 0,
+    interface_invalid_families: u64 = 0,
     interface_families: std.AutoHashMapUnmanaged([32]u8, *InterfaceFamily) = .empty,
     interface_store: ?*const Store = null,
     allocator: Allocator,
@@ -1567,6 +1568,7 @@ pub const LoadedPacks = struct {
             const stats = self.index_stats;
             std.debug.print("pack index: index_bytes={d} bucket_opens={d} bucket_absent={d} negative_hits={d} metadata_opens={d} metadata_bytes={d} candidates={d} duplicates={d} payload_opens={d} payload_files={d} payload_bytes={d} decoded_artifacts={d} requested_artifacts={d} served_artifacts={d} allocation_failures={d} requested={d} served={d} misses={d} source_ineligible={d} linked_ineligible={d} corrupt={d} missing={d}\n", .{ stats.index_bytes, stats.bucket_opens, stats.bucket_absent, stats.negative_hits, stats.metadata_opens, stats.metadata_bytes, stats.candidates, stats.duplicates, stats.payload_opens, stats.payload_files, stats.payload_bytes, stats.decoded_artifacts, stats.requested_artifacts, stats.served_artifacts, stats.allocation_failures, stats.requested, stats.served, stats.misses, stats.source_ineligible, stats.linked_ineligible, stats.corrupt, stats.missing });
         }
+        if (base.dev_diagnostics.isSet(.pack_stats)) std.debug.print("pack interfaces: loaded_bytes={d} invalid_families={d}\n", .{ self.interface_bytes_loaded, self.interface_invalid_families });
         var interface_families = self.interface_families.valueIterator();
         while (interface_families.next()) |family| {
             for (family.*.records.values()) |bytes| self.allocator.free(bytes);
@@ -1643,7 +1645,11 @@ pub const LoadedPacks = struct {
         self.interface_bytes_loaded +|= bytes.len;
         self.readInterfaceFamily(family, key, bytes) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.InvalidSummary => return family,
+            error.InvalidSummary => {
+                self.interface_invalid_families += 1;
+                family.loaded = true;
+                return family;
+            },
         };
         family.loaded = true;
         return family;
@@ -1652,7 +1658,7 @@ pub const LoadedPacks = struct {
     const InterfaceDecodeError = Allocator.Error || error{InvalidSummary};
 
     fn readInterfaceFamily(self: *LoadedPacks, family: *InterfaceFamily, key: [32]u8, bytes: []const u8) InterfaceDecodeError!void {
-        if (bytes.len < 76 or !std.mem.eql(u8, bytes[0..8], "RIFACE01") or !std.mem.eql(u8, bytes[8..40], &key)) return error.InvalidSummary;
+        if (bytes.len < 76 or !std.mem.eql(u8, bytes[0..8], "RIFACE02") or !std.mem.eql(u8, bytes[8..40], &key)) return error.InvalidSummary;
         if (!std.mem.eql(u8, &Index.digest(bytes[72..]), bytes[40..72])) return error.InvalidSummary;
         const count = std.mem.readInt(u32, bytes[72..76], .little);
         var offset: usize = 76;
@@ -1719,7 +1725,7 @@ pub const LoadedPacks = struct {
             if (!family.dirty) continue;
             var bytes = std.ArrayList(u8).empty;
             defer bytes.deinit(self.allocator);
-            try bytes.appendSlice(self.allocator, "RIFACE01");
+            try bytes.appendSlice(self.allocator, "RIFACE02");
             try bytes.appendSlice(self.allocator, entry.key_ptr);
             try bytes.appendNTimes(self.allocator, 0, 32);
             var number: [4]u8 = undefined;
@@ -2614,11 +2620,13 @@ test "persistent interface families invalidate misses, share records, and reject
     const three = (try LoadedPacks.loadInterface(&consumer, allocator, family, third)).?;
     defer allocator.free(three);
     try std.testing.expectEqualStrings("three", three);
-    try fixture.store.native.write(fixture.store.indexedIdentity(.local, family, @splat(0), .interface), "RIFACE01truncated", fixture.store.native.now());
+    try fixture.store.native.write(fixture.store.indexedIdentity(.local, family, @splat(0), .interface), "RIFACE02truncated", fixture.store.native.now());
     var corrupt = LoadedPacks.init(allocator);
     defer corrupt.deinit();
     corrupt.interface_store = &fixture.store;
     try std.testing.expectEqual(null, try LoadedPacks.loadInterface(&corrupt, allocator, family, first));
+    try std.testing.expectEqual(null, try LoadedPacks.loadInterface(&corrupt, allocator, family, second));
+    try std.testing.expectEqual(@as(u64, 1), corrupt.interface_invalid_families);
     try LoadedPacks.recordInterface(&corrupt, family, first, "repaired");
     try corrupt.publishInterfaces();
     var repaired = LoadedPacks.init(allocator);

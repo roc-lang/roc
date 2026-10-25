@@ -6178,7 +6178,7 @@ const Builder = struct {
                 try entry.request.copy(scratch.allocator(), relocation),
                 relocation,
             );
-            try self.recordPersistentInterface(.{ .address = entry.address, .evidence = entry.evidence, .request = try entry.request.copy(scratch.allocator(), relocation), .summary = summary }, &self.program.types, &self.program.names);
+            if (!entry.persisted) try self.recordPersistentInterface(.{ .address = entry.address, .evidence = entry.evidence, .request = try entry.request.copy(scratch.allocator(), relocation), .summary = summary }, &self.program.types, &self.program.names);
         }
     }
 
@@ -6195,7 +6195,7 @@ const Builder = struct {
         const scope_context = scope.compile_time_root_identities.valueContext() orelse return null;
         const program_context = (try self.programValueContext(false)) orelse return null;
         var hash = std.crypto.hash.sha2.Sha256.init(.{});
-        hash.update("roc.interface-provider.v1");
+        hash.update("roc.interface-provider.v2");
         hash.update(&(callee.code_generation_key orelse callee.key).bytes);
         hash.update(&scope_context);
         // Method lookup order is producer data too; a sorted module set does
@@ -6294,11 +6294,13 @@ const Builder = struct {
 
     fn recordPersistentInterface(self: *Builder, entry: InterfaceSummaryEntry, types_: *Type.Store, ns: *const names.NameStore) Allocator.Error!void {
         const family = (try self.persistentInterfaceFamily(entry.address)) orelse return;
+        const evidence = (try self.persistentInterfaceEvidence(entry.evidence)) orelse return;
         const summary: PersistentInterface.Summary = switch (entry.summary) {
             .unchanged => .unchanged,
             .constraints => |c| .{ .constraints = c },
         };
-        const bytes = PersistentInterface.encode(self.allocator, types_, ns, entry.request.leaves, summary) catch |err| switch (err) {
+        var stats: PersistentInterface.Stats = .{};
+        const bytes = PersistentInterface.encodeWithStats(self.allocator, types_, ns, entry.request.leaves, summary, BodyContext.PersistentProvenance{ .builder = self }, &stats) catch |err| switch (err) {
             error.NotRepresentable => {
                 self.count("interface_persistent_unrepresentable");
                 return;
@@ -6306,11 +6308,15 @@ const Builder = struct {
             error.OutOfMemory => return error.OutOfMemory,
         };
         defer self.allocator.free(bytes);
-        const evidence = (try self.persistentInterfaceEvidence(entry.evidence)) orelse return;
         const key = PersistentInterface.requestKey(entry.request, evidence, family.procedure);
         const cache = self.interface_cache.?;
         try cache.record(cache.context, family.provider, key, bytes);
         self.count("interface_persistent_records");
+        self.countBy("interface_persistent_bytes", @intCast(bytes.len));
+        self.countBy("interface_persistent_types", @intCast(stats.types));
+        self.countBy("interface_persistent_references", @intCast(stats.references));
+        if (stats.composites != 0) self.count("interface_persistent_composite_records");
+        if (stats.defaults != 0) self.count("interface_persistent_default_records");
     }
 
     fn persistentInterfaceEvidence(self: *Builder, evidence: StoredConstFnEvidence) Allocator.Error!?[32]u8 {
@@ -21836,6 +21842,8 @@ const InterfaceSummaryEntry = struct {
     evidence: StoredConstFnEvidence,
     request: InterfaceConstraints.Identity,
     summary: InterfaceSummary,
+    /// Already loaded from the persistent family; do not encode it again.
+    persisted: bool = false,
 };
 
 /// A completed expansion's contribution to its request roots. An expansion
@@ -21875,6 +21883,7 @@ const InterfaceSummary = union(enum) {
 const FoundInterfaceSummary = struct {
     summary: InterfaceSummary,
     domain: Domain,
+    persistent: bool = false,
 
     const Domain = enum {
         /// The finding body's own type and name stores.
@@ -22061,6 +22070,7 @@ const InterfaceSummaryCache = struct {
             },
             .request = try request.copy(arena, InterfaceSummaryCopy{}),
             .summary = try source.summary.copy(arena, summary_relocation),
+            .persisted = source.persisted,
         };
         self.buckets.appendAssumeCapacity(source.address, @intCast(self.entries.items.len));
         self.entries.appendAssumeCapacity(owned);
@@ -27935,7 +27945,7 @@ const BodyContext = struct {
         return .{ .cache = &workspace.interface_summaries, .types_are_durable = false };
     }
 
-    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity) Allocator.Error!?FoundInterfaceSummary {
+    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity, root_count: usize) Allocator.Error!?FoundInterfaceSummary {
         if (!self.builder.replay_interface_summaries.enabled()) return null;
         if (try self.findMemoryInterfaceSummary(address, evidence, request)) |found| return found;
         const family = (try self.builder.persistentInterfaceFamily(address)) orelse return null;
@@ -27947,7 +27957,8 @@ const BodyContext = struct {
             return null;
         };
         defer self.allocator.free(bytes);
-        const decoded = PersistentInterface.decode(self.graph.arena(), self.typeStore(), self.nameStoreMut(), request.leaves, bytes, PersistentProvenance{ .builder = self.builder }) catch |err| switch (err) {
+        var stats: PersistentInterface.Stats = .{};
+        const decoded = PersistentInterface.decodeForRequest(self.graph.arena(), self.typeStore(), self.nameStoreMut(), request.leaves, bytes, PersistentProvenance{ .builder = self.builder }, root_count, address.kind != .method_signature, &stats) catch |err| switch (err) {
             error.InvalidSummary => {
                 self.builder.count("interface_persistent_invalid");
                 return null;
@@ -27959,13 +27970,40 @@ const BodyContext = struct {
             .constraints => |c| .{ .constraints = c },
         };
         self.builder.count("interface_persistent_hits");
+        if (stats.composites != 0) self.builder.count("interface_persistent_composite_hits");
+        if (stats.defaults != 0) self.builder.count("interface_persistent_default_hits");
         // This cache owns the record independently of the graph arena. Worker
         // records cross to the coordinator only with their accepted shard.
-        return .{ .summary = try self.insertInterfaceSummary(.{ .address = address, .evidence = evidence, .request = request, .summary = summary }), .domain = .graph };
+        return .{ .summary = try self.insertInterfaceSummary(.{ .address = address, .evidence = evidence, .request = request, .summary = summary, .persisted = true }), .domain = .graph, .persistent = true };
     }
 
     const PersistentProvenance = struct {
         builder: *Builder,
+        pub fn defaultArtifact(self: PersistentProvenance, identity: [32]u8, expr: u32) ?[32]u8 {
+            const declaring = self.builder.moduleForIdentityHash(&identity) orelse return null;
+            _ = declaring.bodies.defaultExpr(expr) orelse return null;
+            return declaring.key.bytes;
+        }
+        pub fn validNamedDefinition(self: PersistentProvenance, ns: *const names.NameStore, named: Type.NamedType, def: Type.TypeDef, kind: Type.NamedKind, owner: ?static_dispatch.BuiltinOwner) bool {
+            if (def.site != self.builder.isAppModuleIdentity(ns.moduleIdentityBytes(def.module))) return false;
+            if (!self.validNamedType(named)) return false;
+            const occurrence = self.builder.moduleForKeyBytes(named.ty_module.bytes).?;
+            const payload = occurrence.types.payload(named.ty);
+            switch (payload) {
+                .alias => |alias| {
+                    return kind == .alias and owner == null and std.mem.eql(u8, &alias.owner_module.bytes, &named.module.bytes) and
+                        std.mem.eql(u8, occurrence.names.moduleIdentityBytes(alias.origin_module), ns.moduleIdentityBytes(def.module)) and
+                        alias.source_decl == def.source_decl and std.mem.eql(u8, occurrence.names.typeNameText(alias.name), ns.typeNameText(def.type_name));
+                },
+                .nominal => |nominal| {
+                    return kind == (if (nominal.is_opaque) Type.NamedKind.@"opaque" else .nominal) and owner == builtinOwner(nominal.builtin) and
+                        std.mem.eql(u8, &nominal.owner_module.bytes, &named.module.bytes) and
+                        std.mem.eql(u8, occurrence.names.moduleIdentityBytes(nominal.origin_module), ns.moduleIdentityBytes(def.module)) and
+                        nominal.source_decl == def.source_decl and std.mem.eql(u8, occurrence.names.typeNameText(nominal.name), ns.typeNameText(def.type_name));
+                },
+                .pending, .err, .flex, .rigid, .record, .tuple, .function, .tag_union, .empty_record, .empty_tag_union => return false,
+            }
+        }
         pub fn validModuleIdentity(self: PersistentProvenance, identity: [32]u8) bool {
             return self.builder.moduleForIdentityHash(&identity) != null;
         }
@@ -28045,7 +28083,7 @@ const BodyContext = struct {
         if (binding.types_are_durable) {
             // Coordinator leaves already belong to permanent program storage.
             const summary = try binding.cache.insert(self.typeStore(), self.nameStore(), entry);
-            try self.builder.recordPersistentInterface(.{ .address = entry.address, .evidence = entry.evidence, .request = entry.request, .summary = summary }, self.typeStore(), self.nameStore());
+            if (!entry.persisted) try self.builder.recordPersistentInterface(.{ .address = entry.address, .evidence = entry.evidence, .request = entry.request, .summary = summary }, self.typeStore(), self.nameStore());
             return summary;
         }
         // Retain only settled leaves; open cells remain explicit constraints.
@@ -28304,14 +28342,14 @@ const BodyContext = struct {
                 },
             }
         }
-        if (cached == null and replay_state.use_finished_summaries) cached = try self.findInterfaceSummary(address, stored_evidence, request);
+        if (cached == null and replay_state.use_finished_summaries) cached = try self.findInterfaceSummary(address, stored_evidence, request, request_roots.items.len);
         var verify_summary: ?InterfaceSummary = null;
         const saved_use_summaries = replay_state.use_finished_summaries;
         expansion.saved_use_summaries = saved_use_summaries;
         expansion.restores_use_summaries = true;
         if (cached) |found| {
             self.builder.count("interface_summary_hits");
-            if (std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
+            if (!found.persistent and std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
                 self.builder.interface_summary_checks += 1;
                 self.builder.count("interface_summary_verifications");
                 verify_summary = try self.graphDomainSummary(found);
@@ -53355,9 +53393,9 @@ const BodyContext = struct {
             .input_digest = interfaceRequestBucket(request.bytes),
         };
         var verify_summary: ?InterfaceSummary = null;
-        if (try self.findInterfaceSummary(address, evidence, request)) |found| {
+        if (try self.findInterfaceSummary(address, evidence, request, roots.items.len)) |found| {
             self.builder.count("interface_summary_hits");
-            if (std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
+            if (!found.persistent and std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
                 self.builder.interface_summary_checks += 1;
                 self.builder.count("interface_summary_verifications");
                 verify_summary = try self.graphDomainSummary(found);
@@ -53476,7 +53514,7 @@ const BodyContext = struct {
         };
         const use_summaries = self.draft.interface_replay.use_finished_summaries;
         if (use_summaries) {
-            if (try self.findInterfaceSummary(address, evidence, request)) |found| {
+            if (try self.findInterfaceSummary(address, evidence, request, 1)) |found| {
                 switch (found.summary) {
                     .unchanged => {},
                     .constraints => |constraints| try self.graph.unify((try self.instantiateFoundConstraints(found.domain, constraints))[0], constraint_node),
@@ -53536,7 +53574,7 @@ const BodyContext = struct {
         const evidence = StoredConstFnEvidence.empty();
         const request: InterfaceConstraints.Identity = .{ .bytes = &.{}, .leaves = &.{} };
         if (cacheable) {
-            if (try self.findInterfaceSummary(address, evidence, request)) |found| {
+            if (try self.findInterfaceSummary(address, evidence, request, 1)) |found| {
                 return switch (found.summary) {
                     .constraints => |constraints| (try self.instantiateFoundConstraints(found.domain, constraints))[0],
                     .unchanged => Common.invariant("checked method signature snapshot had no root"),

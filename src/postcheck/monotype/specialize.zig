@@ -69,6 +69,14 @@ pub const Counters = struct {
     interface_persistent_misses: u64 = 0,
     interface_persistent_invalid: u64 = 0,
     interface_persistent_records: u64 = 0,
+    interface_persistent_bytes: u64 = 0,
+    interface_persistent_types: u64 = 0,
+    interface_persistent_references: u64 = 0,
+    interface_persistent_composite_records: u64 = 0,
+    interface_persistent_default_records: u64 = 0,
+    interface_persistent_composite_hits: u64 = 0,
+    interface_persistent_default_hits: u64 = 0,
+
     interface_persistent_unrepresentable: u64 = 0,
 
     /// Summary hits whose expansion contributed no constraint beyond its input.

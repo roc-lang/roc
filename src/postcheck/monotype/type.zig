@@ -2525,6 +2525,11 @@ pub const Store = struct {
         return self.computeDigest(name_store, ty, .representation, stats) catch digestOutOfMemory();
     }
 
+    /// Fallible representation hashing for optional persistent data publication.
+    pub fn representationDigestFallible(self: *Store, name_store: *const names.NameStore, ty: TypeId) std.mem.Allocator.Error!names.TypeDigest {
+        return self.computeDigest(name_store, ty, .representation, null);
+    }
+
     /// Exact structural equality for closed Monotype types.
     ///
     /// Aliases with backing compare as their backing, non-alias named types

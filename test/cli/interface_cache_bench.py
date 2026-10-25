@@ -77,7 +77,7 @@ main! = |args| {{
                 (source / "main.roc").write_text(app)
                 if phase == "corrupt":
                     for record in cache.rglob("*.ris"):
-                        record.write_bytes(b"RIFACE01truncated")
+                        record.write_bytes(b"RIFACE02truncated")
                     for output in cache.rglob("*.rpo"):
                         output.unlink()
                 exe = run / f"{phase}-app"
