@@ -2815,8 +2815,12 @@ and its demanded pending roots evaluate against the same checked module data
 through the same declared root functions an uncached compilation uses.
 Afterwards every requested root still pending is `unevaluated` again, and the
 module is written to the checked module cache again only when this
-compilation evaluated a root it lacked. A module is cached only when it has no reports, so an entry never
-holds a diagnostic that a later compilation's evaluation could contradict.
+compilation evaluated a root it lacked. A module is cached only when checking
+and evaluation add no reports beyond those present before checked-cache lookup.
+Earlier parsing and canonicalization reports are reproduced before that lookup,
+so they do not prevent reuse and are not emitted again by the checked artifact.
+An entry therefore never holds a new checking or evaluation diagnostic that a
+later compilation's evaluation could contradict.
 
 A build reports the compile-time failures of the roots it evaluates. A
 failure in a root no build demands is reported by `roc check`, which
@@ -4845,8 +4849,10 @@ results, never source environments or a live checker continuation.
 Type-bearing body columns carry the app substitution; unchanged body columns
 remain borrowed.
 Unchanged columns borrow the exact platform identified by the key. Only a
-completed composition without diagnostics may be cached; a hit consumes its
-stored outcomes and replays its recorded debug observations without evaluation.
+completed composition without new checking or evaluation diagnostics may be
+cached; already-replayed earlier-stage reports do not prevent publication. A hit
+consumes its stored outcomes and replays its recorded debug observations without
+evaluation.
 The canonicalized module cache is a separate, non-checked boundary; the rules
 below bind the checked module and composition caches.
 Checked module cache entries are trusted compiler-produced cache entries, not
@@ -4857,6 +4863,21 @@ or walk checked expressions to prove that cached checked data is still complete.
 Correctness belongs to the producer path that writes the cache entry, and
 invalidation belongs to the cache key and explicit cache/selection format
 versions.
+
+The coordinator captures each module's report count immediately before checked
+cache lookup, after parsing and canonicalization reports have been appended.
+Checking (including the deferred import drain) and evaluation only append to
+that same report list. `BuildEnv` moves those reports into its output sink only
+after finalization or when aborting. Solver-store staging and final publication
+share the condition that its count has not changed. Staging serializes the `ModuleEnv`
+while its solver store is live, then releases the store before evaluation;
+final publication additionally requires completed evaluation and, for a reopened
+cache entry, newly completed roots. A later report makes a staged part ineligible
+and it is discarded. Failed staging is an ordinary cache-write failure: the
+compilation continues and releases solver types, but cannot publish a checked
+entry without the staged environment. The empty replacement store is never
+serialized as a checked result. Pairings retain their separate ownership and
+publication rules, and abandoned staged parts are discarded during cleanup.
 
 `ModuleEnv` contains `CommonEnv.strings`, a `base.StringLiteral.Store`. That
 store is part of the checked module cache data. A cache hit materializes it as a
