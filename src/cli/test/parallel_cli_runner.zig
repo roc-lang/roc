@@ -465,6 +465,7 @@ const CustomCase = enum {
     issue_12241_cached_constant_insert,
     issue_12294_cached_capturing_closures,
     cache_fingerprints_agree,
+    compatible_native_procedure_cache,
     shared_early_object_cache,
     issue_11627_static_data_names_cache,
     issue_10733_wasm_boxy_dev_sealed_object,
@@ -592,6 +593,7 @@ const dev_diagnostics_cases = [_]CustomCase{
     .native_build_pack_objects,
     .native_build_pack_hits,
     .early_ctfe_cache,
+    .compatible_native_procedure_cache,
     .shared_early_object_cache,
     .issue_11627_static_data_names_cache,
     .issue_11673_callable_cache,
@@ -3219,6 +3221,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12220: shared object cache keeps each module's list literals in a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_12220_shared_object_cache_literals } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: every program compiles an offered procedure to the same LIR", .timeout_ms = 600_000, .body = .{ .custom = .cache_fingerprints_agree } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12576: compatible native procedure providers elide shared bodies across libc targets", .timeout_ms = 600_000, .body = .{ .custom = .compatible_native_procedure_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "shared early object cache preserves relation identity and LLVM source bodies", .timeout_ms = 600_000, .body = .{ .custom = .shared_early_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11826: a warm dev build keeps the ARC ownership variants of the cold build", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_11826_cache_ownership_variants } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12241: writing to a list read from a top-level constant allocates the same in cold, warm, and uncached builds", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_12241_cached_constant_insert } },
@@ -5205,6 +5208,7 @@ fn runCustomCase(
         .issue_12241_cached_constant_insert => customIssue12241CachedConstantInsert(io, allocator, &env, &timer, timeout_ms),
         .issue_12294_cached_capturing_closures => customIssue12294CachedCapturingClosures(io, allocator, &env, &timer, timeout_ms),
         .cache_fingerprints_agree => customCacheFingerprintsAgree(io, allocator, &env, &timer, timeout_ms),
+        .compatible_native_procedure_cache => customCompatibleNativeProcedureCache(io, allocator, &env, &timer, timeout_ms),
         .shared_early_object_cache => customSharedEarlyObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11627_static_data_names_cache => customIssue11627StaticDataNamesCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
@@ -9548,6 +9552,98 @@ fn customEarlyCtfeCache(
     return null;
 }
 
+/// Both libc outputs consume CTFE's actual provider. Removing recorded
+/// outputs in the helper forces reservation/body construction on every build.
+fn customCompatibleNativeProcedureCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    if (builtin.os.tag != .linux or builtin.cpu.arch != .x86_64) return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "requires x64 Linux libc targets" };
+    var app: []const u8 = undefined;
+    if (stageEditableApp(io, allocator, env, timer, .{
+        .dir_name = "compatible_native_procedure_cache",
+        .platform = "test/str/platform/main.roc",
+        .platform_spelling = "../../str/platform/main.roc",
+        .sources = &.{ "test/cli/shared_early_object_cache/Closed.roc", "test/cli/shared_early_object_cache/compatible.roc" },
+        .app_name = "compatible.roc",
+    }, &app)) |failure| return failure;
+    for ([_][]const u8{ "x64musl", "x64glibc" }) |target| {
+        const target_arg = std.fmt.allocPrint(allocator, "--target={s}", .{target}) catch |err|
+            return customInfraFailure(allocator, timer, "target argument: {}", .{err});
+        if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app, env.dirs.work_dir, target, .{
+            .uncached_baseline = true,
+            .edit_between_builds = true,
+            .monotype_body_reduction = true,
+            .pack_hit_proc = "Closed.total",
+            .early_hit_only = true,
+            .compile_debug = "[dbg] \"compatible first\"\n[dbg] \"compatible second\"",
+            .compile_debug_absent = "compatible undemanded",
+            .stdout = "",
+            .stderr = "original 45 120 earth | Got the following from the host: string from host\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n",
+            .extra_args = &.{ target_arg, "--jobs=1" },
+        })) |failure| return failure;
+    }
+    // An explicit specialization request must make the same shared promise.
+    if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app, env.dirs.work_dir, "glibc_explicit", .{
+        .uncached_baseline = true,
+        .edit_between_builds = true,
+        .monotype_body_reduction = true,
+        .pack_hit_proc = "Closed.total",
+        .early_hit_only = true,
+        .compile_debug = "[dbg] \"compatible first\"\n[dbg] \"compatible second\"",
+        .compile_debug_absent = "compatible undemanded",
+        .stdout = "",
+        .stderr = "original 45 120 earth | Got the following from the host: string from host\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n",
+        .extra_args = &.{ "--target=x64glibc", "--specialize=yes", "--jobs=1" },
+    })) |failure| return failure;
+    const dependency = std.fs.path.join(allocator, &.{ std.fs.path.dirname(app).?, "Closed.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "dependency path: {}", .{err});
+    const source = std.Io.Dir.cwd().readFileAlloc(io, dependency, allocator, .limited(1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "dependency source: {}", .{err});
+    const changed = std.mem.replaceOwned(u8, allocator, source, "        $sum\n", "        $sum + 1\n") catch |err|
+        return customInfraFailure(allocator, timer, "dependency edit: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = dependency, .data = changed }) catch |err|
+        return customInfraFailure(allocator, timer, "write dependency edit: {}", .{err});
+    if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app, env.dirs.work_dir, "glibc_changed_dependency", .{
+        .uncached_baseline = true,
+        .edit_between_builds = true,
+        .monotype_body_reduction = true,
+        .pack_hit_proc = "Closed.total",
+        .early_hit_only = true,
+        .fresh_proc = "Closed.total",
+        .compile_debug = "[dbg] \"compatible first\"\n[dbg] \"compatible second\"",
+        .compile_debug_absent = "compatible undemanded",
+        .stdout = "",
+        .stderr = "original 46 121 earth | Got the following from the host: string from host\n\x1b[32mSUCCESS\x1b[0m: Result contains expected substring!\n",
+        .extra_args = &.{ "--target=x64glibc", "--specialize=yes", "--jobs=1" },
+    })) |failure| return failure;
+    const app_source = std.Io.Dir.cwd().readFileAlloc(io, app, allocator, .limited(1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failing app source: {}", .{err});
+    const failing = std.mem.replaceOwned(u8, allocator, app_source, "initial = {", "initial = {\n    expect Closed.total(10) == 0") catch |err|
+        return customInfraFailure(allocator, timer, "failing app edit: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = failing }) catch |err|
+        return customInfraFailure(allocator, timer, "write failing app: {}", .{err});
+    var reports: [2]std.process.RunResult = undefined;
+    for (0..2) |index| {
+        const args: []const []const u8 = if (index == 0)
+            &.{ "build", "--opt=dev", "--target=x64glibc", "--no-color", "--no-cache", "--jobs=1" }
+        else
+            &.{ "build", "--opt=dev", "--target=x64glibc", "--no-color", "--jobs=1" };
+        const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "timeout before failed-root build");
+        reports[index] = runRocInEnv(io, allocator, env, args, app, .relative, &.{}, null, remaining) catch |err|
+            return customInfraFailure(allocator, timer, "failed-root build: {}", .{err});
+        if (processSucceeded(reports[index].term) or std.mem.find(u8, reports[index].stderr, "This expect failed during compile-time evaluation.") == null) {
+            return failureFromRun(allocator, timer, reports[index], "cached procedure hid a demanded root failure");
+        }
+    }
+    if (!std.mem.eql(u8, reports[0].stderr, reports[1].stderr)) return failureFromRun(allocator, timer, reports[1], "compatible cache changed failure diagnostics");
+    return null;
+}
+
 /// A platform requirement and an independent CTFE/runtime procedure share
 /// the producer. Dev may elide compatible bodies; LLVM still needs source.
 fn customSharedEarlyObjectCache(
@@ -11595,6 +11691,9 @@ fn stageEditableApp(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer
 
 /// Expected cache consumption and behavior across store builds.
 const StoreExpectations = struct {
+    extra_args: []const []const u8 = &.{},
+    /// The first cached build must construct this changed dependency body.
+    fresh_proc: ?[]const u8 = null,
     /// Append a comment to the app between the builds, so the second build
     /// checks it again instead of reusing its cached checked artifact.
     edit_between_builds: bool = false,
@@ -11604,6 +11703,8 @@ const StoreExpectations = struct {
     monotype_body_reduction: bool = false,
     /// Root debug output must appear once on every build, including cache reuse.
     compile_debug: ?[]const u8 = null,
+    /// An undemanded root must produce no observation.
+    compile_debug_absent: ?[]const u8 = null,
     /// Run an uncached build before populating the store.
     uncached_baseline: bool = false,
     /// Which cached build must consume an object pack. Later checked-cache
@@ -11616,6 +11717,7 @@ const StoreExpectations = struct {
     early_hit_only: bool = false,
     /// Require every execution to produce this exact output.
     stdout: ?[]const u8 = null,
+    stderr: ?[]const u8 = null,
 };
 
 /// Builds `roc_file` twice with the object cache on under the case's cache
@@ -11671,15 +11773,27 @@ fn storeBuildsBehaveIdentically(
             if (expect.uncached_baseline and index == 0) &.{ "build", "--no-cache", "--opt=dev", "--timings", out_arg } else &.{ "build", "--opt=dev", "--timings", out_arg }
         else if (expect.uncached_baseline and index == 0) &.{ "build", "--no-cache", "--opt=dev", out_arg } else &.{ "build", "--opt=dev", out_arg };
         if (forgetRecordedProgramOutputs(io, allocator, env, timer)) |failure| return failure;
-        const built = runRocInEnv(io, allocator, &stats_env, build_args, roc_file, .relative, &.{}, null, build_timeout) catch |err|
+        const all_args = std.mem.concat(allocator, []const u8, &.{ build_args, expect.extra_args }) catch |err|
+            return customInfraFailure(allocator, timer, "build arguments: {}", .{err});
+        const built = runRocInEnv(io, allocator, &stats_env, all_args, roc_file, .relative, &.{}, null, build_timeout) catch |err|
             return customInfraFailure(allocator, timer, "store build spawn error: {}", .{err});
         if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
             return failureFromRun(allocator, timer, built, "build with the object cache did not succeed");
+        }
+        if (index == @intFromBool(expect.uncached_baseline)) {
+            if (expect.fresh_proc) |procedure| {
+                if (namedProcBody(built.stderr, procedure) != true or hasNamedCacheHit(built.stderr, procedure, true)) {
+                    return failureFromRun(allocator, timer, built, "changed specialization reused its previous input's body");
+                }
+            }
         }
         if (expect.compile_debug) |message| {
             if (std.mem.count(u8, built.stderr, message) != 1) {
                 return failureFromRun(allocator, timer, built, "compile-time debug output was not preserved exactly once");
             }
+        }
+        if (expect.compile_debug_absent) |message| {
+            if (std.mem.find(u8, built.stderr, message) != null) return failureFromRun(allocator, timer, built, "an undemanded root produced debug output");
         }
         if (expect.monotype_body_reduction) {
             const contexts = timingCounter(built.stderr, "Shared Monotype body + dispatch", "Body contexts created") orelse
@@ -11732,6 +11846,9 @@ fn storeBuildsBehaveIdentically(
         }
         if (expect.stdout) |expected| if (!std.mem.eql(u8, expected, run.stdout)) {
             return failureFromRun(allocator, timer, run, "object-cache program output disagrees with the expected result");
+        };
+        if (expect.stderr) |expected| if (!std.mem.eql(u8, expected, run.stderr)) {
+            return failureFromRun(allocator, timer, run, "object-cache program stderr disagrees with the expected result");
         };
     }
     return null;

@@ -1025,11 +1025,11 @@ pub const Observers = struct {
 pub const SpecCacheLookup = postcheck.Common.SpecCacheLookup;
 
 /// Native provision is an explicit backend/target/splice contract, not an
-/// optimization policy. Only host dev objects share CTFE's artifact domain.
+/// optimization policy. Host dev objects include explicitly compatible native procedure domains.
 pub const CodeProvision = enum {
     /// LLVM, interpreter, images, or an emitter without an object splice source.
     source_bodies,
-    /// Native dev emission with a splice source for CTFE's exact host domain.
+    /// Native dev emission with a splice source for CTFE's declared native procedure domain.
     host_dev_objects,
     /// Native dev emission with its own target-specific splice source.
     target_dev_objects,
