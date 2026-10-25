@@ -22,6 +22,8 @@ pub const Var = enum {
     lir_dump,
     /// Print every closed specialization key.
     spec_census,
+    /// Print deterministic Lambda Solved work once per required invocation.
+    lambda_solve_stats,
     /// Print every object cache lookup and offer.
     pack_trace,
     /// Print how many procedures a dev build served from cached packs.
@@ -45,6 +47,7 @@ pub const Var = enum {
             .trace_boxy_work => "ROC_TRACE_BOXY_WORK",
             .lir_dump => "ROC_LIR_DUMP",
             .spec_census => "ROC_SPEC_CENSUS",
+            .lambda_solve_stats => "ROC_LAMBDA_SOLVE_STATS",
             .pack_trace => "ROC_PACK_TRACE",
             .pack_stats => "ROC_PACK_STATS",
             .ctfe_demand_trace => "ROC_CTFE_DEMAND_TRACE",
