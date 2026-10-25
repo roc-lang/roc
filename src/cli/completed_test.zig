@@ -6,7 +6,7 @@ const reporting = @import("reporting");
 const compile = @import("compile");
 const Allocator = std.mem.Allocator;
 
-pub const magic = "ROC_COMPLETED_DEV_TEST_V1";
+pub const magic = "ROC_COMPLETED_DEV_TEST_V2";
 pub const Digest = [32]u8;
 pub const Input = struct {
     path: []const u8,
@@ -14,12 +14,11 @@ pub const Input = struct {
 };
 pub const Resolution = struct { path: []const u8, target: []const u8 };
 pub const Plan = struct { inputs: []Input, resolutions: []Resolution };
-pub const Source = struct { name: Digest, path: []const u8 };
-pub const Root = struct { order: u32, region: base.Region };
+pub const Source = struct { name: Digest, qualified_name: []const u8, path: []const u8 };
+pub const Root = struct { order: u32, region: base.Region, key: Digest, payload_hash: Digest };
 pub const Module = struct {
     source: u32,
-    key: Digest,
-    payload_hash: Digest,
+    artifact: Digest,
     roots: []const Root,
 };
 pub const Diagnostic = struct {

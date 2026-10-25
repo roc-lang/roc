@@ -33847,6 +33847,12 @@ pub const CompileTimeRootIdentity = value_identity.CompileTimeRootIdentity;
 /// the module's value context, computed when the module is published.
 pub const CompileTimeRootIdentityTable = struct {
     rows: []const CompileTimeRootIdentity = &.{},
+    /// Root semantic dependencies for outcome reuse, independent of CTFE reuse.
+    test_rows: []const CompileTimeRootIdentity = &.{},
+    /// One context digest covering checking policy, types and visible methods.
+    test_context: []const [32]u8 = &.{},
+    /// Implementation identities sorted by the producer's exact definition id.
+    test_definitions: []const value_identity.DefinitionIdentity = &.{},
     /// The module's value context (`value_identity.ModuleIdentities.context`):
     /// one digest in every published module, none in a table that was never
     /// computed.
@@ -33862,6 +33868,9 @@ pub const CompileTimeRootIdentityTable = struct {
 
     pub const Serialized = extern struct {
         rows: SerializedSlice(CompileTimeRootIdentity) = .{},
+        test_rows: SerializedSlice(CompileTimeRootIdentity) = .{},
+        test_context: SerializedSlice([32]u8) = .{},
+        test_definitions: SerializedSlice(value_identity.DefinitionIdentity) = .{},
         context: SerializedSlice([32]u8) = .{},
         exports: SerializedSlice(value_identity.ExportIdentity) = .{},
         method_requires: SerializedSlice([32]u8) = .{},
@@ -33874,6 +33883,8 @@ pub const CompileTimeRootIdentityTable = struct {
     pub fn validate(self: CompileTimeRootIdentityTable, root_count: usize) error{CorruptArtifact}!void {
         if (self.rows.len != 0 and self.rows.len != root_count) return error.CorruptArtifact;
         if (self.context.len > 1) return error.CorruptArtifact;
+        if (self.test_rows.len != 0 and self.test_rows.len != root_count) return error.CorruptArtifact;
+        if (self.test_context.len > 1) return error.CorruptArtifact;
     }
 
     /// The module's value context, when it was computed.
@@ -34227,8 +34238,9 @@ pub const CheckedModuleArtifact = struct {
             // identity table its rows, value context, exports and method and
             // export requirements, and the portability column one more. Stored
             // function evidence keeps its target and structural payloads in
-            // two pools of their own. Template demand vectors add one.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 246);
+            // two pools of their own. Template demand vectors add one. Test outcome
+            // identities add roots, context and definition summaries.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 249);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -37891,6 +37903,7 @@ pub fn publishFromTypedModule(
         },
         .own_identity = module_identity.stable_hash,
     });
+    defer allocator.free(module_identities.definitions);
     var compile_time_root_identities = CompileTimeRootIdentityTable{
         .rows = module_identities.roots,
         .exports = module_identities.exports,
@@ -37899,6 +37912,35 @@ pub fn publishFromTypedModule(
     };
     errdefer compile_time_root_identities.deinit(allocator);
     compile_time_root_identities.context = try allocator.dupe([32]u8, &.{module_identities.context});
+    // Preserve checking policy and import names, but each imported value's
+    // implementation is supplied by its checked summary, not its module key.
+    const test_import_names = try allocator.dupe(ImportIdentity, checking_context_identity.imports);
+    defer allocator.free(test_import_names);
+    for (test_import_names) |*imported| imported.artifact_key = null;
+    var test_checking_context = checking_context_identity;
+    test_checking_context.imports = test_import_names;
+    const test_identities = try value_identity.compute(allocator, .{
+        .env = module.moduleEnvConst(),
+        .names = &canonical_names,
+        .types = checked_types.view(),
+        .roots = compile_time_roots.roots,
+        .top_level_values = &top_level_values,
+        .context = .{
+            .checking_context = hashCheckingContextIdentity(test_checking_context),
+            .direct_import_keys = undefined, // Test identities consume explicit imported summaries.
+        },
+        .own_identity = module_identity.stable_hash,
+        .test_dependencies = true,
+        .imports = inputs.imports,
+        .available = inputs.available_artifacts,
+        .relations = inputs.relation_artifacts,
+    });
+    compile_time_root_identities.test_rows = test_identities.roots;
+    compile_time_root_identities.test_definitions = test_identities.definitions;
+    defer allocator.free(test_identities.exports);
+    defer allocator.free(test_identities.method_requires);
+    defer allocator.free(test_identities.export_requires);
+    compile_time_root_identities.test_context = try allocator.dupe([32]u8, &.{test_identities.context});
 
     var provided_exports = try ProvidedExportTable.fromModule(
         allocator,

@@ -54,8 +54,8 @@ const max_subphases: usize = 25;
 // Shared lowering and a runtime continuation each report nine lowering groups
 // and native emission. Also reserve compile-time roots, test result admission,
 // dev test emission, completed compilation, completed test command,
-// and native test artifact cache.
-const max_counter_groups: usize = 2 * 10 + 6;
+// native test artifact cache, and individual test outcome admission.
+const max_counter_groups: usize = 2 * 10 + 7;
 const max_counters_per_group: usize = 40;
 /// Rows in the ranked timing list printed after the phases.
 const max_ranked_timings: usize = 10;

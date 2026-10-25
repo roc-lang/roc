@@ -17638,8 +17638,8 @@ fn customRocTestCountsCheckingErrorsWithCachedResults(
         return customInfraFailure(allocator, timer, "failed to allocate test source path: {}", .{err});
     defer allocator.free(path);
 
-    // The first run caches all three roots' results, including the rejected
-    // root's compiler error, which the second run replays alongside the passes.
+    // Only completed source-language outcomes are durable. The rejected root
+    // is checked and reported again alongside the two cached passes.
     for (0..2) |run| {
         if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
             .args = &.{ "test", "--no-color", "--timings" },
@@ -17651,7 +17651,7 @@ fn customRocTestCountsCheckingErrorsWithCachedResults(
                 .{ .stream = .stderr, .text = "2 passed" },
                 .{ .stream = .stderr, .text = "0 failed" },
                 .{ .stream = .stderr, .text = "1 compiler errors" },
-                .{ .stream = .stderr, .text = if (run == 0) "Roots cached 0" else "Roots cached 3", .wrapped = true },
+                .{ .stream = .stderr, .text = if (run == 0) "Roots cached 0" else "Roots cached 2", .wrapped = true },
             },
             .occurrences = &.{.{ .stream = .stderr, .text = "type mismatch", .count = 1 }},
             .not_contains = &.{

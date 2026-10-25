@@ -24173,9 +24173,10 @@ inputs are restored. A changed dependency closure may replace the input plan
 and conservatively miss an older outcome with a different closure.
 
 The command owns ordered compile-time debug observations and structured
-diagnostic documents. Test observations remain in the existing per-module
-result payloads, referenced by digest rather than copied into the command
-record. Each observation has exactly one replay owner. Source reporting uses
+diagnostic documents. Test observations remain in the individual-root outcome payloads, referenced
+by key and digest rather than copied into the command record. The manifest
+carries each root's reporting order, source region and checked artifact
+provenance; validated source bytes suffice to decode it without checked IR. Each observation has exactly one replay owner. Source reporting uses
 current validated source bytes and paths; it requires no `PreparedSolved`, CIR
 or type store. Presentation settings and elapsed time are never cached.
 
@@ -24187,7 +24188,7 @@ corrupt records and evicted payloads are misses. A complete hit returns before
 runtime demand construction, specialization, CTFE, LIR/ARC, static data,
 native test code generation and execution. It does not load procedure packs.
 
-The command envelope and per-module result payloads carry content checksums.
+The command envelope and individual-root outcome payloads carry content checksums.
 Command source paths and diagnostic path elements are relative to the current
 working directory and are rebound only after validation. Compilation diagnostics
 are replayed from their document elements, before test observations; color,
@@ -24219,8 +24220,7 @@ link one shared library per checked module. The per-module checked cache
 boundary remains intact, but cache boundaries are not native link/load
 boundaries for optimized tests. Cached test results are merged into the command
 result stream before reporting; uncached test roots are compiled into the single
-test library and written back to their original checked-module cache entries
-after execution.
+test library and published as individual outcome records after execution.
 
 The command-level plan is built after checking has produced all checked modules
 and before any optimized test backend code is generated:
@@ -24236,7 +24236,7 @@ checked modules
   -> one native shared library
   -> parallel test-root calls
   -> deterministic transcript and result merge by test-plan order
-  -> checked cache writes for fresh test results
+  -> per-root outcome writes for fresh test roots
   -> final timing summary
 ```
 
@@ -24300,7 +24300,7 @@ another top-level expect remains inline; collecting it as a second entrypoint
 would execute and count the same source statement twice.
 When roots from separate checked modules reach the same source site, the
 command combines their counts by qualified declaring module and exact region
-after execution. Per-module cache entries retain the uncombined counts so any
+after execution. Per-root outcome records retain the uncombined counts so any
 mix of cached and freshly executed roots produces the same command result.
 
 After the single library is loaded, test roots run on a worker pool. Each root
@@ -24317,10 +24317,11 @@ Expect counters are worker-local dense arrays, initialized once per execution
 batch. Generated LLVM performs a direct indexed increment; generated dev code
 uses a compiler-internal native callback into the same worker-local arrays, and
 the interpreter records through an explicit observer. No increment is atomic.
-After all roots finish, the runner adds the worker arrays by site and reports
-only nonzero rows. Thus synchronization cost is independent of how many times
-an expect executes, and report-time work is proportional to the number of
-lowered sites and workers rather than the number of executions. Worker shards
+At each root completion the worker retains its nonzero observations on that
+root's result and clears those counters before its next call. The runner adds
+those sparse observations by site for consumers of aggregate counts. Thus
+synchronization cost is independent of how many times an expect executes;
+harvesting scans the root's site's range once, never once per execution. Worker shards
 start on separate cache lines so hot source sites do not introduce false
 sharing between parallel roots.
 
@@ -24352,19 +24353,51 @@ results use the same ordering path. Diagnostics, `dbg`, `expect` failures,
 `expect_err` regions, crashes, and backend compiler errors stay attached to
 their test-plan entries until rendering and cache writes replay the plan order.
 
-Checked test-result cache entries derive their source identity from the same
-checked module identity as `roc check`. The result key additionally covers its
-payload format, compiler compatibility, specialization strategy and execution
-mode: a completed outcome records that execution policy's resource behavior.
-These inputs do not change checked module identity. The result cache key does not
-include worker count, color mode,
-verbosity, terminal width, terminal style, elapsed time, final summary text,
-test-run completion order, test-root identity, or test-root order. Test-root
-identity and order are explicit checked module data and payload shape, not
-additional cache-key inputs. Cache reads validate that a decoded test-result
-bundle matches the current checked module's test-root shape and cache format
-before admitting it, but this is payload validation rather than a new source of
-identity.
+Checked test outcomes are separate per-root records. Their semantic identity
+is produced during checked publication, independently of the root's current
+reporting slot. It includes the checked root type, body and name-reference
+closure, including both sides of conditionals, captures and constants.
+Definition summaries are Merkle identities of strongly connected components;
+recursive helpers therefore have stable identities without traversing a fresh
+transitive graph for every test. The checked type/method context covers literal
+conversions, generated dispatch and inspection, including failure observations.
+Imported implementation summaries, rather than runtime specialization or the
+last execution's read set, supply imported dependencies. Checked publication
+stores these in `CompileTimeRootIdentityTable.test_rows`, `test_context`, and
+`test_definitions`. Import contexts cover the type and method environment;
+explicit external and associated references select implementation summaries.
+Imported test-only edits do not change those summaries. Platform/app relation
+identity remains an explicit binding input. This is independent of compile-time
+value reuse's existing identity and portability contract.
+
+The execution strategy, execution mode, compiler compatibility and payload
+version partition outcome admission. Rendering settings, elapsed time, root
+order and the whole enclosing module are not semantic identity. Each current
+plan entry independently loads its outcome, so identical roots retain their
+output multiplicity. Missing, corrupt or incompatible records are misses;
+atomic cache publication prevents incomplete records from becoming hits. Each
+record also contains its expected key and a checksum. Atomic replacement under
+one key can refresh reporting provenance for the same semantic outcome; reads
+still validate that provenance against the current sources.
+
+Source provenance is validated separately from semantics. This format retains
+exact root source regions and validates the declaring source prefix through each
+inline observation before replay. The prefix pins its lexical owner as well as
+its exact site; later unrelated source edits do not invalidate it. Extended
+failure regions, whose owner is not yet carried in the outcome format, retain
+the exact checked artifact as reporting provenance. A moved root or changed inline source
+invalidates that record; no offsets or embedded source details are guessed or
+patched. Results are rebound to the current plan order only after validation.
+Passes and failed expects are equally admissible; compiler errors and incomplete
+execution are not durable outcomes.
+
+Admission precedes submission of runtime roots. Only misses enter specialization,
+LIR, code generation and execution. Each executing root owns its inline-expect
+counts as well as its transcript and result. Worker-local counters are harvested
+and cleared at root completion, retaining sparse nonzero observations with that
+root. Cached and fresh root observations are merged before command-level
+coalescing. Publication happens before coalescing, preserving every root's
+uncombined contribution. Shared code and static data remain command-owned.
 
 Cached test results store structured, pre-render data: the result, ordered
 transcript events, source regions, failure data, and raw or structured Roc
