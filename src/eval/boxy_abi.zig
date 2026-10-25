@@ -501,6 +501,9 @@ pub fn swapActiveRuntime(runtime: ?*GlobalBoxyRuntime) ?*GlobalBoxyRuntime {
     return ActiveRuntimeSelection.swap(runtime);
 }
 
+/// Runtime archives linked into user programs reach this through a sidecar
+/// view, so it reads none of the compiler's developer diagnostics; the
+/// compiler-side entry points trace Boxy runtime creation themselves.
 fn createRuntime(
     gpa: Allocator,
     store: *const LirStore,
@@ -508,7 +511,6 @@ fn createRuntime(
     tables: BoxyTables,
     roc_ops: *RocOps,
 ) error{OutOfMemory}!*GlobalBoxyRuntime {
-    @import("base").dev_diagnostics.traceBoxyWork("runtime");
     const g = try gpa.create(GlobalBoxyRuntime);
     errdefer gpa.destroy(g);
     g.* = .{
@@ -558,6 +560,7 @@ pub fn createRuntimeFromStores(
     roc_ops: *RocOps,
 ) error{OutOfMemory}!*GlobalBoxyRuntime {
     store.requireBoxy();
+    @import("base").dev_diagnostics.traceBoxyWork("runtime");
     return createRuntime(gpa, store, layout_store, tables, roc_ops);
 }
 
@@ -571,6 +574,7 @@ pub fn initGlobal(
     roc_ops: *RocOps,
 ) error{ OutOfMemory, AlreadyInitialized }!void {
     if (global != null) return error.AlreadyInitialized;
+    @import("base").dev_diagnostics.traceBoxyWork("runtime");
     global = try createRuntime(gpa, store, layout_store, tables, roc_ops);
 }
 
