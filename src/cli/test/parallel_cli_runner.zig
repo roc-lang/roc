@@ -461,6 +461,7 @@ const CustomCase = enum {
     ctfe_cache_mixing,
     literal_root_rejected_every_build,
     issue_11673_callable_cache,
+    issue_12595_lambda_solved,
     issue_11678_recursive_callback_cache,
     issue_11678_dev_cache_boxy_tables,
     issue_11710_shared_object_cache,
@@ -3234,6 +3235,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output assembled from its own procedure artifacts is identical", .timeout_ms = 600_000, .body = .{ .custom = .native_build_artifact_round_trip } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev pack programs are deterministic and round-trip through artifacts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_objects } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11673: imported callable identity survives cold warm and sibling builds", .timeout_ms = 600_000, .body = .{ .custom = .issue_11673_callable_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12595: lambda solving preserves test observations across cache states and workers", .backend = .dev, .body = .{ .custom = .issue_12595_lambda_solved } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: cached recursive callbacks retain method result rows", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_recursive_callback_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: dev builds whose code reaches the Boxy runtime are identical whatever the dev cache holds, including another app's packs", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_dev_cache_boxy_tables } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
@@ -5226,6 +5228,7 @@ fn runCustomCase(
         .native_build_artifact_round_trip => customNativeBuildArtifactRoundTrip(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_objects => customNativeBuildPackObjects(io, allocator, &env, &timer, timeout_ms),
         .issue_11673_callable_cache => customIssue11673CallableCache(io, allocator, &env, &timer, timeout_ms),
+        .issue_12595_lambda_solved => customIssue12595LambdaSolved(io, allocator, &env, &timer, timeout_ms),
         .issue_11678_recursive_callback_cache => customIssue11678RecursiveCallbackCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11678_dev_cache_boxy_tables => customIssue11678DevCacheBoxyTables(io, allocator, &env, &timer, timeout_ms),
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
@@ -10077,6 +10080,91 @@ fn customLiteralRootRejectedEveryBuild(
             if (std.mem.find(u8, built.stderr, file) == null) {
                 return failureFromRun(allocator, timer, built, "build reported the rejected literal in the wrong module");
             }
+        }
+    }
+    return null;
+}
+
+/// Required test roots retain their observations when values are evaluated
+/// fresh, restored, or reused while only the app changes. No timings are asserted.
+fn customIssue12595LambdaSolved(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var source: []const u8 = undefined;
+    var app: []const u8 = undefined;
+    for ([_][]const u8{ "Values.roc", "main.roc" }) |name| {
+        const from = std.fmt.allocPrint(allocator, "{s}/test/cli/issue_12595_lambda_solved/{s}", .{ project_root_path, name }) catch |err|
+            return customInfraFailure(allocator, timer, "fixture path: {}", .{err});
+        const contents = std.Io.Dir.cwd().readFileAlloc(io, from, allocator, .limited(1024 * 1024)) catch |err|
+            return customInfraFailure(allocator, timer, "read fixture: {}", .{err});
+        const to = std.fs.path.join(allocator, &.{ env.dirs.work_dir, name }) catch |err|
+            return customInfraFailure(allocator, timer, "staged path: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = to, .data = contents }) catch |err|
+            return customInfraFailure(allocator, timer, "stage fixture: {}", .{err});
+        if (std.mem.eql(u8, name, "main.roc")) {
+            source = contents;
+            app = to;
+        }
+    }
+    var observations: ?[]const u8 = null;
+    var failure_observations: ?[]const u8 = null;
+    for ([_][]const u8{ "--jobs=1", "--jobs=4" }, 0..) |jobs, index| {
+        var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+        defer isolated.env_map.deinit();
+        const cache = std.fmt.allocPrint(allocator, "{s}/cache_{d}", .{ env.dirs.work_dir, index }) catch |err|
+            return customInfraFailure(allocator, timer, "cache path: {}", .{err});
+        isolated.env_map.put("ROC_CACHE_DIR", cache) catch |err|
+            return customInfraFailure(allocator, timer, "isolate cache: {}", .{err});
+        const edited = std.fmt.allocPrint(allocator, "{s}\nexpect run(First({{ call: Values.stored, offset: 4 }})) == 11\n", .{source}) catch |err|
+            return customInfraFailure(allocator, timer, "edit fixture: {}", .{err});
+        const failing = std.fmt.allocPrint(allocator, "{s}\nexpect run(First({{ call: Values.stored, offset: 3 }})) == 999\n", .{source}) catch |err|
+            return customInfraFailure(allocator, timer, "failing fixture: {}", .{err});
+        // Uncached, cold, warm, partial after a new root, warm edited, and
+        // a failure with uncached, partially cached and warm inputs.
+        for (0..8) |phase| {
+            const changed = phase == 3 or phase == 4;
+            const fails = phase >= 5;
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = if (fails) failing else if (changed) edited else source }) catch |err|
+                return customInfraFailure(allocator, timer, "write fixture: {}", .{err});
+            const args: []const []const u8 = if (phase == 0 or phase == 5)
+                &.{ "test", "--opt=dev", "--specialize=yes", "--no-color", "--no-cache", jobs }
+            else
+                &.{ "test", "--opt=dev", "--specialize=yes", "--no-color", jobs };
+            const run = switch (captureRocRun(io, allocator, &isolated, timer, timeout_ms, .{
+                .args = args,
+                .roc_file = app,
+                .exit = if (fails) .failure else .success,
+            })) {
+                .result => |run| run,
+                .failure => |failure| return failure,
+            };
+            if (std.mem.count(u8, run.stderr, "[dbg] \"lambda solved stored closure\"") != 1)
+                return failureFromRun(allocator, timer, run, "stored observation was not replayed exactly once");
+            if (fails and (std.mem.find(u8, run.stderr, "== 999") == null or std.mem.find(u8, run.stderr, "1 failed") == null))
+                return failureFromRun(allocator, timer, run, "the failing expect did not retain its source and outcome");
+            // The test summary reports elapsed time. Compare every diagnostic,
+            // observation and outcome line, leaving that timing line out.
+            var normalized: std.Io.Writer.Allocating = .init(allocator);
+            defer normalized.deinit();
+            var lines = std.mem.splitScalar(u8, run.stderr, '\n');
+            while (lines.next()) |line| {
+                if (std.mem.startsWith(u8, line, "Ran ") and std.mem.find(u8, line, " tests in ") != null) continue;
+                normalized.writer.print("{s}\n", .{line}) catch |err|
+                    return customInfraFailure(allocator, timer, "normalize test output: {}", .{err});
+            }
+            const expected = if (fails) &failure_observations else &observations;
+            if (expected.*) |previous| {
+                if (!std.mem.eql(u8, previous, normalized.written()))
+                    return failureFromRun(allocator, timer, run, "cache state or worker count changed observations or diagnostic source mappings");
+            } else expected.* = normalized.toOwnedSlice() catch |err|
+                return customInfraFailure(allocator, timer, "retain test output: {}", .{err});
+            if (!fails and std.mem.find(u8, run.stdout, if (changed) "All (7) tests passed" else "All (6) tests passed") == null)
+                return failureFromRun(allocator, timer, run, "required tests did not all pass");
         }
     }
     return null;
