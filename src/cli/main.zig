@@ -18472,16 +18472,16 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 206), graph[27].count);
 
     const body = monotypeBodyCounters(diagnostics);
-    try std.testing.expectEqualStrings("Type instantiation scopes", body[3].name);
-    try std.testing.expectEqual(@as(u64, 303), body[3].count);
-    try std.testing.expectEqualStrings("Checked node cache hits", body[5].name);
-    try std.testing.expectEqual(@as(u64, 301), body[5].count);
-    try std.testing.expectEqualStrings("Eager iterator template bodies lowered", body[12].name);
-    try std.testing.expectEqual(@as(u64, 304), body[12].count);
-    try std.testing.expectEqualStrings("Deferred template reuses", body[13].name);
-    try std.testing.expectEqual(@as(u64, 305), body[13].count);
-    try std.testing.expectEqualStrings("Nested closures prepared", body[22].name);
-    try std.testing.expectEqual(@as(u64, 302), body[22].count);
+    try std.testing.expectEqualStrings("Type instantiation scopes", body[8].name);
+    try std.testing.expectEqual(@as(u64, 303), body[8].count);
+    try std.testing.expectEqualStrings("Checked node cache hits", body[10].name);
+    try std.testing.expectEqual(@as(u64, 301), body[10].count);
+    try std.testing.expectEqualStrings("Eager iterator template bodies lowered", body[17].name);
+    try std.testing.expectEqual(@as(u64, 304), body[17].count);
+    try std.testing.expectEqualStrings("Deferred template reuses", body[18].name);
+    try std.testing.expectEqual(@as(u64, 305), body[18].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[27].name);
+    try std.testing.expectEqual(@as(u64, 302), body[27].count);
 
     const parallel = monotypeParallelCounters(.{
         .worker_work_ns = 401,
