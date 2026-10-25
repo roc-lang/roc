@@ -71,7 +71,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v51: statements keep their rows out of line, and the store records its
 ///      lowering modules' keys.
 /// v54: combines the independent v51-v53 image changes.
-pub const FORMAT_VERSION: u32 = 55;
+/// v56: explicit runtime contract; specialized images cannot contain Boxy dependencies.
+pub const FORMAT_VERSION: u32 = 56;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -181,6 +182,7 @@ pub const ProgramView = struct {
 
 /// Public `LirStoreImage` declaration.
 pub const LirStoreImage = extern struct {
+    runtime_contract: u64,
     cf_stmts: ArrayRef,
     cf_switch_branches: ArrayRef,
     str_match_steps: ArrayRef,
@@ -216,6 +218,7 @@ pub const LirStoreImage = extern struct {
         std.debug.assert(store.tail_call_builder == null);
         std.debug.assert(store.proc_rewrite == null and store.body_coordinator == null);
         return .{
+            .runtime_contract = @backingInt(store.runtime_contract),
             .cf_stmts = try encoder.ref(store.cf_stmts.unsafeRawItemsForView()),
             .cf_switch_branches = try encoder.ref(store.cf_switch_branches.unsafeRawItemsForView()),
             .str_match_steps = try encoder.ref(store.str_match_steps.unsafeRawItemsForView()),
@@ -230,7 +233,7 @@ pub const LirStoreImage = extern struct {
             .stmt_rows = try stmtRowRefs(encoder, store),
             .proc_specs = try encoder.ref(store.proc_specs.unsafeRawItemsForView()),
             .strings = try StringLiteralStoreImage.fromStore(encoder, &store.strings),
-            .boxy_names = try BoxyNamesImage.fromStore(encoder, &store.boxy_names),
+            .boxy_names = if (store.runtime_contract == .boxy) try BoxyNamesImage.fromStore(encoder, &store.boxy_names) else std.mem.zeroes(BoxyNamesImage),
             .next_synthetic_symbol = store.next_synthetic_symbol,
             .source_file_bytes = try encoder.ref(store.source_file_bytes.unsafeRawItemsForView()),
             .source_file_ends = try encoder.ref(store.source_file_ends.unsafeRawItemsForView()),
@@ -266,7 +269,11 @@ pub const LirStoreImage = extern struct {
     }
 
     fn view(self: LirStoreImage, base_ptr: [*]align(1) u8, image_size: usize, allocator: std.mem.Allocator) ImageError!LirStore {
+        if (self.runtime_contract > 1) return error.InvalidLirImage;
+        if (self.runtime_contract == @backingInt(LIR.RuntimeContract.specialized) and
+            (self.boxy_names.bytes.len != 0 or self.boxy_names.ends.len != 0 or self.local_descs.len != 0)) return error.InvalidLirImage;
         return .{
+            .runtime_contract = @fromBackingInt(@intCast(self.runtime_contract)),
             .cf_stmts = try guardedListFromRef(LIR.CFStmt, "LirStore.cf_stmts", base_ptr, image_size, self.cf_stmts),
             .cf_switch_branches = try guardedListFromRef(LIR.CFSwitchBranch, "LirStore.cf_switch_branches", base_ptr, image_size, self.cf_switch_branches),
             .str_match_steps = try guardedListFromRef(LIR.StrMatchStep, "LirStore.str_match_steps", base_ptr, image_size, self.str_match_steps),
@@ -281,7 +288,7 @@ pub const LirStoreImage = extern struct {
             .stmt_rows = try self.stmtRowsView(base_ptr, image_size),
             .proc_specs = try guardedListFromRef(LIR.LirProcSpec, "LirStore.proc_specs", base_ptr, image_size, self.proc_specs),
             .strings = try self.strings.view(base_ptr, image_size),
-            .boxy_names = try self.boxy_names.view(base_ptr, image_size),
+            .boxy_names = if (self.runtime_contract == @backingInt(LIR.RuntimeContract.boxy)) try self.boxy_names.view(base_ptr, image_size) else .{},
             .string_builder = .{},
             .strings_insertable = false,
             .allocator = allocator,
@@ -496,6 +503,8 @@ pub const BoxyTablesImage = extern struct {
         // Every consumer of an image reads erased callables without a capture
         // prefix, so only a program lowered without one is imaged.
         std.debug.assert(lowered.erased_capture_prefix == 0);
+        if (lowered.store.runtime_contract == .specialized) return std.mem.zeroes(BoxyTablesImage);
+        base.dev_diagnostics.traceBoxyWork("image-tables");
         return fromView(encoder, .{
             .type_descs = lowered.boxy_type_descs.items,
             .dicts = lowered.boxy_dicts.items,
@@ -800,6 +809,8 @@ pub fn buildSidecarBlob(
     gpa: std.mem.Allocator,
     lowered: *const Program.Result,
 ) (ImageError || std.mem.Allocator.Error)!SidecarBlob {
+    lowered.store.requireBoxy();
+    base.dev_diagnostics.traceBoxyWork("sidecar");
     return serializeGrowing(gpa, serializeSidecarInto, .{lowered});
 }
 
@@ -814,6 +825,8 @@ pub fn buildCanonicalSidecarBlob(
     lowered: *const Program.Result,
     order: *const RuntimeTables.Order,
 ) (ImageError || std.mem.Allocator.Error)!SidecarBlob {
+    lowered.store.requireBoxy();
+    base.dev_diagnostics.traceBoxyWork("sidecar");
     var canonical = try CanonicalLayouts.init(gpa, lowered, order);
     defer canonical.deinit(gpa);
     return serializeGrowing(gpa, serializeCanonicalSidecarInto, .{ lowered, &canonical, order });
@@ -1073,7 +1086,7 @@ comptime {
     // serialized, and default to null or empty in views. The layout store's `digest_cache` is a memo
     // each view starts empty, and its `commit_scratch` and
     // `scratch_field_offsets` are scratch that views start empty.
-    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 40);
+    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 41);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 21);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
@@ -1106,7 +1119,7 @@ pub fn fillHeaderInBuffer(
         .image_size = image_size,
         .root_procs = try arrayRef(base_ptr, image_size, lowered.root_procs.items),
         .platform_entrypoints = try arrayRef(base_ptr, image_size, platform_entrypoints),
-        .boxy_worker_procs = try arrayRef(base_ptr, image_size, lowered.boxy_worker_procs.items),
+        .boxy_worker_procs = if (lowered.store.runtime_contract == .boxy) try arrayRef(base_ptr, image_size, lowered.boxy_worker_procs.items) else std.mem.zeroes(ArrayRef),
         .store = try LirStoreImage.fromStore(encoder, &lowered.store),
         .layouts = try LayoutStoreImage.fromStore(encoder, &lowered.layouts),
         .boxy_tables = try BoxyTablesImage.fromProgram(encoder, lowered),
@@ -1166,7 +1179,7 @@ pub fn referenceProgramWithStaticDataInBuffer(
         .static_data_pointer_bytes = @intCast(lowered.layouts.targetUsize().size()),
         .root_procs = try arrayRef(base_ptr, image_capacity, lowered.root_procs.items),
         .platform_entrypoints = try arrayRef(base_ptr, image_capacity, platform_entrypoints),
-        .boxy_worker_procs = try arrayRef(base_ptr, image_capacity, lowered.boxy_worker_procs.items),
+        .boxy_worker_procs = if (lowered.store.runtime_contract == .boxy) try arrayRef(base_ptr, image_capacity, lowered.boxy_worker_procs.items) else std.mem.zeroes(ArrayRef),
         .store = try LirStoreImage.fromStore(encoder, &lowered.store),
         .layouts = try LayoutStoreImage.fromStore(encoder, &lowered.layouts),
         .boxy_tables = try BoxyTablesImage.fromProgram(encoder, lowered),
@@ -1194,7 +1207,7 @@ pub fn copyProgramWithStaticDataIntoBuffer(
         .static_data_pointer_bytes = @intCast(lowered.layouts.targetUsize().size()),
         .root_procs = try copyArrayRef(allocator, base_ptr, image_capacity, contract, lowered.root_procs.items),
         .platform_entrypoints = try copyArrayRef(allocator, base_ptr, image_capacity, contract, platform_entrypoints),
-        .boxy_worker_procs = try copyArrayRef(allocator, base_ptr, image_capacity, contract, lowered.boxy_worker_procs.items),
+        .boxy_worker_procs = if (lowered.store.runtime_contract == .boxy) try copyArrayRef(allocator, base_ptr, image_capacity, contract, lowered.boxy_worker_procs.items) else std.mem.zeroes(ArrayRef),
         .store = try LirStoreImage.fromStore(encoder, &lowered.store),
         .layouts = try LayoutStoreImage.fromStore(encoder, &lowered.layouts),
         .boxy_tables = try BoxyTablesImage.fromProgram(encoder, lowered),
@@ -1239,7 +1252,18 @@ pub fn viewMappedImageWithAllocator(
     // whose slice fields are not const, even though the interpreter only
     // reads them. Cast once at the boundary so callers don't have to.
     const mutable_base: [*]align(1) u8 = @constCast(base_ptr);
-    const boxy_tables = try header.boxy_tables.view(mutable_base, @intCast(header.image_size));
+    const boxy_tables: BoxyTablesView = if (header.store.runtime_contract == @backingInt(LIR.RuntimeContract.boxy))
+        try header.boxy_tables.view(mutable_base, @intCast(header.image_size))
+    else empty: {
+        if (header.store.runtime_contract != @backingInt(LIR.RuntimeContract.specialized)) return error.InvalidLirImage;
+        inline for (@typeInfo(BoxyTablesImage).@"struct".field_names) |name| {
+            if (@field(header.boxy_tables, name).len != 0) return error.InvalidLirImage;
+        }
+        if (header.boxy_worker_procs.len != 0) return error.InvalidLirImage;
+        var tables: BoxyTablesView = undefined;
+        inline for (@typeInfo(BoxyTablesView).@"struct".field_names) |name| @field(tables, name) = &.{};
+        break :empty tables;
+    };
 
     var layouts = try header.layouts.view(mutable_base, @intCast(header.image_size), target_usize, allocator);
     errdefer deinitViewedLayouts(&layouts, allocator);
@@ -1261,7 +1285,7 @@ pub fn viewMappedImageWithAllocator(
         .boxy_tag_payload_descs = boxy_tables.tag_payload_descs,
         .boxy_field_names = boxy_tables.field_names,
         .boxy_method_slots = boxy_tables.method_slots,
-        .boxy_worker_procs = try sliceFromRef(LIR.LirProcSpecId, mutable_base, @intCast(header.image_size), header.boxy_worker_procs),
+        .boxy_worker_procs = if (header.store.runtime_contract == @backingInt(LIR.RuntimeContract.boxy)) try sliceFromRef(LIR.LirProcSpecId, mutable_base, @intCast(header.image_size), header.boxy_worker_procs) else &.{},
         .boxy_method_arg_layouts = boxy_tables.method_arg_layouts,
         .boxy_method_hidden_desc_sources = boxy_tables.method_hidden_desc_sources,
         .boxy_erased_arg_layouts = boxy_tables.erased_arg_layouts,
@@ -1446,6 +1470,7 @@ test "LIR image views empty and populated boxy tables" {
 
     const header = try allocator.create(Header);
     var lowered = try Program.Result.init(allocator, .u64);
+    lowered.store.runtime_contract = .boxy;
 
     try fillHeaderInBuffer(header, buffer[0..].ptr, buffer.len, &lowered, &.{});
     var empty_view = try viewMappedImageWithAllocator(header, buffer[0..].ptr, buffer.len, .u64, allocator);
@@ -1575,6 +1600,7 @@ test "LIR image views empty and populated boxy tables" {
 test "boxy sidecar blob carries only the names its tables reach" {
     const gpa = std.testing.allocator;
     var lowered = try Program.Result.init(gpa, .u64);
+    lowered.store.runtime_contract = .boxy;
     defer lowered.deinit();
 
     var folded_table: [4096]u8 = undefined;
@@ -1641,6 +1667,7 @@ test "boxy sidecar bytes do not depend on what table storage held before" {
 
     for ([_]u8{ 0x00, 0xff }) |stale| {
         var lowered = try Program.Result.init(gpa, .u64);
+        lowered.store.runtime_contract = .boxy;
         defer lowered.deinit();
 
         // Write the same parameter over storage that held different bytes, so
@@ -1959,6 +1986,7 @@ test "LIR image copies and round-trips every populated store field" {
 
     // A LirStore with every serialized list populated distinctively.
     var store = LirStore.init(source_allocator);
+    store.runtime_contract = .boxy;
     inline for (serialized_guarded_fields, 0..) |fname, i| {
         @field(store, fname) = try h.guarded(@FieldType(LirStore, fname), source_allocator, 2 + i, @intCast(0x20 + i));
     }
@@ -2226,4 +2254,25 @@ test "a viewed LIR image digests a recursive layout" {
     defer view.deinit();
 
     try std.testing.expectEqualSlices(u8, &expected, &(try view.layouts.contentDigest(root)));
+}
+
+test "LIR image preserves the specialized runtime contract and rejects incompatible artifacts" {
+    const allocator = std.testing.allocator;
+    const buffer = try allocator.alignedAlloc(u8, .@"16", 1 << 20);
+    defer allocator.free(buffer);
+    var storage = std.heap.FixedBufferAllocator.init(buffer);
+    const header = try storage.allocator().create(Header);
+    var program = try Program.Result.init(storage.allocator(), .u64);
+    try fillHeaderInBuffer(header, buffer.ptr, buffer.len, &program, &.{});
+    var view = try viewMappedImageWithAllocator(header, buffer.ptr, buffer.len, .u64, allocator);
+    defer view.deinit();
+    try std.testing.expectEqual(LIR.RuntimeContract.specialized, view.store.runtime_contract);
+    header.format_version = FORMAT_VERSION - 1;
+    try std.testing.expectError(error.UnsupportedLirImageVersion, viewMappedImageWithAllocator(header, buffer.ptr, buffer.len, .u64, allocator));
+    header.format_version = FORMAT_VERSION;
+    header.store.runtime_contract = 2;
+    try std.testing.expectError(error.InvalidLirImage, viewMappedImageWithAllocator(header, buffer.ptr, buffer.len, .u64, allocator));
+    header.store.runtime_contract = @backingInt(LIR.RuntimeContract.specialized);
+    header.boxy_tables.erased_arg_layouts.len = 1;
+    try std.testing.expectError(error.InvalidLirImage, viewMappedImageWithAllocator(header, buffer.ptr, buffer.len, .u64, allocator));
 }

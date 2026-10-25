@@ -822,6 +822,7 @@ const Pass = struct {
     }
 
     fn remapBoxyTableProcs(self: *Pass) Allocator.Error!void {
+        if (self.store.runtime_contract == .specialized) return;
         var origins: @TypeOf(self.result.boxy_frozen_method_origins) = .empty;
         errdefer origins.deinit(self.allocator);
         var entries = self.result.boxy_frozen_method_origins.iterator();
@@ -856,6 +857,8 @@ const Pass = struct {
     /// method slot. Building this once at the proc-compaction boundary keeps
     /// every backend from rediscovering and deduplicating the same set.
     fn rebuildBoxyWorkerProcs(self: *Pass) Allocator.Error!void {
+        if (self.store.runtime_contract == .specialized) return;
+        @import("base").dev_diagnostics.traceBoxyWork("worker-list");
         self.result.boxy_worker_procs.clearRetainingCapacity();
 
         const proc_count = self.store.procSpecCount();

@@ -36,7 +36,11 @@ const TestSetup = struct {
 
     fn init(allocator: std.mem.Allocator) std.mem.Allocator.Error!TestSetup {
         return .{
-            .store = LirStore.init(allocator),
+            .store = boxy: {
+                var store = LirStore.init(allocator);
+                store.runtime_contract = .boxy;
+                break :boxy store;
+            },
             .layouts = try layout_mod.Store.init(allocator, base.target.TargetUsize.native),
             .env = RuntimeHostEnv.init(allocator),
             .saved_host = null,
@@ -2076,6 +2080,7 @@ test "boxy abi sidecar view initializes the global runtime from image bytes" {
     const fba_alloc = fba.allocator();
 
     var lowered = try LirProgram.Result.init(fba_alloc, base.target.TargetUsize.native);
+    lowered.store.runtime_contract = .boxy;
 
     const tag_name = try lowered.store.insertBoxyName("Only");
     try lowered.boxy_type_descs.append(fba_alloc, .{
@@ -2114,6 +2119,7 @@ test "boxy abi standalone sidecar preserves producer tag identities after litera
     const allocator = std.testing.allocator;
     const compiled = blk: {
         var lowered = try LirProgram.Result.init(allocator, base.target.TargetUsize.native);
+        lowered.store.runtime_contract = .boxy;
         defer lowered.deinit();
         _ = try lowered.store.insertStringViewAligned(repeated: {
             const pattern = "folded constant payload";

@@ -386,6 +386,8 @@ fn glueRuntimeHostFileName(language: GlueLanguage, target: GlueRuntimeTarget) []
 }
 
 const CustomCase = enum {
+    issue_12569_specialized_callables,
+    issue_12569_wasm_callables,
     noop,
     default_app_all_syntax_checked_cache,
     build_all_syntax_interpreter_output_runs,
@@ -587,6 +589,7 @@ const forced_ice_skip: Skip = if (builtin.mode == .debug) .never else .{ .always
 /// honors the developer-diagnostic environment variables. Each case listed
 /// here sets one of them and checks what it changes or prints.
 const dev_diagnostics_cases = [_]CustomCase{
+    .issue_12569_specialized_callables,
     .package_dev_packs,
     .native_build_artifact_round_trip,
     .native_build_pack_objects,
@@ -1210,6 +1213,13 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: uninhabited slots unify exactly in Lambda Solved (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/uninhabited_slots_unify_exactly.roc", .stdout_exact = "<function>\n{ op: <function>, unused: [] }\n0 2\n0 7\n[]\n", .not_contains = &.{.{ .stream = .stderr, .text = "invariant violated" }} } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: shared higher-order function dispatches each closure it is given (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/lambda_set_dispatch_matrix.roc", .stdout_exact = "11 3\n21 9\n6 14 12\n4 15\nseven 21\n[14, 12, 9]\n", .not_contains = &.{.{ .stream = .stderr, .text = "invariant violated" }} } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: shared higher-order function dispatches each closure it is given (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/lambda_set_dispatch_matrix.roc", .stdout_exact = "11 3\n21 9\n6 14 12\n4 15\nseven 21\n[14, 12, 9]\n", .not_contains = &.{.{ .stream = .stderr, .text = "invariant violated" }} } } },
+    .{ .id = 0, .suite = .echo, .name = "issue 12569: specialized callables on wasm32", .timeout_ms = 600_000, .body = .{ .custom = .issue_12569_wasm_callables } },
+    .{ .id = 0, .suite = .echo, .name = "issue 12569: callable behavior (dev, default)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/issue_12569_specialized_callables.roc", .stdout_exact = "a captured string longer than inline storage: 8\n42\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "issue 12569: callable behavior (dev, --specialize=yes)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=yes" }, .roc_file = "test/echo/issue_12569_specialized_callables.roc", .stdout_exact = "a captured string longer than inline storage: 8\n42\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "issue 12569: callable behavior (interpreter, --specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache", "--specialize=yes" }, .roc_file = "test/echo/issue_12569_specialized_callables.roc", .stdout_exact = "a captured string longer than inline storage: 8\n42\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "issue 12569: callable behavior (size, --specialize=yes)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache", "--specialize=yes" }, .roc_file = "test/echo/issue_12569_specialized_callables.roc", .stdout_exact = "a captured string longer than inline storage: 8\n42\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "issue 12569: callable behavior (dev, --specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/issue_12569_specialized_callables.roc", .stdout_exact = "a captured string longer than inline storage: 8\n42\n" } } },
+    .{ .id = 0, .suite = .echo, .name = "issue 12569: zero Boxy work and dependencies across cold and warm strategy changes", .timeout_ms = 600_000, .body = .{ .custom = .issue_12569_specialized_callables } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: function values at erasure boundaries call the functions they hold (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/erased_callable_boundaries.roc", .stdout_exact = "8\n2 10\n303\n13\n", .not_contains = &.{.{ .stream = .stderr, .text = "invariant violated" }} } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: function values at erasure boundaries call the functions they hold (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/erased_callable_boundaries.roc", .stdout_exact = "8\n2 10\n303\n13\n", .not_contains = &.{.{ .stream = .stderr, .text = "invariant violated" }} } } },
     .{ .id = 0, .suite = .echo, .name = "issue 12148: inspecting functions selected at runtime (interpreter, specialize=yes)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--no-cache", "--opt=interpreter", "--specialize=yes" }, .roc_file = "test/echo/issue_12148_inspect_function_branches.roc", .stdout_exact = "<function><function><function> effect <function>" } } },
@@ -5210,6 +5220,8 @@ fn runCustomCase(
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
         .early_ctfe_cache => customEarlyCtfeCache(io, allocator, &env, &timer, timeout_ms),
         .check_compile_time_pack => customCheckCompileTimePack(io, allocator, &env, &timer, timeout_ms),
+        .issue_12569_specialized_callables => customSpecializedCallables(io, allocator, &env, &timer, timeout_ms),
+        .issue_12569_wasm_callables => customSpecializedWasmCallables(io, allocator, &env, &timer, timeout_ms),
         .discovery_summaries => customDiscoverySummaries(io, allocator, &env, &timer, timeout_ms),
         .ctfe_cache_publication => customCtfeCachePublication(io, allocator, &env, &timer, timeout_ms),
         .demand_ctfe_diagnostics => customDemandCtfeDiagnostics(io, allocator, &env, &timer, timeout_ms),
@@ -18880,5 +18892,48 @@ fn customBidiSourceSecurity(io: std.Io, allocator: Allocator, env: *const CaseEn
             if (!std.mem.eql(u8, after, source)) return customFailure(allocator, timer, "unsafe file changed by formatter", .{});
         }
     }
+    return null;
+}
+
+/// Boxy is the positive control for the instrumentation, then the same cache
+/// is consumed by default and explicitly specialized builds, cold and warm.
+fn customSpecializedCallables(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err| return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    isolated.env_map.put("ROC_TRACE_BOXY_WORK", "1") catch |err| return customInfraFailure(allocator, timer, "set diagnostic: {}", .{err});
+    const output = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "specialized-callables" }) catch |err| return customInfraFailure(allocator, timer, "output path: {}", .{err});
+    const out_arg = outputArg(allocator, output) catch |err| return customInfraFailure(allocator, timer, "output argument: {}", .{err});
+    for ([_]?[]const u8{ "--specialize=no", null, "--specialize=yes", "--specialize=yes", "--specialize=no", null }) |strategy| {
+        const args: []const []const u8 = if (strategy) |flag| &.{ "build", "--opt=dev", "--no-color", flag, out_arg } else &.{ "build", "--opt=dev", "--no-color", out_arg };
+        const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "specialization test timed out");
+        const run = runRocInEnv(io, allocator, &isolated, args, "test/echo/issue_12569_specialized_callables.roc", .relative, &.{}, null, remaining) catch |err| return customInfraFailure(allocator, timer, "build: {}", .{err});
+        if (!processSucceeded(run.term)) return failureFromRun(allocator, timer, run, "callable build failed");
+        const is_boxy = if (strategy) |flag| std.mem.eql(u8, flag, "--specialize=no") else false;
+        const traced = std.mem.find(u8, run.stderr, "boxy-work:") != null;
+        if (traced != is_boxy) return failureFromRun(allocator, timer, run, "runtime strategy performed the wrong Boxy work");
+        const exe = runnableOutputPath(io, allocator, output) catch |err| return customInfraFailure(allocator, timer, "executable: {}", .{err});
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, exe, allocator, .limited(64 * 1024 * 1024)) catch |err| return customInfraFailure(allocator, timer, "read executable: {}", .{err});
+        if (!is_boxy and std.mem.find(u8, bytes, "roc_boxy_") != null) return customFailure(allocator, timer, "specialized executable contains a Boxy symbol", .{});
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{ .args = &.{}, .stdout_exact = "a captured string longer than inline storage: 8\n42\n", .stderr_exact = "" })) |failure| return failure;
+    }
+    return null;
+}
+
+fn customSpecializedWasmCallables(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const output = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "specialized-callables.wasm" }) catch |err| return customInfraFailure(allocator, timer, "output path: {}", .{err});
+    const out_arg = outputArg(allocator, output) catch |err| return customInfraFailure(allocator, timer, "output argument: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--target=wasm32", "--opt=dev", "--specialize=yes", "--no-cache", out_arg },
+        .roc_file = "test/wasm/issue_12569_specialized_callables.roc",
+        .exit = .success,
+    })) |failure| return failure;
+    if (validateWasmOutput(io, allocator, timer, output)) |failure| return failure;
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, output, allocator, .unlimited) catch |err| return customInfraFailure(allocator, timer, "read wasm: {}", .{err});
+    if (std.mem.find(u8, bytes, "roc_boxy_") != null) return customFailure(allocator, timer, "specialized wasm contains a Boxy symbol", .{});
+    var wasm = setupGlueRuntimeWasm(io, allocator, output) catch |err| return customFailure(allocator, timer, "load wasm: {}", .{err});
+    defer wasm.deinit();
+    const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err| return customFailure(allocator, timer, "execute wasm: {}", .{err});
+    const expected = "a returned string longer than inline storage: 42a captured string longer than inline storage: 8";
+    if (!std.mem.eql(u8, result, expected)) return customFailure(allocator, timer, "specialized wasm returned {s}", .{result});
     return null;
 }

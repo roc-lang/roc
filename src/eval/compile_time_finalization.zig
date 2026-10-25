@@ -3969,6 +3969,7 @@ const ThreadSafeAllocator = struct {
 };
 
 fn boxyNativeFnTable() BoxyNativeFnTable {
+    base.dev_diagnostics.traceBoxyWork("native-functions");
     var table: BoxyNativeFnTable = undefined;
     inline for (@typeInfo(BoxyBuiltinFn).@"enum".field_values) |field_value| {
         const boxy_fn: BoxyBuiltinFn = @fromBackingInt(@intCast(field_value));
@@ -4885,8 +4886,9 @@ const DevProgram = struct {
             .boxy_in_process => .native_execution,
         };
         try codegen.setStaticDataSymbols(materialized);
-        var native_fns = boxyNativeFnTable();
-        codegen.boxy_native_fns = &native_fns;
+        var native_fns: ?BoxyNativeFnTable = if (lowered.lir_result.store.runtime_contract == .boxy) boxyNativeFnTable() else null;
+        const native_fn_table = if (native_fns) |*table| table else null;
+        codegen.boxy_native_fns = native_fn_table;
         const const_root_count = lowered.lir_result.const_roots.items.len;
         const evaluation_roots = try allocator.alloc(lir.LIR.LirProcSpecId, const_root_count + lowered.lir_result.literal_roots.items.len);
         defer allocator.free(evaluation_roots);
@@ -4929,9 +4931,9 @@ const DevProgram = struct {
             try entry_offsets.put(root.proc, entrypoint.offset);
         }
         codegen.boxy_native_fns = null;
-        try splice.generateHostedStubs(&codegen, &native_fns);
+        try splice.generateHostedStubs(&codegen, native_fn_table);
         try codegen.finishImage();
-        var executable = splice.link(&codegen, &native_fns) catch |err| switch (err) {
+        var executable = splice.link(&codegen, native_fn_table) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.MappingFailed => return error.MmapFailed,
             error.UnresolvedSymbol => spliceInvariant(&splice, "compile-time code names a symbol the compile-time evaluator cannot bind"),

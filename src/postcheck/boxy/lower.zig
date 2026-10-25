@@ -89,6 +89,8 @@ pub fn run(
     options: Options,
 ) Common.LowerError!Output {
     var result = try LirProgram.Result.init(allocator, options.target_usize);
+    result.store.runtime_contract = .boxy;
+    base.dev_diagnostics.traceBoxyWork("metadata");
     errdefer result.deinit();
     {
         var source_files = std.ArrayList(base.SourceFileEntry).empty;

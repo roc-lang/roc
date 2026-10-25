@@ -1469,6 +1469,7 @@ pub const ProgramPlan = struct {
     recursive_slot_reps: std.ArrayList(RecursiveSlotRep) = .empty,
 
     pub fn init(allocator: Allocator) ProgramPlan {
+        base.dev_diagnostics.traceBoxyWork("planning");
         return .{
             .allocator = allocator,
             .roots = .empty,

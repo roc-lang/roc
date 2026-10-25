@@ -58,6 +58,7 @@ pub const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
 /// output used by test roots; non-test entrypoints initialize them to zero.
 /// Build the explicit function table consumed by in-process machine code.
 pub fn nativeFnTable() BoxyNativeFnTable {
+    @import("base").dev_diagnostics.traceBoxyWork("native-functions");
     var table: BoxyNativeFnTable = undefined;
     inline for (@typeInfo(BoxyBuiltinFn).@"enum".field_values) |field_value| {
         const boxy_fn: BoxyBuiltinFn = @fromBackingInt(@intCast(field_value));
@@ -507,6 +508,7 @@ fn createRuntime(
     tables: BoxyTables,
     roc_ops: *RocOps,
 ) error{OutOfMemory}!*GlobalBoxyRuntime {
+    @import("base").dev_diagnostics.traceBoxyWork("runtime");
     const g = try gpa.create(GlobalBoxyRuntime);
     errdefer gpa.destroy(g);
     g.* = .{
@@ -555,6 +557,7 @@ pub fn createRuntimeFromStores(
     tables: BoxyTables,
     roc_ops: *RocOps,
 ) error{OutOfMemory}!*GlobalBoxyRuntime {
+    store.requireBoxy();
     return createRuntime(gpa, store, layout_store, tables, roc_ops);
 }
 
@@ -617,6 +620,7 @@ pub fn createRuntimeFromSidecarView(
         .erased_arg_desc_params = view.tables.erased_arg_desc_params,
     };
     const g = try createRuntime(gpa, undefined, &view.layouts, tables, roc_ops);
+    g.store_shell.runtime_contract = .boxy;
     g.store_shell.boxy_names = view.names;
     g.runtime.store = &g.store_shell;
     return g;

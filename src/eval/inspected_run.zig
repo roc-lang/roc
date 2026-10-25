@@ -379,8 +379,8 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
         );
         defer codegen.deinit();
         codegen.setNativeStaticData(addresses);
-        var native_fns = boxy_abi.nativeFnTable();
-        codegen.boxy_native_fns = &native_fns;
+        var native_fns: ?boxy_abi.BoxyNativeFnTable = if (program.store.runtime_contract == .boxy) boxy_abi.nativeFnTable() else null;
+        codegen.boxy_native_fns = if (native_fns) |*table| table else null;
         try codegen.compileAllProcSpecs(program.store.getProcSpecs());
         const helpers = try backend.collectRequiredRcHelpers(allocator, program.static_data);
         defer allocator.free(helpers);
@@ -630,7 +630,7 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     );
     defer allocator.free(object_bytes);
 
-    var lib = object_image.load(allocator, object_bytes) catch |err| switch (err) {
+    var lib = object_image.load(allocator, object_bytes, program.store.runtime_contract) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedObject,
         error.MalformedObject,

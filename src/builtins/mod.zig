@@ -32,6 +32,7 @@ test "builtins tests" {
     std.testing.refAllDecls(@import("decimal_parse.zig"));
     std.testing.refAllDecls(@import("dev_wrappers.zig"));
     std.testing.refAllDecls(@import("erased_callable.zig"));
+    std.testing.refAllDecls(@import("native_callable.zig"));
     std.testing.refAllDecls(@import("float_bits.zig"));
     std.testing.refAllDecls(@import("float_math/f32.zig"));
     std.testing.refAllDecls(@import("float_math/f64.zig"));

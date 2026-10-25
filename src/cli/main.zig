@@ -10067,6 +10067,8 @@ fn appendBoxyRuntimeLinkInputs(
     lir_result: *const lir.Program.Result,
     canonical_order: ?*const lir.RuntimeTables.Order,
 ) CliMainError!void {
+    lir_result.store.requireBoxy();
+    base.dev_diagnostics.traceBoxyWork("link-inputs");
     const runtime_bytes = EmbeddedTargetObjects.forTarget(target).boxy_runtime orelse {
         try ctx.io.stderr().print(
             "Error: standalone dev builds of generic (boxy) programs are not supported for the '{s}' target.\n",
