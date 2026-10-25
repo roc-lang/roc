@@ -3227,7 +3227,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output assembled from its own procedure artifacts is identical", .timeout_ms = 600_000, .body = .{ .custom = .native_build_artifact_round_trip } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev pack programs are deterministic and round-trip through artifacts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_objects } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11673: imported callable identity survives cold warm and sibling builds", .timeout_ms = 600_000, .body = .{ .custom = .issue_11673_callable_cache } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12595: lambda solving preserves test observations across cache states and workers", .backend = .dev, .body = .{ .custom = .issue_12595_lambda_solved } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12595/12616: lambda solving preserves test observations across cache states and workers", .backend = .dev, .body = .{ .custom = .issue_12595_lambda_solved } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: cached recursive callbacks retain method result rows", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_recursive_callback_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: dev builds whose code reaches the Boxy runtime are identical whatever the dev cache holds, including another app's packs", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_dev_cache_boxy_tables } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
@@ -10030,10 +10030,20 @@ fn customIssue12595LambdaSolved(
     }
     var observations: ?[]const u8 = null;
     var failure_observations: ?[]const u8 = null;
-    for ([_][]const u8{ "--jobs=1", "--jobs=4" }, 0..) |jobs, index| {
+    const AnalysisCase = struct { jobs: []const u8, fresh: bool };
+    for ([_]AnalysisCase{
+        .{ .jobs = "--jobs=1", .fresh = false },
+        .{ .jobs = "--jobs=4", .fresh = false },
+        .{ .jobs = "--jobs=1", .fresh = true },
+        .{ .jobs = "--jobs=4", .fresh = true },
+    }, 0..) |analysis_case, index| {
+        if (analysis_case.fresh and !build_options.dev_diagnostics) continue;
+        const jobs = analysis_case.jobs;
         var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err|
             return customInfraFailure(allocator, timer, "clone environment: {}", .{err}) };
         defer isolated.env_map.deinit();
+        if (analysis_case.fresh) isolated.env_map.put("ROC_FRESH_TYPE_ANALYSIS", "1") catch |err|
+            return customInfraFailure(allocator, timer, "enable fresh analysis: {}", .{err});
         const cache = std.fmt.allocPrint(allocator, "{s}/cache_{d}", .{ env.dirs.work_dir, index }) catch |err|
             return customInfraFailure(allocator, timer, "cache path: {}", .{err});
         isolated.env_map.put("ROC_CACHE_DIR", cache) catch |err|
