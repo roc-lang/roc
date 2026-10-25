@@ -9188,6 +9188,7 @@ fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) Allocator.Error!vo
     // its own program, and the pack offers the procedures of all of them.
     var combined = try completed.combinedArtifacts(ctx.gpa);
     defer combined.deinit();
+    if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("compile-time pack {d} artifacts\n", .{combined.artifacts.len});
     try parts.offers.publish(build_env, store, destination.placement.origin, destination.placement.identity, destination.key, &combined);
     cache.packs.refreshIndex();
 }
