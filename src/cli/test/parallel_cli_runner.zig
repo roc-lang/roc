@@ -10886,6 +10886,16 @@ fn customCtfeStaticCacheRuntime(
     return null;
 }
 
+fn completionCounter(output: []const u8, name: []const u8) ?u64 {
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t");
+        if (!std.mem.startsWith(u8, trimmed, name)) continue;
+        return std.fmt.parseInt(u64, std.mem.trim(u8, trimmed[name.len..], " \t"), 10) catch null;
+    }
+    return null;
+}
+
 /// A dev build records its program's runtime output. A later build of the
 /// unchanged program links that output without specializing the program,
 /// and a build of an edited program specializes it again.
@@ -10904,8 +10914,10 @@ fn customRecordedProgramOutput(
         .sources = &.{ "test/cli/ctfe_cache_publication/Closed.roc", "test/cli/ctfe_cache_publication/Stable.roc", "test/cli/ctfe_cache_publication/main.roc" },
         .app_name = "main.roc",
     }, &app)) |failure| return failure;
-    const source = std.Io.Dir.cwd().readFileAlloc(io, app, allocator, .limited(1024 * 1024)) catch |err|
+    const original = std.Io.Dir.cwd().readFileAlloc(io, app, allocator, .limited(1024 * 1024)) catch |err|
         return customInfraFailure(allocator, timer, "failed to read app: {}", .{err});
+    const source = std.fmt.allocPrint(allocator, "{s}\nunused : U64\nunused = {{\n    expect 1 == 2\n    99\n}}\n", .{original}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create unused failing root: {}", .{err});
     const edited = std.mem.replaceOwned(u8, allocator, source, "Closed.total(10)", "Closed.total(11)") catch |err|
         return customInfraFailure(allocator, timer, "failed to edit app: {}", .{err});
     const revised = std.mem.replaceOwned(u8, allocator, edited, "expect initial == 45", "expect initial == 55") catch |err|
@@ -10924,6 +10936,7 @@ fn customRecordedProgramOutput(
         .{ .source = source, .specializes = true, .stdout = "45 155\n" },
         .{ .source = source, .specializes = false, .stdout = "45 155\n" },
         .{ .source = revised, .specializes = true, .stdout = "55 155\n" },
+        .{ .source = source, .specializes = false, .stdout = "45 155\n" },
     };
     for (steps, 0..) |step, index| {
         std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = step.source }) catch |err|
@@ -10939,15 +10952,188 @@ fn customRecordedProgramOutput(
             .result => |run| run,
             .failure => |failure| return failure,
         };
-        const specialized = std.mem.find(u8, run.stdout, "Specializing") != null or std.mem.find(u8, run.stderr, "Specializing") != null;
-        if (specialized != step.specializes) {
-            return failureFromRun(allocator, timer, run, if (step.specializes) "a changed program linked recorded output" else "an unchanged program was specialized again");
+        const output = std.fmt.allocPrint(allocator, "{s}\n{s}", .{ run.stdout, run.stderr }) catch return customInfraFailure(allocator, timer, "out of memory reading counters", .{});
+        const hits = completionCounter(output, "Completed result hits") orelse return failureFromRun(allocator, timer, run, "missing completed compilation counters");
+        if (hits != @intFromBool(!step.specializes)) return failureFromRun(allocator, timer, run, "unexpected completed compilation hit count");
+        if (index == 0 and (completionCounter(output, "Post-CTFE specialization passes") orelse 0) == 0) return failureFromRun(allocator, timer, run, "cold fixture did not exercise runtime normalization");
+        if (!step.specializes) {
+            for ([_][]const u8{ "Demand specialization passes", "Post-CTFE specialization passes", "Fresh CTFE roots", "CTFE execution ns", "Runtime object emissions" }) |name| {
+                if (completionCounter(output, name) != 0) return failureFromRun(allocator, timer, run, "completed compilation repeated compiler work");
+            }
         }
+        if (index == 1) {
+            if (completionCounter(output, "Early completed result hits") != 1) return failureFromRun(allocator, timer, run, "unchanged build loaded the frontend before finding its result");
+            for ([_][]const u8{ "Checked modules loaded", "Checked modules compiled" }) |name| {
+                if (completionCounter(output, name) != 0) return failureFromRun(allocator, timer, run, "early hit consumed checked IR");
+            }
+            if ((completionCounter(output, "Input bytes validated") orelse 0) == 0) return failureFromRun(allocator, timer, run, "early hit skipped source content validation");
+        }
+        if (std.mem.count(u8, run.stderr, "CTFE publication observation") != 1) return failureFromRun(allocator, timer, run, "completed compilation changed debug observation multiplicity");
         if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
             .args = &.{},
             .stdout_exact = step.stdout,
             .stderr_exact = "",
         })) |failure| return failure;
+    }
+    const exe = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "completed-relinked" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output: {}", .{err});
+    const out_arg = outputArg(allocator, exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate argument: {}", .{err});
+    // The completed result remains usable after its checked IR was evicted.
+    {
+        var cache_dir = std.Io.Dir.cwd().openDir(io, cache, .{ .iterate = true }) catch |err| return customInfraFailure(allocator, timer, "open cache: {}", .{err});
+        defer cache_dir.close(io);
+        var walker = cache_dir.walk(allocator) catch |err| return customInfraFailure(allocator, timer, "walk cache: {}", .{err});
+        defer walker.deinit();
+        while (walker.next(io) catch |err| return customInfraFailure(allocator, timer, "walk cache: {}", .{err})) |entry| {
+            if (entry.kind == .file and (std.mem.find(u8, entry.path, "/mod/") != null or std.mem.find(u8, entry.path, "\\mod\\") != null))
+                cache_dir.deleteFile(io, entry.path) catch |err| return customInfraFailure(allocator, timer, "evict checked IR: {}", .{err});
+        }
+    }
+    const evicted = switch (captureRocRun(io, allocator, &isolated, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=dev", "--timings", "--no-color", out_arg },
+        .roc_file = app,
+        .occurrences = &.{.{ .stream = .stderr, .text = "CTFE publication observation", .count = 1 }},
+    })) {
+        .result => |run| run,
+        .failure => |failure| return failure,
+    };
+    if (completionCounter(evicted.stderr, "Early completed result hits") != 1 or completionCounter(evicted.stderr, "Checked modules loaded") != 0 or completionCounter(evicted.stderr, "Checked modules compiled") != 0)
+        return failureFromRun(allocator, timer, evicted, "completed result depended on evicted checked IR");
+    // Check and test demand the unused failing root; build never does, even
+    // after those commands have populated their caches.
+    for ([_][]const []const u8{ &.{ "check", "--no-color" }, &.{ "test", "--opt=dev", "--no-color" }, &.{ "build", "--opt=dev", "--specialize=no", "--no-color", out_arg } }) |args| {
+        if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+            .args = args,
+            .roc_file = app,
+            .exit = .failure,
+            .contains = &.{.{ .stream = .stderr, .text = "compile time expect failed" }},
+        })) |failure| return failure;
+    }
+    for ([_][]const []const u8{ &.{ "build", "--opt=dev", "--no-cache", "--no-color", out_arg }, &.{ "build", "--opt=dev", "--specialize=yes", "--no-color", out_arg } }) |args| {
+        // Replacing the executable must not preserve these unrelated bytes.
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = exe, .data = "stale output" }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to replace output: {}", .{err});
+        if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+            .args = args,
+            .roc_file = app,
+            .occurrences = &.{.{ .stream = .stderr, .text = "CTFE publication observation", .count = 1 }},
+        })) |failure| return failure;
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{ .args = &.{}, .stdout_exact = "45 155\n", .stderr_exact = "" })) |failure| return failure;
+    }
+    // An edit making the failure demanded must not use the older success.
+    const failed = std.mem.replaceOwned(u8, allocator, source, "Closed.total(10)", "unused") catch |err|
+        return customInfraFailure(allocator, timer, "failed to demand failing root: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = failed }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to edit source: {}", .{err});
+    if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=dev", "--no-color", out_arg },
+        .roc_file = app,
+        .exit = .failure,
+        .contains = &.{.{ .stream = .stderr, .text = "compile time expect failed" }},
+    })) |failure| return failure;
+    // Warning-only successful compilations remain eligible; the frontend
+    // reports the warning once even when finalization comes from the record.
+    const warning = std.mem.replaceOwned(u8, allocator, source, "main! = |args| {", "main! = |args| {\n    unused_local = 0") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create warning: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = warning }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write warning: {}", .{err});
+    for (0..2) |index| {
+        const run = switch (captureRocRun(io, allocator, &isolated, timer, timeout_ms, .{
+            .args = &.{ "build", "--opt=dev", "--timings", "--no-color", out_arg },
+            .roc_file = app,
+            .exit = .{ .code = 2 },
+            .occurrences = &.{ .{ .stream = .stderr, .text = "unused variable", .count = 1 }, .{ .stream = .stderr, .text = "CTFE publication observation", .count = 1 } },
+        })) {
+            .result => |run| run,
+            .failure => |failure| return failure,
+        };
+        if (completionCounter(run.stderr, "Early completed result hits") != index) return failureFromRun(allocator, timer, run, "warning-only compilation did not reuse completed result before frontend loading");
+    }
+    // A headerless app stages its synthetic platform in a fresh directory.
+    // Finalization owns this warning; replay must rebind it to the user file.
+    const headerless = std.fs.path.join(allocator, &.{ std.fs.path.dirname(app).?, "headerless.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "headerless path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = headerless, .data =
+        \\value : Str
+        \\value = {
+        \\    dbg "headerless observation"
+        \\    "hi".concat(" there")
+        \\}
+        \\main! = |_args| if value == "hi there" Ok({}) else Err(Exit(1))
+        \\
+    }) catch |err| return customInfraFailure(allocator, timer, "write headerless: {}", .{err});
+    for (0..2) |index| {
+        const run = switch (captureRocRun(io, allocator, &isolated, timer, timeout_ms, .{
+            .args = &.{ "build", "--opt=dev", "--timings", "--no-color", out_arg },
+            .roc_file = headerless,
+            .exit = .{ .code = 2 },
+            .occurrences = &.{ .{ .stream = .stderr, .text = "unconditional condition", .count = 1 }, .{ .stream = .stderr, .text = "headerless observation", .count = 1 } },
+        })) {
+            .result => |run| run,
+            .failure => |failure| return failure,
+        };
+        if (completionCounter(run.stderr, "Early completed result hits") != index) return failureFromRun(allocator, timer, run, "staging paths invalidated the early completed compilation");
+        if (std.mem.find(u8, run.stderr, "headerless.roc") == null) return failureFromRun(allocator, timer, run, "finalization warning lost its user source path");
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{ .args = &.{}, .stdout_exact = "", .stderr_exact = "" })) |failure| return failure;
+    }
+    // Transitive source changes and same-size asset edits are content inputs.
+    // Restore the successful source before exercising their independent keys.
+    const imports = std.mem.replaceOwned(u8, allocator, source, "import Stable", "import Stable\nimport \"input.txt\" as imported_text : Str\nimport \"input.bin\" as imported_bytes : List(U8)") catch |err|
+        return customInfraFailure(allocator, timer, "failed to add asset imports: {}", .{err});
+    const with_assets = std.mem.replaceOwned(u8, allocator, imports, "runtime = Closed.runtime_total", "Stdout.line!(imported_text)\n    Stdout.line!(imported_bytes.len().to_str())\n    runtime = Closed.runtime_total") catch |err|
+        return customInfraFailure(allocator, timer, "failed to read assets: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = with_assets }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write asset fixture: {}", .{err});
+    const dir = std.fs.path.dirname(app).?;
+    const text_path = std.fs.path.join(allocator, &.{ dir, "input.txt" }) catch |err| return customInfraFailure(allocator, timer, "asset path: {}", .{err});
+    const binary_path = std.fs.path.join(allocator, &.{ dir, "input.bin" }) catch |err| return customInfraFailure(allocator, timer, "asset path: {}", .{err});
+    const closed_path = std.fs.path.join(allocator, &.{ dir, "Closed.roc" }) catch |err| return customInfraFailure(allocator, timer, "import path: {}", .{err});
+    const closed = std.Io.Dir.cwd().readFileAlloc(io, closed_path, allocator, .limited(1024 * 1024)) catch |err| return customInfraFailure(allocator, timer, "read import: {}", .{err});
+    const closed_edit = std.fmt.allocPrint(allocator, "{s}\n# a changed transitive source\n", .{closed}) catch |err| return customInfraFailure(allocator, timer, "edit import: {}", .{err});
+    const asset_steps = [_]struct { text: []const u8, binary: []const u8, import: []const u8, hit: u64 }{
+        .{ .text = "one", .binary = "abc", .import = closed, .hit = 0 },
+        .{ .text = "one", .binary = "abc", .import = closed, .hit = 1 },
+        .{ .text = "two", .binary = "abc", .import = closed, .hit = 0 },
+        .{ .text = "two", .binary = "xyz", .import = closed, .hit = 0 },
+        .{ .text = "two", .binary = "xyz", .import = closed_edit, .hit = 0 },
+        .{ .text = "one", .binary = "abc", .import = closed, .hit = 1 },
+    };
+    for (asset_steps) |step| {
+        for ([_][]const u8{ text_path, binary_path, closed_path }, [_][]const u8{ step.text, step.binary, step.import }) |path, data| {
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = data }) catch |err| return customInfraFailure(allocator, timer, "write input: {}", .{err});
+        }
+        const run = switch (captureRocRun(io, allocator, &isolated, timer, timeout_ms, .{
+            .args = &.{ "build", "--opt=dev", "--timings", "--no-color", out_arg },
+            .roc_file = app,
+        })) {
+            .result => |run| run,
+            .failure => |failure| return failure,
+        };
+        if (completionCounter(run.stderr, "Completed result hits") != step.hit) return failureFromRun(allocator, timer, run, "source/asset content invalidation disagrees");
+        const expected = std.fmt.allocPrint(allocator, "{s}\n3\n45 155\n", .{step.text}) catch |err| return customInfraFailure(allocator, timer, "expected output: {}", .{err});
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{ .args = &.{}, .stdout_exact = expected, .stderr_exact = "" })) |failure| return failure;
+    }
+    // Corrupt and missing records take the live path and still emit dbg once.
+    for (0..3) |index| {
+        if (index == 0) {
+            var cache_dir = std.Io.Dir.cwd().openDir(io, cache, .{ .iterate = true }) catch |err| return customInfraFailure(allocator, timer, "open cache: {}", .{err});
+            defer cache_dir.close(io);
+            var walker = cache_dir.walk(allocator) catch |err| return customInfraFailure(allocator, timer, "walk cache: {}", .{err});
+            defer walker.deinit();
+            while (walker.next(io) catch |err| return customInfraFailure(allocator, timer, "walk cache: {}", .{err})) |entry| {
+                if (entry.kind == .file and std.mem.endsWith(u8, entry.path, ".rpo")) cache_dir.writeFile(io, .{ .sub_path = entry.path, .data = "ROCCOMP1 truncated" }) catch |err| return customInfraFailure(allocator, timer, "corrupt record: {}", .{err});
+            }
+        } else if (index == 1) deleteRecordedProgramOutputs(io, allocator, cache) catch |err| return customInfraFailure(allocator, timer, "delete records: {}", .{err});
+        const run = switch (captureRocRun(io, allocator, &isolated, timer, timeout_ms, .{
+            .args = &.{ "build", "--opt=dev", "--timings", "--no-color", out_arg },
+            .roc_file = app,
+            .occurrences = &.{.{ .stream = .stderr, .text = "CTFE publication observation", .count = 1 }},
+        })) {
+            .result => |run| run,
+            .failure => |failure| return failure,
+        };
+        if (completionCounter(run.stderr, "Completed result hits") != @intFromBool(index == 2)) return failureFromRun(allocator, timer, run, "corrupt/missing compilation was not repaired");
     }
     return null;
 }

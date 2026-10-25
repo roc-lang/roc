@@ -2736,21 +2736,55 @@ reference counts.
 
 #### Recorded Program Output
 
-A dev build also records its program's runtime output: the Roc object it
-linked and the link inputs it read from the lowering (hosted symbols, link
-roots and app exports), filed under a key covering every checked module the
-program lowers against, with their code-generation keys, the build's output
-policy, and a digest of the optimization state (the object packs the program
-would load, named by their paths and input keys), inside the store's namespace for the target, compiler and
-optimization level. Once a later build's program is checked and before it is
-evaluated, the build asks for that key. On a hit the program is evaluated
-exactly as a build without the record evaluates it: its specialization decides
-the demanded compile-time roots ("Demand-Driven Compile-Time Evaluation"), so
-it reports the same diagnostics and evaluates no root a build without the
-record would leave alone. No runtime program is lowered, and the recorded
-object is linked with the platform's current inputs. A build that reports an error records nothing, and neither
-does a program that links Boxy runtime inputs or optimized pack objects,
-which the record does not carry.
+A specialized native dev build records a completed compilation, an explicit
+alternative to a live evaluation/lowering session. After package resolution,
+it can validate the completed record without loading canonicalized or checked
+module IR. A domain-separated build-level placement pointer locates a candidate;
+it uses the existing placement-pointer storage and is never evidence of validity.
+There are no additional per-module manifest files.
+
+The existing completed-output record begins with a separately checksummed input
+manifest, before its object payload. It records consumed source and asset hashes
+using the same producer data as watch mode, the resolved package graph, import
+path canonicalization and spelling checks, and the explicit optimized-object
+selection. Validation reads source contents and compact metadata, never checked
+IR. URL packages retain the resolver's immutable bundle contract. Compiler-owned
+staging paths bind to named packages in the current invocation. The request
+identity covers compiler compatibility, target/ABI/CPU, build output and codegen
+policy, specialization strategy, synthetic headers, original source paths and
+source-pin validation policy. Neither evaluated-root state nor historical
+dev-pack population is an input. Package resolution and its policy validation
+still run on every invocation.
+
+The record retains the original build's demanded checked roots, transitive reads,
+literal source/value identities and observations, followed by the final normalized
+Roc object, additional selected optimized objects, resolved target configuration,
+hosted symbols, link roots and app exports. It also retains the complete ordered
+frontend and finalization diagnostic documents. An early hit replays these with
+current presentation options and rebound source paths. A later hit, after ordinary
+frontend work, replays only finalization diagnostics; the frontend still owns its
+reports on that path. An unused root evaluated by another command never joins the
+recorded demand. Completed results remain usable after checked-IR cache eviction.
+
+An early hit creates no coordinator or program session and marks no checked
+module finalized. It performs no shared demand specialization, CTFE, post-CTFE
+specialization, runtime lowering or object emission, and loads no procedure packs
+to reconstruct the result. A miss takes the ordinary pipeline, which can still
+find a retained exact completed result after an edit is reverted. Only a
+compilation with no semantic errors publishes; warning-only successes are
+eligible. Boxy builds remain separate, and the record never admits Boxy runtime
+dependencies into LSS.
+
+The length-prefixed binary record validates its manifest independently before
+reading object bytes; the payload has its own integrity digest. Publication uses
+a temporary file and atomic rename. Incompatible, truncated, corrupt or missing
+records miss, and the build pointer is published only after the complete record.
+Additional objects are retained in the record rather than referenced through
+scratch paths. Publication failure leaves the live compilation intact. Every
+invocation validates current platform link inputs and links the retained
+artifacts, even if an executable already exists. Timings distinguish early hits,
+checked-module loads and compilation, input validation time/bytes, manifest reads,
+publication, and skipped producer work.
 
 ### Demand-Driven Compile-Time Evaluation
 
@@ -2767,6 +2801,10 @@ compilation stored, or one of the reads an object-cache entry records for the
 body it stands in for; each demands the root. The set is computed over the
 specialized program itself, so it is a function of the checked program and
 the build's roots, never of what any cache holds.
+
+A completed-compilation hit reuses these semantic decisions and replays their
+observations without recomputing demand. This is equivalent to the live path,
+not check-style evaluation of every root.
 
 Demand-driven evaluation applies to a compilation whose LSS runtime consumer
 continues the evaluation's specialization, that runs no tests, and whose
@@ -24167,8 +24205,12 @@ a constant (static data named by content, a short string as its literal, a
 construction as its parts), and no runtime program declares a slot, a
 failure record, or a guard for a compile-time root that completed.
 
-The point at which this holds is explicit: the end of the program's
-evaluation (`finalizeProgram`). The specialization evaluation made declared
+A completed-compilation record retains only artifacts generated after this
+normalization. Reusing those final artifacts preserves the same rule without
+reconstructing either specialization or the values they consumed.
+
+The point at which this holds for a live compilation is explicit: the end of the
+program's evaluation (`finalizeProgram`). The specialization evaluation made declared
 each pending root's read as a slot read, because the value did not exist
 yet, so when that evaluation completed any compile-time root the program
 demands, its Solved program is not the one a runtime consumer continues.

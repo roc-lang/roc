@@ -622,6 +622,9 @@ pub fn readObjectOwned(owning_arena: collections.SingleThreadArena, bytes: []con
     };
 }
 
+/// Bytes needed to validate the format and read an object pack's input key.
+pub const object_input_key_prefix_len = object_magic.len + 4 + 32;
+
 /// The input key in an object pack's header, read without decoding the
 /// rest; null when the bytes are not an object pack of this format.
 pub fn objectInputKey(bytes: []const u8) ?[32]u8 {

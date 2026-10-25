@@ -1446,6 +1446,8 @@ pub const ComptimeRootRead = postcheck.Common.ComptimeRootRead;
 pub const ComptimeDemandRoot = postcheck.Monotype.Solve.EntryRoot;
 /// A root of a prepared Monotype program.
 pub const MonotypeRoot = postcheck.Monotype.Ast.Root;
+/// Source identity of a literal demand, before the producer is released.
+pub const MonotypeLiteralRoot = postcheck.Monotype.Ast.LiteralRoot;
 
 /// Lower checked modules and explicit roots directly into an ARC-ready LIR program.
 pub fn lowerCheckedModulesToLir(
