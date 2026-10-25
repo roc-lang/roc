@@ -19,6 +19,7 @@
 //!   --verbose            Print PASS results and timing details
 
 const std = @import("std");
+const artifact_store = @import("artifact_store");
 const build_options = @import("build_options");
 const builtin = @import("builtin");
 const posix = std.posix;
@@ -43,7 +44,7 @@ const timeout_result_grace_ms: u64 = 5_000;
 const default_timeout_ms: u64 = 120_000;
 const glue_timeout_ms: u64 = 240_000;
 
-const CliRunnerError = util.RocRunError ||
+const CliRunnerError = artifact_store.Error || util.RocRunError ||
     util.ChildTimeoutError ||
     util.TestDirError ||
     std.mem.Allocator.Error ||
@@ -7520,6 +7521,14 @@ fn runFirstAvailable(
 ) CliRunnerError!?std.process.RunResult {
     for (candidates) |argv| {
         return runRawInEnv(io, allocator, env, argv, project_root_path, null, timeout_ms) catch |err| switch (err) {
+            error.IoFailure,
+            error.CorruptCatalog,
+            error.CapacityExceeded,
+            error.Busy,
+            error.Missing,
+            error.Changed,
+            error.InvalidArtifact,
+            error.PathTooLong,
             error.AccessDenied,
             error.AntivirusInterference,
             error.AssignProcessToJobObjectFailed,
@@ -8110,6 +8119,31 @@ const pack_store_reproducible_apps = [_][]const u8{
     "test/str/app_diamond.roc",
 };
 
+/// The tests inspect explicit family/variant metadata, never filename layouts.
+/// This is a foreground fixture inventory, not the bounded maintenance path.
+fn indexedCacheEntries(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError![]artifact_store.Metadata {
+    var store = try artifact_store.Store.init(allocator, io, cache_root);
+    defer store.deinit();
+    var entries: std.ArrayList(artifact_store.Metadata) = .empty;
+    errdefer entries.deinit(allocator);
+    for (0..artifact_store.shard_count) |number| {
+        var counters = artifact_store.catalog.Counters{};
+        var shard = artifact_store.Shard.open(&store, @intCast(number), false, &counters) catch |err| switch (err) {
+            error.Missing => continue,
+            else => return err,
+        };
+        defer shard.close();
+        var tx = shard.index.transaction();
+        var cursor: artifact_store.catalog.Key = @splat(0);
+        while (try tx.lowerBound(.owners, cursor)) |entry| {
+            try entries.append(allocator, try artifact_store.Metadata.decode(entry.value));
+            cursor = entry.key;
+            if (!artifact_store.advanceKey(&cursor)) break;
+        }
+    }
+    return entries.toOwnedSlice(allocator);
+}
+
 /// Every object-cache pack under `cache_root`, by its path relative to it.
 const PackStoreFiles = struct {
     paths: std.ArrayList([]u8) = .empty,
@@ -8125,18 +8159,24 @@ const PackStoreFiles = struct {
     fn read(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError!PackStoreFiles {
         var result: PackStoreFiles = .{};
         errdefer result.deinit(allocator);
-        var cache = try std.Io.Dir.cwd().openDir(io, cache_root, .{ .iterate = true });
-        defer cache.close(io);
-        var walker = try cache.walk(allocator);
-        defer walker.deinit();
-        while (try walker.next(io)) |entry| {
-            if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".rpk")) continue;
-            const path = try allocator.dupe(u8, entry.path);
+        var store = try artifact_store.Store.init(allocator, io, cache_root);
+        defer store.deinit();
+        const entries = try indexedCacheEntries(io, allocator, cache_root);
+        defer allocator.free(entries);
+        for (entries) |entry| {
+            if (entry.state != .published) continue;
+            switch (entry.family) {
+                .local_pack, .package_pack, .optimized_pack => {},
+                else => continue,
+            }
+            const path = try allocator.dupe(u8, &std.fmt.bytesToHex(entry.key, .lower));
             result.paths.append(allocator, path) catch |err| {
                 allocator.free(path);
                 return err;
             };
-            const bytes = try cache.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024 * 1024));
+            var artifact = (try store.acquireKey(entry.key, store.now())) orelse return error.InvalidArtifact;
+            defer artifact.deinit();
+            const bytes = try artifact.read(allocator);
             result.contents.append(allocator, bytes) catch |err| {
                 allocator.free(bytes);
                 return err;
@@ -9761,8 +9801,7 @@ fn customSharedEarlyObjectCache(
 }
 
 /// Delete the object packs optimized builds filed in the case's cache
-/// (`objects-v*/<target>-speed/` and `<target>-size/`), its optimization
-/// state.
+/// in the speed and size variants, its optimization state.
 fn forgetOptimizationState(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer) ?TestResult {
     const cache_root = env.env_map.get("ROC_CACHE_DIR") orelse
         return customInfraFailure(allocator, timer, "case has no isolated cache", .{});
@@ -9772,26 +9811,12 @@ fn forgetOptimizationState(io: std.Io, allocator: Allocator, env: *const CaseEnv
 }
 
 fn deleteOptimizationState(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError!void {
-    var root = std.Io.Dir.cwd().openDir(io, cache_root, .{ .iterate = true }) catch |err| switch (err) {
-        error.FileNotFound => return,
-        else => return err,
-    };
-    defer root.close(io);
-    var walker = try root.walk(allocator);
-    defer walker.deinit();
-    var stores = std.ArrayList([]const u8).empty;
-    defer {
-        for (stores.items) |path| allocator.free(path);
-        stores.deinit(allocator);
+    const entries = try indexedCacheEntries(io, allocator, cache_root);
+    defer allocator.free(entries);
+    for (entries) |entry| {
+        if (!entry.family.isPack() or entry.state != .published) continue;
+        if (std.mem.eql(u8, &entry.variant, &artifact_store.hashBytes("speed")) or std.mem.eql(u8, &entry.variant, &artifact_store.hashBytes("size"))) try retireTestEntry(io, allocator, cache_root, entry);
     }
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .directory) continue;
-        const parent = std.fs.path.basename(std.fs.path.dirname(entry.path) orelse continue);
-        if (!std.mem.startsWith(u8, parent, "objects-v")) continue;
-        if (!std.mem.endsWith(u8, entry.basename, "-speed") and !std.mem.endsWith(u8, entry.basename, "-size")) continue;
-        try stores.append(allocator, try allocator.dupe(u8, entry.path));
-    }
-    for (stores.items) |path| try root.deleteTree(io, path);
 }
 
 /// Before a build that must serve the program from the object cache's packs:
@@ -9805,26 +9830,21 @@ fn forgetRecordedProgramOutputs(io: std.Io, allocator: Allocator, env: *const Ca
     return null;
 }
 
-/// Delete every recorded program output (`objects-v*/<mode>/programs/`) under
+/// Delete every recorded program output under
 /// `cache_root`.
+fn retireTestEntry(io: std.Io, allocator: Allocator, cache_root: []const u8, entry: artifact_store.Metadata) CliRunnerError!void {
+    var store = try artifact_store.Store.init(allocator, io, cache_root);
+    defer store.deinit();
+    var counters = artifact_store.catalog.Counters{};
+    var shard = try artifact_store.Shard.open(&store, artifact_store.Store.shardFor(entry.key), false, &counters);
+    defer shard.close();
+    _ = try shard.retire(entry.key, entry.generation);
+}
+
 fn deleteRecordedProgramOutputs(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError!void {
-    var root = std.Io.Dir.cwd().openDir(io, cache_root, .{ .iterate = true }) catch |err| switch (err) {
-        error.FileNotFound => return,
-        else => return err,
-    };
-    defer root.close(io);
-    var walker = try root.walk(allocator);
-    defer walker.deinit();
-    var programs = std.ArrayList([]const u8).empty;
-    defer {
-        for (programs.items) |path| allocator.free(path);
-        programs.deinit(allocator);
-    }
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .directory or !std.mem.eql(u8, entry.basename, "programs")) continue;
-        try programs.append(allocator, try allocator.dupe(u8, entry.path));
-    }
-    for (programs.items) |path| try root.deleteTree(io, path);
+    const entries = try indexedCacheEntries(io, allocator, cache_root);
+    defer allocator.free(entries);
+    for (entries) |entry| if (entry.family == .program_output and entry.state == .published) try retireTestEntry(io, allocator, cache_root, entry);
 }
 
 /// Pin the platform's dependent export, not only an independent imported loop.
@@ -12440,50 +12460,16 @@ fn writeGeneratedTypeModule(
     try out.flush();
 }
 
-/// Count the entry files one cache section holds. The compiler keeps its two
-/// module caches in sibling directories under the version directory (checked
-/// artifacts in `mod`, canonicalization output in `can`), so a count must name
-/// the section it means rather than every file under the cache root.
+/// Count published entries of the explicitly selected module-cache family.
 fn countModuleCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u8, section: []const u8) CliRunnerError!usize {
-    var cache_dir = std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true }) catch |err| switch (err) {
-        error.AccessDenied,
-        error.BadPathName,
-        error.Canceled,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NotDir,
-        error.PermissionDenied,
-        error.ProcessFdQuotaExceeded,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        => return err,
-        error.FileNotFound => return 0,
-    };
-    defer cache_dir.close(io);
-
-    var walker = try cache_dir.walk(allocator);
-    defer walker.deinit();
-
+    const family: artifact_store.Family = if (std.mem.eql(u8, section, "mod")) .checked else .canonicalized;
+    const entries = try indexedCacheEntries(io, allocator, cache_path);
+    defer allocator.free(entries);
     var count: usize = 0;
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-        if (std.mem.endsWith(u8, entry.basename, ".meta")) continue;
-        if (std.mem.endsWith(u8, entry.basename, ".tmp")) continue;
-        if (!cachePathIsInSection(entry.path, section)) continue;
+    for (entries) |entry| if (entry.state == .published and entry.family == family) {
         count += 1;
-    }
+    };
     return count;
-}
-
-/// Whether a cache-root-relative entry path lies under `<version>/<section>/`.
-fn cachePathIsInSection(entry_path: []const u8, section: []const u8) bool {
-    var components = std.mem.tokenizeAny(u8, entry_path, "/\\");
-    _ = components.next() orelse return false; // compiler version directory
-    const entry_section = components.next() orelse return false;
-    return std.mem.eql(u8, entry_section, section);
 }
 
 /// The `--timings` row that covers LLVM's optimization pipeline and object
@@ -12827,7 +12813,7 @@ fn customBuildDefaultAppArgs(
 
 /// Where the object and bitcode files under a compiler cache root lie.
 const CacheIntermediates = struct {
-    /// Files inside the per-invocation scratch section, `<version>/tmp/`.
+    /// Files inside registered scratch directories not yet retired.
     in_scratch: usize = 0,
     /// The first file found in a section that builds share, if any.
     first_shared: ?[]const u8 = null,
@@ -12843,6 +12829,10 @@ fn findCacheIntermediates(io: std.Io, allocator: Allocator, cache_path: []const 
     var walker = try cache_dir.walk(allocator);
     defer walker.deinit();
 
+    const entries = try indexedCacheEntries(io, allocator, cache_path);
+    defer allocator.free(entries);
+    var store = try artifact_store.Store.init(allocator, io, cache_path);
+    defer store.deinit();
     var found: CacheIntermediates = .{};
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
@@ -12851,11 +12841,22 @@ fn findCacheIntermediates(io: std.Io, allocator: Allocator, cache_path: []const 
             std.mem.eql(u8, extension, ".obj") or
             std.mem.eql(u8, extension, ".bc");
         if (!is_intermediate) continue;
-        if (cachePathIsInSection(entry.path, "tmp")) {
-            found.in_scratch += 1;
-        } else if (found.first_shared == null) {
-            found.first_shared = try allocator.dupe(u8, entry.path);
+        const absolute = try std.fs.path.resolve(allocator, &.{ cache_path, entry.path });
+        defer allocator.free(absolute);
+        var registered = false;
+        for (entries) |metadata| {
+            if (metadata.family != .scratch) continue;
+            const physical = try store.payloadPath(artifact_store.Store.shardFor(metadata.key), metadata.slot, ".pending");
+            defer allocator.free(physical);
+            const scratch = try std.fs.path.resolve(allocator, &.{physical});
+            defer allocator.free(scratch);
+            if (absolute.len > scratch.len and std.mem.eql(u8, absolute[0..scratch.len], scratch) and std.fs.path.isSep(absolute[scratch.len])) {
+                registered = true;
+                if (metadata.state != .retiring) found.in_scratch += 1;
+                break;
+            }
         }
+        if (!registered and found.first_shared == null) found.first_shared = try allocator.dupe(u8, entry.path);
     }
     return found;
 }
@@ -12863,7 +12864,8 @@ fn findCacheIntermediates(io: std.Io, allocator: Allocator, cache_path: []const 
 /// Concurrent interpreter builds share one compiler cache, so every file a
 /// build writes while it works must lie in a directory that build owns. A
 /// build leaves no intermediate in a shared cache section and removes its
-/// scratch directory when it finishes; `--keep-temp` keeps one scratch
+/// scratch ownership when it finishes; bounded maintenance removes its files.
+/// `--keep-temp` keeps one scratch
 /// directory per build, so two builds never write the same intermediate path.
 fn customBuildInterpreterOwnsIntermediates(
     io: std.Io,
@@ -12888,9 +12890,8 @@ fn customBuildInterpreterOwnsIntermediates(
     if (after_build.first_shared) |path| {
         return customFailure(allocator, timer, "interpreter build wrote the intermediate {s} into a cache section that concurrent builds share", .{path});
     }
-    if (after_build.in_scratch != 0) {
-        return customFailure(allocator, timer, "interpreter build left {d} intermediate files in its scratch directory", .{after_build.in_scratch});
-    }
+    // Reclamation is bounded and may finish in later invocations. Every
+    // intermediate must already belong to a registered scratch generation.
 
     var kept_after_first: usize = 0;
     for (0..2) |build_index| {
@@ -13256,38 +13257,7 @@ fn customPipelineParityDiagnostics(io: std.Io, allocator: Allocator, env: *const
 /// Count only checked-module cache entries (`.../mod/...`), excluding the shim
 /// and linked-executable caches that the run verb also writes under the root.
 fn countCheckedModuleCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u8) CliRunnerError!usize {
-    var cache_dir = std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true }) catch |err| switch (err) {
-        error.AccessDenied,
-        error.BadPathName,
-        error.Canceled,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NotDir,
-        error.PermissionDenied,
-        error.ProcessFdQuotaExceeded,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        => return err,
-        error.FileNotFound => return 0,
-    };
-    defer cache_dir.close(io);
-
-    var walker = try cache_dir.walk(allocator);
-    defer walker.deinit();
-
-    const mod_segment = std.fs.path.sep_str ++ "mod" ++ std.fs.path.sep_str;
-    var count: usize = 0;
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-        if (std.mem.find(u8, entry.path, mod_segment) == null) continue;
-        if (std.mem.endsWith(u8, entry.basename, ".meta")) continue;
-        if (std.mem.endsWith(u8, entry.basename, ".tmp")) continue;
-        count += 1;
-    }
-    return count;
+    return countModuleCacheFiles(io, allocator, cache_path, "mod");
 }
 
 fn customIssue11344Diagnostics(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
@@ -16430,45 +16400,16 @@ fn hostObjectExtension() []const u8 {
 }
 
 fn countGluePluginCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u8, opt_name: []const u8) CliRunnerError!GluePluginCacheFileCounts {
-    var cache_dir = std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true }) catch |err| switch (err) {
-        error.AccessDenied,
-        error.BadPathName,
-        error.Canceled,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NotDir,
-        error.PermissionDenied,
-        error.ProcessFdQuotaExceeded,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        => return err,
-        error.FileNotFound => return .{},
-    };
-    defer cache_dir.close(io);
-
-    var walker = try cache_dir.walk(allocator);
-    defer walker.deinit();
-
-    const opt_segment = try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ std.fs.path.sep_str, opt_name, std.fs.path.sep_str });
-    defer allocator.free(opt_segment);
-
-    const extension = hostObjectExtension();
+    const entries = try indexedCacheEntries(io, allocator, cache_path);
+    defer allocator.free(entries);
+    const variant = artifact_store.hashBytes(opt_name);
     var counts = GluePluginCacheFileCounts{};
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-        if (std.mem.find(u8, entry.path, "glue-plugin") == null) continue;
-
-        if (std.mem.endsWith(u8, entry.basename, ".tmp")) {
-            counts.temps += 1;
-            continue;
-        }
-
-        if (std.mem.find(u8, entry.path, opt_segment) == null) continue;
-        if (std.mem.endsWith(u8, entry.basename, extension)) {
-            counts.plugins += 1;
+    for (entries) |entry| {
+        if (entry.family != .glue_plugin or !std.mem.eql(u8, &entry.variant, &variant)) continue;
+        switch (entry.state) {
+            .published => counts.plugins += 1,
+            .staging => counts.temps += 1,
+            .retiring => {},
         }
     }
     return counts;

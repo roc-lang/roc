@@ -99,8 +99,8 @@ const CheckedModuleCacheRunError = CoordinatorError || eval.BuiltinModules.InitE
     LowLevelOperationsNotFound,
     TestUnexpectedResult,
 };
-const OverwriteFilesUnderDirError = Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || std.Io.Dir.WriteFileError;
-const CorruptCheckedModuleCacheError = Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || std.Io.Dir.ReadFileAllocError || std.Io.Dir.WriteFileError || error{FileNotFound};
+const OverwriteFilesUnderDirError = @import("artifact_store.zig").Error || Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || std.Io.Dir.WriteFileError;
+const CorruptCheckedModuleCacheError = @import("artifact_store.zig").Error || Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || std.Io.Dir.ReadFileAllocError || std.Io.Dir.WriteFileError || error{FileNotFound};
 const TypeCheckedResult = messages.TypeCheckedResult;
 const DiscoveredLocalImport = messages.DiscoveredLocalImport;
 const DiscoveredExternalImport = messages.DiscoveredExternalImport;
@@ -2870,6 +2870,7 @@ pub const Coordinator = struct {
             // cannot return the error itself, so it recorded the OOM here.
             if (self.worker_oom.load(.acquire)) return error.OutOfMemory;
             try self.checkCancelRequest();
+            if (comptime !threading.is_freestanding) @import("cache_cleanup.zig").safePoint(.serial);
 
             var made_progress = false;
 
@@ -2884,7 +2885,14 @@ pub const Coordinator = struct {
             } else {
                 // Multi-threaded: receive from workers via channel
                 // Use blocking recv with timeout to avoid busy spinning
-                if (self.result_channel.recvTimeout(10_000_000)) |result| { // 10ms timeout
+                const next_result = self.result_channel.tryRecv() orelse blk: {
+                    if (comptime !threading.is_freestanding) @import("cache_cleanup.zig").safePoint(.{ .waiting = .{
+                        .budget = self.max_threads,
+                        .tasks = self.inflight.load(.acquire),
+                    } });
+                    break :blk self.result_channel.recvTimeout(10_000_000);
+                };
+                if (next_result) |result| {
                     _ = self.inflight.fetchSub(1, .monotonic);
                     try self.handleResult(result);
                     made_progress = true;
@@ -4160,7 +4168,7 @@ pub const Coordinator = struct {
         };
         writeCheckedModuleCacheHeader(.platform_pairing, bytes[0..checked_module_cache_header_len], key, 0, writer.total_bytes, @splat(0));
         _ = writer.writeToBuffer(bytes[checked_module_cache_header_len..]) catch unreachable; // bytes was allocated with writer.total_bytes after the header
-        manager.storeRawBytes(key.bytes, bytes, directory, artifact.moduleEnvConst().module_name);
+        manager.storeFamilyBytes(.pairing, key.bytes, bytes, directory, artifact.moduleEnvConst().module_name);
     }
 
     fn tryLoadCachedPlatformPairing(self: *Coordinator, platform: *const CheckedArtifact.CheckedModuleArtifact, app: *const CheckedArtifact.CheckedModuleArtifact) ?CheckedArtifact.CheckedModuleArtifact {
@@ -4168,7 +4176,7 @@ pub const Coordinator = struct {
         if (!manager.config.enabled) return null;
         const directory = self.cache_entry_dirs.platform_pairing orelse return null;
         const key = cache_key_mod.platformPairingCacheKey(platform.key, app.key);
-        const data = manager.loadRawBytesMapped(key.bytes, directory) orelse return null;
+        const data = manager.loadFamilyMapped(manager.allocator, .checked, .pairing, key.bytes, directory) orelse return null;
         defer data.deinit(manager.allocator);
         const bodies = decodeCheckedCacheEnvelope(.platform_pairing, key, data.data()) orelse {
             manager.stats.recordInvalidation();
@@ -7677,7 +7685,7 @@ test "issue 11389 invalid pairing cache recomposes from immutable modules" {
     const config = CacheConfig{ .enabled = true, .cache_dir = cache };
     const pair_directory = try config.getPlatformPairingCacheDir(allocator);
     defer allocator.free(pair_directory);
-    const corrupted = try overwriteFilesUnderDir(allocator, pair_directory, "invalid pairing");
+    const corrupted = try overwriteFilesUnderDir(allocator, cache, pair_directory, .pairing, "invalid pairing");
     try std.testing.expectEqual(@as(usize, 1), corrupted);
     var repaired = try compileAppRootIdentity(allocator, cache, app);
     defer repaired.deinit(allocator);
@@ -9932,46 +9940,55 @@ fn countHoistedValidations(
     return count;
 }
 
-fn overwriteFilesUnderDir(allocator: Allocator, absolute_dir: []const u8, contents: []const u8) OverwriteFilesUnderDirError!usize {
-    const io = std.testing.io;
-    var dir = try std.Io.Dir.openDirAbsolute(io, absolute_dir, .{ .iterate = true });
-    defer dir.close(io);
-
-    var walker = try dir.walk(allocator);
-    defer walker.deinit();
-
-    var overwritten: usize = 0;
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-        try dir.writeFile(io, .{ .sub_path = entry.path, .data = contents });
-        overwritten += 1;
+/// Test-only access to published payloads, without corrupting control records.
+fn testCachePaths(allocator: Allocator, root: []const u8, scope: []const u8, family: @import("artifact_store.zig").Family) @import("artifact_store.zig").Error![][]u8 {
+    var store = try @import("artifact_store.zig").Store.init(allocator, std.testing.io, root);
+    defer store.deinit();
+    const keys = try store.groupKeys(allocator, CacheManager.identity(family, @splat(0), scope));
+    defer allocator.free(keys);
+    var paths: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (paths.items) |path| allocator.free(path);
+        paths.deinit(allocator);
     }
-    return overwritten;
+    for (keys) |key| {
+        var artifact = (try store.acquireKey(key, store.now())) orelse continue;
+        defer artifact.deinit();
+        try paths.ensureUnusedCapacity(allocator, 1);
+        paths.appendAssumeCapacity(try allocator.dupe(u8, artifact.path));
+    }
+    return paths.toOwnedSlice(allocator);
 }
 
-/// Drop the last byte of every cache entry under `absolute_dir`, leaving a body
-/// whose header lengths no longer describe it.
-fn truncateFilesUnderDir(allocator: Allocator, absolute_dir: []const u8) CorruptCheckedModuleCacheError!usize {
-    const io = std.testing.io;
-    var dir = try std.Io.Dir.openDirAbsolute(io, absolute_dir, .{ .iterate = true });
-    defer dir.close(io);
+fn overwriteFilesUnderDir(allocator: Allocator, root: []const u8, scope: []const u8, family: @import("artifact_store.zig").Family, contents: []const u8) OverwriteFilesUnderDirError!usize {
+    const paths = try testCachePaths(allocator, root, scope, family);
+    defer {
+        for (paths) |path| allocator.free(path);
+        allocator.free(paths);
+    }
+    for (paths) |path| try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = contents });
+    return paths.len;
+}
 
-    var walker = try dir.walk(allocator);
-    defer walker.deinit();
-
+/// Drop the last byte, leaving header lengths that no longer describe the body.
+fn truncateFilesUnderDir(allocator: Allocator, root: []const u8, scope: []const u8, family: @import("artifact_store.zig").Family) CorruptCheckedModuleCacheError!usize {
+    const paths = try testCachePaths(allocator, root, scope, family);
+    defer {
+        for (paths) |path| allocator.free(path);
+        allocator.free(paths);
+    }
     var truncated: usize = 0;
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-        const contents = try dir.readFileAlloc(io, entry.path, allocator, .unlimited);
+    for (paths) |path| {
+        const contents = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .unlimited);
         defer allocator.free(contents);
         if (contents.len == 0) continue;
-        try dir.writeFile(io, .{ .sub_path = entry.path, .data = contents[0 .. contents.len - 1] });
+        try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = contents[0 .. contents.len - 1] });
         truncated += 1;
     }
     return truncated;
 }
 
-fn corruptCheckedModuleEnvIdentBytesLens(allocator: Allocator, checked_module_cache_dir: []const u8) CorruptCheckedModuleCacheError!usize {
+fn corruptCheckedModuleEnvIdentBytesLens(allocator: Allocator, root: []const u8, checked_module_cache_dir: []const u8) CorruptCheckedModuleCacheError!usize {
     const env_ident_bytes_len_offset =
         checked_module_cache_header_len +
         @offsetOf(ModuleEnv.Serialized, "common") +
@@ -9981,22 +9998,20 @@ fn corruptCheckedModuleEnvIdentBytesLens(allocator: Allocator, checked_module_ca
         @offsetOf(collections.SafeList(u8).Serialized, "len");
 
     const io = std.testing.io;
-    var dir = try std.Io.Dir.openDirAbsolute(io, checked_module_cache_dir, .{ .iterate = true });
-    defer dir.close(io);
-
-    var walker = try dir.walk(allocator);
-    defer walker.deinit();
-
+    const dir = std.Io.Dir.cwd();
+    const paths = try testCachePaths(allocator, root, checked_module_cache_dir, .checked);
+    defer {
+        for (paths) |path| allocator.free(path);
+        allocator.free(paths);
+    }
     var corrupted: usize = 0;
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-
-        const bytes = try dir.readFileAlloc(io, entry.path, allocator, .limited(@import("cache_config.zig").Constants.MAX_CACHE_SIZE));
+    for (paths) |path| {
+        const bytes = try dir.readFileAlloc(io, path, allocator, .limited(@import("cache_config.zig").Constants.MAX_CACHE_SIZE));
         defer allocator.free(bytes);
         if (bytes.len < env_ident_bytes_len_offset + @sizeOf(u64)) continue;
 
         std.mem.writeInt(u64, bytes[env_ident_bytes_len_offset..][0..8], std.math.maxInt(u64), .little);
-        try dir.writeFile(io, .{ .sub_path = entry.path, .data = bytes });
+        try dir.writeFile(io, .{ .sub_path = path, .data = bytes });
         corrupted += 1;
     }
 
@@ -10251,7 +10266,7 @@ test "Coordinator corrupt checked module cache entries compile from source" {
     const config = CacheConfig{ .cache_dir = cache_dir };
     const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator);
     defer allocator.free(checked_module_cache_dir);
-    const overwritten = try overwriteFilesUnderDir(allocator, checked_module_cache_dir, "not a checked module cache entry");
+    const overwritten = try overwriteFilesUnderDir(allocator, cache_dir, checked_module_cache_dir, .checked, "not a checked module cache entry");
     try std.testing.expect(overwritten > 0);
 
     const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
@@ -10274,7 +10289,7 @@ test "Coordinator corrupt checked module cache env relocations compile from sour
     const config = CacheConfig{ .cache_dir = cache_dir };
     const checked_module_cache_dir = try config.getCheckedArtifactCacheDir(allocator);
     defer allocator.free(checked_module_cache_dir);
-    const corrupted = try corruptCheckedModuleEnvIdentBytesLens(allocator, checked_module_cache_dir);
+    const corrupted = try corruptCheckedModuleEnvIdentBytesLens(allocator, cache_dir, checked_module_cache_dir);
     try std.testing.expect(corrupted > 0);
 
     const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
@@ -10400,15 +10415,9 @@ fn readCheckedModuleCacheEntry(allocator: Allocator, cache_dir: []const u8, key:
     const config = CacheConfig{ .cache_dir = cache_dir };
     const entries_dir = try config.getCheckedArtifactCacheDir(allocator);
     defer allocator.free(entries_dir);
-    var dir = try std.Io.Dir.openDirAbsolute(io, entries_dir, .{});
-    defer dir.close(io);
-    const hex = std.fmt.bytesToHex(key, .lower);
-    const sub_path = try std.fs.path.join(allocator, &.{ hex[0..2], hex[2..] });
-    defer allocator.free(sub_path);
-    return dir.readFileAlloc(io, sub_path, allocator, .unlimited) catch |err| switch (err) {
-        error.FileNotFound => null,
-        else => |e| return e,
-    };
+    var store = try @import("artifact_store.zig").Store.init(allocator, io, cache_dir);
+    defer store.deinit();
+    return store.read(allocator, CacheManager.identity(.checked, key, entries_dir), store.now());
 }
 
 test "issue 12059: a checked module's cache entry does not depend on how an importer reads its constants" {
@@ -10488,22 +10497,13 @@ test "issue 12059: an app reading an imported constant at a defaulted nominal ty
 }
 
 /// Count the entry files one cache directory holds.
-fn countCacheEntries(allocator: Allocator, absolute_dir: []const u8) (std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || Allocator.Error)!usize {
-    const io = std.testing.io;
-    var dir = std.Io.Dir.openDirAbsolute(io, absolute_dir, .{ .iterate = true }) catch |err| switch (err) {
-        error.FileNotFound => return 0,
-        else => |e| return e,
-    };
-    defer dir.close(io);
-
-    var walker = try dir.walk(allocator);
-    defer walker.deinit();
-
-    var count: usize = 0;
-    while (try walker.next(io)) |entry| {
-        if (entry.kind == .file) count += 1;
+fn countCacheEntries(allocator: Allocator, root: []const u8, scope: []const u8, family: @import("artifact_store.zig").Family) @import("artifact_store.zig").Error!usize {
+    const paths = try testCachePaths(allocator, root, scope, family);
+    defer {
+        for (paths) |path| allocator.free(path);
+        allocator.free(paths);
     }
-    return count;
+    return paths.len;
 }
 
 test "canonicalized module cache hits every module on a second compile and produces identical output" {
@@ -10661,7 +10661,7 @@ test "canonicalized module cache shares one entry between identical modules in d
     // the cache holds exactly one fewer entry than the build canonicalized
     // modules, because nothing about a module's package, path, or importers
     // reaches its key.
-    const entry_count = try countCacheEntries(allocator, canonicalized_dir);
+    const entry_count = try countCacheEntries(allocator, cache_dir, canonicalized_dir, .canonicalized);
     try std.testing.expectEqual(first.build.canonicalized_cache_misses - 1, @as(u32, @intCast(entry_count)));
 
     // Both of them load that one entry on the next build.
@@ -10669,7 +10669,7 @@ test "canonicalized module cache shares one entry between identical modules in d
     defer second.deinit(allocator);
     try std.testing.expectEqual(first.build.canonicalized_cache_misses, second.build.canonicalized_cache_hits);
     try std.testing.expectEqual(@as(u32, 0), second.build.canonicalized_cache_misses);
-    try std.testing.expectEqual(entry_count, try countCacheEntries(allocator, canonicalized_dir));
+    try std.testing.expectEqual(entry_count, try countCacheEntries(allocator, cache_dir, canonicalized_dir, .canonicalized));
     try std.testing.expectEqualStrings(first.reports, second.reports);
 }
 
@@ -10919,7 +10919,7 @@ test "Coordinator corrupt canonicalized module cache entries compile from source
     defer allocator.free(canonicalized_dir);
 
     // A body that is not a canonicalized entry at all.
-    const overwritten = try overwriteFilesUnderDir(allocator, canonicalized_dir, "not a canonicalized module cache entry");
+    const overwritten = try overwriteFilesUnderDir(allocator, cache_dir, canonicalized_dir, .canonicalized, "not a canonicalized module cache entry");
     try std.testing.expect(overwritten > 0);
 
     var second = try compileAppFacts(allocator, cache_dir, app_path);
@@ -10935,7 +10935,7 @@ test "Coordinator corrupt canonicalized module cache entries compile from source
     try std.testing.expectEqualStrings(first.reports, third.reports);
 
     // A truncated body is rejected the same way.
-    const truncated = try truncateFilesUnderDir(allocator, canonicalized_dir);
+    const truncated = try truncateFilesUnderDir(allocator, cache_dir, canonicalized_dir, .canonicalized);
     try std.testing.expect(truncated > 0);
 
     var fourth = try compileAppFacts(allocator, cache_dir, app_path);

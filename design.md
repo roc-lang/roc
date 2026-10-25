@@ -666,10 +666,10 @@ is made portable by this contract. Linked-only LLVM objects remain exact-target
 inputs and cannot serve CTFE. Source-location, transitive code/data closure,
 compile-time reads and demand/observation eligibility checks still apply.
 
-Dev procedure packs and discovery records live under `proc-<domain>-dev` within
-the versioned object namespace. Program outputs stay under `<target>-dev`, and
-optimized packs stay under their exact target and optimization level. Both
-publication and lookup use the procedure namespace. A compatible runtime build
+Dev procedure packs and discovery records use `proc-<domain>-dev` as their
+logical group scope in the indexed artifact store. Program outputs use
+`<target>-dev`, and optimized packs retain their exact target and optimization
+level. Both publication and lookup use the procedure scope. A compatible runtime build
 owns its target-specific Store while borrowing CTFE's heap-owned LoadedPacks
 for both specialization lookup and splicing; that owner outlives lowering and
 emission. Shared body elision still requires the exact same provider capability.
@@ -679,24 +679,119 @@ Same-program retained fragments remain exact-target for now. Their separate
 `rejected_target` metric exposes this limitation; revision, transferred LIR and
 layout ownership, CPU, static-data and runtime-context checks are unchanged.
 
+### Indexed cache storage and maintenance
+
+Cache storage and cache maintenance share one publication protocol. The native
+store uses a new storage-format namespace; it neither imports nor scans legacy
+cache directories. Compiler compatibility is part of artifact identity, not
+maintenance ownership: one nonblocking, kernel-managed lock at the shared cache
+root elects the maintenance owner across all compiler compatibility namespaces.
+The coordination file is permanent and is never replaced or unlinked. Its
+existence does not mean that a process owns the lock. Process death releases
+kernel ownership; no PID timeout or persistent lock marker establishes liveness.
+
+The store has sixteen shard files with 512-byte metadata records and fixed-width
+crit-bit indexes for logical artifacts, allocation generations, and recency. A
+lookup visits at most 512 branch records regardless of cache size. Lookups and
+updates use positional I/O, not whole-catalog reads or rewrites. Transactions
+have at most 24 changed records in one checksummed redo record, published before
+changing catalog records. Recovery
+finishes that transaction before admitting readers. There is no accumulating
+log to replay at startup. Payload generation and streaming happen outside
+catalog locks. A corrupt record or an I/O failure is an ordinary cache failure,
+never a compiler invariant. Corrupt catalogs disable that shard rather than
+trusting its paths or scanning all payloads during a foreground operation.
+These are process-interruption guarantees, not a promise of power-loss durability.
+Freed metadata slots are reused; catalog capacity and stable lease files remain
+at their historical high-water mark, so no unbounded compaction is hidden in GC.
+
+Every staging artifact is registered before its payload is created. Stable
+slot IDs and reuse generations identify reserved, published, and retiring
+artifacts. Atomic publication exposes complete payloads only. Retirement is
+idempotent: an interrupted deletion can be repeated, and a generation check
+prevents a stale checkpoint from deleting a replacement. Scratch ownership is
+an OS-backed lease, not an inference from age. Native child consumers inherit scratch leases. POSIX uses open-file-description
+locks; Windows uses file-sharing denial, which survives handle inheritance
+unlike process-owned byte-range locks. Closing the parent's handle does not
+release a lease still owned by a child.
+
+Artifact acquisition opens storage and a shared lease under the shard lock,
+then releases the shard lock before reading payloads. It returns owned bytes or
+retained storage. A pathname that
+another consumer will open later must be pinned for that consumer's lifetime.
+An artifact disappearing before acquisition is a cache miss. Existing cache
+header, key, layout, and dependency-closure validation remains authoritative;
+maintenance metadata never makes an otherwise invalid cache hit acceptable.
+
+Maintenance checkpoints name logical slots and operation phases, never opaque
+filesystem directory positions. A pass captures a finite allocation boundary;
+new allocations cannot extend that pass indefinitely, and reused slots behind
+the cursor are covered by the next pass. Each unit bounds metadata I/O,
+enumeration, index maintenance, and deletion work. Namespace retirement,
+recovery, and reclamation obey the same units; none contains recursive tree
+deletion, whole-store inventory, sorting, or compaction. Accounting and eviction
+indexes are persisted and reconciled incrementally with missing payloads and
+interrupted publications. A scratch step examines at most one directory entry
+and deletes at most one leaf or empty directory. Its checksummed relative-path
+cursor has a platform-path-length bound; every ancestor is opened without
+following symlinks. Restarting after a lost cursor is safe because all remaining
+leaves of an unowned scratch directory are eligible.
+
+Optional maintenance runs as one synchronous task immediately before a
+coordinator waits for a result, only when its declared queued-plus-executing
+worker demand is below its configured budget and that budget exceeds one.
+The maintenance task occupies the otherwise waiting coordinator's slot. Serial
+coordination and linking do not grant optional capacity. No compiler scheduling
+lock spans filesystem work. Returning foreground demand stops subsequent
+admissions, not a unit already executing. There is no detached worker and no
+owner waiting for capacity while holding maintenance ownership.
+
+A completed pass sets its next due time five minutes ahead. An unfinished pass
+keeps its due time. Once a pass is one minute overdue, every successful grant
+completes and checkpoints one compulsory unit synchronously at command startup,
+completed-task safe points, or command shutdown. Missing state starts overdue.
+The checkpoint permits at most one compulsory grant per second per shared root,
+so parallel invocations share that allowance. A one-worker build receives the
+same compulsory allowance. Individual invocations inside that one-second
+window need not do work; continued invocations spanning subsequent windows
+advance a finite pass. Persisted pressure raises each grant to eight units.
+
+Retention keeps the five-minute abandoned-scratch, one-day local-pack/program,
+and thirty-day persistent/package-pack windows. Artifact family and eligibility
+are explicit metadata. Cache use is recorded on acquisition, independently of
+filesystem access-time policy. Published, reserved, and retiring payload bytes
+are accounted separately from scratch. Publishers update shard counters in the
+same transaction as their records. Each maintenance unit refreshes one shard's
+observed total, and age traversal reconciles external payload removal. Pressure
+is based on this persisted, incrementally refreshed observation, not a new
+inventory. Eviction merges one persisted recency candidate per shard; candidates
+are revalidated under shard ownership, and live leases are skipped for this pass.
+The limit is eventual for a finite, unpinned workload: publication can outpace
+maintenance indefinitely, and pinned files, metadata, scratch, external changes,
+and delayed reclamation also consume storage. Optional cache publication skips
+busy shards instead of waiting; required scratch reservation waits for its short
+metadata transaction. OS failures stop the current attempt rather than create
+retry loops. Continued successful invocations and filesystem operations
+guarantee progress through a finite workload; process termination and absence
+of future invocations do not.
+
+These are operation-count guarantees, not wall-clock deadlines. A single OS
+operation may block. Spare capacity in participating builds also does not prove
+that unrelated applications have left the machine idle. Compulsory maintenance
+intentionally consumes a bounded amount of foreground capacity.
+
 ### Object Cache Store
 
-Dev packs live under `<cache root>/<compiler version>/objects-v<pack format>/
-proc-<domain>-dev/<local|pkg>/<module identity>/<key>.rpk`, and the pack an
-optimized build files for its program, which each optimized build of the
-program replaces, under `<target>-<opt>/optimized/<identity>.rpk`. Every
-other pack's path is a function of its content, so a writer stages it beside its path in a file it
-alone created (`CoreCtx.writeTempFile`), so two writers never share a partly
-written file, renames it into place, and leaves a pack already present alone; builds with runtime
-safety compare the bytes they would have written with the pack in place. The
-background sweep (`cache_cleanup.sweep`) deletes every `objects-v*` namespace
-of a format other than the compiler's own, ages the current namespace's
-`local/` packs (rewritten by every edit) and recorded program outputs
-(`programs/`, see "Recorded Program Output") on one day and its `pkg/` and
-`optimized/` packs on thirty, by last use (`max(atime, mtime)`), and then deletes the least
-recently used persistent cache files of every family until the cache fits
-`CacheConfig.max_size_mb`. Eviction only deletes files; it never changes what
-a build writes.
+Packs use explicit artifact families in the indexed store. Compiler
+compatibility, procedure domain or exact target, optimization level, module
+placement identity, and artifact key determine their logical identity. An optimized program pack
+replaces its previous generation. Module pack offers remain sorted by artifact
+key, independent of their physical slots or publication order. Decoded offers
+own their bytes; an optimization-state digest hashes logical identities and
+input keys rather than physical payload paths. Format obsolescence and the
+one-day local/program and thirty-day package/optimized last-use policies are
+handled by the same bounded traversal as other families. Eviction never changes
+what a build writes.
 
 A pack entry's code is a function of the procedure alone: every reference
 from it into code placed with it, and every reference by identity to code

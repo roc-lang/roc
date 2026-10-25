@@ -968,6 +968,7 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
 
 /// Link object files into an executable using LLD
 pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
+    @import("compile").cleanup.safePoint(.linking);
     // Check if LLVM is available at compile time
     if (comptime !llvm_available) {
         return LinkError.LLVMNotAvailable;
