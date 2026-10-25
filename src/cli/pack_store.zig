@@ -659,7 +659,7 @@ test "object cache interleaved writers expose only complete final bytes" {
     try std.testing.expectEqual(@as(usize, 1), count);
 }
 
-test "native procedure domain shares packs but isolates final outputs and linked objects" {
+test "native procedure domain shares packs and interfaces but isolates final outputs and linked objects" {
     const a = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -677,6 +677,17 @@ test "native procedure domain shares packs but isolates final outputs and linked
     const key: [32]u8 = @splat(2);
     try musl.write(.local, identity, key, "procedure pack");
     try std.testing.expect(try glibc.has(.local, identity, key));
+    var interface_producer = LoadedPacks.init(a);
+    defer interface_producer.deinit();
+    interface_producer.interface_store = &musl;
+    try LoadedPacks.recordInterface(&interface_producer, identity, key, "interface relation");
+    try interface_producer.publishInterfaces();
+    var interface_consumer = LoadedPacks.init(a);
+    defer interface_consumer.deinit();
+    interface_consumer.interface_store = &glibc;
+    const interface_bytes = (try LoadedPacks.loadInterface(&interface_consumer, a, identity, key)).?;
+    defer a.free(interface_bytes);
+    try std.testing.expectEqualStrings("interface relation", interface_bytes);
     // Indexed offers, metadata, payloads and completion markers share the
     // procedure domain too.
     const offered_key: [32]u8 = @splat(3);
@@ -705,6 +716,8 @@ test "native procedure domain shares packs but isolates final outputs and linked
         try std.testing.expect(!try incompatible.hasIndexed(.local, identity, key));
         var packs = LoadedPacks.init(a);
         defer packs.deinit();
+        packs.interface_store = &incompatible;
+        try std.testing.expectEqual(null, try LoadedPacks.loadInterface(&packs, a, identity, key));
         try incompatible.loadIdentity(io, &packs, .local, identity);
         try packs.indexPacks();
         try std.testing.expect(packs.specCacheLookup().lookup(offered_key, .dev_code, &.{}) == null);
@@ -713,6 +726,10 @@ test "native procedure domain shares packs but isolates final outputs and linked
     defer boxy.deinit();
     try std.testing.expect(!try boxy.has(.local, identity, key));
     try std.testing.expect(!try boxy.hasIndexed(.local, identity, key));
+    var boxy_interfaces = LoadedPacks.init(a);
+    defer boxy_interfaces.deinit();
+    boxy_interfaces.interface_store = &boxy;
+    try std.testing.expectEqual(null, try LoadedPacks.loadInterface(&boxy_interfaces, a, identity, key));
     for ([_][]const u8{ "speed", "size" }) |level| {
         var left = try Store.init(a, config, .x64musl, level);
         defer left.deinit();
@@ -1003,6 +1020,17 @@ pub const LoadedPacks = struct {
     };
     const IndexedResult = enum { hit, miss, unavailable };
 
+    /// One checked module/context provider, shared by its procedure requests.
+    const InterfaceFamily = struct {
+        records: std.AutoArrayHashMapUnmanaged([32]u8, []const u8) = .empty,
+        loaded: bool = false,
+        dirty: bool = false,
+    };
+    interface_mutex: std.Io.Mutex = .init,
+    /// Worker reads update this under interface_mutex; reported after joining.
+    interface_bytes_loaded: u64 = 0,
+    interface_families: std.AutoHashMapUnmanaged([32]u8, *InterfaceFamily) = .empty,
+    interface_store: ?*const Store = null,
     allocator: Allocator,
     index_dirs: std.ArrayList([]const u8) = .empty,
     index_io: ?std.Io = null,
@@ -1112,6 +1140,8 @@ pub const LoadedPacks = struct {
     /// or in the next compilation; a miss never promises code availability.
     pub fn refreshIndex(self: *LoadedPacks) void {
         self.negative.clearRetainingCapacity();
+        var families = self.interface_families.valueIterator();
+        while (families.next()) |family| family.*.loaded = false;
     }
 
     /// Register freshly published offers in the checked program's provider order.
@@ -1740,6 +1770,13 @@ pub const LoadedPacks = struct {
             const stats = self.index_stats;
             std.debug.print("pack index: index_bytes={d} bucket_opens={d} bucket_absent={d} negative_hits={d} metadata_opens={d} metadata_bytes={d} candidates={d} duplicates={d} payload_opens={d} payload_files={d} payload_bytes={d} decoded_artifacts={d} requested_artifacts={d} served_artifacts={d} allocation_failures={d} requested={d} served={d} misses={d} source_ineligible={d} linked_ineligible={d} corrupt={d} missing={d}\n", .{ stats.index_bytes, stats.bucket_opens, stats.bucket_absent, stats.negative_hits, stats.metadata_opens, stats.metadata_bytes, stats.candidates, stats.duplicates, stats.payload_opens, stats.payload_files, stats.payload_bytes, stats.decoded_artifacts, stats.requested_artifacts, stats.served_artifacts, stats.allocation_failures, stats.requested, stats.served, stats.misses, stats.source_ineligible, stats.linked_ineligible, stats.corrupt, stats.missing });
         }
+        var interface_families = self.interface_families.valueIterator();
+        while (interface_families.next()) |family| {
+            for (family.*.records.values()) |bytes| self.allocator.free(bytes);
+            family.*.records.deinit(self.allocator);
+            self.allocator.destroy(family.*);
+        }
+        self.interface_families.deinit(self.allocator);
         self.negative.deinit(self.allocator);
         self.provider_ranks.deinit(self.allocator);
         self.index_roots.deinit(self.allocator);
@@ -1781,7 +1818,143 @@ pub const LoadedPacks = struct {
 
     /// The lookup Monotype consults at reservation.
     pub fn specCacheLookup(self: *LoadedPacks) Common.SpecCacheLookup {
-        return .{ .context = @ptrCast(self), .find = findSpec, .find_discovery = findDiscovery };
+        return .{ .context = @ptrCast(self), .find = findSpec, .find_discovery = findDiscovery, .interfaces = if (!base.dev_diagnostics.isSet(.disable_persistent_interfaces)) .{ .context = self, .load = loadInterface, .record = recordInterface } else null };
+    }
+
+    fn interfaceStore(self: *const LoadedPacks) ?*const Store {
+        // The checked-module session binds its store after the runtime
+        // capability is declared, before any specialization task runs.
+        return if (self.pending) |pending| pending.store else self.interface_store;
+    }
+
+    fn interfacePath(store: *const Store, allocator: Allocator, family: [32]u8) Allocator.Error![]u8 {
+        const name = std.fmt.bytesToHex(family, .lower) ++ ".ris".*;
+        return std.fs.path.join(allocator, &.{ store.procedure_root, "interfaces", &name });
+    }
+
+    /// Caller holds interface_mutex. One read per family and snapshot, including
+    /// absence. Publications update the resident family directly.
+    fn interfaceFamily(self: *LoadedPacks, store: *const Store, key: [32]u8) Allocator.Error!*InterfaceFamily {
+        const entry = try self.interface_families.getOrPut(self.allocator, key);
+        if (!entry.found_existing) {
+            errdefer _ = self.interface_families.remove(key);
+            const family = try self.allocator.create(InterfaceFamily);
+            family.* = .{};
+            entry.value_ptr.* = family;
+        }
+        const family = entry.value_ptr.*;
+        if (family.loaded) return family;
+        const path = try interfacePath(store, self.allocator, key);
+        defer self.allocator.free(path);
+        const bytes = std.Io.Dir.cwd().readFileAlloc(store.roc_ctx.std_io, path, self.allocator, .limited(64 * 1024 * 1024)) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.FileNotFound => {
+                family.loaded = true;
+                return family;
+            },
+            else => return family,
+        };
+        defer self.allocator.free(bytes);
+        self.interface_bytes_loaded +|= bytes.len;
+        self.readInterfaceFamily(family, key, bytes) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidSummary => return family,
+        };
+        family.loaded = true;
+        return family;
+    }
+
+    const InterfaceDecodeError = Allocator.Error || error{InvalidSummary};
+
+    fn readInterfaceFamily(self: *LoadedPacks, family: *InterfaceFamily, key: [32]u8, bytes: []const u8) InterfaceDecodeError!void {
+        if (bytes.len < 76 or !std.mem.eql(u8, bytes[0..8], "RIFACE01") or !std.mem.eql(u8, bytes[8..40], &key)) return error.InvalidSummary;
+        if (!std.mem.eql(u8, &Index.digest(bytes[72..]), bytes[40..72])) return error.InvalidSummary;
+        const count = std.mem.readInt(u32, bytes[72..76], .little);
+        var offset: usize = 76;
+        // Validate the whole container before installing any member.
+        for (0..count) |_| {
+            if (bytes.len - offset < 36) return error.InvalidSummary;
+            const len = std.mem.readInt(u32, bytes[offset + 32 ..][0..4], .little);
+            offset += 36;
+            if (len > bytes.len - offset) return error.InvalidSummary;
+            offset += len;
+        }
+        if (offset != bytes.len) return error.InvalidSummary;
+        offset = 76;
+        for (0..count) |_| {
+            const request = bytes[offset..][0..32].*;
+            const len = std.mem.readInt(u32, bytes[offset + 32 ..][0..4], .little);
+            offset += 36;
+            if (!family.records.contains(request)) {
+                const owned = try self.allocator.dupe(u8, bytes[offset..][0..len]);
+                errdefer self.allocator.free(owned);
+                try family.records.put(self.allocator, request, owned);
+            }
+            offset += len;
+        }
+    }
+
+    fn loadInterface(context: *anyopaque, allocator: Allocator, family_key: [32]u8, request: [32]u8) Allocator.Error!?[]u8 {
+        const self: *LoadedPacks = @ptrCast(@alignCast(context));
+        if (self.defer_code_lookup) return null;
+        const store = self.interfaceStore() orelse return null;
+        self.interface_mutex.lockUncancelable(store.roc_ctx.std_io);
+        defer self.interface_mutex.unlock(store.roc_ctx.std_io);
+        const family = try self.interfaceFamily(store, family_key);
+        const bytes = family.records.get(request) orelse return null;
+        return try allocator.dupe(u8, bytes);
+    }
+
+    fn recordInterface(context: *anyopaque, family_key: [32]u8, request: [32]u8, bytes: []const u8) Allocator.Error!void {
+        const self: *LoadedPacks = @ptrCast(@alignCast(context));
+        if (self.defer_code_lookup) return;
+        const store = self.interfaceStore() orelse return;
+        self.interface_mutex.lockUncancelable(store.roc_ctx.std_io);
+        defer self.interface_mutex.unlock(store.roc_ctx.std_io);
+        const family = try self.interfaceFamily(store, family_key);
+        if (family.records.get(request)) |existing| if (std.mem.eql(u8, existing, bytes)) return;
+        const owned = try self.allocator.dupe(u8, bytes);
+        errdefer self.allocator.free(owned);
+        const entry = try family.records.getOrPut(self.allocator, request);
+        if (entry.found_existing) self.allocator.free(entry.value_ptr.*);
+        entry.value_ptr.* = owned;
+        family.dirty = true;
+    }
+
+    /// Publish once per changed module/context provider, within the reported cache
+    /// publication phase. Concurrent writers can lose optional variants, never
+    /// mix partial records: every replacement is complete and atomic.
+    pub fn publishInterfaces(self: *LoadedPacks) Allocator.Error!void {
+        const store = self.interfaceStore() orelse return;
+        self.interface_mutex.lockUncancelable(store.roc_ctx.std_io);
+        defer self.interface_mutex.unlock(store.roc_ctx.std_io);
+        var families = self.interface_families.iterator();
+        while (families.next()) |entry| {
+            const family = entry.value_ptr.*;
+            if (!family.dirty) continue;
+            var bytes = std.ArrayList(u8).empty;
+            defer bytes.deinit(self.allocator);
+            try bytes.appendSlice(self.allocator, "RIFACE01");
+            try bytes.appendSlice(self.allocator, entry.key_ptr);
+            try bytes.appendNTimes(self.allocator, 0, 32);
+            var number: [4]u8 = undefined;
+            std.mem.writeInt(u32, &number, @intCast(family.records.count()), .little);
+            try bytes.appendSlice(self.allocator, &number);
+            for (family.records.keys(), family.records.values()) |request, payload| {
+                try bytes.appendSlice(self.allocator, &request);
+                std.mem.writeInt(u32, &number, @intCast(payload.len), .little);
+                try bytes.appendSlice(self.allocator, &number);
+                try bytes.appendSlice(self.allocator, payload);
+            }
+            bytes.items[40..72].* = Index.digest(bytes.items[72..]);
+            const path = try interfacePath(store, self.allocator, entry.key_ptr.*);
+            defer self.allocator.free(path);
+            _ = store.publishIndexedPath(path, bytes.items) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.PackWriteFailed => continue,
+            };
+            family.dirty = false;
+        }
     }
 
     /// The artifact source the object compiler splices from.
@@ -2537,4 +2710,69 @@ test "indexed object cache routes a package offer to producer storage outside it
     try packs.indexPacks();
     _ = packs.specCacheLookup().lookup(@splat(1), .dev_code, &.{}) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("package code", packs.artifacts.get(@splat(1)).?.set.artifacts[0].code);
+}
+
+test "interface provider capability stays stable before store registration" {
+    var packs = LoadedPacks.init(std.testing.allocator);
+    defer packs.deinit();
+    const before = packs.specCacheLookup();
+    var fixture: IndexFixture = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    packs.interface_store = &fixture.store;
+    try std.testing.expect(std.meta.eql(before, packs.specCacheLookup()));
+}
+
+test "persistent interface families invalidate misses, share records, and reject corruption" {
+    var fixture: IndexFixture = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const allocator = std.testing.allocator;
+    const family: [32]u8 = @splat(42);
+    const first: [32]u8 = @splat(1);
+    const second: [32]u8 = @splat(2);
+    var producer = LoadedPacks.init(allocator);
+    defer producer.deinit();
+    producer.interface_store = &fixture.store;
+    try std.testing.expectEqual(null, try LoadedPacks.loadInterface(&producer, allocator, family, first));
+    try LoadedPacks.recordInterface(&producer, family, first, "one");
+    try LoadedPacks.recordInterface(&producer, family, second, "two");
+    try producer.publishInterfaces();
+    try std.testing.expectEqual(@as(usize, 1), producer.interface_families.count());
+    try std.testing.expect(!producer.interface_families.get(family).?.dirty);
+    try LoadedPacks.recordInterface(&producer, family, first, "one");
+    try std.testing.expect(!producer.interface_families.get(family).?.dirty);
+    var consumer = LoadedPacks.init(allocator);
+    defer consumer.deinit();
+    consumer.interface_store = &fixture.store;
+    const one = (try LoadedPacks.loadInterface(&consumer, allocator, family, first)).?;
+    defer allocator.free(one);
+    try std.testing.expectEqualStrings("one", one);
+    const two = (try LoadedPacks.loadInterface(&consumer, allocator, family, second)).?;
+    defer allocator.free(two);
+    try std.testing.expectEqualStrings("two", two);
+    const third: [32]u8 = @splat(3);
+    try std.testing.expectEqual(null, try LoadedPacks.loadInterface(&consumer, allocator, family, third));
+    try LoadedPacks.recordInterface(&producer, family, third, "three");
+    try producer.publishInterfaces();
+    try std.testing.expectEqual(null, try LoadedPacks.loadInterface(&consumer, allocator, family, third));
+    consumer.refreshIndex();
+    const three = (try LoadedPacks.loadInterface(&consumer, allocator, family, third)).?;
+    defer allocator.free(three);
+    try std.testing.expectEqualStrings("three", three);
+    const path = try LoadedPacks.interfacePath(&fixture.store, allocator, family);
+    defer allocator.free(path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = "RIFACE01truncated" });
+    var corrupt = LoadedPacks.init(allocator);
+    defer corrupt.deinit();
+    corrupt.interface_store = &fixture.store;
+    try std.testing.expectEqual(null, try LoadedPacks.loadInterface(&corrupt, allocator, family, first));
+    try LoadedPacks.recordInterface(&corrupt, family, first, "repaired");
+    try corrupt.publishInterfaces();
+    var repaired = LoadedPacks.init(allocator);
+    defer repaired.deinit();
+    repaired.interface_store = &fixture.store;
+    const value = (try LoadedPacks.loadInterface(&repaired, allocator, family, first)).?;
+    defer allocator.free(value);
+    try std.testing.expectEqualStrings("repaired", value);
 }

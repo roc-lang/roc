@@ -65,6 +65,12 @@ pub const Counters = struct {
     interface_replay_digest_root_requests: u64 = 0,
     interface_replay_digest_node_misses: u64 = 0,
     interface_summary_hits: u64 = 0,
+    interface_persistent_hits: u64 = 0,
+    interface_persistent_misses: u64 = 0,
+    interface_persistent_invalid: u64 = 0,
+    interface_persistent_records: u64 = 0,
+    interface_persistent_unrepresentable: u64 = 0,
+
     /// Summary hits whose expansion contributed no constraint beyond its input.
     interface_summary_unchanged_hits: u64 = 0,
     /// Relation requests whose settled parametric instantiations were captured as holes.

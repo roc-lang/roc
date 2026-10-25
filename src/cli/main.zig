@@ -11852,7 +11852,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         for (lowered.lir_result.store.getProcSpecs()) |proc| {
             if (proc.c_abi_entry) linked_procs += 1;
         }
-        std.debug.print("pack hits: {d} external procs: {d} linked procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d} cache bytes loaded: {d}\n", .{ packs.hits, external_procs, linked_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count(), packs.bytes_loaded });
+        std.debug.print("pack hits: {d} external procs: {d} linked procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d} cache bytes loaded: {d}\n", .{ packs.hits, external_procs, linked_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count(), packs.bytes_loaded +| packs.interface_bytes_loaded });
     }
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
@@ -11936,6 +11936,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     if (object_store != null and diag.errors == 0) {
         const store = object_store.?;
         reporter.begin("Publishing Runtime Cache");
+        if (loaded_packs) |packs| try packs.publishInterfaces();
         try writePacksToStore(ctx, &build_env, store, root_artifact, &lowered, if (object_compiler.captured_artifacts) |*set| set else null);
         reporter.end();
     }
@@ -17909,10 +17910,15 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [28]
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [31]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Interface summary hits", .count = diagnostics.specialization.interface_summary_hits },
+        .{ .name = "Persistent interface hits", .count = diagnostics.specialization.interface_persistent_hits },
+        .{ .name = "Persistent interface misses", .count = diagnostics.specialization.interface_persistent_misses },
+        .{ .name = "Persistent interface invalid", .count = diagnostics.specialization.interface_persistent_invalid },
+        .{ .name = "Persistent interface records", .count = diagnostics.specialization.interface_persistent_records },
+        .{ .name = "Persistent interface unrepresentable", .count = diagnostics.specialization.interface_persistent_unrepresentable },
         .{ .name = "Interface summary expansions", .count = diagnostics.specialization.interface_summary_expansions },
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
         .{ .name = "Type instantiation scopes", .count = body.instantiation_scopes_created },

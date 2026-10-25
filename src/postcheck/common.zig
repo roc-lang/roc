@@ -561,10 +561,21 @@ pub fn sortProgramModules(identities: [][32]u8) ProgramModules {
     return identities[0..kept];
 }
 
+/// Optional immutable interface records. Reads may run on specialization
+/// workers; publication is staged by the coordinator after accepting a result.
+/// Loaded bytes belong to the requesting allocator.
+pub const InterfaceSummaryCache = struct {
+    context: *anyopaque,
+    load: *const fn (*anyopaque, std.mem.Allocator, [32]u8, [32]u8) std.mem.Allocator.Error!?[]u8,
+    record: *const fn (*anyopaque, [32]u8, [32]u8, []const u8) std.mem.Allocator.Error!void,
+};
+
 /// The object cache's answer for a specialization key, asked when Monotype
 /// reserves the specialization and before its body exists. The consumer that
 /// owns the cache supplies the context and the lookup.
+/// Also supplies optional earlier specialization-interface summaries.
 pub const SpecCacheLookup = struct {
+    interfaces: ?InterfaceSummaryCache = null,
     context: *anyopaque,
     /// `takes`: which entries can serve the asking consumer; `modules`: the
     /// asking program's modules.

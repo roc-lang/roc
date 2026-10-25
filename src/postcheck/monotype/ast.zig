@@ -619,6 +619,33 @@ pub fn fnEvidenceDigest(
     return .{ .bytes = hasher.finalResult() };
 }
 
+/// Name evidence's checked type views by explicit producer value contexts.
+/// Procedure targets keep their exact body identities. Callers must exclude
+/// local-procedure targets, whose view also owns the local body address.
+pub fn fnEvidenceContextDigest(
+    evidence: check.ConstStore.ConstFnEvidenceVector,
+    frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    head: ?u32,
+    contexts: anytype,
+) EvidenceDigest {
+    const ContextNames = struct {
+        contexts: @TypeOf(contexts),
+        fn module(_: @This(), _: *const [32]u8) ?void {
+            return null;
+        }
+        fn template(_: @This(), _: names.ProcTemplate) ?names.TypeDigest {
+            return null;
+        }
+        /// Producer context for an evidence view, when supplied.
+        pub fn moduleContext(self: @This(), key: *const [32]u8) ?[32]u8 {
+            return self.contexts.get(key.*);
+        }
+    };
+    var hasher = TypeDigestHasher.init();
+    writeFnEvidence(&hasher, evidence, frames, head, ContextNames{ .contexts = contexts });
+    return .{ .bytes = hasher.finalResult() };
+}
+
 /// Names evidence's modules and method templates by content.
 const ContentEvidenceNames = struct {
     fn module(_: ContentEvidenceNames, _: *const [32]u8) ?void {
@@ -840,6 +867,13 @@ fn methodTargetIdentityEql(
 }
 
 fn writeEvidenceModule(hasher: anytype, bytes: *const [32]u8, site_names: anytype) void {
+    if (comptime @hasDecl(@TypeOf(site_names), "moduleContext")) {
+        if (site_names.moduleContext(bytes)) |context| {
+            writeBytes(hasher, "checked-value-context");
+            writeBytes(hasher, &context);
+            return;
+        }
+    }
     if (site_names.module(bytes)) |_| {
         writeBytes(hasher, "app-module");
     } else {

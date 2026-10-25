@@ -680,12 +680,96 @@ Same-program retained fragments remain exact-target for now. Their separate
 `rejected_target` metric exposes this limitation; revision, transferred LIR and
 layout ownership, CPU, static-data and runtime-context checks are unchanged.
 
+### Persistent Specialization Interface Summaries
+
+The earliest reusable result of an open specialization request is its settled
+interface relation, before the callee's body reservation and machine-code
+lookup. Closed interfaces already have a complete checked root and publish no
+persistent record. Checking still supplies the template, dispatch relations and
+evidence; the consumer still instantiates its own request and substitution cells. A
+producer records the relation only after its recursive component has reached
+its fixed point, using the same detached, parametric inputs as in-process
+interface replay. A multi-request recursive component with parametric holes
+has no independently reusable summary.
+
+An interface summary is either an explicit unchanged result or immutable
+constraints over locally numbered nodes and field-kind cells. Persistent
+constraints refer to settled types through the current request's leaf positions
+or explicit primitive types; they do not serialize solver stores or retain
+producer-owned type ids. A producer whose result requires another settled type
+publishes no persistent summary; checked default-expression addresses likewise
+remain unrepresented. Named checked provenance in open constraints
+must still name a currently present exact checked module. Consumers validate
+all indices, tags, lengths and provenance before instantiating fresh nodes.
+Missing, incompatible, corrupt or unrepresentable optional records are misses.
+
+The provider key includes the exact checked callee code-generation key,
+the method scope's checked value context and ordered
+lookup-scope contexts, the program method context, the callee's explicit import
+closure, and lowering
+policy. These use the identities already produced for literal value reuse:
+top modules contribute their checked type/method world and imports; other
+modules contribute exact checked keys. Platform requirements reached from
+methods contribute their exported definition identities. The callee's transitive
+import closure additionally contributes exact code-generation keys and the
+requirement identities reached from those modules' exports. Unrelated exports
+(such as the platform's call to application main) do not become dependencies
+of every imported callee. This retains transitive method/conversion/body
+dependencies without making an
+unrelated top-level application expression part of every imported callee's
+interface key. A scope without that explicit context has no persistent offer.
+Paired platform templates keep their code-generation key, which includes the
+application bindings. The request key includes the procedure/template ordinals,
+the full captured input and
+canonical evidence identity. Evidence views of top modules use the checker's
+explicit value context, which describes their type/method world independently
+of unrelated expression bodies. Procedure targets retain their exact module and
+template identities; local-procedure evidence has no persistent offer because
+its view also owns its body address. Checked callable-type ordinals are
+provenance, not evidence identity; their producer-issued canonical keys remain
+part of that digest, as in `Ast.fnEvidenceDigest`. Compiler, target and optimization namespaces remain those
+of the object store.
+
+This boundary is a type relation, not a code or demand certificate. It neither
+evaluates roots nor publishes their observations, changes demand, or promises
+machine code. Exact callable specialization, compile-time-read demand,
+ownership interfaces, native-only code-provider admission and source/debug
+validation still happen at the existing body/code boundary. Request leaf
+references preserve current-caller type provenance. After an application edit,
+a callee in another unchanged module can reuse the relation;
+changing the callee's own module still changes its identity. Finer reuse within
+that module requires producer-issued template identities and relocatable
+checked provenance, not deletion of its checked-module guard.
+
+The post-evaluation normalization pass remains a specialization against stored
+completed constants. It may consume these immutable interface summaries and
+existing validated normalized machine-code offers, but never reuse the first
+pass's slot-read bodies. Interface relations do not carry compile-time values:
+constant-function evidence and the current request still identify the selected
+relation. Thus a fresh value and a restored value enter the same normalization
+path, and unused failing roots remain undemanded.
+
+Persistent records are batched by checked module and context in
+`interfaces/<provider>.ris` under the object store's procedure domain.
+Different procedures remain separate request keys. Compatible native procedure
+domains share them; specialization strategies and incompatible targets stay
+separate. The binary container validates its provider, lengths and payload
+digest before exposing any request. A build reads each provider once, including
+absent providers; explicit index refresh invalidates that snapshot. Accepted
+coordinator results update the resident provider immediately,
+so local publication invalidates absence. Publication writes each changed
+provider once in the reported runtime-cache phase and leaves identical records
+alone. Concurrent atomic replacements can discard optional variants but cannot
+expose partial records or change correctness. No historical providers are scanned.
+`ROC_DISABLE_PERSISTENT_INTERFACES` is a developer-diagnostic-only comparison
+switch, read solely through `base.dev_diagnostics`.
+
 ### Object Cache Store
 
 The store has two namespaces under `<cache root>/<compiler version>/
 objects-v<pack format>/`. Every dev procedure record (offers, shared metadata,
-payloads, completion markers and discovery summaries) lives in the procedure
-namespace `proc-<domain>-dev/` of the build's `NativeProcDomain` (see "Native
+payloads, completion markers, discovery summaries and interface summaries) lives
+in the procedure namespace `proc-<domain>-dev/` of the build's `NativeProcDomain` (see "Native
 dev procedure compatibility"), so publication and lookup both use it, and a
 musl and a glibc build at the same CPU floor read each other's records. The
 exact-target namespace `<target>-<opt>/` holds recorded program outputs

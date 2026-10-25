@@ -98,7 +98,7 @@ main! = |args| {{
                         stats[k] = stats.get(k, 0) + int(v)
             rss = int((run_dir / "rss").read_text())
             results.setdefault(phase, []).append((elapsed, rss, publication / 1e6))
-            files = [f for f in cache.rglob("*") if f.suffix in (".rpi", ".rpa", ".rpm")]
+            files = [f for f in cache.rglob("*") if f.suffix in (".rpi", ".rpa", ".rpm", ".ris")]
             print(a.label, repeat, phase, f"wall_ms={elapsed:.3f} rss_kib={rss} publication_ms={publication / 1e6:.3f} records={len(files)} bytes={sum(f.stat().st_size for f in files)}", stats, flush=True)
         if a.trace and repeat == 0:
             (source / "main.roc").write_text(app.replace("+ 10", "+ 12"))
