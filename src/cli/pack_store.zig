@@ -103,7 +103,7 @@ pub const Store = struct {
         };
     }
 
-    /// Read a bounded prefix without reading the record's object payload.
+    /// Read a bounded prefix without reading the record's payload.
     pub fn readProgramPrefix(self: *const Store, key: [32]u8, len: usize, allocator: Allocator) Allocator.Error!?[]const u8 {
         const path = try self.programPath(key);
         defer self.allocator.free(path);
@@ -144,6 +144,9 @@ pub const Store = struct {
         };
         defer self.allocator.free(temp);
         defer self.roc_ctx.deleteFile(temp) catch {};
+        // Records are checksummed manifests naming immutable objects by
+        // content. Replacing a corrupt record repairs a miss, and never
+        // changes an object it names.
         self.roc_ctx.rename(temp, path) catch |err| {
             self.reportWriteFailure("publish staging file", temp, bytes.len, err);
             return error.PackWriteFailed;

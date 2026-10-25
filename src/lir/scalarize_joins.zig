@@ -2481,6 +2481,7 @@ fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error
 test "scalarize keeps descriptor-bearing struct join parameters" {
     var f = try ScalarizeTest.init(testing.allocator);
     defer f.deinit();
+    f.store.runtime_contract = .boxy;
     const store = &f.store;
 
     const state = try store.addLocal(.{ .layout_idx = f.pair });

@@ -14367,6 +14367,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
             const ret_size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_ret_layout)).size;
             const ret_buffer_offset = if (ret_size == 0) 0 else self.codegen.allocStackSlot(ret_size);
+            if (self.store.runtime_contract == .specialized) {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
+                const fn_slot = self.codegen.allocStackSlot(8);
+                const reg = try self.allocTempGeneral();
+                try self.emitLoad(.w64, reg, frame_ptr, closure_ptr_slot);
+                try self.emitLoad(.w64, reg, reg, 0);
+                try self.emitStore(.w64, frame_ptr, fn_slot, reg);
+                self.codegen.freeGeneral(reg);
+                try builder.addMemArg(frame_ptr, fn_slot);
+                if (deferred) {
+                    try builder.addMemArg(frame_ptr, closure_ptr_slot);
+                    if (arg_refs.len == 0) try builder.addImmArg(0) else try builder.addLeaArg(frame_ptr, args_slot);
+                    try builder.addImmArg(plan.size);
+                    try self.callBuiltin(&builder, .native_callable_defer);
+                } else {
+                    if (ret_size == 0) try builder.addImmArg(0) else try builder.addLeaArg(frame_ptr, ret_buffer_offset);
+                    if (arg_refs.len == 0) try builder.addImmArg(0) else try builder.addLeaArg(frame_ptr, args_slot);
+                    try builder.addMemArg(frame_ptr, capture_stack_offset);
+                    if (reuse_closure) try builder.addMemArg(frame_ptr, closure_ptr_slot) else try builder.addImmArg(0);
+                    try self.callBuiltin(&builder, .native_callable_call);
+                }
+                return if (ret_size == 0) .{ .immediate_i64 = 0 } else self.stackLocationForLayout(runtime_ret_layout, ret_buffer_offset);
+            }
             const out_desc_slot = self.codegen.allocStackSlot(8);
 
             // Load the closure's function pointer into a stack slot so the
@@ -14488,7 +14512,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (size > 0) try self.copyBytesToStackOffset(result_slot, value_loc, size);
             // The descriptor a pending call returns replaces the statement's
             // own, which stays in place when nothing is pending.
-            const out_desc_slot = self.codegen.allocStackSlot(8);
+            const out_desc_slot = if (self.store.runtime_contract == .boxy) self.codegen.allocStackSlot(8) else 0;
             if (out_desc) |local| {
                 try self.copyBytesToStackOffset(out_desc_slot, try self.emitValueLocal(local), 8);
             }
@@ -14512,10 +14536,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             } else {
                 try builder.addLeaArg(frame_ptr, result_slot);
             }
-            try builder.addLeaArg(frame_ptr, out_desc_slot);
-            if (result_desc_slot) |slot| try builder.addMemArg(frame_ptr, slot) else try builder.addImmArg(0);
-            try self.addRuntimeLayoutArg(&builder, &runtime_regs, runtime_layout);
-            try self.callBoxyBuiltin(&builder, .drive_pending);
+            if (self.store.runtime_contract == .specialized) {
+                try self.callBuiltin(&builder, .native_callable_drive);
+            } else {
+                try builder.addLeaArg(frame_ptr, out_desc_slot);
+                if (result_desc_slot) |slot| try builder.addMemArg(frame_ptr, slot) else try builder.addImmArg(0);
+                try self.addRuntimeLayoutArg(&builder, &runtime_regs, runtime_layout);
+                try self.callBoxyBuiltin(&builder, .drive_pending);
+            }
             runtime_regs.release(self);
             if (skip_patch) |patch| try self.codegen.patchJump(patch, self.codegen.currentOffset());
             if (out_desc) |local| {
@@ -14593,7 +14621,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             const capture_prefix_size: u32 = self.erased_capture_prefix;
             const base_capture_size: u32 = capture_prefix_size + capture_size;
-            const metadata_offset: u32 = @intCast(builtins.erased_callable.compilerMetadataOffset(base_capture_size));
+            const metadata_offset: u32 = if (self.store.runtime_contract == .boxy) @intCast(builtins.erased_callable.compilerMetadataOffset(base_capture_size)) else 0;
             const result_desc_slot: ?i32 = if (result_desc) |desc| try self.boxyDescRefToSlot(desc) else null;
 
             if (reuse) |reuse_local| {
@@ -14607,7 +14635,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // allocation in place when uniqueness permits (running the old
                 // capture's drop callback first) and otherwise allocates a fresh
                 // payload and decrefs the shared old one.
-                const total_capture_size: u32 = metadata_offset + @sizeOf(builtins.erased_callable.CompilerMetadata);
+                const total_capture_size: u32 = if (self.store.runtime_contract == .boxy) metadata_offset + @sizeOf(builtins.erased_callable.CompilerMetadata) else base_capture_size;
                 const capture_src_slot = self.codegen.allocStackSlot(total_capture_size);
 
                 if (self.hotReloadEnabled()) {
@@ -14654,18 +14682,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 }
 
-                const metadata_result_desc = try self.allocTempGeneral();
-                if (result_desc_slot) |slot|
-                    try self.emitLoad(.w64, metadata_result_desc, frame_ptr, slot)
-                else
-                    try self.codegen.emitLoadImm(metadata_result_desc, 0);
-                try self.emitStore(
-                    .w64,
-                    frame_ptr,
-                    capture_src_slot + @as(i32, @intCast(metadata_offset)),
-                    metadata_result_desc,
-                );
-                self.codegen.freeGeneral(metadata_result_desc);
+                if (self.store.runtime_contract == .boxy) {
+                    const metadata_result_desc = try self.allocTempGeneral();
+                    if (result_desc_slot) |slot|
+                        try self.emitLoad(.w64, metadata_result_desc, frame_ptr, slot)
+                    else
+                        try self.codegen.emitLoadImm(metadata_result_desc, 0);
+                    try self.emitStore(
+                        .w64,
+                        frame_ptr,
+                        capture_src_slot + @as(i32, @intCast(metadata_offset)),
+                        metadata_result_desc,
+                    );
+                    self.codegen.freeGeneral(metadata_result_desc);
+                }
 
                 const proc_addr_slot = self.codegen.allocStackSlot(8);
                 {
@@ -14720,7 +14750,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return try self.scalarRetReg();
             }
 
-            const payload_size = builtins.erased_callable.compilerPayloadSize(base_capture_size);
+            const payload_size = if (self.store.runtime_contract == .boxy) builtins.erased_callable.compilerPayloadSize(base_capture_size) else builtins.erased_callable.payloadSize(base_capture_size);
             const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
 
             {
@@ -14810,18 +14840,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            const metadata_result_desc = try self.allocTempGeneral();
-            if (result_desc_slot) |slot|
-                try self.emitLoad(.w64, metadata_result_desc, frame_ptr, slot)
-            else
-                try self.codegen.emitLoadImm(metadata_result_desc, 0);
-            try self.emitStore(
-                .w64,
-                heap_ptr,
-                @intCast(builtins.erased_callable.capture_offset + metadata_offset + @offsetOf(builtins.erased_callable.CompilerMetadata, "result_desc")),
-                metadata_result_desc,
-            );
-            self.codegen.freeGeneral(metadata_result_desc);
+            if (self.store.runtime_contract == .boxy) {
+                const metadata_result_desc = try self.allocTempGeneral();
+                if (result_desc_slot) |slot|
+                    try self.emitLoad(.w64, metadata_result_desc, frame_ptr, slot)
+                else
+                    try self.codegen.emitLoadImm(metadata_result_desc, 0);
+                try self.emitStore(
+                    .w64,
+                    heap_ptr,
+                    @intCast(builtins.erased_callable.capture_offset + metadata_offset + @offsetOf(builtins.erased_callable.CompilerMetadata, "result_desc")),
+                    metadata_result_desc,
+                );
+                self.codegen.freeGeneral(metadata_result_desc);
+            }
 
             // Record this worker's actual return layout under its runtime code
             // address so an erased call whose site expects a different layout
@@ -15651,6 +15683,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// which the native evaluator cannot reference by pointer, so they are
         /// only reachable through the machine-code shim's symbol resolution.
         fn callBoxyBuiltin(self: *Self, builder: *Builder, boxy_fn: BoxyBuiltinFn) Allocator.Error!void {
+            if (self.store.runtime_contract != .boxy) base.invariant("specialized code requested a Boxy runtime dependency", .{});
             self.boxy_runtime_used = true;
             if (boxy_fn.paramAbiSizes()) |sizes| {
                 builder.packStackArgsForCAbi(sizes);
@@ -15716,6 +15749,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// (design.md "Canonical Dev Images"). The recorded references then
         /// name canonical numbers.
         pub fn renumberRuntimeRefs(self: *Self, numbering: *lir.RuntimeTables.Numbering) Allocator.Error!void {
+            if (self.store.runtime_contract == .specialized) return;
             const code = self.codegen.emit.buf.items;
             for (self.codegen.relocations.items) |*relocation| switch (relocation.*) {
                 .runtime_ref => |*runtime_ref| {
@@ -15781,6 +15815,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Object-file entrypoints emit this before running any proc; the linked
         /// `roc_boxy_runtime` object provides the symbol.
         fn emitBoxyRuntimeInit(self: *Self) Allocator.Error!void {
+            self.store.requireBoxy();
             self.boxy_runtime_used = true;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
@@ -18437,7 +18472,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     defer builder.deinit();
                     try builder.addMemArg(frame_ptr, slot);
-                    try self.callBoxyBuiltin(&builder, .caller_drives);
+                    if (self.store.runtime_contract == .specialized)
+                        try self.callBuiltin(&builder, .native_callable_caller_drives)
+                    else
+                        try self.callBoxyBuiltin(&builder, .caller_drives);
                     try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
                     self.caller_drives_slot = slot;
                 }
@@ -22304,6 +22342,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// under its runtime code address, the value stored at an erased
         /// callable's function-pointer field.
         fn emitErasedProcRegistration(self: *Self, proc_id: lir.LIR.LirProcSpecId, metadata_offset: u32, capture_prefix_size: u32) Allocator.Error!void {
+            if (self.store.runtime_contract == .specialized) return;
             const proc_spec = self.store.getProcSpec(proc_id);
             const proc = try self.compiledProcForId(proc_id);
             const addr_reg = try self.allocTempGeneral();
@@ -22333,6 +22372,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// runtime is installed so the runtime's tables are populated before
         /// any dictionary dispatch or erased call.
         fn emitBoxyDictProcRegistrations(self: *Self) Allocator.Error!void {
+            if (self.store.runtime_contract == .specialized) return;
             // In identity order, which no cache hit changes, unlike the
             // program's procedure numbering.
             var frozen_workers = std.ArrayList(lir.LIR.LirProcSpecId).empty;
