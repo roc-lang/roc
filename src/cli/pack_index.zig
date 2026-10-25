@@ -1,5 +1,5 @@
 //! Persistent keyed dev offers. Metadata is a payload-free pack of one
-//! producer-declared dependency closure; each artifact's bytes are addressed
+//! producer-declared union of dependency closures; each artifact's bytes are addressed
 //! separately by SHA-256. No directory of historical packs is consulted.
 const std = @import("std");
 const base = @import("base");
@@ -10,7 +10,9 @@ const PF = backend.dev.PackFile;
 const Allocator = std.mem.Allocator;
 
 /// Magic and schema version of an offer metadata record.
-pub const magic = "ROFFER01";
+pub const magic = "ROFFER02";
+/// Shared producer metadata, independent of specialization offers and payloads.
+pub const metadata_magic = "ROFMETA1";
 /// Magic and schema version of an independently addressed payload record.
 pub const payload_magic = "RPAYLD01";
 /// Optional cache records can fail validation or allocation.
@@ -40,9 +42,9 @@ pub fn payload(allocator: Allocator, artifact: PA.Artifact) Allocator.Error![]u8
     return bytes.toOwnedSlice(allocator);
 }
 
-/// The producer supplies the exact splice closure, in original set order.
+/// The producer supplies the union of offered splice closures, in original set order.
 /// Content naming uses the original bytes, never the stripped metadata.
-pub fn encode(allocator: Allocator, set: *const PA.Set, spec: PF.SpecEntry, closure: []const u32, hashes: []const [32]u8, names: *const PA.ContentNames) Allocator.Error![]u8 {
+pub fn encodeMetadata(allocator: Allocator, set: *const PA.Set, specs: []const PF.SpecEntry, closure: []const u32, hashes: []const [32]u8, names: *const PA.ContentNames) Allocator.Error![]u8 {
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const scratch = arena.allocator();
@@ -63,13 +65,15 @@ pub fn encode(allocator: Allocator, set: *const PA.Set, spec: PF.SpecEntry, clos
         for (data) |*item| item.bytes = &.{};
         artifact.data = data;
     }
-    var entry = spec;
-    entry.artifact = map[spec.artifact];
-    std.debug.assert(entry.artifact != std.math.maxInt(u32));
-    const metadata = try PF.writeWithNames(scratch, &.{ .arena = undefined, .artifacts = artifacts, .source_files = set.source_files }, &.{entry}, names);
+    const entries = try scratch.dupe(PF.SpecEntry, specs);
+    for (entries) |*entry| {
+        entry.artifact = map[entry.artifact];
+        std.debug.assert(entry.artifact != std.math.maxInt(u32));
+    }
+    const metadata = try PF.writeWithNames(scratch, &.{ .arena = undefined, .artifacts = artifacts, .source_files = set.source_files }, entries, names);
     var bytes = std.ArrayList(u8).empty;
     errdefer bytes.deinit(allocator);
-    try bytes.appendSlice(allocator, magic);
+    try bytes.appendSlice(allocator, metadata_magic);
     var count: [4]u8 = undefined;
     std.mem.writeInt(u32, &count, std.math.cast(u32, closure.len) orelse return error.OutOfMemory, .little);
     try bytes.appendSlice(allocator, &count);
@@ -78,21 +82,21 @@ pub fn encode(allocator: Allocator, set: *const PA.Set, spec: PF.SpecEntry, clos
     return bytes.toOwnedSlice(allocator);
 }
 
-/// An owned decoded offer and the explicit digests of its required payloads.
-pub const Offer = struct {
+/// Owned shared producer metadata and the explicit digests of its payloads.
+pub const Metadata = struct {
     pack: PF.Pack,
     hashes: []const [32]u8,
 };
 
 /// Own both the metadata and its decoding; reject foreign/corrupt optional data.
-pub fn decode(allocator: Allocator, bytes: []const u8, key: [32]u8) Error!Offer {
-    if (bytes.len < 12 or !std.mem.eql(u8, bytes[0..8], magic)) return error.MalformedPack;
+pub fn decodeMetadata(allocator: Allocator, bytes: []const u8) Error!Metadata {
+    if (bytes.len < 12 or !std.mem.eql(u8, bytes[0..8], metadata_magic)) return error.MalformedPack;
     const count = std.mem.readInt(u32, bytes[8..12], .little);
     if (count > (bytes.len - 12) / 32) return error.MalformedPack;
     var pack = try PF.read(allocator, bytes[12 + @as(usize, count) * 32 ..]);
     errdefer pack.deinit();
-    if (pack.set.artifacts.len != count or pack.specs.len != 1 or !std.mem.eql(u8, &pack.specs[0].key, &key)) return error.MalformedPack;
-    if (pack.set.artifacts[pack.specs[0].artifact].kind != .proc) return error.MalformedPack;
+    if (pack.set.artifacts.len != count) return error.MalformedPack;
+    for (pack.specs) |spec| if (pack.set.artifacts[spec.artifact].kind != .proc) return error.MalformedPack;
     for (pack.set.artifacts) |artifact| {
         if (artifact.code.len != 0 or artifact.runtime_refs.len != 0) return error.MalformedPack;
         for (artifact.data) |item| if (item.bytes.len != 0) return error.MalformedPack;
@@ -101,6 +105,29 @@ pub fn decode(allocator: Allocator, bytes: []const u8, key: [32]u8) Error!Offer 
     for (hashes, 0..) |*hash, i| hash.* = bytes[12 + i * 32 ..][0..32].*;
     return .{ .pack = pack, .hashes = hashes };
 }
+
+/// A keyed offer references one entry of shared immutable producer metadata.
+pub const Offer = struct {
+    metadata: [32]u8,
+    spec: u32,
+    origin: enum(u8) { local, pkg },
+    owner: [32]u8,
+
+    pub fn encode(self: Offer) [77]u8 {
+        var bytes: [77]u8 = undefined;
+        bytes[0..8].* = magic.*;
+        bytes[8..40].* = self.metadata;
+        std.mem.writeInt(u32, bytes[40..44], self.spec, .little);
+        bytes[44] = @backingInt(self.origin);
+        bytes[45..77].* = self.owner;
+        return bytes;
+    }
+
+    pub fn decode(bytes: []const u8) Error!Offer {
+        if (bytes.len != 77 or !std.mem.eql(u8, bytes[0..8], magic)) return error.MalformedPack;
+        return .{ .metadata = bytes[8..40].*, .spec = std.mem.readInt(u32, bytes[40..44], .little), .origin = std.enums.fromInt(@FieldType(Offer, "origin"), bytes[44]) orelse return error.MalformedPack, .owner = bytes[45..77].* };
+    }
+};
 
 /// Bytes are owned by the loader, and remain live until all its consumers end.
 pub fn materialize(artifact: *PA.Artifact, bytes: []const u8) Error!void {

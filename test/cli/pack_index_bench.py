@@ -97,11 +97,17 @@ main! = |args| {
         baseline = run("lookup baseline", force_lookup=True)
         assert baseline["payload_files"] > 0
         templates = sorted(cache.rglob("*.rpi"))
-        template = next(p for p in templates if struct.unpack_from("<I", p.read_bytes(), 8)[0] > 0)
-        metadata = template.read_bytes()
-        assert metadata[:8] == b"ROFFER01"
-        module = template.parent.parent.parent
-        payload_dir = module / "payload"
+        template = templates[0]
+        offer_template = template.read_bytes()
+        assert offer_template[:8] == b"ROFFER02" and len(offer_template) == 77
+        namespace = template.parents[3]
+        origin = ("local", "pkg")[offer_template[44]]
+        owner = namespace / origin / offer_template[45:77].hex()
+        metadata_dir = owner / "metadata"
+        payload_dir = owner / "payload"
+        metadata = (metadata_dir / (offer_template[8:40].hex() + ".rpm")).read_bytes()
+        assert metadata[:8] == b"ROFMETA1"
+        assert struct.unpack_from("<I", metadata, 8)[0] > 0
         original_payload = (payload_dir / (metadata[12:44].hex() + ".rpa")).read_bytes()
         assert original_payload[:8] == b"RPAYLD01"
         code_len = struct.unpack_from("<Q", original_payload, 8)[0]
@@ -114,13 +120,17 @@ main! = |args| {
             payload = b"RPAYLD01" + struct.pack("<Q", code_len + len(extra)) + original_payload[16:16 + code_len] + extra + original_payload[16 + code_len:]
             digest = sha(payload)
             (payload_dir / (digest + ".rpa")).write_bytes(payload)
-            offer = bytearray(metadata)
-            offer[12:44] = bytes.fromhex(digest)
-            offer[spec_offset:spec_offset + 32] = key
-            bucket = module / "offers" / key.hex()
+            shared = bytearray(metadata)
+            shared[12:44] = bytes.fromhex(digest)
+            shared[spec_offset:spec_offset + 32] = key
+            shared_hash = sha(shared)
+            (metadata_dir / (shared_hash + ".rpm")).write_bytes(shared)
+            offer = bytearray(offer_template)
+            offer[8:40] = bytes.fromhex(shared_hash)
+            bucket = template.parent.parent / key.hex()
             bucket.mkdir()
-            (bucket / (sha(offer) + ".rpi")).write_bytes(offer)
-            metadata_growth += len(offer)
+            (bucket / (template.name[:65] + sha(offer) + ".rpi")).write_bytes(offer)
+            metadata_growth += len(shared) + len(offer)
             payload_growth += len(payload)
         print(f"history: {args.history} offers, {metadata_growth} metadata bytes, {payload_growth} payload bytes", flush=True)
         for _ in range(args.repeats):
