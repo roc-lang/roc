@@ -23,7 +23,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 15;
+pub const format_version: u32 = 16;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -32,6 +32,8 @@ pub const format_version: u32 = 15;
 pub const SpecEntry = struct {
     key: [32]u8,
     artifact: u32,
+    /// The producer proved this closure contains no expect instrumentation.
+    test_compatible: bool = false,
     /// The compile-time roots the procedure's code reads, which a linking
     /// program demands (`Common.SpecCacheHit.comptime_root_reads`).
     comptime_root_reads: []const lir.CheckedPipeline.ComptimeRootRead = &.{},
@@ -645,6 +647,7 @@ fn writeSpecs(writer: *Writer, specs: []const SpecEntry) Allocator.Error!void {
     for (specs) |spec| {
         try writer.raw(&spec.key);
         try writer.word(spec.artifact);
+        try writer.byte(@intFromBool(spec.test_compatible));
         try writer.word(@intCast(spec.comptime_root_reads.len));
         for (spec.comptime_root_reads) |root_read| {
             try writer.raw(&root_read.module);
@@ -669,6 +672,11 @@ fn readSpecs(reader: *Reader, arena_allocator: Allocator, count: u32, artifact_c
         spec.* = .{
             .key = (try reader.raw(32))[0..32].*,
             .artifact = try reader.word(),
+            .test_compatible = switch (try reader.byte()) {
+                0 => false,
+                1 => true,
+                else => return error.MalformedPack,
+            },
             .comptime_root_reads = reads: {
                 const reads = try arena_allocator.alloc(lir.CheckedPipeline.ComptimeRootRead, try reader.word());
                 for (reads) |*root_read| root_read.* = .{ .module = (try reader.raw(32))[0..32].*, .root = try reader.word() };

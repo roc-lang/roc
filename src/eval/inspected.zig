@@ -409,6 +409,17 @@ pub const BoolRootModule = struct {
     static_data: RuntimeStaticData = .{},
 };
 
+/// Native test code capability. The provider owns admitted bytes until all
+/// invocations complete; publication borrows only code this execution emitted.
+pub const DevTestArtifacts = struct {
+    splice_source: ?backend.dev.SpliceSource = null,
+    executor: ?base.post_check_task_executor.Executor = null,
+    publication: ?struct {
+        context: *anyopaque,
+        accept: *const fn (*anyopaque, *const backend.dev.ProcArtifact.Set) Allocator.Error!void,
+    } = null,
+};
+
 /// Timings for JIT-compiling and running boolean test roots with the dev backend.
 pub const DevBoolRootTimingSnapshot = struct {
     lir_statements: u64 = 0,
@@ -421,6 +432,8 @@ pub const DevBoolRootTimingSnapshot = struct {
     entrypoint_codegen_ns: u64 = 0,
     executable_memory_ns: u64 = 0,
     root_execution_ns: u64 = 0,
+    procedures_emitted: u64 = 0,
+    procedures_spliced: u64 = 0,
 };
 
 /// Mutable timing collector for one dev-backend boolean-root evaluation batch.
@@ -2302,6 +2315,12 @@ pub fn devEvalBoolRootModule(allocator: Allocator, module: BoolRootModule, timin
 
 /// Compile one explicitly shared program once, retaining module observation partitions.
 pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolRootModule, timing: ?*DevBoolRootTiming, max_workers: ?usize) Error!BoolRootEvalBatch {
+    return devEvalSharedBoolRootModulesWithArtifacts(allocator, modules, timing, max_workers, null);
+}
+
+/// The specialized native consumer; null retains the interpreter helpers' and
+/// Boxy caller's in-process emission contract.
+pub fn devEvalSharedBoolRootModulesWithArtifacts(allocator: Allocator, modules: []const BoolRootModule, timing: ?*DevBoolRootTiming, max_workers: ?usize, artifacts: ?DevTestArtifacts) Error!BoolRootEvalBatch {
     try validateSharedBoolRootModules(modules);
     const module = modules[0];
     const store = module.store;
@@ -2337,16 +2356,26 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
         defer static_strings.deinit();
         if (timing) |timings| timings.finish(static_strings_started_ns, .static_strings);
 
-        var static_image = backend.StaticDataImage.init(allocator, module.static_data.exports) catch |err| switch (err) {
+        var static_layout = backend.StaticDataImage.Layout.plan(allocator, module.static_data.exports, .{}) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => zeroArgRootInvariant("invalid frozen data graph for dev test roots"),
         };
-        defer static_image.deinit();
-        const static_addresses = static_image.lirValueAddresses(allocator, module.static_data.value_count) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => zeroArgRootInvariant("dev test graph omitted an explicit static value slot"),
-        };
-        defer allocator.free(static_addresses);
+        var layout_owned = true;
+        defer if (layout_owned) static_layout.deinit(allocator);
+        var static_image: ?backend.StaticDataImage = null;
+        defer if (static_image) |*image| image.deinit();
+        var static_addresses: ?[]usize = null;
+        defer if (static_addresses) |addresses| allocator.free(addresses);
+        if (artifacts == null) {
+            static_image = backend.StaticDataImage.init(allocator, module.static_data.exports) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => zeroArgRootInvariant("invalid frozen data graph for dev test roots"),
+            };
+            static_addresses = static_image.?.lirValueAddresses(allocator, module.static_data.value_count) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => zeroArgRootInvariant("dev test graph omitted an explicit static value slot"),
+            };
+        }
 
         const codegen_setup_started_ns = if (timing) |timings| timings.start() else 0;
         var codegen = try HostLirCodeGen.initWithBoxyMetadata(
@@ -2361,30 +2390,65 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
-        codegen.setNativeStaticData(static_addresses);
+        if (artifacts != null) {
+            codegen.generation_mode = .object_file;
+            try codegen.setStaticDataSymbols(module.static_data.exports);
+        } else codegen.setNativeStaticData(static_addresses.?);
+        var splice = backend.dev.HostSplice.init(allocator);
+        defer splice.deinit();
+        if (artifacts != null) splice.reserveStaticData(&static_layout);
         // Worker threads read this table through the codegen'd code while the
         // parallel run below is still in flight, so it must stay alive until
         // this function returns.
-        var native_fns: ?boxy_abi.BoxyNativeFnTable = if (store.runtime_contract == .boxy) boxyNativeFnTable() else null;
-        codegen.boxy_native_fns = if (native_fns) |*table| table else null;
+        var native_fns: ?BoxyNativeFnTable = if (store.runtime_contract == .boxy) boxyNativeFnTable() else null;
+        const native_fn_table: ?*const BoxyNativeFnTable = if (native_fns) |*table| table else null;
+        codegen.boxy_native_fns = native_fn_table;
         if (timing) |timings| timings.finish(codegen_setup_started_ns, .codegen_setup);
 
         const procedure_codegen_started_ns = if (timing) |timings| timings.start() else 0;
-        base.dev_diagnostics.countTestWork(.native_test_procedures, store.getProcSpecs().len);
-        try codegen.compileAllProcSpecs(store.getProcSpecs());
-        if (timing) |timings| {
-            timings.snapshot_value.lir_statements += store.getCFStmts().len;
-            // Count resolved native procedures, excluding reserved static
-            // initializers that compileAllProcSpecs deliberately does not emit.
-            for (0..store.getProcSpecs().len) |index| {
-                if (codegen.compiledProcSymbol(@fromBackingInt(@intCast(index))) != null)
-                    timings.snapshot_value.emitted_procedures += 1;
-            }
+        var demand = std.ArrayList(LirProcSpecId).empty;
+        defer demand.deinit(allocator);
+        for (store.getProcSpecs(), 0..) |proc, index| {
+            // Finalization has already materialized these initializers as
+            // frozen data; their bodies are not runtime procedure demand.
+            if (proc.is_static_initializer) continue;
+            try demand.append(allocator, @fromBackingInt(@intCast(index)));
         }
+        if (artifacts) |options| if (options.splice_source) |source| try splice.spliceExternal(&codegen, demand.items, source);
         const static_rc_helpers = try backend.collectRequiredRcHelpers(allocator, module.static_data.exports);
         defer allocator.free(static_rc_helpers);
-        try codegen.compileStaticDataRcHelpers(static_rc_helpers);
-        if (timing) |timings| timings.finish(procedure_codegen_started_ns, .procedure_codegen);
+        var retained: ?backend.dev.NativeProcCompiler.Retained = null;
+        defer if (retained) |*owned| owned.deinit();
+        if (artifacts) |options| {
+            var metrics: backend.dev.NativeProcCompiler.Metrics = .{};
+            retained = try backend.dev.NativeProcCompiler.run(HostLirCodeGen, allocator, &codegen, demand.items, .{
+                .target = backend.dev.LirCodeGenMod.host_lir_codegen_target,
+                .executor = options.executor,
+                .static_helpers = static_rc_helpers,
+                .constant_exports = module.static_data.exports,
+                .metrics_out = &metrics,
+            });
+            base.dev_diagnostics.countTestWork(.native_test_procedures, metrics.procedures_emitted);
+            const carried = try retained.?.dataItems(allocator);
+            defer allocator.free(carried);
+            try splice.addDataItems(carried);
+            if (timing) |timings| {
+                timings.snapshot_value.procedures_emitted += metrics.procedures_emitted;
+                timings.snapshot_value.procedures_spliced += splice.spliced_procs;
+            }
+        } else {
+            base.dev_diagnostics.countTestWork(.native_test_procedures, demand.items.len);
+            try codegen.compileAllProcSpecs(store.getProcSpecs());
+            try codegen.compileStaticDataRcHelpers(static_rc_helpers);
+        }
+        if (timing) |timings| {
+            timings.snapshot_value.lir_statements += store.getCFStmts().len;
+            for (demand.items) |id| if (codegen.compiledProcSymbol(id) != null) {
+                timings.snapshot_value.emitted_procedures += 1;
+            };
+            timings.finish(procedure_codegen_started_ns, .procedure_codegen);
+        }
+        codegen.generation_mode = .native_execution;
 
         const entry_offsets = try allocator.alloc(usize, roots.len);
         defer allocator.free(entry_offsets);
@@ -2402,12 +2466,18 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
         if (timing) |timings| timings.finish(entrypoint_codegen_started_ns, .entrypoint_codegen);
 
         const executable_memory_started_ns = if (timing) |timings| timings.start() else 0;
+        if (artifacts != null) try splice.generateHostedStubs(&codegen, native_fn_table);
         try codegen.finishImage();
         if (timing) |timings| {
             timings.snapshot_value.emitted_entrypoints += roots.len;
             timings.snapshot_value.emitted_code_bytes += codegen.getGeneratedCode().len;
         }
-        var executable = try ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
+        var executable = if (artifacts != null) splice.link(&codegen, native_fn_table) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MappingFailed => return error.MmapFailed,
+            error.UnresolvedSymbol => zeroArgRootInvariant("admitted native test code names an unavailable symbol"),
+            error.InvalidRelocation => zeroArgRootInvariant("admitted native test code has an invalid relocation"),
+        } else try ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
             codegen.getGeneratedCode(),
             0,
             codegen.getUnwindFunctions(),
@@ -2418,6 +2488,22 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
             executable.deinit();
             if (timing) |timings| timings.finish(executable_deinit_started_ns, .executable_memory);
         }
+
+        if (artifacts != null) {
+            layout_owned = false;
+            static_image = static_layout.place(allocator, splice.staticDataMemory(&executable)) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => zeroArgRootInvariant("invalid frozen data placement for native tests"),
+            };
+        }
+        if (artifacts) |options| if (options.publication) |publication| {
+            var extracted = backend.dev.ProcArtifact.extract(HostLirCodeGen, allocator, &codegen, store.getProcSpecs(), layouts, static_strings.exports, module.static_data.exports, splice.data.items) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => zeroArgRootInvariant("native test emission produced invalid procedure artifacts"),
+            };
+            defer extracted.deinit();
+            try publication.accept(publication.context, &extracted);
+        };
 
         const Resolver = struct {
             codegen: *const HostLirCodeGen,
@@ -2431,7 +2517,7 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
             }
         };
         var resolver = Resolver{ .codegen = &codegen, .executable = &executable };
-        static_image.resolveFunctionRelocations(.{ .context = &resolver, .resolve = Resolver.resolve }) catch |err| switch (err) {
+        static_image.?.resolveFunctionRelocations(.{ .context = &resolver, .resolve = Resolver.resolve }) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => zeroArgRootInvariant("dev test graph omitted a callable procedure"),
         };

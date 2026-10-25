@@ -1031,6 +1031,8 @@ pub const CodeProvision = enum {
     source_bodies,
     /// Native dev emission with a splice source for CTFE's declared native procedure domain.
     host_dev_objects,
+    /// Native tests splice only observation-compatible host procedures.
+    host_test_dev_objects,
     /// Native dev emission with its own target-specific splice source.
     target_dev_objects,
     /// As `host_dev_objects`, emitted as an object file that is linked, so the
@@ -1060,6 +1062,7 @@ pub const CodeProvision = enum {
     pub fn specCacheTakes(self: CodeProvision) postcheck.Common.SpecCacheTakes {
         return switch (self) {
             .source_bodies, .host_dev_objects, .target_dev_objects => .dev_code,
+            .host_test_dev_objects => .test_dev_code,
             .host_dev_objects_beside_linked => .dev_code_beside_linked_objects,
             .host_linked_dev_objects, .target_linked_dev_objects => .dev_code_and_linked_objects,
             .target_linked_objects => .linked_objects,
@@ -1073,6 +1076,9 @@ pub const CodeProvision = enum {
     /// evaluation runs code in process, where nothing is linked.
     pub fn sharedDomain(self: CodeProvision, other: CodeProvision) CodeProvision {
         if (!self.hostDomain() or !other.hostDomain()) return .source_bodies;
+        if (self == .host_test_dev_objects or other == .host_test_dev_objects) {
+            return if (self.linksObjects() or other.linksObjects()) .source_bodies else .host_test_dev_objects;
+        }
         return if (self.linksObjects() or other.linksObjects()) .host_dev_objects_beside_linked else .host_dev_objects;
     }
 
@@ -1081,13 +1087,13 @@ pub const CodeProvision = enum {
     fn linksObjects(self: CodeProvision) bool {
         return switch (self) {
             .host_linked_dev_objects, .host_dev_objects_beside_linked, .target_linked_dev_objects, .target_linked_objects => true,
-            .source_bodies, .host_dev_objects, .target_dev_objects => false,
+            .source_bodies, .host_dev_objects, .host_test_dev_objects, .target_dev_objects => false,
         };
     }
 
     fn hostDomain(self: CodeProvision) bool {
         return switch (self) {
-            .host_dev_objects, .host_linked_dev_objects, .host_dev_objects_beside_linked => true,
+            .host_dev_objects, .host_test_dev_objects, .host_linked_dev_objects, .host_dev_objects_beside_linked => true,
             .source_bodies, .target_dev_objects, .target_linked_dev_objects, .target_linked_objects => false,
         };
     }
@@ -1569,12 +1575,13 @@ pub fn prepareCheckedModulesMonotype(
 }
 
 test "shared producer native provision requires every consumer in the host dev domain" {
-    const host_domain = [_]CodeProvision{ .host_dev_objects, .host_linked_dev_objects, .host_dev_objects_beside_linked };
+    const host_domain = [_]CodeProvision{ .host_dev_objects, .host_test_dev_objects, .host_linked_dev_objects, .host_dev_objects_beside_linked };
     for (std.enums.values(CodeProvision)) |host| {
         for (std.enums.values(CodeProvision)) |runtime| {
             const both_host = std.mem.findScalar(CodeProvision, &host_domain, host) != null and std.mem.findScalar(CodeProvision, &host_domain, runtime) != null;
-            const either_linked = host != .host_dev_objects or runtime != .host_dev_objects;
-            const expected: CodeProvision = if (!both_host) .source_bodies else if (either_linked) .host_dev_objects_beside_linked else .host_dev_objects;
+            const either_linked = host.linksObjects() or runtime.linksObjects();
+            const tests = host == .host_test_dev_objects or runtime == .host_test_dev_objects;
+            const expected: CodeProvision = if (!both_host or (tests and either_linked)) .source_bodies else if (tests) .host_test_dev_objects else if (either_linked) .host_dev_objects_beside_linked else .host_dev_objects;
             try std.testing.expectEqual(expected, host.sharedDomain(runtime));
             try std.testing.expectEqual(expected, runtime.sharedDomain(host));
         }

@@ -864,6 +864,38 @@ operation may block. Spare capacity in participating builds also does not prove
 that unrelated applications have left the machine idle. Compulsory maintenance
 intentionally consumes a bounded amount of foreground capacity.
 
+Native dev tests consume this domain through the same heap-owned lookup and
+splice provider as CTFE. They emit object-mode procedures, link symbolic
+references through `HostSplice`, and generate invocation wrappers separately.
+The native target and CPU floor, specialized calling convention, shared-thread
+ARC signatures, hot-reload capture prefix, dev inlining policy, dictionary seed,
+and readonly constant representation are the ordinary native dev contracts.
+The final runtime continuation supplies normalized stored compile-time values;
+evaluation-stage code is never published as the test runtime's code.
+
+Test observation eligibility is an additional explicit capability. A pack offer
+records whether its complete LIR call closure contains an expect or an opaque
+external body. Only a closure proven free of both can serve a test consumer.
+An ordinary dev expect reports failure but does not count success; a test expect
+uses a command-local site index. Neither is interchangeable with the other.
+Test-instrumented closures are not published, and their bodies remain available
+for the current plan's counters. Generic `dbg` calls use the invocation's host
+hooks and remain shareable. Shared specialization intersects this capability
+with CTFE's provision and still requires the identical provider on both sides.
+Frozen constants containing function relocations retain the existing pack
+withholding rule; the test image resolves their current procedures and explicit
+RC helpers before executing any root.
+Program-local Boxy runtime references remain ineligible for packs. Only the
+explicit Boxy runtime contract may initialize that runtime or construct its
+function table; the specialized runtime contract never does so.
+
+The test runner retains admitted pack bytes, carried immutable data, generated
+code, source maps and executable memory until all workers finish. Every call
+owns its observation state. Cache admission happens before body elision; missing,
+corrupt or incompatible optional entries are misses, never a reason to compile
+a missing body after admission. Publication uses only the code actually emitted
+for required tests, and complete result hits never enter this runtime consumer.
+
 ### Object Cache Store
 
 The store uses explicit logical scopes in the indexed artifact catalog.
@@ -2721,8 +2753,9 @@ sets are combined. Each stage's offers, with everything about its procedures
 they depend on, are gathered as soon as the stage has run, and the stage's
 code is then released: later stages and a runtime consumer read only its
 completed values and their representation metadata, so the levels' code
-never accumulates. The pack is filed beside the root module's
-dev packs under a key derived from the root module's code-generation key,
+never accumulates. The pack is filed under the program's app placement, or
+the root module's placement when there is no app, with an index key derived
+from the root module's code-generation key,
 which covers every module the program's code comes from and no runtime pack
 uses, so an edited program files a new pack beside the old one. The key also
 names the command and the optimization level its program is specialized for:

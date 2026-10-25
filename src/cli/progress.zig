@@ -53,8 +53,9 @@ const max_phases: usize = 16;
 const max_subphases: usize = 25;
 // Shared lowering and a runtime continuation each report nine lowering groups
 // and native emission. Also reserve compile-time roots, test result admission,
-// dev test emission, and completed compilation.
-const max_counter_groups: usize = 2 * 10 + 4;
+// dev test emission, completed compilation, completed test command,
+// and native test artifact cache.
+const max_counter_groups: usize = 2 * 10 + 6;
 const max_counters_per_group: usize = 32;
 /// Rows in the ranked timing list printed after the phases.
 const max_ranked_timings: usize = 10;
@@ -1019,12 +1020,14 @@ test "counter capacity includes shared runtime native and test groups" {
     reporter.recordCounters("Final test cache", &.{.{ .name = "Hits", .count = 7 }});
     reporter.recordCounters("Completed compilation", &.{.{ .name = "Hits", .count = 1 }});
     reporter.recordCounters("Dev test emission", &.{.{ .name = "Procedures emitted", .count = 3 }});
+    reporter.recordCounters("Native test artifact cache", &.{.{ .name = "Hits", .count = 1 }});
     reporter.finish();
     try testing.expectEqual(@as(usize, 20), std.mem.count(u8, buf.written(), "Compiler work"));
     try testing.expect(std.mem.find(u8, buf.written(), "Final test cache") != null);
     try testing.expect(std.mem.find(u8, buf.written(), "Completed compilation") != null);
     try testing.expect(std.mem.find(u8, buf.written(), "Compile-time roots") != null);
     try testing.expect(std.mem.find(u8, buf.written(), "Dev test emission") != null);
+    try testing.expect(std.mem.find(u8, buf.written(), "Native test artifact cache") != null);
 }
 
 test "static breakdown lists every phase with the timings flag" {

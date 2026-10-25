@@ -604,7 +604,7 @@ pub const LinkedStores = struct {
     pub fn selectionFor(allocator: Allocator, build_env: *compile.BuildEnv, root: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!Selection {
         return .{
             .modules = try packageModules(allocator, build_env, root),
-            .optimized_identity = if (optimizedPackPlacement(build_env, root)) |placement| placement.identity else null,
+            .optimized_identity = if (programPackPlacement(build_env, root)) |placement| placement.identity else null,
         };
     }
 
@@ -630,11 +630,11 @@ pub const LinkedStores = struct {
     }
 };
 
-/// The placement whose identity names the optimized pack of the program
-/// whose root module is `root_artifact`: the app's when the program has one,
-/// since every app of a platform shares the platform as its root, and
-/// otherwise the root's.
-pub fn optimizedPackPlacement(build_env: *compile.BuildEnv, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) ?compile.BuildEnv.PackPlacement {
+/// The placement for program-wide packs: the app's when the program has one,
+/// otherwise the root's. Every app of a platform shares its executable root;
+/// tests need not even load that platform. The app is the common declared owner
+/// for native CTFE packs and optimized program packs across these commands.
+pub fn programPackPlacement(build_env: *compile.BuildEnv, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) ?compile.BuildEnv.PackPlacement {
     if (build_env.getAppSemanticData()) |app| {
         if (app.checked_artifact) |artifact| return build_env.packPlacementForArtifactKey(artifact.key);
     }
@@ -728,6 +728,9 @@ pub const Pending = struct {
     linked_stores: ?*const LinkedStores = null,
     io: std.Io,
     build_env: *compile.BuildEnv,
+    /// Explicit-root commands have no executable root. Checking supplies their
+    /// complete module set before any specialization asks for an artifact.
+    explicit_artifacts: []const *const check.CheckedArtifact.CheckedModuleArtifact = &.{},
 };
 
 /// The command whose compile-time evaluation filed a compile-time pack, and
@@ -860,6 +863,7 @@ pub const LoadedPacks = struct {
     artifacts_served: u64 = 0,
     /// Bytes read from procedure, discovery and linked-object files.
     bytes_loaded: u64 = 0,
+    lookups: u64 = 0,
     /// Set until `indexPacks` runs; lookups before that register the pending
     /// store's index directories for the modules in view first.
     pending: ?Pending = null,
@@ -1066,6 +1070,7 @@ pub const LoadedPacks = struct {
                 continue;
             }
             const spec = pack.specs[offer.spec];
+            if (takes == .test_dev_code and !spec.test_compatible) continue;
             const program = ProgramPack.of(&pack.set, modules);
             const absent = self.lines_outside.get(program) orelse blk: {
                 const present = try allocator.alloc(bool, pack.set.source_files.len);
@@ -1166,7 +1171,7 @@ pub const LoadedPacks = struct {
         };
     }
 
-    /// Load every `.rpk` file in `dir_path` and index the result.
+    /// Load explicit diagnostic pack files from a directory.
     pub fn loadDir(allocator: Allocator, io: std.Io, dir_path: []const u8) LoadError!LoadedPacks {
         var self = LoadedPacks.init(allocator);
         errdefer self.deinit();
@@ -1382,6 +1387,7 @@ pub const LoadedPacks = struct {
         self.artifacts.putAssumeCapacityNoClobber(spec.key, .{ .set = &pack.set, .index = spec.artifact });
         self.specs.putAssumeCapacityNoClobber(spec.key, .{
             .identity = identity.bytes,
+            .test_compatible = spec.test_compatible,
             .comptime_root_reads = spec.comptime_root_reads,
             .rc_borrowed_params = spec.rc_borrowed_params,
             .rc_ret_borrowed = spec.rc_ret_borrowed,
@@ -1446,7 +1452,7 @@ pub const LoadedPacks = struct {
     fn loadLinked(self: *LoadedPacks, pending: Pending, stores: *const LinkedStores, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
         const modules = try packageModules(self.allocator, pending.build_env, root_artifact);
         defer self.allocator.free(modules);
-        const root_placement = optimizedPackPlacement(pending.build_env, root_artifact);
+        const root_placement = programPackPlacement(pending.build_env, root_artifact);
         for (&stores.stores) |*store| {
             for (modules) |module| {
                 try self.loadStoredObject(store, store.packIdentity(.pkg, module.identity, module.key));
@@ -1465,6 +1471,14 @@ pub const LoadedPacks = struct {
     fn ensureLoaded(self: *LoadedPacks) void {
         if (self.state != .pending) return;
         const pending = self.pending orelse return;
+        if (pending.explicit_artifacts.len != 0) {
+            self.loadExplicitModules(pending, false) catch |err| {
+                self.unavailable(err);
+                return;
+            };
+            self.indexPacks() catch |err| self.unavailable(err);
+            return;
+        }
         // The first lookups come from the compile-time evaluator's program,
         // which lowers inside checking, after the root module's artifact
         // exists and before the build has declared its artifacts final.
@@ -1485,6 +1499,14 @@ pub const LoadedPacks = struct {
     fn ensureDiscoveryLoaded(self: *LoadedPacks) void {
         if (self.discovery_state != .pending) return;
         const pending = self.pending orelse return;
+        if (pending.explicit_artifacts.len != 0) {
+            self.loadExplicitModules(pending, true) catch {
+                self.discovery_state = .unavailable;
+                return;
+            };
+            self.discovery_state = .ready;
+            return;
+        }
         const root_semantic = pending.build_env.getExecutableRootSemanticData() orelse return;
         const root_artifact = root_semantic.checked_artifact orelse return;
         self.loadPendingDiscovery(pending, root_artifact) catch |err| {
@@ -1493,6 +1515,18 @@ pub const LoadedPacks = struct {
             return;
         };
         self.discovery_state = .ready;
+    }
+
+    fn loadExplicitModules(self: *LoadedPacks, pending: Pending, discovery: bool) LoadError!void {
+        const store = pending.store orelse return;
+        for (pending.explicit_artifacts) |artifact| {
+            const placement = pending.build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
+            if (discovery) {
+                try store.loadIdentityDiscovery(pending.io, self, placement.origin, placement.identity);
+            } else {
+                try store.loadIdentity(pending.io, self, placement.origin, placement.identity);
+            }
+        }
     }
 
     fn loadPendingDiscovery(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
@@ -1743,6 +1777,7 @@ pub const LoadedPacks = struct {
     fn findSpec(context: *anyopaque, key: [32]u8, takes: Common.SpecCacheTakes, modules: Common.ProgramModules) ?Common.SpecCacheHit {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
         if (self.defer_code_lookup) return null;
+        self.lookups +|= 1;
         self.ensureLoaded();
         if (self.state != .ready) return null;
         // An optimized object serves a consumer whose code is linked ahead
@@ -1757,6 +1792,7 @@ pub const LoadedPacks = struct {
         if (!takes.takesDevCode()) return null;
         self.index_stats.requested += 1;
         var eligible = self.specs.contains(key);
+        if (eligible and takes == .test_dev_code and !self.specs.get(key).?.test_compatible) eligible = false;
         if (eligible and self.linesOutsideProgram(key, modules)) {
             self.index_stats.source_ineligible += 1;
             eligible = false;
@@ -1799,6 +1835,10 @@ pub const LoadedPacks = struct {
     /// location in a module version outside `modules`.
     fn linesOutsideProgram(self: *LoadedPacks, key: [32]u8, modules: Common.ProgramModules) bool {
         const located = self.artifacts.get(key) orelse return false;
+        return self.artifactLinesOutsideProgram(located, modules);
+    }
+
+    fn artifactLinesOutsideProgram(self: *LoadedPacks, located: backend.dev.LocatedArtifact, modules: Common.ProgramModules) bool {
         const set = located.set;
         var all_present = true;
         for (set.source_files) |identity| all_present = all_present and Common.programHasModule(modules, identity);
@@ -1873,6 +1913,82 @@ pub const LoadedPacks = struct {
 
 fn nameLessThan(_: void, lhs: []u8, rhs: []u8) bool {
     return std.mem.order(u8, lhs, rhs) == .lt;
+}
+
+test "native test indexed admission pins verified payloads and rejects observation ABI mismatches" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root);
+    var store = try Store.init(a, .{ .cache_dir = root, .roc_ctx = CoreCtx.default(a, a, io) }, RocTarget.detectNative(), "dev");
+    defer store.deinit();
+    const identity: [32]u8 = @splat(7);
+    const key: [32]u8 = @splat(11);
+    const set: backend.dev.ProcArtifact.Set = .{
+        .arena = undefined,
+        .artifacts = &.{.{ .kind = .{ .proc = lir.ProcIdentity.forTest(1) }, .code = "\xc3", .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} }},
+    };
+    var spec: PackFile.SpecEntry = .{
+        .key = key,
+        .artifact = 0,
+        .test_compatible = true,
+        .rc_borrowed_params = 0,
+        .rc_ret_borrowed = false,
+        .rc_ret_lenders = 0,
+        .rc_read_only_params = 0,
+        .rc_ret_unique = false,
+        .rc_ret_unique_fields = 0,
+        .rc_ret_conditions = &.{},
+    };
+    for ([_]bool{ true, false }) |compatible| {
+        spec.test_compatible = compatible;
+        spec.key = if (compatible) key else @splat(12);
+        try store.writeIndexed(.local, identity, &set, &.{spec});
+        // Repeated publication reuses both immutable files.
+        try store.writeIndexed(.local, identity, &set, &.{spec});
+    }
+    var packs = LoadedPacks.init(a);
+    defer packs.deinit();
+    try store.loadIdentity(io, &packs, .local, identity);
+    try packs.indexPacks();
+    try std.testing.expectEqual(@as(u64, 0), packs.index_stats.payload_files);
+    const lookup = packs.specCacheLookup();
+    try std.testing.expect(lookup.lookup(@splat(99), .test_dev_code, &.{}) == null);
+    try std.testing.expectEqual(@as(u64, 0), packs.index_stats.payload_files);
+    try std.testing.expect(lookup.lookup(@splat(12), .test_dev_code, &.{}) == null);
+    try std.testing.expect(lookup.lookup(@splat(12), .dev_code, &.{}) != null);
+    try std.testing.expect(lookup.lookup(key, .test_dev_code, &.{}) != null);
+    try std.testing.expectEqual(@as(u64, 1), packs.index_stats.payload_files);
+    // Eviction cannot revoke a promise already made to specialization.
+    const payload_bytes = try Index.payload(a, set.artifacts[0]);
+    defer a.free(payload_bytes);
+    const payload_id = store.indexedIdentity(.local, identity, Index.digest(payload_bytes), .payload);
+    try store.native.invalidate(payload_id);
+    const source = packs.spliceSource();
+    try std.testing.expect(source.find(source.context, key) != null);
+    try std.testing.expect(lookup.lookup(key, .test_dev_code, &.{}) != null);
+    var missing = LoadedPacks.init(a);
+    defer missing.deinit();
+    try store.loadIdentity(io, &missing, .local, identity);
+    try missing.indexPacks();
+    try std.testing.expect(missing.specCacheLookup().lookup(key, .test_dev_code, &.{}) == null);
+
+    try store.writeIndexed(.local, identity, &set, &.{spec});
+    var corrupt = LoadedPacks.init(a);
+    defer corrupt.deinit();
+    try store.loadIdentity(io, &corrupt, .local, identity);
+    try corrupt.indexPacks();
+    try store.native.write(payload_id, "interrupted payload", store.native.now());
+    try std.testing.expect(corrupt.specCacheLookup().lookup(spec.key, .dev_code, &.{}) == null);
+    try std.testing.expectEqual(@as(u64, 0), corrupt.hits);
+    try store.writeIndexed(.local, identity, &set, &.{spec});
+    var repaired = LoadedPacks.init(a);
+    defer repaired.deinit();
+    try store.loadIdentity(io, &repaired, .local, identity);
+    try repaired.indexPacks();
+    try std.testing.expect(repaired.specCacheLookup().lookup(spec.key, .dev_code, &.{}) != null);
 }
 
 test "discovery summaries round-trip and a file of another version is no offer" {

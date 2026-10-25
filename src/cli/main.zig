@@ -314,6 +314,7 @@ const CompileTimeObjectCache = struct {
     /// evaluation's levels run, when the command publishes one.
     pack_parts: ?CompileTimePackParts = null,
     build_env: ?*BuildEnv = null,
+    explicit_artifacts: []const *const check.CheckedArtifact.CheckedModuleArtifact = &.{},
 
     fn bind(context: *anyopaque, build_env: *BuildEnv) void {
         const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
@@ -323,6 +324,7 @@ const CompileTimeObjectCache = struct {
             .linked_stores = self.linked_stores,
             .io = self.io,
             .build_env = build_env,
+            .explicit_artifacts = self.explicit_artifacts,
         };
     }
 
@@ -358,7 +360,7 @@ const CompileTimePackParts = struct {
         const build_env = cache.build_env orelse return null;
         const root_semantic = build_env.getExecutableRootSemanticData() orelse return null;
         const root_artifact = root_semantic.checked_artifact orelse return null;
-        const placement = build_env.packPlacementForArtifactKey(root_artifact.key) orelse return null;
+        const placement = pack_store.programPackPlacement(build_env, root_artifact) orelse return null;
         const key = pack_store.compileTimePackKey(root_artifact.codeGenerationKey().bytes, publisher);
         if (try cache.store.hasIndexed(placement.origin, placement.identity, key)) return null;
         return .{ .placement = placement, .key = key };
@@ -8539,7 +8541,7 @@ fn writeOptimizedPacks(
 ) CliMainError!void {
     if (comptime !llvm_available) return;
     if (args.no_cache or args.fuzz) return;
-    const placement = pack_store.optimizedPackPlacement(build_env, root_artifact) orelse return;
+    const placement = pack_store.programPackPlacement(build_env, root_artifact) orelse return;
     var store = pack_store.Store.init(ctx.gpa, .{ .enabled = true, .verbose = args.verbose, .roc_ctx = ctx.coreCtx() }, target, @tagName(args.opt)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.NoHomeDirectory => return,
@@ -9142,6 +9144,8 @@ const PackOffers = struct {
     /// differently, so evaluation's code for an entry that reads one is not
     /// the code another program compiles, and such an entry is withheld.
     evaluation: bool,
+    observation_independent: []const bool = &.{},
+    offered_count: ?*usize = null,
     /// Every keyed specialization, in program order.
     keyed: std.ArrayList(Candidate) = .empty,
     /// Every procedure offered by its identity (`Common.procIdentityCacheKey`),
@@ -9160,6 +9164,7 @@ const PackOffers = struct {
         reads: lir.CheckedPipeline.SpecComptimeReads.Lookup,
         /// A rule read from the program's code withholds it.
         withheld: bool,
+        test_compatible: bool,
         rc_borrowed_params: u64,
         rc_ret_borrowed: bool,
         rc_ret_lenders: u64,
@@ -9196,6 +9201,10 @@ const PackOffers = struct {
     ) Allocator.Error!void {
         const allocator = self.literal_converters.allocator;
         const store = &lowered.lir_result.store;
+        const independent = try lir.PackProgram.observationIndependentProcs(allocator, store);
+        defer allocator.free(independent);
+        self.observation_independent = independent;
+        defer self.observation_independent = &.{};
         const converting = try lir.PackProgram.literalConvertingProcs(allocator, store);
         defer allocator.free(converting);
         for (store.getProcSpecs(), converting) |proc, converts| {
@@ -9247,7 +9256,13 @@ const PackOffers = struct {
         // entry rather than calling it, and has no body for an entry, so it
         // sees the entry outside every call cycle and would reach it with an
         // ordinary call where the cycle needs a frame-replacing one.
-        const withheld = !reads.offerable or
+        const closure = try lir.PackProgram.procCallClosure(self.literal_converters.allocator, store, id);
+        defer self.literal_converters.allocator.free(closure);
+        var test_compatible = true;
+        for (closure, self.observation_independent) |reached, independent| {
+            if (reached and !independent) test_compatible = false;
+        }
+        const withheld = (lowered.lir_result.expect_sites.items.len != 0 and !test_compatible) or !reads.offerable or
             (self.evaluation and reads.evaluated) or
             proc.rc_variant_demandable or
             try procReachesLinkedEntry(self.literal_converters.allocator, store, id) or
@@ -9264,6 +9279,7 @@ const PackOffers = struct {
             .identity = proc.identity,
             .reads = .{ .offerable = reads.offerable, .reads = try arena.dupe(lir.CheckedPipeline.ComptimeRootRead, reads.reads), .evaluated = reads.evaluated },
             .withheld = withheld,
+            .test_compatible = test_compatible,
             .rc_borrowed_params = proc.rc_borrowed_params,
             .rc_ret_borrowed = proc.rc_ret_borrowed,
             .rc_ret_lenders = proc.rc_ret_lenders,
@@ -9309,6 +9325,7 @@ const PackOffers = struct {
                 try specs.append(allocator, .{
                     .key = offer.key,
                     .artifact = artifact,
+                    .test_compatible = offer.test_compatible,
                     .comptime_root_reads = offer.reads.reads,
                     .rc_borrowed_params = offer.rc_borrowed_params,
                     .rc_ret_borrowed = offer.rc_ret_borrowed,
@@ -9323,6 +9340,7 @@ const PackOffers = struct {
         if (trace) {
             std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld\n", .{ set.artifacts.len, specs.items.len, withheld });
         }
+        if (self.offered_count) |out| out.* = specs.items.len;
         return specs.toOwnedSlice(allocator);
     }
 
@@ -14256,7 +14274,7 @@ fn checkedRuntimeLoweringConfig(
             .consume_dead_boxes = switch (roots) {
                 .linked_output => true,
                 .platform_entrypoints => |artifact| artifact == .dev_run_image,
-                .test_plan => false,
+                .test_plan => opt == .dev,
             },
             .inline_expects = switch (roots) {
                 .test_plan => .run,
@@ -14291,6 +14309,19 @@ fn devCapturePrefix(roots: CheckedLirRoots, opt: cli_args.OptLevel, target: RocT
     }
     const arch = target.toCpuArch();
     return if (arch == .x86_64 or arch == .aarch64) @import("builtins").erased_callable.hot_reload_capture_prefix_size else 0;
+}
+
+test "native test generic procedures use the ordinary native dev representation and ownership policy" {
+    const native = RocTarget.detectNative();
+    const tests = checkedRuntimeLoweringConfig(.{ .test_plan = .{ .requests = &.{}, .metadata = &.{} } }, .dev, .lss, native, false);
+    const build = checkedRuntimeLoweringConfig(.linked_output, .dev, .lss, native, false);
+    try std.testing.expectEqualDeep(lir.CheckedPipeline.LirPolicy.fromTarget(build.target), lir.CheckedPipeline.LirPolicy.fromTarget(tests.target));
+    try std.testing.expectEqualDeep(lir.CheckedPipeline.SolvedPolicy.fromTarget(build.target), lir.CheckedPipeline.SolvedPolicy.fromTarget(tests.target));
+    try std.testing.expectEqual(build.target.erased_capture_prefix, tests.target.erased_capture_prefix);
+    try std.testing.expectEqual(build.target.target_usize, tests.target.target_usize);
+    try std.testing.expectEqual(build.target.inline_expects, tests.target.inline_expects);
+    try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, tests.target.code_provision);
+    try std.testing.expect(tests.target.spec_cache == null);
 }
 
 /// Native builds promise object provision only when they have an object
@@ -15112,6 +15143,35 @@ fn runCompiledTestRoots(
     try appendInlineExpectResults(ctx, &lowered.lir_result.store, lowered.lir_result.expect_sites.items, eval_batch.expect_counts, results, summary, source_modules);
 }
 
+/// Publication borrows the final runtime continuation, never evaluation LIR.
+const NativeTestPublication = struct {
+    ctx: *CliCtx,
+    cache: *CompileTimeObjectCache,
+    program: *const lir.CheckedPipeline.LoweredProgram,
+    placement: BuildEnv.PackPlacement,
+
+    fn accept(raw: *anyopaque, set: *const backend.dev.ProcArtifact.Set) Allocator.Error!void {
+        const self: *@This() = @ptrCast(@alignCast(raw));
+        const reads = if (self.program.spec_comptime_reads) |*reads| reads else base.invariant("native test publication requires final runtime dependency metadata", .{});
+        var offers = PackOffers.init(self.ctx.gpa, false);
+        defer offers.deinit();
+        var offered: usize = 0;
+        offers.offered_count = &offered;
+        try offers.addProgram(self.program, reads);
+        // Normalize static names before sharing the code with another program.
+        var normalized = try backend.dev.ProcArtifact.combineDistinct(self.ctx.gpa, &.{set});
+        defer normalized.deinit();
+        const specs = try offers.entries(self.ctx.gpa, &normalized);
+        defer self.ctx.gpa.free(specs);
+        if (offered == 0) return;
+        self.cache.store.writeIndexed(self.placement.origin, self.placement.identity, &normalized, specs) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.PackWriteFailed => return,
+        };
+        self.cache.packs.refreshIndex();
+    }
+};
+
 fn lowerPlannedTestModule(
     ctx: *CliCtx,
     shared: *lir.CheckedPipeline.LoweredProgram,
@@ -15191,6 +15251,7 @@ fn runCompiledLoweredTestModulesOnce(
     max_workers: ?usize,
     live_output: ?*CliOptimizedLiveTestOutput,
     source_modules: *const CliTestSourceModuleMap,
+    native_artifacts: ?eval.Inspected.DevTestArtifacts,
 ) ReportRenderError!void {
     if (lowered_modules.len == 0) return;
 
@@ -15250,7 +15311,7 @@ fn runCompiledLoweredTestModulesOnce(
     defer if (live_output) |live| live.clearRuns();
 
     var eval_batch = (switch (mode) {
-        .dev => eval.Inspected.devEvalSharedBoolRootModules(ctx.gpa, bool_modules.items, dev_timing, max_workers),
+        .dev => eval.Inspected.devEvalSharedBoolRootModulesWithArtifacts(ctx.gpa, bool_modules.items, dev_timing, max_workers, native_artifacts),
         .llvm_size, .llvm_speed => eval.Inspected.llvmEvalSharedBoolRootModules(
             ctx.gpa,
             bool_modules.items,
@@ -15434,6 +15495,7 @@ fn runCompiledTestPlan(
     total: *CliTestRunSummary,
     live_output: ?*CliOptimizedLiveTestOutput,
     source_modules: *const CliTestSourceModuleMap,
+    native_artifacts: ?eval.Inspected.DevTestArtifacts,
 ) (ReportRenderError || lir.CheckedPipeline.HostedBindingError || error{NoHomeDirectory})!void {
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
@@ -15474,7 +15536,7 @@ fn runCompiledTestPlan(
         );
     }
 
-    try runCompiledLoweredTestModulesOnce(ctx, mode, dev_timing, lowered_modules.items, fresh_results, summaries, max_workers, live_output, source_modules);
+    try runCompiledLoweredTestModulesOnce(ctx, mode, dev_timing, lowered_modules.items, fresh_results, summaries, max_workers, live_output, source_modules, native_artifacts);
 
     for (lowered_modules.items) |*lowered_module| {
         const planned = &test_plan.modules[lowered_module.planned_index];
@@ -16736,6 +16798,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     defer test_plan.deinit(ctx.gpa);
 
     const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    reporter.begin("Test Planning");
     for (test_plan.modules) |*planned| {
         if (try loadCachedCliTestResults(
             ctx,
@@ -16751,6 +16814,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             planned.cached_summary = cached.summary;
         }
     }
+    reporter.end();
     reporter.recordCounters("Test result cache", &cliTestCacheCounters(cliTestCacheStats(&test_plan)));
 
     var discovery_requests = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
@@ -16794,6 +16858,19 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         RocTarget.detectNative(),
         false,
     );
+    const native_test_cache = if (backend.host_lir_codegen_available and specialization_strategy == .lss and runtime_requests.items.len != 0)
+        sharedCompileTimeObjectCache(&build_env, RocTarget.detectNative(), args.opt)
+    else
+        null;
+    var native_cache_modules = std.ArrayList(*const check.CheckedArtifact.CheckedModuleArtifact).empty;
+    defer native_cache_modules.deinit(ctx.gpa);
+    if (native_test_cache) |cache| {
+        for (modules) |module| if (module.semantic.checked_artifact) |artifact| try native_cache_modules.append(ctx.gpa, artifact);
+        cache.explicit_artifacts = native_cache_modules.items;
+        runtime_config.target.spec_cache = cache.packs.specCacheLookup();
+        runtime_config.target.code_provision = .host_test_dev_objects;
+        runtime_config.target.spec_comptime_reads = true;
+    }
     runtime_config.explicit_roots = runtime_roots;
     runtime_config.compile_time_discovery_roots = .{
         .requests = discovery_requests.items,
@@ -16851,6 +16928,20 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         };
         if (shared_test_program.?.frozen_static_data) |*previous| previous.deinit();
         shared_test_program.?.frozen_static_data = .{ .allocator = ctx.gpa, .exports = test_static_data };
+    }
+
+    var native_publication: ?NativeTestPublication = null;
+    var native_artifacts: ?eval.Inspected.DevTestArtifacts = if (args.opt == .dev and specialization_strategy == .lss) .{
+        .executor = build_env.postCheckExecutor(),
+    } else null;
+    if (native_test_cache) |cache| {
+        native_artifacts.?.splice_source = cache.packs.spliceSource();
+        if (shared_test_program) |*program| {
+            if (build_env.packPlacementForArtifactKey(test_plan.modules[0].artifact.key)) |placement| {
+                native_publication = .{ .ctx = ctx, .cache = cache, .program = program, .placement = placement };
+                native_artifacts.?.publication = .{ .context = &native_publication.?, .accept = NativeTestPublication.accept };
+            }
+        }
     }
 
     const test_mode = cliTestExecutionMode(args.opt);
@@ -16933,6 +17024,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             &total,
             if (live_output) |*output| output else null,
             &source_modules,
+            native_artifacts,
         ),
         .interpreter => {
             for (test_plan.modules) |*planned| {
@@ -16980,6 +17072,13 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     reporter.end();
     recordPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
     if (test_mode == .dev) recordDevTestExecution(&reporter, &dev_timing);
+    if (native_test_cache) |cache| reporter.recordCounters("Native test artifact cache", &.{
+        .{ .name = "Lookups", .count = cache.packs.lookups },
+        .{ .name = "Hits", .count = cache.packs.hits },
+        .{ .name = "Misses", .count = cache.packs.lookups - cache.packs.hits },
+        .{ .name = "Payloads read", .count = cache.packs.index_stats.payload_files },
+        .{ .name = "Bytes read", .count = cache.packs.bytes_loaded },
+    });
     reporter.finish();
 
     // Calculate elapsed time
@@ -18479,6 +18578,10 @@ fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test
         snapshot.entrypoint_codegen_ns +|
         snapshot.executable_memory_ns +|
         snapshot.root_execution_ns;
+    reporter.recordCounters("Native test procedures", &.{
+        .{ .name = "Emitted", .count = snapshot.procedures_emitted },
+        .{ .name = "Spliced", .count = snapshot.procedures_spliced },
+    });
     reporter.recordCompletedWithBreakdown(
         "Dev Codegen + Execution",
         total_ns,
