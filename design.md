@@ -17642,7 +17642,7 @@ reuse hits, invalidations, lazy expansion and unification. Peak fact counts and
 payload bytes account for certificate arrays and table payload capacity (allocator
 metadata and table control bytes are excluded); allocator tests separately
 assert that warmed repetition performs no allocation.
-The issue 12616 interleaving fixtures settle five completion pairs and six
+On x86_64, the issue 12616 interleaving fixtures settle five completion pairs and six
 inhabitation nodes into 12 facts (4,176 accounted proof bytes; 6,600 total
 query-owned bytes including scratch, across 49 initial allocations), and three
 compatibility pairs into three facts (1,928 accounted proof bytes; 2,500 total
