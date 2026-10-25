@@ -2752,6 +2752,59 @@ object is linked with the platform's current inputs. A build that reports an err
 does a program that links Boxy runtime inputs or optimized pack objects,
 which the record does not carry.
 
+#### Native link preparation
+
+A recorded program is a checksummed binary manifest of link facts and the
+content digest and length of its separately addressable object, not an envelope
+containing another copy of that object. Native objects, including compiler-owned
+builtins, startup and support objects, live beside these manifests in the same
+compiler/format/actual-target/optimization namespace. Their names are BLAKE3
+content digests. A cold build writes the backend's bytes once and publishes a
+directory entry atomically. No writer truncates a published inode.
+
+Embedded runtime-object digests and the fixed Windows stack-probe object are
+computed when the compiler is built, rather than regenerated for each link.
+Cached objects are still validated against their content identity (or against
+the embedded bytes already retained by the compiler), so same-size corruption
+cannot authorize a hit. Procedure-domain sharing never changes this full-target
+namespace: manifests and raw final-link objects both use the output store root.
+
+Before validating a cached object's length and digest, a build hard-links it
+into its unique scratch directory on the cache filesystem. Those names pin the
+objects through linking and output finalization, independently of cache
+eviction. On Windows a pin is a second NTFS name added through
+`FileLinkInformation` without replacement, opened with no data access and every
+sharing mode, so pinning never conflicts with readers or replaces a name. The invocation holds `link.lock` in that scratch directory; scratch
+cleanup skips a held lock, and an abandoned directory ages out after the OS
+releases its owner's lock. Missing, corrupt or incompatible objects are cache
+misses. Manifests publish atomically after the object. The executable is always
+linked anew, even when it already exists.
+
+Local platform inputs have no content identity supplied by their publisher.
+They are inspected on every build; path, size and timestamps never key symbol
+metadata. Inspection reads bounded object headers and symbol/string tables with
+positional reads, retaining their bytes only for the current archive member.
+It does not map mutable local files: truncation must produce an incomplete scan,
+never a mapping fault. Verification stops precisely when its required-symbol
+set is empty, including within object symbol tables. Export discovery visits
+every member, sharing the same retained ranges with verification. Unsupported
+formats leave missing-symbol results non-authoritative, as before; the linker
+still validates the actual inputs.
+
+Platform publishers must atomically replace complete inputs. A build checks
+file identity, size and change/modification state before inspection, before LLD,
+and after linking; a change fails the build. These checks detect concurrent
+publication, not authorize cross-build reuse. In-place mutation while LLD is
+reading an input is outside the supported publication contract. Link order,
+roots, exports, lazy archives, ABI and LLD parallelism are unchanged.
+
+Requested timing output separates platform input validation, object
+materialization, host inspection, argument preparation, embedded LLD and output
+finalization. These are wall times, not summed linker worker times. Counters
+report object bytes written/reused/validated, host bytes copied, peak retained
+host bytes, and archive members and symbol tables visited. Ordinary successful
+builds produce no new diagnostic output.
+
 ### Demand-Driven Compile-Time Evaluation
 
 A build evaluates only the compile-time roots its program demands. A root is

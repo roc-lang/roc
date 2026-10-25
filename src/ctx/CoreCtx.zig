@@ -96,6 +96,11 @@ pub const VTable = struct {
     /// Atomically rename `old_path` to `new_path`.
     rename: *const fn (?*anyopaque, std.Io, []const u8, []const u8) RenameError!void,
 
+    /// Add `new_path` as another name for the file `old_path` names, without
+    /// replacing an existing `new_path` or following a final symbolic link.
+    /// Defaults to `error.OperationUnsupported` for backends without hard links.
+    hardLink: *const fn (?*anyopaque, std.Io, []const u8, []const u8) HardLinkError!void = &missingHardLink,
+
     /// Look up environment variable `key`. Caller owns the returned slice.
     getEnvVar: *const fn (?*anyopaque, std.Io, []const u8, Allocator) GetEnvVarError![]u8,
 
@@ -280,6 +285,12 @@ pub fn rename(self: Self, old_path: []const u8, new_path: []const u8) RenameErro
     return self.vtable.rename(self.ctx, self.std_io, old_path, new_path);
 }
 
+/// Add `new_path` as another name for the file `old_path` names. An existing
+/// `new_path` is never replaced: it fails with `error.PathAlreadyExists`.
+pub fn hardLink(self: Self, old_path: []const u8, new_path: []const u8) HardLinkError!void {
+    return self.vtable.hardLink(self.ctx, self.std_io, old_path, new_path);
+}
+
 /// Look up environment variable `key`. Caller owns the returned slice.
 pub fn getEnvVar(self: Self, key: []const u8, allocator: Allocator) GetEnvVarError![]u8 {
     return self.vtable.getEnvVar(self.ctx, self.std_io, key, allocator);
@@ -408,6 +419,9 @@ pub const MakePathError = std.Io.Dir.CreateDirPathError || error{
 pub const RenameError = std.Io.Dir.RenameError || error{
     IoError,
 };
+
+/// Errors that can occur when adding a hard link to a file.
+pub const HardLinkError = std.Io.Dir.HardLinkError;
 
 /// Errors that can occur when deleting a file or directory.
 pub const DeleteError = error{
@@ -543,6 +557,7 @@ const os_vtable = VTable{
     .canonicalize = &osCanonicalize,
     .makePath = &osMakePath,
     .rename = &osRename,
+    .hardLink = &osHardLink,
     .getEnvVar = &osGetEnvVar,
     .queryEnvVar = &osQueryEnvVar,
     .fetchUrl = &osFetchUrl,
@@ -1046,6 +1061,104 @@ fn osMakePath(_: ?*anyopaque, std_io: std.Io, path: []const u8) MakePathError!vo
 
 fn osRename(_: ?*anyopaque, std_io: std.Io, old_path: []const u8, new_path: []const u8) RenameError!void {
     return std.Io.Dir.cwd().rename(old_path, std.Io.Dir.cwd(), new_path, std_io);
+}
+
+fn osHardLink(_: ?*anyopaque, std_io: std.Io, old_path: []const u8, new_path: []const u8) HardLinkError!void {
+    if (comptime builtin.os.tag == .windows) return windowsHardLink(old_path, new_path);
+    return std.Io.Dir.cwd().hardLink(old_path, .cwd(), new_path, std_io, .{});
+}
+
+/// `std.Io` reports hard links as unsupported on Windows, so this asks NTFS
+/// directly, as `CreateHardLinkW` does: open the existing file without data
+/// access, sharing every mode so open readers and linkers are unaffected, and
+/// add the new name with `FileLinkInformation`. ReplaceIfExists is false, so an
+/// existing name is never unlinked or replaced; it fails as a collision. The
+/// new name refers to the same file record, so removing or renaming any other
+/// name leaves the file's bytes reachable through it.
+fn windowsHardLink(old_path: []const u8, new_path: []const u8) HardLinkError!void {
+    const w = std.os.windows;
+    const cwd = std.Io.Dir.cwd().handle;
+    const old_w = try std.Io.Threaded.sliceToPrefixedFileW(cwd, old_path, .{});
+    const new_w = try std.Io.Threaded.sliceToPrefixedFileW(cwd, new_path, .{});
+    const attributes: w.OBJECT.ATTRIBUTES = .{
+        .RootDirectory = if (std.fs.path.isAbsoluteWindowsWtf16(old_w.span())) null else cwd,
+        .ObjectName = @constCast(&old_w.string()),
+    };
+    var io_status: w.IO_STATUS_BLOCK = undefined;
+    var handle: w.HANDLE = undefined;
+    const opened = w.ntdll.NtCreateFile(
+        &handle,
+        .{
+            .SPECIFIC = .{ .FILE = .{ .WRITE_ATTRIBUTES = true } },
+            .STANDARD = .{ .SYNCHRONIZE = true },
+        },
+        &attributes,
+        &io_status,
+        null,
+        .{ .NORMAL = true },
+        .VALID_FLAGS,
+        .OPEN,
+        .{
+            .NON_DIRECTORY_FILE = true,
+            .IO = .SYNCHRONOUS_NONALERT,
+            .OPEN_REPARSE_POINT = true,
+        },
+        null,
+        0,
+    );
+    if (opened != .SUCCESS) return windowsHardLinkFailure(opened);
+    defer w.CloseHandle(handle);
+
+    // FILE_LINK_INFORMATION: ReplaceIfExists (a BOOLEAN padded to the
+    // pointer's alignment), RootDirectory, FileNameLength, FileName.
+    const LinkInformation = extern struct {
+        replace_if_exists: w.BOOLEAN,
+        root_directory: ?w.HANDLE,
+        file_name_length: w.ULONG,
+        file_name: [w.PATH_MAX_WIDE]w.WCHAR,
+    };
+    const new_name = new_w.span();
+    var info: LinkInformation = .{
+        .replace_if_exists = .FALSE,
+        .root_directory = if (std.fs.path.isAbsoluteWindowsWtf16(new_name)) null else cwd,
+        .file_name_length = @intCast(new_name.len * @sizeOf(w.WCHAR)),
+        .file_name = undefined,
+    };
+    @memcpy(info.file_name[0..new_name.len], new_name);
+    // NtSetInformationFile rejects a length below the documented struct's
+    // ABI size, whose FileName holds one character.
+    const documented_size = std.mem.alignForward(usize, @offsetOf(LinkInformation, "file_name") + @sizeOf(w.WCHAR), @alignOf(LinkInformation));
+    const length = @max(documented_size, @offsetOf(LinkInformation, "file_name") + info.file_name_length);
+    const linked = w.ntdll.NtSetInformationFile(handle, &io_status, &info, @intCast(length), .Link);
+    if (linked != .SUCCESS) return windowsHardLinkFailure(linked);
+}
+
+/// The failure an unsuccessful status from opening the existing file or adding
+/// its new name reports. NTSTATUS is an open set of codes, so this is a table of
+/// the documented causes; every other status is unexpected.
+fn windowsHardLinkFailure(status: std.os.windows.NTSTATUS) HardLinkError {
+    const causes = [_]struct { std.os.windows.NTSTATUS, HardLinkError }{
+        .{ .OBJECT_NAME_COLLISION, error.PathAlreadyExists },
+        .{ .OBJECT_NAME_NOT_FOUND, error.FileNotFound },
+        .{ .OBJECT_PATH_NOT_FOUND, error.FileNotFound },
+        .{ .DELETE_PENDING, error.FileNotFound },
+        .{ .OBJECT_NAME_INVALID, error.BadPathName },
+        .{ .ACCESS_DENIED, error.AccessDenied },
+        .{ .SHARING_VIOLATION, error.AccessDenied },
+        .{ .NOT_A_DIRECTORY, error.NotDir },
+        .{ .NOT_SAME_DEVICE, error.CrossDevice },
+        .{ .TOO_MANY_LINKS, error.LinkQuotaExceeded },
+        .{ .DISK_FULL, error.NoSpaceLeft },
+        .{ .MEDIA_WRITE_PROTECTED, error.ReadOnlyFileSystem },
+        .{ .NOT_SUPPORTED, error.OperationUnsupported },
+        .{ .INVALID_DEVICE_REQUEST, error.OperationUnsupported },
+    };
+    for (causes) |cause| if (cause[0] == status) return cause[1];
+    return std.os.windows.unexpectedStatus(status);
+}
+
+fn missingHardLink(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) HardLinkError!void {
+    return error.OperationUnsupported;
 }
 
 fn osGetEnvVar(_: ?*anyopaque, _: std.Io, key: []const u8, allocator: Allocator) GetEnvVarError![]u8 {
@@ -1605,6 +1718,40 @@ test "OS filesystem mutations preserve NotDir" {
     try std.testing.expectError(error.NotDir, fs.writeFile(blocked_path, "data"));
     try std.testing.expectError(error.NotDir, fs.makePath(blocked_path));
     try std.testing.expectError(error.NotDir, fs.rename(source_path, blocked_path));
+}
+
+test "OS hardLink names one file through removal of other names and never replaces a name" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const fs = os(allocator, a, io);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    const original = try std.fs.path.join(a, &.{ root, "original" });
+    const alias = try std.fs.path.join(a, &.{ root, "alias" });
+    const pin = try std.fs.path.join(a, &.{ root, "pin" });
+    const other = try std.fs.path.join(a, &.{ root, "other" });
+    try fs.writeFile(original, "linked bytes");
+    try fs.writeFile(other, "other bytes");
+
+    try fs.hardLink(original, alias);
+    try std.testing.expectError(error.PathAlreadyExists, fs.hardLink(original, other));
+    try std.testing.expectEqualStrings("other bytes", try fs.readFile(other, a));
+    try std.testing.expectError(error.FileNotFound, fs.hardLink(try std.fs.path.join(a, &.{ root, "missing" }), pin));
+
+    // A reader keeps its handle while the file gains a name and loses two.
+    const reader = try std.Io.Dir.cwd().openFile(io, alias, .{});
+    defer reader.close(io);
+    try fs.hardLink(alias, pin);
+    try fs.deleteFile(original);
+    try fs.deleteFile(alias);
+    var buffer: [32]u8 = undefined;
+    const count = try reader.readPositionalAll(io, &buffer, 0);
+    try std.testing.expectEqualStrings("linked bytes", buffer[0..count]);
+    try std.testing.expectEqualStrings("linked bytes", try fs.readFile(pin, a));
 }
 
 test "OS writeFile preserves IsDir" {

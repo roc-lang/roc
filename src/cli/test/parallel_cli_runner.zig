@@ -10936,7 +10936,9 @@ fn customRecordedProgramOutput(
         .{ .source = source, .specializes = true, .stdout = "45 155\n" },
         .{ .source = source, .specializes = false, .stdout = "45 155\n" },
         .{ .source = revised, .specializes = true, .stdout = "55 155\n" },
+        .{ .source = revised, .specializes = false, .stdout = "55 155\n" },
     };
+    var cold_elf: ?[]const u8 = null;
     for (steps, 0..) |step, index| {
         std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = step.source }) catch |err|
             return customInfraFailure(allocator, timer, "failed to write app: {}", .{err});
@@ -10954,6 +10956,21 @@ fn customRecordedProgramOutput(
         const specialized = std.mem.find(u8, run.stdout, "Specializing") != null or std.mem.find(u8, run.stderr, "Specializing") != null;
         if (specialized != step.specializes) {
             return failureFromRun(allocator, timer, run, if (step.specializes) "a changed program linked recorded output" else "an unchanged program was specialized again");
+        }
+        if (!step.specializes) {
+            const written = timingCounter(run.stderr, "Link preparation", "Object bytes written") orelse
+                return failureFromRun(allocator, timer, run, "missing object materialization counters");
+            const reused = timingCounter(run.stderr, "Link preparation", "Object bytes reused") orelse
+                return failureFromRun(allocator, timer, run, "missing immutable object reuse counter");
+            if (written != 0 or reused == 0) return failureFromRun(allocator, timer, run, "a warm dev link rewrote immutable object bytes");
+            if (std.mem.find(u8, run.stderr, "Embedded LLD") == null) return failureFromRun(allocator, timer, run, "a warm dev build did not report its actual linker work");
+        }
+        if (builtin.os.tag == .linux and index < 2) {
+            const bytes = std.Io.Dir.cwd().readFileAlloc(io, exe, allocator, .unlimited) catch |err|
+                return customInfraFailure(allocator, timer, "failed to read linked ELF: {}", .{err});
+            if (cold_elf) |cold| {
+                if (!std.mem.eql(u8, cold, bytes)) return failureFromRun(allocator, timer, run, "immutable object reuse changed the linked ELF bytes");
+            } else cold_elf = bytes;
         }
         if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
             .args = &.{},
