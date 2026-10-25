@@ -151,11 +151,15 @@ pub const StaticDataId = enum(u32) { _ };
 
 /// Optional command-level test-plan metadata for a checked root request.
 pub const RootTestPlanMetadata = struct {
-    /// Exact position in the producer-owned root request sequence.
+    /// Position in the execution subset (offset when CTFE prefixes its roots).
     request_index: u32,
+    /// Original source root order; never renumbered by cache admission.
     root_order: u32,
+    /// Slot in the complete reporting plan, including cached results.
     result_index: u32,
+    /// Original source module index, independent of execution partitions.
     module_index: u32,
+    /// Original root index within its source module.
     root_index: u32,
 };
 
@@ -381,12 +385,15 @@ test "test metadata uses explicit union request positions across equal root orde
     var root: checked.RootRequest = undefined;
     root.order = 0;
     const roots: RootRequests = .{ .test_plan_metadata = &.{
-        .{ .request_index = 2, .root_order = 0, .result_index = 0, .module_index = 4, .root_index = 0 },
-        .{ .request_index = 3, .root_order = 0, .result_index = 1, .module_index = 7, .root_index = 0 },
+        .{ .request_index = 2, .root_order = 0, .result_index = 11, .module_index = 4, .root_index = 3 },
+        .{ .request_index = 3, .root_order = 0, .result_index = 29, .module_index = 7, .root_index = 5 },
     } };
     try std.testing.expect(testPlanMetadataForRoot(roots, root, 0) == null);
     try std.testing.expectEqual(@as(u32, 4), testPlanMetadataForRoot(roots, root, 2).?.module_index);
     try std.testing.expectEqual(@as(u32, 7), testPlanMetadataForRoot(roots, root, 3).?.module_index);
+    try std.testing.expectEqual(@as(u32, 11), testPlanMetadataForRoot(roots, root, 2).?.result_index);
+    try std.testing.expectEqual(@as(u32, 29), testPlanMetadataForRoot(roots, root, 3).?.result_index);
+    try std.testing.expectEqual(@as(u32, 5), testPlanMetadataForRoot(roots, root, 3).?.root_index);
 }
 
 /// A checked compile-time root, named by its module's identity bytes.

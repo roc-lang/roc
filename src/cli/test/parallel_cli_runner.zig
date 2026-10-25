@@ -507,6 +507,7 @@ const CustomCase = enum {
     build_interpreter_owns_intermediates,
     build_glibc_target_non_linux_error,
     build_windows_shared_library,
+    uncached_test_subset,
     cache_passing_results,
     cache_failing_results,
     cache_invalidated_by_source_change,
@@ -3641,6 +3642,9 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10951: explicit empty wasm32 exports are accepted", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=dev", "--no-cache" }, .roc_file = "test/wasm/issue_10951_wasm_exports/empty_exports/app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "Missing Wasm Exports" }, .{ .stream = .stderr, .text = "linker failed" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build glibc target gives helpful error on non-Linux", .body = .{ .custom = .build_glibc_target_non_linux_error } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build Shared output links a Windows DLL", .body = .{ .custom = .build_windows_shared_library } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12590: cached test roots do not enter shared compilation", .timeout_ms = 600_000, .body = .{ .custom = .uncached_test_subset } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12590: interpreter cached subsets preserve transcripts", .backend = .interpreter, .body = .{ .custom = .uncached_test_subset } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12590: optimized cached subsets preserve transcripts", .backend = .speed, .body = .{ .custom = .uncached_test_subset } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_passing_results } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches passing results (dev)", .backend = .dev, .body = .{ .custom = .cache_passing_results } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches failing results (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_failing_results } },
@@ -5287,6 +5291,7 @@ fn runCustomCase(
         .build_interpreter_owns_intermediates => customBuildInterpreterOwnsIntermediates(io, allocator, &env, &timer, timeout_ms),
         .build_glibc_target_non_linux_error => customGlibcTargetNonLinux(io, allocator, &env, &timer, timeout_ms),
         .build_windows_shared_library => customWindowsSharedLibrary(io, allocator, &env, &timer, timeout_ms),
+        .uncached_test_subset => customUncachedTestSubset(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .dev),
         .cache_passing_results => customCachePassingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_failing_results => customCacheFailingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_invalidated_by_source_change => customCacheInvalidated(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
@@ -14469,6 +14474,222 @@ fn countCompileRecords(bytes: []const u8) u32 {
         if (byte == '\n') count += 1;
     }
     return count;
+}
+
+/// Result-cache admission must bound work before specialization, not just skip
+/// root calls after a complete program has already been compiled.
+fn customUncachedTestSubset(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64, backend: OptMode) ?TestResult {
+    const dir = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "uncached-test-subset" }) catch |err|
+        return customInfraFailure(allocator, timer, "subset directory: {}", .{err});
+    std.Io.Dir.cwd().createDirPath(io, dir) catch |err|
+        return customInfraFailure(allocator, timer, "create subset directory: {}", .{err});
+    var paths: [8][]const u8 = undefined;
+    var sources: [8][]const u8 = undefined;
+    for ([_][]const u8{ "A.roc", "B.roc", "C.roc", "D.roc", "Main.roc", "Shared.roc", "Query.roc", "Literal.roc" }, 0..) |name, index| {
+        const source_path = std.fmt.allocPrint(allocator, "test/cli/uncached_test_subset/{s}", .{name}) catch |err|
+            return customInfraFailure(allocator, timer, "subset source path: {}", .{err});
+        const absolute = absoluteFromProjectRoot(allocator, source_path) catch |err|
+            return customInfraFailure(allocator, timer, "absolute subset path: {}", .{err});
+        sources[index] = std.Io.Dir.cwd().readFileAlloc(io, absolute, allocator, .limited(1024 * 1024)) catch |err|
+            return customInfraFailure(allocator, timer, "read subset fixture: {}", .{err});
+        paths[index] = std.fs.path.join(allocator, &.{ dir, name }) catch |err|
+            return customInfraFailure(allocator, timer, "staged subset path: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = paths[index], .data = sources[index] }) catch |err|
+            return customInfraFailure(allocator, timer, "write subset fixture: {}", .{err});
+    }
+    const opt_arg = backendOptArg(allocator, backend) catch |err|
+        return customInfraFailure(allocator, timer, "subset backend: {}", .{err});
+    const args = [_][]const u8{ "test", opt_arg, "--jobs=1", "--no-color", "--verbose" };
+    var timed_args: [args.len + 1][]const u8 = undefined;
+    @memcpy(timed_args[0..args.len], &args);
+    timed_args[args.len] = "--timings";
+    var uncached_args = timed_args;
+    uncached_args[args.len] = "--no-cache";
+    const baseline = switch (captureRocRun(io, allocator, env, timer, timeout_ms, .{
+        .args = &uncached_args,
+        .roc_file = paths[4],
+        .exit = .{ .code = 1 },
+        .contains = &.{.{ .stream = .stderr, .text = "value != 2" }},
+    })) {
+        .result => |run| run,
+        .failure => |failure| return failure,
+    };
+    // All-miss, all-hit, misses at each position, then disjoint misses. Two
+    // edits per mask independently exercise transcript replay and work counts.
+    for ([_]u4{ 15, 0, 1, 2, 4, 8, 5, 10 }, 0..) |mask, revision| {
+        for (0..@as(usize, if (backend == .dev) 2 else 1)) |pass| {
+            for (paths[0..4], sources[0..4], 0..) |path, source, index| {
+                if (mask & (@as(u4, 1) << @intCast(index)) == 0) continue;
+                const edited = std.fmt.allocPrint(allocator, "{s}\n# revision {d} pass {d}\n", .{ source, revision, pass }) catch |err|
+                    return customInfraFailure(allocator, timer, "subset edit: {}", .{err});
+                std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = edited }) catch |err|
+                    return customInfraFailure(allocator, timer, "write subset edit: {}", .{err});
+            }
+            const run = switch (captureRocRun(io, allocator, env, timer, timeout_ms, .{
+                .args = if (pass == 0) &args else &timed_args,
+                .roc_file = paths[4],
+                .exit = .{ .code = 1 },
+            })) {
+                .result => |run| run,
+                .failure => |failure| return failure,
+            };
+            if (pass == 0) {
+                if (expectSamePreSummaryBytes(allocator, timer, "cache-disabled", baseline, "execution subset", run)) |failure| return failure;
+            } else {
+                const misses: u64 = @popCount(mask);
+                if (timingCounter(run.stderr, "Test result cache", "Modules cached") != 4 - misses or
+                    timingCounter(run.stderr, "Test result cache", "Roots uncached") != 2 * misses or
+                    timingCounter(run.stderr, "Dev test emission", "Entrypoints emitted") != 2 * misses)
+                    return failureFromRun(allocator, timer, run, "cache hits leaked into the execution subset");
+                if (mask == 0 and timingCounter(run.stderr, "Dev test emission", "Procedures emitted") != 0)
+                    return failureFromRun(allocator, timer, run, "all-hit plan emitted runtime procedures");
+            }
+        }
+    }
+    if (backend != .dev) return null;
+    // B grows while the uncached A closure stays identical. Reporting grows;
+    // specialization, LIR passes, ARC and native emission must not grow.
+    const work = [_]struct { group: []const u8, counter: []const u8 }{
+        .{ .group = "Shared Monotype body + dispatch", .counter = "Body contexts created" },
+        .{ .group = "Dev test emission", .counter = "Lowered LIR statements" },
+        .{ .group = "ARC parallel execution", .counter = "Uniqueness statement rows" },
+        .{ .group = "ARC parallel execution", .counter = "Emission tasks committed" },
+        .{ .group = "Dev test emission", .counter = "Procedures emitted" },
+        .{ .group = "Dev test emission", .counter = "Entrypoints emitted" },
+    };
+    var original_work: [work.len]u64 = undefined;
+    for ([_]usize{ 0, 24 }, 0..) |extra_roots, size_index| {
+        var expanded = std.Io.Writer.Allocating.init(allocator);
+        defer expanded.deinit();
+        expanded.writer.writeAll(sources[1]) catch |err|
+            return customInfraFailure(allocator, timer, "expand cached module: {}", .{err});
+        for (0..extra_roots) |i| expanded.writer.print("\nexpect private_b({d}) > 0\n", .{i + 1}) catch |err|
+            return customInfraFailure(allocator, timer, "add cached root: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = paths[1], .data = expanded.written() }) catch |err|
+            return customInfraFailure(allocator, timer, "write expanded module: {}", .{err});
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &args, .roc_file = paths[4], .exit = .{ .code = 1 } })) |failure| return failure;
+        // A new stored closure value requires normalization from finalized
+        // values in both sizes, so both specialization passes are measured.
+        const new_value = std.mem.replaceOwned(u8, allocator, sources[0], "make_adder(3)", if (size_index == 0) "make_adder(4)" else "make_adder(5)") catch |err|
+            return customInfraFailure(allocator, timer, "edit stored closure: {}", .{err});
+        const edited = std.fmt.allocPrint(allocator, "{s}\n# growth revision {d}\n", .{ new_value, size_index }) catch |err|
+            return customInfraFailure(allocator, timer, "growth edit: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = paths[0], .data = edited }) catch |err|
+            return customInfraFailure(allocator, timer, "write growth edit: {}", .{err});
+        const run = switch (captureRocRun(io, allocator, env, timer, timeout_ms, .{
+            .args = &timed_args,
+            .roc_file = paths[4],
+            .exit = .{ .code = 1 },
+        })) {
+            .result => |run| run,
+            .failure => |failure| return failure,
+        };
+        if (timingCounter(run.stderr, "Test result cache", "Modules cached") != 3 or
+            timingCounter(run.stderr, "Test result cache", "Roots cached") != 6 + extra_roots)
+            return failureFromRun(allocator, timer, run, "growth fixture did not cache exactly B, C and D");
+        for (work, 0..) |counter, index| {
+            const value = timingCounter(run.stderr, counter.group, counter.counter) orelse
+                return failureFromRun(allocator, timer, run, "missing execution-subset work counter");
+            if (size_index == 0) original_work[index] = value else if (value != original_work[index])
+                return failureFromRun(allocator, timer, run, "cached-only roots changed execution-subset compilation work");
+        }
+        const fresh_baseline = switch (captureRocRun(io, allocator, env, timer, timeout_ms, .{
+            .args = &uncached_args,
+            .roc_file = paths[4],
+            .exit = .{ .code = 1 },
+        })) {
+            .result => |result| result,
+            .failure => |failure| return failure,
+        };
+        const replay = switch (captureRocRun(io, allocator, env, timer, timeout_ms, .{
+            .args = &args,
+            .roc_file = paths[4],
+            .exit = .{ .code = 1 },
+        })) {
+            .result => |result| result,
+            .failure => |failure| return failure,
+        };
+        if (expectSamePreSummaryBytes(allocator, timer, "fresh finalized values", fresh_baseline, "normalized subset results", replay)) |failure| return failure;
+        // Restore A's original value before the next size; the next edit uses
+        // another new value and must evaluate its closure again.
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = paths[0], .data = sources[0] }) catch |err|
+            return customInfraFailure(allocator, timer, "restore A: {}", .{err});
+    }
+    // A separate pending compile-time obligation still runs with all runtime
+    // tests cached. Its observation and diagnostic must match --no-cache.
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &args, .roc_file = paths[4], .exit = .{ .code = 1 } })) |failure| return failure;
+    const diagnostic_source = std.fmt.allocPrint(
+        allocator,
+        "{s}\nunused : I64\nunused = {{\n    dbg \"non-test obligation\"\n    crash \"required diagnostic\"\n}}\n",
+        .{sources[4]},
+    ) catch |err| return customInfraFailure(allocator, timer, "diagnostic source: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = paths[4], .data = diagnostic_source }) catch |err|
+        return customInfraFailure(allocator, timer, "write diagnostic source: {}", .{err});
+    var diagnostic_baseline: ?std.process.RunResult = null;
+    for (0..3) |pass| {
+        const run = switch (captureRocRun(io, allocator, env, timer, timeout_ms, .{
+            .args = if (pass == 0) &uncached_args else &args,
+            .roc_file = paths[4],
+            .exit = .{ .code = 1 },
+            .contains = &.{
+                .{ .stream = .stderr, .text = "required diagnostic" },
+                .{ .stream = .stderr, .text = "non-test obligation" },
+            },
+        })) {
+            .result => |run| run,
+            .failure => |failure| return failure,
+        };
+        if (diagnostic_baseline) |expected| {
+            if (expectSamePreSummaryBytes(allocator, timer, "uncached obligations", expected, "cached runtime roots", run)) |failure| return failure;
+        } else diagnostic_baseline = run;
+    }
+    // This conversion is generic in Query: only specialization of the test
+    // discovers it. A cached runtime outcome cannot discharge its diagnostic.
+    var literal_baseline: ?std.process.RunResult = null;
+    for (0..3) |pass| {
+        const run = switch (captureRocRun(io, allocator, env, timer, timeout_ms, .{
+            .args = if (pass == 0) &uncached_args else &args,
+            .roc_file = paths[7],
+            .exit = .{ .code = 1 },
+            .contains = &.{
+                .{ .stream = .stderr, .text = "invalid string" },
+                .{ .stream = .stderr, .text = "literal conversion obligation" },
+                .{ .stream = .stderr, .text = "literal test outcome" },
+            },
+        })) {
+            .result => |run| run,
+            .failure => |failure| return failure,
+        };
+        if (literal_baseline) |expected| {
+            if (expectSamePreSummaryBytes(allocator, timer, "uncached literal obligation", expected, "cached test outcome", run)) |failure| return failure;
+        } else literal_baseline = run;
+    }
+    const literal_cached = switch (captureRocRun(io, allocator, env, timer, timeout_ms, .{
+        .args = &timed_args,
+        .roc_file = paths[7],
+        .exit = .{ .code = 1 },
+        .contains = &.{.{ .stream = .stderr, .text = "invalid string" }},
+    })) {
+        .result => |run| run,
+        .failure => |failure| return failure,
+    };
+    if (timingCounter(literal_cached.stderr, "Test result cache", "Roots cached") != 1 or
+        timingCounter(literal_cached.stderr, "Dev test emission", "Entrypoints emitted") != 0)
+        return failureFromRun(allocator, timer, literal_cached, "literal checking re-executed a cached test root");
+    const empty_path = std.fs.path.join(allocator, &.{ dir, "Empty.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "empty fixture path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = empty_path, .data = "Empty := [].{}\n" }) catch |err|
+        return customInfraFailure(allocator, timer, "write empty fixture: {}", .{err});
+    const empty = switch (captureRocRun(io, allocator, env, timer, timeout_ms, .{
+        .args = &timed_args,
+        .roc_file = empty_path,
+    })) {
+        .result => |run| run,
+        .failure => |failure| return failure,
+    };
+    if (timingCounter(empty.stderr, "Dev test emission", "Procedures emitted") != 0)
+        return failureFromRun(allocator, timer, empty, "zero-root plan emitted runtime code");
+    return null;
 }
 
 fn customOptimizedMultiModuleCompilesOnce(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
