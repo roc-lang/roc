@@ -4967,6 +4967,80 @@ data emitter. The checked cache must not store native pointer-width padding,
 static refcount words, allocation headers, or any other runtime `RocStr` layout
 bytes.
 
+### Checking dependencies and inference reuse
+
+A checking dependency is distinct from a checked module's implementation
+identity. The latter continues to include the complete source and imported
+implementations. It names evaluated constants, procedure templates, lowering
+inputs and test results. Equality of checking dependencies authorizes reuse of
+inference only; it never authorizes reuse of those implementation results.
+
+Checking publishes its import-facing inputs while the solved source store is
+still available. These inputs include exposed names and their value/type
+classification, declaration and method bindings, complete copied schemes
+(including descriptor flags and generated-codec requirements), nominal backing
+templates, declaration annotations and their argument-position semantics,
+generated-method and hosted-declaration classifications, invoking-callable
+facts, diagnostic hosted origins, and the facts that govern stored-constant
+eligibility. The ordered import, type-owner and method-lookup scope is part of
+the dependency. An implementation edit can change one of these facts without
+changing a printed type signature.
+
+Module ownership is a parameter of reusable inference. A checking dependency
+records the ordered owner bindings and their equality relationships, separately
+from the current owners' deep content hashes. Two distinct current owners never
+become one owner merely because they publish equal checking interfaces.
+Recursive type graphs retain identity sharing and cycles. Import cycles remain
+the explicitly rejected edges described under Module Completion Boundary.
+
+The inference-result cache stores the solved source environment together with
+the checker-selected publication inputs, before evaluation. Its key includes
+the module's own source inputs, validation and resolution context, and the
+checking dependencies it consumed. Serialized references retain their explicit
+owner and declaration bindings; admission must establish those bindings against
+the current dependency publications. Equality of a signature, a name or an
+incidental node index is never a license to substitute a declaration. Source
+regions that are retained as checking input participate in admission as well.
+
+The first format seals the producer's declaration-reference layout as part of
+its interface: every reachable source declaration/binding/annotation index is
+encoded with the facts it names. A changed layout misses, even if its printed
+types are identical. Admission therefore proves the retained foreign indices
+still name the same published checking facts; it never searches for a matching
+name or guesses an index correspondence. Only the dense module-identity table
+is rebound, using the ordered owner parameters and their equality partition.
+Source indices and solved graphs are not rewritten. The import-facing type
+projection uses the ordinary import graph copier, preserving sharing, cycles,
+descriptor flags, nominal templates and dispatch metadata; names are encoded
+as text and owner identities as parameters. Section lengths, source ordering
+and sorted exposures make the encoding independent of hash-map iteration.
+
+A hit binds the inference result to current owners and publishes a new checked
+artifact against current imported artifacts. Publication consumes the stored
+root selections and scheme evidence; it neither reruns
+inference nor reconstructs these facts. No finalized artifact with old imported
+keys is installed under a new key. Evaluation and ordinary checked-artifact
+caching then use the new full implementation identity.
+
+Inference cache entries have their own versioned content-addressed admission
+contract in the existing cache infrastructure. Missing, incompatible or corrupt
+entries are cache misses. Dependency diagnostics are produced by each current
+dependency's ordinary compilation. An inference result with checking reports
+is not admitted unless those reports and their current provenance are explicitly
+part of the stored result. The first format stores only diagnostic-free
+inference, and always reports evaluation diagnostics from current publication.
+Work counters distinguish inference, interface
+publication, reference binding and artifact publication, so interface creation
+cannot hide a second checking pass.
+
+Stored-constant eligibility of a foreign callable is a producer fact. Checking
+scans each module-global definition's own body once, records the exact local
+callee edges and current imported eligibility facts, and propagates rejection
+backwards through those edges to a fixed point. A recursive component with no
+rejected body or outgoing dependency is eligible. Importers consume the
+published result by definition identity; they never reopen the foreign body or
+interpret a foreign import index in their own import environment.
+
 ### Cache Admission Versioning
 
 A serialization root is a `Serialized` type whose bytes are admitted from outside

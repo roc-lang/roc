@@ -349,6 +349,9 @@ pub const OwnedSemanticModuleData = struct {
 
 /// Result of successfully type-checking a module
 pub const TypeCheckedResult = struct {
+    /// A hit republishes against current artifacts without invoking inference.
+    inference_reused: bool = false,
+    owner_bindings: u32 = 0,
     /// Package this module belongs to
     package_name: []const u8,
     /// Module identifier
