@@ -562,6 +562,23 @@ test "native driver reuse contract is directional and dependency sensitive" {
     try std.testing.expectEqual(@as(u64, 4), totals.peak_inflight_fragments);
 }
 
+test "native driver retained libc fragments remain target specific" {
+    const source = Emitter.FragmentContract{
+        .target = .x64musl,
+        .cpu_level = .default,
+        .hot_reload = false,
+        .default_platform_runtime = false,
+        .initialize_boxy_runtime = false,
+        .static_data_readonly = false,
+    };
+    var target = source;
+    target.target = .x64glibc;
+    var metrics: Metrics = .{};
+    try std.testing.expect(!reusable(source, target, .{}, &metrics));
+    try std.testing.expectEqual(@as(u64, 1), metrics.rejected_target);
+    try std.testing.expectEqual(@as(u64, 0), metrics.rejected_context);
+}
+
 test "native driver reuse survives procedure compaction and rejects changed revisions" {
     if (comptime !Emitter.host_lir_codegen_available) return error.SkipZigTest;
     const a = std.testing.allocator;

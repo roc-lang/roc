@@ -644,17 +644,64 @@ scope LIR inlining made, and a digest of the lifted function's checked source
 for a scope SpecConstr made. The LLVM backend names inlined debug subprograms
 and source frames from it.
 
+### Native dev procedure compatibility
+
+`backend.dev.NativeProcDomain` declares the artifact contract separately from
+final-link targets. Only specialized x64 Linux musl/glibc procedures share a
+domain, at matching CPU floors; default and v1 remain separate. Other target
+pairs and Boxy retain separate domains. The domain names the compiler
+compatibility hash, pack format, target contract (including architecture,
+pointer width, endianness and calling convention), CPU floor, specialization
+policy, dev representation/runtime ABI revision, and relocatable execution
+capabilities. Its digest is storage identity, never proof of provider ownership.
+
+The shared x64 contract uses System V calls, 64-bit little-endian data, and
+symbolic procedure/helper references, `x86_call_rel32` function relocations,
+and `abs64`/`rel32` data relocations; carried data uses named 64-bit address
+relocations with explicit addends. `HostSplice.compilerFunction` binds builtins,
+in-process host symbols and `native_runtime_libcalls` in the compiler process; final linking
+binds them to the selected platform instead. Carried data retains its relocation
+metadata. No process address, libc object, symbol version, TLS or startup object
+is made portable by this contract. Linked-only LLVM objects remain exact-target
+inputs and cannot serve CTFE. Source-location, transitive code/data closure,
+compile-time reads and demand/observation eligibility checks still apply.
+
+Dev procedure records (the indexed offers, metadata, payloads and completion
+markers of "Object Cache Store") and discovery records live under
+`proc-<domain>-dev` within the versioned object namespace. Program outputs stay under `<target>-dev`, and
+optimized packs stay under their exact target and optimization level. Both
+publication and lookup use the procedure namespace. A compatible runtime build
+owns its target-specific Store while borrowing CTFE's heap-owned LoadedPacks
+for both specialization lookup and splicing; that owner outlives lowering and
+emission. Shared body elision still requires the exact same provider capability.
+CTFE continues using its native generator and in-process bindings.
+
+Same-program retained fragments remain exact-target for now. Their separate
+`rejected_target` metric exposes this limitation; revision, transferred LIR and
+layout ownership, CPU, static-data and runtime-context checks are unchanged.
+
 ### Object Cache Store
 
-The store namespace is `<cache root>/<compiler version>/objects-v<pack format>/
-<target>-<opt>/`. Compiler compatibility, target (including libc/CPU domain),
-optimization policy, specialization strategy and schema isolation remain the
-existing explicit key and namespace contracts. A specialized consumer never
-acquires Boxy code: offer production rejects closures that depend on the
-program's runtime descriptor tables, and indexed metadata admission rejects
-runtime references too. The index does not broaden any target compatibility.
+The store has two namespaces under `<cache root>/<compiler version>/
+objects-v<pack format>/`. Every dev procedure record (offers, shared metadata,
+payloads, completion markers and discovery summaries) lives in the procedure
+namespace `proc-<domain>-dev/` of the build's `NativeProcDomain` (see "Native
+dev procedure compatibility"), so publication and lookup both use it, and a
+musl and a glibc build at the same CPU floor read each other's records. The
+exact-target namespace `<target>-<opt>/` holds recorded program outputs
+(`programs/`) and, at optimized levels, object packs. Compiler compatibility,
+procedure domain (pack format, target contract, CPU floor, specialization
+strategy, representation revision and execution capability), optimization
+policy and schema isolation are explicit key and namespace contracts. A
+specialized consumer never acquires Boxy code: offer production rejects
+closures that depend on the program's runtime descriptor tables, indexed
+metadata admission rejects runtime references too, and Boxy has its own
+domain. The index broadens no compatibility beyond the declared domain, and a
+record from a shared domain elides a body only for a consumer with the exact
+same provider capability (`CodeProvision`).
 
-Dev offers live under `<local|pkg>/offers/<specialization key>/
+Within the procedure namespace, dev offers live under
+`<local|pkg>/offers/<specialization key>/
 <provider identity>-<offer SHA-256>.rpi`. The `ROFFER02` binary record names a
 shared metadata digest, a specialization ordinal, and the explicit origin and
 module identity owning its storage. Provider visibility and rank are supplied
@@ -727,15 +774,16 @@ The completed-result probe defers procedure and discovery lookups until its
 result is known. A miss enables indexed reuse; a hit uses source demand and
 cached compile-time values to preserve diagnostics without procedure discovery.
 Unrelated history does not enter its key. Retaining historical artifacts is
-independent of eagerly reading them. The pack-format bump invalidates prior
+independent of eagerly reading them. A pack-format change selects new
 namespaces without a migration scan.
 
-Optimized object packs retain their existing locations: a package artifact's
-`<artifact key>.rpk` and the program's `optimized/<identity>.rpk`. Explicit
+Optimized object packs live in the exact-target namespace: a package
+artifact's `<artifact key>.rpk` and the program's `optimized/<identity>.rpk`. Explicit
 pack export/import for developer diagnostics still uses complete `PackFile`
 records. The background sweep deletes obsolete `objects-v*` namespaces and
-recursively ages current `local/` files and recorded `programs/` outputs on one
-day, and `pkg/` and `optimized/` files on thirty, using `max(atime, mtime)`.
+recursively ages each current namespace's `local/` files and recorded
+`programs/` outputs on one day, and `pkg/` and `optimized/` files on thirty,
+using `max(atime, mtime)`.
 Size eviction also includes indexed metadata and payloads. Either may be
 removed first: a stale reference is detected before a hit, and live readers own
 their bytes. Unused historical payloads remain available until eviction.
@@ -844,8 +892,8 @@ of its program. The first pack to offer a key or a procedure serves it, so
 which pack serves a procedure two offer, and the order the program links
 them in, are functions of the optimization state alone.
 
-A caching `roc check` may deliberately prepare URL-package host dev packs for
-independent module exports. It excludes modules whose checked context or
+A caching `roc check` may deliberately prepare URL-package host dev packs,
+under the host procedure domain's `pkg/`, for independent module exports. It excludes modules whose checked context or
 explicit visible dependency closure carries a platform/app relation, so a
 paired platform entrypoint cannot reach into the application for cache warming.
 Normal runtime builds and runs do not perform this extra compilation. Existing
@@ -2900,8 +2948,12 @@ and its demanded pending roots evaluate against the same checked module data
 through the same declared root functions an uncached compilation uses.
 Afterwards every requested root still pending is `unevaluated` again, and the
 module is written to the checked module cache again only when this
-compilation evaluated a root it lacked. A module is cached only when it has no reports, so an entry never
-holds a diagnostic that a later compilation's evaluation could contradict.
+compilation evaluated a root it lacked. A module is cached only when checking
+and evaluation add no reports beyond those present before checked-cache lookup.
+Earlier parsing and canonicalization reports are reproduced before that lookup,
+so they do not prevent reuse and are not emitted again by the checked artifact.
+An entry therefore never holds a new checking or evaluation diagnostic that a
+later compilation's evaluation could contradict.
 
 A build reports the compile-time failures of the roots it evaluates. A
 failure in a root no build demands is reported by `roc check`, which
@@ -4930,8 +4982,10 @@ results, never source environments or a live checker continuation.
 Type-bearing body columns carry the app substitution; unchanged body columns
 remain borrowed.
 Unchanged columns borrow the exact platform identified by the key. Only a
-completed composition without diagnostics may be cached; a hit consumes its
-stored outcomes and replays its recorded debug observations without evaluation.
+completed composition without new checking or evaluation diagnostics may be
+cached; already-replayed earlier-stage reports do not prevent publication. A hit
+consumes its stored outcomes and replays its recorded debug observations without
+evaluation.
 The canonicalized module cache is a separate, non-checked boundary; the rules
 below bind the checked module and composition caches.
 Checked module cache entries are trusted compiler-produced cache entries, not
@@ -4942,6 +4996,21 @@ or walk checked expressions to prove that cached checked data is still complete.
 Correctness belongs to the producer path that writes the cache entry, and
 invalidation belongs to the cache key and explicit cache/selection format
 versions.
+
+The coordinator captures each module's report count immediately before checked
+cache lookup, after parsing and canonicalization reports have been appended.
+Checking (including the deferred import drain) and evaluation only append to
+that same report list. `BuildEnv` moves those reports into its output sink only
+after finalization or when aborting. Solver-store staging and final publication
+share the condition that its count has not changed. Staging serializes the `ModuleEnv`
+while its solver store is live, then releases the store before evaluation;
+final publication additionally requires completed evaluation and, for a reopened
+cache entry, newly completed roots. A later report makes a staged part ineligible
+and it is discarded. Failed staging is an ordinary cache-write failure: the
+compilation continues and releases solver types, but cannot publish a checked
+entry without the staged environment. The empty replacement store is never
+serialized as a checked result. Pairings retain their separate ownership and
+publication rules, and abandoned staged parts are discarded during cleanup.
 
 `ModuleEnv` contains `CommonEnv.strings`, a `base.StringLiteral.Store`. That
 store is part of the checked module cache data. A cache hit materializes it as a

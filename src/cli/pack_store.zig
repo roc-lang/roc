@@ -20,8 +20,9 @@ pub const SpliceClosure = Index.SpliceClosure;
 const CoreCtx = ctx_mod.CoreCtx;
 
 /// The pack files of one compiler build, target, and optimization level,
-/// under the cache root: `objects-v<format>/<target>-<opt>/<local|pkg>/<module
-/// identity>/<artifact key>.rpk`. Packs are filed by module identity so an
+/// under the cache root. Dev packs use the declared procedure domain; linked
+/// packs and program outputs retain the exact target. Packs are filed by
+/// module identity so an
 /// edited module's previous packs stay beside its new one until the sweep
 /// removes them, which is what lets unchanged specializations hit across an
 /// edit. Every file is a pure function of the module and its transitive
@@ -30,28 +31,43 @@ const CoreCtx = ctx_mod.CoreCtx;
 pub const Store = struct {
     allocator: Allocator,
     roc_ctx: CoreCtx,
+    /// Exact final-link target and optimization level.
     root: []u8,
+    /// Procedure packs and discovery summaries, independently of final output.
+    procedure_root: []u8,
     verbose: bool,
 
     pub const InitError = Allocator.Error || error{NoHomeDirectory};
 
     pub fn init(allocator: Allocator, cache_config: compile.CacheConfig, target: RocTarget, opt_name: []const u8) InitError!Store {
+        return initForStrategy(allocator, cache_config, target, opt_name, .lss);
+    }
+
+    pub fn initForStrategy(allocator: Allocator, cache_config: compile.CacheConfig, target: RocTarget, opt_name: []const u8, strategy: base.SpecializationStrategy) InitError!Store {
         const version_dir = try cache_config.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
         const mode = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ @tagName(target), opt_name });
         defer allocator.free(mode);
         const namespace = compile.config.objectPackNamespace(PackFile.format_version);
         const root = try std.fs.path.join(allocator, &.{ version_dir, namespace, mode });
-        return .{ .allocator = allocator, .roc_ctx = cache_config.roc_ctx, .root = root, .verbose = cache_config.verbose };
+        errdefer allocator.free(root);
+        const procedure_root = if (std.mem.eql(u8, opt_name, "dev")) blk: {
+            const domain = backend.dev.NativeProcDomain.init(target, strategy);
+            const procedure_mode = try std.fmt.allocPrint(allocator, "proc-{s}-dev", .{std.fmt.bytesToHex(domain.key(), .lower)});
+            defer allocator.free(procedure_mode);
+            break :blk try std.fs.path.join(allocator, &.{ version_dir, namespace, procedure_mode });
+        } else try allocator.dupe(u8, root);
+        return .{ .allocator = allocator, .roc_ctx = cache_config.roc_ctx, .root = root, .procedure_root = procedure_root, .verbose = cache_config.verbose };
     }
 
     pub fn deinit(self: *Store) void {
         self.allocator.free(self.root);
+        self.allocator.free(self.procedure_root);
     }
 
     /// The directory of every pack filed under a module identity.
     pub fn identityDir(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8) Allocator.Error![]u8 {
-        return std.fs.path.join(self.allocator, &.{ self.root, @tagName(origin), &std.fmt.bytesToHex(identity, .lower) });
+        return std.fs.path.join(self.allocator, &.{ self.procedure_root, @tagName(origin), &std.fmt.bytesToHex(identity, .lower) });
     }
 
     fn packPath(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8) Allocator.Error![]u8 {
@@ -60,7 +76,7 @@ pub const Store = struct {
 
     fn filePath(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, comptime extension: []const u8) Allocator.Error![]u8 {
         const name = std.fmt.bytesToHex(key, .lower) ++ extension[0..extension.len].*;
-        return std.fs.path.join(self.allocator, &.{ self.root, @tagName(origin), &std.fmt.bytesToHex(identity, .lower), &name });
+        return std.fs.path.join(self.allocator, &.{ self.procedure_root, @tagName(origin), &std.fmt.bytesToHex(identity, .lower), &name });
     }
 
     /// File a program's discovery summaries (design.md "Discovery
@@ -242,7 +258,7 @@ pub const Store = struct {
                 .pkg => .pkg,
             }, .owner = identity }).encode();
             const name = std.fmt.bytesToHex(provider.identity, .lower) ++ "-".* ++ std.fmt.bytesToHex(Index.digest(&bytes), .lower) ++ ".rpi".*;
-            const path = try std.fs.path.join(allocator, &.{ self.root, @tagName(provider.origin), "offers", &std.fmt.bytesToHex(spec.key, .lower), &name });
+            const path = try std.fs.path.join(allocator, &.{ self.procedure_root, @tagName(provider.origin), "offers", &std.fmt.bytesToHex(spec.key, .lower), &name });
             defer allocator.free(path);
             if (try self.publishIndexedPath(path, &bytes)) {
                 metadata_bytes += bytes.len;
@@ -570,7 +586,7 @@ test "object cache write failures preserve quiet behavior and report verbose cau
                 };
                 try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, capture.stderr.items, cause));
                 try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, capture.stderr.items, "(4 bytes)"));
-                try std.testing.expect(std.mem.containsAtLeast(u8, capture.stderr.items, 1, store.root));
+                try std.testing.expect(std.mem.containsAtLeast(u8, capture.stderr.items, 1, store.procedure_root));
             } else {
                 try std.testing.expectEqualStrings("", capture.stderr.items);
             }
@@ -621,7 +637,7 @@ test "object cache interleaved writers expose only complete final bytes" {
     const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(root);
     const base_ctx = CoreCtx.default(allocator, allocator, io);
-    var store = Store{ .allocator = allocator, .roc_ctx = base_ctx, .root = try allocator.dupe(u8, root), .verbose = false };
+    var store = Store{ .allocator = allocator, .roc_ctx = base_ctx, .root = try allocator.dupe(u8, root), .procedure_root = try allocator.dupe(u8, root), .verbose = false };
     defer store.deinit();
     var hook = Hook{ .store = &store, .base = base_ctx };
     store.roc_ctx.ctx = &hook;
@@ -641,6 +657,75 @@ test "object cache interleaved writers expose only complete final bytes" {
         count += 1;
     }
     try std.testing.expectEqual(@as(usize, 1), count);
+}
+
+test "native procedure domain shares packs but isolates final outputs and linked objects" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root);
+    const config: compile.CacheConfig = .{ .cache_dir = root, .roc_ctx = CoreCtx.default(a, a, io) };
+    var musl = try Store.init(a, config, .x64musl, "dev");
+    defer musl.deinit();
+    var glibc = try Store.init(a, config, .x64glibc, "dev");
+    defer glibc.deinit();
+    try std.testing.expectEqualStrings(musl.procedure_root, glibc.procedure_root);
+    try std.testing.expect(!std.mem.eql(u8, musl.root, glibc.root));
+    const identity: [32]u8 = @splat(1);
+    const key: [32]u8 = @splat(2);
+    try musl.write(.local, identity, key, "procedure pack");
+    try std.testing.expect(try glibc.has(.local, identity, key));
+    // Indexed offers, metadata, payloads and completion markers share the
+    // procedure domain too.
+    const offered_key: [32]u8 = @splat(3);
+    const artifact: backend.dev.ProcArtifact.Artifact = .{ .kind = .{ .proc = lir.ProcIdentity.forTest(4) }, .code = "\xc3", .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} };
+    const spec: PackFile.SpecEntry = .{ .key = offered_key, .artifact = 0, .rc_borrowed_params = 0, .rc_ret_borrowed = false, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique = false, .rc_ret_unique_fields = 0, .rc_ret_conditions = &.{} };
+    try musl.writeIndexed(.local, identity, &.{ .arena = undefined, .artifacts = &.{artifact} }, &.{spec});
+    try musl.completeIndexed(.local, identity, key);
+    try std.testing.expect(try glibc.hasIndexed(.local, identity, key));
+    {
+        var packs = LoadedPacks.init(a);
+        defer packs.deinit();
+        try glibc.loadIdentity(io, &packs, .local, identity);
+        try packs.indexPacks();
+        try std.testing.expect(packs.specCacheLookup().lookup(offered_key, .dev_code, &.{}) != null);
+    }
+    try musl.writeProgram(key, "musl program output");
+    try std.testing.expectEqual(null, try glibc.readProgram(key, a));
+    try glibc.writeProgram(key, "glibc program output");
+    const bytes = (try musl.readProgram(key, a)).?;
+    defer a.free(bytes);
+    try std.testing.expectEqualStrings("musl program output", bytes);
+    for ([_]RocTarget{ .x64v1glibc, .arm64musl, .x64win }) |target| {
+        var incompatible = try Store.init(a, config, target, "dev");
+        defer incompatible.deinit();
+        try std.testing.expect(!try incompatible.has(.local, identity, key));
+        try std.testing.expect(!try incompatible.hasIndexed(.local, identity, key));
+        var packs = LoadedPacks.init(a);
+        defer packs.deinit();
+        try incompatible.loadIdentity(io, &packs, .local, identity);
+        try packs.indexPacks();
+        try std.testing.expect(packs.specCacheLookup().lookup(offered_key, .dev_code, &.{}) == null);
+    }
+    var boxy = try Store.initForStrategy(a, config, .x64glibc, "dev", .boxy);
+    defer boxy.deinit();
+    try std.testing.expect(!try boxy.has(.local, identity, key));
+    try std.testing.expect(!try boxy.hasIndexed(.local, identity, key));
+    for ([_][]const u8{ "speed", "size" }) |level| {
+        var left = try Store.init(a, config, .x64musl, level);
+        defer left.deinit();
+        var right = try Store.init(a, config, .x64glibc, level);
+        defer right.deinit();
+        try left.write(.pkg, identity, key, "linked-only package");
+        try std.testing.expect(!try right.has(.pkg, identity, key));
+        const left_path = try left.optimizedPackPath(identity);
+        defer a.free(left_path);
+        const right_path = try right.optimizedPackPath(identity);
+        defer a.free(right_path);
+        try std.testing.expect(!std.mem.eql(u8, left_path, right_path));
+    }
 }
 
 test "the cache sweep finds and ages the packs the store writes" {
@@ -962,6 +1047,8 @@ pub const LoadedPacks = struct {
     hits: u64 = 0,
     /// Artifacts handed to a splice so far.
     artifacts_served: u64 = 0,
+    /// Bytes read from procedure, discovery and linked-object files.
+    bytes_loaded: u64 = 0,
     /// Set until `indexPacks` runs; lookups before that register the pending
     /// store's index directories for the modules in view first.
     pending: ?Pending = null,
@@ -1049,6 +1136,7 @@ pub const LoadedPacks = struct {
             },
         };
         defer allocator.free(bytes);
+        self.bytes_loaded +|= bytes.len;
         self.index_stats.index_bytes += bytes.len;
         self.index_stats.metadata_bytes += bytes.len;
         if (!std.mem.eql(u8, &Index.digest(bytes), &hash)) {
@@ -1147,6 +1235,7 @@ pub const LoadedPacks = struct {
                 },
             };
             defer allocator.free(bytes);
+            self.bytes_loaded +|= bytes.len;
             self.index_stats.index_bytes += bytes.len;
             if (!std.mem.eql(u8, candidate.name[65..129], &std.fmt.bytesToHex(Index.digest(bytes), .lower))) {
                 self.index_stats.corrupt += 1;
@@ -1248,6 +1337,7 @@ pub const LoadedPacks = struct {
             },
         };
         errdefer self.allocator.free(bytes);
+        self.bytes_loaded +|= bytes.len;
         self.index_stats.payload_bytes += bytes.len;
         if (!std.mem.eql(u8, &Index.digest(bytes), &hash)) {
             self.allocator.free(bytes);
@@ -1352,6 +1442,7 @@ pub const LoadedPacks = struct {
                     else => error.PackDirectoryUnreadable,
                 };
             };
+            self.bytes_loaded +|= bytes.len;
             switch (files) {
                 .discovery => {
                     // The index copies what it keeps out of the file's bytes.
@@ -1385,6 +1476,7 @@ pub const LoadedPacks = struct {
                 else => error.PackDirectoryUnreadable,
             };
         };
+        self.bytes_loaded +|= bytes.len;
         var pack = PackFile.readObjectOwned(arena, bytes) catch |err| switch (err) {
             error.UnsupportedPackVersion => return,
             else => |other| return other,
@@ -1976,6 +2068,12 @@ test "object packs serve in load order, and app-bound entries serve only the pro
             try packs.object_packs.append(allocator, pack);
         }
         try packs.indexObjectPacks(consumer_program);
+        try packs.indexPacks();
+        // A shared producer and CTFE cannot execute a linked-only offer.
+        const lookup = packs.specCacheLookup();
+        try std.testing.expect(lookup.lookup(@splat(1), .dev_code, &.{}) == null);
+        try std.testing.expect(lookup.lookup(@splat(1), .dev_code_beside_linked_objects, &.{}) == null);
+        try std.testing.expect(lookup.lookup(@splat(1), .dev_code_and_linked_objects, &.{}) != null);
         try std.testing.expectEqual(@as(u32, 0), packs.linked_specs.get(@splat(1)).?.pack);
         try std.testing.expectEqual(@as(?u32, 0), packs.linked_identities.get(shared));
         const serves_app = std.mem.eql(u8, &consumer_program, &program_key);
@@ -2023,10 +2121,15 @@ const IndexFixture = struct {
         self.arena = std.heap.ArenaAllocator.init(allocator);
         const root = try self.tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
         defer allocator.free(root);
+        // Distinct roots expose any procedure record filed under the exact
+        // final-output target instead of the procedure domain.
+        const output_root = try std.fs.path.join(allocator, &.{ root, "output" });
+        errdefer allocator.free(output_root);
         self.store = .{
             .allocator = allocator,
             .roc_ctx = CoreCtx.default(allocator, self.arena.allocator(), std.testing.io),
-            .root = try allocator.dupe(u8, root),
+            .root = output_root,
+            .procedure_root = try std.fs.path.join(allocator, &.{ root, "procedures" }),
             .verbose = false,
         };
     }
@@ -2310,7 +2413,7 @@ test "indexed object cache rejects corrupt offers and shared metadata before rea
         const bucket = if (shared_metadata)
             try std.fs.path.join(F.allocator, &.{ module_dir, "metadata" })
         else
-            try std.fs.path.join(F.allocator, &.{ fixture.store.root, "local", "offers", &std.fmt.bytesToHex(@as([32]u8, @splat(1)), .lower) });
+            try std.fs.path.join(F.allocator, &.{ fixture.store.procedure_root, "local", "offers", &std.fmt.bytesToHex(@as([32]u8, @splat(1)), .lower) });
         defer F.allocator.free(bucket);
         var dir = try std.Io.Dir.cwd().openDir(std.testing.io, bucket, .{ .iterate = true });
         defer dir.close(std.testing.io);
