@@ -23919,7 +23919,11 @@ references resolve their explicit declaration row and retain the representation
 owner's semantic type/method context, so location independence never removes
 nominal identity, backing declaration validation, or method precedence. This
 contract is specific to outcome identity; ordinary checked type identity and
-compile-time value portability are unchanged.
+compile-time value portability are unchanged. The semantic type environment
+also includes the referenced-definition and import summaries of declared field
+defaults: foreign construction materializes them without a local value-reference
+edge. Default-expression observations have their declaring type as an explicit
+reporting owner.
 
 The execution strategy, execution mode, compiler compatibility and payload
 version partition outcome admission. Rendering settings, elapsed time, root

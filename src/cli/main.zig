@@ -16700,12 +16700,16 @@ fn runWatchCommand(ctx: *CliCtx, arg0: []const u8, command: WatchCommand) WatchC
     }
 }
 
-fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestError!void {
-    defer if (base.dev_diagnostics.isSet(.test_command_work)) {
+fn printCliTestWork(ctx: *CliCtx) void {
+    if (base.dev_diagnostics.isSet(.test_command_work)) {
         inline for (@typeInfo(base.dev_diagnostics.TestWork).@"enum".field_names) |field| {
             ctx.io.stderr().print("test-work {s}={d}\n", .{ field, base.dev_diagnostics.testWorkCount(@field(base.dev_diagnostics.TestWork, field)) }) catch {};
         }
-    };
+    }
+}
+
+fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestError!void {
+    defer printCliTestWork(ctx);
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -16821,6 +16825,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             const elapsed: u64 = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - start_time);
             try writeCliTestRunSummary(if (completed.total.allPassed()) stdout else stderr, completed.total, elapsed, true, testReportingConfig(ctx).shouldUseColors());
             if (!completed.total.allPassed()) return error.TestsFailed;
+            if (warnings > 0) printCliTestWork(ctx);
             exitOnWarnings(ctx, warnings);
             return;
         }
@@ -17134,6 +17139,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         try writeCliTestRunSummary(stdout, total, elapsed_ns, fully_cached, report_config.shouldUseColors());
         // Same warning exit policy as check/build/run: passing tests with
         // compile warnings exit 2.
+        if (diag.warnings > 0) printCliTestWork(ctx);
         exitOnWarnings(ctx, diag.warnings);
         return;
     }

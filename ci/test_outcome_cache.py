@@ -27,7 +27,7 @@ class Fixture:
         self.root = root
         self.roc = roc
         self.cache = root / "cache"
-        self.env = dict(os.environ, ROC_CACHE_DIR=str(self.cache))
+        self.env = dict(os.environ, ROC_CACHE_DIR=str(self.cache), ROC_TRACE_BOXY_WORK="1")
         self.path = root / "Main.roc"
 
     def write(self, text, name="Main.roc"):
@@ -44,6 +44,7 @@ class Fixture:
         result = subprocess.run(args, env=env, capture_output=True, timeout=120)
         assert result.returncode in (0, 1, 2), result.stderr.decode(errors="replace")
         assert b"panic" not in result.stderr, result.stderr.decode(errors="replace")
+        assert b"boxy-work:" not in result.stderr, result.stderr.decode(errors="replace")
         return result
 
     def check(self, hits=None, *, mode="dev"):
@@ -128,6 +129,22 @@ def relocation_checks(f):
     edit('# moved imported nominal and helper\n' + typed, 1, name='Typed.roc')
     edit(typed.replace('module [make]\n', 'module [make]\nexpect 37 == 37\n'), 1, 1, name='Typed.roc')
     edit(typed.replace('value: 1', 'value: 2'), 0, 1, name='Typed.roc')
+
+    alias = ('module [make]\nThing : { value : U64 }\n'
+             'make : {} -> Thing\nmake = |_| { value: 1 }\n')
+    f.write(alias, 'TypedAlias.roc')
+    f.write('import TypedAlias\nhelper = || TypedAlias.make({})\nexpect helper().value == 1\n')
+    f.check(1)
+    edit('# moved imported alias\n' + alias, 1, name='TypedAlias.roc')
+    edit(alias.replace('U64', 'I64'), 0, 1, name='TypedAlias.roc')
+
+    default_helper = ('WithDefault := { value : U64 ?? compute() }.{}\n'
+                      'compute = || { expect True\n    1 }\n')
+    f.write(default_helper, 'WithDefault.roc')
+    f.write('import WithDefault\nexpect WithDefault.{}.value == 1\n')
+    f.check(1)
+    edit('# moved a default and its helper\n' + default_helper, 1, name='WithDefault.roc')
+    edit(default_helper.replace('    1 }', '    2 }'), 0, 1, name='WithDefault.roc')
 
     defaults = ('Config := { value : U64 ?? 1 }\n'
                 'make = || Config.{}\n'

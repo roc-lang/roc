@@ -100,6 +100,7 @@ pub const DefinitionIdentity = extern struct {
     value: [32]u8,
 };
 
+/// The module's value context, dependency summaries, root identities and report sites.
 pub const ModuleIdentities = struct {
     /// Digest of everything outside its plain definitions that dispatch on
     /// its types can select or depend on: the module context and the type
@@ -205,6 +206,7 @@ pub fn nameDigest(name: []const u8) [32]u8 {
 const Owner = union(enum) {
     def: CIR.Def.Idx,
     expect: CIR.Statement.Idx,
+    type_default: CIR.Statement.Idx,
 };
 
 const State = struct {
@@ -297,14 +299,12 @@ const State = struct {
         if (self.inputs.test_dependencies) {
             // Failed-expect detail includes the complete mentioned binding,
             // including whitespace between its pattern and expression.
-            switch (env.store.getExpr(def.expr)) {
-                .e_lambda, .e_closure, .e_hosted_lambda => {},
-                else => {
-                    const start = env.store.getPatternRegion(def.pattern).start.offset;
-                    const end = env.store.getExprRegion(def.expr).end.offset;
-                    // This is the reporter's exact excerpt eligibility rule.
-                    if (start < end and end <= self.source().len) hashBytes(&hasher, self.source()[start..end]);
-                },
+            const expr_tag = std.meta.activeTag(env.store.getExpr(def.expr));
+            if (expr_tag != .e_lambda and expr_tag != .e_closure and expr_tag != .e_hosted_lambda) {
+                const start = env.store.getPatternRegion(def.pattern).start.offset;
+                const end = env.store.getExprRegion(def.expr).end.offset;
+                // This is the reporter's exact excerpt eligibility rule.
+                if (start < end and end <= self.source().len) hashBytes(&hasher, self.source()[start..end]);
             }
             hasher.update(&try self.importedReferences(def.expr));
         }
@@ -407,6 +407,14 @@ const State = struct {
                 => {},
             }
         }
+        if (!self.inputs.test_dependencies) return;
+        for (env.store.sliceStatements(env.type_decls)) |statement| {
+            const fields = can.default_omissions.backingRecordFields(env, statement) orelse continue;
+            for (env.store.sliceAnnoRecordFields(fields)) |field| {
+                const expr = env.store.getAnnoRecordField(field).default_value orelse continue;
+                try self.mapOwner(expr, .{ .type_default = statement });
+            }
+        }
     }
 
     fn mapOwner(self: *State, root: CIR.Expr.Idx, owner: Owner) Allocator.Error!void {
@@ -451,7 +459,7 @@ const State = struct {
             if (owners.get(statement)) |owner| {
                 const envelope = switch (owner) {
                     .def => |def| env.store.getExprRegion(env.store.getDef(def).expr),
-                    .expect => |root| env.store.getStatementRegion(root),
+                    .expect, .type_default => |root| env.store.getStatementRegion(root),
                 };
                 const owner_digest = try owner_digests.getOrPut(self.allocator, owner);
                 if (!owner_digest.found_existing) {
@@ -493,7 +501,7 @@ const State = struct {
             if (!anchor.found_existing) {
                 const region = switch (owner) {
                     .def => |def| env.store.getExprRegion(env.store.getDef(def).expr),
-                    .expect => |statement| env.store.getStatementRegion(statement),
+                    .expect, .type_default => |statement| env.store.getStatementRegion(statement),
                 };
                 var hash = Sha256.init(.{});
                 hashTag(&hash, "roc.test-report-owner.v1");
@@ -547,8 +555,10 @@ const State = struct {
     }
 
     fn importedByIndex(self: *const State, index: CIR.Import.Idx) checked_artifact.ImportedModuleView {
-        const identity = self.inputs.env.importIdentity(index) orelse base.invariant("checked external lookup has no module identity", .{});
-        return self.importedByIdentity(self.inputs.env.moduleIdentityHash(identity).*);
+        const module_idx = self.inputs.env.imports.getResolvedModule(index) orelse
+            base.invariant("checked external lookup has no resolved module", .{});
+        for (self.inputs.imports) |entry| if (entry.module_idx == module_idx) return entry.view;
+        base.invariant("checked external lookup has no published imported module", .{});
     }
 
     fn importedByIdentity(self: *const State, identity: [32]u8) checked_artifact.ImportedModuleView {
@@ -583,7 +593,64 @@ const State = struct {
                         try values.append(self.allocator, self.importedDefinition(self.importedByIdentity(identity.*), lookup.target_def_idx));
                     }
                 },
-                else => {},
+                .e_num,
+                .e_frac_f32,
+                .e_frac_f64,
+                .e_dec,
+                .e_dec_small,
+                .e_num_from_numeral,
+                .e_typed_int,
+                .e_typed_frac,
+                .e_typed_num_from_numeral,
+                .e_str_segment,
+                .e_str,
+                .e_bytes_literal,
+                .e_lookup_local,
+                .e_deferred_import_ref,
+                .e_lookup_associated_local,
+                .e_lookup_associated,
+                .e_lookup_required,
+                .e_list,
+                .e_empty_list,
+                .e_tuple,
+                .e_match,
+                .e_if,
+                .e_call,
+                .e_record,
+                .e_empty_record,
+                .e_block,
+                .e_tag,
+                .e_nominal,
+                .e_nominal_external,
+                .e_zero_argument_tag,
+                .e_closure,
+                .e_lambda,
+                .e_binop,
+                .e_unary_minus,
+                .e_field_access,
+                .e_method_call,
+                .e_dispatch_call,
+                .e_interpolation,
+                .e_structural_eq,
+                .e_structural_hash,
+                .e_method_eq,
+                .e_type_method_call,
+                .e_type_dispatch_call,
+                .e_tuple_access,
+                .e_runtime_error,
+                .e_crash,
+                .e_dbg,
+                .e_expect_err,
+                .e_expect,
+                .e_ellipsis,
+                .e_anno_only,
+                .e_derived_method,
+                .e_return,
+                .e_break,
+                .e_for,
+                .e_hosted_lambda,
+                .e_run_low_level,
+                => {},
             }
             try appendExprChildren(self.inputs.env, expr, &stack, self.allocator);
         }
@@ -664,6 +731,22 @@ const State = struct {
                 };
                 if (!include) continue;
                 try texts.append(self.allocator, digestBytes("statement", self.regionText(env.store.getStatementRegion(statement_idx))));
+            }
+        }
+        if (self.inputs.test_dependencies) {
+            // Foreign constructions materialize these defaults without a local
+            // value-reference edge. Publish their complete dependencies as part
+            // of the declaring module's semantic type environment.
+            for (env.store.sliceStatements(env.type_decls)) |statement| {
+                const fields = can.default_omissions.backingRecordFields(env, statement) orelse continue;
+                for (env.store.sliceAnnoRecordFields(fields)) |field| {
+                    const expr = env.store.getAnnoRecordField(field).default_value orelse continue;
+                    var hash = Sha256.init(.{});
+                    hashTag(&hash, "declared-default-dependencies");
+                    hashDigests(&hash, try self.referencedIdentities(expr));
+                    hash.update(&try self.importedReferences(expr));
+                    try texts.append(self.allocator, hash.finalResult());
+                }
             }
         }
         sortDigests(texts.items);
@@ -763,6 +846,7 @@ const State = struct {
         return switch (resolved) {
             .def => |def_idx| digestBytes("owner.def", self.defName(def_idx)),
             .expect => |statement| digestBytes("owner.expect", self.regionText(env.store.getStatementRegion(statement))),
+            .type_default => |statement| digestBytes("owner.default", self.regionText(env.store.getStatementRegion(statement))),
         };
     }
 
@@ -820,6 +904,7 @@ const State = struct {
                         hashBytes(&class, self.regionText(env.store.getStatementRegion(statement)));
                         hashDigests(&class, try self.referencedIdentities(expectBody(env, statement)));
                     },
+                    .type_default => |statement| hashBytes(&class, self.regionText(env.store.getStatementRegion(statement))),
                 } else hashTag(&class, "unowned");
                 hashBytes(&class, if (root.hoisted_body) |body| @tagName(body) else "no-body");
                 hashBytes(&class, self.regionText(env.store.getExprRegion(hoisted.expr)));
