@@ -896,8 +896,10 @@ test "frozen root transcode preserves Boxy recipe identity and generic boxed cap
     };
     var source = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
     defer source.deinit();
+    source.store.runtime_contract = .boxy;
     var target = try Program.Result.init(allocator, .u32);
     defer target.deinit();
+    target.store.runtime_contract = .boxy;
     const source_fixture = try Fixture.init(&source, false);
     const target_fixture = try Fixture.init(&target, true);
     var host = @import("runtime_host.zig").init(allocator);

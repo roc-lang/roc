@@ -2396,7 +2396,7 @@ pub fn devEvalSharedBoolRootModulesWithArtifacts(allocator: Allocator, modules: 
         // Worker threads read this table through the codegen'd code while the
         // parallel run below is still in flight, so it must stay alive until
         // this function returns.
-        var native_fns: ?BoxyNativeFnTable = if (tables.needsRuntimeForStore(store)) boxyNativeFnTable() else null;
+        var native_fns: ?BoxyNativeFnTable = if (store.runtime_contract == .boxy) boxyNativeFnTable() else null;
         const native_fn_table: ?*const BoxyNativeFnTable = if (native_fns) |*table| table else null;
         codegen.boxy_native_fns = native_fn_table;
         if (timing) |timings| timings.finish(codegen_setup_started_ns, .codegen_setup);
@@ -2570,7 +2570,7 @@ fn callBoolRoot(
     runtime_env.resetObservation();
     runtime_env.resetAllocationTracker();
     runtime_env.setExpectCounters(expect_passed, expect_failed);
-    const boxy_runtime_instance = if (tables.needsRuntimeForStore(store))
+    const boxy_runtime_instance = if (boxy_runtime.storeNeedsRuntime(store))
         try boxy_abi.createRuntimeFromStores(allocator, store, layouts, tables, runtime_env.get_ops())
     else
         null;
@@ -3016,7 +3016,7 @@ pub fn llvmEvalBoolRootModules(
     );
     defer allocator.free(object_bytes);
 
-    var lib = object_image.load(allocator, object_bytes) catch |err| switch (err) {
+    var lib = object_image.load(allocator, object_bytes, modules[0].store.runtime_contract) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedObject,
         error.MalformedObject,
