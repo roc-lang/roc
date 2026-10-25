@@ -1,7 +1,9 @@
 //! A record decoded or encoded inside a definition and used only through
 //! field access closes at that definition's generalization boundary, so the
-//! derived codec's error row is part of the published type.
+//! derived codec's error row is part of the published type. The field kinds of
+//! a record literal no caller can reach settle at the same boundary.
 
+const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
 test "derived parser: a record used only through field access closes before generalization" {
@@ -162,4 +164,54 @@ test "derived encoder: a nested open record in a parameter is rejected" {
     defer test_env.deinit();
 
     try test_env.assertOneTypeError("Record Fields Not Known");
+}
+
+test "derived encoder: a boundary-local record literal's field kinds settle before generalization" {
+    const source =
+        \\Doc := { n : U64 }
+        \\
+        \\encode : Doc -> Try(Str, [Infinity, NaN, NegativeInfinity])
+        \\encode = |doc| Json.to_str_try({ n: doc.n })
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    // The codec's error row reaches the signature's implicitly open row, but
+    // no caller can change the record's codec, so the scheme needs no
+    // codec evidence from its uses.
+    try std.testing.expectEqual(0, test_env.module_env.binding_scheme_codec_requirements.items.items.len);
+}
+
+test "derived encoder: a record literal the signature reaches keeps its field kinds undetermined" {
+    const source =
+        \\pair = |n| {
+        \\    rec = { v: n }
+        \\    (rec, Json.to_str_try(rec))
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expect(test_env.module_env.binding_scheme_codec_requirements.items.items.len > 0);
+}
+
+test "derived encoder: a record literal's field kind pinned by an optional access stays optional" {
+    const source =
+        \\encode_optional = |{}| {
+        \\    n : U64
+        \\    n = 1
+        \\    rec = { v: n }
+        \\    _ = rec.?v
+        \\    Json.to_str_try(rec)
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
 }

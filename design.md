@@ -644,10 +644,45 @@ scope LIR inlining made, and a digest of the lifted function's checked source
 for a scope SpecConstr made. The LLVM backend names inlined debug subprograms
 and source frames from it.
 
+### Native dev procedure compatibility
+
+`backend.dev.NativeProcDomain` declares the excerpt contract separately from
+final-link targets. Only specialized x64 Linux musl/glibc procedures share a
+domain, at matching CPU floors; default and v1 remain separate. Other target
+pairs and Boxy retain separate domains. The domain names the compiler
+compatibility hash, pack format, target contract (including architecture,
+pointer width, endianness and calling convention), CPU floor, specialization
+policy, dev representation/runtime ABI revision, and relocatable execution
+capabilities. Its digest is storage identity, never proof of provider ownership.
+
+The shared x64 contract uses System V calls, 64-bit little-endian data, and
+symbolic procedure/helper references, `x86_call_rel32` function relocations,
+and `abs64`/`rel32` data relocations; carried data uses named 64-bit address
+relocations with explicit addends. `HostSplice.compilerFunction` binds builtins,
+in-process host symbols and `native_runtime_libcalls` in the compiler process; final linking
+binds them to the selected platform instead. Carried data retains its relocation
+metadata. No process address, libc object, symbol version, TLS or startup object
+is made portable by this contract. Linked-only LLVM objects remain exact-target
+inputs and cannot serve CTFE. Source-location, transitive code/data closure,
+compile-time reads and demand/observation eligibility checks still apply.
+
+Dev procedure packs and discovery records live under `proc-<domain>-dev` within
+the versioned object namespace. Program outputs stay under `<target>-dev`, and
+optimized packs stay under their exact target and optimization level. Both
+publication and lookup use the procedure namespace. A compatible runtime build
+owns its target-specific Store while borrowing CTFE's heap-owned LoadedPacks
+for both specialization lookup and splicing; that owner outlives lowering and
+emission. Shared body elision still requires the exact same provider capability.
+CTFE continues using its native generator and in-process bindings.
+
+Same-program retained fragments remain exact-target for now. Their separate
+`rejected_target` metric exposes this limitation; revision, transferred LIR and
+layout ownership, CPU, static-data and runtime-context checks are unchanged.
+
 ### Object Cache Store
 
-Packs live under `<cache root>/<compiler version>/objects-v<pack format>/
-<target>-<opt>/<local|pkg>/<module identity>/<key>.rpk`, and the pack an
+Dev packs live under `<cache root>/<compiler version>/objects-v<pack format>/
+proc-<domain>-dev/<local|pkg>/<module identity>/<key>.rpk`, and the pack an
 optimized build files for its program, which each optimized build of the
 program replaces, under `<target>-<opt>/optimized/<identity>.rpk`. Every
 other pack's path is a function of its content, so a writer stages it beside its path in a file it
@@ -758,7 +793,7 @@ them in, are functions of the optimization state alone.
 
 After version resolution selects the final package versions and checking
 outputs their constants, caching check, run, and build commands prepare the URL
-packages' host dev packs under `<host>-dev/pkg/`. This includes `roc check`,
+packages' host dev packs under the host procedure domain's `pkg/`. This includes `roc check`,
 so a package checked when downloaded already has its dev packs when its first
 app build starts. Preparation compiles each module's closed exports with the
 ordinary dev pack policy; it neither writes local-module packs nor starts
@@ -10990,6 +11025,22 @@ instantiated, so callers' exhaustiveness and annotation checks would run
 against an incomplete error row. An extension owned by an enclosing scope or
 by a non-generalized value binding waits for its owner.
 
+The same boundary commits the undetermined field kinds of those records (a
+record literal's fields, Field Kinds below) to `required` when the boundary
+owns the kind and no boundary root's interface reaches it. Such a kind is just
+as invisible to callers as a boundary-local extension, and `required` is the
+kind module finalization would commit it to. A record's codec depends on its
+field kinds, so an undetermined kind would keep the codec from producing its
+constraints at the boundary. If the codec relation also reached a type
+variable of the definition's interface (the implicitly open error row of
+`encode : Doc -> Try(Str, [Infinity, NaN, NegativeInfinity])`), the definition's
+scheme would gain a codec requirement that every use resolves again, although
+no use can change the codec. A kind that a pending `.?` access or unset is
+waiting on is left to that judgment, which pins it `optional` later at the same
+boundary. A kind an interface reaches (a returned record literal) stays
+undetermined, because a caller may pin it either way, and its codec stays a
+requirement of the scheme.
+
 A row whose extension the boundary owns and an interface does reach (a record
 parameter, or a returned record) rejects the derived codec with a "Record
 Fields Not Known" report at the codec call. Callers could use such a record
@@ -13164,13 +13215,16 @@ Other solved-graph mutations:
   as data that was inferred from use sites closes its unconstrained flexible
   extension to the empty record through ordinary unification; rigid
   extensions remain rejected.
-- `closeBoundaryLocalDerivedCodecRecordRows`—policy: Derived Structural
+- `settleBoundaryLocalDerivedCodecRecords`—policy: Derived Structural
   Codec Record-Row Closure (above). At a generalization boundary, each record
   row in a pending derived codec relation's value shape whose flexible
   extension the boundary owns and no boundary interface reaches closes to the
   empty record through ordinary unification before scheme capture. A row
   whose extension an interface reaches is rejected instead
-  (`reportDerivedCodecOpenRecord`), never closed.
+  (`reportDerivedCodecOpenRecord`), never closed. Each undetermined field
+  kind of those records that the boundary owns, no boundary interface
+  reaches, and no pending `.?` judgment waits on is unified with `required`
+  before scheme capture.
 - `closeValueRowTailsCarryingDerivations`—policy: Derived Equality And
   Hashing Over Open Rows (above). After the module solves, a walk over each
   non-function top-level value's data positions collects open row tails; one

@@ -384,9 +384,9 @@ const CompileTimePackParts = struct {
 };
 
 /// The compile-time object cache, when a build's own runtime packs are the
-/// same store: a dev build for the host.
+/// same procedure domain. Final-output stores remain target-specific.
 fn sharedCompileTimeObjectCache(build_env: *BuildEnv, target: RocTarget, opt: cli_args.OptLevel) ?*CompileTimeObjectCache {
-    if (opt != .dev or target != RocTarget.detectNative()) return null;
+    if (opt != .dev or !backend.dev.NativeProcDomain.init(target, .lss).compatible(backend.dev.NativeProcDomain.init(RocTarget.detectNative(), .lss))) return null;
     const owner = build_env.compile_time_object_cache_owner orelse return null;
     const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(owner.context));
     return cache;
@@ -2885,7 +2885,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
     // A dev run reads the object cache: its image splices the dev packs'
     // entries, and its host executable links its URL packages' objects.
-    const run_object_cache: ?*RunObjectCache = if (args.opt == .dev and !args.no_cache) try RunObjectCache.create(ctx, false) else null;
+    const run_object_cache: ?*RunObjectCache = if (args.opt == .dev and !args.no_cache) try RunObjectCache.create(ctx, false, currentRuntimeSpecializationStrategy(args.specialization_strategy)) else null;
     defer if (run_object_cache) |cache| cache.destroy(ctx.gpa);
     var run_package_objects: RunPackageObjects = .{};
 
@@ -6150,7 +6150,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
 
     // The running host links the same object packs the first generation's
     // did; a rebuild needing others changes the host identity below.
-    const run_object_cache: ?*RunObjectCache = if (source_rewrite == null and !args.no_cache) try RunObjectCache.create(ctx, false) else null;
+    const run_object_cache: ?*RunObjectCache = if (source_rewrite == null and !args.no_cache) try RunObjectCache.create(ctx, false, currentRuntimeSpecializationStrategy(args.specialization_strategy)) else null;
     defer if (run_object_cache) |cache| cache.destroy(ctx.gpa);
     var lowered_result = try lowerLirWithBuildEnv(
         ctx,
@@ -6788,10 +6788,10 @@ const RunObjectCache = struct {
     packs: pack_store.LoadedPacks,
 
     /// Null without a cache root.
-    fn create(ctx: *CliCtx, verbose: bool) Allocator.Error!?*RunObjectCache {
+    fn create(ctx: *CliCtx, verbose: bool, strategy: base.SpecializationStrategy) Allocator.Error!?*RunObjectCache {
         const config = CacheConfig{ .enabled = true, .verbose = verbose, .roc_ctx = ctx.coreCtx() };
         const native = RocTarget.detectNative();
-        var store = pack_store.Store.init(ctx.gpa, config, native, @tagName(cli_args.OptLevel.dev)) catch |err| switch (err) {
+        var store = pack_store.Store.initForStrategy(ctx.gpa, config, native, @tagName(cli_args.OptLevel.dev), strategy) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.NoHomeDirectory => return null,
         };
@@ -8747,7 +8747,7 @@ fn writeOptimizedPacks(
     // order, so the object would depend on scheduling.
     var config = linkedObjectLoweringConfig(strategy, target);
     config.target.spec_cache = .{ .context = &no_entries, .find = noObjectCacheEntries };
-    config.target.code_provision = nativeObjectCodeProvision(target, .dev, true, true);
+    config.target.code_provision = nativeObjectCodeProvision(target, .dev, true, true, strategy);
     config.target.spec_comptime_reads = true;
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         ctx.gpa,
@@ -11822,19 +11822,20 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // build reads and writes no dev packs; only object packs serve it.
     const splices_dev_packs = target_arch != .wasm32;
     if (object_cache_enabled) {
-        if (sharedCompileTimeObjectCache(&build_env, target, args.opt)) |shared| {
-            object_store = &shared.store;
+        const strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+        if (splices_dev_packs) {
+            const store_config = CacheConfig{ .enabled = true, .verbose = args.verbose, .roc_ctx = ctx.coreCtx() };
+            own_store = pack_store.Store.initForStrategy(ctx.gpa, store_config, target, @tagName(args.opt), strategy) catch |err| {
+                std.log.warn("object cache unavailable: {}", .{err});
+                return error.NativeCompilationFailed;
+            };
+            object_store = &own_store.?;
+        }
+        const shared_cache = if (strategy == .lss) sharedCompileTimeObjectCache(&build_env, target, args.opt) else null;
+        if (shared_cache) |shared| {
             loaded_packs = &shared.packs;
             shared.linked_stores = if (linked_stores) |*stores| stores else null;
         } else {
-            const store_config = CacheConfig{ .enabled = true, .verbose = args.verbose, .roc_ctx = ctx.coreCtx() };
-            if (splices_dev_packs) {
-                own_store = pack_store.Store.init(ctx.gpa, store_config, target, @tagName(args.opt)) catch |err| {
-                    std.log.warn("object cache unavailable: {}", .{err});
-                    return error.NativeCompilationFailed;
-                };
-                object_store = &own_store.?;
-            }
             own_packs = pack_store.LoadedPacks.init(ctx.gpa);
             own_packs.?.pending = .{
                 .store = object_store,
@@ -11855,7 +11856,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     if (loaded_packs) |packs| {
         runtime_lowering.target.spec_cache = packs.specCacheLookup();
     }
-    runtime_lowering.target.code_provision = nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_stores != null);
+    runtime_lowering.target.code_provision = nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_stores != null, currentRuntimeSpecializationStrategy(args.specialization_strategy));
     // This program's specializations go into packs.
     runtime_lowering.target.spec_comptime_reads = object_store != null or dev_diagnostics.isSet(.dev_pack_objects);
     build_env.setRuntimeLowering(runtime_lowering);
@@ -11904,7 +11905,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // compilations as a check does, before the runtime program takes the
     // shared Solved program.
     if (diag.errors == 0) try publishCompileTimeResults(ctx, &build_env, root_artifact);
-    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (loaded_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_stores != null));
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (loaded_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_stores != null, currentRuntimeSpecializationStrategy(args.specialization_strategy)));
     defer lowered.deinit();
     // The program links the objects defining the entries it took, and no
     // other.
@@ -11923,7 +11924,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         for (lowered.lir_result.store.getProcSpecs()) |proc| {
             if (proc.c_abi_entry) linked_procs += 1;
         }
-        std.debug.print("pack hits: {d} external procs: {d} linked procs: {d} evaluator excerpts: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, external_procs, linked_procs, packs.excerpts_served, packs.packs.items.len, packs.specs.count() });
+        std.debug.print("pack hits: {d} external procs: {d} linked procs: {d} evaluator excerpts: {d} packs loaded: {d} keys: {d} cache bytes loaded: {d}\n", .{ packs.hits, external_procs, linked_procs, packs.excerpts_served, packs.packs.items.len, packs.specs.count(), packs.bytes_loaded });
     }
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
@@ -13777,35 +13778,40 @@ fn devCapturePrefix(roots: CheckedLirRoots, opt: cli_args.OptLevel, target: RocT
 }
 
 /// Native builds promise object provision only when they have an object
-/// cache. Foreign objects cannot replace CTFE's host-domain bodies. The
+/// cache. Only declared compatible procedures can replace CTFE's bodies. The
 /// wasm32 emitter splices no dev artifacts, so only linked objects serve it.
-fn nativeObjectCodeProvision(target: RocTarget, opt: cli_args.OptLevel, has_object_cache: bool, links_objects: bool) lir.CheckedPipeline.CodeProvision {
+fn nativeObjectCodeProvision(target: RocTarget, opt: cli_args.OptLevel, has_object_cache: bool, links_objects: bool, strategy: base.SpecializationStrategy) lir.CheckedPipeline.CodeProvision {
     if (!has_object_cache or opt != .dev) return .source_bodies;
     if (target.toCpuArch() == .wasm32) return if (links_objects) .target_linked_objects else .source_bodies;
-    const host = target == RocTarget.detectNative();
+    const host = backend.dev.NativeProcDomain.init(target, strategy).compatible(backend.dev.NativeProcDomain.init(RocTarget.detectNative(), .lss));
     if (links_objects) return if (host) .host_linked_dev_objects else .target_linked_dev_objects;
     return if (host) .host_dev_objects else .target_dev_objects;
 }
 
 test "native code provision names the emitter target and splice capability" {
     const native = RocTarget.detectNative();
+    try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_dev_objects, nativeObjectCodeProvision(native, .dev, true, false, .boxy));
     for (std.enums.values(cli_args.OptLevel)) |opt| {
-        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, nativeObjectCodeProvision(native, opt, false, false));
+        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, nativeObjectCodeProvision(native, opt, false, false, .lss));
         const expected: lir.CheckedPipeline.CodeProvision = if (opt == .dev) .host_dev_objects else .source_bodies;
-        try std.testing.expectEqual(expected, nativeObjectCodeProvision(native, opt, true, false));
+        try std.testing.expectEqual(expected, nativeObjectCodeProvision(native, opt, true, false, .lss));
         const linked: lir.CheckedPipeline.CodeProvision = if (opt == .dev) .host_linked_dev_objects else .source_bodies;
-        try std.testing.expectEqual(linked, nativeObjectCodeProvision(native, opt, true, true));
+        try std.testing.expectEqual(linked, nativeObjectCodeProvision(native, opt, true, true, .lss));
     }
     for (std.enums.values(RocTarget)) |target| {
-        if (target == native) continue;
-        if (target.toCpuArch() == .wasm32) {
-            try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, nativeObjectCodeProvision(target, .dev, true, false));
-            try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_linked_objects, nativeObjectCodeProvision(target, .dev, true, true));
-            try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, nativeObjectCodeProvision(target, .size, true, true));
+        if (backend.dev.NativeProcDomain.init(target, .lss).compatible(backend.dev.NativeProcDomain.init(native, .lss))) {
+            try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.host_dev_objects, nativeObjectCodeProvision(target, .dev, true, false, .lss));
+            try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.host_linked_dev_objects, nativeObjectCodeProvision(target, .dev, true, true, .lss));
             continue;
         }
-        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_dev_objects, nativeObjectCodeProvision(target, .dev, true, false));
-        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_linked_dev_objects, nativeObjectCodeProvision(target, .dev, true, true));
+        if (target.toCpuArch() == .wasm32) {
+            try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, nativeObjectCodeProvision(target, .dev, true, false, .lss));
+            try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_linked_objects, nativeObjectCodeProvision(target, .dev, true, true, .lss));
+            try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, nativeObjectCodeProvision(target, .size, true, true, .lss));
+            continue;
+        }
+        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_dev_objects, nativeObjectCodeProvision(target, .dev, true, false, .lss));
+        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_linked_dev_objects, nativeObjectCodeProvision(target, .dev, true, true, .lss));
     }
 }
 

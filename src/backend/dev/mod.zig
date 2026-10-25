@@ -44,6 +44,8 @@ pub const host_lir_codegen_available = LirCodeGenMod.host_lir_codegen_available;
 pub const ObjectFileCompiler = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").ObjectFileCompiler;
 /// Per-region machine-code excerpts and their reassembly.
 pub const CodeExcerpt = @import("CodeExcerpt.zig");
+/// Declared compatibility of relocatable native dev procedures.
+pub const NativeProcDomain = @import("NativeProcDomain.zig");
 /// Shared native procedure task driver and same-program retained excerpts.
 pub const NativeProcCompiler = @import("NativeProcCompiler.zig");
 /// An excerpt located in a loaded pack.
