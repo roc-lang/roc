@@ -7637,6 +7637,7 @@ test "certify accepts a payload borrow used while the owner is live" {
 test "certify accepts a retained Boxy field borrowed from implicit capture storage" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
+    f.store.runtime_contract = .boxy;
 
     const erased_box = try f.layouts.insertLayout(layout_mod.Layout.erasedBox());
     const capture_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{

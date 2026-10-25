@@ -9217,6 +9217,7 @@ test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
 test "ARC preserves erased callable repack reuse" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
+    f.store.runtime_contract = .boxy;
 
     const erased_callable = try f.layouts.insertErasedCallable();
     const capture = try f.local(.str);
@@ -9326,6 +9327,7 @@ test "ARC preserves erased callable repack reuse" {
 test "ARC preserves erased call ABI metadata" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
+    f.store.runtime_contract = .boxy;
 
     const erased_callable = try f.layouts.insertErasedCallable();
     const closure = try f.local(erased_callable);
@@ -16970,6 +16972,7 @@ test "RC field-take demand crosses complete tag payload and wrapper calls" {
 test "RC specialization: caller body survives variant proc append" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
+    f.store.runtime_contract = .boxy;
 
     // Callee returns its string parameter at position 1, so that parameter
     // and return solve borrowed.

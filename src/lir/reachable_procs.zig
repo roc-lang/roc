@@ -822,7 +822,11 @@ const Pass = struct {
     }
 
     fn remapBoxyTableProcs(self: *Pass) Allocator.Error!void {
-        if (self.store.runtime_contract == .specialized) return;
+        if (self.store.runtime_contract == .specialized) {
+            if (self.result.boxy_frozen_method_origins.count() != 0 or self.result.boxy_method_slots.items.len != 0)
+                base.invariant("specialized program carried Boxy method tables", .{});
+            return;
+        }
         var origins: @TypeOf(self.result.boxy_frozen_method_origins) = .empty;
         errdefer origins.deinit(self.allocator);
         var entries = self.result.boxy_frozen_method_origins.iterator();
@@ -1262,6 +1266,7 @@ test "reachable proc pass follows packed erased callable refs in static initiali
 test "reachable proc pass publishes exact deduplicated boxy worker procs" {
     var result = try LirProgram.Result.init(std.testing.allocator, base.target.TargetUsize.native);
     defer result.deinit();
+    result.store.runtime_contract = .boxy;
 
     const value = try result.store.addLocal(.{ .layout_idx = .zst });
     const ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
@@ -1543,6 +1548,7 @@ test "reachable proc pass retains frozen method provenance after implementation 
     const gpa = std.testing.allocator;
     var result = try LirProgram.Result.init(gpa, @import("base").target.TargetUsize.native);
     defer result.deinit();
+    result.store.runtime_contract = .boxy;
     const local = try result.store.addLocal(.{ .layout_idx = .zst });
     const body = try result.store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const implementation_identity = LIR.ProcIdentity.forTest(81);

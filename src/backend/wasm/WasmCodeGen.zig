@@ -17884,6 +17884,7 @@ test "a metadata-only descriptor out local binds once and reads back that slot" 
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
     defer store.deinit();
+    store.runtime_contract = .boxy;
     var layouts = try layout.Store.init(allocator, .u32);
     defer layouts.deinit();
 
