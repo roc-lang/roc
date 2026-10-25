@@ -5,12 +5,15 @@ const std = @import("std");
 const reporting = @import("reporting");
 const Allocator = std.mem.Allocator;
 
+/// A module of the completed compilation, named by its checked identity.
 pub const Module = struct {
     key: [32]u8,
     path: []const u8,
     identity_path: []const u8 = "",
 };
 
+/// A report a module produced, kept as typed document items so its paths
+/// can be rebound to the consuming invocation's source paths.
 pub const Diagnostic = struct {
     module: [32]u8,
     title: []const u8,
@@ -23,7 +26,9 @@ pub const Diagnostic = struct {
 /// Checked identities survive arena teardown and are independent of the
 /// producer's transient Monotype/Solved root positions.
 pub const Root = struct { module: [32]u8, root: u32 };
+/// A compile-time root the compilation evaluated and the roots it read.
 pub const RootDemand = struct { root: Root, reads: []const Root };
+/// A literal checked at compile time and the roots its check read.
 pub const LiteralDemand = struct {
     module: [32]u8,
     checked_expr: u32,
@@ -31,12 +36,15 @@ pub const LiteralDemand = struct {
     identity: ?[32]u8,
     reads: []const Root,
 };
+/// The compile-time demand one compile-time evaluation recorded.
 pub const Demand = struct {
     evaluated: []const RootDemand,
     stored: []const Root,
     literals: []const LiteralDemand,
 };
 
+/// Everything a completed compilation records for a later invocation to
+/// consume in place of evaluating its modules again.
 pub const Outcome = struct {
     modules: []const Module = &.{},
     diagnostics: []const Diagnostic = &.{},
@@ -55,6 +63,7 @@ pub fn encode(allocator: Allocator, value: anytype) Allocator.Error![]u8 {
     return out.toOwnedSlice();
 }
 
+/// Appends the encoding of one record value to `out`.
 pub fn write(comptime T: type, out: *std.Io.Writer, value: T) std.Io.Writer.Error!void {
     switch (@typeInfo(T)) {
         .void => {},
@@ -73,15 +82,17 @@ pub fn write(comptime T: type, out: *std.Io.Writer, value: T) std.Io.Writer.Erro
         },
         .@"struct" => |info| inline for (info.field_names, info.field_types) |name, Field| try write(Field, out, @field(value, name)),
         .@"union" => |info| {
-            try write(info.tag_type.?, out, std.meta.activeTag(value));
-            switch (value) {
-                inline else => |v| try write(@TypeOf(v), out, v),
+            const tag = std.meta.activeTag(value);
+            try write(info.tag_type.?, out, tag);
+            inline for (info.field_names, info.field_types) |name, Field| {
+                if (tag == @field(info.tag_type.?, name)) try write(Field, out, @field(value, name));
             }
         },
-        else => @compileError("unsupported record field: " ++ @typeName(T)),
+        .type, .noreturn, .float, .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @compileError("unsupported record field: " ++ @typeName(T)),
     }
 }
 
+/// Decodes records written by `write`, rejecting malformed input.
 pub const Reader = struct {
     bytes: []const u8,
     arena: Allocator,
@@ -144,7 +155,7 @@ pub const Reader = struct {
                 }
                 return error.InvalidRecord;
             },
-            else => @compileError("unsupported record field: " ++ @typeName(T)),
+            .type, .noreturn, .float, .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @compileError("unsupported record field: " ++ @typeName(T)),
         }
     }
 };
@@ -161,10 +172,12 @@ pub fn rebindElements(elements: []reporting.DocumentElement, before: []const Mod
             v.content = rebindPath(v.content, before, after).?;
         },
         .vertical_stack, .horizontal_concat => |v| rebindElements(v, before, after),
-        else => {},
+        .text, .line_break, .indent, .space, .horizontal_rule, .annotation_start, .annotation_end, .raw, .reflowing_text, .link => {},
     };
 }
 
+/// The source path in `after` of the module `path` named in `before`, or
+/// `path` itself when no module of `before` has it.
 pub fn rebindPath(path: ?[]const u8, before: []const Module, after: []const Module) ?[]const u8 {
     const value = path orelse return null;
     for (before) |old| {

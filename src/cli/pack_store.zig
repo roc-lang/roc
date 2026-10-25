@@ -468,7 +468,7 @@ test "completed compilation interleaved writers expose only complete final bytes
     try testAtomicPublication(true);
 }
 
-fn testAtomicPublication(program: bool) !void {
+fn testAtomicPublication(program: bool) (Allocator.Error || std.Io.Dir.RealPathFileAllocError || std.Io.Dir.OpenError || std.Io.Dir.Iterator.Error || error{ PackWriteFailed, TestUnexpectedResult, TestExpectedEqual })!void {
     const Hook = struct {
         store: *Store,
         program: bool,
