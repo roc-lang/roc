@@ -36,7 +36,12 @@ pub const Objects = struct {
     lease: std.Io.File,
     counters: Counters = .{},
 
-    pub fn init(core: CoreCtx, arena: Allocator, root: ?[]const u8, scratch: []const u8) !Objects {
+    /// Why taking the link lease can fail.
+    pub const InitError = Allocator.Error || std.Io.File.OpenError;
+    /// Why writing an object into the scratch directory can fail.
+    pub const MaterializeError = Allocator.Error || CoreCtx.DeleteError || std.Io.Dir.WriteFileError;
+
+    pub fn init(core: CoreCtx, arena: Allocator, root: ?[]const u8, scratch: []const u8) InitError!Objects {
         const lock_path = try std.fs.path.join(arena, &.{ scratch, "link.lock" });
         const lease = try std.Io.Dir.cwd().createFile(core.std_io, lock_path, .{ .read = true, .exclusive = true, .lock = .exclusive });
         return .{ .core = core, .arena = arena, .root = root, .scratch = scratch, .lease = lease };
@@ -104,13 +109,13 @@ pub const Objects = struct {
     /// Publish once, straight from the backend's bytes. The scratch name is
     /// already a lifetime pin; publication only adds and atomically renames a
     /// directory entry. A failed cache publication does not lose the object.
-    pub fn materialize(self: *Objects, bytes: []const u8) ![]const u8 {
+    pub fn materialize(self: *Objects, bytes: []const u8) MaterializeError![]const u8 {
         return self.materializeKnown(bytes, Identity.of(bytes));
     }
 
     /// `id` was computed from these bytes by their producer, either during
     /// this build or when embedding compiler inputs. Never from path or stat.
-    pub fn materializeKnown(self: *Objects, bytes: []const u8, id: Identity) ![]const u8 {
+    pub fn materializeKnown(self: *Objects, bytes: []const u8, id: Identity) MaterializeError![]const u8 {
         std.debug.assert(bytes.len == id.size);
         if (try self.findKnown(id, bytes)) |path| return path;
         const path = try std.fs.path.join(self.arena, &.{ self.scratch, try self.name(id) });
@@ -189,12 +194,14 @@ test "concurrent object publishers leave complete immutable objects" {
     try tmp.dir.createDir(io, "a", .default_dir);
     try tmp.dir.createDir(io, "b", .default_dir);
     const Worker = struct {
-        fn run(thread_io: std.Io, cache_root: []const u8, scratch: []const u8, failure: *?anyerror) void {
+        const PublishError = Objects.InitError || Objects.MaterializeError;
+
+        fn run(thread_io: std.Io, cache_root: []const u8, scratch: []const u8, failure: *?PublishError) void {
             publish(thread_io, cache_root, scratch) catch |err| {
                 failure.* = err;
             };
         }
-        fn publish(thread_io: std.Io, cache_root: []const u8, scratch: []const u8) !void {
+        fn publish(thread_io: std.Io, cache_root: []const u8, scratch: []const u8) PublishError!void {
             var storage = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             defer storage.deinit();
             const allocator = storage.allocator();
@@ -203,7 +210,7 @@ test "concurrent object publishers leave complete immutable objects" {
             _ = try objects.materialize("concurrent content");
         }
     };
-    var failures: [2]?anyerror = .{ null, null };
+    var failures: [2]?Worker.PublishError = .{ null, null };
     const first = try std.Thread.spawn(.{}, Worker.run, .{ io, root, try std.fs.path.join(a, &.{ root, "a" }), &failures[0] });
     const second = std.Thread.spawn(.{}, Worker.run, .{ io, root, try std.fs.path.join(a, &.{ root, "b" }), &failures[1] }) catch |err| {
         first.join();

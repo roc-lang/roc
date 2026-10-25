@@ -911,7 +911,7 @@ fn testElf(symbol: []const u8, weak: bool) [512]u8 {
     return bytes;
 }
 
-fn testArHeader(size: usize) ![60]u8 {
+fn testArHeader(size: usize) std.fmt.BufPrintError![60]u8 {
     var header: [60]u8 = @splat(' ');
     @memcpy(header[0..4], "x.o/");
     _ = try std.fmt.bufPrint(header[48..58], "{d}", .{size});
