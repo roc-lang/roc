@@ -41027,18 +41027,28 @@ fn assertSchemeRequirementBoundaryDecided(self: *const Self, roots: []const Boun
     }
 }
 
-/// Close every record row in the value shape of a pending derived `parser_for`
-/// or `encoder_for` relation, when this boundary owns the row's flexible
-/// extension and no boundary root's interface reaches it. Nothing outside the
-/// definition can name such an extension, so no later use can add a field: the
-/// fields the row has are the fields it gets, exactly as at module
-/// finalization. Closing it
-/// here lets the codec produce its constraints, including its error row,
-/// before generalization publishes the definition's type; deferring it to
-/// module finalization would add errors to a scheme that callers have already
-/// instantiated. A codec whose open row the interface does reach is rejected
-/// by `reportDerivedCodecOpenRecord` instead.
-fn closeBoundaryLocalDerivedCodecRecordRows(
+/// Settle every record in the value shape of a pending derived `parser_for`
+/// or `encoder_for` relation whose open parts this boundary owns and no
+/// boundary root's interface reaches. Nothing outside the definition can name
+/// such a part, so no later use can refine it, exactly as at module
+/// finalization:
+///
+/// - A flexible row extension closes: the fields the row has are the fields
+///   it gets. A codec whose open row the interface does reach is rejected by
+///   `reportDerivedCodecOpenRecord` instead.
+/// - An undetermined field kind (a record literal's) commits to `required`,
+///   the kind module finalization would commit it to. A kind that a pending
+///   `.?` access or unset is waiting on is left for that judgment, which
+///   runs later at this boundary and pins it `optional`. A kind the interface
+///   reaches stays undetermined: a caller may still pin it either way, so the
+///   codec stays a requirement of the definition's scheme.
+///
+/// Settling here lets the codec produce its constraints, including its error
+/// row, before generalization publishes the definition's type, instead of
+/// adding a codec requirement to the scheme that every use must resolve again;
+/// deferring it to module finalization would add errors to a scheme that
+/// callers have already instantiated.
+fn settleBoundaryLocalDerivedCodecRecords(
     self: *Self,
     roots: []const BoundaryRoot,
     env: *Env,
@@ -41046,12 +41056,16 @@ fn closeBoundaryLocalDerivedCodecRecordRows(
     const rank = env.rank();
     var exts = std.ArrayList(Var).empty;
     defer exts.deinit(self.gpa);
+    var kinds = std.ArrayList(Var).empty;
+    defer kinds.deinit(self.gpa);
     var interface_vars = collections.DenseMap(Var, void).init(self.gpa);
     defer interface_vars.deinit();
     var interface_collected = false;
 
     var shape_exts = std.ArrayList(Var).empty;
     defer shape_exts.deinit(self.gpa);
+    var shape_kinds = std.ArrayList(Var).empty;
+    defer shape_kinds.deinit(self.gpa);
 
     var open_in_interface = std.ArrayList(OpenRecordCodec).empty;
     defer open_in_interface.deinit(self.gpa);
@@ -41067,14 +41081,16 @@ fn closeBoundaryLocalDerivedCodecRecordRows(
         } else continue;
 
         shape_exts.clearRetainingCapacity();
-        try self.collectDerivedCodecOpenRecordExts(deferred.var_, &shape_exts);
+        shape_kinds.clearRetainingCapacity();
+        try self.collectDerivedCodecOpenRecordParts(deferred.var_, &shape_exts, &shape_kinds);
+        if (shape_exts.items.len == 0 and shape_kinds.items.len == 0) continue;
+        if (!interface_collected) {
+            for (roots) |root| try self.collectReachableVars(root.interface, &interface_vars);
+            interface_collected = true;
+        }
         const local_start = exts.items.len;
         const reaches_interface = for (shape_exts.items) |ext| {
             if (self.types.resolveVar(ext).desc.rank != rank) continue;
-            if (!interface_collected) {
-                for (roots) |root| try self.collectReachableVars(root.interface, &interface_vars);
-                interface_collected = true;
-            }
             if (interface_vars.contains(ext)) break true;
             try exts.append(self.gpa, ext);
         } else false;
@@ -41082,19 +41098,69 @@ fn closeBoundaryLocalDerivedCodecRecordRows(
             exts.shrinkRetainingCapacity(local_start);
             try open_in_interface.append(self.gpa, .{ .deferred = deferred, .constraint = codec_constraint });
         }
+        try self.appendBoundaryLocalKinds(shape_kinds.items, &interface_vars, rank, &kinds);
+    }
+
+    // A final codec relation the boundary's own definitions created waits on
+    // the owner's candidate chain rather than in the deferred queue. Its
+    // record kinds settle the same way, so capture can see its inputs settled.
+    for (roots) |root| {
+        const owner_chain = self.scheme_requirement_candidate_chains_by_owner.get(root.owner) orelse continue;
+        var candidate_idx = owner_chain.first;
+        while (candidate_idx != SchemeRequirementCandidate.none) : (candidate_idx = self.scheme_requirement_candidates.items[candidate_idx].next_of_owner) {
+            const candidate = self.scheme_requirement_candidates.items[candidate_idx];
+            if (self.final_codec_dispatch_constraint_fns.get(candidate.constraint.fn_var) != .final) continue;
+            shape_kinds.clearRetainingCapacity();
+            try self.collectDerivedCodecOpenRecordParts(candidate.receiver_var, null, &shape_kinds);
+            if (shape_kinds.items.len == 0) continue;
+            if (!interface_collected) {
+                for (roots) |interface_root| try self.collectReachableVars(interface_root.interface, &interface_vars);
+                interface_collected = true;
+            }
+            try self.appendBoundaryLocalKinds(shape_kinds.items, &interface_vars, rank, &kinds);
+        }
     }
 
     for (open_in_interface.items) |open| {
         try self.reportDerivedCodecOpenRecord(open.deferred, open.constraint, env);
     }
-    if (exts.items.len == 0) return;
+    if (exts.items.len == 0 and kinds.items.len == 0) return;
 
     for (exts.items) |ext| {
         if (self.types.resolveVar(ext).desc.content != .flex) continue;
         try self.unifyWith(ext, .{ .structure = .empty_record }, env);
     }
+    if (kinds.items.len != 0) {
+        var optional_judged = collections.DenseMap(Var, void).init(self.gpa);
+        defer optional_judged.deinit();
+        for (self.optional_field_accesses.items) |access| {
+            try optional_judged.put(self.types.resolveVar(access.presence_var).var_, {});
+        }
+        for (kinds.items) |kind| {
+            const resolved = self.types.resolveVar(kind);
+            if (resolved.desc.content != .flex) continue;
+            if (optional_judged.contains(resolved.var_)) continue;
+            try self.unifyWith(resolved.var_, .{ .field_presence = .required }, env);
+        }
+    }
     try self.checkStaticDispatchConstraints(env, false);
     try self.checkAllConstraints(env);
+}
+
+/// Append each of `candidates` that a boundary at `rank` owns and whose
+/// interface does not reach it.
+fn appendBoundaryLocalKinds(
+    self: *Self,
+    candidates: []const Var,
+    interface_vars: *const collections.DenseMap(Var, void),
+    rank: Rank,
+    out: *std.ArrayList(Var),
+) Allocator.Error!void {
+    for (candidates) |kind| {
+        if (self.types.resolveVar(kind).desc.rank != rank) continue;
+        if (interface_vars.contains(kind)) continue;
+        try out.append(self.gpa, kind);
+    }
 }
 
 /// The expression whose checking instantiated the scheme that introduced this
@@ -41191,7 +41257,7 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     try self.relateSameMethodRequirementsAtBoundary(roots, env);
     try self.relateUndischargedInterpolationParts(env);
 
-    try self.closeBoundaryLocalDerivedCodecRecordRows(roots, env);
+    try self.settleBoundaryLocalDerivedCodecRecords(roots, env);
 
     // Generalization publishes a complete scheme: its root type plus every
     // unresolved method relation the definition owns. Capture those relations
@@ -50429,41 +50495,57 @@ fn satisfyImplicitCodecConstraint(
     }
 }
 
-/// Collect, in variable order, the flexible extension of every record a
-/// derived codec's value shape reaches as data. A literal-carrying extension
-/// is not one: a pending literal can still add information to it.
-fn collectDerivedCodecOpenRecordExts(
+/// Collect, in variable order, the open parts of every record a derived
+/// codec's value shape reaches as data: into `exts`, each flexible extension
+/// (a literal-carrying extension is not one: a pending literal can still add
+/// information to it), and into `kinds`, each field kind that is still
+/// undetermined.
+fn collectDerivedCodecOpenRecordParts(
     self: *Self,
     root: Var,
-    out: *std.ArrayList(Var),
+    exts: ?*std.ArrayList(Var),
+    kinds: ?*std.ArrayList(Var),
 ) Allocator.Error!void {
     var reachable = collections.DenseMap(Var, void).init(self.gpa);
     defer reachable.deinit();
     try self.collectDataReachableVars(root, &reachable);
 
-    const start = out.items.len;
+    const exts_start = if (exts) |out| out.items.len else 0;
+    const kinds_start = if (kinds) |out| out.items.len else 0;
     var iter = reachable.keyIterator();
     while (iter.next()) |var_| {
         const content = self.types.resolveVar(var_.*).desc.content;
         if (content != .structure or content.structure != .record) continue;
-        const ext = self.types.resolveVar(content.structure.record.ext);
-        if (ext.desc.content != .flex) continue;
-        if (self.varLiteralKind(ext.var_) != null) continue;
-        try out.append(self.gpa, ext.var_);
+        if (kinds) |out| {
+            const fields = self.types.getRecordFieldsSlice(content.structure.record.fields);
+            for (fields.items(.presence)) |presence| {
+                const presence_var = presence.presenceVar() orelse continue;
+                const kind = self.types.resolveVar(presence_var);
+                if (kind.desc.content != .flex) continue;
+                try out.append(self.gpa, kind.var_);
+            }
+        }
+        if (exts) |out| {
+            const ext = self.types.resolveVar(content.structure.record.ext);
+            if (ext.desc.content != .flex) continue;
+            if (self.varLiteralKind(ext.var_) != null) continue;
+            try out.append(self.gpa, ext.var_);
+        }
     }
-    std.mem.sort(Var, out.items[start..], {}, varLessThan);
+    if (exts) |out| std.mem.sort(Var, out.items[exts_start..], {}, varLessThan);
+    if (kinds) |out| std.mem.sort(Var, out.items[kinds_start..], {}, varLessThan);
 }
 
 fn varLessThan(_: void, a: Var, b: Var) bool {
     return @backingInt(a) < @backingInt(b);
 }
 
-/// Close every flexible record extension `collectDerivedCodecOpenRecordExts`
+/// Close every flexible record extension `collectDerivedCodecOpenRecordParts`
 /// finds in `root`'s shape. Reports whether there was any to close.
 fn closeDerivedCodecOpenRecordExts(self: *Self, root: Var, env: *Env) Allocator.Error!bool {
     var exts = std.ArrayList(Var).empty;
     defer exts.deinit(self.gpa);
-    try self.collectDerivedCodecOpenRecordExts(root, &exts);
+    try self.collectDerivedCodecOpenRecordParts(root, &exts, null);
     if (exts.items.len == 0) return false;
     for (exts.items) |ext| {
         if (self.types.resolveVar(ext).desc.content != .flex) continue;

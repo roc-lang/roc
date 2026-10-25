@@ -2070,6 +2070,10 @@ const TargetEvidenceSource = union(enum) {
     derive,
     checked: EvidenceContract,
     materialized_contract: []const SpecEvidence,
+    /// A direct edge instantiated the scheme of the exact procedure alias
+    /// its target was reached through; the contract resolves that alias's
+    /// own requirements, and the target's evidence composes through the alias.
+    alias_scope: EvidenceContract,
 };
 
 /// The carried substitution an evidence-dependent dispatch instantiates its
@@ -36081,22 +36085,24 @@ const BodyContext = struct {
             }
             break :blk existing.slot;
         } else blk: {
-            const subst = (try self.directDispatchTargetSubstitution(plan, lookup, callable_node)) orelse
-                Common.invariant("closed direct procedure call had no checked substitution");
             const template = lookup.view.templates.get(procedure.template.template);
-            if (subst.len != template.scheme_vars.len) {
+            const edge: EdgeEvidence = if (try self.directAliasTargetEdge(plan, lookup)) |alias_edge| alias_edge else edge: {
+                const subst = (try self.directDispatchTargetSubstitution(plan, lookup, callable_node)) orelse
+                    Common.invariant("closed direct procedure call had no checked substitution");
+                break :edge .{
+                    .subst = subst,
+                    .vector = try self.deriveEvidenceVector(
+                        templateSchemaIn(lookup.view, &template),
+                        subst,
+                        self.view,
+                        if (self.dispatchTargetContract(plan)) |c| c.entries else null,
+                        .body_lowering,
+                    ),
+                };
+            };
+            if (edge.subst.len != template.scheme_vars.len) {
                 Common.invariant("closed direct procedure call substitution length differed from its scheme");
             }
-            const edge: EdgeEvidence = .{
-                .subst = subst,
-                .vector = try self.deriveEvidenceVector(
-                    templateSchemaIn(lookup.view, &template),
-                    subst,
-                    self.view,
-                    if (self.dispatchTargetContract(plan)) |c| c.entries else null,
-                    .body_lowering,
-                ),
-            };
             const source_fn_ty = lookup.target.callable_ty;
             const created = try self.builder.lowerDraftTemplateFromContext(
                 self,
@@ -50678,6 +50684,13 @@ const BodyContext = struct {
         const nested = switch (node.nested) {
             .resolved => plans.nestedEvidence(node),
             .from_callable => return false,
+            // A block-local alias's scope belongs to this body's lexical
+            // context, as a local procedure's does.
+            .through_alias => switch (node.target.alias orelse
+                Common.invariant("alias-scope evidence named a target with no alias binding")) {
+                .local => return true,
+                .top_level => plans.aliasScopeEvidence(node),
+            },
         };
         for (nested) |evidence| {
             if (self.checkedEvidenceSelectsLocalProc(evidence)) return true;
@@ -52254,15 +52267,28 @@ const BodyContext = struct {
             const node = request_node orelse Common.invariant("constrained scheme use had no checked substitution");
             return try self.deriveEdgeAtRequest(schema, node, purpose);
         };
-        const tys = site_view.static_dispatch_plans.siteSubstitution(expr) orelse &.{};
-        const refs = site_view.static_dispatch_plans.siteEvidence(expr);
         return .{
             .subst = subst,
-            .vector = if (refs) |site_refs|
-                try self.deriveSiteEvidenceVector(schema, subst, site_view, site_refs, tys, purpose)
-            else
-                try self.deriveEvidenceVector(schema, subst, site_view, refs, purpose),
+            .vector = try self.siteEvidenceVector(site_view, expr, schema, subst, purpose),
         };
+    }
+
+    /// The evidence a checked use site supplies for `schema` under the
+    /// substitution checking recorded there.
+    fn siteEvidenceVector(
+        self: *BodyContext,
+        site_view: ModuleView,
+        expr: checked.CheckedExprId,
+        schema: SchemeRequirements,
+        subst: SpecSubstitution,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error![]const SpecEvidence {
+        const tys = site_view.static_dispatch_plans.siteSubstitution(expr) orelse &.{};
+        const refs = site_view.static_dispatch_plans.siteEvidence(expr);
+        return if (refs) |site_refs|
+            try self.deriveSiteEvidenceVector(schema, subst, site_view, site_refs, tys, purpose)
+        else
+            try self.deriveEvidenceVector(schema, subst, site_view, refs, purpose);
     }
 
     /// `deriveCheckedEvidenceVector` for a checked use site, shared between
@@ -52669,7 +52695,7 @@ const BodyContext = struct {
             const finished = frames.pop().?;
             delivered = switch (finished.owner) {
                 .root => return,
-                .target => |target| .{ .target = finishEvidenceTarget(site_view, target) },
+                .target => |target| .{ .target = try self.finishEvidenceTarget(site_view, target, purpose) },
                 .contracts => |primary| blk: {
                     const original = evidenceCallableContracts(primary);
                     var changed: ?[]SpecEvidence = if (original.len == finished.out.len) null else try arena.alloc(SpecEvidence, finished.out.len);
@@ -52751,24 +52777,47 @@ const BodyContext = struct {
             .params = &.{},
             .nested = &.{},
         };
-        switch (node.nested) {
-            .from_callable => {},
-            .resolved => {
-                const refs = site_view.static_dispatch_plans.nestedEvidence(node);
-                if (refs.len != schema.params.len) {
-                    Common.invariant("checked target nested evidence length differed from its requirement schema");
-                }
-                if (refs.len != 0) {
-                    frame.refs = refs;
-                    frame.params = schema.params;
-                    frame.nested = try self.builder.evidence_arena.allocator().alloc(SpecEvidence, refs.len);
-                }
+        const refs, const params = switch (node.nested) {
+            .from_callable => .{ &[_]static_dispatch.CheckedEvidence{}, schema.params },
+            .resolved => .{ site_view.static_dispatch_plans.nestedEvidence(node), schema.params },
+            // The edge resolved the requirements of the alias the target was
+            // reached through; the target's own vector composes through the
+            // alias when the frame finishes.
+            .through_alias => .{
+                site_view.static_dispatch_plans.aliasScopeEvidence(node),
+                self.aliasScopeSchema(.{
+                    .view = lookup.view,
+                    .alias = node.target.alias orelse
+                        Common.invariant("alias-scope evidence named a target with no alias binding"),
+                }).params,
             },
+        };
+        if (node.nested != .from_callable and refs.len != params.len) {
+            Common.invariant("checked target nested evidence length differed from its requirement schema");
+        }
+        if (refs.len != 0) {
+            frame.refs = refs;
+            frame.params = params;
+            frame.nested = try self.builder.evidence_arena.allocator().alloc(SpecEvidence, refs.len);
         }
         return frame;
     }
 
-    fn finishEvidenceTarget(site_view: ModuleView, frame: EvidenceTargetFrame) *const SpecEvidenceTarget {
+    fn finishEvidenceTarget(
+        self: *BodyContext,
+        site_view: ModuleView,
+        frame: EvidenceTargetFrame,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error!*const SpecEvidenceTarget {
+        const substitution = checkedTargetSubstitution(site_view, frame.lookup.view, frame.node);
+        const nested: []const SpecEvidence = switch (frame.node.nested) {
+            .resolved, .from_callable => frame.nested,
+            .through_alias => blk: {
+                const recorded = substitution.?;
+                const alias_subst = try self.substitutionFromCheckedTypes(recorded.view, recorded.tys);
+                break :blk (try self.edgeThroughAlias(recorded.alias.?, .{ .subst = alias_subst, .vector = frame.nested }, purpose)).vector;
+            },
+        };
         frame.target.* = .{
             .view = frame.lookup.view,
             .target = frame.node.target,
@@ -52777,9 +52826,9 @@ const BodyContext = struct {
                 .callable, .alias, .derived_from_callable => |callable_ty| .{ .view = site_view, .callable_ty = callable_ty },
             } else null,
             .local_proc_context = frame.lookup.local_proc_context,
-            .substitution = checkedTargetSubstitution(site_view, frame.lookup.view, frame.node),
-            .nested = if (frame.nested.len != 0 and evidenceVectorCarriesCheckedContract(frame.nested))
-                .{ .resolved = frame.nested }
+            .substitution = substitution,
+            .nested = if (nested.len != 0 and evidenceVectorCarriesCheckedContract(nested))
+                .{ .resolved = nested }
             else
                 .synthesize,
         };
@@ -53480,6 +53529,49 @@ const BodyContext = struct {
             Common.invariant("independent dispatch callable attempted to synthesize SchemeUseRecord-supplied nested evidence");
     }
 
+    /// The alias-scope evidence a direct edge resolved, when it instantiated
+    /// the scheme of the exact procedure alias its target was reached through.
+    fn directAliasScopeContract(self: *BodyContext, node_id: static_dispatch.EvidenceNodeId) ?EvidenceContract {
+        const node = self.view.static_dispatch_plans.evidenceNode(node_id);
+        return switch (node.nested) {
+            .through_alias => .{ .view = self.view, .entries = self.view.static_dispatch_plans.aliasScopeEvidence(node) },
+            .resolved, .from_callable => null,
+        };
+    }
+
+    /// The edge of a target reached through an exact procedure alias, from
+    /// the substitution and alias-scope evidence this body's checked edge
+    /// recorded for the alias's scheme.
+    fn aliasTargetEdge(
+        self: *BodyContext,
+        recorded: CheckedTargetSubstitution,
+        contract: EvidenceContract,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error!EdgeEvidence {
+        const target_alias = recorded.alias orelse
+            Common.invariant("alias-scope evidence had no alias substitution");
+        const alias_subst = try self.substitutionFromCheckedTypes(recorded.view, recorded.tys);
+        const alias_vector = try self.deriveEvidenceVector(self.aliasScopeSchema(target_alias), alias_subst, contract.view, contract.entries, purpose);
+        return try self.edgeThroughAlias(target_alias, .{ .subst = alias_subst, .vector = alias_vector }, purpose);
+    }
+
+    /// The edge of a direct dispatch's target when the edge instantiated the
+    /// scheme of the exact procedure alias the target was reached through.
+    fn directAliasTargetEdge(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        lookup: MethodLookup,
+    ) Allocator.Error!?EdgeEvidence {
+        const direct = switch (plan.resolution) {
+            .direct_closed, .direct_parametric => |direct| direct,
+            .evidence_dependent, .structural, .checked_error, .@"unreachable" => return null,
+            .direct_pending => Common.invariant("unfinalized direct call reached Monotype"),
+        };
+        const contract = self.directAliasScopeContract(direct.evidence) orelse return null;
+        const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
+        return try self.aliasTargetEdge(checkedTargetSubstitution(self.view, lookup.view, node).?, contract, .body_lowering);
+    }
+
     /// The requirement-target contract a checked dispatch plan recorded for
     /// its target's own requirements: a direct plan's resolved nested
     /// entries. Every other edge derives the target's evidence from the
@@ -53490,7 +53582,7 @@ const BodyContext = struct {
                 const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
                 break :blk switch (node.nested) {
                     .resolved => .{ .view = self.view, .entries = self.view.static_dispatch_plans.nestedEvidence(node) },
-                    .from_callable => null,
+                    .from_callable, .through_alias => null,
                 };
             },
             .evidence_dependent, .structural, .checked_error, .@"unreachable" => null,
@@ -53509,7 +53601,9 @@ const BodyContext = struct {
         plan: static_dispatch.StaticDispatchCallPlan,
     ) TargetEvidenceSource {
         return switch (plan.resolution) {
-            .direct_closed, .direct_parametric => if (self.dispatchTargetContract(plan)) |contract|
+            .direct_closed, .direct_parametric => |direct| if (self.directAliasScopeContract(direct.evidence)) |contract|
+                .{ .alias_scope = contract }
+            else if (self.dispatchTargetContract(plan)) |contract|
                 .{ .checked = contract }
             else
                 .derive,
@@ -53635,11 +53729,44 @@ const BodyContext = struct {
     }
 
     /// The substitution of a target reached through an exact procedure alias.
-    /// `alias_subst` substitutes the alias scope's quantified variables. Each
-    /// alias's forwarded lookup recorded its own substitution over that scope,
-    /// so instantiating it in the scope seeded with `alias_subst` composes the
-    /// two exactly, alias by alias, up to the procedure the chain reaches.
+    /// `alias_subst` substitutes the alias scope's quantified variables.
     fn substitutionThroughAlias(self: *BodyContext, target_alias: TargetAlias, alias_subst: SpecSubstitution) Allocator.Error!SpecSubstitution {
+        return (try self.composeThroughAlias(target_alias, alias_subst, null, .body_lowering)).subst;
+    }
+
+    /// The edge of a target reached through an exact procedure alias, from
+    /// the edge that instantiated the alias's scheme: `alias_edge` substitutes
+    /// the alias scope's quantified variables and supplies the alias's own
+    /// requirements.
+    fn edgeThroughAlias(
+        self: *BodyContext,
+        target_alias: TargetAlias,
+        alias_edge: EdgeEvidence,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error!EdgeEvidence {
+        const composed = try self.composeThroughAlias(target_alias, alias_edge.subst, alias_edge.vector, purpose);
+        return .{ .subst = composed.subst, .vector = composed.vector.? };
+    }
+
+    /// A target's substitution, and its evidence when the composition was
+    /// given the alias's, composed through an exact procedure alias chain.
+    const AliasComposition = struct {
+        subst: SpecSubstitution,
+        vector: ?[]const SpecEvidence,
+    };
+
+    /// Each alias's forwarded lookup recorded its own substitution and
+    /// evidence over that alias's scope, so instantiating the lookup in the
+    /// scope seeded with the alias's substitution, and with its evidence when
+    /// `alias_vector` is given, composes the two exactly, alias by alias, up
+    /// to the procedure the chain reaches.
+    fn composeThroughAlias(
+        self: *BodyContext,
+        target_alias: TargetAlias,
+        alias_subst: SpecSubstitution,
+        alias_vector: ?[]const SpecEvidence,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error!AliasComposition {
         const Step = union(enum) {
             callable_eval: Builder.CallableEvalUse,
             local: struct { view: ModuleView, lookup: checked.CheckedExprId, dispatch_scope: ?checked.DispatchScopeId },
@@ -53649,6 +53776,7 @@ const BodyContext = struct {
             .local => |local| .{ .local = .{ .view = target_alias.view, .lookup = local.lookup, .dispatch_scope = local.dispatch_scope } },
         };
         var subst = alias_subst;
+        var vector = alias_vector;
         while (true) {
             const view, const lookup, const owner_template, const schema = switch (step) {
                 .callable_eval => |use| blk: {
@@ -53676,25 +53804,61 @@ const BodyContext = struct {
                 Common.invariant("procedure alias substitution length differed from its scope's quantified variables");
             }
             try alias_ctx.seedSubstitution(schema, subst);
-            const next = try alias_ctx.recordedSiteSubstitution(view, lookup, try alias_ctx.useSiteSchema(lookup)) orelse
+            if (vector) |alias_evidence| {
+                if (alias_evidence.len != schema.params.len) {
+                    Common.invariant("procedure alias evidence length differed from its scope's requirements");
+                }
+                const edge: EdgeEvidence = .{ .subst = subst, .vector = alias_evidence };
+                alias_ctx.evidence = switch (step) {
+                    .callable_eval => rootEvidenceWithSubstitution(owner_template, schema, edge),
+                    .local => |local| if (local.dispatch_scope) |scope_id|
+                        try enterEvidenceScope(self.builder, self.evidence, scope_id, lookup, edge)
+                    else
+                        self.evidence,
+                };
+            }
+            const lookup_schema = try alias_ctx.useSiteSchema(lookup);
+            const next = try alias_ctx.recordedSiteSubstitution(view, lookup, lookup_schema) orelse
                 Common.invariant("procedure alias lookup had no checked substitution");
+            const next_vector: ?[]const SpecEvidence = if (vector != null)
+                try alias_ctx.siteEvidenceVector(view, lookup, lookup_schema, next, purpose)
+            else
+                null;
             const ref_id = view.resolved_refs.lookupIdByCheckedExpr(lookup) orelse
                 Common.invariant("forwarded procedure alias lookup had no resolved value");
+            const done: AliasComposition = .{ .subst = next, .vector = next_vector };
             step = switch (view.resolved_refs.records[@backingInt(ref_id)].ref) {
                 .local_proc => |local| if (local.is_alias)
                     .{ .local = .{ .view = view, .lookup = local.expr, .dispatch_scope = local.dispatch_scope } }
                 else
-                    return next,
+                    return done,
                 .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| .{
-                    .callable_eval = self.builder.forwardingCallableEvalForProcedureUse(proc) orelse return next,
+                    .callable_eval = self.builder.forwardingCallableEvalForProcedureUse(proc) orelse return done,
                 },
                 .platform_required_proc => |required| .{
-                    .callable_eval = self.builder.forwardingCallableEvalForProcedureUse(required.procedure) orelse return next,
+                    .callable_eval = self.builder.forwardingCallableEvalForProcedureUse(required.procedure) orelse return done,
                 },
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => Common.invariant("forwarded procedure alias lookup did not name a procedure"),
             };
             subst = next;
+            vector = next_vector;
         }
+    }
+
+    /// The requirement schema of the scope an exact procedure alias owns:
+    /// a top-level alias's entry wrapper's, or a block-local alias's
+    /// generalized-local scope's.
+    fn aliasScopeSchema(self: *BodyContext, target_alias: TargetAlias) SchemeRequirements {
+        return switch (target_alias.alias) {
+            .top_level => |binding| blk: {
+                const use = self.builder.callableEvalForAliasBinding(target_alias.view, binding);
+                const template = use.view.callable_eval_templates.templates[@backingInt(use.template)];
+                const wrapper = use.view.entry_wrappers.lookupByRoot(template.root) orelse
+                    Common.invariant("callable eval template root had no checked entry wrapper");
+                break :blk templateSchemaIn(use.view, &use.view.templates.get(wrapper.template.template));
+            },
+            .local => |local| self.scopeSchema(target_alias.view, local.dispatch_scope),
+        };
     }
 
     fn methodTargetSchema(self: *BodyContext, lookup: MethodLookup) SchemeRequirements {
@@ -53713,7 +53877,7 @@ const BodyContext = struct {
                 const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
                 break :blk switch (node.nested) {
                     .resolved => .{ .view = self.view, .entries = self.view.static_dispatch_plans.nestedEvidence(node) },
-                    .from_callable => null,
+                    .from_callable, .through_alias => null,
                 };
             },
             .evidence_dependent, .structural, .checked_error, .@"unreachable" => null,
@@ -53726,7 +53890,9 @@ const BodyContext = struct {
         call: static_dispatch.IteratorDispatchCall,
     ) TargetEvidenceSource {
         return switch (call.resolution) {
-            .direct_closed, .direct_parametric => if (self.iteratorCallContract(call)) |contract|
+            .direct_closed, .direct_parametric => |direct| if (self.directAliasScopeContract(direct.evidence)) |contract|
+                .{ .alias_scope = contract }
+            else if (self.iteratorCallContract(call)) |contract|
                 .{ .checked = contract }
             else
                 .derive,
@@ -54506,15 +54672,31 @@ const BodyContext = struct {
         const lookup = try self.withLocalProcContext(raw_lookup);
         const source_fn_ty = lookup.target.callable_ty;
         const source_fn_key = lookup.view.types.rootKey(source_fn_ty);
+        // A target reached through an alias takes the substitution and the
+        // evidence composed through that alias together, so the context the
+        // target's root relates in holds the very cells its evidence names.
+        const alias_edge: ?EdgeEvidence = switch (evidence_source) {
+            .alias_scope => |contract| try self.aliasTargetEdge(switch (lookup.substitution orelse
+                Common.invariant("alias-scope evidence reached a target with no checked substitution")) {
+                .own_body => |own| own,
+                .carried => Common.invariant("alias-scope evidence reached a carried target substitution"),
+            }, contract, .body_lowering),
+            .derive, .checked, .materialized_contract => null,
+        };
         return switch (lookup.target.kind) {
             .procedure => |procedure| blk: {
                 const template = lookup.view.templates.get(procedure.template.template);
                 const schema = templateSchemaIn(lookup.view, &template);
-                var target_ctx = try self.substitutedMethodTargetContext(lookup);
+                var target_ctx = if (alias_edge) |edge| ctx: {
+                    var ctx = try self.methodTargetContext(lookup);
+                    errdefer ctx.deinit();
+                    try ctx.seedSubstitution(schema, edge.subst);
+                    break :ctx ctx;
+                } else try self.substitutedMethodTargetContext(lookup);
                 defer target_ctx.deinit();
                 const target_root_node = try target_ctx.instNode(template.checked_fn_root);
                 try self.relateEvidenceTargetRootToRequest(lookup.view, template.checked_fn_root, target_root_node, request_fn_node);
-                const edge = try self.deriveTargetEdge(&target_ctx, schema, evidence_source);
+                const edge = alias_edge orelse try self.deriveTargetEdge(&target_ctx, schema, evidence_source);
                 break :blk try self.builder.lowerDraftTemplateFromContext(
                     self,
                     procedure.template,
@@ -54528,6 +54710,7 @@ const BodyContext = struct {
                 );
             },
             .local_proc => |local| blk: {
+                if (alias_edge != null) Common.invariant("a method alias reached a local procedure target");
                 const schema = self.scopeSchema(lookup.view, local.dispatch_scope);
                 var target_ctx = try self.substitutedMethodTargetContext(lookup);
                 defer target_ctx.deinit();
@@ -54648,6 +54831,7 @@ const BodyContext = struct {
                 // composite requirements with no substitution slot.
                 break :blk try normalizeMaterializedEvidence(self.builder.evidence_arena.allocator(), contract);
             },
+            .alias_scope => Common.invariant("alias-scope evidence reached a target's own edge"),
         };
         return .{
             .subst = subst,
@@ -54669,7 +54853,8 @@ const BodyContext = struct {
         const lookup = try self.withLocalProcContext(raw_lookup);
         const source_fn_ty = lookup.target.callable_ty;
         const source_fn_key = lookup.view.types.rootKey(source_fn_ty);
-        const subst = (try self.directDispatchTargetSubstitution(plan, lookup, request_fn_node)) orelse
+        const alias_edge = try self.directAliasTargetEdge(plan, lookup);
+        const subst = if (alias_edge) |edge| edge.subst else (try self.directDispatchTargetSubstitution(plan, lookup, request_fn_node)) orelse
             Common.invariant("direct dispatch target had no checked substitution");
         const contract: ?[]const static_dispatch.CheckedEvidence = if (self.dispatchTargetContract(plan)) |c| c.entries else null;
         return switch (lookup.target.kind) {
@@ -54679,7 +54864,7 @@ const BodyContext = struct {
                     Common.invariant("direct dispatch target substitution length differed from its scheme");
                 }
                 const schema = templateSchemaIn(lookup.view, &template);
-                const edge: EdgeEvidence = .{
+                const edge: EdgeEvidence = alias_edge orelse .{
                     .subst = subst,
                     .vector = try self.deriveEvidenceVector(schema, subst, self.view, contract, .body_lowering),
                 };
@@ -54696,6 +54881,7 @@ const BodyContext = struct {
                 );
             },
             .local_proc => |local| blk: {
+                if (alias_edge != null) Common.invariant("a method alias reached a local procedure target");
                 const schema = self.scopeSchema(lookup.view, local.dispatch_scope);
                 if (subst.len != schema.scheme_vars.len) {
                     Common.invariant("direct local method target substitution length differed from its scope scheme");

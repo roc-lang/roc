@@ -11025,6 +11025,22 @@ instantiated, so callers' exhaustiveness and annotation checks would run
 against an incomplete error row. An extension owned by an enclosing scope or
 by a non-generalized value binding waits for its owner.
 
+The same boundary commits the undetermined field kinds of those records (a
+record literal's fields, Field Kinds below) to `required` when the boundary
+owns the kind and no boundary root's interface reaches it. Such a kind is just
+as invisible to callers as a boundary-local extension, and `required` is the
+kind module finalization would commit it to. A record's codec depends on its
+field kinds, so an undetermined kind would keep the codec from producing its
+constraints at the boundary. If the codec relation also reached a type
+variable of the definition's interface (the implicitly open error row of
+`encode : Doc -> Try(Str, [Infinity, NaN, NegativeInfinity])`), the definition's
+scheme would gain a codec requirement that every use resolves again, although
+no use can change the codec. A kind that a pending `.?` access or unset is
+waiting on is left to that judgment, which pins it `optional` later at the same
+boundary. A kind an interface reaches (a returned record literal) stays
+undetermined, because a caller may pin it either way, and its codec stays a
+requirement of the scheme.
+
 A row whose extension the boundary owns and an interface does reach (a record
 parameter, or a returned record) rejects the derived codec with a "Record
 Fields Not Known" report at the codec call. Callers could use such a record
@@ -13199,13 +13215,16 @@ Other solved-graph mutations:
   as data that was inferred from use sites closes its unconstrained flexible
   extension to the empty record through ordinary unification; rigid
   extensions remain rejected.
-- `closeBoundaryLocalDerivedCodecRecordRows`—policy: Derived Structural
+- `settleBoundaryLocalDerivedCodecRecords`—policy: Derived Structural
   Codec Record-Row Closure (above). At a generalization boundary, each record
   row in a pending derived codec relation's value shape whose flexible
   extension the boundary owns and no boundary interface reaches closes to the
   empty record through ordinary unification before scheme capture. A row
   whose extension an interface reaches is rejected instead
-  (`reportDerivedCodecOpenRecord`), never closed.
+  (`reportDerivedCodecOpenRecord`), never closed. Each undetermined field
+  kind of those records that the boundary owns, no boundary interface
+  reaches, and no pending `.?` judgment waits on is unified with `required`
+  before scheme capture.
 - `closeValueRowTailsCarryingDerivations`—policy: Derived Equality And
   Hashing Over Open Rows (above). After the module solves, a walk over each
   non-function top-level value's data positions collects open row tails; one
