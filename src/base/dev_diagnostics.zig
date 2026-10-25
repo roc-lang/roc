@@ -39,7 +39,7 @@ pub const Var = enum {
     /// Load the pack objects in the named directory into a native dev build.
     dev_pack_hits,
     /// Check every object compile against one assembled from its artifacts.
-    dev_artifact_roundtrip,
+    dev_excerpt_roundtrip,
     /// Append one record to the named file per in-process LLVM object compile.
     test_llvm_object_compile_count_file,
     /// Print deterministic work counters for one test command.
@@ -59,7 +59,7 @@ pub const Var = enum {
             .ctfe_reuse_trace => "ROC_CTFE_REUSE_TRACE",
             .dev_pack_objects => "ROC_DEV_PACK_OBJECTS",
             .dev_pack_hits => "ROC_DEV_PACK_HITS",
-            .dev_artifact_roundtrip => "ROC_DEV_ARTIFACT_ROUNDTRIP",
+            .dev_excerpt_roundtrip => "ROC_DEV_EXCERPT_ROUNDTRIP",
             .test_llvm_object_compile_count_file => "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE",
             .test_command_work => "ROC_TEST_COMMAND_WORK",
         };

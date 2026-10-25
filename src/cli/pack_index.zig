@@ -5,7 +5,7 @@ const std = @import("std");
 const base = @import("base");
 const backend = @import("backend");
 const lir = @import("lir");
-const PA = backend.dev.ProcArtifact;
+const PA = backend.dev.CodeExcerpt;
 const PF = backend.dev.PackFile;
 const Allocator = std.mem.Allocator;
 
@@ -33,7 +33,7 @@ fn appendSlice(allocator: Allocator, bytes: *std.ArrayList(u8), value: []const u
 }
 
 /// Encode one artifact's code and static-data bytes, without metadata.
-pub fn payload(allocator: Allocator, artifact: PA.Artifact) Allocator.Error![]u8 {
+pub fn payload(allocator: Allocator, artifact: PA.Excerpt) Allocator.Error![]u8 {
     var bytes = std.ArrayList(u8).empty;
     errdefer bytes.deinit(allocator);
     try bytes.appendSlice(allocator, payload_magic);
@@ -48,12 +48,12 @@ pub fn encodeMetadata(allocator: Allocator, set: *const PA.Set, specs: []const P
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const scratch = arena.allocator();
-    const map = try scratch.alloc(u32, set.artifacts.len);
+    const map = try scratch.alloc(u32, set.excerpts.len);
     @memset(map, std.math.maxInt(u32));
     for (closure, 0..) |old, new| map[old] = std.math.cast(u32, new) orelse return error.OutOfMemory;
-    const artifacts = try scratch.alloc(PA.Artifact, closure.len);
+    const artifacts = try scratch.alloc(PA.Excerpt, closure.len);
     for (closure, artifacts) |old, *artifact| {
-        artifact.* = set.artifacts[old];
+        artifact.* = set.excerpts[old];
         artifact.code = &.{};
         const refs = try scratch.dupe(PA.Reference, artifact.refs);
         for (refs) |*ref| {
@@ -67,10 +67,10 @@ pub fn encodeMetadata(allocator: Allocator, set: *const PA.Set, specs: []const P
     }
     const entries = try scratch.dupe(PF.SpecEntry, specs);
     for (entries) |*entry| {
-        entry.artifact = map[entry.artifact];
-        std.debug.assert(entry.artifact != std.math.maxInt(u32));
+        entry.excerpt = map[entry.excerpt];
+        std.debug.assert(entry.excerpt != std.math.maxInt(u32));
     }
-    const metadata = try PF.writeWithNames(scratch, &.{ .arena = undefined, .artifacts = artifacts, .source_files = set.source_files }, entries, names);
+    const metadata = try PF.writeWithNames(scratch, &.{ .arena = undefined, .excerpts = artifacts, .source_files = set.source_files }, entries, names);
     var bytes = std.ArrayList(u8).empty;
     errdefer bytes.deinit(allocator);
     try bytes.appendSlice(allocator, metadata_magic);
@@ -95,10 +95,10 @@ pub fn decodeMetadata(allocator: Allocator, bytes: []const u8) Error!Metadata {
     if (count > (bytes.len - 12) / 32) return error.MalformedPack;
     var pack = try PF.read(allocator, bytes[12 + @as(usize, count) * 32 ..]);
     errdefer pack.deinit();
-    if (pack.set.artifacts.len != count) return error.MalformedPack;
-    for (pack.specs) |spec| if (pack.set.artifacts[spec.artifact].kind != .proc) return error.MalformedPack;
-    for (pack.set.artifacts) |artifact| {
-        if (artifact.code.len != 0 or artifact.runtime_refs.len != 0) return error.MalformedPack;
+    if (pack.set.excerpts.len != count) return error.MalformedPack;
+    for (pack.specs) |spec| if (pack.set.excerpts[spec.excerpt].kind != .proc) return error.MalformedPack;
+    for (pack.set.excerpts) |artifact| {
+        if (artifact.code.len != 0 or artifact.runtime_numbers.len != 0) return error.MalformedPack;
         for (artifact.data) |item| if (item.bytes.len != 0) return error.MalformedPack;
     }
     const hashes = try pack.set.arena.allocator().alloc([32]u8, count);
@@ -130,7 +130,7 @@ pub const Offer = struct {
 };
 
 /// Bytes are owned by the loader, and remain live until all its consumers end.
-pub fn materialize(artifact: *PA.Artifact, bytes: []const u8) Error!void {
+pub fn materialize(artifact: *PA.Excerpt, bytes: []const u8) Error!void {
     if (!std.mem.startsWith(u8, bytes, payload_magic)) return error.MalformedPack;
     var offset: usize = payload_magic.len;
     artifact.code = try take(bytes, &offset);
@@ -151,8 +151,8 @@ fn take(bytes: []const u8, offset: *usize) Error![]const u8 {
 /// The exact set-local and symbolic dependency closure followed by a splice.
 pub const SpliceClosure = struct {
     allocator: Allocator,
-    set: *const backend.dev.ProcArtifact.Set,
-    procs: std.AutoHashMap(lir.ProcIdentity, ProcArtifacts),
+    set: *const backend.dev.CodeExcerpt.Set,
+    procs: std.AutoHashMap(lir.ProcIdentity, CodeExcerpts),
     thunks: std.AutoHashMap(lir.ProcIdentity, u32),
     helpers: std.StringHashMap(u32),
     /// Artifacts the current query reached; exactly the indices in `order`.
@@ -161,20 +161,20 @@ pub const SpliceClosure = struct {
 
     /// The artifacts of one procedure identity: a splice reaches the first,
     /// and a pack offers the last.
-    const ProcArtifacts = struct { first: u32, last: u32 };
+    const CodeExcerpts = struct { first: u32, last: u32 };
 
-    pub fn init(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set) Allocator.Error!SpliceClosure {
+    pub fn init(allocator: Allocator, set: *const backend.dev.CodeExcerpt.Set) Allocator.Error!SpliceClosure {
         var self = SpliceClosure{
             .allocator = allocator,
             .set = set,
-            .procs = std.AutoHashMap(lir.ProcIdentity, ProcArtifacts).init(allocator),
+            .procs = std.AutoHashMap(lir.ProcIdentity, CodeExcerpts).init(allocator),
             .thunks = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator),
             .helpers = std.StringHashMap(u32).init(allocator),
             .seen = .{},
         };
         errdefer self.deinit();
-        self.seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, set.artifacts.len);
-        for (set.artifacts, 0..) |artifact, index| {
+        self.seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, set.excerpts.len);
+        for (set.excerpts, 0..) |artifact, index| {
             switch (artifact.kind) {
                 .proc => |identity| {
                     const entry = try self.procs.getOrPut(identity);
@@ -190,7 +190,7 @@ pub const SpliceClosure = struct {
     }
 
     /// The artifact a pack offers for the procedure `identity`.
-    pub fn offeredProcArtifact(self: *const SpliceClosure, identity: lir.ProcIdentity) ?u32 {
+    pub fn offeredProcExcerpt(self: *const SpliceClosure, identity: lir.ProcIdentity) ?u32 {
         const artifacts = self.procs.get(identity) orelse return null;
         return artifacts.last;
     }
@@ -211,7 +211,7 @@ pub const SpliceClosure = struct {
         try self.visit(root);
         var cursor: usize = 0;
         while (cursor < self.order.items.len) : (cursor += 1) {
-            const artifact = self.set.artifacts[self.order.items[cursor]];
+            const artifact = self.set.excerpts[self.order.items[cursor]];
             for (artifact.refs) |ref| try self.visit(ref.target);
             for (artifact.symbolic_refs) |ref| {
                 const target = switch (ref.target) {

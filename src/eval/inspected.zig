@@ -416,7 +416,7 @@ pub const DevTestArtifacts = struct {
     executor: ?base.post_check_task_executor.Executor = null,
     publication: ?struct {
         context: *anyopaque,
-        accept: *const fn (*anyopaque, *const backend.dev.ProcArtifact.Set) Allocator.Error!void,
+        accept: *const fn (*anyopaque, *const backend.dev.CodeExcerpt.Set) Allocator.Error!void,
     } = null,
 };
 
@@ -2510,7 +2510,7 @@ pub fn devEvalSharedBoolRootModulesWithArtifacts(allocator: Allocator, modules: 
             };
         }
         if (artifacts) |options| if (options.publication) |publication| {
-            var extracted = backend.dev.ProcArtifact.extract(HostLirCodeGen, allocator, &codegen, store.getProcSpecs(), layouts, static_strings.exports, module.static_data.exports, splice.data.items) catch |err| switch (err) {
+            var extracted = backend.dev.CodeExcerpt.extract(HostLirCodeGen, allocator, &codegen, store.getProcSpecs(), layouts, static_strings.exports, module.static_data.exports, splice.data.items) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => zeroArgRootInvariant("native test emission produced invalid procedure artifacts"),
             };
