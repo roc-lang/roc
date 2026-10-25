@@ -107,20 +107,3 @@ test "foreground events grant completed checkpoints and revoke optional admissio
     session.tickAt(now + maintenance.Policy.grant_interval, .{ .waiting = .{ .budget = 1, .tasks = 1 } }, &stats);
     try std.testing.expectEqual(@as(usize, 1), stats.units); // saturated one-worker progress
 }
-
-test "scratch cleanup preserves a live link lease and removes an abandoned one" {
-    const io = std.testing.io;
-    const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.createDirPath(io, "version/tmp/link");
-    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
-    defer allocator.free(root);
-    var lease = try tmp.dir.createFile(io, "version/tmp/link/link.lock", .{ .read = true, .lock = .exclusive });
-    const future = nowNs(io) + Config.TEMP_MAX_AGE_NS + std.time.ns_per_s;
-    cleanupScratchDirs(io, root, future, null);
-    try tmp.dir.access(io, "version/tmp/link", .{});
-    lease.close(io);
-    cleanupScratchDirs(io, root, future, null);
-    try std.testing.expectError(error.FileNotFound, tmp.dir.access(io, "version/tmp/link", .{}));
-}

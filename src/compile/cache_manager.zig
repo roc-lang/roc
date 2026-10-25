@@ -125,7 +125,7 @@ pub const CacheManager = struct {
 
     fn familyFor(kind: Kind) artifacts.Family {
         return switch (kind) {
-            .checked => .checked,
+            .checked, .inference => .checked,
             .canonicalized => .canonicalized,
         };
     }

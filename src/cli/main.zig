@@ -11688,7 +11688,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             .gpa = ctx.gpa,
             .build_env = &build_env,
             .store = store,
-            .manager = &cache_manager,
+            .manager = build_env.cache_manager.?,
             .policy = programOutputPolicy(args, link_type),
             .linked_stores = if (linked_stores) |*stores| stores else null,
             .objects = &link_objects,
@@ -11817,7 +11817,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     };
     if (program_probe) |*probe| probe.runtime_emissions += 1;
     defer written.deinit();
-    if (object_compiler.capture_artifacts) {
+    if (object_compiler.capture_excerpts) {
         object_compiler.captured_excerpts = written.excerpts;
         written.excerpts = null;
     }

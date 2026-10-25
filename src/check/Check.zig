@@ -13911,12 +13911,28 @@ const callable_checking = @import("callable_checking.zig");
 /// Only local callee edges enter the fixed point; imported callees already
 /// have completed facts. The scan does no inference or type-graph mutation.
 fn publishCallableCheckingFacts(self: *Self) Allocator.Error!void {
-    const defs = self.cir.store.sliceDefs(self.cir.global_value_defs);
-    var graph = try callable_checking.Graph.init(self.gpa, defs.len);
-    defer graph.deinit();
+    var definitions = std.ArrayList(CIR.Def.Idx).empty;
+    defer definitions.deinit(self.gpa);
     var ids = collections.DenseMap(CIR.Def.Idx, callable_checking.Id).init(self.gpa);
     defer ids.deinit();
-    for (defs, 0..) |def, i| try ids.put(def, @fromBackingInt(@as(u32, @intCast(i))));
+    // Checking can publish methods after canonicalization fixed the global
+    // definition span. Those explicit method bindings belong to the same
+    // eligibility graph as source globals and must receive producer facts.
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def| {
+        const entry = try ids.getOrPut(def);
+        if (entry.found_existing) continue;
+        entry.value_ptr.* = @fromBackingInt(@as(u32, @intCast(definitions.items.len)));
+        try definitions.append(self.gpa, def);
+    }
+    for (self.cir.method_defs.entries.items) |method| {
+        const entry = try ids.getOrPut(method.value.def_idx);
+        if (entry.found_existing) continue;
+        entry.value_ptr.* = @fromBackingInt(@as(u32, @intCast(definitions.items.len)));
+        try definitions.append(self.gpa, method.value.def_idx);
+    }
+    const defs = definitions.items;
+    var graph = try callable_checking.Graph.init(self.gpa, defs.len);
+    defer graph.deinit();
 
     var context = HoistedDependencyContext{};
     defer context.deinit(self.gpa);

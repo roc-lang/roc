@@ -58,7 +58,7 @@ pub const Store = struct {
         self.allocator.free(self.procedure_root);
     }
 
-    fn identity(self: *const Store, family: compile.artifacts.Family, module: [32]u8, key: [32]u8) compile.artifacts.Identity {
+    fn artifactIdentity(self: *const Store, family: compile.artifacts.Family, module: [32]u8, key: [32]u8) compile.artifacts.Identity {
         var result: compile.artifacts.Identity = .{ .namespace = undefined, .family = family, .group = undefined, .key = key, .pack_format = PackFile.format_version, .variant = self.variant };
         std.crypto.hash.sha2.Sha256.hash(@import("build_options").compiler_compatibility_id, &result.namespace, .{});
         var hash = std.crypto.hash.sha2.Sha256.init(.{});
@@ -84,7 +84,7 @@ pub const Store = struct {
     }
 
     pub fn linkObjectIdentity(self: *const Store, digest: [32]u8) compile.artifacts.Identity {
-        var id = self.identity(.program_output, @splat(0), digest);
+        var id = self.artifactIdentity(.program_output, @splat(0), digest);
         var hash = std.crypto.hash.sha2.Sha256.init(.{});
         hash.update(&id.variant);
         hash.update("roc-native-link-object-v1");
@@ -112,11 +112,11 @@ pub const Store = struct {
     }
 
     pub fn readProgramPrefix(self: *const Store, key: [32]u8, len: usize, allocator: Allocator) Allocator.Error!?[]const u8 {
-        return self.readPrefix(self.identity(.program_output, @splat(0), key), len, allocator);
+        return self.readPrefix(self.artifactIdentity(.program_output, @splat(0), key), len, allocator);
     }
 
     fn packIdentity(self: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8, key: [32]u8) compile.artifacts.Identity {
-        return self.identity(if (origin == .local) .local_pack else .package_pack, module, key);
+        return self.artifactIdentity(if (origin == .local) .local_pack else .package_pack, module, key);
     }
 
     fn read(self: *const Store, allocator: Allocator, id: compile.artifacts.Identity) Allocator.Error!?[]u8 {
@@ -144,25 +144,25 @@ pub const Store = struct {
     pub fn writeDiscovery(self: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
         var key: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(bytes, &key, .{});
-        try self.writeEntry(self.identity(if (origin == .local) .local_discovery else .package_discovery, module, key), bytes);
+        try self.writeEntry(self.artifactIdentity(if (origin == .local) .local_discovery else .package_discovery, module, key), bytes);
     }
 
     pub fn readProgram(self: *const Store, key: [32]u8, allocator: Allocator) Allocator.Error!?[]u8 {
-        return self.read(allocator, self.identity(.program_output, @splat(0), key));
+        return self.read(allocator, self.artifactIdentity(.program_output, @splat(0), key));
     }
 
     pub fn writeProgram(self: *const Store, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
-        try self.writeEntry(self.identity(.program_output, @splat(0), key), bytes);
+        try self.writeEntry(self.artifactIdentity(.program_output, @splat(0), key), bytes);
     }
 
     pub fn optimizedInputKey(self: *const Store, module: [32]u8) Allocator.Error!?[32]u8 {
-        const bytes = (try self.readPrefix(self.identity(.optimized_pack, module, @splat(0)), PackFile.object_input_key_prefix_len, self.allocator)) orelse return null;
+        const bytes = (try self.readPrefix(self.artifactIdentity(.optimized_pack, module, @splat(0)), PackFile.object_input_key_prefix_len, self.allocator)) orelse return null;
         defer self.allocator.free(bytes);
         return PackFile.objectInputKey(bytes);
     }
 
     pub fn replaceOptimized(self: *const Store, module: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
-        try self.writeEntry(self.identity(.optimized_pack, module, @splat(0)), bytes);
+        try self.writeEntry(self.artifactIdentity(.optimized_pack, module, @splat(0)), bytes);
     }
 
     pub fn has(self: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8, key: [32]u8) Allocator.Error!bool {
@@ -178,7 +178,7 @@ pub const Store = struct {
         try self.writeEntry(self.packIdentity(origin, module, key), bytes);
     }
 
-    pub fn loadIdentity(self: *const Store, _: std.Io, packs: *LoadedPacks, origin: compile.BuildEnv.PackOrigin, module: [32]u8) LoadedPacks.LoadError!void {
+    pub fn loadIdentity(self: *const Store, _: std.Io, packs: *LoadedPacks, origin: compile.BuildEnv.PackOrigin, module: [32]u8) Allocator.Error!void {
         try packs.addIndexProvider(self, origin, module);
     }
 
@@ -274,7 +274,7 @@ pub const Store = struct {
     }
 
     pub fn loadIdentityDiscovery(self: *const Store, _: std.Io, packs: *LoadedPacks, origin: compile.BuildEnv.PackOrigin, module: [32]u8) LoadedPacks.LoadError!void {
-        try self.loadGroup(packs, self.identity(if (origin == .local) .local_discovery else .package_discovery, module, @splat(0)), .discovery);
+        try self.loadGroup(packs, self.artifactIdentity(if (origin == .local) .local_discovery else .package_discovery, module, @splat(0)), .discovery);
     }
 
     fn publishIndexed(self: *const Store, id: compile.artifacts.Identity, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!bool {
@@ -613,7 +613,6 @@ pub const LinkedStores = struct {
     /// Selection was emitted by the checked producer. Its keys let an early
     /// completed-build lookup inspect current optimized stores without IR.
     pub fn selectionDigest(self: *const LinkedStores, selection: Selection) Allocator.Error![32]u8 {
-        const allocator = self.stores[0].allocator;
         var hasher = std.crypto.hash.Blake3.init(.{});
         hasher.update("roc.optimization-state.v1");
         for (&self.stores) |*store| {
@@ -623,7 +622,7 @@ pub const LinkedStores = struct {
             }
             const identity = selection.optimized_identity orelse continue;
             const input_key = try store.optimizedInputKey(identity) orelse continue;
-            hasher.update(&store.identity(.optimized_pack, identity, @splat(0)).indexedKey());
+            hasher.update(&store.artifactIdentity(.optimized_pack, identity, @splat(0)).indexedKey());
             hasher.update(&input_key);
         }
         var digest: [32]u8 = undefined;
@@ -1460,7 +1459,7 @@ pub const LoadedPacks = struct {
                 try self.loadStoredObject(store, store.packIdentity(.pkg, module.identity, module.key));
             }
             if (root_placement) |placement| {
-                try self.loadStoredObject(store, store.identity(.optimized_pack, placement.identity, @splat(0)));
+                try self.loadStoredObject(store, store.artifactIdentity(.optimized_pack, placement.identity, @splat(0)));
             }
         }
         try self.indexObjectPacks(try programBindingKey(self.allocator, pending.build_env, root_artifact));

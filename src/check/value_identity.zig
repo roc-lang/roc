@@ -417,8 +417,15 @@ const State = struct {
     }
 
     fn importedByIndex(self: *const State, index: CIR.Import.Idx) checked_artifact.ImportedModuleView {
-        const identity = self.inputs.env.importIdentity(index) orelse base.invariant("checked external lookup has no module identity", .{});
-        return self.importedByIdentity(self.inputs.env.moduleIdentityHash(identity).*);
+        // External lookups use the resolved import scope supplied to checked
+        // publication. The drain's identity table need not contain imports
+        // introduced by checking (including implicit builtin imports).
+        const module_idx = self.inputs.env.imports.getResolvedModule(index) orelse
+            base.invariant("checked external lookup has no resolved module", .{});
+        for (self.inputs.imports) |entry| {
+            if (entry.module_idx == module_idx) return entry.view;
+        }
+        base.invariant("checked external lookup has no published imported artifact", .{});
     }
 
     fn importedByIdentity(self: *const State, identity: [32]u8) checked_artifact.ImportedModuleView {

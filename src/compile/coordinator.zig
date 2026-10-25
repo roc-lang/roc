@@ -11054,7 +11054,7 @@ test "issue 12592: a dependency test edit preserves importer checking results" {
     const config = CacheConfig{ .enabled = true, .cache_dir = cache_dir, .roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io) };
     const inference_dir = try config.getInferenceCacheDir(allocator);
     defer allocator.free(inference_dir);
-    try std.testing.expect(try overwriteFilesUnderDir(allocator, inference_dir, "truncated inference capsule") > 0);
+    try std.testing.expect(try overwriteFilesUnderDir(allocator, cache_dir, inference_dir, .checked, "truncated inference capsule") > 0);
     try tmp_dir.dir.writeFile(std.testing.io, .{
         .sub_path = "checking_dependency/app/A.roc",
         .data = "A := {}.{ value : {} -> I64\n value = |_| 2\n}\nexpect A.value({}) == 2\n",
