@@ -692,9 +692,9 @@ pub const MethodTarget = struct {
     callable_ty: CheckedTypeId,
     /// The exact procedure alias the method is bound to (`method = f`), when
     /// this target is the procedure the alias chain reaches. A dispatch edge
-    /// instantiates the alias's scheme, so the target's substitution composes
-    /// through the alias's forwarded lookup, and its own evidence follows
-    /// from its callable, which that instantiation fixes.
+    /// instantiates the alias's scheme and resolves the alias's obligations,
+    /// so the target's substitution and evidence both compose through the
+    /// alias's forwarded lookup.
     alias: ?MethodAlias = null,
 };
 
@@ -1664,9 +1664,9 @@ pub const EvidenceTargetInstantiation = union(enum(u8)) {
     /// Exact callable relation produced while discharging this edge, which
     /// instantiated the scheme of the exact procedure alias the target was
     /// reached through (`MethodTarget.alias`). The node's
-    /// substitution substitutes that alias scope's quantified variables;
-    /// the target's own substitution composes through the alias's forwarded
-    /// lookup.
+    /// substitution substitutes that alias scope's quantified variables and
+    /// its nested evidence is `through_alias`; the target's own substitution
+    /// and evidence compose through the alias's forwarded lookup.
     alias: CheckedTypeId,
     /// Checking performed no instantiation of the target's scheme for this
     /// edge: publication selected it as the numeric default owner of an
@@ -1686,6 +1686,12 @@ pub const EvidenceNested = union(enum(u8)) {
     /// checker-recorded paths over its concrete callable, and from the
     /// callables of the requirement targets it selects.
     from_callable,
+    /// The edge instantiated the scheme of the exact procedure alias the
+    /// target was reached through (`EvidenceTargetInstantiation.alias`), and
+    /// publication resolved every obligation of that alias's scheme, in its
+    /// canonical order. The target's own evidence is the alias's forwarded
+    /// lookup's evidence in the alias's scope under these entries.
+    through_alias: artifact_serialize.Span,
 };
 
 /// Exact checked target and nested evidence selected for one dispatch edge.
@@ -2713,6 +2719,21 @@ pub const StaticDispatchPlanTable = struct {
             .resolved => |resolved| resolved,
             .from_callable => {
                 base.invariant("callable-derived target evidence has no resolved checked-evidence span", .{});
+            },
+            .through_alias => {
+                base.invariant("alias-scope evidence was read as its target's own evidence", .{});
+            },
+        };
+        return self.evidence_refs[span.start .. span.start + span.len];
+    }
+
+    /// The evidence an edge that instantiated a procedure alias's scheme
+    /// resolved for that alias's own obligations.
+    pub fn aliasScopeEvidence(self: *const StaticDispatchPlanTable, node: EvidenceNode) []const CheckedEvidence {
+        const span = switch (node.nested) {
+            .through_alias => |through_alias| through_alias,
+            .resolved, .from_callable => {
+                base.invariant("target evidence was read as an alias scope's evidence", .{});
             },
         };
         return self.evidence_refs[span.start .. span.start + span.len];

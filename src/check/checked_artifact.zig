@@ -19593,7 +19593,7 @@ const EvidencePass = struct {
                         );
                         switch (self.evidence_nodes.items[@backingInt(node_id)].nested) {
                             .resolved => {},
-                            .from_callable => checkedArtifactInvariant(
+                            .from_callable, .through_alias => checkedArtifactInvariant(
                                 "generated codec method evidence was not resolved at its checked call edge",
                                 .{},
                             ),
@@ -19653,7 +19653,7 @@ const EvidencePass = struct {
                         }
                         switch (node.nested) {
                             .resolved => {},
-                            .from_callable => checkedArtifactInvariant(
+                            .from_callable, .through_alias => checkedArtifactInvariant(
                                 "checked generated codec callable retained unresolved nested evidence",
                                 .{},
                             ),
@@ -20840,7 +20840,8 @@ const EvidencePass = struct {
             .refs = try self.appendEvidenceRefs(frame.entries.items),
             .subst = try self.appendSiteSubstitution(frame.scheme_root, frame.pairs, frame.renamings),
         };
-        if (frame.procedure_schema == .requires_record or frame.procedure_schema == .from_target) {
+        const through_alias = frame.target.alias != null;
+        if (!through_alias and (frame.procedure_schema == .requires_record or frame.procedure_schema == .from_target)) {
             const target_view = self.procedureEvidenceView(frame.target);
             if (nested.refs.len != target_view.template.evidence_params.len) {
                 checkedArtifactInvariant("recorded procedure target evidence length differed from its declared params", .{});
@@ -20850,8 +20851,8 @@ const EvidencePass = struct {
             .target = frame.target,
             .dispatcher_ty = frame.dispatcher_ty,
             .generated_codec_derivation = null,
-            .instantiation = .{ .callable = frame.callable_ty },
-            .nested = .{ .resolved = nested.refs },
+            .instantiation = if (through_alias) .{ .alias = frame.callable_ty } else .{ .callable = frame.callable_ty },
+            .nested = if (through_alias) .{ .through_alias = nested.refs } else .{ .resolved = nested.refs },
             .subst = nested.subst,
         });
         try self.node_by_record.put(frame.record_idx, node_id);
@@ -20889,33 +20890,25 @@ const EvidencePass = struct {
         if (target.alias != null) {
             // The dispatch edge instantiated the alias's scheme, whose
             // requirements are not the target's. Its record substitutes the
-            // alias scope's variables, and the target's substitution composes
-            // through the alias's forwarded lookup. The alias's instantiation
-            // fixes the target's callable, and the target's evidence follows
-            // from that callable.
+            // alias scope's variables and resolves the alias's obligations;
+            // the target's substitution and evidence compose through the
+            // alias's forwarded lookup. An edge with no record instantiated
+            // an alias scheme with no variables, and so no obligations.
             const callable = callable_ty orelse
                 checkedArtifactInvariant("method target reached through an alias had no checked callable", .{});
-            const subst: artifact_serialize.Span = if (record_idx) |idx| blk: {
-                const module_env = self.module.moduleEnvConst();
-                const record = module_env.scheme_uses.items.items[idx];
-                break :blk try self.appendSiteSubstitution(
-                    @fromBackingInt(@intCast(record.scheme_root)),
-                    module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len],
-                    renamings,
-                );
-            } else .{};
-            return .{ .done = try self.internEvidenceNode(.{
-                .target = target,
-                .dispatcher_ty = dispatcher_ty,
-                .generated_codec_derivation = generated_codec_derivation,
-                .instantiation = .{ .alias = callable },
-                .nested = if (procedure_schema == .none) .{ .resolved = .{} } else .from_callable,
-                .subst = subst,
-            }) };
+            if (record_idx == null) {
+                return .{ .done = try self.internEvidenceNode(.{
+                    .target = target,
+                    .dispatcher_ty = dispatcher_ty,
+                    .generated_codec_derivation = generated_codec_derivation,
+                    .instantiation = .{ .alias = callable },
+                    .nested = .{ .through_alias = .{} },
+                }) };
+            }
         }
         if (record_idx) |idx| {
             const record = self.module.moduleEnvConst().scheme_uses.items.items[idx];
-            if (record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target)) {
+            if (target.alias == null and record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target)) {
                 // The checker closed an exact concrete backedge and proved
                 // every requirement is determined by the target's callable,
                 // directly or through the callables of determined
@@ -20935,8 +20928,9 @@ const EvidencePass = struct {
             if (self.node_by_record.get(idx)) |memoized| {
                 const existing = self.evidence_nodes.items[@backingInt(memoized)];
                 const callable_matches = switch (existing.instantiation) {
-                    .monomorphic, .alias, .derived_from_callable => false,
-                    .callable => |existing_callable| existing_callable == callable_ty.?,
+                    .monomorphic, .derived_from_callable => false,
+                    .callable => |existing_callable| target.alias == null and existing_callable == callable_ty.?,
+                    .alias => |existing_callable| target.alias != null and existing_callable == callable_ty.?,
                 };
                 if (existing.dispatcher_ty != dispatcher_ty or
                     existing.generated_codec_derivation != generated_codec_derivation or
@@ -21032,8 +21026,8 @@ const EvidencePass = struct {
         }
         switch (candidate.nested) {
             .from_callable => std.hash.autoHash(&hasher, @as(u8, 0)),
-            .resolved => |span| {
-                std.hash.autoHash(&hasher, @as(u8, 1));
+            .resolved, .through_alias => |span| {
+                std.hash.autoHash(&hasher, @as(u8, if (candidate.nested == .resolved) 1 else 2));
                 const refs = self.evidence_refs.items[span.start .. span.start + span.len];
                 std.hash.autoHash(&hasher, refs.len);
                 for (refs) |ref| std.hash.autoHash(&hasher, ref);
@@ -21070,19 +21064,21 @@ const EvidencePass = struct {
         for (left_subst, right_subst) |left_ty, right_ty| {
             if (left_ty != right_ty) return false;
         }
+        if (std.meta.activeTag(left.nested) != std.meta.activeTag(right.nested)) return false;
         return switch (left.nested) {
-            .from_callable => right.nested == .from_callable,
-            .resolved => |left_span| switch (right.nested) {
-                .from_callable => false,
-                .resolved => |right_span| blk: {
-                    const left_refs = self.evidence_refs.items[left_span.start .. left_span.start + left_span.len];
-                    const right_refs = self.evidence_refs.items[right_span.start .. right_span.start + right_span.len];
-                    if (left_refs.len != right_refs.len) break :blk false;
-                    for (left_refs, right_refs) |left_ref, right_ref| {
-                        if (!std.meta.eql(left_ref, right_ref)) break :blk false;
-                    }
-                    break :blk true;
-                },
+            .from_callable => true,
+            .resolved, .through_alias => |left_span| blk: {
+                const right_span = switch (right.nested) {
+                    .resolved, .through_alias => |span| span,
+                    .from_callable => unreachable, // the tags were compared equal above
+                };
+                const left_refs = self.evidence_refs.items[left_span.start .. left_span.start + left_span.len];
+                const right_refs = self.evidence_refs.items[right_span.start .. right_span.start + right_span.len];
+                if (left_refs.len != right_refs.len) break :blk false;
+                for (left_refs, right_refs) |left_ref, right_ref| {
+                    if (!std.meta.eql(left_ref, right_ref)) break :blk false;
+                }
+                break :blk true;
             },
         };
     }
@@ -25788,7 +25784,9 @@ fn directEvidenceEnter(
         .structural => checkedArtifactInvariant("direct evidence closure contained a structural target", .{}),
     }
     switch (node.nested) {
-        .from_callable => {
+        // A target reached through an alias takes its evidence from the
+        // alias's forwarded lookup, which belongs to the specialization.
+        .from_callable, .through_alias => {
             states[raw_node] = .parametric;
             return .{ .decided = false };
         },
@@ -35113,7 +35111,7 @@ pub const CheckedModuleArtifact = struct {
 
         for (table.evidence_nodes, 0..) |node, i| {
             switch (node.nested) {
-                .resolved => |nested| if (@as(u64, nested.start) + nested.len > table.evidence_refs.len) {
+                .resolved, .through_alias => |nested| if (@as(u64, nested.start) + nested.len > table.evidence_refs.len) {
                     return .{ .kind = .evidence_node_nested_refs_out_of_bounds, .index = @intCast(i) };
                 },
                 .from_callable => {},

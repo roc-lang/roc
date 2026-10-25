@@ -234,7 +234,7 @@ const ContentDigester = struct {
                 if (node.generated_codec_derivation) |nested| try self.appendNestedCodec(@backingInt(nested));
                 switch (node.nested) {
                     .from_callable => {},
-                    .resolved => |span| try self.tasks.append(self.allocator, .{ .refs = span }),
+                    .resolved, .through_alias => |span| try self.tasks.append(self.allocator, .{ .refs = span }),
                 }
             },
             .refs => |span| for (self.table.evidence_refs[span.start..][0..span.len]) |ref| {
@@ -338,7 +338,7 @@ const ContentDigester = struct {
         self.writeU8(@backingInt(std.meta.activeTag(node.nested)));
         switch (node.nested) {
             .from_callable => {},
-            .resolved => |span| try self.children.append(self.allocator, .{ .refs = span }),
+            .resolved, .through_alias => |span| try self.children.append(self.allocator, .{ .refs = span }),
         }
     }
 
@@ -640,6 +640,7 @@ const Comparer = struct {
                     switch (a.nested) {
                         .from_callable => {},
                         .resolved => |span| if (!try self.refs(span, b.nested.resolved)) return false,
+                        .through_alias => |span| if (!try self.refs(span, b.nested.through_alias)) return false,
                     }
                 },
             }

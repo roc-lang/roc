@@ -5593,7 +5593,7 @@ const Builder = struct {
                 };
                 const nested = switch (node.nested) {
                     .resolved => |span| span,
-                    .from_callable => boxyPlanInvariant("generated codec call retained callable-derived evidence"),
+                    .from_callable, .through_alias => boxyPlanInvariant("generated codec call retained callable-derived evidence"),
                 };
                 source = workerSourceForMethodTarget(lookup, dispatch_type, null);
                 source_fn_type = .{ .module = viewModule(target_view), .ty = node.target.callable_ty };
@@ -12406,7 +12406,7 @@ const Builder = struct {
                 .resolved => try cursors.append(self.allocator, .{ .view = view, .entries = view.static_dispatch_plans.nestedEvidence(node), .schema = nested_schema }),
                 // The target's nested evidence travels with the callable value
                 // and is observed through that callable's own use.
-                .from_callable => {},
+                .from_callable, .through_alias => {},
             }
         }
     }
@@ -13537,7 +13537,7 @@ const Builder = struct {
         const dispatch_plan = directCallDispatchPlan(call_expr);
         if (dispatchResolutionIsStructural(site_view, dispatch_plan)) return null;
         const node = site_view.static_dispatch_plans.evidenceNode(directDispatchEvidenceNode(site_view, dispatch_plan));
-        if (node.nested != .from_callable or carriesTargetSubstitution(node)) return null;
+        if (node.nested == .resolved or carriesTargetSubstitution(node)) return null;
         const call_rep = self.plan.repForSourceType(direct.source_fn_type) orelse
             boxyPlanInvariant("boxy direct call function type was not analyzed");
         return try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@backingInt(direct.worker)].rep, call_rep);
@@ -15955,7 +15955,7 @@ const Builder = struct {
                 // evidence from its callable.
                 break :blk switch (node.nested) {
                     .resolved => view.static_dispatch_plans.nestedEvidence(node),
-                    .from_callable => null,
+                    .from_callable, .through_alias => null,
                 };
             },
             .direct_pending => boxyPlanInvariant("unfinalized direct call reached Boxy planning"),
@@ -16023,7 +16023,7 @@ const Builder = struct {
         const node = view.static_dispatch_plans.evidenceNode(node_id);
         return switch (node.nested) {
             .resolved => view.static_dispatch_plans.nestedEvidence(node),
-            .from_callable => null,
+            .from_callable, .through_alias => null,
         };
     }
 
@@ -16152,7 +16152,7 @@ const Builder = struct {
             const node = view.static_dispatch_plans.evidenceNode(node_id);
             // A target reached through a procedure alias derives its evidence
             // from its callable, related to the call's function type.
-            const relation: ?Span = if (node.nested == .from_callable and !carriesTargetSubstitution(node)) blk: {
+            const relation: ?Span = if (node.nested != .resolved and !carriesTargetSubstitution(node)) blk: {
                 const call_rep = self.plan.repForSourceType(call.source_fn_type) orelse
                     boxyPlanInvariant("boxy iterator call function type was not analyzed");
                 break :blk try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@backingInt(call.worker)].rep, call_rep);
@@ -16167,7 +16167,7 @@ const Builder = struct {
                 .evidence_view = view,
                 .evidence = switch (node.nested) {
                     .resolved => view.static_dispatch_plans.nestedEvidence(node),
-                    .from_callable => null,
+                    .from_callable, .through_alias => null,
                 },
                 .scheme_substitution = self.evidenceEdgeSchemeSubstitution(call.worker, .{ .module = call.module, .node = node_id }),
                 .relation = relation,
@@ -18052,7 +18052,7 @@ const Builder = struct {
                         // its evidence from its callable.
                         switch (node.nested) {
                             .resolved => view.static_dispatch_plans.nestedEvidence(node),
-                            .from_callable => null,
+                            .from_callable, .through_alias => null,
                         },
                         evidence_edge,
                         state.caller_id,
@@ -19587,7 +19587,7 @@ const Builder = struct {
         edge: DictionaryMethodEvidence.EvidenceEdge,
     ) Allocator.Error!?Span {
         const node = self.moduleForId(edge.module).static_dispatch_plans.evidenceNode(edge.node);
-        if (node.nested != .from_callable or carriesTargetSubstitution(node)) return null;
+        if (node.nested == .resolved or carriesTargetSubstitution(node)) return null;
         const callable_rep = self.plan.repForSourceType(callable_type) orelse
             boxyPlanInvariant("dictionary method callable type was not analyzed");
         return try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@backingInt(worker_id)].rep, callable_rep);
