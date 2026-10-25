@@ -964,10 +964,19 @@ comptime {
     @export(&shimGetOps, .{ .name = shim_symbols.roc_shim_get_ops });
     @export(&shimEntrypoint, .{ .name = shim_symbols.roc_entrypoint });
     @export(&shimDefaultMain, .{ .name = shim_symbols.roc_shim_default_main });
+    @export(&shimHotReloadGeneration, .{ .name = shim_symbols.roc_hot_reload_generation });
 }
 
 fn shimGetOps() callconv(.c) *anyopaque {
     return shim_host_abi.getOpsOpaque();
+}
+
+var last_coherent_generation: std.atomic.Value(u64) = .init(0);
+
+fn shimHotReloadGeneration() callconv(.c) u64 {
+    if (!runtime_state_initialized.load(.acquire)) return 0;
+    const control = runtime_state.control orelse return 0;
+    return hot_reload.latestCoherentGeneration(control, &last_coherent_generation);
 }
 
 fn shimEntrypoint(

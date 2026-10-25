@@ -52,6 +52,11 @@ pub const in_process_recorder_set = [_][:0]const u8{
     roc_expect_err_region,
     roc_checked_error_reached,
 };
+/// Returns the latest published hot-reload generation, or 0 when no
+/// hot-reload session exists. Every executable Roc links defines exactly one:
+/// the machine-code shim reads the live value, and every other path defines a
+/// stub that returns 0.
+pub const roc_hot_reload_generation = "roc_hot_reload_generation";
 /// The default platform's `main` implementation inside the machine-code shim.
 pub const roc_shim_default_main = "roc_shim_default_main";
 /// The default platform's pre-main runtime initialization hook.

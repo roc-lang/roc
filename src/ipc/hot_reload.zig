@@ -228,6 +228,15 @@ pub fn publishedGeneration(control: *const Control) u64 {
     return if (publishedImage(control)) |image| image.generation else 0;
 }
 
+/// Return the latest coherent published generation and raise `last_coherent`
+/// to it. When no snapshot is coherent, return `last_coherent` unchanged, so the
+/// result never decreases.
+pub fn latestCoherentGeneration(control: *const Control, last_coherent: *std.atomic.Value(u64)) u64 {
+    const image = publishedImage(control) orelse return last_coherent.load(.monotonic);
+    const previous = last_coherent.fetchMax(image.generation, .monotonic);
+    return @max(previous, image.generation);
+}
+
 /// Return the shared-memory byte offset of the currently published image.
 pub fn imageOffset(control: *const Control) usize {
     return @intCast(loadU64(&control.image_offset, .acquire));
@@ -454,6 +463,25 @@ test "hot reload publication snapshots reject in-progress writes" {
     try std.testing.expectEqual(@as(usize, 512), image.descriptor_offset);
     try std.testing.expectEqual(@as(usize, 8192), image.image_offset);
     try std.testing.expectEqual(@as(usize, 16384), image.image_size);
+}
+
+test "hot reload coherent generation keeps the last value while a publication is in progress" {
+    var control = std.mem.zeroes(Control);
+    control.magic = MAGIC;
+    control.format_version = FORMAT_VERSION;
+    var last_coherent: std.atomic.Value(u64) = .init(0);
+
+    storeU64(&control.publish_sequence, 2, .release);
+    storeU64(&control.published_descriptor_offset, 512, .release);
+    storeU64(&control.published_generation, 4, .release);
+    try std.testing.expectEqual(@as(u64, 4), latestCoherentGeneration(&control, &last_coherent));
+
+    storeU64(&control.publish_sequence, 3, .release);
+    storeU64(&control.published_generation, 5, .release);
+    try std.testing.expectEqual(@as(u64, 4), latestCoherentGeneration(&control, &last_coherent));
+
+    storeU64(&control.publish_sequence, 4, .release);
+    try std.testing.expectEqual(@as(u64, 5), latestCoherentGeneration(&control, &last_coherent));
 }
 
 test "hot reload acknowledgement snapshots reject in-progress writes" {

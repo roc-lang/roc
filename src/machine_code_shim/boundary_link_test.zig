@@ -31,4 +31,6 @@ test "canonical symbols link through the shim and back to the host" {
     ops.roc_dealloc(ops, allocation, 1);
     ops.roc_dbg(ops, "", 0);
     ops.roc_expect_failed(ops, "", 0);
+    const hot_reload_generation = @extern(*const fn () callconv(.c) u64, .{ .name = symbols.roc_hot_reload_generation });
+    try std.testing.expectEqual(@as(u64, 0), hot_reload_generation());
 }

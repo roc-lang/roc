@@ -38,6 +38,7 @@ const exports = [_][]const u8{
     symbols.roc_shim_get_ops,
     symbols.roc_entrypoint,
     symbols.roc_shim_default_main,
+    symbols.roc_hot_reload_generation,
 };
 const imports = symbols.runtime_set ++ .{
     symbols.roc_shim_hosted_fns,
