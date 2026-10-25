@@ -1812,7 +1812,7 @@ const IndexFixture = struct {
     const allocator = std.testing.allocator;
     const identity: [32]u8 = @splat(0xa1);
 
-    fn init(self: *@This()) !void {
+    fn init(self: *@This()) (std.Io.Dir.RealPathFileAllocError || Allocator.Error)!void {
         self.tmp = std.testing.tmpDir(.{});
         self.arena = std.heap.ArenaAllocator.init(allocator);
         const root = try self.tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
@@ -1831,7 +1831,7 @@ const IndexFixture = struct {
         self.tmp.cleanup();
     }
 
-    fn loader(self: *@This()) !LoadedPacks {
+    fn loader(self: *@This()) LoadedPacks.LoadError!LoadedPacks {
         var packs = LoadedPacks.init(allocator);
         errdefer packs.deinit();
         try self.store.loadIdentity(std.testing.io, &packs, .local, identity);
@@ -1847,11 +1847,11 @@ const IndexFixture = struct {
         return .{ .key = @splat(key), .artifact = artifact_index, .rc_borrowed_params = 3, .rc_ret_borrowed = true, .rc_ret_lenders = 2, .rc_read_only_params = 1, .rc_ret_unique = false, .rc_ret_unique_fields = 0, .rc_ret_conditions = &.{1} };
     }
 
-    fn publish(self: *@This(), artifacts: []const backend.dev.ProcArtifact.Artifact, specs: []const PackFile.SpecEntry, files: []const [32]u8) !void {
+    fn publish(self: *@This(), artifacts: []const backend.dev.ProcArtifact.Artifact, specs: []const PackFile.SpecEntry, files: []const [32]u8) (Allocator.Error || error{PackWriteFailed})!void {
         try self.store.writeIndexed(.local, identity, &.{ .arena = undefined, .artifacts = artifacts, .source_files = files }, specs);
     }
 
-    fn payloadPath(self: *@This(), artifact_value: backend.dev.ProcArtifact.Artifact) ![]u8 {
+    fn payloadPath(self: *@This(), artifact_value: backend.dev.ProcArtifact.Artifact) Allocator.Error![]u8 {
         const bytes = try Index.payload(allocator, artifact_value);
         defer allocator.free(bytes);
         const dir = try self.store.identityDir(.local, identity);
