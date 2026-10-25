@@ -16883,7 +16883,11 @@ requires the type to have two different methods of that name and shows both
 method types, at the use that introduced the second requirement, or at the
 definition when another definition introduced it; the receiver is poisoned so
 it reports nothing further. An annotation that declares two such requirements
-is the same mismatch, reported at the second requirement. A relation folded into a retained one selects no target of its own,
+is the same mismatch, reported at the second requirement. A requirement a
+use copies out of a definition's type fails at that use, not inside the
+definition: its report shows the code in the definition that introduced it,
+and, when its type shares a variable with a requirement this boundary related
+from two uses of one method, both of those uses. A relation folded into a retained one selects no target of its own,
 yet its dispatch site still outputs a plan. The unifier journals each fold as
 an exact (dropped, retained) pair of raw constraint function vars, and checking
 outputs `ModuleEnv.dispatch_relation_merges`, mapping every folded relation

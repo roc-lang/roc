@@ -15,14 +15,14 @@ shout! = |line| [line]
 expect apply(["a"], [pure_one, shout!]) |> List.is_eq(["a", "a"])
 ~~~
 # EXPECTED
-TYPE MISMATCH - effectful_callback_through_pure_join_map.md:8:21:8:39
+TYPE MISMATCH - effectful_callback_through_pure_join_map.md:8:8:8:40
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 8 21) (end 8 39))
+		(region (start 8 8) (end 8 40))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -34,7 +34,7 @@ TYPE MISMATCH - effectful_callback_through_pure_join_map.md:8:21:8:39
 			(reflow " ")
 			(reflow "has an incompatible type."))
 		(document
-			(source-region (file "effectful_callback_through_pure_join_map.md") (start 8 21) (end 8 39) (annotation error) (line-text "expect apply([\"a\"], [pure_one, shout!]) |> List.is_eq([\"a\", \"a\"])"))
+			(source-region (file "effectful_callback_through_pure_join_map.md") (start 8 8) (end 8 40) (annotation error) (line-text "expect apply([\"a\"], [pure_one, shout!]) |> List.is_eq([\"a\", \"a\"])"))
 			(line-break)
 			(reflow "The method")
 			(reflow " ")
@@ -58,7 +58,12 @@ TYPE MISMATCH - effectful_callback_through_pure_join_map.md:8:21:8:39
 			(line-break)
 			(indent 1)
 			(text "  where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]")
-			(annotation-end))))
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "This use needs that because of this code in the definition it uses:")
+			(line-break)
+			(source-region (file "effectful_callback_through_pure_join_map.md") (start 1 50) (end 1 81) (annotation error) (line-text "apply = |lines, functions| lines.join_map(|line| functions.join_map(|f| f(line)))")))))
 ~~~
 # TOKENS
 ~~~zig
