@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused issue #12593 CLI checks\n    does not run MiniCI or compiler eval suites."""
+"""Focused individual-outcome and reporting-relocation checks (#12593/#12615)."""
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +14,7 @@ def is_outcome(path):
     if not path.is_file():
         return False
     with path.open('rb') as source:
-        return source.read(len(b'ROC_TEST_OUTCOMES_V1')) == b'ROC_TEST_OUTCOMES_V1'
+        return source.read(len(b'ROC_TEST_OUTCOMES_V2')) == b'ROC_TEST_OUTCOMES_V2'
 
 
 def transcript(data):
@@ -27,22 +27,24 @@ class Fixture:
         self.root = root
         self.roc = roc
         self.cache = root / "cache"
-        self.env = dict(os.environ, ROC_CACHE_DIR=str(self.cache))
+        self.env = dict(os.environ, ROC_CACHE_DIR=str(self.cache), ROC_TRACE_BOXY_WORK="1")
         self.path = root / "Main.roc"
 
     def write(self, text, name="Main.roc"):
         (self.root / name).write_text(text)
 
-    def run(self, *, cache=True, timings=False, mode="dev"):
+    def run(self, *, cache=True, timings=False, mode="dev", work=False):
         args = [str(self.roc), "test", str(self.path), f"--opt={mode}",
                 "--specialize=yes", "--no-color", "--verbose"]
         if not cache:
             args.append("--no-cache")
         if timings:
             args.append("--timings")
-        result = subprocess.run(args, env=self.env, capture_output=True, timeout=120)
+        env = dict(self.env, ROC_TEST_COMMAND_WORK="1") if work else self.env
+        result = subprocess.run(args, env=env, capture_output=True, timeout=120)
         assert result.returncode in (0, 1, 2), result.stderr.decode(errors="replace")
         assert b"panic" not in result.stderr, result.stderr.decode(errors="replace")
+        assert b"boxy-work:" not in result.stderr, result.stderr.decode(errors="replace")
         return result
 
     def check(self, hits=None, *, mode="dev"):
@@ -57,6 +59,8 @@ class Fixture:
             warm = self.run(timings=True, mode=mode)
             self.hits(warm, hits)
             text = re.sub(r"\s+", " ", warm.stderr.decode(errors="replace"))
+            if 'Completed test command' in text:
+                return cached
             for label in ('Roots submitted for specialization',):
                 assert re.search(label + r"\s+0\b", text), text
             if mode == 'dev':
@@ -71,6 +75,109 @@ class Fixture:
         match = re.search(r"Roots cached\s+(\d+)", text)
         assert match, text
         assert int(match[1]) == expected, (expected, match[1], text)
+
+
+def relocation_checks(f):
+    def edit(source, hits, executed=0, name="Main.roc"):
+        f.write(source, name)
+        run = f.run(timings=True, work=True)
+        f.hits(run, hits)
+        counter = re.search(rb"test-work test_root_execution=(\d+)", run.stderr)
+        assert counter and int(counter[1]) == executed, run.stderr.decode(errors="replace")
+        f.check()
+
+    passing = 'expect { dbg "Main.roc:123: user bytes"\n    1 == 1 }\n'
+    failing = 'expect { dbg "failed"\n    2 == 3 }\n'
+    base = passing + failing
+    f.write(base)
+    f.check(2)
+    edit('# inserted comment\n\n' + base, 2)
+    edit(base, 2)
+    edit(failing + passing, 2)
+    edit(failing + passing.replace('1 == 1', '100 == 100'), 1, 1)
+    edit(passing.replace('1 == 1', '1000 == 1000') + failing, 1, 1)
+    edit('expect 42 == 42\n' + passing + failing, 2, 1)
+    edit(passing * 3 + failing * 2, 5)
+    edit('\n# duplicate occurrences move together\n' + failing * 2 + passing * 3, 5)
+
+    duplicate_inline = 'expect { expect False\n    dbg "nested duplicate"\n    True }\n'
+    f.write(duplicate_inline * 2)
+    f.check(2)
+    edit('# before duplicate inline sites\n' + duplicate_inline + '\n' + duplicate_inline, 2)
+
+    helper = ('observe = |x| { dbg "Helper.roc:5: user text"\n'
+              '    expect x > 0\n    x }\n')
+    roots = 'expect observe(1) == 1\nexpect observe(0) == 0\n'
+    f.write(helper + roots)
+    f.check(2)
+    edit('# move helper and roots\n\n' + helper + roots, 2)
+    edit(roots + '\n# helper moved independently\n' + helper, 2)
+    edit(roots + helper.replace('x > 0', 'x > 1'), 0, 2)
+
+    imported = 'module [observe]\n' + helper
+    f.write(imported, 'Observer.roc')
+    f.write('import Observer\nexpect Observer.observe(0) == 0\n')
+    f.check(1)
+    edit('module [observe]\n# helper moved\n\n' + helper, 1, name='Observer.roc')
+    edit(imported.replace('x > 0', 'x > 1'), 0, 1, name='Observer.roc')
+
+    typed = ('module [make]\nThing := { value : U64 }\n'
+             'make = || Thing.{ value: 1 }\n')
+    f.write(typed, 'Typed.roc')
+    f.write('import Typed\nhelper = || Typed.make()\nexpect helper().value == 1\n')
+    f.check(1)
+    edit('# moved imported nominal and helper\n' + typed, 1, name='Typed.roc')
+    edit(typed.replace('module [make]\n', 'module [make]\nexpect 37 == 37\n'), 1, 1, name='Typed.roc')
+    edit(typed.replace('value: 1', 'value: 2'), 0, 1, name='Typed.roc')
+
+    alias = ('module [make]\nThing : { value : U64 }\n'
+             'make : {} -> Thing\nmake = |_| { value: 1 }\n')
+    f.write(alias, 'TypedAlias.roc')
+    f.write('import TypedAlias\nhelper = || TypedAlias.make({})\nexpect helper().value == 1\n')
+    f.check(1)
+    edit('# moved imported alias\n' + alias, 1, name='TypedAlias.roc')
+    edit(alias.replace('U64', 'I64'), 0, 1, name='TypedAlias.roc')
+
+    default_helper = ('WithDefault := { value : U64 ?? compute() }.{}\n'
+                      'compute = || { expect True\n    1 }\n')
+    f.write(default_helper, 'WithDefault.roc')
+    f.write('import WithDefault\nexpect WithDefault.{}.value == 1\n')
+    f.check(1)
+    edit('# moved a default and its helper\n' + default_helper, 1, name='WithDefault.roc')
+    edit(default_helper.replace('    1 }', '    2 }'), 0, 1, name='WithDefault.roc')
+
+    defaults = ('Config := { value : U64 ?? 1 }\n'
+                'make = || Config.{}\n'
+                'expect make().value == 1\n')
+    f.write(defaults)
+    f.check(1)
+    edit('# before a defaulted type\n' + defaults, 1)
+    edit(defaults.replace('?? 1', '?? 2'), 0, 1)
+
+    scoped = ('left = || { value = 1\n    expect value == 1\n    True }\n'
+              'right = || { value = 2\n    expect value == 1\n    True }\n'
+              'expect left()\nexpect right()\n')
+    f.write(scoped)
+    f.check(2)
+    edit('# before distinct binding scopes\n' + scoped, 2)
+    edit(scoped.replace('value = 2', 'value = 3'), 1, 1)
+
+    asset = 'import "asset.txt" as data : Str\nexpect data == "before"\n'
+    f.write('before', 'asset.txt')
+    f.write(asset)
+    f.check(1)
+    edit('# before a file import\n' + asset, 1)
+    edit('after', 0, 1, name='asset.txt')
+
+    # Failure details include current binding excerpts; user messages are exact.
+    crashing = 'expect { dbg "unchanged crash output"\n    crash "Main.roc:99" }\n'
+    f.write(crashing)
+    f.check(1)
+    edit('# before a crash\n' + crashing, 1)
+    question = 'expect { value : Try(U64, [Oops])\n    value = Err(Oops)\n    value? == 1 }\n'
+    f.write(question)
+    f.check(1)
+    edit('\n# before an extended failure span\n' + question, 1)
 
 
 def exercise(f):
@@ -224,8 +331,10 @@ def main():
     parser.add_argument('--roc', type=Path, required=True)
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='roc-test-outcomes-') as temp:
-        exercise(Fixture(Path(temp), args.roc.resolve()))
-    print('issue 12593: focused test-outcome cache checks passed')
+        fixture = Fixture(Path(temp), args.roc.resolve())
+        exercise(fixture)
+        relocation_checks(fixture)
+    print('issues 12593/12615: focused test-outcome cache checks passed')
 
 
 if __name__ == '__main__':

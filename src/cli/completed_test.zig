@@ -6,7 +6,9 @@ const reporting = @import("reporting");
 const compile = @import("compile");
 const Allocator = std.mem.Allocator;
 
+/// Prefix of every command record; changing the record format changes it.
 pub const magic = "ROC_COMPLETED_DEV_TEST_V2";
+/// A SHA-256 content digest.
 pub const Digest = [32]u8;
 /// A file a producer read, with the content state it saw.
 pub const Input = struct {
@@ -17,11 +19,15 @@ pub const Input = struct {
 pub const Resolution = struct { path: []const u8, target: []const u8 };
 /// Everything a command's outcome depends on outside the compiler, in sorted order.
 pub const Plan = struct { inputs: []Input, resolutions: []Resolution };
-pub const Source = struct { name: Digest, qualified_name: []const u8, path: []const u8 };
+/// Producer-authored location-independent reporting identity and current region.
+pub const ReportSite = @import("check").CheckedArtifact.TestReportSite;
+/// A source owner and its reporting map under the exact command input manifest.
+pub const Source = struct { name: Digest, qualified_name: []const u8, path: []const u8, sites: []const ReportSite };
+/// A current test occurrence and the durable semantic outcome it instantiates.
 pub const Root = struct { order: u32, region: base.Region, key: Digest, payload_hash: Digest };
+/// A tested module and its current root occurrences.
 pub const Module = struct {
     source: u32,
-    artifact: Digest,
     roots: []const Root,
 };
 /// A non-error report from compilation, stored as its structured document content.

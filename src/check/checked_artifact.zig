@@ -33842,6 +33842,8 @@ pub const CompileTimeRootReadTable = struct {
 /// Value identity and site of a compile-time root (design.md "Compile-Time
 /// Value Reuse Across Edits").
 pub const CompileTimeRootIdentity = value_identity.CompileTimeRootIdentity;
+/// A relocatable test observation site and its current source span.
+pub const TestReportSite = value_identity.TestReportSite;
 
 /// Every compile-time root's value identity and site, dense by root id, and
 /// the module's value context, computed when the module is published.
@@ -33853,6 +33855,8 @@ pub const CompileTimeRootIdentityTable = struct {
     test_context: []const [32]u8 = &.{},
     /// Implementation identities sorted by the producer's exact definition id.
     test_definitions: []const value_identity.DefinitionIdentity = &.{},
+    test_report_sites: []const value_identity.TestReportSite = &.{},
+    test_declarations: []const value_identity.DeclarationIdentity = &.{},
     /// The module's value context (`value_identity.ModuleIdentities.context`):
     /// one digest in every published module, none in a table that was never
     /// computed.
@@ -33871,6 +33875,8 @@ pub const CompileTimeRootIdentityTable = struct {
         test_rows: SerializedSlice(CompileTimeRootIdentity) = .{},
         test_context: SerializedSlice([32]u8) = .{},
         test_definitions: SerializedSlice(value_identity.DefinitionIdentity) = .{},
+        test_report_sites: SerializedSlice(value_identity.TestReportSite) = .{},
+        test_declarations: SerializedSlice(value_identity.DeclarationIdentity) = .{},
         context: SerializedSlice([32]u8) = .{},
         exports: SerializedSlice(value_identity.ExportIdentity) = .{},
         method_requires: SerializedSlice([32]u8) = .{},
@@ -33885,6 +33891,10 @@ pub const CompileTimeRootIdentityTable = struct {
         if (self.context.len > 1) return error.CorruptArtifact;
         if (self.test_rows.len != 0 and self.test_rows.len != root_count) return error.CorruptArtifact;
         if (self.test_context.len > 1) return error.CorruptArtifact;
+        for (self.test_report_sites) |site| if (site.start > site.end) return error.CorruptArtifact;
+        for (self.test_declarations, 0..) |declaration, i| {
+            if (i > 0 and @backingInt(self.test_declarations[i - 1].statement) >= @backingInt(declaration.statement)) return error.CorruptArtifact;
+        }
     }
 
     /// The module's value context, when it was computed.
@@ -34239,8 +34249,8 @@ pub const CheckedModuleArtifact = struct {
             // export requirements, and the portability column one more. Stored
             // function evidence keeps its target and structural payloads in
             // two pools of their own. Template demand vectors add one. Test outcome
-            // identities add roots, context and definition summaries.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 249);
+            // identities add roots, context, definition summaries, report sites and declaration identities.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 251);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -37943,6 +37953,8 @@ pub fn publishFromTypedModule(
         .own_identity = module_identity.stable_hash,
     });
     defer allocator.free(module_identities.definitions);
+    defer allocator.free(module_identities.report_sites);
+    defer allocator.free(module_identities.declarations);
     var compile_time_root_identities = CompileTimeRootIdentityTable{
         .rows = module_identities.roots,
         .exports = module_identities.exports,
@@ -37974,6 +37986,8 @@ pub fn publishFromTypedModule(
         .available = inputs.available_artifacts,
         .relations = inputs.relation_artifacts,
     });
+    compile_time_root_identities.test_declarations = test_identities.declarations;
+    compile_time_root_identities.test_report_sites = test_identities.report_sites;
     compile_time_root_identities.test_rows = test_identities.roots;
     compile_time_root_identities.test_definitions = test_identities.definitions;
     defer allocator.free(test_identities.exports);

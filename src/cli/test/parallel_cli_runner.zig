@@ -14173,7 +14173,7 @@ fn damageCompletedTestCache(io: std.Io, allocator: Allocator, cache_path: []cons
         if (entry.kind != .file or std.mem.find(u8, entry.path, segment) == null) continue;
         const bytes = try directory.readFileAlloc(io, entry.path, allocator, .limited(16 * 1024 * 1024));
         defer allocator.free(bytes);
-        const magic = if (remove_payload) "ROC_TEST_RESULTS_V10" else "ROC_COMPLETED_DEV_TEST_V1";
+        const magic = if (remove_payload) "ROC_TEST_OUTCOMES_V2" else "ROC_COMPLETED_DEV_TEST_V2";
         if (!std.mem.startsWith(u8, bytes, magic)) continue;
         if (remove_payload) try directory.deleteFile(io, entry.path) else try directory.writeFile(io, .{ .sub_path = entry.path, .data = bytes[0 .. bytes.len / 2] });
         damaged = true;

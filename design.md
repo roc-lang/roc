@@ -24514,6 +24514,22 @@ Imported test-only edits do not change those summaries. Platform/app relation
 identity remains an explicit binding input. This is independent of compile-time
 value reuse's existing identity and portability contract.
 
+Nominal and alias types in test dependency summaries use producer-authored
+`test_declarations` provenance instead of an imported artifact key and an
+incidental declaration number. The provenance covers the declaring module's
+qualified name and declaration bytes; a block-local declaration additionally
+names its checked lexical owner and relative span. A declaration outside that
+ownership graph retains exact version provenance. Imported representation
+references resolve their explicit declaration row and retain the representation
+owner's semantic type/method context, so location independence never removes
+nominal identity, backing declaration validation, or method precedence. This
+contract is specific to outcome identity; ordinary checked type identity and
+compile-time value portability are unchanged. The semantic type environment
+also includes the referenced-definition and import summaries of declared field
+defaults: foreign construction materializes them without a local value-reference
+edge. Default-expression observations have their declaring type as an explicit
+reporting owner.
+
 The execution strategy, execution mode, compiler compatibility and payload
 version partition outcome admission. Rendering settings, elapsed time, root
 order and the whole enclosing module are not semantic identity. Each current
@@ -24524,16 +24540,41 @@ record also contains its expected key and a checksum. Atomic replacement under
 one key can refresh reporting provenance for the same semantic outcome; reads
 still validate that provenance against the current sources.
 
-Source provenance is validated separately from semantics. This format retains
-exact root source regions and validates the declaring source prefix through each
-inline observation before replay. The prefix pins its lexical owner as well as
-its exact site; later unrelated source edits do not invalidate it. Extended
-failure regions, whose owner is not yet carried in the outcome format, retain
-the exact checked artifact as reporting provenance. A moved root or changed inline source
-invalidates that record; no offsets or embedded source details are guessed or
-patched. Results are rebound to the current plan order only after validation.
-Passes and failed expects are equally admissible; compiler errors and incomplete
+Source provenance is validated separately from semantics. Outcome format V2
+contains no absolute root offsets in its key or payload. A root's checked body
+and semantic dependency identity, compiler compatibility, native target,
+specialization strategy and execution policy decide its outcome. Current root
+order, source owner and region form an occurrence, supplied by the current test
+plan. Identical roots may share an outcome, but each occurrence independently
+instantiates that outcome and contributes its observations.
+
+A report inside the unchanged root carries a root-relative span. Other reports
+carry a qualified source owner and a checked producer-authored site identity.
+Checked publication emits `test_report_sites`: each site names its enclosing
+checked declaration's name and body bytes plus its relative span, and carries
+the current absolute region separately. Declaration bodies are hashed once per
+owner. The command builds both directions of this mapping once per source;
+replay never rescans or hashes source prefixes. Multiple current regions for
+one site identity are ambiguous and make that optional outcome unusable.
+Root-relative binding explicitly selects the current occurrence, so duplicate
+root bodies never require matching by old list position or proximity.
+
+The decoder validates every reference, span, counter, event and checksum before
+returning an outcome for merging or rendering. Missing, corrupt, incompatible
+or ambiguous reporting data rejects the entire outcome without emitting a
+partial transcript. Source maps borrow the command's checked sources, or the
+complete-command arena's validated source snapshots, through final rendering.
+Raw `dbg` and crash payload bytes remain semantic output and are never rewritten.
+Failure excerpts of mentioned bindings are covered by checked definition
+identity; primary source excerpts and line numbers render from current sources.
+Passes and failures are equally admissible; compiler errors and incomplete
 execution are not durable outcomes.
+
+Completed-command format V2 references durable individual outcomes and retains
+producer-authored report maps and each occurrence's current region, order and
+key under its exact validated input manifest. Both replay paths call the same
+outcome decoder. After an edit the command manifest misses, and current checking
+supplies fresh maps for individual reuse; a complete hit needs no checked graph.
 
 Admission precedes submission of runtime roots. Only misses enter specialization,
 LIR, code generation and execution. Each executing root owns its inline-expect

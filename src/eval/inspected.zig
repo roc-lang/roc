@@ -506,6 +506,7 @@ pub const BoolRootEvalResult = struct {
     expect_observations: []ExpectObservation = &.{},
 };
 
+/// The uncombined counts contributed by one root to an inline expect site.
 pub const ExpectObservation = struct {
     site: u32,
     counts: ExpectCounts,
