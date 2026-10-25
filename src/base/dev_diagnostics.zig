@@ -16,6 +16,8 @@ pub const available = builtin.link_libc and build_options.dev_diagnostics;
 
 /// One developer-diagnostic environment variable.
 pub const Var = enum {
+    /// Trace Boxy-only work; specialized compilation must produce no events.
+    trace_boxy_work,
     /// Print the final LIR of every procedure whose debug name contains the value.
     lir_dump,
     /// Print every closed specialization key.
@@ -40,6 +42,7 @@ pub const Var = enum {
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
         return switch (self) {
+            .trace_boxy_work => "ROC_TRACE_BOXY_WORK",
             .lir_dump => "ROC_LIR_DUMP",
             .spec_census => "ROC_SPEC_CENSUS",
             .pack_trace => "ROC_PACK_TRACE",
@@ -85,4 +88,9 @@ fn Cached(comptime variable: Var) type {
             return value.load(.monotonic);
         }
     };
+}
+
+/// Called only by owners of Boxy-only work, never by the specialized path.
+pub fn traceBoxyWork(comptime activity: []const u8) void {
+    if (isSet(.trace_boxy_work)) std.debug.print("boxy-work: " ++ activity ++ "\n", .{});
 }

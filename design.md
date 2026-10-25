@@ -13491,6 +13491,31 @@ selects the code-generation backend and optimization family. The
 `--specialize` flag selects how checked data becomes LIR before ARC and code
 generation.
 
+The opt-in is transitive. An `.lss` compilation performs no Boxy planning,
+descriptor construction, runtime initialization, registration, or sidecar
+work. Its code and cached artifacts have no Boxy dependencies. LIR carries an
+explicit runtime contract, set by its producer and retained by images; only a
+Boxy producer can authorize descriptor operations. Store construction enforces
+this contract, and consumers use it without discovering a strategy by scanning
+procedures. CTFE always carries the specialized contract.
+
+Erasure in LSS erases the identity of a callable, not its argument and result
+representations. Lambda Solved's `abi_fn` supplies those exact types; direct
+LIR lowering converts inputs and outputs at typed boundaries. An erased worker
+therefore implements the same packed-argument and result-pointer ABI its caller
+uses. Its native call needs no descriptors, runtime layout indices, worker
+registration, or polymorphic value adaptation. Captures and their explicit ARC
+drop helper remain in the ordinary erased-callable allocation, including the
+existing hot-reload prefix when requested.
+
+Specialized deferred calls use a descriptor-free native trampoline. A pending
+call contains only its function pointer, owned closure, and packed argument
+bytes. ARC explicitly transfers that closure ownership to the pending call;
+the trampoline releases it after invocation. Tail-drive marks determine where
+to drive the trampoline, just as for ordinary calls. Specialized results pass
+unchanged through these tail positions; representation conversions execute as
+LIR before returning, never as runtime descriptor operations.
+
 Compile-time evaluation is not a runtime lowering-strategy selection. CTFE
 always uses `.lss`, including when the enclosing runtime compilation explicitly
 selects `.boxy`. Runtime strategy flags, cache entries, and host wrappers must
@@ -13506,7 +13531,8 @@ stored in every lowered-output cache key. It is not recovered from the backend,
 optimization level, target, root set, or whether a later stage asks for an
 interpreter image. Backends receive ARC-complete LIR and do not know whether the
 LIR came from `.lss` or `.boxy` except through ordinary LIR statements,
-layouts, descriptor tables, and root metadata.
+layouts, descriptor tables, root metadata, and the producer-owned runtime
+contract.
 
 ### `.lss` Runtime Lowering
 

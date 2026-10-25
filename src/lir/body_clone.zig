@@ -3022,6 +3022,7 @@ test "body_clone scratch is bounded by reachable locals and scopes" {
     const testing = std.testing;
     var store = LirStore.init(testing.allocator);
     defer store.deinit();
+    store.runtime_contract = .boxy;
     const scope: LIR.InlineScope = .{
         .source_identity = LIR.ProcIdentity.forTest(1),
         .copies_site_code = false,
@@ -3195,6 +3196,7 @@ test "body_clone preserves external locals without preseeded map entries" {
     };
     var store = LirStore.init(std.testing.allocator);
     defer store.deinit();
+    store.runtime_contract = .boxy;
     const desc = try store.addLocal(.{ .layout_idx = .u64 });
     const value = try store.addLocal(.{ .layout_idx = .u64, .boxy_desc = .{ .local = desc } });
     var cloner = try BodyCloner(Rewriter).init(&store, .{ .renamed = value });
