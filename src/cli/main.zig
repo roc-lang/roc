@@ -9217,6 +9217,10 @@ fn publishDiscoverySummaries(build_env: *BuildEnv, root_artifact: *const check.C
 fn publishCompileTimeResults(ctx: *CliCtx, build_env: *BuildEnv, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!void {
     try publishCompileTimePack(ctx, build_env);
     try publishDiscoverySummaries(build_env, root_artifact);
+    if (build_env.compile_time_object_cache_owner) |owner| {
+        const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(owner.context));
+        try cache.packs.publishInterfaces();
+    }
 }
 
 /// Whether `root`'s code reaches a procedure a linked object-cache object
@@ -16144,6 +16148,13 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         false,
     );
     runtime_config.explicit_roots = runtime_roots;
+    // Test roots still compile their own code, but share the checked session's
+    // settled interface provider with compile-time evaluation.
+    const interface_packs: ?*pack_store.LoadedPacks = if (build_env.compile_time_object_cache_owner) |owner| blk: {
+        const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(owner.context));
+        break :blk &cache.packs;
+    } else null;
+    if (interface_packs) |packs| runtime_config.target.spec_cache = packs.specCacheLookup();
     if (runtime_requests.items.len != 0) {
         runtime_config.root_module = test_plan.modules[0].artifact;
         build_env.setRuntimeLowering(runtime_config);
@@ -16206,6 +16217,8 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         if (shared_test_program.?.frozen_static_data) |*previous| previous.deinit();
         shared_test_program.?.frozen_static_data = .{ .allocator = ctx.gpa, .exports = test_static_data };
     }
+
+    if (interface_packs) |packs| try packs.publishInterfaces();
 
     const test_mode = cliTestExecutionMode(args.opt);
     const use_live_optimized_output = runtime_requests.items.len != 0 and switch (test_mode) {
@@ -17910,13 +17923,20 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [28]
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [31]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [38]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Interface summary hits", .count = diagnostics.specialization.interface_summary_hits },
         .{ .name = "Persistent interface hits", .count = diagnostics.specialization.interface_persistent_hits },
         .{ .name = "Persistent interface misses", .count = diagnostics.specialization.interface_persistent_misses },
         .{ .name = "Persistent interface invalid", .count = diagnostics.specialization.interface_persistent_invalid },
+        .{ .name = "Persistent interface types", .count = diagnostics.specialization.interface_persistent_types },
+        .{ .name = "Persistent interface references", .count = diagnostics.specialization.interface_persistent_references },
+        .{ .name = "Persistent interface composite records", .count = diagnostics.specialization.interface_persistent_composite_records },
+        .{ .name = "Persistent interface default records", .count = diagnostics.specialization.interface_persistent_default_records },
+        .{ .name = "Persistent interface composite hits", .count = diagnostics.specialization.interface_persistent_composite_hits },
+        .{ .name = "Persistent interface default hits", .count = diagnostics.specialization.interface_persistent_default_hits },
+        .{ .name = "Persistent interface bytes", .count = diagnostics.specialization.interface_persistent_bytes },
         .{ .name = "Persistent interface records", .count = diagnostics.specialization.interface_persistent_records },
         .{ .name = "Persistent interface unrepresentable", .count = diagnostics.specialization.interface_persistent_unrepresentable },
         .{ .name = "Interface summary expansions", .count = diagnostics.specialization.interface_summary_expansions },

@@ -1523,6 +1523,7 @@ pub fn prepareCheckedModulesMonotype(
             .{
                 .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
                 .spec_cache = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
+                .interface_cache = if (target.spec_cache) |cache| cache.interfaces else null,
                 .spec_cache_takes = target.code_provision.specCacheTakes(),
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,

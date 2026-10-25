@@ -1,5 +1,12 @@
+import Defaults
+
 Generic := [].{
-    f0 = |x| x + 1
+    fresh = |factory| factory.make()
+    composite = |_| fresh(Defaults.{})
+    f0 = |x| {
+        wrapped = fresh(Defaults.{})
+        x + wrapped.value + wrapped.base.count + 1
+    }
     f1 = |x| f0(x) + 1
     f2 = |x| f1(x) + 1
     f3 = |x| f2(x) + 1

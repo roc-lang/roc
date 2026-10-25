@@ -693,15 +693,52 @@ interface replay. A multi-request recursive component with parametric holes
 has no independently reusable summary.
 
 An interface summary is either an explicit unchanged result or immutable
-constraints over locally numbered nodes and field-kind cells. Persistent
-constraints refer to settled types through the current request's leaf positions
-or explicit primitive types; they do not serialize solver stores or retain
-producer-owned type ids. A producer whose result requires another settled type
-publishes no persistent summary; checked default-expression addresses likewise
-remain unrepresented. Named checked provenance in open constraints
-must still name a currently present exact checked module. Consumers validate
-all indices, tags, lengths and provenance before instantiating fresh nodes.
-Missing, incompatible, corrupt or unrepresentable optional records are misses.
+constraints over locally numbered nodes and field-kind cells. A settled relation
+may still contain checked variables, row extensions, recursive links, field-kind
+cells, and provisional field views: these are relation data, not completed runtime
+types. Compiler placeholders, redirects and lazy solver leaves are not publishable.
+The capture producer supplies all open-node witnesses, related groups, generated
+iterator provenance, and field-presence evidence explicitly.
+
+Build and test runtime lowering share the checked session's interface provider
+with compile-time evaluation. Test roots retain source-body code provision;
+interface replay does not grant machine-code splice capability. Successful
+compile-time publication and test lowering flush the provider's batched records.
+
+Payload version 2 addresses immutable types through captured request leaves or a
+summary-owned node table. The table covers primitives, lists, boxes, tuples,
+records, tag unions, functions, named nominal/alias/opaque types, erased digests,
+zero-sized types and demand holes. Spans become counted sequences; names become
+content. Named nodes retain declaration and occurrence owners, checked occurrence,
+arguments, generated identity, iterator topology/tier, backing visibility and
+authority, and declared field order. Fields retain slot and value types, provisional
+state and default identity; tags retain both semantic and checked labels. Table
+indices are assigned in request traversal order, with a work queue and memoized
+references preserving sharing and recursion without recursive graph expansion.
+Leaf lookup uses representation digest buckets and exact equality; semantic
+equality alone never erases an alias or generated backing.
+
+A field default's durable address is its declaring module content identity, exact
+checked artifact key, and producer-authored CIR expression ordinal. The producer
+resolves this address through the checked body's archived default-expression map.
+The consumer requires that same artifact and mapping; it neither evaluates the
+default nor searches by spelling, source text or shape. Changing or removing that
+dependency invalidates the summary. These addresses apply equally to immutable
+record fields and open field-kind constraints.
+
+Decoding owns temporary storage until every length, tag, graph reference, row and
+checked provenance has been validated. Only then does it reserve a private type
+transaction, fill all nodes, intern the complete group, and relocate the returned
+constraints. Allocation failure aborts the transaction; no request relation sees
+partial types. Each replay instantiates fresh mutable solver nodes. Names are
+monotonically interned in the receiving store, and no producer arena is borrowed.
+Replayed entries retain their publication origin across worker relocation and are
+not re-encoded for publication. Only counts exceeding the format's u32 address
+capacity remain unrepresentable; no type shape is excluded.
+Payload and family envelope versions change together; old, missing, incompatible
+or corrupt optional records are misses. Encoding and publication retain the
+existing batched, atomic family store. Counters distinguish misses, serialization
+failures, records and bytes, replay, invalid records and actual relation expansion.
 
 The provider key includes the exact checked callee code-generation key,
 the method scope's checked value context and ordered

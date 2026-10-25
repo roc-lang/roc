@@ -54,7 +54,7 @@ const max_subphases: usize = 25;
 // Shared lowering and a runtime continuation each report eight lowering groups
 // and native emission; tests also report result-cache counts.
 const max_counter_groups: usize = 2 * 9 + 1;
-const max_counters_per_group: usize = 32;
+const max_counters_per_group: usize = 38;
 /// Rows in the ranked timing list printed after the phases.
 const max_ranked_timings: usize = 10;
 /// Bytes reserved for copies of the ranked rows' names, which the caller's
@@ -924,7 +924,7 @@ test "ranked timings are omitted without --timings" {
     try testing.expect(std.mem.find(u8, buf.written(), "pdf.Slow") == null);
 }
 
-test "timing counter groups retain every Monotype graph diagnostic" {
+test "timing counter groups retain every Monotype body diagnostic" {
     var buf: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buf.deinit();
     var reporter = Reporter.init(.{
@@ -938,14 +938,14 @@ test "timing counter groups retain every Monotype graph diagnostic" {
     reporter.start();
     var counters = repeated: {
         const pattern = [_]Counter{.{ .name = "Graph diagnostic", .count = 0 }};
-        var result: [pattern.len * (27)]@TypeOf(pattern[0]) = undefined;
-        for (0..(27)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], &pattern);
+        var result: [pattern.len * (38)]@TypeOf(pattern[0]) = undefined;
+        for (0..(38)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], &pattern);
         break :repeated result;
     };
-    counters[26] = .{ .name = "Generated-private guard returns", .count = 12345 };
-    reporter.recordCounters("Monotype type graph", &counters);
+    counters[37] = .{ .name = "Direct call request reuses", .count = 12345 };
+    reporter.recordCounters("Monotype body + dispatch", &counters);
     reporter.finish();
-    try testing.expect(std.mem.find(u8, buf.written(), "Generated-private guard returns") != null);
+    try testing.expect(std.mem.find(u8, buf.written(), "Direct call request reuses") != null);
     try testing.expect(std.mem.find(u8, buf.written(), "12345") != null);
 }
 

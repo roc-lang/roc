@@ -9485,7 +9485,7 @@ fn customPersistentInterfaceCache(io: std.Io, allocator: Allocator, env: *const 
         .dir_name = "persistent_interface_cache",
         .platform = "test/fx-open/platform/main.roc",
         .platform_spelling = "../../fx-open/platform/main.roc",
-        .sources = &.{ "test/cli/persistent_interface_cache/Generic.roc", "test/cli/persistent_interface_cache/main.roc" },
+        .sources = &.{ "test/cli/persistent_interface_cache/Generic.roc", "test/cli/persistent_interface_cache/Defaults.roc", "test/cli/persistent_interface_cache/CacheTests.roc", "test/cli/persistent_interface_cache/main.roc" },
         .app_name = "main.roc",
     }, &app)) |failure| return failure;
     if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app, env.dirs.work_dir, "interfaces", .{
@@ -9498,13 +9498,88 @@ fn customPersistentInterfaceCache(io: std.Io, allocator: Allocator, env: *const 
     })) |failure| return failure;
     // Now force fresh compile-time evaluation and normalization too. The
     // unchanged callees must reuse their settled interfaces in both paths.
-    return storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app, env.dirs.work_dir, "runtime_interfaces", .{
+    if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app, env.dirs.work_dir, "runtime_interfaces", .{
         .edit_between_builds = true,
         .source_edit = .{ .from = "Generic.f7(2)", .to = "Generic.f7(1) + 1" },
         .persistent_interface_reuse = true,
+        .uncached_baseline = true,
         .compile_debug = "[dbg] \"persistent interface observation\"",
         .stdout = "29\n",
-    });
+    })) |failure| return failure;
+    if (persistentInterfaceTests(io, allocator, env, timer, timeout_ms, app)) |failure| return failure;
+    // The durable expression address belongs to this exact checked artifact.
+    // Changing its body must change both the compile-time and runtime result.
+    const defaults_path = std.fs.path.join(allocator, &.{ std.fs.path.dirname(app).?, "Defaults.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "default dependency path: {}", .{err});
+    const original = std.Io.Dir.cwd().readFileAlloc(io, defaults_path, allocator, .limited(1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "default dependency read: {}", .{err});
+    const changed = std.mem.replaceOwned(u8, allocator, original, "?? 0", "?? 3") catch |err|
+        return customInfraFailure(allocator, timer, "default dependency edit: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = defaults_path, .data = changed }) catch |err|
+        return customInfraFailure(allocator, timer, "default dependency write: {}", .{err});
+    if (storeBuildsBehaveIdentically(io, allocator, env, timer, timeout_ms, app, env.dirs.work_dir, "changed_default", .{
+        .uncached_baseline = true,
+        .compile_debug = "[dbg] \"persistent interface observation\"",
+        .stdout = "35\n",
+    })) |failure| return failure;
+    const failing = std.mem.replaceOwned(u8, allocator, original, "?? 0", "?? { crash \"changed interface default\" }") catch |err|
+        return customInfraFailure(allocator, timer, "failing default dependency edit: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = defaults_path, .data = failing }) catch |err|
+        return customInfraFailure(allocator, timer, "failing default dependency write: {}", .{err});
+    const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "case timeout exhausted before default rejection");
+    const rejected = runRocInEnv(io, allocator, env, &.{ "build", "--opt=dev" }, app, .relative, &.{}, null, remaining) catch |err|
+        return customInfraFailure(allocator, timer, "failing default build: {}", .{err});
+    if (processSucceeded(rejected.term) or std.mem.find(u8, rejected.stderr, "changed interface default") == null)
+        return failureFromRun(allocator, timer, rejected, "persistent interface reuse hid a changed default's failure");
+    return null;
+}
+
+/// Test roots also need the intermediate relation when their caller changes.
+fn persistentInterfaceTests(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64, app: []const u8) ?TestResult {
+    const path = std.fs.path.join(allocator, &.{ std.fs.path.dirname(app).?, "CacheTests.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "interface test path: {}", .{err});
+    var isolated = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "interface test environment: {}", .{err}),
+    };
+    defer isolated.env_map.deinit();
+    const cache = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "interface-test-cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "interface test cache path: {}", .{err});
+    isolated.env_map.put("ROC_CACHE_DIR", cache) catch |err|
+        return customInfraFailure(allocator, timer, "interface test cache environment: {}", .{err});
+    var cold_expansions: u64 = 0;
+    for (0..3) |iteration| {
+        if (iteration == 2) {
+            const source = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024)) catch |err|
+                return customInfraFailure(allocator, timer, "interface test read: {}", .{err});
+            const changed = std.mem.replaceOwned(u8, allocator, source, "Generic.f7(2.U64)", "Generic.f7(1.U64) + 1") catch |err|
+                return customInfraFailure(allocator, timer, "interface test edit: {}", .{err});
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = changed }) catch |err|
+                return customInfraFailure(allocator, timer, "interface test write: {}", .{err});
+        }
+        const remaining = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "case timeout exhausted before interface tests");
+        const result = runRocInEnv(io, allocator, &isolated, if (iteration == 0) &.{ "test", "--opt=dev", "--timings", "--no-cache" } else &.{ "test", "--opt=dev", "--timings" }, path, .relative, &.{}, null, remaining) catch |err|
+            return customInfraFailure(allocator, timer, "interface test spawn: {}", .{err});
+        if (!processSucceeded(result.term) or std.mem.find(u8, result.stderr, "unused failing interface root") != null)
+            return failureFromRun(allocator, timer, result, "persistent interface test replay changed results or demand");
+        if (std.mem.count(u8, result.stderr, "persistent test observation") != 1)
+            return failureFromRun(allocator, timer, result, "persistent interface test replay changed observations");
+        const unsupported = timingCounter(result.stderr, "Shared Monotype body + dispatch", "Persistent interface unrepresentable") orelse 0;
+        if (unsupported != 0) return failureFromRun(allocator, timer, result, "supported test interfaces were not representable");
+        const expansions = timingCounter(result.stderr, "Shared Monotype body + dispatch", "Interface summary expansions") orelse 0;
+        if (iteration == 1) cold_expansions = expansions;
+        if (iteration == 2) {
+            const hits = timingCounter(result.stderr, "Shared Monotype body + dispatch", "Persistent interface hits") orelse 0;
+            if (hits == 0 or expansions >= cold_expansions)
+                return failureFromRun(allocator, timer, result, "edited tests did not avoid callee relation computation through persistent replay");
+            const composites = timingCounter(result.stderr, "Shared Monotype body + dispatch", "Persistent interface composite hits") orelse 0;
+            const defaults = timingCounter(result.stderr, "Shared Monotype body + dispatch", "Persistent interface default hits") orelse 0;
+            if (composites == 0 or defaults == 0)
+                return failureFromRun(allocator, timer, result, "edited tests did not replay composite and default-bearing interfaces");
+        }
+    }
+    return null;
 }
 
 /// A real checked-artifact/object-store workflow, with a changed app so the
@@ -11646,6 +11721,7 @@ fn storeBuildsBehaveIdentically(
     const store_exes: []const []const u8 = if (expect.uncached_baseline) &.{ "uncached", "a", "b" } else &.{ "a", "b" };
     var store_runs: [3]std.process.RunResult = undefined;
     var cold_body_contexts: ?u64 = null;
+    var cold_interface_expansions: ?u64 = null;
     for (store_exes, 0..) |name, index| {
         const exe = std.fmt.allocPrint(allocator, "{s}/{s}_{s}", .{ out_dir, prefix, name }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
@@ -11716,10 +11792,25 @@ fn storeBuildsBehaveIdentically(
                 }
             }
         }
+        if (expect.persistent_interface_reuse) {
+            const unsupported = timingCounter(built.stderr, "Shared Monotype body + dispatch", "Persistent interface unrepresentable") orelse 0;
+            if (unsupported != 0) return failureFromRun(allocator, timer, built, "supported interface results were not representable");
+        }
+        if (expect.persistent_interface_reuse and !last and cold_interface_expansions == null) {
+            cold_interface_expansions = timingCounter(built.stderr, "Shared Monotype body + dispatch", "Interface summary expansions") orelse
+                return failureFromRun(allocator, timer, built, "build did not report interface relation work");
+        }
         if (last and expect.persistent_interface_reuse) {
             const hits = timingCounter(built.stderr, "Shared Monotype body + dispatch", "Persistent interface hits") orelse
                 return failureFromRun(allocator, timer, built, "build did not report persistent interface reuse");
             if (hits == 0) return failureFromRun(allocator, timer, built, "app edit reused no persistent interface summary");
+            const expansions = timingCounter(built.stderr, "Shared Monotype body + dispatch", "Interface summary expansions") orelse
+                return failureFromRun(allocator, timer, built, "build did not report interface relation work");
+            if (expansions >= cold_interface_expansions.?) return failureFromRun(allocator, timer, built, "persistent replay did not reduce actual relation expansion");
+            const composites = timingCounter(built.stderr, "Shared Monotype body + dispatch", "Persistent interface composite hits") orelse 0;
+            if (composites == 0) return failureFromRun(allocator, timer, built, "app edit reused no newly produced composite interface");
+            const defaults = timingCounter(built.stderr, "Shared Monotype body + dispatch", "Persistent interface default hits") orelse 0;
+            if (defaults == 0) return failureFromRun(allocator, timer, built, "app edit reused no default-bearing interface");
             if (std.mem.find(u8, built.stderr, "unused failing interface root") != null)
                 return failureFromRun(allocator, timer, built, "interface replay demanded an unused failing root");
         }
