@@ -1108,9 +1108,15 @@ pub const LoadedPacks = struct {
             const bucket = try std.fs.path.join(allocator, &.{ index_root, "offers", &std.fmt.bytesToHex(key, .lower) });
             buckets.appendAssumeCapacity(bucket);
             self.index_stats.bucket_opens += 1;
-            var dir = std.Io.Dir.cwd().openDir(io, bucket, .{ .iterate = true }) catch |err| {
-                if (err == error.FileNotFound) self.index_stats.bucket_absent += 1 else cacheable = false;
-                continue;
+            var dir = std.Io.Dir.cwd().openDir(io, bucket, .{ .iterate = true }) catch |err| switch (err) {
+                error.FileNotFound => {
+                    self.index_stats.bucket_absent += 1;
+                    continue;
+                },
+                else => {
+                    cacheable = false;
+                    continue;
+                },
             };
             defer dir.close(io);
             var it = dir.iterate();
