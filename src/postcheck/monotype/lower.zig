@@ -66800,7 +66800,7 @@ const CompletionAnalysisFixture = struct {
         self.types.deinit();
     }
 
-    fn expectRelation(self: *@This(), expected: BodyContext.RequestCompletion, request: NodeId, produced: NodeId) !void {
+    fn expectRelation(self: *@This(), expected: BodyContext.RequestCompletion, request: NodeId, produced: NodeId) (Allocator.Error || error{TestExpectedEqual})!void {
         var path = BodyContext.RequestCompletionPath.init(self.allocator);
         defer path.deinit();
         for (0..2) |_| {
@@ -66812,7 +66812,7 @@ const CompletionAnalysisFixture = struct {
         try std.testing.expectEqual(expected, try self.ctx.requestCompletionRelation(request, produced, &path, null));
     }
 
-    fn expectUninhabited(self: *@This(), node: NodeId, access: BodyContext.UninhabitedBackingAccess, expected: bool) !void {
+    fn expectUninhabited(self: *@This(), node: NodeId, access: BodyContext.UninhabitedBackingAccess, expected: bool) (Allocator.Error || error{TestExpectedEqual})!void {
         for (0..2) |_| try std.testing.expectEqual(expected, try self.ctx.nodeIsProvenUninhabitedInner(node, access));
         for (&self.ctx.node_uninhabited_memo) |*memo| memo.clearRetainingCapacity();
         try std.testing.expectEqual(expected, try self.ctx.nodeIsProvenUninhabitedInner(node, access));
@@ -67051,7 +67051,7 @@ test "completion analysis does not publish a recursive inhabitation assumption" 
 
 test "completion analysis scratch and partial memos survive every allocation failure" {
     const Probe = struct {
-        fn run(ctx: *BodyContext, inhabited: NodeId, request: NodeId, produced: NodeId) !bool {
+        fn run(ctx: *BodyContext, inhabited: NodeId, request: NodeId, produced: NodeId) (Allocator.Error || error{TestUnexpectedResult})!bool {
             try std.testing.expect(!try ctx.nodeIsProvenUninhabited(inhabited));
             return ctx.resultCompletesRequest(request, produced);
         }
