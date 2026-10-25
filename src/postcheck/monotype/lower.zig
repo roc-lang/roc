@@ -2072,7 +2072,7 @@ const TargetEvidenceSource = union(enum) {
     materialized_contract: []const SpecEvidence,
     /// A direct edge instantiated the scheme of the exact procedure alias
     /// its target was reached through; the contract resolves that alias's
-    /// own obligations, and the target's evidence composes through the alias.
+    /// own requirements, and the target's evidence composes through the alias.
     alias_scope: EvidenceContract,
 };
 
@@ -52780,7 +52780,7 @@ const BodyContext = struct {
         const refs, const params = switch (node.nested) {
             .from_callable => .{ &[_]static_dispatch.CheckedEvidence{}, schema.params },
             .resolved => .{ site_view.static_dispatch_plans.nestedEvidence(node), schema.params },
-            // The edge resolved the obligations of the alias the target was
+            // The edge resolved the requirements of the alias the target was
             // reached through; the target's own vector composes through the
             // alias when the frame finishes.
             .through_alias => .{
@@ -53737,7 +53737,7 @@ const BodyContext = struct {
     /// The edge of a target reached through an exact procedure alias, from
     /// the edge that instantiated the alias's scheme: `alias_edge` substitutes
     /// the alias scope's quantified variables and supplies the alias's own
-    /// obligations.
+    /// requirements.
     fn edgeThroughAlias(
         self: *BodyContext,
         target_alias: TargetAlias,
