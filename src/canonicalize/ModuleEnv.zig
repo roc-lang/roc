@@ -888,6 +888,49 @@ pub const BindingScheme = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// Import-facing eligibility of a module-global callable for stored constants.
+/// Checking publishes one row per global definition, ordered by definition id.
+/// The body and its transitive callee dependencies are owned by that checker.
+pub const CallableCheckingFact = extern struct {
+    def: CIR.Def.Idx,
+    allows_stored_const: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// Checking's import-facing identity and the current content identities that
+/// bind its owner parameters. The digest never substitutes for an implementation
+/// identity. Canonicalized environments have an unpublished dependency.
+pub const CheckingDependency = struct {
+    digest: [32]u8 = @splat(0),
+    owners: collections.SafeList(base.ModuleIdentity.Hash) = .{},
+    published: bool = false,
+
+    pub fn deinit(self: *CheckingDependency, allocator: Allocator) void {
+        self.owners.deinit(allocator);
+    }
+
+    pub const Serialized = extern struct {
+        digest: [32]u8,
+        owners: collections.SafeList(base.ModuleIdentity.Hash).Serialized,
+        published: u64,
+
+        pub fn serialize(self: *@This(), value: *const CheckingDependency, allocator: Allocator, writer: *CompactWriter) Allocator.Error!void {
+            self.digest = value.digest;
+            self.published = @intFromBool(value.published);
+            try self.owners.serialize(&value.owners, allocator, writer);
+        }
+
+        pub fn deserializeInto(self: *const @This(), address: usize) CheckingDependency {
+            return .{ .digest = self.digest, .owners = self.owners.deserializeInto(address), .published = self.published != 0 };
+        }
+
+        pub fn deserializeWithCopy(self: *const @This(), address: usize, allocator: Allocator) Allocator.Error!CheckingDependency {
+            return .{ .digest = self.digest, .owners = try self.owners.deserializeWithCopy(address, allocator), .published = self.published != 0 };
+        }
+    };
+};
+
 /// One generated-codec dispatch relation that remains part of a binding's
 /// scheme across checked-module boundaries. `scheme_root` preserves alias
 /// identity when a cached checked environment is rechecked, and
@@ -1026,6 +1069,10 @@ top_level_demand_dependencies_ready: bool,
 /// Demand"): functions whose bodies can, and definitions holding values.
 /// Checking produces it with the strict-demand relation; importers read it.
 invoking_defs: collections.SafeList(CIR.Def.Idx),
+/// Exact stored-constant eligibility of each global callable, published after
+/// checking settles its body. Importers consume this instead of scanning CIR.
+callable_checking_facts: CallableCheckingFact.SafeList,
+checking_dependency: CheckingDependency,
 
 /// True only after `check.TypedCIR.prepareRuntimeEnv` has prepared this env for
 /// checked-artifact consumption. Serialized user modules intentionally do not
@@ -1451,6 +1498,8 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.top_level_demand_dependencies = .{};
     self.top_level_demand_dependencies_ready = false;
     self.invoking_defs = .{};
+    self.callable_checking_facts = .{};
+    self.checking_dependency = .{};
     self.runtime_prepared = false;
 }
 
@@ -1502,6 +1551,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .top_level_demand_dependencies = .{},
         .top_level_demand_dependencies_ready = false,
         .invoking_defs = .{},
+        .callable_checking_facts = .{},
+        .checking_dependency = .{},
         .runtime_prepared = false,
         .idents = idents,
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -1565,6 +1616,8 @@ pub fn deinit(self: *Self) void {
     self.inspect_override_instances.deinit(self.gpa);
     self.top_level_demand_dependencies.deinit(self.gpa);
     self.invoking_defs.deinit(self.gpa);
+    self.callable_checking_facts.deinit(self.gpa);
+    self.checking_dependency.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 }
@@ -1609,6 +1662,25 @@ pub fn defInvokes(self: *const Self, def_idx: CIR.Def.Idx) bool {
         }
     }
     return false;
+}
+
+/// Import-facing stored-constant eligibility. Every global definition has a
+/// producer row, including rejected definitions; absence is a compiler bug.
+pub fn callableAllowsStoredConst(self: *const Self, def_idx: CIR.Def.Idx) bool {
+    const facts = self.callable_checking_facts.items.items;
+    var low: usize = 0;
+    var high = facts.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (@backingInt(facts[mid].def) < @backingInt(def_idx)) {
+            low = mid + 1;
+        } else if (facts[mid].def != def_idx) {
+            high = mid;
+        } else {
+            return facts[mid].allows_stored_const != 0;
+        }
+    }
+    base.invariant("checked global callable has no producer-owned stored-constant eligibility", .{});
 }
 
 /// Return the producer-authored low-level implementation for `def_idx`.
@@ -3961,6 +4033,8 @@ pub const Serialized = extern struct {
     store: NodeStore.Serialized,
     top_level_demand_dependencies: DependencyGraph.Dependency.SafeList.Serialized,
     invoking_defs: collections.SafeList(CIR.Def.Idx).Serialized,
+    callable_checking_facts: CallableCheckingFact.SafeList.Serialized,
+    checking_dependency: CheckingDependency.Serialized,
     top_level_demand_dependencies_ready: bool,
     runtime_prepared: bool,
     runtime_prepared_padding: [6]u8,
@@ -4064,6 +4138,8 @@ pub const Serialized = extern struct {
             writer,
         );
         try self.invoking_defs.serialize(&env.invoking_defs, allocator, writer);
+        try self.callable_checking_facts.serialize(&env.callable_checking_facts, allocator, writer);
+        try self.checking_dependency.serialize(&env.checking_dependency, allocator, writer);
 
         // Set gpa and module_name to zeros;
         // these are runtime-only and will be set during deserialization.
@@ -4163,6 +4239,8 @@ pub const Serialized = extern struct {
             .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
             .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
             .invoking_defs = self.invoking_defs.deserializeInto(base_addr),
+            .callable_checking_facts = self.callable_checking_facts.deserializeInto(base_addr),
+            .checking_dependency = self.checking_dependency.deserializeInto(base_addr),
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -4246,6 +4324,8 @@ pub const Serialized = extern struct {
             .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
             .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
             .invoking_defs = self.invoking_defs.deserializeInto(base_addr),
+            .callable_checking_facts = self.callable_checking_facts.deserializeInto(base_addr),
+            .checking_dependency = self.checking_dependency.deserializeInto(base_addr),
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -4341,6 +4421,8 @@ pub const Serialized = extern struct {
             .top_level_demand_dependencies = try self.top_level_demand_dependencies.deserializeWithCopy(base_addr, gpa),
             .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
             .invoking_defs = try self.invoking_defs.deserializeWithCopy(base_addr, gpa),
+            .callable_checking_facts = try self.callable_checking_facts.deserializeWithCopy(base_addr, gpa),
+            .checking_dependency = try self.checking_dependency.deserializeWithCopy(base_addr, gpa),
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),

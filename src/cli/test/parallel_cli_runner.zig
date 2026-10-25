@@ -578,6 +578,7 @@ const CustomCase = enum {
     glue_c_tests,
     roc_test_skips_url_dependency_expects,
     roc_test_caches_local_dependency_expects,
+    issue_12592_inference_reuse_current_tests,
     roc_test_counts_checking_errors_with_cached_results,
 };
 
@@ -3019,6 +3020,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test skips a downloaded dependency's expects", .body = .{ .custom = .roc_test_skips_url_dependency_expects } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12591: native test artifacts survive result invalidation", .backend = .dev, .body = .{ .custom = .native_test_artifact_reuse } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test runs a path dependency's expects and caches them by source", .body = .{ .custom = .roc_test_caches_local_dependency_expects } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12592: reused importer inference observes current helper implementations and tests", .backend = .dev, .body = .{ .custom = .issue_12592_inference_reuse_current_tests } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11439: blocked expects remain counted with cached results and disappear after a fix", .body = .{ .custom = .roc_test_counts_checking_errors_with_cached_results } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test runs an app's expects without its platform entrypoint", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/AppWithoutEntrypoint.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "exposed but not defined" }, .{ .stream = .stderr, .text = "missing platform required definition" }, .{ .stream = .stderr, .text = "compile time crash" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check still requires the platform entrypoint roc test does not", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/AppWithoutEntrypoint.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "exposed but not defined" }, .{ .stream = .stderr, .text = "missing platform required definition" }, .{ .stream = .stderr, .text = "main!" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -5369,6 +5371,7 @@ fn runCustomCase(
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
         .roc_test_caches_local_dependency_expects => customRocTestCachesLocalDependencyExpects(io, allocator, &env, &timer, timeout_ms),
+        .issue_12592_inference_reuse_current_tests => customIssue12592(io, allocator, &env, &timer, timeout_ms),
         .roc_test_counts_checking_errors_with_cached_results => customRocTestCountsCheckingErrorsWithCachedResults(io, allocator, &env, &timer, timeout_ms),
     };
 
@@ -17684,6 +17687,53 @@ fn customRocTestCountsCheckingErrorsWithCachedResults(
 /// so its `expect`s run alongside the root's. They also have to stop running
 /// once nothing has changed: results are cached against a hash of the source
 /// that produced them, so a second run reports them without executing any.
+fn customIssue12592(io: std.Io, allocator: Allocator, env: *CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const root = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "C.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate inference fixture path: {}", .{err});
+    defer allocator.free(root);
+    if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "B.roc",
+        \\import A
+        \\B := {}.{
+        \\    value : {} -> I64
+        \\    value = |arg| A.value(arg)
+        \\}
+    )) |failure| return failure;
+    const a_body = "A := {}.{ value : {} -> I64\n value = |_| 7\n}\n";
+    const a_changed = "A := {}.{ value : {} -> I64\n value = |_| 8\n}\n";
+    const c_body = "import B\nC := {}.{ value : {} -> I64\n value = |arg| B.value(arg)\n}\n";
+    const edits = [_]struct { a: []const u8, c: []const u8, passes: bool, failed_expect: []const u8 = "" }{
+        .{ .a = a_body ++ "expect A.value({}) == 7\n", .c = c_body ++ "expect C.value({}) == 7\n", .passes = true },
+        .{ .a = a_body ++ "expect A.value({}) == 7\n", .c = c_body ++ "expect C.value({}) == 7\n", .passes = true },
+        .{ .a = a_body ++ "expect A.value({}) == 8\n", .c = c_body ++ "expect C.value({}) == 7\n", .passes = false, .failed_expect = "expect A.value({}) == 8" },
+        .{ .a = a_changed ++ "expect A.value({}) == 8\n", .c = c_body ++ "expect C.value({}) == 7\n", .passes = false, .failed_expect = "expect C.value({}) == 7" },
+        .{ .a = a_changed ++ "expect A.value({}) == 8\n", .c = c_body ++ "expect C.value({}) == 8\n", .passes = true },
+        .{ .a = a_body ++ "expect A.value({}) == 7\n", .c = c_body ++ "expect C.value({}) == 8\n", .passes = false, .failed_expect = "expect C.value({}) == 8" },
+        .{ .a = a_body ++ "expect A.value({}) == 7\n", .c = c_body ++ "expect C.value({}) == 7\n", .passes = true },
+    };
+    for (edits) |edit| {
+        if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "A.roc", edit.a)) |failure| return failure;
+        if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "C.roc", edit.c)) |failure| return failure;
+        for ([_][]const []const u8{
+            &.{ "test", "--opt=dev", "--specialize=yes" },
+            &.{ "test", "--opt=dev", "--specialize=yes", "--no-cache" },
+        }) |args| {
+            if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+                .args = args,
+                .roc_file = root,
+                .exit = if (edit.passes) .success else .{ .code = 1 },
+                .contains = if (edit.passes) &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} else &.{
+                    .{ .stream = .stderr, .text = "Ran 2 tests" },
+                    .{ .stream = .stderr, .text = "1 passed" },
+                    .{ .stream = .stderr, .text = "1 failed" },
+                    .{ .stream = .stderr, .text = edit.failed_expect },
+                },
+                .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+            })) |failure| return failure;
+        }
+    }
+    return null;
+}
+
 fn customRocTestCachesLocalDependencyExpects(
     io: std.Io,
     allocator: Allocator,

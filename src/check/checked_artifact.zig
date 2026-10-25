@@ -37451,6 +37451,43 @@ pub fn checkedModuleKeyFromModuleEnv(
     );
 }
 
+/// Inference admission is deliberately separate from artifact identity. The
+/// producer-owned checking scope supplies dependency facts and owner equality;
+/// the full imported implementation keys continue to key every publication.
+pub fn inferenceKeyFromModuleEnv(
+    module_env: *const ModuleEnv,
+    scope_hash: [32]u8,
+    platform_requirement_owner: ?u32,
+    explicit_roots: []const ExplicitRootRequestInput,
+    validation: can.Can.Validation,
+    missing_public_types: []const []const u8,
+) [32]u8 {
+    var hasher = base.Sha256.init(.{});
+    hasher.update("roc-inference-inputs-v1");
+    hasher.update(&hashModuleSourceInputs(module_env));
+    hasher.update(&scope_hash);
+    hashByteSlice(&hasher, module_env.module_name);
+    hashByteSlice(&hasher, @tagName(module_env.module_kind));
+    hashByteSlice(&hasher, @tagName(module_env.module_role));
+    if (platform_requirement_owner) |owner| {
+        hasher.update(&.{1});
+        hashU32(&hasher, owner);
+    } else hasher.update(&.{0});
+    hashByteSlice(&hasher, @tagName(validation));
+    hashU32(&hasher, @intCast(explicit_roots.len));
+    for (explicit_roots) |root| hashExplicitRootRequestInput(&hasher, root);
+    const imports = module_env.imports.imports.items.items;
+    hashU32(&hasher, @intCast(imports.len));
+    for (imports, 0..) |name, i| {
+        hashByteSlice(&hasher, module_env.getString(name));
+        const import_idx: CIR.Import.Idx = @fromBackingInt(@as(u32, @intCast(i)));
+        hashU32(&hasher, module_env.imports.getResolvedModule(import_idx) orelse std.math.maxInt(u32));
+    }
+    hashU32(&hasher, @intCast(missing_public_types.len));
+    for (missing_public_types) |name| hashByteSlice(&hasher, name);
+    return hasher.finalResult();
+}
+
 /// Public `publishFromTypedModule` function.
 pub fn publishFromTypedModule(
     allocator: Allocator,
