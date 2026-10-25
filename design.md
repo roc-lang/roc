@@ -18181,16 +18181,17 @@ function bodies or specializations.
 
 A certificate records every canonical node it reads and references to earlier
 certificates. Each dependency owns a reverse link. Producers record semantic
-writes in a graph-owned mutation index: one slot per node in a list ordered by
-its latest write. Repeated writes move that slot to the front, so recording
-never allocates and history cannot grow beyond the live graph. An observer
-visits only nodes written since its last epoch, then follows reverse links to
-retire affected proofs and their dependents. The mutation index occupies 16
-bytes per allocated node slot, independent of the number of writes. Removing a reverse link is constant
-work using its recorded slot; invalidation frees certificates only after all
-references have been detached. Unrelated writes neither inspect nor retire
-unaffected proofs. Validation costs changed nodes plus affected proof edges,
-not retained graph size or the number of intervening mutations. Path compression
+writes through graph-owned intrusive subscriptions: each node owns the head of
+its readers, and each published dependency owns its subscription. A write visits
+only readers of that node and queues their invalidation without allocating. Query
+owners have stable notification storage even when their enclosing cache moves.
+At a query boundary the owner drains its notifications and follows reverse proof
+links, detaching all references before freeing any certificates. The graph must
+outlive its subscribers; scope exit unsubscribes in constant time per dependency.
+The graph's index occupies one pointer per node. There is no mutation history for
+each body-local observer to scan. Unrelated writes do not visit those observers.
+Validation costs affected dependency edges and retired facts, independent of
+unrelated graph writes. Path compression
 directly shortens existing links without recording a semantic mutation. Lazy expansion or joining representatives during a
 query prevents publication of that traversal. The special untouched-leaf
 shortcut also reads mutable clone-context ownership; it remains a direct
@@ -18205,10 +18206,10 @@ payload bytes account for certificate arrays and table payload capacity (allocat
 metadata and table control bytes are excluded); allocator tests separately
 assert that warmed repetition performs no allocation.
 On x86_64, the issue 12616 interleaving fixtures settle five completion pairs and six
-inhabitation nodes into 12 facts (4,176 accounted proof bytes; 6,600 total
-query-owned bytes including scratch, across 49 initial allocations), and three
-compatibility pairs into three facts (1,928 accounted proof bytes; 2,500 total
-query-owned bytes across 20 initial allocations). Repeating A/B 512 times adds
+inhabitation nodes into 12 facts (3,224 accounted proof bytes; 5,608 total
+query-owned bytes including scratch, across 38 initial allocations), and three
+compatibility pairs into three facts (1,216 accounted proof bytes; 1,756 total
+query-owned bytes across 14 initial allocations). Repeating A/B 512 times adds
 no expansions, allocations or retained bytes. These are small deterministic
 graph measurements, not an attribution of the entire compiler phase's time.
 `ROC_FRESH_TYPE_ANALYSIS`, available only through developer diagnostics, starts

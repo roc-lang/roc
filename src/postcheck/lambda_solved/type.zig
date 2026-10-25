@@ -351,8 +351,8 @@ pub const Store = struct {
     }
 
     /// Visit exactly the identities changed since a proof observer last ran.
-    pub fn analysisChangesSince(self: *const Store, epoch: u64) @import("../proofs.zig").Changes(TypeVarId).Iterator {
-        return self.analysis_changes.since(epoch);
+    pub fn proofChanges(self: *Store) *@import("../proofs.zig").Changes(TypeVarId) {
+        return &self.analysis_changes;
     }
 
     pub fn markNamedBacking(self: *Store, id: TypeVarId) void {

@@ -4950,8 +4950,8 @@ pub const InstGraph = struct {
     }
 
     /// Exact changed identities for dependency invalidation; compression is absent.
-    pub fn analysisChangesSince(self: *const InstGraph, epoch: u64) @import("../proofs.zig").Changes(NodeId).Iterator {
-        return self.analysis_changes.since(epoch);
+    pub fn proofChanges(self: *InstGraph) *@import("../proofs.zig").Changes(NodeId) {
+        return &self.analysis_changes;
     }
 
     /// Current root for the node's union-find class.
