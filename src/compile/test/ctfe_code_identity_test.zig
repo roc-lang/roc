@@ -16,7 +16,7 @@ const CoreCtx = @import("ctx").CoreCtx;
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const is_freestanding = @import("../threading.zig").is_freestanding;
 
-const ProcArtifact = backend.dev.ProcArtifact;
+const CodeExcerpt = backend.dev.CodeExcerpt;
 
 const echo_platform = [_]struct { path: []const u8, source: []const u8 }{
     .{ .path = ".roc_echo_platform/main.roc", .source =
@@ -50,7 +50,7 @@ const echo_platform = [_]struct { path: []const u8, source: []const u8 }{
 /// sites. Compile-time evaluation's combined artifacts name each constant by
 /// its content, so a relocation of `expected` to a constant the build
 /// numbers is compared by the content name `expected_names` gives it.
-fn artifactDifference(expected: ProcArtifact.Artifact, expected_names: *const ProcArtifact.ContentNames, actual: ProcArtifact.Artifact) ?[]const u8 {
+fn excerptDifference(expected: CodeExcerpt.Excerpt, expected_names: *const CodeExcerpt.ContentNames, actual: CodeExcerpt.Excerpt) ?[]const u8 {
     if (!std.mem.eql(u8, expected.code, actual.code)) return "code";
     if (expected.entry != actual.entry) return "entry";
     if (!std.meta.eql(expected.frame, actual.frame)) return "frame";
@@ -165,7 +165,7 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
-    var evaluated = try session.completed.?.combinedArtifacts(allocator);
+    var evaluated = try session.completed.?.combinedExcerpts(allocator);
     defer evaluated.deinit();
 
     var runtime = try session.takeRuntime(allocator, session.runtime_roots, coord.runtime_lowering.?.target);
@@ -196,26 +196,26 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
         roc_target.RocTarget.detectNative(),
     );
     defer compiled.deinit();
-    const built = &(compiled.artifacts orelse return error.TestUnexpectedResult);
+    const built = &(compiled.excerpts orelse return error.TestUnexpectedResult);
 
-    var built_names = try ProcArtifact.ContentNames.init(allocator, built);
+    var built_names = try CodeExcerpt.ContentNames.init(allocator, built);
     defer built_names.deinit();
     var built_by_identity = std.AutoHashMap(lir.ProcIdentity, usize).init(allocator);
     defer built_by_identity.deinit();
-    for (built.artifacts, 0..) |artifact, index| switch (artifact.kind) {
+    for (built.excerpts, 0..) |artifact, index| switch (artifact.kind) {
         .proc => |identity| try built_by_identity.put(identity, index),
         .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
     };
     var shared: usize = 0;
     var differing: usize = 0;
-    for (evaluated.artifacts) |artifact| {
+    for (evaluated.excerpts) |artifact| {
         const identity = switch (artifact.kind) {
             .proc => |identity| identity,
             .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => continue,
         };
         const index = built_by_identity.get(identity) orelse continue;
         shared += 1;
-        if (artifactDifference(built.artifacts[index], &built_names, artifact)) |difference| {
+        if (excerptDifference(built.excerpts[index], &built_names, artifact)) |difference| {
             differing += 1;
             var name: []const u8 = "";
             for (runtime.lir_result.store.getProcSpecs(), 0..) |proc, proc_index| {

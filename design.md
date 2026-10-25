@@ -676,8 +676,8 @@ A pack's line entries index the pack's own source-file table, which names
 each file by its module's content identity in the order the lines first use
 it. Splicing binds each to the receiving program's file for the same module
 identity, so DWARF line programs cover spliced procedures exactly as they do
-compiled ones. Each procedure artifact also carries its procedure's location
-(`Artifact.loc`, `LirStore.procLoc`) in the same table, which names the
+compiled ones. Each procedure excerpt also carries its procedure's location
+(`Excerpt.loc`, `LirStore.procLoc`) in the same table, which names the
 procedure's debug entry wherever it lands. A procedure's identity does not
 depend on where it sits in its file, so an entry could be served across an
 edit of a module its code was lowered from; its lines would then name a module
@@ -751,13 +751,13 @@ object packs alone, never of which dev packs exist.
 A dev build reads object packs by exact path, never by listing a
 directory: for the target's preferred level (`speed` natively, `size` on
 wasm32) and then the other, the pack of each URL-package module in view
-under its artifact key, in module identity order, then the optimized pack
+under its checked module cache key, in module identity order, then the optimized pack
 of its program. The first pack to offer a key or a procedure serves it, so
 which pack serves a procedure two offer, and the order the program links
 them in, are functions of the optimization state alone.
 
 After version resolution selects the final package versions and checking
-publishes their constants, caching check, run, and build commands prepare the URL
+outputs their constants, caching check, run, and build commands prepare the URL
 packages' host dev packs under `<host>-dev/pkg/`. This includes `roc check`,
 so a package checked when downloaded already has its dev packs when its first
 app build starts. Preparation compiles each module's closed exports with the
@@ -767,7 +767,7 @@ packs are rebuilt from the checked modules. A command with errors or
 `--no-cache` prepares none.
 New packs are also offered directly to the command's cache providers, so
 runtime lowering can use them even if compile-time evaluation already loaded
-the store. Decoded packs retain stable addresses as new offers arrive; artifacts
+the store. Decoded packs retain stable addresses as new offers arrive; excerpts
 already handed to evaluation remain valid.
 
 The wasm32 dev backend cannot splice dev code, so a wasm32 dev build
@@ -875,7 +875,7 @@ leave the type's structure alone.
 
 ### Optimized Builds Feed Dev Builds
 
-An optimized build of a program, once its executable is written and when it
+An optimized build of a program, once its executable binary is written and when it
 reports no error, files the object packs a later dev build links in place of
 compiling the code they hold (`writeOptimizedPacks`), under its own level's
 store: the pack of every URL-package module in view the store lacks, and the
@@ -912,23 +912,23 @@ package's pack, and a program with no candidate gets an empty pack.
 `roc run --opt=dev` links the root's pack too, beside its URL packages'
 packs, and keeps the objects it loaded for its whole hot reload session.
 
-### Canonical Dev Images
+### Deterministic Dev Images
 
-A build's executable is a function of its source, its command line, and its
+A build's executable binary is a function of its source, its command line, and its
 optimization state (the object packs it links); which dev packs the object
 cache holds, and in which order or on which worker a procedure was compiled,
 must change nothing in it. The dev backend's object is therefore laid out
-canonically (`ObjectFileCompiler.compileWithCodeGen`). The code generated for
-the program, compiled now or spliced from dev packs, is lifted into artifacts
-(`ProcArtifact.extract`); a linked program keeps only the artifacts its roots
+in a fixed order (`ObjectFileCompiler.compileWithCodeGen`). The code generated for
+the program, compiled now or spliced from dev packs, is lifted into excerpts
+(`CodeExcerpt.extract`); a linked program keeps only the excerpts its roots
 reach, the procedures its entry wrappers call and the host-visible constants
 with what they name (`retainReachable`), since a program that took an entry
 lowers some procedures (the members of an entry's lambda sets) only so the
 entry could call them; and the remaining set is placed again into the code
-generator the object is encoded from (`canonicalize`, `assembleCanonical`):
+generator the object is encoded from (`arrange`, `assembleArranged`):
 
 - procedures in identity order, then Boxy thunks, then refcount helpers by
-  name, each message pool run right after the one artifact whose code
+  name, each message pool run right after the one excerpt whose code
   addresses it;
 - every constant code names, and every constant a host-visible constant
   names, under its content name (`ContentNames`), so a constant this program
@@ -936,10 +936,10 @@ generator the object is encoded from (`canonicalize`, `assembleCanonical`):
   entry are one symbol, in name order; host-visible constants keep their
   names and only they are global;
 - a symbol and a debug entry for every procedure (`roc__p{identity}`, with its
-  artifact's location) and every helper with a frame, whether the program
+  excerpt's location) and every helper with a frame, whether the program
   declares it or only spliced code reaches it.
 
-A procedure's artifact is the same whether this program compiled it or a
+A procedure's excerpt is the same whether this program compiled it or a
 pack carried it, so the object is the same however each procedure was
 provided.
 
@@ -947,14 +947,14 @@ The Boxy runtime reads its sidecar tables by numbers the code passes it:
 layout indices and the starts of runs of erased argument layouts. A program
 numbers both in the order its lowering reached them, which depends on which
 procedures it lowered and which a pack served, so code loads each such number
-with a fixed-width instruction sequence and records it as a runtime reference
-(`RuntimeRef`) that its artifact carries. Once the image's code is placed,
-each number is given its canonical one in the order the placed code first
-loads it, and every load is patched to it (`LirCodeGen.renumberRuntimeRefs`,
+with a fixed-width instruction sequence and records it as a runtime number
+(`RuntimeNumber`) that its excerpt carries. Once the image's code is placed,
+each number is given its arranged one in the order the placed code first
+loads it, and every load is patched to it (`LirCodeGen.renumberRuntimeNumbers`,
 `RuntimeTables.Numbering`); the fixed layouts keep their indices. The sidecar
 linked beside the object holds exactly what that order names, then every
 layout those and the Boxy tables reach, in the order a walk from them first
-meets each (`LirImage.buildCanonicalSidecarBlob`). Code that loads a runtime
+meets each (`LirImage.buildArrangedSidecarBlob`). Code that loads a runtime
 table number is never offered by a pack, since the number is its program's
 own. No code passes the runtime a procedure's index: it is the program's own
 numbering too.
@@ -2815,8 +2815,12 @@ and its demanded pending roots evaluate against the same checked module data
 through the same declared root functions an uncached compilation uses.
 Afterwards every requested root still pending is `unevaluated` again, and the
 module is written to the checked module cache again only when this
-compilation evaluated a root it lacked. A module is cached only when it has no reports, so an entry never
-holds a diagnostic that a later compilation's evaluation could contradict.
+compilation evaluated a root it lacked. A module is cached only when checking
+and evaluation add no reports beyond those present before checked-cache lookup.
+Earlier parsing and canonicalization reports are reproduced before that lookup,
+so they do not prevent reuse and are not emitted again by the checked module data.
+An entry therefore never holds a new checking or evaluation diagnostic that a
+later compilation's evaluation could contradict.
 
 A build reports the compile-time failures of the roots it evaluates. A
 failure in a root no build demands is reported by `roc check`, which
@@ -4541,10 +4545,10 @@ A module completes with failure only where no checked output can exist for it
 with failure), and the module where that failure originates
 always carries an error-severity report. A build without error reports has
 therefore completed every module successfully, and successful completion always
-includes the module's checked artifact. Post-build consumers of checked modules
+includes the module's CheckedModule. Post-build consumers of checked modules
 (documentation, public API extraction) run only for builds without error
 reports, and they read checked modules through `ModuleState.checkedModule`,
-whose artifact is not optional.
+whose CheckedModule is not optional.
 
 Workers carry source-read and type-check operational errors through the existing
 result channel as explicit stage/error data. The coordinator preserves the
@@ -4845,8 +4849,10 @@ results, never source environments or a live checker continuation.
 Type-bearing body columns carry the app substitution; unchanged body columns
 remain borrowed.
 Unchanged columns borrow the exact platform identified by the key. Only a
-completed composition without diagnostics may be cached; a hit consumes its
-stored outcomes and replays its recorded debug observations without evaluation.
+completed composition without new checking or evaluation diagnostics may be
+cached; already-replayed earlier-stage reports do not prevent caching. A hit
+consumes its stored outcomes and replays its recorded debug observations without
+evaluation.
 The canonicalized module cache is a separate, non-checked boundary; the rules
 below bind the checked module and composition caches.
 Checked module cache entries are trusted compiler-produced cache entries, not
@@ -4857,6 +4863,21 @@ or walk checked expressions to prove that cached checked data is still complete.
 Correctness belongs to the producer path that writes the cache entry, and
 invalidation belongs to the cache key and explicit cache/selection format
 versions.
+
+The coordinator captures each module's report count immediately before checked
+cache lookup, after parsing and canonicalization reports have been appended.
+Checking (including the deferred import drain) and evaluation only append to
+that same report list. `BuildEnv` moves those reports into its output sink only
+after finalization or when aborting. Solver-store staging and the final cache write
+share the condition that its count has not changed. Staging serializes the `ModuleEnv`
+while its solver store is live, then releases the store before evaluation;
+the final cache write additionally requires completed evaluation and, for a reopened
+cache entry, newly completed roots. A later report makes a staged part ineligible
+and it is discarded. Failed staging is an ordinary cache-write failure: the
+compilation continues and releases solver types, but cannot write a checked
+entry without the staged environment. The empty replacement store is never
+serialized as a checked result. Pairings retain their separate ownership and
+cache-write rules, and abandoned staged parts are discarded during cleanup.
 
 `ModuleEnv` contains `CommonEnv.strings`, a `base.StringLiteral.Store`. That
 store is part of the checked module cache data. A cache hit materializes it as a
@@ -7586,7 +7607,7 @@ renames every type that holds a variable. A definition's own quantified
 variable (the implicitly open tail of `dec : Str -> Try([A, B], [InvalidJson(Str)])`)
 is therefore a fresh, unquantified variable inside the contract, which reads
 at its default. A generated call's dispatch-target record was written against
-the originals, so the contract publishes its renaming (`generated_codec_renamings`)
+the originals, so the contract outputs its renaming (`generated_codec_renamings`)
 and the call's evidence-edge substitution names the renamed copies. The
 substitution then describes the same types as the call's callable; it never
 names a variable of the defining scheme that the contract's own types do not
@@ -11434,7 +11455,7 @@ requirements transitively through
 helper definitions without turning ordinary same-rank creation sites into
 schemes or reconstructing ownership from solved type shape.
 
-A boundary whose root does not generalize publishes no scheme, and no use of
+A boundary whose root does not generalize outputs no scheme, and no use of
 its monomorphic binding instantiates one, so `retireNonGeneralizedTypeSchemes`
 hands each requirement it captured to the innermost enclosing root still
 prospective, exactly as a use's copy would; every use shares the binding's one
@@ -16160,9 +16181,9 @@ The demand of a variable is one of three values, the same scale
   extension, and a variable the scheme's root type does not mention.
 
 Checking computes the demand vector of every template once, when the checked
-artifact is published (`TemplateDemandPass`), and stores it beside the
+module data is written (`TemplateDemandPass`), and stores it beside the
 template's `scheme_vars` (`CheckedProcedureTemplateTable.templateDemands`), so a
-cached artifact carries it and no later stage recomputes it. Each body is
+cached CheckedModule carries it and no later stage recomputes it. Each body is
 walked once into a base vector and a set of edges: a direct call or a
 dispatch that checking resolved to one procedure template relates each
 caller variable that the callee slot's checked substitution mentions to that
@@ -16252,7 +16273,7 @@ nothing behind it.
 A shaped specialization's procedure identity renders its holes as holes, so
 the object cache keys it by its demand-shaped types with no further change,
 and the specialization set stays a function of the source tree: the demand
-vector comes from the checked artifact and the substitution from the request.
+vector comes from the CheckedModule and the substitution from the request.
 
 ### Procedure Aliases
 
@@ -20196,7 +20217,7 @@ order exactly as `y` and `z` do. A guard on `base + limit` established once
 therefore bounds every later `base + offset` whose `offset` a loop head keeps
 below `limit`, which is the shape of a word-at-a-time compare over two cursors
 into one buffer. Every use of a sum also relates it to each other sum whose
-operands the path's facts bound one by one: from `a <= p + c1` and
+operands the path's known orderings bound one by one: from `a <= p + c1` and
 `b <= q + c2`, `a + b <= p + q + c1 + c2`, and the same with the orderings
 reversed. A guard on `current + limit` thereby bounds a read at
 `candidate + len` when the candidate is at or before the current position and
@@ -21748,7 +21769,7 @@ a time, callees first, and each component outputs its parameter benefits
 (its parameter containers, projected containers rooted at its parameters,
 complete field and tag payload reads of its parameters, and forwarding to beneficial callee
 positions) before any caller is solved. Procedures sharing statements form one
-node of that graph. A benefit once published keeps classifying its positions
+node of that graph. A benefit once recorded keeps classifying its positions
 as consuming operands. A recursive component whose own new benefits make a
 further refcounted argument a consuming operand retracts its committed plans
 and solves again; the consuming operands only grow, so this terminates, and a
@@ -22287,12 +22308,12 @@ against the borrow typing rules:
   refinement is bounded by the name count; balance divergence across
   mode-identical entries is itself a finding—per-iteration accumulation),
   so certification of every procedure runs to completion
-- an intermediate aggregate projection needed to claim a selected field
+- an intermediate aggregate field read needed to claim a selected field
   keeps its carrier local across inner-join frames as well as join summaries.
   Retaining only the anonymous value preserves a liveness proof but loses the
   exact ownership path when the enclosing loop is summarized again. Copying
   reachable frame values therefore also copies the carrier bindings of their
-  payload sources, including projections defined inside an exited region.
+  payload sources, including field reads defined inside an exited region.
 - distinct borrow-lender and holder proofs remain separate at every join;
   a group-count threshold must never discard provenance and manufacture a
   borrowed entry with no owner. Valid incoming paths with different owners
@@ -23013,9 +23034,9 @@ all argument registers and introduce no new callee-save or frame requirements.
 ## LLVM Value Representation
 
 Aggregate transport preserves storage identity. Records, tuples, and inline tag
-payloads use the same memory-view plan: an immutable alias or projection names
+payloads use the same memory-view plan: an immutable alias or field read names
 its ultimate storage owner and a committed byte offset. LLVM does not rebuild
-these aliases or projections field by field. The existing per-proc
+these aliases or field reads field by field. The existing per-proc
 value planner uses the shared LIR access inventory and liveness solution to
 prove these views. Join parameters, explicit mutations, and uninitialized
 storage remain snapshots. A single static definition may execute repeatedly:
@@ -23048,7 +23069,7 @@ view, or its own fixed-size entry-block slot, or SSA, a sequence of LLVM values.
 Only a layout with a scalar carrier can be SSA: Bool as `i1`, an integer as `iN`, Dec as `i128`, F32 and F64,
 and a SIMD vector as its LLVM vector type. Strings, lists, boxes, pointers,
 records, tag unions, and callables stay in memory, because their consumers (RC
-helpers, builtins, field projections, host boundaries) take addresses. The
+helpers, builtins, field reads, host boundaries) take addresses. The
 backend does not split aggregates into components: Record Component Bindings
 and Join-Parameter Scalarization already give LIR one scalar local per component
 wherever a program reads an aggregate component-wise, and those locals become
@@ -24100,7 +24121,7 @@ continuing that program rather than preparing its own.
 
 ### Runtime Programs Read Stored Values
 
-A build's executable is a function of its source, its command line, and its
+A build's executable binary is a function of its source, its command line, and its
 optimization state; whether the checked module cache already held a
 module's compile-time values is none of these. A compilation that evaluates
 a compile-time root stores the completed value in its module's constant
@@ -24125,7 +24146,7 @@ the first evaluation already reported, report nowhere. A literal root is
 not stored by any compilation, so both kinds of compilation read literal
 roots' completed values from the stages that evaluated them, the same way.
 The evaluation's own stages, with their specializations' compile-time
-reads, are what the compile-time object pack publishes. A compilation that
+reads, are what the compile-time object pack holds. A compilation that
 evaluated no compile-time root its program demands continues its one
 specialization, which is already that program.
 

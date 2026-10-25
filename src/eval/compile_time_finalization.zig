@@ -113,7 +113,7 @@ pub const Options = struct {
     timing: ?*Timing = null,
     object_cache: ?CompileTimeObjectCache = null,
     /// Keep each stage's code as object-cache artifacts
-    /// (`CompletedStages.artifacts`): what an object cache publishes.
+    /// (`CompletedStages.excerpts`): what an object cache publishes.
     keep_artifacts: bool = false,
     /// Where a compile-time failure is reported when the source it names
     /// belongs to a checked module this finalization does not complete: a
@@ -754,9 +754,9 @@ pub const CompletedStages = struct {
     /// The specializations' compile-time reads, which the object cache
     /// writes beside the program's procedures.
     spec_comptime_reads: ?lir.CheckedPipeline.SpecComptimeReads = null,
-    /// Each stage's code as object-cache artifacts, when the evaluation
+    /// Each stage's code as object-cache excerpts, when the evaluation
     /// writes to an object cache.
-    artifacts: std.ArrayList(backend.dev.ProcArtifact.Set) = .empty,
+    excerpts: std.ArrayList(backend.dev.CodeExcerpt.Set) = .empty,
     /// The discovery summaries of the evaluation's program (design.md
     /// "Discovery Summaries"); null when the evaluation produced a message a
     /// later compilation that skipped its bodies would not repeat.
@@ -791,18 +791,18 @@ pub const CompletedStages = struct {
         self.erased_members.deinit(self.allocator);
         self.pending.deinit(self.allocator);
         if (self.spec_comptime_reads) |*reads| reads.deinit();
-        for (self.artifacts.items) |*set| set.deinit();
-        self.artifacts.deinit(self.allocator);
+        for (self.excerpts.items) |*set| set.deinit();
+        self.excerpts.deinit(self.allocator);
         if (self.discovery_summaries) |*summaries| summaries.deinit();
         self.* = undefined;
     }
 
-    /// The stages' code as one artifact set, one copy of each procedure.
-    pub fn combinedArtifacts(self: *const CompletedStages, allocator: Allocator) Allocator.Error!backend.dev.ProcArtifact.Set {
-        const sets = try allocator.alloc(*const backend.dev.ProcArtifact.Set, self.artifacts.items.len);
+    /// The stages' code as one excerpt set, one copy of each procedure.
+    pub fn combinedExcerpts(self: *const CompletedStages, allocator: Allocator) Allocator.Error!backend.dev.CodeExcerpt.Set {
+        const sets = try allocator.alloc(*const backend.dev.CodeExcerpt.Set, self.excerpts.items.len);
         defer allocator.free(sets);
-        for (self.artifacts.items, sets) |*set, *ptr| ptr.* = set;
-        return backend.dev.ProcArtifact.combineDistinct(allocator, sets);
+        for (self.excerpts.items, sets) |*set, *ptr| ptr.* = set;
+        return backend.dev.CodeExcerpt.combineDistinct(allocator, sets);
     }
 
     /// The stages' programs, in evaluation order. Each one's code was
@@ -2012,9 +2012,9 @@ fn evaluateStaged(
         if (stage.frozen_static_data) |*read| read.deinit();
         stage.frozen_static_data = frozen;
         if (ProgramPtr == *DevProgram and options.keep_artifacts) {
-            var set = try program.extractArtifacts(stage);
+            var set = try program.extractExcerpts(stage);
             errdefer set.deinit();
-            try completed.artifacts.append(allocator, set);
+            try completed.excerpts.append(allocator, set);
         }
         try completed.finishStage();
         if (options.object_cache) |cache| if (cache.stage_sink) |sink| if (prepared.spec_comptime_reads) |*reads| {
@@ -4763,7 +4763,7 @@ const StaticSlotEnvironment = struct {
 /// roots it runs, and of every procedure of the program that the
 /// object-cache code it splices calls, to a fixed point. A spliced entry's
 /// call to a procedure the program has binds to the program's own code
-/// (`ProcArtifact.splice`), so that procedure is compiled too, and the
+/// (`CodeExcerpt.splice`), so that procedure is compiled too, and the
 /// object-cache entries its closure reaches are spliced in turn.
 fn evaluationDemand(
     allocator: Allocator,
@@ -4786,7 +4786,7 @@ fn evaluationDemand(
     var added = collections.DenseMap(lir.LIR.LirProcSpecId, void).init(allocator);
     defer added.deinit();
     for (roots) |root| try added.put(root, {});
-    const Visit = struct { set: *const backend.dev.ProcArtifact.Set, index: u32 };
+    const Visit = struct { set: *const backend.dev.CodeExcerpt.Set, index: u32 };
     var visited = std.AutoHashMapUnmanaged(Visit, void).empty;
     defer visited.deinit(allocator);
     var stack = std.ArrayList(Visit).empty;
@@ -4801,14 +4801,14 @@ fn evaluationDemand(
             const located = source.find(source.context, key) orelse continue;
             try stack.append(allocator, .{ .set = located.set, .index = located.index });
         }
-        // Every artifact the spliced closures place, walked once, as
-        // `ProcArtifact.splice` places them: set-local references, and
+        // Every excerpt the spliced closures place, walked once, as
+        // `CodeExcerpt.splice` places them: set-local references, and
         // symbolic references to code the program does not have.
         while (stack.pop()) |visit| {
             if ((try visited.getOrPut(allocator, visit)).found_existing) continue;
-            const artifact = visit.set.artifacts[visit.index];
-            for (artifact.refs) |ref| try stack.append(allocator, .{ .set = visit.set, .index = ref.target });
-            for (artifact.symbolic_refs) |ref| {
+            const excerpt = visit.set.excerpts[visit.index];
+            for (excerpt.refs) |ref| try stack.append(allocator, .{ .set = visit.set, .index = ref.target });
+            for (excerpt.symbolic_refs) |ref| {
                 switch (ref.target) {
                     .proc => |identity| if (procs_by_identity.get(identity)) |proc_id| {
                         if ((try added.getOrPut(proc_id)).found_existing) continue;
@@ -4836,7 +4836,7 @@ const DevProgram = struct {
     splice: backend.dev.HostSplice,
     executable: backend.ExecutableMemory,
     entry_offsets: collections.DenseMap(lir.LIR.LirProcSpecId, usize),
-    artifacts: ?NativeProcCompiler.Retained,
+    excerpts: ?NativeProcCompiler.Retained,
     /// The bytes the program's erased callables reserve before their
     /// captures (`LirProgram.Result.erased_capture_prefix`).
     capture_prefix: u32,
@@ -4986,7 +4986,7 @@ const DevProgram = struct {
             .splice = splice,
             .executable = executable,
             .entry_offsets = entry_offsets,
-            .artifacts = artifacts,
+            .excerpts = artifacts,
             .capture_prefix = lowered.lir_result.erased_capture_prefix,
         };
     }
@@ -5073,9 +5073,9 @@ const DevProgram = struct {
     /// The image's code as object-cache artifacts, carrying the completed
     /// values it reads. Its procedures are a dev build's object code, so a
     /// build splices them as its own.
-    fn extractArtifacts(self: *DevProgram, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!backend.dev.ProcArtifact.Set {
+    fn extractExcerpts(self: *DevProgram, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!backend.dev.CodeExcerpt.Set {
         const frozen = lowered.frozen_static_data orelse finalizationInvariant("compile-time stage froze no completed values");
-        return backend.dev.ProcArtifact.extract(
+        return backend.dev.CodeExcerpt.extract(
             backend.HostLirCodeGen,
             self.allocator,
             &self.codegen,
@@ -5095,7 +5095,7 @@ const DevProgram = struct {
         self.executable.deinit();
         self.splice.deinit();
         self.codegen.deinit();
-        if (self.artifacts) |*artifacts| artifacts.deinit();
+        if (self.excerpts) |*excerpts| excerpts.deinit();
         self.slots.deinit();
         self.static_strings.deinit();
         self.* = undefined;
