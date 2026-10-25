@@ -51,8 +51,8 @@ pub fn decode(arena: Allocator, types: *Type.Store, ns: *names.NameStore, leaves
 }
 
 /// Procedure ordinals, captured input and context-qualified evidence identity.
-/// Checked callable-type ordinals are provenance; canonical keys carry their
-/// relation, as in `Ast.fnEvidenceDigest`.
+/// Checked callable-type ordinals are provenance; producer-issued callable keys
+/// carry their relation, as in `Ast.fnEvidenceDigest`.
 pub fn requestKey(request: Constraints.Identity, evidence: [32]u8, procedure: [8]u8) [32]u8 {
     var hash = std.crypto.hash.sha2.Sha256.init(.{});
     hash.update("roc.interface-request.v2");
@@ -247,10 +247,14 @@ test "persistent interface constraints relocate request leaves and preserve cycl
     const source_ty = try source.internPrimitive(&ns, .u64);
     _ = try destination.internPrimitive(&ns, .bool);
     const destination_ty = try destination.internPrimitive(&ns, .u64);
+    // Node slot 0 is the open function, which returns itself; slot 1 is its
+    // U64 argument leaf.
+    const function_slot: u32 = 0;
+    const argument_slot: u32 = 1;
     const input: Summary = .{ .constraints = .{
-        .roots = &.{@fromBackingInt(0)},
+        .roots = &.{@fromBackingInt(function_slot)},
         .nodes = &.{ .{ .open = 0 }, .{ .mono = source_ty } },
-        .open_nodes = &.{.{ .content = .{ .func = .{ .args = @constCast(&[_]Solve.NodeId{@fromBackingInt(1)}), .ret = @fromBackingInt(0) } } }},
+        .open_nodes = &.{.{ .content = .{ .func = .{ .args = @constCast(&[_]Solve.NodeId{@fromBackingInt(argument_slot)}), .ret = @fromBackingInt(function_slot) } } }},
         .kinds = &.{},
     } };
     const bytes = try encode(allocator, &source, &ns, &.{source_ty}, input);
@@ -282,15 +286,17 @@ test "persistent interface leaves preserve representation beyond semantic equali
     defer types.deinit();
     const u64_ty = try types.internPrimitive(&ns, .u64);
     const alias = try types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(0), .ty_module = .{} },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(1), .ty_module = .{} },
         .def = .{ .module = try ns.internModuleIdentity(&@as([32]u8, @splat(1))), .type_name = try ns.internTypeName("Alias") },
         .kind = .alias,
         .args = Type.Span.empty(),
         .backing = .{ .ty = u64_ty, .use = .inspectable },
     } });
     try std.testing.expect(try types.typeEql(&ns, alias, u64_ty));
+    // Node slot 0 is the alias leaf.
+    const alias_slot: u32 = 0;
     const summary: Summary = .{ .constraints = .{
-        .roots = &.{@fromBackingInt(0)},
+        .roots = &.{@fromBackingInt(alias_slot)},
         .nodes = &.{.{ .mono = alias }},
         .open_nodes = &.{},
         .kinds = &.{},
@@ -333,9 +339,9 @@ test "persistent interface evidence contexts preserve types and exact procedure 
     const nodes = [_]check.ConstStore.ConstFnEvidence{.{ .target = 0 }};
     var targets = [_]check.ConstStore.ConstFnTargetEvidence{.{
         .view = .{ .bytes = first },
-        .method = .{ .module_idx = 0, .def_idx = @fromBackingInt(0), .kind = .{ .structural = .parser }, .callable_ty = @fromBackingInt(0) },
+        .method = .{ .module_idx = 0, .def_idx = @fromBackingInt(1), .kind = .{ .structural = .parser }, .callable_ty = @fromBackingInt(2) },
         .method_callable_key = .{ .bytes = @splat(4) },
-        .instantiation = .{ .view = .{ .bytes = first }, .callable_key = .{ .bytes = @splat(5) }, .callable_ty = @fromBackingInt(0) },
+        .instantiation = .{ .view = .{ .bytes = first }, .callable_key = .{ .bytes = @splat(5) }, .callable_ty = @fromBackingInt(3) },
         .nested = .from_callable,
     }};
     const evidence: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &nodes, .targets = &targets };
@@ -347,8 +353,8 @@ test "persistent interface evidence contexts preserve types and exact procedure 
     try std.testing.expect(!std.meta.eql(original, Ast.fnEvidenceContextDigest(evidence, &.{}, null, &contexts)));
     try contexts.put(second, @splat(3));
     targets[0].method.kind = .{ .procedure = .{
-        .proc = .{ .artifact = .{ .bytes = first }, .proc_base = @fromBackingInt(0) },
-        .template = .{ .artifact = .{ .bytes = first }, .proc_base = @fromBackingInt(0), .template = @fromBackingInt(0) },
+        .proc = .{ .artifact = .{ .bytes = first }, .proc_base = @fromBackingInt(1) },
+        .template = .{ .artifact = .{ .bytes = first }, .proc_base = @fromBackingInt(1), .template = @fromBackingInt(2) },
     } };
     const procedure = Ast.fnEvidenceContextDigest(evidence, &.{}, null, &contexts);
     targets[0].method.kind.procedure.template.artifact.bytes = second;

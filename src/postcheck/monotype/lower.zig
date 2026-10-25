@@ -6185,7 +6185,7 @@ const Builder = struct {
         const callee = self.moduleForKeyBytes(address.family.module) orelse return null;
         const template = callee.templates.get(@fromBackingInt(address.family.template));
         // Checking already supplies the complete relation of a closed
-        // interface; it has no callee relation program to reconstruct.
+        // interface, so no callee relation program exists for it.
         if (templateInterfaceIsClosed(callee, &template)) return null;
         const scope = self.moduleForKeyBytes(address.family.method_scope) orelse return null;
         const scope_context = scope.compile_time_root_identities.valueContext() orelse return null;
