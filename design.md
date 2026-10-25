@@ -2702,45 +2702,54 @@ reference counts.
 #### Recorded Program Output
 
 A specialized native dev build records a completed compilation, an explicit
-alternative to a live evaluation/lowering session. After the ordinary frontend
-has resolved and content-validated the complete dependency closure, it probes
-before platform evaluation or app/platform pairing. The identity covers the
-compiler and record format, target/ABI/CPU contract, build output and codegen
-policy, specialization strategy, synthetic header policy, source-pin validation
-version, app/platform identities, every checked module identity, native source
-paths (using the original path of staged app sources and logical module names
-for compiler-owned platforms), and the
-explicitly selected optimized object stores. Checked identities cover source,
-transitive imports and imported assets; resolution and pin validation still run
-on every invocation. Neither evaluated-root state nor historical dev-pack
-population is an input to this identity.
+alternative to a live evaluation/lowering session. After package resolution,
+it can validate the completed record without loading canonicalized or checked
+module IR. A domain-separated build-level placement pointer locates a candidate;
+it uses the existing placement-pointer storage and is never evidence of validity.
+There are no additional per-module manifest files.
 
-The record retains the original build's demanded checked roots, their transitive
-reads, literal source/value identities, and observations, followed by the final
-normalized Roc object, additional selected optimized objects, resolved target
-configuration, hosted symbols, link roots and app exports. Checking owns its
-ordinary diagnostics; the completed record owns finalization diagnostics and
-compile-time debug observations. Diagnostics retain structured documents and
-source identities, so replay uses current source paths and presentation options.
-An unused root evaluated by another command never joins the recorded demand.
+The existing completed-output record begins with a separately checksummed input
+manifest, before its object payload. It records consumed source and asset hashes
+using the same producer data as watch mode, the resolved package graph, import
+path canonicalization and spelling checks, and the explicit optimized-object
+selection. Validation reads source contents and compact metadata, never checked
+IR. URL packages retain the resolver's immutable bundle contract. Compiler-owned
+staging paths bind to named packages in the current invocation. The request
+identity covers compiler compatibility, target/ABI/CPU, build output and codegen
+policy, specialization strategy, synthetic headers, original source paths and
+source-pin validation policy. Neither evaluated-root state nor historical
+dev-pack population is an input. Package resolution and its policy validation
+still run on every invocation.
 
-An exact hit consumes this finished result: it neither creates a program session
-nor marks prepared checked modules finalized. It performs no shared demand
-specialization, CTFE, post-CTFE specialization, runtime lowering or object
-emission, and does not load procedure packs to reconstruct the result. A miss
-performs ordinary evaluation and normalization. Only a compilation with no
-semantic errors publishes; warning-only successes are eligible. Boxy builds
-are separate and this record never admits Boxy runtime dependencies into LSS.
+The record retains the original build's demanded checked roots, transitive reads,
+literal source/value identities and observations, followed by the final normalized
+Roc object, additional selected optimized objects, resolved target configuration,
+hosted symbols, link roots and app exports. It also retains the complete ordered
+frontend and finalization diagnostic documents. An early hit replays these with
+current presentation options and rebound source paths. A later hit, after ordinary
+frontend work, replays only finalization diagnostics; the frontend still owns its
+reports on that path. An unused root evaluated by another command never joins the
+recorded demand. Completed results remain usable after checked-IR cache eviction.
 
-The length-prefixed binary record carries an integrity digest, and publication
-uses a temporary file and atomic rename. Incompatible, truncated, corrupt or
-missing records miss. Additional objects are retained in the same validated
-record rather than referenced through scratch paths. Publication failure leaves
-the live compilation intact. The record certifies compilation, not a linked
-executable: every invocation revalidates current platform link inputs and links
-the retained artifacts, even if an output executable already exists. Timings
-separately report hits, bytes read/written, publication time and skipped producer
-work.
+An early hit creates no coordinator or program session and marks no checked
+module finalized. It performs no shared demand specialization, CTFE, post-CTFE
+specialization, runtime lowering or object emission, and loads no procedure packs
+to reconstruct the result. A miss takes the ordinary pipeline, which can still
+find a retained exact completed result after an edit is reverted. Only a
+compilation with no semantic errors publishes; warning-only successes are
+eligible. Boxy builds remain separate, and the record never admits Boxy runtime
+dependencies into LSS.
+
+The length-prefixed binary record validates its manifest independently before
+reading object bytes; the payload has its own integrity digest. Publication uses
+a temporary file and atomic rename. Incompatible, truncated, corrupt or missing
+records miss, and the build pointer is published only after the complete record.
+Additional objects are retained in the record rather than referenced through
+scratch paths. Publication failure leaves the live compilation intact. Every
+invocation validates current platform link inputs and links the retained
+artifacts, even if an executable already exists. Timings distinguish early hits,
+checked-module loads and compilation, input validation time/bytes, manifest reads,
+publication, and skipped producer work.
 
 ### Demand-Driven Compile-Time Evaluation
 

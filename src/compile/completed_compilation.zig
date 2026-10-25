@@ -12,6 +12,47 @@ pub const Module = struct {
     identity_path: []const u8 = "",
 };
 
+/// Compiler-owned staging paths are relative to an explicitly named package.
+/// Ordinary source paths retain the spelling used by the compilation.
+pub const InputPath = struct {
+    package: ?[]const u8 = null,
+    path: []const u8,
+};
+/// A source or asset and the content state consumed by compilation.
+pub const FileInput = struct { path: InputPath, state: @import("watch_inputs.zig").State };
+/// A source path and its canonical identity accepted during import resolution.
+pub const PathCheck = struct { path: InputPath, canonical: InputPath };
+/// Exact directory-entry spellings accepted by import resolution. Unrelated
+/// files and build outputs in the same directory are not compilation inputs.
+pub const DirectoryInput = struct { path: InputPath, entries: []const InputPath };
+/// Inputs sufficient to validate a completed compilation without checked IR.
+pub const Inputs = struct {
+    resolution: [32]u8,
+    files: []const FileInput,
+    path_checks: []const PathCheck,
+    directories: []const DirectoryInput,
+    /// Same order as Outcome.modules, for diagnostic path rebinding.
+    module_paths: []const InputPath,
+};
+
+/// Capture documents before their rendering owner releases them. The returned
+/// record is independent of both checked IR and the report's arena.
+pub fn copyDiagnostic(arena: Allocator, report: *const reporting.Report) Allocator.Error!Diagnostic {
+    const bytes = try encode(arena, Diagnostic{
+        .module = @splat(0),
+        .title = report.title,
+        .severity = report.severity,
+        .file = report.file,
+        .headline = report.headline.elements.items,
+        .body = report.document.elements.items,
+    });
+    var reader = Reader{ .bytes = bytes, .arena = arena, .remaining = bytes.len * 4 };
+    return reader.read(Diagnostic) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidRecord => @import("base").invariant("completion diagnostic writer produced invalid bytes", .{}),
+    };
+}
+
 /// A report a module produced, kept as typed document items so its paths
 /// can be rebound to the consuming invocation's source paths.
 pub const Diagnostic = struct {

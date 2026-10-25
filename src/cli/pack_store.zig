@@ -87,6 +87,28 @@ pub const Store = struct {
         };
     }
 
+    /// Read a bounded prefix without reading the record's object payload.
+    pub fn readProgramPrefix(self: *const Store, key: [32]u8, len: usize, allocator: Allocator) Allocator.Error!?[]const u8 {
+        const path = try self.programPath(key);
+        defer self.allocator.free(path);
+        const stat = self.roc_ctx.stat(path) catch return null;
+        if (len > stat.size) return null;
+        const bytes = try allocator.alloc(u8, len);
+        errdefer allocator.free(bytes);
+        const read = self.roc_ctx.readFileInto(path, bytes) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {
+                allocator.free(bytes);
+                return null;
+            },
+        };
+        if (read != len) {
+            allocator.free(bytes);
+            return null;
+        }
+        return bytes;
+    }
+
     /// Atomically publish a completed compilation. Replacing an existing
     /// record also repairs corruption after a miss; no partial bytes are visible.
     pub fn writeProgram(self: *const Store, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
@@ -609,21 +631,39 @@ pub const LinkedStores = struct {
     /// carries its own, so the digest reads no object.
     pub fn stateDigest(self: *const LinkedStores, build_env: *compile.BuildEnv, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error![32]u8 {
         const allocator = self.stores[0].allocator;
-        const modules = try packageModules(allocator, build_env, root_artifact);
-        defer allocator.free(modules);
+        const selection = try selectionFor(allocator, build_env, root_artifact);
+        defer allocator.free(selection.modules);
+        return self.selectionDigest(selection);
+    }
+
+    /// Optimized object identities selected from a checked root and its imports.
+    pub const Selection = struct { modules: []const PackageModule, optimized_identity: ?[32]u8 };
+
+    /// Capture the checked producer's selection for later validation without IR.
+    pub fn selectionFor(allocator: Allocator, build_env: *compile.BuildEnv, root: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!Selection {
+        return .{
+            .modules = try packageModules(allocator, build_env, root),
+            .optimized_identity = if (optimizedPackPlacement(build_env, root)) |placement| placement.identity else null,
+        };
+    }
+
+    /// Selection was emitted by the checked producer. Its keys let an early
+    /// completed-build lookup inspect current optimized stores without IR.
+    pub fn selectionDigest(self: *const LinkedStores, selection: Selection) Allocator.Error![32]u8 {
+        const allocator = self.stores[0].allocator;
         var hasher = std.crypto.hash.Blake3.init(.{});
         hasher.update("roc.optimization-state.v1");
         for (&self.stores) |*store| {
-            for (modules) |module| {
+            for (selection.modules) |module| {
                 const path = try store.packagePackPath(module.identity, module.key);
                 defer allocator.free(path);
                 if (!store.roc_ctx.fileExists(path)) continue;
                 hasher.update(path);
                 hasher.update(&.{0});
             }
-            const placement = optimizedPackPlacement(build_env, root_artifact) orelse continue;
-            const input_key = try store.optimizedInputKey(placement.identity) orelse continue;
-            const path = try store.optimizedPackPath(placement.identity);
+            const identity = selection.optimized_identity orelse continue;
+            const input_key = try store.optimizedInputKey(identity) orelse continue;
+            const path = try store.optimizedPackPath(identity);
             defer allocator.free(path);
             hasher.update(path);
             hasher.update(&.{0});
@@ -691,7 +731,7 @@ const ProgramPack = struct {
 
 /// A URL-package module in view of a program: its placement identity and the
 /// artifact key its object pack is filed under.
-const PackageModule = struct {
+pub const PackageModule = struct {
     identity: [32]u8,
     key: [32]u8,
 

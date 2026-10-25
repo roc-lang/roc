@@ -993,6 +993,10 @@ pub const PublicModuleTarget = struct {
 
 /// State of a package in the workspace
 pub const PackageState = struct {
+    /// Canonical paths accepted while resolving imports. Recorded at the
+    /// validation boundary, never reconstructed from the solved program.
+    pub const SourcePathCheck = struct { path: []const u8, canonical: []const u8, spelling_checked: bool = false };
+    source_path_checks: std.ArrayList(SourcePathCheck) = .empty,
     /// Package name (alias in workspace)
     name: []const u8,
     /// Root directory for the package
@@ -1043,6 +1047,11 @@ pub const PackageState = struct {
     }
 
     pub fn deinit(self: *PackageState, gpa: Allocator) void {
+        for (self.source_path_checks.items) |entry| {
+            gpa.free(entry.path);
+            gpa.free(entry.canonical);
+        }
+        self.source_path_checks.deinit(gpa);
         if (comptime trace_build) {
             std.debug.print("[PKG DEINIT] {s}: deiniting {} modules\n", .{ self.name, self.modules.items.len });
         }
@@ -5133,6 +5142,16 @@ pub const Coordinator = struct {
 
         if (!pathIsWithinRoot(canonical_path, canonical_root)) return .outside_package;
 
+        if (self.track_watch_inputs) {
+            for ([_][]const u8{ package_root, path }, [_][]const u8{ canonical_root, canonical_path }) |input, canonical_input| {
+                const owned_input = try self.gpa.dupe(u8, input);
+                errdefer self.gpa.free(owned_input);
+                const owned_canonical = try self.gpa.dupe(u8, canonical_input);
+                errdefer self.gpa.free(owned_canonical);
+                try pkg.source_path_checks.append(self.gpa, .{ .path = owned_input, .canonical = owned_canonical });
+            }
+        }
+
         const lexical_path = try std.fs.path.resolve(self.gpa, &.{path});
         defer self.gpa.free(lexical_path);
         if (!pathsHaveExactSpelling(canonical_path, lexical_path)) {
@@ -5151,6 +5170,7 @@ pub const Coordinator = struct {
                 }
             }
             if (!has_exact_spelling) return .incorrect_spelling;
+            if (self.track_watch_inputs) pkg.source_path_checks.items[pkg.source_path_checks.items.len - 1].spelling_checked = true;
         }
 
         if (pkg.physical_module_paths.get(canonical_path)) |existing| {

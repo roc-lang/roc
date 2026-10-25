@@ -10862,6 +10862,13 @@ fn customRecordedProgramOutput(
                 if (completionCounter(output, name) != 0) return failureFromRun(allocator, timer, run, "completed compilation repeated compiler work");
             }
         }
+        if (index == 1) {
+            if (completionCounter(output, "Early completed result hits") != 1) return failureFromRun(allocator, timer, run, "unchanged build loaded the frontend before finding its result");
+            for ([_][]const u8{ "Checked modules loaded", "Checked modules compiled" }) |name| {
+                if (completionCounter(output, name) != 0) return failureFromRun(allocator, timer, run, "early hit consumed checked IR");
+            }
+            if ((completionCounter(output, "Input bytes validated") orelse 0) == 0) return failureFromRun(allocator, timer, run, "early hit skipped source content validation");
+        }
         if (std.mem.count(u8, run.stderr, "CTFE publication observation") != 1) return failureFromRun(allocator, timer, run, "completed compilation changed debug observation multiplicity");
         if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
             .args = &.{},
@@ -10873,6 +10880,27 @@ fn customRecordedProgramOutput(
         return customInfraFailure(allocator, timer, "failed to allocate output: {}", .{err});
     const out_arg = outputArg(allocator, exe) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate argument: {}", .{err});
+    // The completed result remains usable after its checked IR was evicted.
+    {
+        var cache_dir = std.Io.Dir.cwd().openDir(io, cache, .{ .iterate = true }) catch |err| return customInfraFailure(allocator, timer, "open cache: {}", .{err});
+        defer cache_dir.close(io);
+        var walker = cache_dir.walk(allocator) catch |err| return customInfraFailure(allocator, timer, "walk cache: {}", .{err});
+        defer walker.deinit();
+        while (walker.next(io) catch |err| return customInfraFailure(allocator, timer, "walk cache: {}", .{err})) |entry| {
+            if (entry.kind == .file and (std.mem.find(u8, entry.path, "/mod/") != null or std.mem.find(u8, entry.path, "\\mod\\") != null))
+                cache_dir.deleteFile(io, entry.path) catch |err| return customInfraFailure(allocator, timer, "evict checked IR: {}", .{err});
+        }
+    }
+    const evicted = switch (captureRocRun(io, allocator, &isolated, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=dev", "--timings", "--no-color", out_arg },
+        .roc_file = app,
+        .occurrences = &.{.{ .stream = .stderr, .text = "CTFE publication observation", .count = 1 }},
+    })) {
+        .result => |run| run,
+        .failure => |failure| return failure,
+    };
+    if (completionCounter(evicted.stderr, "Early completed result hits") != 1 or completionCounter(evicted.stderr, "Checked modules loaded") != 0 or completionCounter(evicted.stderr, "Checked modules compiled") != 0)
+        return failureFromRun(allocator, timer, evicted, "completed result depended on evicted checked IR");
     // Check and test demand the unused failing root; build never does, even
     // after those commands have populated their caches.
     for ([_][]const []const u8{ &.{ "check", "--no-color" }, &.{ "test", "--opt=dev", "--no-color" }, &.{ "build", "--opt=dev", "--specialize=no", "--no-color", out_arg } }) |args| {
@@ -10921,7 +10949,7 @@ fn customRecordedProgramOutput(
             .result => |run| run,
             .failure => |failure| return failure,
         };
-        if (completionCounter(run.stderr, "Completed result hits") != index) return failureFromRun(allocator, timer, run, "warning-only compilation did not reuse completed result");
+        if (completionCounter(run.stderr, "Early completed result hits") != index) return failureFromRun(allocator, timer, run, "warning-only compilation did not reuse completed result before frontend loading");
     }
     // A headerless app stages its synthetic platform in a fresh directory.
     // Finalization owns this warning; replay must rebind it to the user file.
@@ -10946,7 +10974,7 @@ fn customRecordedProgramOutput(
             .result => |run| run,
             .failure => |failure| return failure,
         };
-        if (completionCounter(run.stderr, "Completed result hits") != index) return failureFromRun(allocator, timer, run, "staging paths invalidated the completed compilation");
+        if (completionCounter(run.stderr, "Early completed result hits") != index) return failureFromRun(allocator, timer, run, "staging paths invalidated the early completed compilation");
         if (std.mem.find(u8, run.stderr, "headerless.roc") == null) return failureFromRun(allocator, timer, run, "finalization warning lost its user source path");
         if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{ .args = &.{}, .stdout_exact = "", .stderr_exact = "" })) |failure| return failure;
     }

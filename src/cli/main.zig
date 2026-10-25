@@ -11748,6 +11748,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
 
     var build_env = try initBuildCommandEnv(ctx, args);
     defer build_env.deinit();
+    if (!args.no_cache and args.opt == .dev and currentRuntimeSpecializationStrategy(args.specialization_strategy) == .lss) build_env.setWatchInputTracking(true);
     // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
     // valid: records discovered source inputs for `roc build --watch` on every exit path.
     defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
@@ -11868,14 +11869,30 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             .gpa = ctx.gpa,
             .build_env = &build_env,
             .store = store,
+            .manager = &cache_manager,
             .policy = programOutputPolicy(args, link_type),
             .linked_stores = if (linked_stores) |*stores| stores else null,
         };
     };
-    if (program_probe) |*probe| build_env.setRuntimeOutputProbe(probe.runtimeOutputProbe());
+    if (program_probe) |*probe| {
+        try probe.initialize(args);
+        build_env.setRuntimeOutputProbe(probe.runtimeOutputProbe());
+        build_env.diagnostic_observer = .{ .context = probe, .record = ProgramOutputProbe.observeDiagnostic };
+    }
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
-    const diag, const resolved_targets_config = try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
+    const diag, const resolved_targets_config = early: {
+        if (program_probe) |*probe| {
+            reporter.begin("Validating Completed Inputs");
+            const hit = try probe.early();
+            reporter.end();
+            if (hit) {
+                try build_env.validateDiscoveredPlatformTargetFilesForCurrentTarget();
+                break :early .{ try probe.replayEarly(ctx), probe.found.?.outcome.targets.? };
+            }
+        }
+        break :early try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
+    };
 
     if (build_env.runtimeOutputCached()) {
         const output = program_probe.?.found.?;
@@ -12136,6 +12153,8 @@ fn linkNativeBuild(
 /// Final normalized compiler artifacts and their completed semantic outcome.
 /// Linking always validates and consumes the platform's current host inputs.
 const ProgramOutput = struct {
+    manifest: Manifest = .{},
+    diagnostics: []const compile.completed_compilation.Diagnostic = &.{},
     object: []const u8,
     additional_objects: []const []const u8 = &.{},
     facts: LinkFacts,
@@ -12146,8 +12165,26 @@ const ProgramOutput = struct {
         link_root_symbols: []const []const u8,
         app_export_symbols: []const []const u8,
     };
-    const magic = "ROCCOMP1";
-    const header_len = magic.len + 32;
+    const OptimizationInput = struct {
+        selection: pack_store.LinkedStores.Selection,
+        digest: [32]u8,
+    };
+    const Manifest = struct {
+        request: [32]u8 = @splat(0),
+        inputs: ?compile.completed_compilation.Inputs = null,
+        optimizations: []const OptimizationInput = &.{},
+    };
+    const Payload = struct {
+        object: []const u8,
+        additional_objects: []const []const u8,
+        facts: LinkFacts,
+        outcome: compile.completed_compilation.Outcome,
+        diagnostics: []const compile.completed_compilation.Diagnostic,
+    };
+    const magic = "ROCCOMP2";
+    const header_len = magic.len + 8 + 32 + 32;
+    const manifest_digest_offset = magic.len + 8;
+    const payload_digest_offset = manifest_digest_offset + 32;
 
     fn encode(allocator: Allocator, output: ProgramOutput) Allocator.Error![]u8 {
         var out: std.Io.Writer.Allocating = .init(allocator);
@@ -12155,24 +12192,58 @@ const ProgramOutput = struct {
         var header: [header_len]u8 = @splat(0);
         @memcpy(header[0..magic.len], magic);
         out.writer.writeAll(&header) catch return error.OutOfMemory;
-        compile.completed_compilation.write(ProgramOutput, &out.writer, output) catch return error.OutOfMemory;
+        compile.completed_compilation.write(Manifest, &out.writer, output.manifest) catch return error.OutOfMemory;
+        const manifest_end = out.written().len;
+        compile.completed_compilation.write(Payload, &out.writer, .{
+            .object = output.object,
+            .additional_objects = output.additional_objects,
+            .facts = output.facts,
+            .outcome = output.outcome,
+            .diagnostics = output.diagnostics,
+        }) catch return error.OutOfMemory;
         const bytes = try out.toOwnedSlice();
-        std.crypto.hash.Blake3.hash(bytes[header_len..], bytes[magic.len..header_len], .{});
+        std.mem.writeInt(u64, bytes[magic.len..][0..8], manifest_end - header_len, .little);
+        std.crypto.hash.Blake3.hash(bytes[header_len..manifest_end], bytes[manifest_digest_offset..][0..32], .{});
+        std.crypto.hash.Blake3.hash(bytes[manifest_end..], bytes[payload_digest_offset..][0..32], .{});
         return bytes;
     }
 
-    fn decode(arena: Allocator, bytes: []const u8) Allocator.Error!?ProgramOutput {
-        if (bytes.len < header_len or !std.mem.eql(u8, bytes[0..magic.len], magic)) return null;
+    fn manifestEnd(header: []const u8) ?usize {
+        if (header.len < header_len or !std.mem.eql(u8, header[0..magic.len], magic)) return null;
+        const len = std.math.cast(usize, std.mem.readInt(u64, header[magic.len..][0..8], .little)) orelse return null;
+        return std.math.add(usize, header_len, len) catch null;
+    }
+
+    fn readSection(comptime T: type, arena: Allocator, bytes: []const u8, expected_digest: *const [32]u8) Allocator.Error!?T {
         var digest: [32]u8 = undefined;
-        std.crypto.hash.Blake3.hash(bytes[header_len..], &digest, .{});
-        if (!std.mem.eql(u8, &digest, bytes[magic.len..header_len])) return null;
-        var reader = compile.completed_compilation.Reader{ .bytes = bytes[header_len..], .arena = arena, .remaining = (bytes.len - header_len) *| 4 };
-        const result = reader.read(ProgramOutput) catch |err| switch (err) {
+        std.crypto.hash.Blake3.hash(bytes, &digest, .{});
+        if (!std.mem.eql(u8, &digest, expected_digest)) return null;
+        var reader = compile.completed_compilation.Reader{ .bytes = bytes, .arena = arena, .remaining = bytes.len *| 4 };
+        const result = reader.read(T) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.InvalidRecord => return null,
         };
-        if (reader.offset != reader.bytes.len) return null;
-        return result;
+        return if (reader.offset == bytes.len) result else null;
+    }
+
+    fn decodeManifest(arena: Allocator, bytes: []const u8) Allocator.Error!?Manifest {
+        const end = manifestEnd(bytes) orelse return null;
+        if (end > bytes.len) return null;
+        return readSection(Manifest, arena, bytes[header_len..end], bytes[manifest_digest_offset..][0..32]);
+    }
+
+    fn decode(arena: Allocator, bytes: []const u8) Allocator.Error!?ProgramOutput {
+        const manifest = try decodeManifest(arena, bytes) orelse return null;
+        const end = manifestEnd(bytes).?;
+        const payload = try readSection(Payload, arena, bytes[end..], bytes[payload_digest_offset..][0..32]) orelse return null;
+        return .{
+            .manifest = manifest,
+            .object = payload.object,
+            .additional_objects = payload.additional_objects,
+            .facts = payload.facts,
+            .outcome = payload.outcome,
+            .diagnostics = payload.diagnostics,
+        };
     }
 };
 
@@ -12186,6 +12257,9 @@ test "program output records round-trip and reject foreign bytes" {
     };
     const bytes = try ProgramOutput.encode(std.testing.allocator, .{ .object = "object bytes", .facts = facts });
     defer std.testing.allocator.free(bytes);
+    const prefix = bytes[0..ProgramOutput.manifestEnd(bytes).?];
+    try std.testing.expect((try ProgramOutput.decodeManifest(arena.allocator(), prefix)) != null);
+    try std.testing.expect((try ProgramOutput.decode(arena.allocator(), prefix)) == null);
     const decoded = (try ProgramOutput.decode(arena.allocator(), bytes)).?;
     try std.testing.expectEqualStrings("object bytes", decoded.object);
     try std.testing.expectEqual(@as(usize, 2), decoded.facts.hosted_symbols.len);
@@ -12228,8 +12302,10 @@ test "program output records preserve observations and reject corrupt artifacts 
     bytes[ProgramOutput.header_len + 9] ^= 1;
     try std.testing.expect(try ProgramOutput.decode(arena.allocator(), bytes) == null);
     // Even a well-checksummed envelope cannot claim more object bytes than it contains.
-    @memset(bytes[ProgramOutput.header_len..][0..8], 255);
-    std.crypto.hash.Blake3.hash(bytes[ProgramOutput.header_len..], bytes[ProgramOutput.magic.len..ProgramOutput.header_len], .{});
+    bytes[ProgramOutput.header_len + 9] ^= 1;
+    const payload_start = ProgramOutput.manifestEnd(bytes).?;
+    @memset(bytes[payload_start..][0..8], 255);
+    std.crypto.hash.Blake3.hash(bytes[payload_start..], bytes[ProgramOutput.payload_digest_offset..][0..32], .{});
     try std.testing.expect(try ProgramOutput.decode(arena.allocator(), bytes) == null);
 }
 
@@ -12244,12 +12320,113 @@ const ProgramOutputProbe = struct {
     store: *const pack_store.Store,
     policy: [32]u8,
     linked_stores: ?*const pack_store.LinkedStores,
+    manager: *CacheManager,
+    request: [32]u8 = @splat(0),
+    resolution: [32]u8 = @splat(0),
+    optimizations: []const ProgramOutput.OptimizationInput = &.{},
+    diagnostics: std.ArrayList(compile.completed_compilation.Diagnostic) = .empty,
+    current_modules: []compile.completed_compilation.Module = &.{},
+    early_hit: bool = false,
+    validation_ns: u64 = 0,
+    source_bytes_read: u64 = 0,
+    manifest_bytes_read: u64 = 0,
     key: ?[32]u8 = null,
     found: ?ProgramOutput = null,
     bytes_read: usize = 0,
     bytes_written: usize = 0,
     publication_ns: u64 = 0,
     runtime_emissions: u64 = 0,
+
+    fn observeDiagnostic(context: *anyopaque, report: *const reporting.Report) Allocator.Error!void {
+        const self: *ProgramOutputProbe = @ptrCast(@alignCast(context));
+        try self.diagnostics.append(self.arena, try compile.completed_compilation.copyDiagnostic(self.arena, report));
+    }
+
+    fn initialize(self: *ProgramOutputProbe, args: cli_args.BuildArgs) Allocator.Error!void {
+        const descriptor = .{
+            .domain = @as([]const u8, "roc-completed-request-v2"),
+            .store = @as([]const u8, self.store.root),
+            .cwd = self.build_env.cwd,
+            .entry = args.synthetic_root_original_path orelse args.path,
+            .source_dir = args.source_dir_override,
+            .source_url = args.root_source_url,
+            .policy = self.policy,
+            .pin = self.build_env.source_pin_version,
+        };
+        const bytes = try compile.completed_compilation.encode(self.arena, descriptor);
+        std.crypto.hash.Blake3.hash(bytes, &self.request, .{});
+        self.resolution = try self.build_env.completionResolutionKey(self.arena);
+    }
+
+    /// The placement pointer is only a candidate locator. Admission validates
+    /// the record's complete input manifest before reading any object bytes.
+    fn early(self: *ProgramOutputProbe) Allocator.Error!bool {
+        const started = std.Io.Timestamp.now(self.store.roc_ctx.std_io, .awake).nanoseconds;
+        defer self.validation_ns += @intCast(std.Io.Timestamp.now(self.store.roc_ctx.std_io, .awake).nanoseconds - started);
+        const key = self.manager.loadPlacementPointer(self.request) orelse return false;
+        const header = try self.store.readProgramPrefix(key, ProgramOutput.header_len, self.arena) orelse return false;
+        self.bytes_read += header.len;
+        self.manifest_bytes_read += header.len;
+        const end = ProgramOutput.manifestEnd(header) orelse return false;
+        const prefix = try self.store.readProgramPrefix(key, end, self.arena) orelse return false;
+        self.bytes_read += prefix.len;
+        self.manifest_bytes_read += prefix.len;
+        const manifest = try ProgramOutput.decodeManifest(self.arena, prefix) orelse return false;
+        if (!std.mem.eql(u8, &manifest.request, &self.request)) return false;
+        const inputs = manifest.inputs orelse return false;
+        if (!try self.build_env.validateCompletionInputs(self.arena, inputs, self.resolution, &self.source_bytes_read)) return false;
+        if (self.linked_stores) |stores| {
+            if (manifest.optimizations.len != 2) return false;
+            for (manifest.optimizations) |input| {
+                if (!std.mem.eql(u8, &input.digest, &try stores.selectionDigest(input.selection))) return false;
+            }
+        } else if (manifest.optimizations.len != 0) return false;
+        const bytes = try self.store.readProgram(key, self.arena) orelse return false;
+        self.bytes_read += bytes.len;
+        // A concurrent atomic replacement must not switch the validated
+        // manifest underneath this reader.
+        if (bytes.len < end or !std.mem.eql(u8, prefix, bytes[0..end])) return false;
+        self.found = try ProgramOutput.decode(self.arena, bytes);
+        const output = if (self.found) |*value| value else return false;
+        if (output.outcome.targets == null or inputs.module_paths.len != output.outcome.modules.len) return false;
+        for (output.diagnostics) |diagnostic| if (diagnostic.severity.isError()) return false;
+        // Resolve every diagnostic source before replay. No checked module
+        // or coordinator is constructed to stand in for this completed result.
+        self.current_modules = try self.arena.alloc(compile.completed_compilation.Module, inputs.module_paths.len);
+        for (inputs.module_paths, output.outcome.modules, self.current_modules) |path, old, *current| current.* = .{
+            .key = old.key,
+            .path = try self.build_env.completionPath(self.arena, path) orelse return false,
+        };
+        self.key = key;
+        self.early_hit = true;
+        self.build_env.recorded_completion = &output.outcome;
+        self.build_env.recorded_inputs = inputs;
+        return true;
+    }
+
+    fn replayEarly(self: *ProgramOutputProbe, ctx: *CliCtx) Allocator.Error!CheckDiagnosticCounts {
+        const output = self.found.?;
+        for (output.outcome.observations) |message| {
+            ctx.coreCtx().writeStderr("[dbg] ") catch {};
+            ctx.coreCtx().writeStderr(message) catch {};
+            ctx.coreCtx().writeStderr("\n") catch {};
+        }
+        var warnings: usize = 0;
+        const config = ctx.reportConfig(.stderr);
+        const palette = reporting.ColorUtils.getPaletteForConfig(config);
+        for (output.diagnostics) |diagnostic| {
+            var report = try reporting.Report.init(ctx.gpa, diagnostic.title, "", diagnostic.severity);
+            defer report.deinit();
+            compile.completed_compilation.rebindElements(diagnostic.headline, output.outcome.modules, self.current_modules);
+            compile.completed_compilation.rebindElements(diagnostic.body, output.outcome.modules, self.current_modules);
+            try report.headline.elements.appendSlice(diagnostic.headline);
+            try report.document.elements.appendSlice(diagnostic.body);
+            if (compile.completed_compilation.rebindPath(diagnostic.file, output.outcome.modules, self.current_modules)) |path| try report.setFile(path);
+            reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
+            warnings += 1;
+        }
+        return .{ .errors = 0, .warnings = warnings };
+    }
 
     fn runtimeOutputProbe(self: *ProgramOutputProbe) compile.build.RuntimeOutputProbe {
         return .{ .context = self, .cached = cached };
@@ -12261,7 +12438,8 @@ const ProgramOutputProbe = struct {
         const modules = try coord.compilationModules(self.gpa);
         defer self.gpa.free(modules);
         var hasher = std.crypto.hash.Blake3.init(.{});
-        hasher.update("roc.completed-build.v1");
+        hasher.update("roc.completed-build.v2");
+        hasher.update(&self.request);
         hasher.update(&self.policy);
         const pin = coord.source_pin_version orelse "";
         var pin_len: [8]u8 = undefined;
@@ -12281,14 +12459,19 @@ const ProgramOutputProbe = struct {
         // Only explicitly selected optimized stores affect output. Dev packs,
         // checked values and this build's own cache writes do not change it.
         if (self.linked_stores) |stores| {
-            hasher.update(&try stores.stateDigest(self.build_env, root));
-            hasher.update(&try stores.stateDigest(self.build_env, coord.appRootCheckedArtifact()));
+            const inputs = try self.arena.alloc(ProgramOutput.OptimizationInput, 2);
+            for ([_]*const check.CheckedArtifact.CheckedModuleArtifact{ root, coord.appRootCheckedArtifact() }, inputs) |artifact, *input| {
+                input.selection = try pack_store.LinkedStores.selectionFor(self.arena, self.build_env, artifact);
+                input.digest = try stores.selectionDigest(input.selection);
+                hasher.update(&input.digest);
+            }
+            self.optimizations = inputs;
         }
         var key: [32]u8 = undefined;
         hasher.final(&key);
         self.key = key;
         const bytes = try self.store.readProgram(key, self.arena) orelse return null;
-        self.bytes_read = bytes.len;
+        self.bytes_read += bytes.len;
         self.found = try ProgramOutput.decode(self.arena, bytes);
         const found = if (self.found) |*value| value else return null;
         // Every manifest member is validated by the current content-based
@@ -12307,6 +12490,7 @@ const ProgramOutputProbe = struct {
             };
             if (!known) return null;
         }
+        self.manager.storePlacementPointer(self.request, key);
         return &found.outcome;
     }
 
@@ -12320,20 +12504,35 @@ const ProgramOutputProbe = struct {
         defer self.gpa.free(object);
         var outcome = self.build_env.coordinator.?.completion_outcome;
         outcome.targets = targets;
-        const bytes = try ProgramOutput.encode(self.gpa, .{ .object = object, .additional_objects = objects, .facts = facts, .outcome = outcome });
+        const inputs = try self.build_env.captureCompletionInputs(self.arena, self.resolution, outcome.modules);
+        const bytes = try ProgramOutput.encode(self.gpa, .{
+            .manifest = .{ .request = self.request, .inputs = inputs, .optimizations = self.optimizations },
+            .diagnostics = self.diagnostics.items,
+            .object = object,
+            .additional_objects = objects,
+            .facts = facts,
+            .outcome = outcome,
+        });
         defer self.gpa.free(bytes);
         self.store.writeProgram(key, bytes) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.PackWriteFailed => return,
         };
         self.bytes_written = bytes.len;
+        self.manager.storePlacementPointer(self.request, key);
     }
 };
 
 /// These counters count producer work, independently of phase labels.
 fn recordCompletionCounters(reporter: *progress.Reporter, build_env: *BuildEnv, probe: *const ProgramOutputProbe, hit: bool) void {
-    const timing = build_env.coordinator.?.ctfe_timing.snapshot();
+    const timing = if (build_env.coordinator) |coord| coord.ctfe_timing.snapshot() else eval.CompileTimeFinalization.TimingSnapshot{};
     reporter.recordCounters("Completed compilation", &.{
+        .{ .name = "Early completed result hits", .count = @intFromBool(probe.early_hit) },
+        .{ .name = "Checked modules loaded", .count = build_env.getBuildStats().cache_hits },
+        .{ .name = "Checked modules compiled", .count = build_env.getBuildStats().modules_compiled },
+        .{ .name = "Manifest bytes read", .count = probe.manifest_bytes_read },
+        .{ .name = "Input bytes validated", .count = probe.source_bytes_read },
+        .{ .name = "Input validation ns", .count = probe.validation_ns },
         .{ .name = "Completed result hits", .count = @intFromBool(hit) },
         .{ .name = "Demand specialization passes", .count = timing.specialization_passes - timing.respecialization_passes },
         .{ .name = "Post-CTFE specialization passes", .count = timing.respecialization_passes },
@@ -12342,7 +12541,7 @@ fn recordCompletionCounters(reporter: *progress.Reporter, build_env: *BuildEnv, 
         .{ .name = "Runtime object emissions", .count = probe.runtime_emissions },
         .{ .name = "Completed bytes read", .count = probe.bytes_read },
         .{ .name = "Completed bytes written", .count = probe.bytes_written },
-        .{ .name = "Completed publication ns", .count = probe.publication_ns + build_env.coordinator.?.completion_capture_ns },
+        .{ .name = "Completed publication ns", .count = probe.publication_ns + if (build_env.coordinator) |coord| coord.completion_capture_ns else @as(u64, 0) },
     });
 }
 
