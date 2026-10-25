@@ -17469,6 +17469,38 @@ materializing shapes. A query must not expand a clone that the following
 unification can join directly; doing so would discard the proof and duplicate
 large payload graphs merely to check that they can join.
 
+Compatibility traversal scratch belongs to one solver invocation. Deterministic
+work counters distinguish compatibility queries and structural pairs from lazy
+expansion, unification, member merging and final ordering. The developer-only
+`ROC_LAMBDA_SOLVE_STATS` diagnostic reports one record per invocation, including
+its required roots and functions;
+pre-evaluation solving and normalization from stored values remain separate
+invocations. No diagnostic state or solved facts cross those boundaries.
+
+The solver retains the structural pairs of its last completed, successful
+compatibility traversal. They are reusable only at the type store's recorded
+mutation epoch; any semantic write invalidates them, including lazy expansion,
+while path compression preserves meaning. A query that expands leaves does
+not publish facts. Pairs visited during a query are provisional until the
+entire query succeeds, so a cycle cut followed by a conflicting sibling never
+publishes a cyclic assumption as a completed fact. A successful traversal
+replaces the previous fact set instead of accumulating every queried pair;
+retained capacity is bounded by the largest traversal in this invocation.
+Compatibility still only chooses which payloads can relate. Unification runs
+every required payload relation and propagates callable members and erasure.
+
+The focused regression builds two recursive callable graphs, each a function
+returning a chain of D singleton tuples back to itself, then relates two rows
+whose W distinct tags all carry those graphs. `mergeTags` asks
+`payloadsCompatible` about each tag before scheduling any payload unification.
+Previously each `typesCompatible` call rebuilt its worklist and visited set and
+processed the same D+1 structural pairs: W*(D+1) pairs in all. Retaining the
+completed traversal reduces this to D+1 pairs and W-1 reuse hits, with D+1
+retained facts. At W=64 and D=64 the regression records 4,160 pairs before and
+65 after, while both versions perform all 131 unification pairs. The graphs
+carry overlapping lambda sets and a shared capture span; canonical member
+ordering, capture identity and their union remain part of the regression.
+
 A positional leaf may inherit a named type’s argument scope without reaching
 any of its bindings. Its expansion is still unobservable in that case: the
 solver checks the immutable Monotype graph for scoped argument occurrences,
