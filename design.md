@@ -16189,38 +16189,37 @@ data, that is a compiler bug.
 
 ### Monotype completion and inhabitation analysis reuse
 
-Each body context owns request-completion answers keyed by the exact ordered
-pair of resolved graph nodes, and uninhabitedness answers keyed by resolved
-node in separate inspectable-only and runtime-layout maps. These identities
-belong to that context's one instantiation graph; answers never cross a graph
-reset, another body, or a worker boundary. Memo capacity is proportional to the
-analysis states queried in the current graph epoch, not one graph per query.
-Completion path, operation, and frame storage and inhabitation evaluation
-storage are reused between queries and released with the context.
+Completion is a directed relation on a request and produced node in one body
+instantiation graph. Its ordered outcomes are `unchanged < completed < mismatch`.
+Ordinary children take the maximum; a row extension must stay unchanged;
+an inspectable checked-public backing maps either successful outcome to
+completed. A finite system of these monotone equations is solved from unchanged
+to its least fixed point. A back edge alone therefore contributes unchanged,
+but a later completion or mismatch propagates to every dependent pair, including
+pairs already encountered through the back edge. Provisional answers are never
+published. Expansion and propagation use explicit worklists.
 
-Answers are valid only at the graph's structure epoch. Every class union,
-content replacement (including backing authority/use changes), and lazy leaf
-expansion advances that epoch. Tag-head reordering also advances it: the
-completion relation compares entries in stored order, even though sorting
-preserves type meaning. Marking an already sorted head, allocating an unconnected
-node, and path compression do not change existing answers. Evidence matters here
-only through the explicit node content/backing it produces; analysis does not
-read external evidence tables. Immutable finished-type inhabitation answers
-remain owned by the graph's type analysis and survive graph mutations.
+Uninhabitedness is a separate least Boolean fixed point, initially false.
+Tuples, required record fields and box contents use OR of emptiness; unions use
+AND across alternatives, each of which uses OR across payloads. Empty AND is
+true and empty OR is false. Inspectable-only and runtime-layout queries remain
+separate, as do immutable finished types and mutable graph nodes. Settling a
+recursive component publishes every node's converged answer, including false.
 
-Every completion child entry consults the same memo as top-level queries.
-Lazy expansion can change the epoch during a query: an answer is recorded only
-if its entire traversal used one epoch, and every lookup first retires answers
-from older epochs. Invalidated queries may revisit structure; diagnostics count
-those invalidations separately from graph visits and memo hits.
+Proofs are graph-owned and retain explicit dependencies on the canonical nodes
+read to establish them and observe explicit producer mutation events.
+Unrelated writes preserve them; a changed input or canonical representative
+retires its dependent proofs. Path compression
+preserves root identity and meaning. Lazy expansion, backing policy changes,
+field changes and class joins are observable mutations. Completion also observes
+tag-head order. A traversal that crosses an observable mutation does not publish
+its previous assumptions as facts about the resulting graph.
 
-Both walkers preserve their existing active-path cycle rule. A completion
-cycle assumes `unchanged`; an inhabitation cycle supplies no proof of emptiness.
-Each frame records the cycle counter at entry. Only a frame that finishes
-without a new cycle assumption may publish a reusable answer. Cycle-dependent
-frames are deliberately revisited, with those assumptions counted explicitly;
-no provisional recursive answer becomes a durable fact. This changes analysis
-reuse only, never typing, relation production, row policy, or reachability.
+Proof ownership ends with the body context; no facts cross a graph reset,
+worker boundary or specialization. Shared subproofs are retained once, and
+scratch is reused between queries. Lambda Solved compatibility has its own
+truth conditions and lifetime described below; no completion or inhabitation
+truth is inferred from a compatibility proof.
 
 ### Row, Nominal, Alias, And Opaque Authority
 
@@ -18152,16 +18151,65 @@ pre-evaluation solving and normalization from stored values remain separate
 invocations. No diagnostic state or solved compatibility proofs cross those
 boundaries.
 
-The solver retains the structural pairs of its last completed, successful
-compatibility traversal. They are reusable only at the type store's recorded
-mutation epoch; any write that changes meaning invalidates them, including
-lazy expansion, while path compression preserves meaning. A query that expands
-leaves retains no proven pairs. Pairs visited during a query are provisional
-until the entire query succeeds, so a cycle cut followed by a conflicting
-sibling never retains a cyclic assumption as a completed proof. A successful
-traversal replaces the previous proven set instead of accumulating every
-queried pair; retained capacity is bounded by the largest traversal in this
-invocation.
+Compatibility means that structural unification would encounter no conflict;
+it is neither type equality nor a transitive equivalence relation. Unbound
+variables and compatible nominal views are not permission to equate arbitrary
+third parties. Function compatibility checks arguments and results, while
+callable slots still flow through the subsequent unification.
+
+Compatibility proofs belong to the function currently being solved and are
+released at its completion, including on failure. Queries outside a function
+belong to the enclosing solver operation and end with it. Within that scope,
+interleaved queries retain disjoint completed proofs, including counterexamples.
+Each completed traversal publishes only newly examined pairs in one certificate,
+referring to earlier
+certificates it consumed rather than copying their subgraphs. Storage is
+O(P + E) for the distinct demanded pairs and dependency edges of the live
+producer scope, never the Cartesian product of all types of the invocation.
+The same bound applies to Monotype's body-owned relation graph. Certificates
+and dependency arrays are freed on invalidation or scope exit; hash/worklist
+capacity is reused. This is an ownership boundary, not a timed or size-based
+eviction policy. Pair relations can inherently require quadratic work inside
+one scope; the implementation does not retain those pairs across completed
+function bodies or specializations.
+
+A certificate records every canonical node it reads and references to earlier
+certificates. Each dependency owns a reverse link. Producers record semantic
+writes in a graph-owned mutation index: one slot per node in a list ordered by
+its latest write. Repeated writes move that slot to the front, so recording
+never allocates and history cannot grow beyond the live graph. An observer
+visits only nodes written since its last epoch, then follows reverse links to
+retire affected proofs and their dependents. The mutation index occupies 16
+bytes per allocated node slot, independent of the number of writes. Removing a reverse link is constant
+work using its recorded slot; invalidation frees certificates only after all
+references have been detached. Unrelated writes neither inspect nor retire
+unaffected proofs. Validation costs changed nodes plus affected proof edges,
+not retained graph size or the number of intervening mutations. Path compression
+directly shortens existing links without recording a semantic mutation. Lazy expansion or joining representatives during a
+query prevents publication of that traversal. The special untouched-leaf
+shortcut also reads mutable clone-context ownership; it remains a direct
+answer and does not publish a structural certificate with missing dependencies.
+No other traversal publishes provisional cycle assumptions. A late conflict
+prevents all successful pairs of that walk from being published; only the
+requested false result may be retained, with its counterexample dependencies.
+
+Counters separate queries, structural walks, pair expansions, repeat visits,
+reuse hits, invalidations, lazy expansion and unification. Peak fact counts and
+payload bytes account for certificate arrays and table payload capacity (allocator
+metadata and table control bytes are excluded); allocator tests separately
+assert that warmed repetition performs no allocation.
+On x86_64, the issue 12616 interleaving fixtures settle five completion pairs and six
+inhabitation nodes into 12 facts (4,176 accounted proof bytes; 6,600 total
+query-owned bytes including scratch, across 49 initial allocations), and three
+compatibility pairs into three facts (1,928 accounted proof bytes; 2,500 total
+query-owned bytes across 20 initial allocations). Repeating A/B 512 times adds
+no expansions, allocations or retained bytes. These are small deterministic
+graph measurements, not an attribution of the entire compiler phase's time.
+`ROC_FRESH_TYPE_ANALYSIS`, available only through developer diagnostics, starts
+each top-level completion, inhabitation and compatibility query with empty
+proofs. CLI differential tests compare observations, diagnostics and failures
+with retained and fresh analyses, cold and warm persistent caches, after an
+edit, and with one or four workers. It does not change persistence policy.
 Compatibility still only chooses which payloads can relate. Unification runs
 every required payload relation and propagates callable members and erasure.
 
@@ -26244,7 +26292,7 @@ each phase's report.
 ### Developer Diagnostics
 
 The compiler's developer-only environment variables (`ROC_LIR_DUMP`,
-`ROC_SPEC_CENSUS`, `ROC_PACK_TRACE`, `ROC_PACK_STATS`, `ROC_CTFE_DEMAND_TRACE`,
+`ROC_SPEC_CENSUS`, `ROC_FRESH_TYPE_ANALYSIS`, `ROC_PACK_TRACE`, `ROC_PACK_STATS`, `ROC_CTFE_DEMAND_TRACE`,
 `ROC_CTFE_REUSE_TRACE`, `ROC_DEV_PACK_OBJECTS`, `ROC_DEV_PACK_HITS`, the object-compile round-trip
 variable and `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`) are honored only by a
 compiler for which `build_options.dev_diagnostics` is true: every Debug compiler, and any

@@ -24,6 +24,8 @@ pub const Var = enum {
     spec_census,
     /// Print deterministic Lambda Solved work once per required invocation.
     lambda_solve_stats,
+    /// Start each top-level recursive type analysis with empty proof tables.
+    fresh_type_analysis,
     /// Print every object cache lookup and offer.
     pack_trace,
     /// Print how many procedures a dev build served from cached packs.
@@ -52,6 +54,7 @@ pub const Var = enum {
             .lir_dump => "ROC_LIR_DUMP",
             .spec_census => "ROC_SPEC_CENSUS",
             .lambda_solve_stats => "ROC_LAMBDA_SOLVE_STATS",
+            .fresh_type_analysis => "ROC_FRESH_TYPE_ANALYSIS",
             .pack_trace => "ROC_PACK_TRACE",
             .pack_stats => "ROC_PACK_STATS",
             .disable_persistent_interfaces => "ROC_DISABLE_PERSISTENT_INTERFACES",

@@ -56,7 +56,7 @@ const max_subphases: usize = 25;
 // dev test emission, completed compilation, completed test command,
 // native test artifact cache, and individual test outcome admission.
 const max_counter_groups: usize = 2 * 10 + 7;
-const max_counters_per_group: usize = 40;
+const max_counters_per_group: usize = 42;
 /// Rows in the ranked timing list printed after the phases.
 const max_ranked_timings: usize = 10;
 /// Bytes reserved for copies of the ranked rows' names, which the caller's

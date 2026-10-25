@@ -1914,14 +1914,16 @@ pub const GraphDiagnostics = struct {
     completion_pair_entries: u64 = 0,
     completion_pair_expansions: u64 = 0,
     completion_memo_hits: u64 = 0,
-    completion_cycle_assumptions: u64 = 0,
-    completion_invalidations: u64 = 0,
+    completion_repeated_pairs: u64 = 0,
     inhabitation_queries: u64 = 0,
     inhabitation_node_entries: u64 = 0,
     inhabitation_node_expansions: u64 = 0,
     inhabitation_memo_hits: u64 = 0,
-    inhabitation_cycle_assumptions: u64 = 0,
-    inhabitation_invalidations: u64 = 0,
+    analysis_changed_nodes: u64 = 0,
+    analysis_invalidation_edges: u64 = 0,
+    analysis_peak_facts: u64 = 0,
+    analysis_peak_payload_bytes: u64 = 0,
+    analysis_invalidated_groups: u64 = 0,
 
     /// Node identities retained by argument-class snapshots.
     argument_class_members_snapshotted: u64 = 0,
@@ -2418,6 +2420,8 @@ pub const InstGraph = struct {
     parents: std.ArrayList(NodeId),
     field_kinds: std.ArrayList(FieldKindNode),
     versions: std.ArrayList(u32),
+    /// Analysis observes content writes and order-sensitive row normalization.
+    analysis_changes: @import("../proofs.zig").Changes(NodeId) = .{},
     /// Intrusive chain of permanent node ids in each live union class. Draft
     /// request lookup indexes an open function under one permanent interface
     /// node and probes the current class members, so later unions never stale
@@ -2707,6 +2711,7 @@ pub const InstGraph = struct {
         self.parents.clearRetainingCapacity();
         self.field_kinds.clearRetainingCapacity();
         self.versions.clearRetainingCapacity();
+        self.analysis_changes.clearRetainingCapacity();
         self.class_member_next.clearRetainingCapacity();
         self.class_member_head.clearRetainingCapacity();
         self.class_member_tail.clearRetainingCapacity();
@@ -2878,6 +2883,7 @@ pub const InstGraph = struct {
         self.class_member_head.deinit(allocator);
         self.class_member_next.deinit(allocator);
         self.versions.deinit(allocator);
+        self.analysis_changes.deinit(allocator);
         self.parents.deinit(allocator);
         self.nodes.deinit(allocator);
         self.field_kinds.deinit(allocator);
@@ -3939,10 +3945,12 @@ pub const InstGraph = struct {
 
     /// Whether a finished type is proven uninhabited under `policy`.
     pub fn typeProvenUninhabited(self: *InstGraph, ty: Type.TypeId, policy: UninhabitedPolicy) Allocator.Error!bool {
+        if (base.dev_diagnostics.isSet(.fresh_type_analysis)) {
+            for (&self.proven_uninhabited_types) |*memo| memo.clearRetainingCapacity();
+        }
         const answers = &self.proven_uninhabited_types[@backingInt(policy)];
         if (answers.get(ty)) |cached| return cached;
         var scan = TypeUninhabitedScan{ .graph = self, .policy = policy };
-        defer scan.visiting.deinit(self.allocator);
         const result = try TypeUninhabitedScan.Eval.runWith(self.allocator, &self.type_uninhabited_scratch, &scan, ty);
         try answers.put(self.allocator, ty, result);
         return result;
@@ -4018,7 +4026,7 @@ pub const InstGraph = struct {
     /// leaf's structure after relations freeze adds nodes that denote parts
     /// of an already-imported finished type; that relates nothing.
     /// The per-node columns that grow with `nodes`, one entry per node.
-    const node_columns = .{ "parents", "versions", "class_member_next", "class_member_head", "class_member_tail", "containment_visit_epochs", "request_source_interfaces", "constructor_evidence_requests", "private_backing_roots", "representation_membership", "class_finished_monos" };
+    const node_columns = .{ "parents", "versions", "analysis_changes", "class_member_next", "class_member_head", "class_member_tail", "containment_visit_epochs", "request_source_interfaces", "constructor_evidence_requests", "private_backing_roots", "representation_membership", "class_finished_monos" };
 
     /// Room for one more node in `nodes` and every per-node column. Each
     /// column's capacity is kept at least `nodes`'s, so a node fitting in
@@ -4043,6 +4051,7 @@ pub const InstGraph = struct {
         self.nodes.appendAssumeCapacity(node_content);
         self.parents.appendAssumeCapacity(id);
         self.versions.appendAssumeCapacity(0);
+        self.analysis_changes.appendAssumeCapacity();
         self.class_member_next.appendAssumeCapacity(.none);
         self.class_member_head.appendAssumeCapacity(id);
         self.class_member_tail.appendAssumeCapacity(id);
@@ -4339,6 +4348,7 @@ pub const InstGraph = struct {
         self.nodes.items[@backingInt(root)] = expanded;
         self.markPrivateBacking(expanded);
         self.versions.items[@backingInt(root)] +%= 1;
+        self.analysis_changes.mark(root);
         self.structure_epoch +%= 1;
         if (self.leaf_alias_origins.fetchRemove(root)) |aliases| {
             var alias_origins = aliases.value;
@@ -4937,6 +4947,11 @@ pub const InstGraph = struct {
         const node = try self.newLeaf(.{ .ty = ty, .origin = .{ .import = .{} } });
         try self.imported_type_nodes.put(ty, node);
         return node;
+    }
+
+    /// Exact changed identities for dependency invalidation; compression is absent.
+    pub fn analysisChangesSince(self: *const InstGraph, epoch: u64) @import("../proofs.zig").Changes(NodeId).Iterator {
+        return self.analysis_changes.since(epoch);
     }
 
     /// Current root for the node's union-find class.
@@ -6852,6 +6867,8 @@ pub const InstGraph = struct {
         self.nodes.items[@backingInt(loser)] = .{ .redirect = winner };
         self.parents.items[@backingInt(loser)] = winner;
         self.versions.items[@backingInt(winner)] +%= 1;
+        self.analysis_changes.mark(winner);
+        self.analysis_changes.mark(loser);
         self.structure_epoch +%= 1;
         self.countDiagnostic("class_unions");
         // An active snapshot exists only for a resolved class and reaches
@@ -6902,6 +6919,7 @@ pub const InstGraph = struct {
         self.nodes.items[@backingInt(root)] = new_content;
         self.markPrivateBacking(new_content);
         self.versions.items[@backingInt(root)] +%= 1;
+        self.analysis_changes.mark(root);
         self.structure_epoch +%= 1;
         return true;
     }
@@ -7847,8 +7865,9 @@ pub const InstGraph = struct {
             std.mem.sortUnstable(InstTag, tags, self.name_store, instTagLessThan);
             // Completion compares row entries in their stored order. Its
             // answers must not survive a reordering, although type meaning,
-            // containment versions, and resolvedness are unchanged.
+            // solver versions and resolvedness are unchanged.
             self.structure_epoch +%= 1;
+            self.analysis_changes.mark(root);
         }
         for (tags, 0..) |tag, index| {
             if (index != 0) std.debug.assert(tags[index - 1].name != tag.name);
@@ -8938,25 +8957,18 @@ pub const UninhabitedPolicy = enum(u2) {
 const TypeUninhabitedScan = struct {
     graph: *InstGraph,
     policy: UninhabitedPolicy,
-    /// Each type being expanded, with the number of cycle hits seen before
-    /// it was entered.
-    visiting: collections.DenseMapUnmanaged(Type.TypeId, usize) = .empty,
-    /// Re-entries of a type still being expanded. A type whose expansion saw
-    /// none answers independently of the types enclosing it, so its answer
-    /// is cached for every later scan.
-    cycle_hits: usize = 0,
-
-    const Eval = AnyAll.Evaluation(Type.TypeId, TypeUninhabitedScan);
+    const Eval = @import("../inhabitation.zig").Evaluation(Type.TypeId, TypeUninhabitedScan);
 
     fn answers(self: *TypeUninhabitedScan) *collections.DenseMapUnmanaged(Type.TypeId, bool) {
         return &self.graph.proven_uninhabited_types[@backingInt(self.policy)];
     }
 
+    /// Immutable finished types already carry their canonical identity.
+    pub fn canonical(_: *TypeUninhabitedScan, ty: Type.TypeId) Type.TypeId {
+        return ty;
+    }
+
     pub fn enter(self: *TypeUninhabitedScan, items: Eval.Items, ty: Type.TypeId) Allocator.Error!Eval.Expansion {
-        if (self.visiting.contains(ty)) {
-            self.cycle_hits += 1;
-            return .{ .value = false };
-        }
         if (self.answers().get(ty)) |cached| return .{ .value = cached };
         const types = self.graph.types;
         const expansion: Eval.Expansion = switch (types.get(ty)) {
@@ -8984,6 +8996,9 @@ const TypeUninhabitedScan = struct {
             .tag_union => |tags| blk: {
                 const tag_span = types.tagSpan(tags);
                 for (0..GuardedList.borrowLen(tag_span)) |tag_index| {
+                    if (GuardedList.borrowLen(types.span(GuardedList.at(tag_span, tag_index).payloads)) == 0) return .{ .value = false };
+                }
+                for (0..GuardedList.borrowLen(tag_span)) |tag_index| {
                     const payloads = types.span(GuardedList.at(tag_span, tag_index).payloads);
                     const payload_count = GuardedList.borrowLen(payloads);
                     try items.group(.any, payload_count);
@@ -8994,14 +9009,11 @@ const TypeUninhabitedScan = struct {
             // A hole stands for every type, so it is not provably uninhabited.
             .primitive, .list, .func, .erased, .zst, .hole => .{ .value = false },
         };
-        if (expansion == .group) try self.visiting.put(self.graph.allocator, ty, self.cycle_hits);
         return expansion;
     }
 
     pub fn exit(self: *TypeUninhabitedScan, ty: Type.TypeId, result: ?bool) Allocator.Error!void {
-        const hits_before = (self.visiting.fetchRemove(ty) orelse return).value;
-        const decided = result orelse return;
-        if (self.cycle_hits == hits_before) try self.answers().put(self.graph.allocator, ty, decided);
+        if (result) |decided| try self.answers().put(self.graph.allocator, ty, decided);
     }
 };
 

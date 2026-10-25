@@ -18875,7 +18875,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [40]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [42]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -18910,14 +18910,16 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [40]
         .{ .name = "Completion pair entries", .count = graph.completion_pair_entries },
         .{ .name = "Completion pair expansions", .count = graph.completion_pair_expansions },
         .{ .name = "Completion memo hits", .count = graph.completion_memo_hits },
-        .{ .name = "Completion cycle assumptions", .count = graph.completion_cycle_assumptions },
-        .{ .name = "Completion invalidations", .count = graph.completion_invalidations },
+        .{ .name = "Completion repeated pairs", .count = graph.completion_repeated_pairs },
         .{ .name = "Inhabitation queries", .count = graph.inhabitation_queries },
         .{ .name = "Inhabitation node entries", .count = graph.inhabitation_node_entries },
         .{ .name = "Inhabitation node expansions", .count = graph.inhabitation_node_expansions },
         .{ .name = "Inhabitation memo hits", .count = graph.inhabitation_memo_hits },
-        .{ .name = "Inhabitation cycle assumptions", .count = graph.inhabitation_cycle_assumptions },
-        .{ .name = "Inhabitation invalidations", .count = graph.inhabitation_invalidations },
+        .{ .name = "Analysis changed nodes", .count = graph.analysis_changed_nodes },
+        .{ .name = "Analysis invalidation edges", .count = graph.analysis_invalidation_edges },
+        .{ .name = "Analysis peak facts", .count = graph.analysis_peak_facts },
+        .{ .name = "Analysis peak payload bytes", .count = graph.analysis_peak_payload_bytes },
+        .{ .name = "Analysis invalidated groups", .count = graph.analysis_invalidated_groups },
     };
 }
 
