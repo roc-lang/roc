@@ -4022,7 +4022,7 @@ test "check type - nominal - local method type - fail" {
         \\```roc
         \\  Str.encode("hi", fmt)
         \\```
-        \\                   ^^^
+        \\  ^^^^^^^^^^^^^^^^^^^^^
         \\
         \\The method `encode_str` has the type:
         \\

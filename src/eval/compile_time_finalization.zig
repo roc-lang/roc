@@ -26,6 +26,7 @@ const RootGraph = @import("compile_time_root_graph.zig");
 const LiteralValues = @import("literal_values.zig").LiteralValues;
 const Value = @import("value.zig").Value;
 const boxy_abi = @import("boxy_abi.zig");
+const boxy_runtime = @import("boxy_runtime.zig");
 const interpreter_mod = @import("interpreter.zig");
 const interpreter_static_data = @import("interpreter_static_data.zig");
 const static_data_exports = @import("static_data");
@@ -3757,7 +3758,7 @@ fn evalDevLiteralRoot(
     host.timing_io = if (options.timing) |timing| timing.std_io else null;
 
     const boxy_tables = Interpreter.BoxyTables.fromResult(&lowered.lir_result);
-    const selected_runtime = if (boxy_tables.needsRuntimeForStore(&lowered.lir_result.store))
+    const selected_runtime = if (boxy_runtime.storeNeedsRuntime(&lowered.lir_result.store))
         try boxy_abi.createRuntimeFromStores(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, boxy_tables, host.ops())
     else
         null;
@@ -3969,6 +3970,7 @@ const ThreadSafeAllocator = struct {
 };
 
 fn boxyNativeFnTable() BoxyNativeFnTable {
+    base.dev_diagnostics.traceBoxyWork("native-functions");
     var table: BoxyNativeFnTable = undefined;
     inline for (@typeInfo(BoxyBuiltinFn).@"enum".field_values) |field_value| {
         const boxy_fn: BoxyBuiltinFn = @fromBackingInt(@intCast(field_value));
@@ -4885,8 +4887,9 @@ const DevProgram = struct {
             .boxy_in_process => .native_execution,
         };
         try codegen.setStaticDataSymbols(materialized);
-        var native_fns = boxyNativeFnTable();
-        codegen.boxy_native_fns = &native_fns;
+        var native_fns: ?BoxyNativeFnTable = if (lowered.lir_result.store.runtime_contract == .boxy) boxyNativeFnTable() else null;
+        const native_fn_table = if (native_fns) |*table| table else null;
+        codegen.boxy_native_fns = native_fn_table;
         const const_root_count = lowered.lir_result.const_roots.items.len;
         const evaluation_roots = try allocator.alloc(lir.LIR.LirProcSpecId, const_root_count + lowered.lir_result.literal_roots.items.len);
         defer allocator.free(evaluation_roots);
@@ -4929,9 +4932,9 @@ const DevProgram = struct {
             try entry_offsets.put(root.proc, entrypoint.offset);
         }
         codegen.boxy_native_fns = null;
-        try splice.generateHostedStubs(&codegen, &native_fns);
+        try splice.generateHostedStubs(&codegen, native_fn_table);
         try codegen.finishImage();
-        var executable = splice.link(&codegen, &native_fns) catch |err| switch (err) {
+        var executable = splice.link(&codegen, native_fn_table) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.MappingFailed => return error.MmapFailed,
             error.UnresolvedSymbol => spliceInvariant(&splice, "compile-time code names a symbol the compile-time evaluator cannot bind"),
@@ -5186,7 +5189,7 @@ fn evalDevProgramRoots(
     }
 
     const boxy_tables = Interpreter.BoxyTables.fromResult(&lowered.lir_result);
-    const boxy_global_installed = jobs_len != 0 and boxy_tables.needsRuntimeForStore(&lowered.lir_result.store);
+    const boxy_global_installed = jobs_len != 0 and boxy_runtime.storeNeedsRuntime(&lowered.lir_result.store);
     const selected_runtime = if (boxy_global_installed)
         try boxy_abi.createRuntimeFromStores(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, boxy_tables, jobs[0].host.ops())
     else

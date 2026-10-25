@@ -10,14 +10,14 @@ f = |a| g(a).x
 expect f([1].first())
 ~~~
 # EXPECTED
-TYPE MISMATCH - dispatch_instantiated_constraint_owner.md:3:10:3:21
+TYPE MISMATCH - dispatch_instantiated_constraint_owner.md:3:8:3:22
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 3 10) (end 3 21))
+		(region (start 3 8) (end 3 22))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -29,7 +29,7 @@ TYPE MISMATCH - dispatch_instantiated_constraint_owner.md:3:10:3:21
 			(reflow " ")
 			(reflow "has an incompatible type."))
 		(document
-			(source-region (file "dispatch_instantiated_constraint_owner.md") (start 3 10) (end 3 21) (annotation error) (line-text "expect f([1].first())"))
+			(source-region (file "dispatch_instantiated_constraint_owner.md") (start 3 8) (end 3 22) (annotation error) (line-text "expect f([1].first())"))
 			(line-break)
 			(reflow "The method")
 			(reflow " ")
@@ -56,7 +56,12 @@ TYPE MISMATCH - dispatch_instantiated_constraint_owner.md:3:10:3:21
 			(line-break)
 			(indent 1)
 			(text "  where [_ok.from_numeral : Numeral -> Try(_ok, [InvalidNumeral(Str)])]")
-			(annotation-end))))
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "This use needs that because of this code in the definition it uses:")
+			(line-break)
+			(source-region (file "dispatch_instantiated_constraint_owner.md") (start 1 9) (end 1 18) (annotation error) (line-text "g = |r| r.is_ok()")))))
 ~~~
 # TOKENS
 ~~~zig

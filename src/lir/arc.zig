@@ -9169,6 +9169,7 @@ test "ARC emission exclusions copy once and preserve solver resources on allocat
 
 test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
     var f = try ArcTest.init(testing.allocator);
+    f.store.runtime_contract = .boxy;
     defer f.deinit();
 
     const erased_box = try f.layouts.insertLayout(layout_mod.Layout.erasedBox());
@@ -9216,6 +9217,7 @@ test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
 test "ARC preserves erased callable repack reuse" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
+    f.store.runtime_contract = .boxy;
 
     const erased_callable = try f.layouts.insertErasedCallable();
     const capture = try f.local(.str);
@@ -9325,6 +9327,7 @@ test "ARC preserves erased callable repack reuse" {
 test "ARC preserves erased call ABI metadata" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
+    f.store.runtime_contract = .boxy;
 
     const erased_callable = try f.layouts.insertErasedCallable();
     const closure = try f.local(erased_callable);
@@ -16969,6 +16972,7 @@ test "RC field-take demand crosses complete tag payload and wrapper calls" {
 test "RC specialization: caller body survives variant proc append" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
+    f.store.runtime_contract = .boxy;
 
     // Callee returns its string parameter at position 1, so that parameter
     // and return solve borrowed.
@@ -17792,6 +17796,7 @@ test "RC alias into set_local moves the leader unit" {
 
 test "RC releases descriptor-backed old set_local value before immutable replacement" {
     var f = try ArcTest.init(testing.allocator);
+    f.store.runtime_contract = .boxy;
     defer f.deinit();
 
     const desc = try f.local(.opaque_ptr);
@@ -17818,6 +17823,7 @@ test "RC releases descriptor-backed old set_local value before immutable replace
 
 test "RC descriptor updates scan only the current proc frame" {
     var f = try ArcTest.init(testing.allocator);
+    f.store.runtime_contract = .boxy;
     defer f.deinit();
 
     const unrelated = try f.local(.str);
@@ -17869,6 +17875,7 @@ test "RC descriptor updates scan only the current proc frame" {
 
 test "RC descriptor snapshot owns an alias across source descriptor reuse" {
     var f = try ArcTest.init(testing.allocator);
+    f.store.runtime_contract = .boxy;
     defer f.deinit();
 
     const source_desc = try f.local(.opaque_ptr);
@@ -17908,6 +17915,7 @@ test "RC descriptor snapshot owns an alias across source descriptor reuse" {
 
 test "RC preserves a surviving source before a consuming boxy adapter" {
     var f = try ArcTest.init(testing.allocator);
+    f.store.runtime_contract = .boxy;
     defer f.deinit();
 
     const source = try f.local(f.list_i64);
@@ -17943,6 +17951,7 @@ test "RC preserves a surviving source before a consuming boxy adapter" {
 test "RC descriptor-bearing tag aliases and aggregates follow their committed layout" {
     for ([_]layout_mod.Idx{ .i64, .str }) |payload_layout| {
         var f = try ArcTest.init(testing.allocator);
+        f.store.runtime_contract = .boxy;
         defer f.deinit();
 
         const tag_layout = try f.layouts.putTagUnion(&.{ .zst, payload_layout });
@@ -17979,6 +17988,7 @@ test "RC descriptor-bearing tag aliases and aggregates follow their committed la
 
 test "RC does not treat a descriptor-bearing scalar dictionary result as refcounted" {
     var f = try ArcTest.init(testing.allocator);
+    f.store.runtime_contract = .boxy;
     defer f.deinit();
 
     const desc = LIR.BoxyDescRef{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) };
