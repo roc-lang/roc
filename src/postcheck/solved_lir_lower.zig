@@ -181,6 +181,10 @@ pub const Options = struct {
     /// linked, so a linked-object entry (`Common.SpecCacheHit.c_abi_entry`)
     /// can, and whether its emitter splices dev code.
     spec_cache_takes: Common.SpecCacheTakes = .dev_code,
+    /// Give every site-named procedure a code key
+    /// (`CheckedPipeline.TargetConfig.site_code_keys`); required whenever
+    /// `spec_cache` is set.
+    site_code_keys: bool = false,
     inline_plan: SolvedInline.Plan = .{},
     /// Lower every keyed specialization's procedure body, even one whose every
     /// call was inlined, so a pack program can offer it.
@@ -295,6 +299,7 @@ pub fn runBorrowed(
     try lowerer.lower();
     try lowerer.bindRoots();
     try lowerer.lowerReachableFns();
+    try lowerer.markStableSignatures();
     try lowerer.keepReachedErasedMembers();
     lowerer.keepLoweredSpecProcs();
     try lowerer.writeRuntimeSchemas();
@@ -897,6 +902,7 @@ const Lowerer = struct {
     proc_debug_names: bool,
     spec_cache: ?Common.SpecCacheLookup,
     spec_cache_takes: Common.SpecCacheTakes,
+    site_code_keys: bool,
     /// The module identities of this program's source files, which the
     /// object cache serves entries for (`Common.ProgramModules`).
     program_modules: Common.ProgramModules = &.{},
@@ -1190,6 +1196,8 @@ const Lowerer = struct {
         solved: *const Solved.Program,
         options: Options,
     ) Common.LowerError!Lowerer {
+        // Cached code names a site-named procedure by its code key.
+        if (options.spec_cache != null and !options.site_code_keys) Common.invariant("a program served by the object cache gave site-named procedures no code keys");
         var payload_conditions = collections.DenseMap(Lifted.LocalId, PayloadCondition).init(allocator);
         errdefer payload_conditions.deinit();
         for (0..solved.lifted.exprCount()) |raw_expr| {
@@ -1268,6 +1276,7 @@ const Lowerer = struct {
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
             .spec_cache_takes = options.spec_cache_takes,
+            .site_code_keys = options.site_code_keys,
             .root_manifest = options.root_manifest,
             .fn_queue_index = 0,
             .initializer_queue_index = 0,
@@ -1484,6 +1493,47 @@ const Lowerer = struct {
         self.deinitLoweringState();
         self.runtime_schemas.deinit();
         self.result.deinit();
+    }
+
+    /// Mark every procedure with a code key that code without one can call
+    /// (`LIR.LirProcSpec.stable_signature`): a member of a lambda set in the
+    /// signature of a procedure without a code key, or an app function such
+    /// a procedure's code reaches (`Lifted.Program.appCalleesReachedBy`).
+    /// These are exactly the procedures a program taking that procedure from
+    /// a pack lowers for it, and they follow from the program's types and
+    /// source, never from which bodies this program lowered rather than took
+    /// from a pack, so every program marks the same procedures. Every
+    /// specialization of a marked source function is marked.
+    fn markStableSignatures(self: *Lowerer) Common.LowerError!void {
+        // Without code keys no procedure is stable.
+        if (!self.site_code_keys) return;
+        const stable_sources = try self.allocator.alloc(bool, self.solved.lifted.fnCount());
+        defer self.allocator.free(stable_sources);
+        @memset(stable_sources, false);
+        var app_callees = std.ArrayList(Lifted.FnId).empty;
+        defer app_callees.deinit(self.allocator);
+        var members = std.ArrayList(Type.FnId).empty;
+        defer members.deinit(self.allocator);
+        for (self.fn_entries.items, self.fn_reachable.items, 0..) |entry, is_reached, index| {
+            if (!is_reached) continue;
+            const proc = entry.proc orelse Common.invariant("reachable function had no procedure");
+            if (self.result.store.getProcSpec(proc).code_key != null) continue;
+            app_callees.clearRetainingCapacity();
+            try self.solved.lifted.appCalleesReachedBy(self.fn_specs.items[index].source, &app_callees, self.allocator);
+            for (app_callees.items) |callee| stable_sources[@backingInt(callee)] = true;
+            members.clearRetainingCapacity();
+            const arg_tys = self.types.span(entry.args);
+            for (0..arg_tys.len) |arg_index| try self.collectCallableMembers(GuardedList.at(arg_tys, arg_index), &members);
+            if (entry.capture_arg_ty) |capture_arg_ty| try self.collectCallableMembers(capture_arg_ty, &members);
+            try self.collectCallableMembers(entry.ret, &members);
+            for (members.items) |member| stable_sources[@backingInt(self.fn_specs.items[@backingInt(member)].source)] = true;
+        }
+        for (self.fn_entries.items, 0..) |entry, index| {
+            const proc = entry.proc orelse continue;
+            if (!stable_sources[@backingInt(self.fn_specs.items[index].source)]) continue;
+            const spec = self.result.store.getProcSpecPtr(proc);
+            if (spec.code_key != null) spec.stable_signature = true;
+        }
     }
 
     /// Drop each erased callable plan's members that nothing reached: no
@@ -3189,9 +3239,11 @@ const Lowerer = struct {
         } else if (dev_diagnostics.isSet(.pack_trace) and self.spec_cache != null) {
             if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped plain={} cached={}\n", .{ key.bytes[0..8], plain_spec, cached != null });
         }
-        // Only a program using the object cache separates a site-named
-        // procedure's code from its identity.
-        const code_key = if (self.spec_cache != null) procCodeKey(source_fn.source, identity) else null;
+        // A program whose code a pack can hold separates a site-named
+        // procedure's code from its identity whether or not it uses the
+        // object cache, so the cache changes nothing it compiles (design.md
+        // "Output Determinism").
+        const code_key = if (self.site_code_keys) procCodeKey(source_fn.source, identity) else null;
         // Any other procedure a body lowered for is served by its identity,
         // which names its code once Lambda Mono has decided it: its source,
         // its solved types with their lambda sets, and its captures. A
@@ -6239,6 +6291,14 @@ const Lowerer = struct {
     /// entry's own copy predates; this program lowers each, so the splice
     /// links the entry's calls to the program's current code.
     fn queueCallableMembers(self: *Lowerer, served_entry: LIR.LirProcSpecId, root: Type.TypeId) Common.LowerError!void {
+        var members = std.ArrayList(Type.FnId).empty;
+        defer members.deinit(self.allocator);
+        try self.collectCallableMembers(root, &members);
+        for (members.items) |member| try self.served_member_fns.append(self.allocator, .{ .entry = served_entry, .fn_id = member });
+    }
+
+    /// Append every lambda-set member `root` mentions.
+    fn collectCallableMembers(self: *Lowerer, root: Type.TypeId, out: *std.ArrayList(Type.FnId)) Common.LowerError!void {
         var visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer visited.deinit();
         var stack = std.ArrayList(Type.TypeId).empty;
@@ -6270,7 +6330,7 @@ const Lowerer = struct {
                     const variants = self.types.fnVariantSpan(span);
                     for (0..variants.len) |index| {
                         const variant = GuardedList.at(variants, index);
-                        try self.served_member_fns.append(self.allocator, .{ .entry = served_entry, .fn_id = variant.target });
+                        try out.append(self.allocator, variant.target);
                         if (variant.capture_ty) |capture_ty| try stack.append(self.allocator, capture_ty);
                     }
                 },

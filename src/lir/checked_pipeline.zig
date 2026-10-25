@@ -203,6 +203,16 @@ pub const TargetConfig = struct {
     proc_debug_names: bool = false,
     /// The object cache Monotype asks for closed specializations.
     spec_cache: ?postcheck.Common.SpecCacheLookup = null,
+    /// Give every procedure whose identity names its template by site a code
+    /// key (`LIR.LirProcSpec.code_key`), whether or not this program has a
+    /// `spec_cache`. Dev builds, compile-time evaluation and object pack
+    /// lowering set it, since packs hold their code and a build without the
+    /// cache compiles what one with an empty cache does (design.md "Output
+    /// Determinism"). Optimized builds and the interpreter leave it off: they
+    /// take no code from a pack and offer none, so ARC solves their
+    /// procedures' signatures freely. Required whenever `spec_cache` serves
+    /// the program.
+    site_code_keys: bool = false,
     /// Keep every keyed specialization procedure through compaction; a pack
     /// program offers them from its manifest whether or not its export
     /// wrappers inlined their calls.
@@ -1114,6 +1124,7 @@ pub const LirPolicy = struct {
     list_in_place_map: bool,
     proc_debug_names: bool,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
+    site_code_keys: bool,
     code_provision: CodeProvision,
     keep_specialization_procs: bool,
     promote_loop_appends: base.TestSwitch(true),
@@ -1827,6 +1838,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .root_manifest = consumer.roots,
         .spec_cache = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
         .spec_cache_takes = target.code_provision.specCacheTakes(),
+        .site_code_keys = target.site_code_keys,
         .inline_plan = prepared.inline_plan.view(),
         .keep_specialization_procs = target.keep_specialization_procs,
         .post_check_executor = target.post_check_executor,

@@ -261,9 +261,14 @@ pub const Solution = struct {
     /// Flat conditional-return rows referenced by `RcSig.ret_conditions`.
     ret_conditions: []arc_sig.RetCondition,
     /// Bit set => the proc's signature is pinned by ABI (roots, hosted,
-    /// erased-callable, bodyless, and address-escaping procs). Pinned procs
-    /// are never mode-specialized.
+    /// erased-callable, bodyless, and address-escaping procs) or for
+    /// stability (`LIR.LirProcSpec.stable_signature`). Pinned procs are never
+    /// mode-specialized.
     pinned: std.bit_set.DynamicBitSetUnmanaged,
+    /// Bit set => the proc is pinned only for stability: its body is this
+    /// program's, so code compiled with the same body may still call its
+    /// outcome variant (`outcomeSpanForCall`).
+    stability_pinned: std.bit_set.DynamicBitSetUnmanaged = .{},
     /// Store-shaped settlement inputs built by the first uniqueness
     /// settlement and reused by every later one on this solution.
     uniqueness_structure: ?*UniquenessStructure = null,
@@ -302,6 +307,7 @@ pub const Solution = struct {
         self.unique_origins_ok.deinit(self.allocator);
         self.fresh_reads.deinit(self.allocator);
         self.pinned.deinit(self.allocator);
+        self.stability_pinned.deinit(self.allocator);
         if (self.uniqueness_structure) |structure| structure.destroy();
     }
 
@@ -497,6 +503,16 @@ pub const Solution = struct {
 
     pub fn sigOf(self: *const Solution, proc: LIR.LirProcSpecId) arc_sig.RcSig {
         return self.sigTable().get(proc);
+    }
+
+    /// The outcome span a call from `caller` to `callee` may demand. A stable
+    /// procedure's outcome rows follow its current body, which code without
+    /// a code key does not change with, so only a caller with one may demand
+    /// them.
+    pub fn outcomeSpanForCall(self: *const Solution, store: *const LirStore, caller: LIR.LirProcSpecId, callee: LIR.LirProcSpecId) arc_sig.OutcomeSpan {
+        const index = @backingInt(callee);
+        if (index < self.stability_pinned.capacity() and self.stability_pinned.isSet(index) and store.getProcSpec(caller).code_key == null) return .empty;
+        return self.availableOutcomeSpanOf(callee);
     }
 
     pub fn availableOutcomeSpanOf(self: *const Solution, proc: LIR.LirProcSpecId) arc_sig.OutcomeSpan {
@@ -833,6 +849,7 @@ const Solver = struct {
     domain: *const ArcLocalDomain,
     sigs: []arc_sig.RcSig,
     pinned: std.bit_set.DynamicBitSetUnmanaged,
+    stability_pinned: std.bit_set.DynamicBitSetUnmanaged,
     /// Call-graph SCC id per proc, for the tail-call rule.
     scc: []u32,
     defs: []DefKind,
@@ -934,6 +951,7 @@ pub fn solveWithOptions(
         .domain = &domain,
         .sigs = &.{},
         .pinned = .{},
+        .stability_pinned = .{},
         .scc = &.{},
         .defs = &.{},
         .demand = &.{},
@@ -964,6 +982,7 @@ pub fn solveWithOptions(
     };
     defer {
         solver.pinned.deinit(allocator);
+        solver.stability_pinned.deinit(allocator);
         allocator.free(solver.scc);
         allocator.free(solver.defs);
         allocator.free(solver.demand);
@@ -998,6 +1017,7 @@ pub fn solveWithOptions(
     // nested inventories. Moved result tables are reset to empty at handoff.
     solver.sigs = try allocator.alloc(arc_sig.RcSig, proc_count);
     solver.pinned = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count);
+    solver.stability_pinned = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count);
     solver.scc = try allocator.alloc(u32, proc_count);
     solver.defs = try allocator.alloc(DefKind, arc_local_count);
     solver.demand = try allocator.alloc(bool, arc_local_count);
@@ -1268,10 +1288,12 @@ pub fn solveWithOptions(
             .fresh_reads = fresh_reads,
             .ret_conditions = initial_ret_conditions,
             .pinned = solver.pinned,
+            .stability_pinned = solver.stability_pinned,
         };
     };
     solver.sigs = &.{};
     solver.pinned = .{};
+    solver.stability_pinned = .{};
     solver.join_index_by_stmt = &.{};
     solver.jump_target_join_index_by_stmt = &.{};
     solver.jump_site_index_by_stmt = &.{};
@@ -1553,7 +1575,7 @@ fn computeOutcomeRestitution(
 
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        if (solution.isPinnedProc(proc_id)) continue;
+        if (solution.isPinnedProc(proc_id) and !solution.stability_pinned.isSet(proc_index)) continue;
         const proc = store.getProcSpec(proc_id);
         const body = proc.arcBody() orelse continue;
         if (layouts.getLayout(proc.ret_layout).tag != .tag_union) continue;
@@ -3457,6 +3479,7 @@ fn lowLevelBorrowSource(
 
 fn computePins(solver: *Solver, roots: []const LIR.LirProcSpecId) SolveError!void {
     fillPinnedProcContracts(solver.store, roots, &solver.pinned);
+    fillStabilityPins(solver.store, roots, &solver.stability_pinned);
     debugAssertAddressTakenPinned(solver.store, &solver.address_taken, &solver.pinned);
 }
 
@@ -3502,13 +3525,31 @@ fn fillPinnedProcContracts(
     }
     for (0..store.procSpecCount()) |proc_index| {
         const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-        // A procedure named by site keeps its identity when its body changes,
-        // so code compiled against an earlier body calls it; its signature is
-        // the one its types determine (`LIR.LirProcSpec.code_key`).
-        if (proc.arcBody() == null or proc.hosted != null or proc.abi == .erased_callable or proc.code_key != null) {
+        // Code compiled against an earlier body of a stable procedure calls
+        // it by identity; its signature is the one its types determine
+        // (`LIR.LirProcSpec.stable_signature`).
+        if (pinnedByAbi(proc) or proc.stable_signature) {
             pinned.set(proc_index);
         }
     }
+}
+
+fn pinnedByAbi(proc: *const LIR.LirProcSpec) bool {
+    return proc.arcBody() == null or proc.hosted != null or proc.abi == .erased_callable;
+}
+
+/// The procedures pinned only because they are stable: no root and no ABI
+/// pins them, and their body is this program's.
+fn fillStabilityPins(
+    store: *const LirStore,
+    roots: []const LIR.LirProcSpecId,
+    stability_pinned: *std.bit_set.DynamicBitSetUnmanaged,
+) void {
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+        if (proc.stable_signature and !pinnedByAbi(proc)) stability_pinned.set(proc_index);
+    }
+    for (roots) |root| stability_pinned.unset(@backingInt(root));
 }
 
 fn computeVisibilityFromFacts(

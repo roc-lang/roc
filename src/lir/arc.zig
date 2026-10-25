@@ -737,7 +737,12 @@ fn recordObjectCacheFacts(
         spec.rc_ret_unique_fields = sig.ret_unique_fields;
         spec.rc_ret_conditions = conditions;
         spec.rc_variant_demandable = false;
-        if (solution.isPinnedProc(proc)) continue;
+        if (solution.isPinnedProc(proc)) {
+            // A proc pinned only for stability still has its outcome
+            // variant, for callers compiled with its current body.
+            spec.rc_variant_demandable = solution.stability_pinned.isSet(proc_index) and !solution.availableOutcomeSpanOf(proc).isEmpty();
+            continue;
+        }
         const borrowed = sig.borrowed_params;
         const specialized_demand = specialize and
             (solution.uniqueSeedMaskOf(proc) != 0 or
@@ -1308,6 +1313,14 @@ fn variantIdentity(sig_table: arc_sig.SigTable, source: LIR.ProcIdentity, demand
     return key.finish();
 }
 
+/// The code key of a variant of a procedure with code key `source_key`: the
+/// source's code with the variant's demand, which its identity names.
+fn variantCodeKey(source_key: [32]u8, identity: LIR.ProcIdentity) [32]u8 {
+    var key = (LIR.ProcIdentity{ .bytes = source_key }).deriving("arc-variant-code");
+    key.update(&identity.bytes);
+    return key.finish().bytes;
+}
+
 /// Mode-specialized proc variants keyed by demanded ownership vector.
 const VariantTable = struct {
     map: std.AutoHashMap(VariantSelector, LIR.LirProcSpecId),
@@ -1327,9 +1340,13 @@ const VariantTable = struct {
         const source_spec = store.getProcSpec(callee);
         if (source_spec.external) arcInvariant("ARC demanded a variant of an object-cache procedure, whose signature is fixed");
         if (source_spec.is_static_initializer) arcInvariant("ARC demanded a variant of a static initializer, which nothing calls");
+        const identity = variantIdentity(self.sig_table, source_spec.identity, request.demanded);
         const variant = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
-            .identity = variantIdentity(self.sig_table, source_spec.identity, request.demanded),
+            .identity = identity,
+            // A site-named source's code is named by its code key, and so is
+            // every variant emitted from that code.
+            .code_key = if (source_spec.code_key) |source_key| variantCodeKey(source_key, identity) else null,
             .args = source_spec.args,
             .erased_reuse_arg = source_spec.erased_reuse_arg,
             .erased_call_args = source_spec.erased_call_args,
@@ -4855,7 +4872,7 @@ const Inserter = struct {
                 }
                 if (carrier_position) |position| {
                     var sig = self.solution.sigOf(stmt.assign_call.proc);
-                    sig.outcomes = self.solution.availableOutcomeSpanOf(stmt.assign_call.proc);
+                    sig.outcomes = self.solution.outcomeSpanForCall(self.store, self.current_source_proc, stmt.assign_call.proc);
                     if (!self.outcomeArgumentsHaveDistinctPlaces(stmt.assign_call.args, sig)) return null;
                     return try self.outcomeRestitutionGuard(
                         root,
@@ -6318,7 +6335,7 @@ const Inserter = struct {
             demanded.ret_lenders = 0;
         }
         var outcome_sig = callee_sig;
-        if (callee) |direct| outcome_sig.outcomes = self.solution.availableOutcomeSpanOf(direct);
+        if (callee) |direct| outcome_sig.outcomes = self.solution.outcomeSpanForCall(self.store, self.current_source_proc, direct);
         const outcome_places_distinct = !outcome_sig.outcomes.isEmpty() and
             self.outcomeArgumentsHaveDistinctPlaces(span, outcome_sig);
         const outcome_mask = self.outcomeRestitutableMask(outcome_sig);
