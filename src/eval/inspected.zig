@@ -417,6 +417,8 @@ pub const DevBoolRootTimingSnapshot = struct {
     entrypoint_codegen_ns: u64 = 0,
     executable_memory_ns: u64 = 0,
     root_execution_ns: u64 = 0,
+    root_codegen_count: u64 = 0,
+    root_execution_count: u64 = 0,
 };
 
 /// Mutable timing collector for one dev-backend boolean-root evaluation batch.
@@ -483,6 +485,13 @@ pub const BoolRootEvalOutcome = union(enum) {
 pub const BoolRootEvalResult = struct {
     outcome: BoolRootEvalOutcome,
     events: []BoolRootEvent,
+    /// Sparse source-site observations owned by this invocation.
+    expect_observations: []ExpectObservation = &.{},
+};
+
+pub const ExpectObservation = struct {
+    site: u32,
+    counts: ExpectCounts,
 };
 
 /// Aggregate executions of one dense LIR expect site.
@@ -565,6 +574,7 @@ fn deinitBoolRootEvalOutcome(allocator: Allocator, outcome: BoolRootEvalOutcome)
 fn deinitBoolRootEvalResult(allocator: Allocator, result: BoolRootEvalResult) void {
     deinitBoolRootEvalOutcome(allocator, result.outcome);
     deinitBoolRootEvents(allocator, result.events);
+    allocator.free(result.expect_observations);
 }
 
 /// Free all crash messages, transcript events, and the results slice.
@@ -2385,7 +2395,10 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
             );
             entry_offsets[i] = entrypoint.offset;
         }
-        if (timing) |timings| timings.finish(entrypoint_codegen_started_ns, .entrypoint_codegen);
+        if (timing) |timings| {
+            timings.finish(entrypoint_codegen_started_ns, .entrypoint_codegen);
+            timings.snapshot_value.root_codegen_count += roots.len;
+        }
 
         const executable_memory_started_ns = if (timing) |timings| timings.start() else 0;
         try codegen.finishImage();
@@ -2441,7 +2454,12 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
 
         const root_execution_started_ns = if (timing) |timings| timings.start() else 0;
         const batch = runBoolRootCalls(allocator, calls, max_workers, null, null);
-        if (timing) |timings| timings.finish(root_execution_started_ns, .root_execution);
+        if (timing) |timings| {
+            timings.finish(root_execution_started_ns, .root_execution);
+            if (batch) |_| {
+                timings.snapshot_value.root_execution_count += calls.len;
+            } else |_| {}
+        }
         return batch;
     }
 }
@@ -2632,6 +2650,24 @@ fn boolRootWorker(args: *BoolRootWorkerArgs) void {
             state.errors[index] = err;
             return;
         };
+        var observations = std.ArrayList(ExpectObservation).empty;
+        defer observations.deinit(state.allocator);
+        for (0..call.expect_site_count) |site| {
+            const passed = &state.worker_expect_passed[expect_start + site];
+            const failed = &state.worker_expect_failed[expect_start + site];
+            if (passed.* != 0 or failed.* != 0) {
+                observations.append(state.allocator, .{ .site = @intCast(site), .counts = .{ .passed = passed.*, .failed = failed.* } }) catch |err| {
+                    state.errors[index] = err;
+                    return;
+                };
+                passed.* = 0;
+                failed.* = 0;
+            }
+        }
+        state.results[index].?.expect_observations = observations.toOwnedSlice(state.allocator) catch |err| {
+            state.errors[index] = err;
+            return;
+        };
         if (state.completion_callback) |callback| {
             callback.complete(callback.context, index, &state.results[index].?);
         }
@@ -2743,11 +2779,11 @@ fn runBoolRootCalls(
 
     const expect_counts = try allocator.alloc(ExpectCounts, total_expect_sites);
     @memset(expect_counts, .{});
-    for (0..worker_count) |worker_index| {
-        const start = worker_index * worker_expect_stride;
-        for (expect_counts, 0..) |*counts, site| {
-            counts.passed +|= worker_expect_passed[start + site];
-            counts.failed +|= worker_expect_failed[start + site];
+    for (calls, results) |call, result| {
+        for (result.expect_observations) |observation| {
+            const counts = &expect_counts[call.expect_site_base + observation.site];
+            counts.passed +|= observation.counts.passed;
+            counts.failed +|= observation.counts.failed;
         }
     }
 

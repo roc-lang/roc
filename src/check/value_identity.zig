@@ -50,6 +50,12 @@ pub const Inputs = struct {
     context: ContextHashes,
     /// The module's own content identity, which names its own declarations.
     own_identity: [32]u8,
+    /// Test summaries use published import contexts and exact referenced
+    /// implementations instead of whole imported artifacts.
+    test_dependencies: bool = false,
+    imports: []const checked_artifact.PublishImportArtifact = &.{},
+    available: []const checked_artifact.ImportedModuleView = &.{},
+    relations: []const checked_artifact.ImportedModuleView = &.{},
 };
 
 /// The artifact-key inputs a module's value context hashes.
@@ -70,6 +76,11 @@ pub const ExportIdentity = extern struct {
 /// A module's value identities: its value context, the identities of its
 /// exports, the platform requirements its methods reach, and every root's
 /// identity.
+pub const DefinitionIdentity = extern struct {
+    def: CIR.Def.Idx,
+    value: [32]u8,
+};
+
 pub const ModuleIdentities = struct {
     /// Digest of everything outside its plain definitions that dispatch on
     /// its types can select or depend on: the module context and the type
@@ -86,6 +97,7 @@ pub const ModuleIdentities = struct {
     export_requires: [][32]u8,
     /// Every root's identity, in root order. Owned.
     roots: []CompileTimeRootIdentity,
+    definitions: []DefinitionIdentity,
 };
 
 /// Compute the module's value context and every root's identity.
@@ -107,6 +119,32 @@ pub fn compute(allocator: Allocator, inputs: Inputs) Allocator.Error!ModuleIdent
     const export_requires = try state.exportRequires();
     errdefer allocator.free(export_requires);
 
+    var definitions = std.ArrayList(DefinitionIdentity).empty;
+    errdefer definitions.deinit(allocator);
+    if (inputs.test_dependencies) {
+        var seen = collections.DenseMap(CIR.Def.Idx, void).init(allocator);
+        defer seen.deinit();
+        for (inputs.env.store.sliceDefs(inputs.env.all_defs)) |def| {
+            try seen.put(def, {});
+            try definitions.append(allocator, .{ .def = def, .value = try state.methodIdentity(def) });
+        }
+        for (inputs.env.store.sliceDefs(inputs.env.exports)) |def| {
+            if (seen.contains(def)) continue;
+            try seen.put(def, {});
+            try definitions.append(allocator, .{ .def = def, .value = try state.methodIdentity(def) });
+        }
+        for (inputs.env.method_defs.entries.items) |entry| {
+            const def = entry.value.def_idx;
+            if (seen.contains(def)) continue;
+            try seen.put(def, {});
+            try definitions.append(allocator, .{ .def = def, .value = try state.methodIdentity(def) });
+        }
+    }
+    std.mem.sort(DefinitionIdentity, definitions.items, {}, struct {
+        fn lessThan(_: void, a: DefinitionIdentity, b: DefinitionIdentity) bool {
+            return @backingInt(a.def) < @backingInt(b.def);
+        }
+    }.lessThan);
     var ordinals = std.AutoHashMapUnmanaged([32]u8, u32).empty;
     defer ordinals.deinit(allocator);
     for (inputs.roots, identities) |root, *identity| {
@@ -118,6 +156,7 @@ pub fn compute(allocator: Allocator, inputs: Inputs) Allocator.Error!ModuleIdent
         .method_requires = method_requires,
         .export_requires = export_requires,
         .roots = identities,
+        .definitions = try definitions.toOwnedSlice(allocator),
     };
 }
 
@@ -227,6 +266,20 @@ const State = struct {
             hashTag(&hasher, "scheme");
             hasher.update(&try self.type_walk.digest(root));
         } else hashTag(&hasher, "no-scheme");
+        if (self.inputs.test_dependencies) {
+            // Failed-expect detail includes the complete mentioned binding,
+            // including whitespace between its pattern and expression.
+            switch (env.store.getExpr(def.expr)) {
+                .e_lambda, .e_closure, .e_hosted_lambda => {},
+                else => {
+                    const start = env.store.getPatternRegion(def.pattern).start.offset;
+                    const end = env.store.getExprRegion(def.expr).end.offset;
+                    // This is the reporter's exact excerpt eligibility rule.
+                    if (start < end and end <= self.source().len) hashBytes(&hasher, self.source()[start..end]);
+                },
+            }
+            hasher.update(&try self.importedReferences(def.expr));
+        }
         return hasher.finalResult();
     }
 
@@ -340,6 +393,77 @@ const State = struct {
         }
     }
 
+    fn importedDefinition(self: *const State, view: checked_artifact.ImportedModuleView, def: CIR.Def.Idx) [32]u8 {
+        _ = self;
+        const summary = view.compile_time_root_identities;
+        var lo: usize = 0;
+        var hi = summary.test_definitions.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const entry = summary.test_definitions[mid];
+            if (@backingInt(entry.def) < @backingInt(def)) {
+                lo = mid + 1;
+            } else if (@backingInt(entry.def) > @backingInt(def)) {
+                hi = mid;
+            } else {
+                var hash = Sha256.init(.{});
+                hashTag(&hash, "imported-test-definition");
+                hash.update(&summary.test_context[0]);
+                hash.update(&entry.value);
+                return hash.finalResult();
+            }
+        }
+        base.invariant("checked imported reference has no published implementation identity", .{});
+    }
+
+    fn importedByIndex(self: *const State, index: CIR.Import.Idx) checked_artifact.ImportedModuleView {
+        const identity = self.inputs.env.importIdentity(index) orelse base.invariant("checked external lookup has no module identity", .{});
+        return self.importedByIdentity(self.inputs.env.moduleIdentityHash(identity).*);
+    }
+
+    fn importedByIdentity(self: *const State, identity: [32]u8) checked_artifact.ImportedModuleView {
+        for (self.inputs.imports) |entry| if (std.meta.eql(entry.view.module_identity.stable_hash, identity)) return entry.view;
+        for (self.inputs.available) |view| if (std.meta.eql(view.module_identity.stable_hash, identity)) return view;
+        for (self.inputs.relations) |view| if (std.meta.eql(view.module_identity.stable_hash, identity)) return view;
+        base.invariant("checked associated lookup has no declaring module", .{});
+    }
+
+    /// Traverse explicit checked name references on every path, including
+    /// nested closure bodies. Local recursion is handled by the SCC summaries.
+    fn importedReferences(self: *State, root: CIR.Expr.Idx) Allocator.Error![32]u8 {
+        var stack = std.ArrayList(CIR.Expr.Idx).empty;
+        defer stack.deinit(self.allocator);
+        var seen = collections.DenseMap(CIR.Expr.Idx, void).init(self.allocator);
+        defer seen.deinit();
+        var values = std.ArrayList([32]u8).empty;
+        defer values.deinit(self.allocator);
+        try stack.append(self.allocator, root);
+        while (stack.pop()) |expr| {
+            const entry = try seen.getOrPut(expr);
+            if (entry.found_existing) continue;
+            switch (self.inputs.env.store.getExpr(expr)) {
+                .e_lookup_external => |lookup| {
+                    const view = self.importedByIndex(lookup.module_idx);
+                    const target: CIR.Def.Idx = @fromBackingInt(lookup.target_node_idx);
+                    try values.append(self.allocator, self.importedDefinition(view, target));
+                },
+                .e_lookup_associated_resolved => |lookup| {
+                    const identity = self.inputs.env.moduleIdentityHash(lookup.module_identity);
+                    if (!std.meta.eql(identity.*, self.inputs.own_identity)) {
+                        try values.append(self.allocator, self.importedDefinition(self.importedByIdentity(identity.*), lookup.target_def_idx));
+                    }
+                },
+                else => {},
+            }
+            try appendExprChildren(self.inputs.env, expr, &stack, self.allocator);
+        }
+        sortDigests(values.items);
+        var hash = Sha256.init(.{});
+        hashTag(&hash, "checked-import-references");
+        hashDigests(&hash, values.items);
+        return hash.finalResult();
+    }
+
     /// Everything outside any one root that its value can depend on: the
     /// module's checking context and imports, its name and kind, and the
     /// files it imports.
@@ -350,7 +474,13 @@ const State = struct {
         hashTag(&hasher, domain);
         hashTag(&hasher, "context");
         hasher.update(&context.checking_context);
-        hasher.update(&context.direct_import_keys);
+        if (self.inputs.test_dependencies) {
+            for (self.inputs.imports) |imported| {
+                const summary = imported.view.compile_time_root_identities;
+                if (summary.test_context.len != 1) base.invariant("imported checked module has no test dependency context", .{});
+                hasher.update(&summary.test_context[0]);
+            }
+        } else hasher.update(&context.direct_import_keys);
         // A type module's main type is named after the module, so the name
         // covers it; a type module whose declaration is missing names no
         // main type at all.
@@ -545,6 +675,7 @@ const State = struct {
                 const text = self.regionText(env.store.getStatementRegion(statement));
                 hashBytes(&value, text);
                 hashDigests(&value, try self.referencedIdentities(expectBody(env, statement)));
+                if (self.inputs.test_dependencies) value.update(&try self.importedReferences(expectBody(env, statement)));
                 hashBytes(&site, text);
             },
             .hoisted => |hoisted| {
