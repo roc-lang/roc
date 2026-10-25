@@ -6395,8 +6395,15 @@ fn writeDevRunImageToSharedMemory(
         const generated_code = codegen.getGeneratedCode();
         const relocations = codegen.getRelocations();
 
-        var sidecar_blob = try lir.LirImage.buildSidecarBlob(ctx.gpa, &lowered.lir_result);
-        defer sidecar_blob.deinit(ctx.gpa);
+        // Only a Boxy program has descriptor tables for the shim's runtime;
+        // a specialized image carries an empty sidecar region.
+        var sidecar_blob: ?lir.LirImage.SidecarBlob = switch (lowered.lir_result.store.runtime_contract) {
+            .boxy => try lir.LirImage.buildSidecarBlob(ctx.gpa, &lowered.lir_result),
+            .specialized => null,
+        };
+        defer if (sidecar_blob) |*blob| blob.deinit(ctx.gpa);
+        const sidecar_bytes: []const u8 = if (sidecar_blob) |blob| blob.bytes else &.{};
+        const sidecar_desc: lir.LirImage.BoxySidecar = if (sidecar_blob) |blob| blob.sidecar else std.mem.zeroes(lir.LirImage.BoxySidecar);
 
         var empty_region_buffer: [0]u8 = .{};
         var fixed_region_buffer = std.heap.FixedBufferAllocator.init(&empty_region_buffer);
@@ -6424,7 +6431,7 @@ fn writeDevRunImageToSharedMemory(
                 codegen.getSymbolNames(),
                 relocations,
                 readonly_data.items,
-                sidecar_blob.bytes,
+                sidecar_bytes,
             );
             const required_capacity = required_bound - allocation.region_start;
 
@@ -6456,8 +6463,8 @@ fn writeDevRunImageToSharedMemory(
             codegen.getSymbolNames(),
             relocations,
             readonly_data.items,
-            sidecar_blob.bytes,
-            sidecar_blob.sidecar,
+            sidecar_bytes,
+            sidecar_desc,
         );
         const image_offset = @intFromPtr(header) - @intFromPtr(shm.base_ptr);
         const image_bound: usize = @intCast(header.image_size);
@@ -10067,6 +10074,8 @@ fn appendBoxyRuntimeLinkInputs(
     lir_result: *const lir.Program.Result,
     canonical_order: ?*const lir.RuntimeTables.Order,
 ) CliMainError!void {
+    lir_result.store.requireBoxy();
+    base.dev_diagnostics.traceBoxyWork("link-inputs");
     const runtime_bytes = EmbeddedTargetObjects.forTarget(target).boxy_runtime orelse {
         try ctx.io.stderr().print(
             "Error: standalone dev builds of generic (boxy) programs are not supported for the '{s}' target.\n",
@@ -11803,7 +11812,15 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // in view and writes its own. A directory of packs given for a test
     // (`ROC_DEV_PACK_HITS`) replaces the store. A dev build for the host
     // reads the very packs compile-time evaluation reads, so it shares them.
-    const object_cache_enabled = !args.no_cache and loaded_packs == null;
+    // Packs hold LSS specializations under their specialization keys, so
+    // only an LSS runtime program reads or writes them; a Boxy program
+    // lowers no Monotype specializations and no pack may serve or hold its
+    // procedures.
+    const runtime_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    const object_cache_enabled = !args.no_cache and loaded_packs == null and switch (runtime_strategy) {
+        .lss => true,
+        .boxy => false,
+    };
     var own_store: ?pack_store.Store = null;
     defer if (own_store) |*store| store.deinit();
     var object_store: ?*pack_store.Store = null;
@@ -11849,7 +11866,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var runtime_lowering = checkedRuntimeLoweringConfig(
         .linked_output,
         args.opt,
-        currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        runtime_strategy,
         target,
         args.synthetic_default_platform,
     );

@@ -661,6 +661,7 @@ pub fn captureBodyPrefix(self: *const Self) BodyPrefix {
 pub fn cloneForBodyShard(self: *const Self, allocator: Allocator) Allocator.Error!Self {
     var result = Self.init(allocator);
     result.body_coordinator = self;
+    result.runtime_contract = self.runtime_contract;
     result.body_prefix = self.captureBodyPrefix();
     result.strings_insertable = true;
     result.next_synthetic_symbol = self.next_synthetic_symbol;
@@ -987,6 +988,10 @@ pub fn StoreSpanBorrow(comptime T: type, comptime field_name: []const u8) type {
 pub fn StoreSpanBorrowMut(comptime T: type, comptime field_name: []const u8) type {
     return GuardedList.BorrowSpanMut(T, "LirStore." ++ field_name);
 }
+
+/// Producer-owned execution capability, retained in serialized images.
+/// Only explicit Boxy lowering enables descriptor execution.
+runtime_contract: lir_defs.RuntimeContract = .specialized,
 
 cf_stmts: GuardedList.List(CFStmt, "LirStore.cf_stmts"),
 cf_switch_branches: GuardedList.List(CFSwitchBranch, "LirStore.cf_switch_branches"),
@@ -1611,6 +1616,7 @@ fn boxyNameCount(self: *const Self) u32 {
 
 /// Assigns a Boxy identity without inserting bytes into the literal store.
 pub fn insertBoxyName(self: *Self, text: []const u8) Allocator.Error!lir_defs.BoxyNameId {
+    self.requireBoxy();
     self.assertBodyMetadataImmutable();
     return self.boxy_names.insert(self.allocator, text);
 }
@@ -1731,6 +1737,7 @@ pub fn addLocal(self: *Self, local: Local) Allocator.Error!LocalId {
 }
 
 fn addLocalDesc(self: *Self, desc: lir_defs.BoxyDescRef) Allocator.Error!LocalDescId {
+    self.requireBoxy();
     const idx = self.local_descs.len() + if (self.body_coordinator != null) self.body_prefix.local_descs else 0;
     if (idx >= @backingInt(LocalDescId.none)) return error.OutOfMemory;
     try self.local_descs.append(self.allocator, desc);
@@ -1966,6 +1973,27 @@ pub fn stmtRowCount(self: *const Self, comptime column: usize) usize {
 
 /// Adds an immutable out-of-line statement row and returns its id.
 pub fn addStmtRow(self: *Self, comptime T: type, row: T) Allocator.Error!lir_defs.StmtRowId(T) {
+    if (T == lir_defs.BoxyDescRef or
+        T == lir_defs.BoxyDynamicNumLiteral or
+        T == lir_defs.BoxyDynamicFracLiteral or
+        T == lir_defs.BoxyDescRefData or
+        T == lir_defs.BoxyBoxData or
+        T == lir_defs.BoxyRecordUpdateData or
+        T == lir_defs.BoxyUnboxData or
+        T == lir_defs.BoxyAdaptData or
+        T == lir_defs.BoxyInspectData or
+        T == lir_defs.BoxyEqData or
+        T == lir_defs.BoxyHashData or
+        T == lir_defs.BoxyTagData or
+        T == lir_defs.BoxyTagPayloadData or
+        T == lir_defs.CallDictData) self.requireBoxy();
+    if (T == lir_defs.ErasedCallData and self.runtime_contract == .specialized) {
+        if (row.arg_layouts.len != 0 or row.arg_descs.len != 0 or row.arg_desc_keys.len != 0 or row.result_desc != null or row.out_desc != null or row.returns_pending != null)
+            @import("base").invariant("specialized callable carried Boxy adaptation metadata", .{});
+    }
+    if (T == lir_defs.PackedErasedFnData and self.runtime_contract == .specialized) {
+        if (row.result_desc != null or row.on_drop == .boxy_capture) @import("base").invariant("specialized callable carried a Boxy descriptor", .{});
+    }
     const column = comptime stmtRowColumn(T);
     const index = self.stmtRowCount(column);
     // The largest id names no row.
@@ -2052,8 +2080,21 @@ pub fn addRcEffect(self: *Self, effect: lir_defs.LowLevel.RcEffect) Allocator.Er
 // statement-replacement entry points; every producer states the origin of the
 // statement it creates. There is no ambient location state.
 
+/// Only a Boxy producer authorizes descriptor-bearing operations.
+pub fn requireBoxy(self: *const Self) void {
+    if (self.runtime_contract != .boxy) @import("base").invariant("specialized LIR cannot construct Boxy metadata or operations", .{});
+}
+
+fn validateStatementContract(self: *const Self, stmt: CFStmt) void {
+    switch (stmt) {
+        .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => self.requireBoxy(),
+        .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
+    }
+}
+
 /// Appends a statement with its explicit provenance and returns its id.
 pub fn addCFStmt(self: *Self, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!CFStmtId {
+    self.validateStatementContract(stmt);
     const idx = self.cf_stmts.len() + if (self.body_coordinator != null) self.body_prefix.cf_stmts else 0;
     if (idx >= lir_defs.max_cf_stmt_count) return error.OutOfMemory;
     try self.cf_stmts.ensureUnusedCapacity(self.allocator, 1);
@@ -2076,6 +2117,7 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!
 /// publishes it on commit; any other body worker's prefix metadata is
 /// immutable, so it must restate a prefix statement's existing origin.
 pub fn replaceCFStmt(self: *Self, id: CFStmtId, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!void {
+    self.validateStatementContract(stmt);
     const source = try self.internStmtSource(.{ .loc = origin.loc, .region = origin.region });
     self.getCFStmtPtr(id).* = stmt;
     const index = @backingInt(id);
@@ -2240,6 +2282,11 @@ pub fn getJoinPointSpanMut(self: *Self, span: JoinPointSpan) StoreSpanBorrowMut(
 
 /// Appends a proc specification and returns its id.
 pub fn addProcSpec(self: *Self, proc: LirProcSpec, loc: base.SourceLoc) Allocator.Error!LirProcSpecId {
+    if (self.runtime_contract == .specialized and
+        (proc.ret_desc != null or proc.runtime_ret_desc != null or
+            proc.erased_arg_desc_offsets.len != 0 or proc.erased_arg_layouts.len != 0 or
+            proc.erased_arg_desc_params.len != 0 or proc.static_erased_capture_layout != null or
+            proc.boxy_runtime_entry)) @import("base").invariant("specialized procedure carried Boxy runtime metadata", .{});
     self.assertBodyMetadataImmutable();
     const idx = self.proc_specs.len();
     // A procedure created with a body was built from statements this store
@@ -3175,6 +3222,7 @@ pub fn procNeedsStackProbe(self: *const Self, layouts: *const layout.Store, proc
 test "body shards borrow Boxy identities and reject added Boxy metadata" {
     const allocator = std.testing.allocator;
     var coordinator = Self.init(allocator);
+    coordinator.runtime_contract = .boxy;
     defer coordinator.deinit();
     const name = try coordinator.insertBoxyName("Only");
     var worker = try coordinator.cloneForBodyShard(allocator);
@@ -3223,6 +3271,7 @@ test "body shard relocates erased-call layouts into the program table" {
     var layouts = try layout.Store.init(allocator, .u64);
     defer layouts.deinit();
     var coordinator = Self.init(allocator);
+    coordinator.runtime_contract = .boxy;
     defer coordinator.deinit();
     const closure = try coordinator.addLocal(.{ .layout_idx = .u64 });
     var worker = try coordinator.cloneForBodyShard(allocator);
