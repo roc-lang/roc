@@ -181,6 +181,7 @@ comptime {
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
         std.testing.refAllDecls(pack_store);
+        std.testing.refAllDecls(completed_test);
         std.testing.refAllDecls(link_artifacts);
         std.testing.refAllDecls(@import("builder.zig"));
         std.testing.refAllDecls(@import("host_symbols.zig"));
@@ -13103,7 +13104,11 @@ fn cliCompletedTestSeed(allocator: Allocator, build: *BuildEnv, args: cli_args.T
     return completed_test.hash(bytes);
 }
 
-fn cliCompletedTestDir(allocator: Allocator, manager: *CacheManager) ![]const u8 {
+/// Locating the test cache directory needs a home directory; the rest of the
+/// completed-test cache work fails only on allocation.
+const CliCompletedTestError = Allocator.Error || error{NoHomeDirectory};
+
+fn cliCompletedTestDir(allocator: Allocator, manager: *CacheManager) CliCompletedTestError![]const u8 {
     const test_dir = try manager.config.getTestCacheDir(allocator);
     return std.fs.path.join(allocator, &.{ test_dir, "commands" });
 }
@@ -13157,7 +13162,7 @@ const CliCompletedTest = struct {
     }
 };
 
-fn loadCliCompletedTest(ctx: *CliCtx, arena: Allocator, build: *BuildEnv, seed: [32]u8) !?CliCompletedTest {
+fn loadCliCompletedTest(ctx: *CliCtx, arena: Allocator, build: *BuildEnv, seed: [32]u8) CliCompletedTestError!?CliCompletedTest {
     const manager = build.cache_manager orelse return null;
     const directory = try cliCompletedTestDir(arena, manager);
     const plan_bytes = manager.loadFamilyBytes(.test_result, seed, directory) orelse return null;
@@ -13247,7 +13252,7 @@ fn storeCliCompletedTest(
     module_results: []const CliModuleTestResult,
     debug_messages: []const []const u8,
     diagnostics: []const BuildEnv.DrainedModuleReports,
-) !void {
+) CliCompletedTestError!void {
     const manager = build.cache_manager orelse return;
     for (module_results) |module| for (module.results) |result| {
         if (!result.cacheable or result.result == .compiler_error) return;

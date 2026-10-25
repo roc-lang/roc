@@ -14069,7 +14069,9 @@ fn customCompletedTestCommand(io: std.Io, allocator: Allocator, env: *const Case
 
 /// Damage only this case's isolated cache. Command records and referenced
 /// module payloads must both be admitted before any observation is replayed.
-fn damageCompletedTestCache(io: std.Io, allocator: Allocator, cache_path: []const u8, remove_payload: bool) !bool {
+const DamageCompletedTestCacheError = std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || std.Io.Dir.ReadFileAllocError || std.Io.Dir.DeleteFileError || std.Io.Dir.WriteFileError;
+
+fn damageCompletedTestCache(io: std.Io, allocator: Allocator, cache_path: []const u8, remove_payload: bool) DamageCompletedTestCacheError!bool {
     var directory = try std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true });
     defer directory.close(io);
     var walker = try directory.walk(allocator);

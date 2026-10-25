@@ -79,11 +79,13 @@ pub const TestWork = enum {
 };
 var test_work: [@typeInfo(TestWork).@"enum".field_names.len]std.atomic.Value(u64) = @splat(.init(0));
 
+/// Add `amount` to a test-work counter when test command work tracing is on.
 pub fn countTestWork(counter: TestWork, amount: usize) void {
     if (!isSet(.test_command_work)) return;
     _ = test_work[@backingInt(counter)].fetchAdd(amount, .monotonic);
 }
 
+/// The number of times a stage has counted this test work.
 pub fn testWorkCount(counter: TestWork) u64 {
     return test_work[@backingInt(counter)].load(.monotonic);
 }

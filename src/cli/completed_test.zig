@@ -8,11 +8,14 @@ const Allocator = std.mem.Allocator;
 
 pub const magic = "ROC_COMPLETED_DEV_TEST_V2";
 pub const Digest = [32]u8;
+/// A file a producer read, with the content state it saw.
 pub const Input = struct {
     path: []const u8,
     state: compile.watch_inputs.State,
 };
+/// A module path and the cwd-relative physical file the import resolver admitted for it.
 pub const Resolution = struct { path: []const u8, target: []const u8 };
+/// Everything a command's outcome depends on outside the compiler, in sorted order.
 pub const Plan = struct { inputs: []Input, resolutions: []Resolution };
 pub const Source = struct { name: Digest, qualified_name: []const u8, path: []const u8 };
 pub const Root = struct { order: u32, region: base.Region, key: Digest, payload_hash: Digest };
@@ -21,6 +24,7 @@ pub const Module = struct {
     artifact: Digest,
     roots: []const Root,
 };
+/// A non-error report from compilation, stored as its structured document content.
 pub const Diagnostic = struct {
     title: []const u8,
     severity: reporting.Severity,
@@ -28,11 +32,13 @@ pub const Diagnostic = struct {
     headline: []reporting.DocumentElement,
     body: []reporting.DocumentElement,
 
+    /// Borrow a report's content; the caller keeps the report alive until encoding.
     pub fn fromReport(report: *const reporting.Report) Diagnostic {
         return .{ .title = report.title, .severity = report.severity, .file = report.file, .headline = report.headline.elements.items, .body = report.document.elements.items };
     }
 
-    pub fn render(self: Diagnostic, allocator: Allocator, writer: *std.Io.Writer, config: reporting.ReportingConfig) !void {
+    /// Render the stored report with the current terminal configuration.
+    pub fn render(self: Diagnostic, allocator: Allocator, writer: *std.Io.Writer, config: reporting.ReportingConfig) (Allocator.Error || std.Io.Writer.Error)!void {
         // The record arena owns all document content. Rendering borrows it.
         var report = reporting.Report{
             .title = self.title,
@@ -47,6 +53,7 @@ pub const Diagnostic = struct {
         try reporting.renderReportToTerminal(&report, writer, reporting.ColorUtils.getPaletteForConfig(config), config);
     }
 };
+/// A complete test command's outcome, valid only for the plan whose key is `input_key`.
 pub const Record = struct {
     input_key: Digest,
     sources: []const Source,
@@ -56,6 +63,7 @@ pub const Record = struct {
     modules_with_tests: u32,
 };
 
+/// The digest used for every input, payload and record in the command cache.
 pub fn hash(bytes: []const u8) Digest {
     return compile.watch_inputs.hashBytes(bytes);
 }
@@ -98,13 +106,15 @@ fn put(allocator: Allocator, bytes: *std.ArrayList(u8), value: anytype) Allocato
         .@"struct" => |s| inline for (s.field_names) |field| {
             try put(allocator, bytes, @field(value, field));
         },
-        .@"union" => {
-            try put(allocator, bytes, std.meta.activeTag(value));
-            switch (value) {
-                inline else => |v| try put(allocator, bytes, v),
+        .@"union" => |u| {
+            const tag = std.meta.activeTag(value);
+            try put(allocator, bytes, tag);
+            inline for (u.field_names) |field| {
+                if (std.mem.eql(u8, @tagName(tag), field)) return put(allocator, bytes, @field(value, field));
             }
+            unreachable; // the active tag names one of the union's declared fields
         },
-        else => @compileError("unsupported command record field " ++ @typeName(T)),
+        .type, .noreturn, .float, .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @compileError("unsupported command record field " ++ @typeName(T)),
     }
 }
 
@@ -156,11 +166,12 @@ const Reader = struct {
                 }
                 unreachable; // the decoded union tag names one of its declared fields
             },
-            else => @compileError("unsupported command record field " ++ @typeName(T)),
+            .type, .noreturn, .float, .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @compileError("unsupported command record field " ++ @typeName(T)),
         };
     }
 };
 
+/// Decode a checksummed record into `allocator`; a damaged or foreign record is null.
 pub fn decode(allocator: Allocator, comptime T: type, bytes: []const u8) Allocator.Error!?T {
     if (bytes.len < magic.len + 32 or !std.mem.startsWith(u8, bytes, magic)) return null;
     const body = bytes[0 .. bytes.len - 32];
