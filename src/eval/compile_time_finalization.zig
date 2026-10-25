@@ -93,6 +93,9 @@ pub const Options = struct {
         }
     };
 
+    /// Runtime outcomes already supplied by the caller. Only their literal
+    /// conversion obligations may specialize; these roots never execute.
+    discovery_roots: lir.CheckedPipeline.RootRequestSet = .{},
     max_threads: usize = 0,
     /// Borrow the coordinator's workers after all frontend tasks have finished.
     /// Standalone finalizers without a coordinator lower on their calling thread.
@@ -1415,7 +1418,14 @@ fn specializeAndEvaluate(
         } else {
             try source_modules.appendSlice(allocator, program_roots.source_modules);
         }
-    } else if (program_roots.requests.len != 0) {
+    }
+    const discovery_start = requests.items.len;
+    const discovery_sets = [_]lir.CheckedPipeline.RootRequestSet{
+        if (lss_runtime) .{} else program_roots,
+        options.discovery_roots,
+    };
+    const discovery_candidate_count = discovery_sets[0].requests.len + discovery_sets[1].requests.len;
+    if (discovery_candidate_count != 0) {
         var declared = std.AutoHashMapUnmanaged(lir.CheckedPipeline.LiteralDemand.DeclaredRoot, void).empty;
         defer declared.deinit(allocator);
         for (modules) |entry| {
@@ -1427,16 +1437,19 @@ fn specializeAndEvaluate(
         literal_demand = try lir.CheckedPipeline.LiteralDemand.compute(allocator, checked_modules, &declared);
         var selected = std.ArrayList(usize).empty;
         defer selected.deinit(allocator);
-        try lir.CheckedPipeline.LiteralDemand.selectDiscoveryRoots(allocator, &literal_demand.?, checked_modules, program_roots.requests, program_roots.source_modules, &selected);
-        for (selected.items) |index| {
-            try requests.append(allocator, program_roots.requests[index]);
-            try source_modules.append(allocator, if (program_roots.source_modules.len == 0) lowering_modules.root.module.key.digest() else program_roots.source_modules[index]);
+        for (discovery_sets) |discovery| {
+            selected.clearRetainingCapacity();
+            try lir.CheckedPipeline.LiteralDemand.selectDiscoveryRoots(allocator, &literal_demand.?, checked_modules, discovery.requests, discovery.source_modules, &selected);
+            for (selected.items) |index| {
+                try requests.append(allocator, discovery.requests[index]);
+                try source_modules.append(allocator, if (discovery.source_modules.len == 0) lowering_modules.root.module.key.digest() else discovery.source_modules[index]);
+            }
         }
         if (options.timing) |timing| {
             const counters = literal_demand.?.counters;
             timing.lowering.addDemand(.{
-                .program_roots = program_roots.requests.len,
-                .discovery_roots = selected.items.len,
+                .program_roots = discovery_candidate_count,
+                .discovery_roots = requests.items.len - discovery_start,
                 .modules = counters.modules,
                 .templates = counters.templates,
                 .source_templates = counters.source_templates,
@@ -1478,10 +1491,10 @@ fn specializeAndEvaluate(
         union_roots.include_internal_static_data = false;
         union_roots.layout_requests = &.{};
         union_roots.static_data_requests = &.{};
-        if (literal_demand) |*literal| {
-            union_roots.discovery_start = requested_root_count;
-            union_roots.literal_demand = literal;
-        }
+    }
+    if (literal_demand) |*literal| {
+        union_roots.discovery_start = discovery_start;
+        union_roots.literal_demand = literal;
     }
     // An LSS runtime consumer continues this specialization, so it is
     // made under the runtime's Solved policy.

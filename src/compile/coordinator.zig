@@ -3159,8 +3159,14 @@ pub const Coordinator = struct {
         options.object_cache = self.compile_time_object_cache;
         options.keep_artifacts = self.compile_time_object_cache != null or self.keep_compile_time_artifacts;
         options.cached_debug_modules = cached_debug_modules.items;
+        if (self.runtime_lowering) |config| options.discovery_roots = config.compile_time_discovery_roots;
         options.defer_debug_replay = !replay_cached_debug;
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;
+        // An explicitly empty test execution subset has no runtime consumer.
+        // Checking still finalizes every pending compile-time obligation.
+        if (explicit_runtime and runtime_roots.requests.len == 0 and
+            !runtime_roots.include_provided_data_exports and !runtime_roots.include_internal_static_data and
+            runtime_roots.layout_requests.len == 0 and runtime_roots.static_data_requests.len == 0) runtime_target = null;
         if (runtime_target) |*target| target.post_check_executor = self.postCheckExecutor();
         var unfinalized = UnfinalizedReportDestinations{ .coordinator = self, .program_root = root.key.digest() };
         defer unfinalized.deinit();
