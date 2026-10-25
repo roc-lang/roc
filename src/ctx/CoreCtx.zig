@@ -1086,7 +1086,7 @@ fn windowsHardLink(old_path: []const u8, new_path: []const u8) HardLinkError!voi
     };
     var io_status: w.IO_STATUS_BLOCK = undefined;
     var handle: w.HANDLE = undefined;
-    switch (w.ntdll.NtCreateFile(
+    const opened = w.ntdll.NtCreateFile(
         &handle,
         .{
             .SPECIFIC = .{ .FILE = .{ .WRITE_ATTRIBUTES = true } },
@@ -1105,15 +1105,8 @@ fn windowsHardLink(old_path: []const u8, new_path: []const u8) HardLinkError!voi
         },
         null,
         0,
-    )) {
-        .SUCCESS => {},
-        .OBJECT_NAME_NOT_FOUND, .OBJECT_PATH_NOT_FOUND, .DELETE_PENDING => return error.FileNotFound,
-        .OBJECT_NAME_INVALID => return error.BadPathName,
-        .ACCESS_DENIED, .SHARING_VIOLATION => return error.AccessDenied,
-        .NOT_A_DIRECTORY => return error.NotDir,
-        // NTSTATUS is non-exhaustive: every other status is unexpected.
-        else => |status| return w.unexpectedStatus(status),
-    }
+    );
+    if (opened != .SUCCESS) return windowsHardLinkFailure(opened);
     defer w.CloseHandle(handle);
 
     // FILE_LINK_INFORMATION: ReplaceIfExists (a BOOLEAN padded to the
@@ -1136,21 +1129,32 @@ fn windowsHardLink(old_path: []const u8, new_path: []const u8) HardLinkError!voi
     // ABI size, whose FileName holds one character.
     const documented_size = std.mem.alignForward(usize, @offsetOf(LinkInformation, "file_name") + @sizeOf(w.WCHAR), @alignOf(LinkInformation));
     const length = @max(documented_size, @offsetOf(LinkInformation, "file_name") + info.file_name_length);
-    switch (w.ntdll.NtSetInformationFile(handle, &io_status, &info, @intCast(length), .Link)) {
-        .SUCCESS => {},
-        .OBJECT_NAME_COLLISION => return error.PathAlreadyExists,
-        .OBJECT_NAME_NOT_FOUND, .OBJECT_PATH_NOT_FOUND => return error.FileNotFound,
-        .OBJECT_NAME_INVALID => return error.BadPathName,
-        .ACCESS_DENIED => return error.AccessDenied,
-        .NOT_SAME_DEVICE => return error.CrossDevice,
-        .TOO_MANY_LINKS => return error.LinkQuotaExceeded,
-        .DISK_FULL => return error.NoSpaceLeft,
-        .MEDIA_WRITE_PROTECTED => return error.ReadOnlyFileSystem,
-        .NOT_SUPPORTED, .INVALID_DEVICE_REQUEST => return error.OperationUnsupported,
-        .NOT_A_DIRECTORY => return error.NotDir,
-        // NTSTATUS is non-exhaustive: every other status is unexpected.
-        else => |status| return w.unexpectedStatus(status),
-    }
+    const linked = w.ntdll.NtSetInformationFile(handle, &io_status, &info, @intCast(length), .Link);
+    if (linked != .SUCCESS) return windowsHardLinkFailure(linked);
+}
+
+/// The failure an unsuccessful status from opening the existing file or adding
+/// its new name reports. NTSTATUS is an open set of codes, so this is a table of
+/// the documented causes; every other status is unexpected.
+fn windowsHardLinkFailure(status: std.os.windows.NTSTATUS) HardLinkError {
+    const causes = [_]struct { std.os.windows.NTSTATUS, HardLinkError }{
+        .{ .OBJECT_NAME_COLLISION, error.PathAlreadyExists },
+        .{ .OBJECT_NAME_NOT_FOUND, error.FileNotFound },
+        .{ .OBJECT_PATH_NOT_FOUND, error.FileNotFound },
+        .{ .DELETE_PENDING, error.FileNotFound },
+        .{ .OBJECT_NAME_INVALID, error.BadPathName },
+        .{ .ACCESS_DENIED, error.AccessDenied },
+        .{ .SHARING_VIOLATION, error.AccessDenied },
+        .{ .NOT_A_DIRECTORY, error.NotDir },
+        .{ .NOT_SAME_DEVICE, error.CrossDevice },
+        .{ .TOO_MANY_LINKS, error.LinkQuotaExceeded },
+        .{ .DISK_FULL, error.NoSpaceLeft },
+        .{ .MEDIA_WRITE_PROTECTED, error.ReadOnlyFileSystem },
+        .{ .NOT_SUPPORTED, error.OperationUnsupported },
+        .{ .INVALID_DEVICE_REQUEST, error.OperationUnsupported },
+    };
+    for (causes) |cause| if (cause[0] == status) return cause[1];
+    return std.os.windows.unexpectedStatus(status);
 }
 
 fn missingHardLink(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) HardLinkError!void {
