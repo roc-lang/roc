@@ -31,13 +31,15 @@ pub fn init(target: targets.RocTarget, strategy: base.SpecializationStrategy) Se
     return .{
         .target = if (strategy == .lss) switch (target) {
             .x64musl, .x64glibc, .x64v1musl, .x64v1glibc => .x64_linux_sysv,
-            else => .{ .exact = target.defaultCpuTarget() },
+            .x64mac, .x64win, .x64mingw, .x64freebsd, .x64openbsd, .x64netbsd, .x64linux, .x64elf, .x64v1mac, .x64v1win, .x64v1mingw, .x64v1freebsd, .x64v1openbsd, .x64v1netbsd, .x64v1linux, .x64v1elf, .arm64mac, .arm64win, .arm64mingw, .arm64linux, .arm64musl, .arm64glibc, .arm64v1win, .arm64v1mingw, .arm64v1linux, .arm64v1musl, .arm64v1glibc, .arm32linux, .arm32musl, .wasm32, .wasm32v1 => .{ .exact = target.defaultCpuTarget() },
         } else .{ .exact = target.defaultCpuTarget() },
         .cpu = target.cpuLevel(),
         .strategy = strategy,
     };
 }
 
+/// Whether procedures produced under `other` may be loaded under `self`:
+/// every field of the two domains must match.
 pub fn compatible(self: Self, other: Self) bool {
     return std.meta.eql(self, other);
 }
