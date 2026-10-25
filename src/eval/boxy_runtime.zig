@@ -12,7 +12,6 @@ const base = @import("base");
 const layout_mod = @import("layout");
 const lir = @import("lir");
 const builtins = @import("builtins");
-const build_options = @import("build_options");
 const lir_value = @import("value.zig");
 const value_rules = @import("value_rules");
 
@@ -23,39 +22,13 @@ const RocOps = builtins.host_abi.RocOps;
 const Allocator = std.mem.Allocator;
 const Value = lir_value.Value;
 const LayoutHelper = lir_value.LayoutHelper;
-const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 const RcOp = layout_mod.RcOp;
 const RcAtomicity = builtins.utils.RcAtomicity;
 const Layout = layout_mod.Layout;
 
-const is_freestanding = builtin.target.os.tag == .freestanding;
-
 /// The error set shared by the boxy runtime and the LIR interpreter.
 pub const Error = @import("layout_runtime.zig").Error;
-
-/// Comptime-gated tracing for the boxy runtime's RC plan execution.
-/// Enabled via `-Dtrace-eval=true`. Zero cost when disabled.
-const trace = struct {
-    const enabled = if (@hasDecl(build_options, "trace_eval")) build_options.trace_eval else false;
-
-    fn log(comptime fmt: []const u8, args: anytype) void {
-        if (comptime enabled) {
-            debugPrint("[interp] " ++ fmt ++ "\n", args);
-        }
-    }
-};
-
-const debugPrint = if (is_freestanding)
-    struct {
-        fn print(comptime _: []const u8, _: anytype) void {}
-    }.print
-else
-    struct {
-        fn print(comptime fmt: []const u8, args: anytype) void {
-            std.debug.print(fmt, args);
-        }
-    }.print;
 
 /// Marks a boxy span as indexing the interpreter's runtime descriptor tables
 /// rather than the static tables lowered with the program.
@@ -293,13 +266,6 @@ pub const BoxyTables = struct {
             self.erased_arg_desc_params.len != 0;
     }
 
-    /// The producer alone selects descriptor execution. Erased LSS calls
-    /// have a complete concrete ABI and need no Boxy runtime.
-    pub fn needsRuntimeForStore(self: BoxyTables, store: *const LirStore) bool {
-        _ = self;
-        return store.runtime_contract == .boxy;
-    }
-
     pub fn fromResult(result: *const LirProgram.Result) BoxyTables {
         if (result.store.runtime_contract == .specialized) return .{};
         return .{
@@ -345,10 +311,16 @@ pub const BoxyTables = struct {
     }
 };
 
+/// Whether a program's LIR requires the shared Boxy runtime. The producer
+/// alone selects descriptor execution; erased LSS calls have a complete
+/// concrete ABI and need no Boxy runtime.
+pub fn storeNeedsRuntime(store: *const LirStore) bool {
+    return store.runtime_contract == .boxy;
+}
+
 /// Whether a live lowered program requires the shared Boxy runtime.
 pub fn resultNeedsRuntime(result: *const LirProgram.Result) bool {
-    const tables = BoxyTables.fromResult(result);
-    return tables.needsRuntimeForStore(&result.store);
+    return storeNeedsRuntime(&result.store);
 }
 
 /// Identity of one instantiation of a capture-bound static descriptor

@@ -638,7 +638,7 @@ fn runGlueSpecPlugin(
     defer crash_boundary.deinit();
 
     const boxy_tables = eval_mod.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result);
-    const boxy_runtime = if (boxy_tables.needsRuntimeForStore(&lowered.lir_result.store))
+    const boxy_runtime = if (eval_mod.boxy_runtime.storeNeedsRuntime(&lowered.lir_result.store))
         try eval_mod.boxy_abi.createRuntimeFromStores(
             gpa,
             &lowered.lir_result.store,

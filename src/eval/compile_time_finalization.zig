@@ -26,6 +26,7 @@ const RootGraph = @import("compile_time_root_graph.zig");
 const LiteralValues = @import("literal_values.zig").LiteralValues;
 const Value = @import("value.zig").Value;
 const boxy_abi = @import("boxy_abi.zig");
+const boxy_runtime = @import("boxy_runtime.zig");
 const interpreter_mod = @import("interpreter.zig");
 const interpreter_static_data = @import("interpreter_static_data.zig");
 const static_data_exports = @import("static_data");
@@ -3757,7 +3758,7 @@ fn evalDevLiteralRoot(
     host.timing_io = if (options.timing) |timing| timing.std_io else null;
 
     const boxy_tables = Interpreter.BoxyTables.fromResult(&lowered.lir_result);
-    const selected_runtime = if (boxy_tables.needsRuntimeForStore(&lowered.lir_result.store))
+    const selected_runtime = if (boxy_runtime.storeNeedsRuntime(&lowered.lir_result.store))
         try boxy_abi.createRuntimeFromStores(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, boxy_tables, host.ops())
     else
         null;
@@ -5188,7 +5189,7 @@ fn evalDevProgramRoots(
     }
 
     const boxy_tables = Interpreter.BoxyTables.fromResult(&lowered.lir_result);
-    const boxy_global_installed = jobs_len != 0 and boxy_tables.needsRuntimeForStore(&lowered.lir_result.store);
+    const boxy_global_installed = jobs_len != 0 and boxy_runtime.storeNeedsRuntime(&lowered.lir_result.store);
     const selected_runtime = if (boxy_global_installed)
         try boxy_abi.createRuntimeFromStores(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, boxy_tables, jobs[0].host.ops())
     else

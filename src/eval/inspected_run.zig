@@ -510,7 +510,7 @@ pub fn generateWasmModule(allocator: Allocator, program: Program, cpu_level: roc
     };
 
     const proc = program.store.getProcSpec(program.main_proc);
-    const runtime_input: ?backend.wasm.WasmCodeGen.BoxyRuntimeInput = if (program.boxy_tables.needsRuntimeForStore(program.store)) .{
+    const runtime_input: ?backend.wasm.WasmCodeGen.BoxyRuntimeInput = if (boxy_runtime.storeNeedsRuntime(program.store)) .{
         .runtime_object = switch (cpu_level) {
             .default => wasm32_boxy_runtime.bytes[0..],
             .v1 => wasm32v1_boxy_runtime.bytes[0..],
@@ -716,7 +716,7 @@ fn installBoxyGlobal(
     program: Program,
     roc_ops: *builtins.host_abi.RocOps,
 ) Allocator.Error!bool {
-    if (!program.boxy_tables.needsRuntimeForStore(program.store)) return false;
+    if (!boxy_runtime.storeNeedsRuntime(program.store)) return false;
 
     // A crash can longjmp past a previous teardown, so clear stale state
     // before installing this program's explicit runtime inputs.

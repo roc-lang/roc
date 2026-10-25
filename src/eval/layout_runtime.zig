@@ -18,6 +18,7 @@ const Allocator = std.mem.Allocator;
 const debugPrint = if (builtin.os.tag == .freestanding) struct {
     fn print(comptime _: []const u8, _: anytype) void {}
 }.print else std.debug.print;
+/// The error set shared by the Boxy runtime and the LIR interpreter.
 pub const Error = error{
     OutOfMemory,
     RuntimeError,
@@ -27,29 +28,38 @@ pub const Error = error{
     UnsupportedHostedFunction,
     InvalidHostedFunctionSignature,
 };
+/// A newly allocated tag union value: `outer` is the value of the union's
+/// layout, and `base` is the storage its payload and discriminant live in,
+/// which is the box's data when the union layout is boxed.
 pub const AllocatedTag = struct {
     outer: Value,
     base: Value,
     base_layout: layout_mod.Idx,
 };
+/// What allocating the data of a box layout needs.
 pub const BoxAllocInfo = struct {
     elem_layout: layout_mod.Idx,
     elem_size: u32,
     elem_alignment: u32,
     contains_rc: bool,
 };
+/// A list value read at its explicit resolved list layout.
 pub const ResolvedListBase = struct {
     value: Value,
     layout: layout_mod.Idx,
 };
+/// A tag union value read at its unboxed tag union layout.
 pub const ResolvedTagUnionBase = struct {
     value: Value,
     layout: layout_mod.Idx,
 };
+/// Whether a scalar layout is an unsigned integer.
 pub fn isUnsigned(layout_idx: layout_mod.Idx) bool {
     return layout_idx == .u8 or layout_idx == .u16 or layout_idx == .u32 or
         layout_idx == .u64 or layout_idx == .u128;
 }
+/// The RC operation applied to the items a value holds when `op` is applied
+/// to the value itself.
 pub fn nestedDropOp(op: RcOp) RcOp {
     return switch (op) {
         .incref => .incref,
@@ -57,11 +67,13 @@ pub fn nestedDropOp(op: RcOp) RcOp {
         .host_drop => hostDropInRcStatement(),
     };
 }
+/// Reads a `RocStr` from a value's bytes.
 pub fn valueToRocStr(val: Value) RocStr {
     var rs: RocStr = undefined;
     @memcpy(std.mem.asBytes(&rs), val.ptr[0..@sizeOf(RocStr)]);
     return rs;
 }
+/// Reads a `RocList` from a value's bytes.
 pub fn valueToRocList(val: Value) RocList {
     var rl: RocList = undefined;
     @memcpy(std.mem.asBytes(&rl), val.ptr[0..@sizeOf(RocList)]);

@@ -2482,7 +2482,7 @@ fn callBoolRoot(
     runtime_env.resetObservation();
     runtime_env.resetAllocationTracker();
     runtime_env.setExpectCounters(expect_passed, expect_failed);
-    const boxy_runtime_instance = if (tables.needsRuntimeForStore(store))
+    const boxy_runtime_instance = if (boxy_runtime.storeNeedsRuntime(store))
         try boxy_abi.createRuntimeFromStores(allocator, store, layouts, tables, runtime_env.get_ops())
     else
         null;
