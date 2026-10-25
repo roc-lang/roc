@@ -2833,6 +2833,12 @@ summaries load apart from the code packs, so a program whose every discovery
 request is settled reads no code pack. `--timings` counts these under
 "Summarized requests", which are included in the parked requests.
 
+Test plans supply an explicit checked root and the complete ordered checked
+module list to the cache provider before finalization. Package tests use that
+root for discovery and compile-time pack publication; they do not require an
+application package. The explicit provider list remains present when every
+runtime test outcome is cached and only discovery requests remain.
+
 #### Compile-Time Object Packs
 
 A runtime build fills the object cache with packs of dev code; compile-time

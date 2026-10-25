@@ -359,8 +359,11 @@ const CompileTimePackParts = struct {
 
     fn decideDestination(cache: *CompileTimeObjectCache, publisher: pack_store.CompileTimePublisher) Allocator.Error!?Destination {
         const build_env = cache.build_env orelse return null;
-        const root_semantic = build_env.getExecutableRootSemanticData() orelse return null;
-        const root_artifact = root_semantic.checked_artifact orelse return null;
+        // A test plan supplies its own checked owner, including package roots.
+        const root_artifact = switch (publisher.command) {
+            .test_run => if (build_env.runtime_lowering) |config| config.root_module else null,
+            .build, .check => if (build_env.getExecutableRootSemanticData()) |root| root.checked_artifact else null,
+        } orelse return null;
         const placement = pack_store.programPackPlacement(build_env, root_artifact) orelse return null;
         const key = pack_store.compileTimePackKey(root_artifact.codeGenerationKey().bytes, publisher);
         if (try cache.store.hasIndexed(placement.origin, placement.identity, key)) return null;
@@ -9300,7 +9303,7 @@ const PackOffers = struct {
         defer closure.deinit();
         const rejected = try allocator.alloc(bool, set.excerpts.len);
         defer allocator.free(rejected);
-        for (rejected, 0..) |*mark, index| mark.* = converting_artifacts.isSet(index) or closureNamesProgramLocalSymbols(set, &.{@intCast(index)});
+        for (rejected, 0..) |*mark, index| mark.* = converting_excerpts.isSet(index) or closureNamesProgramLocalSymbols(set, &.{@intCast(index)});
         try backend.dev.CodeExcerpt.markReferrers(allocator, set, rejected, .follow);
         for ([_][]const Candidate{ self.keyed.items, self.by_identity.items }, [_]bool{ false, true }) |candidates, by_identity| {
             for (candidates) |offer| {
@@ -9313,7 +9316,7 @@ const PackOffers = struct {
                 // and a constant holding a code pointer names code the pack
                 // may not carry; an entry that reaches either cannot be
                 // linked elsewhere, so it is not offered.
-                if (rejected[artifact]) {
+                if (rejected[excerpt]) {
                     withheld += 1;
                     continue;
                 }
@@ -10910,7 +10913,7 @@ fn compileLlvmAppObject(
     }
 
     return .{
-        .excerpt_dir = artifact_dir,
+        .artifact_dir = artifact_dir,
         .bitcode_path = bitcode_path,
         .object_path = object_path,
     };
@@ -11015,7 +11018,7 @@ fn rocBuildWasmLlvm(
         false,
         reporter,
     );
-    defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.excerpt_dir) catch {};
+    defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
 
     reporter.end();
     reporter.begin("Linking");
@@ -11027,7 +11030,7 @@ fn rocBuildWasmLlvm(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.excerpt_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
+        const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, &.{combined_obj});
         return;
     }
@@ -11037,8 +11040,8 @@ fn rocBuildWasmLlvm(
         return error.UnsupportedTarget;
     }
 
-    const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.excerpt_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
-    try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, combined_obj, app_object.excerpt_dir);
+    const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
+    try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, combined_obj, app_object.artifact_dir);
 }
 
 /// Base output path for `roc build`: `--output`, else the synthetic
@@ -11438,14 +11441,14 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
             &reporter,
         );
 
-        if (args.keep_temp) try reportKeptTempDir(ctx, app_object.excerpt_dir);
-        defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.excerpt_dir) catch {};
+        if (args.keep_temp) try reportKeptTempDir(ctx, app_object.artifact_dir);
+        defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
 
         var static_data_obj_path: ?[]const u8 = null;
         if (static_data_exports.len > 0) {
             var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
             const static_obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_static_data_{s}.o", .{@tagName(target)});
-            const static_obj_path = try std.fs.path.join(ctx.arena, &.{ app_object.excerpt_dir, static_obj_filename });
+            const static_obj_path = try std.fs.path.join(ctx.arena, &.{ app_object.artifact_dir, static_obj_filename });
             try object_compiler.compileStaticDataObjectAndWrite(
                 static_data_exports,
                 target,
@@ -11463,10 +11466,10 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
             try object_files.append(path);
         }
         if (enable_default_platform_runtime) {
-            try appendDefaultPlatformLinkInputs(ctx, &object_files, app_object.excerpt_dir, target);
+            try appendDefaultPlatformLinkInputs(ctx, &object_files, app_object.artifact_dir, target);
         }
         if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) {
-            try appendBoxyRuntimeLinkInputs(ctx, &object_files, app_object.excerpt_dir, target, &lowered.lir_result, null, null);
+            try appendBoxyRuntimeLinkInputs(ctx, &object_files, app_object.artifact_dir, target, &lowered.lir_result, null, null);
         }
         reporter.end();
 
@@ -11522,7 +11525,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
                 .can_exit_early = false,
                 .disable_output = false,
                 .platform_files_dir = link_inputs.platform_files_dir,
-                .scratch_dir = app_object.excerpt_dir,
+                .scratch_dir = app_object.artifact_dir,
                 .macho_dwarf_object = if (target_os == .macos and link_type != .archive)
                     app_object.object_path
                 else
@@ -13350,7 +13353,7 @@ fn storeCliCompletedTest(
     manager.storeFamilyBytes(.test_result, seed, plan_bytes, directory, "test command inputs");
 }
 
-const cli_test_cache_magic = "ROC_TEST_OUTCOMES_V2";
+const cli_test_cache_magic = "ROC_TEST_OUTCOMES_V3";
 
 fn appendU32(bytes: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u32) Allocator.Error!void {
     var buf: [4]u8 = undefined;
@@ -17083,9 +17086,12 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         null;
     var native_cache_modules = std.ArrayList(*const check.CheckedArtifact.CheckedModuleArtifact).empty;
     defer native_cache_modules.deinit(ctx.gpa);
-    if (native_test_cache) |cache| {
+    if (build_env.compile_time_object_cache_owner) |owner| {
+        const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(owner.context));
         for (modules) |module| if (module.semantic.checked_artifact) |artifact| try native_cache_modules.append(ctx.gpa, artifact);
         cache.explicit_artifacts = native_cache_modules.items;
+    }
+    if (native_test_cache) |cache| {
         runtime_config.target.spec_cache = cache.packs.specCacheLookup();
         runtime_config.target.code_provision = .host_test_dev_objects;
         runtime_config.target.spec_comptime_reads = true;
@@ -17123,9 +17129,9 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     // compilations as a check does, under the module the object cache loads
     // a program's packs from.
     if (diag.errors == 0) {
-        if (build_env.getExecutableRootSemanticData()) |root_semantic| if (root_semantic.checked_artifact) |root_artifact| {
+        if (runtime_config.root_module) |root_artifact| {
             try publishCompileTimeResults(ctx, &build_env, root_artifact);
-        };
+        }
     }
     try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, build_env.getTimingInfo());
     reporter.recordCounters("Test result cache", &cliTestCacheCounters(cliTestCacheStats(&test_plan)));

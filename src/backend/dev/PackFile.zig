@@ -23,7 +23,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 16;
+pub const format_version: u32 = 17;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// excerpt holding its procedure, and the ownership signature and
@@ -381,7 +381,7 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
                     1 => .absent,
                     2 => binding: {
                         const index = try reader.word();
-                        if (index >= artifact_count) return error.MalformedPack;
+                        if (index >= excerpt_count) return error.MalformedPack;
                         break :binding .{ .local = index };
                     },
                     else => return error.MalformedPack,
@@ -517,9 +517,9 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
         }
     }
 
-    for (artifacts) |artifact| for (artifact.symbolic_refs) |ref| {
+    for (excerpts) |artifact| for (artifact.symbolic_refs) |ref| {
         if (ref.binding != .local) continue;
-        const kind = artifacts[ref.binding.local].kind;
+        const kind = excerpts[ref.binding.local].kind;
         const matches = switch (ref.target) {
             .proc => |identity| kind == .proc and std.meta.eql(identity, kind.proc),
             .boxy_thunk => |identity| kind == .boxy_thunk and std.meta.eql(identity, kind.boxy_thunk),
@@ -528,7 +528,7 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
         if (!matches) return error.MalformedPack;
     };
 
-    const specs = try readSpecs(&reader, arena_allocator, spec_count, artifact_count);
+    const specs = try readSpecs(&reader, arena_allocator, spec_count, excerpt_count);
     if (reader.offset != bytes.len) return error.MalformedPack;
 
     return .{

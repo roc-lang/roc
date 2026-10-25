@@ -14,7 +14,7 @@ def is_outcome(path):
     if not path.is_file():
         return False
     with path.open('rb') as source:
-        return source.read(len(b'ROC_TEST_OUTCOMES_V2')) == b'ROC_TEST_OUTCOMES_V2'
+        return source.read(len(b'ROC_TEST_OUTCOMES_V3')) == b'ROC_TEST_OUTCOMES_V3'
 
 
 def transcript(data):

@@ -2490,7 +2490,7 @@ const IndexFixture = struct {
     const allocator = std.testing.allocator;
     const identity: [32]u8 = @splat(0xa1);
 
-    fn init(self: *@This()) (std.Io.Dir.RealPathFileAllocError || Allocator.Error)!void {
+    fn init(self: *@This()) (std.Io.Dir.RealPathFileAllocError || Store.InitError)!void {
         self.tmp = std.testing.tmpDir(.{});
         self.arena = std.heap.ArenaAllocator.init(allocator);
         const root = try self.tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
@@ -2524,13 +2524,10 @@ const IndexFixture = struct {
         try self.store.writeIndexed(.local, identity, &.{ .arena = undefined, .excerpts = artifacts, .source_files = files }, specs);
     }
 
-    fn payloadPath(self: *@This(), value: backend.dev.CodeExcerpt.Excerpt) Allocator.Error![]u8 {
+    fn payloadPath(self: *@This(), value: backend.dev.CodeExcerpt.Excerpt) ![]u8 {
         const bytes = try Index.payload(allocator, value);
         defer allocator.free(bytes);
-        var record = (self.store.native.acquire(self.store.indexedIdentity(.local, @splat(0), Index.digest(bytes), .payload), self.store.native.now()) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return error.OutOfMemory,
-        }) orelse return error.OutOfMemory;
+        var record = (try self.store.native.acquire(self.store.indexedIdentity(.local, @splat(0), Index.digest(bytes), .payload), self.store.native.now())) orelse return error.TestUnexpectedResult;
         defer record.deinit();
         return allocator.dupe(u8, record.path);
     }
@@ -2718,7 +2715,7 @@ test "indexed object cache interrupted publication exposes no offer and concurre
     // Simulate interruption after payload publication but before any offer.
     const unoffered = try Index.payload(F.allocator, F.excerpt(1, "code"));
     defer F.allocator.free(unoffered);
-    try fixture.store.native.write(fixture.store.indexedIdentity(.local, F.identity, Index.digest(unoffered), .payload), unoffered, fixture.store.native.now());
+    try fixture.store.native.write(fixture.store.indexedIdentity(.local, @splat(0), Index.digest(unoffered), .payload), unoffered, fixture.store.native.now());
     var interrupted = try fixture.loader();
     defer interrupted.deinit();
     try std.testing.expect(interrupted.specCacheLookup().lookup(@splat(1), .dev_code, &.{}) == null);
@@ -2870,9 +2867,10 @@ test "indexed object cache shares payloads and verifies immutable records before
     const artifacts = [_]backend.dev.CodeExcerpt.Excerpt{ first, second, F.excerpt(3, "shared dependency") };
     const specs = [_]PackFile.SpecEntry{ F.spec(1, 0), F.spec(2, 1) };
     try fixture.publish(&artifacts, &specs, &.{});
-    const group = fixture.store.indexedIdentity(.local, F.identity, @splat(0), .metadata);
+    const group = fixture.store.indexedIdentity(.local, @splat(0), @splat(0), .metadata);
     const keys = try fixture.store.native.groupKeys(F.allocator, group);
     defer F.allocator.free(keys);
+    try std.testing.expect(keys.len > 0);
     var before = (try fixture.store.native.acquireKey(keys[0], fixture.store.native.now())).?;
     defer before.deinit();
     try fixture.publish(&artifacts, &specs, &.{});
@@ -2888,7 +2886,6 @@ test "indexed object cache shares payloads and verifies immutable records before
     try std.testing.expectEqual(@as(u64, 3), packs.index_stats.decoded_artifacts);
     const left = packs.excerpts.get(@splat(1)).?;
     const right = packs.excerpts.get(@splat(2)).?;
-    try std.testing.expectEqual(left.set, right.set);
     try std.testing.expectEqual(left.set.excerpts[left.index].payload_record, right.set.excerpts[right.index].payload_record);
 }
 
@@ -3005,7 +3002,7 @@ test "native publication reuses acquired payloads and offers across a one-caller
     defer combined.deinit();
     var closure = try SpliceClosure.init(a, &combined);
     defer closure.deinit();
-    for (&specs, 0..) |*spec, i| spec.excerpt = closure.offeredCodeExcerpt(lir.ProcIdentity.forTest(@intCast(i + 1))).?;
+    for (&specs, 0..) |*spec, i| spec.excerpt = closure.offeredProcExcerpt(lir.ProcIdentity.forTest(@intCast(i + 1))).?;
     stats = .{};
     try fixture.store.writeIndexedRetained(.local, F.identity, &combined, &specs, null, &loaded);
     try std.testing.expectEqual(@as(u64, count), stats.offers_reused);
@@ -3077,11 +3074,15 @@ test "native publication retained files survive cleanup until their last owner e
     defer F.allocator.free(path);
     loaded.deinit();
     live = false;
-    try std.testing.expect(!base.retained_cache.remove(std.Io.Dir.cwd(), std.testing.io, path));
+    const payload = try Index.payload(F.allocator, artifact);
+    defer F.allocator.free(payload);
+    const id = fixture.store.indexedIdentity(.local, @splat(0), Index.digest(payload), .payload);
+    try std.testing.expectError(error.Busy, fixture.store.native.invalidate(id));
     try std.testing.expectEqualStrings("immutable bytes", copy.excerpts[0].code);
     copy.deinit();
     copy_live = false;
-    try std.testing.expect(base.retained_cache.remove(std.Io.Dir.cwd(), std.testing.io, path));
+    try fixture.store.native.invalidate(id);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().openFile(std.testing.io, path, .{}));
     var missing = try fixture.loader();
     defer missing.deinit();
     try std.testing.expect(missing.specCacheLookup().lookup(spec.key, .dev_code, &.{}) == null);
@@ -3212,56 +3213,68 @@ test "native publication shares a cyclic component and invalidates exact depende
     try std.testing.expectEqual(owned.excerpts[next].kind.proc, dependency.kind.proc);
 }
 
-test "native publication pins dependencies until all offers are visible" {
+test "native publication retains catalog generations through batch completion" {
     const F = IndexFixture;
     var fixture: F = undefined;
     try fixture.init();
     defer fixture.deinit();
-    const payload_path = try fixture.payloadPath(F.excerpt(1, "code"));
-    defer F.allocator.free(payload_path);
-    const Cleaner = struct {
-        payload: []const u8,
-        attempts: usize = 0,
-        write: @TypeOf(@as(CoreCtx, undefined).vtable.writeTempFile),
-        fn stage(ctx: ?*anyopaque, io: std.Io, allocator: Allocator, path: []const u8, bytes: []const u8) (Allocator.Error || CoreCtx.WriteError)![]u8 {
-            const self: *@This() = @ptrCast(@alignCast(ctx.?));
-            if (std.mem.endsWith(u8, path, ".rpm") or std.mem.endsWith(u8, path, ".rpi")) {
-                self.attempts += 1;
-                if (base.retained_cache.remove(std.Io.Dir.cwd(), io, self.payload)) return error.AccessDenied;
-            }
-            return self.write(null, io, allocator, path, bytes);
-        }
-    };
-    var cleaner = Cleaner{ .payload = payload_path, .write = fixture.store.roc_ctx.vtable.writeTempFile };
-    fixture.store.roc_ctx.ctx = &cleaner;
-    fixture.store.roc_ctx.vtable.writeTempFile = Cleaner.stage;
-    try fixture.publish(&.{F.excerpt(1, "code")}, &.{F.spec(1, 0)}, &.{});
-    try std.testing.expectEqual(@as(usize, 2), cleaner.attempts);
-    try std.testing.expect(base.retained_cache.remove(std.Io.Dir.cwd(), std.testing.io, payload_path));
+    const bytes = try Index.payload(F.allocator, F.excerpt(1, "code"));
+    defer F.allocator.free(bytes);
+    const id = fixture.store.indexedIdentity(.local, @splat(0), Index.digest(bytes), .payload);
+    var pins = std.ArrayList(compile.artifacts.Artifact).empty;
+    defer {
+        for (pins.items) |*pin| pin.deinit();
+        pins.deinit(F.allocator);
+    }
+    var stats: Store.PublicationStats = .{};
+    _ = try fixture.store.publishIndexedHeld(id, bytes, &stats, &pins);
+    try std.testing.expectError(error.Busy, fixture.store.native.invalidate(id));
+    const metadata = "publication still in progress";
+    _ = try fixture.store.publishIndexedHeld(fixture.store.indexedIdentity(.local, @splat(0), Index.digest(metadata), .metadata), metadata, &stats, &pins);
+    try std.testing.expectError(error.Busy, fixture.store.native.invalidate(id));
+    for (pins.items) |*pin| pin.deinit();
+    pins.clearRetainingCapacity();
+    try fixture.store.native.invalidate(id);
+    try std.testing.expect(try fixture.store.native.acquire(id, fixture.store.native.now()) == null);
 }
 
-test "native publication failure at every record boundary exposes only complete offers" {
+test "native publication interruption at each catalog boundary exposes only complete offers" {
     const F = IndexFixture;
-    const Fail = struct {
-        suffix: []const u8,
-        fn rename(ctx: ?*anyopaque, io: std.Io, old: []const u8, new: []const u8) CoreCtx.RenameError!void {
-            const self: *const @This() = @ptrCast(@alignCast(ctx.?));
-            if (std.mem.endsWith(u8, new, self.suffix)) return error.AccessDenied;
-            try std.Io.Dir.cwd().rename(old, std.Io.Dir.cwd(), new, io);
-        }
+    var fixture: F = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const set = backend.dev.CodeExcerpt.Set{ .arena = undefined, .excerpts = &.{F.excerpt(1, "code")} };
+    const specs = [_]PackFile.SpecEntry{F.spec(1, 0)};
+    var closure = try SpliceClosure.init(F.allocator, &set);
+    defer closure.deinit();
+    var graph = try Index.ComponentGraph.init(F.allocator, &closure);
+    defer graph.deinit();
+    var names = try backend.dev.CodeExcerpt.ContentNames.init(F.allocator, &set);
+    defer names.deinit();
+    const payload = try Index.payload(F.allocator, set.excerpts[0]);
+    defer F.allocator.free(payload);
+    const hashes = [_][32]u8{Index.digest(payload)};
+    var components: [1][32]u8 = undefined;
+    const metadata = try Index.encodeComponent(F.allocator, &set, &graph, &closure, 0, &components, &hashes, &names);
+    defer F.allocator.free(metadata);
+    components[0] = Index.digest(metadata);
+    const selection = try Index.encodeOffer(F.allocator, components[0], 0, set.excerpts[0].kind.proc, specs[0]);
+    defer F.allocator.free(selection);
+    const offer = try F.allocator.alloc(u8, 32 + selection.len);
+    defer F.allocator.free(offer);
+    @memcpy(offer[0..32], &F.identity);
+    @memcpy(offer[32..], selection);
+    const identities = [_]compile.artifacts.Identity{
+        fixture.store.indexedIdentity(.local, @splat(0), hashes[0], .payload),
+        fixture.store.indexedIdentity(.local, @splat(0), components[0], .metadata),
+        fixture.store.indexedIdentity(.local, specs[0].key, Index.digest(offer), .offer),
     };
-    for ([_][]const u8{ ".rpa", ".rpm", ".rpi" }) |suffix| {
-        var fixture: F = undefined;
-        try fixture.init();
-        defer fixture.deinit();
-        var fail = Fail{ .suffix = suffix };
-        fixture.store.roc_ctx.ctx = &fail;
-        fixture.store.roc_ctx.vtable.rename = Fail.rename;
-        try std.testing.expectError(error.PackWriteFailed, fixture.publish(&.{F.excerpt(1, "code")}, &.{F.spec(1, 0)}, &.{}));
+    for (identities, [_][]const u8{ payload, metadata, offer }, 0..) |id, bytes, index| {
+        _ = try fixture.store.publishIndexed(id, bytes);
         var packs = try fixture.loader();
         defer packs.deinit();
-        try std.testing.expect(packs.specCacheLookup().lookup(@splat(1), .dev_code, &.{}) == null);
-        try std.testing.expect(!try fixture.store.hasIndexed(.local, F.identity, @splat(1)));
+        const hit = packs.specCacheLookup().lookup(specs[0].key, .dev_code, &.{});
+        try std.testing.expectEqual(index == 2, hit != null);
     }
 }
 

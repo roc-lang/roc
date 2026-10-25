@@ -7,7 +7,7 @@ const compile = @import("compile");
 const Allocator = std.mem.Allocator;
 
 /// Prefix of every command record; changing the record format changes it.
-pub const magic = "ROC_COMPLETED_DEV_TEST_V2";
+pub const magic = "ROC_COMPLETED_DEV_TEST_V3";
 /// A SHA-256 content digest.
 pub const Digest = [32]u8;
 /// A file a producer read, with the content state it saw.
