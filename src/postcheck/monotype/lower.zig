@@ -22381,12 +22381,13 @@ const BodyContext = struct {
     /// fresh visitation hash table per query.
     inhabitation_visiting: std.bit_set.DynamicBitSetUnmanaged,
     /// Each node being expanded by the running uninhabitedness scan, with the
-    /// scan's count of unsettled encounters when it was entered.
+    /// scan's count of active-path cycle assumptions when it was entered.
     inhabitation_entered: collections.DenseMapUnmanaged(NodeId, usize) = .empty,
-    /// Uninhabitedness of graph roots whose whole reachable structure was
-    /// settled when scanned, per backing access. Nothing can change such an
-    /// answer.
-    settled_node_uninhabited: [2]collections.DenseMapUnmanaged(NodeId, bool) = .{ .empty, .empty },
+    /// Cycle-independent answers at `inhabitation_epoch`, per backing access.
+    node_uninhabited_memo: [2]collections.DenseMapUnmanaged(NodeId, bool) = .{ .empty, .empty },
+    inhabitation_epoch: u32 = 0,
+    completion_memo: CompletionMemo = .{},
+    completion_scratch: CompletionScratch = .{},
     /// The stacks the uninhabitedness scans run on, kept between scans.
     node_uninhabited_scratch: NodeUninhabitedScan.Evaluation.Scratch = .{},
     pattern_uninhabited_scratch: PatternUninhabitedScan.Evaluation.Scratch = .{},
@@ -23338,6 +23339,8 @@ const BodyContext = struct {
         self.pattern_literal_guards.deinit(self.allocator);
         self.optional_destruct_binds.deinit(self.allocator);
         self.loop_contexts.deinit(self.allocator);
+        self.completion_memo.deinit(self.allocator);
+        self.completion_scratch.deinit(self.allocator);
         self.inhabitation_visiting.deinit(self.allocator);
         self.releaseMemos();
         self.node_uninhabited_scratch.deinit(self.allocator);
@@ -26571,7 +26574,7 @@ const BodyContext = struct {
     /// The per-body memo maps the builder pools across body contexts.
     const Memos = struct {
         inhabitation_entered: collections.DenseMapUnmanaged(NodeId, usize) = .empty,
-        settled_node_uninhabited: [2]collections.DenseMapUnmanaged(NodeId, bool) = .{ .empty, .empty },
+        node_uninhabited_memo: [2]collections.DenseMapUnmanaged(NodeId, bool) = .{ .empty, .empty },
         explicit_binding_memo: collections.DenseMapUnmanaged(checked.CheckedPatternId, bool) = .empty,
 
         /// The chunk-directory span past which a released map gives up its
@@ -26580,14 +26583,14 @@ const BodyContext = struct {
 
         fn deinit(self: *Memos, allocator: Allocator) void {
             self.inhabitation_entered.deinit(allocator);
-            for (&self.settled_node_uninhabited) |*settled| settled.deinit(allocator);
+            for (&self.node_uninhabited_memo) |*settled| settled.deinit(allocator);
             self.explicit_binding_memo.deinit(allocator);
         }
     };
 
     fn installMemos(self: *BodyContext, memos: Memos) void {
         self.inhabitation_entered = memos.inhabitation_entered;
-        self.settled_node_uninhabited = memos.settled_node_uninhabited;
+        self.node_uninhabited_memo = memos.node_uninhabited_memo;
         self.explicit_binding_memo = memos.explicit_binding_memo;
     }
 
@@ -26595,14 +26598,14 @@ const BodyContext = struct {
     fn releaseMemos(self: *BodyContext) void {
         var memos: Memos = .{
             .inhabitation_entered = self.inhabitation_entered,
-            .settled_node_uninhabited = self.settled_node_uninhabited,
+            .node_uninhabited_memo = self.node_uninhabited_memo,
             .explicit_binding_memo = self.explicit_binding_memo,
         };
         // A pooled map keeps the pages of a body-sized key range, not every
         // page any body ever touched.
         const allocator = self.builder.allocator;
         memos.inhabitation_entered.clearRetainingAtMost(allocator, Memos.retained_chunks);
-        for (&memos.settled_node_uninhabited) |*settled| settled.clearRetainingAtMost(allocator, Memos.retained_chunks);
+        for (&memos.node_uninhabited_memo) |*settled| settled.clearRetainingAtMost(allocator, Memos.retained_chunks);
         memos.explicit_binding_memo.clearRetainingAtMost(allocator, Memos.retained_chunks);
         self.builder.body_memo_pool.append(self.builder.allocator, memos) catch memos.deinit(self.builder.allocator);
     }
@@ -28830,24 +28833,52 @@ const BodyContext = struct {
         produced: NodeId,
     };
 
-    /// Request-completion relations of the pairs one produced-value walk
-    /// enters. A pair's relation is a fact about its whole subtree, so a walk
-    /// that asks it of every container on a path would otherwise re-walk each
-    /// subtree once per enclosing container. Relations are recorded while the
-    /// first query walks the subtree and hold while the graph's
-    /// `structure_epoch` is unchanged; a relation decided by assuming a pair
-    /// still on the walked path is not recorded, since it holds only under
-    /// that assumption.
+    /// Answers belong to this body and this graph epoch. No cycle-dependent
+    /// relation is published, even when a later sibling decides the result.
     const CompletionMemo = struct {
-        epoch: u32,
-        relations: std.AutoHashMap(RequestCompletionPair, RequestCompletion),
+        epoch: u32 = 0,
+        relations: std.AutoHashMapUnmanaged(RequestCompletionPair, RequestCompletion) = .empty,
 
-        fn init(allocator: Allocator) CompletionMemo {
-            return .{ .epoch = 0, .relations = std.AutoHashMap(RequestCompletionPair, RequestCompletion).init(allocator) };
+        fn deinit(self: *CompletionMemo, allocator: Allocator) void {
+            self.relations.deinit(allocator);
         }
 
-        fn deinit(self: *CompletionMemo) void {
-            self.relations.deinit();
+        fn get(self: *CompletionMemo, graph: *InstGraph, pair: RequestCompletionPair) ?RequestCompletion {
+            if (self.epoch != graph.structure_epoch) {
+                graph.countDiagnostic("completion_invalidations");
+                self.relations.clearRetainingCapacity();
+                self.epoch = graph.structure_epoch;
+            }
+            return self.relations.get(pair);
+        }
+
+        fn put(self: *CompletionMemo, ctx: *BodyContext, pair: RequestCompletionPair, relation: RequestCompletion, epoch: u32) Allocator.Error!void {
+            // Reading a leaf may expand it and join its component classes.
+            // A traversal spanning that change cannot certify an epoch fact.
+            if (epoch != ctx.graph.structure_epoch) return;
+            _ = self.get(ctx.graph, pair);
+            try self.relations.put(ctx.allocator, pair, relation);
+        }
+    };
+
+    const CompletionFrame = struct {
+        pair: RequestCompletionPair,
+        ops_start: usize,
+        next: usize,
+        relation: RequestCompletion,
+        cycles_at_entry: usize,
+        epoch: u32,
+    };
+
+    const CompletionScratch = struct {
+        path: RequestCompletionPath.Map = .empty,
+        frames: std.ArrayList(CompletionFrame) = .empty,
+        ops: std.ArrayList(RequestCompletionOp) = .empty,
+
+        fn deinit(self: *CompletionScratch, allocator: Allocator) void {
+            self.path.deinit(allocator);
+            self.frames.deinit(allocator);
+            self.ops.deinit(allocator);
         }
     };
 
@@ -28863,31 +28894,9 @@ const BodyContext = struct {
     ) Allocator.Error!bool {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
-        var visiting = RequestCompletionPath.init(self.allocator);
-        defer visiting.deinit();
-        return (try self.requestCompletionRelation(request_ret_node, produced_ret_node, &visiting, null)) == .completed;
-    }
-
-    /// `resultCompletesRequest` for a pair a produced-value walk enters,
-    /// answered from the walk's memo while the graph is unchanged.
-    fn producedPairCompletesRequest(
-        self: *BodyContext,
-        checked_root: NodeId,
-        produced_root: NodeId,
-        memo: *CompletionMemo,
-    ) Allocator.Error!bool {
-        var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
-        defer timing_scope.end();
-        const pair = RequestCompletionPair{ .request = self.graph.rootNode(checked_root), .produced = self.graph.rootNode(produced_root) };
-        if (memo.epoch != self.graph.structure_epoch) {
-            memo.relations.clearRetainingCapacity();
-            memo.epoch = self.graph.structure_epoch;
-        } else if (memo.relations.get(pair)) |relation| {
-            return relation == .completed;
-        }
-        var visiting = RequestCompletionPath.init(self.allocator);
-        defer visiting.deinit();
-        return (try self.requestCompletionRelation(checked_root, produced_root, &visiting, memo)) == .completed;
+        var visiting = RequestCompletionPath{ .allocator = self.allocator, .map = self.completion_scratch.path };
+        defer self.completion_scratch.path = visiting.map;
+        return (try self.requestCompletionRelation(request_ret_node, produced_ret_node, &visiting, &self.completion_memo)) == .completed;
     }
 
     fn relateCheckedNodeToProducedValue(
@@ -28897,9 +28906,7 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         var visiting = std.AutoHashMap(ProducedValuePair, void).init(self.allocator);
         defer visiting.deinit();
-        var completions = CompletionMemo.init(self.allocator);
-        defer completions.deinit();
-        return try self.relateCheckedNodeToProducedValueInner(checked_node, produced_node, &visiting, &completions);
+        return try self.relateCheckedNodeToProducedValueInner(checked_node, produced_node, &visiting);
     }
 
     /// One step of relating a matching container's children: a child pair
@@ -28938,7 +28945,6 @@ const BodyContext = struct {
         root_checked: NodeId,
         root_produced: NodeId,
         visiting: *std.AutoHashMap(ProducedValuePair, void),
-        completions: *CompletionMemo,
     ) Allocator.Error!NodeId {
         var frames: std.ArrayListUnmanaged(ProducedValueFrame) = .empty;
         defer frames.deinit(self.allocator);
@@ -28950,7 +28956,7 @@ const BodyContext = struct {
             _ = visiting.remove(frame.pair);
         };
 
-        var delivered: ?NodeId = try self.enterProducedValue(root_checked, root_produced, visiting, completions, &frames, &ops, &results);
+        var delivered: ?NodeId = try self.enterProducedValue(root_checked, root_produced, visiting, &frames, &ops, &results);
         while (true) {
             if (delivered) |node| {
                 if (frames.items.len == 0) return node;
@@ -28964,7 +28970,7 @@ const BodyContext = struct {
                 frames.items[frames.items.len - 1].next += 1;
                 switch (op) {
                     .child => |child| {
-                        delivered = try self.enterProducedValue(child.checked, child.produced, visiting, completions, &frames, &ops, &results);
+                        delivered = try self.enterProducedValue(child.checked, child.produced, visiting, &frames, &ops, &results);
                         continue;
                     },
                     .field_name => |field| failed = field.checked != field.produced,
@@ -28998,7 +29004,6 @@ const BodyContext = struct {
         checked_node: NodeId,
         produced_node: NodeId,
         visiting: *std.AutoHashMap(ProducedValuePair, void),
-        completions: *CompletionMemo,
         frames: *std.ArrayListUnmanaged(ProducedValueFrame),
         ops: *std.ArrayListUnmanaged(ProducedValueOp),
         results: *std.ArrayListUnmanaged(NodeId),
@@ -29037,7 +29042,7 @@ const BodyContext = struct {
             }
             return checked_node;
         }
-        if (try self.producedPairCompletesRequest(checked_root, produced_root, completions)) return produced_node;
+        if (try self.resultCompletesRequest(checked_root, produced_root)) return produced_node;
 
         const ops_start = ops.items.len;
         var included_tags: ?[]const InstTag = null;
@@ -29475,27 +29480,23 @@ const BodyContext = struct {
         visiting: *RequestCompletionPath,
         memo: ?*CompletionMemo,
     ) Allocator.Error!RequestCompletion {
-        const Frame = struct {
-            pair: RequestCompletionPair,
-            ops_start: usize,
-            next: usize,
-            relation: RequestCompletion,
-            /// Whether a relation below this frame assumed a pair on the path.
-            assumed: bool = false,
-        };
-        var frames: std.ArrayListUnmanaged(Frame) = .empty;
-        defer frames.deinit(self.allocator);
-        var ops: std.ArrayListUnmanaged(RequestCompletionOp) = .empty;
-        defer ops.deinit(self.allocator);
-        errdefer for (frames.items) |frame| {
-            visiting.leave(frame.pair);
-        };
+        self.graph.countDiagnostic("completion_queries");
+        const frames = &self.completion_scratch.frames;
+        const ops = &self.completion_scratch.ops;
+        std.debug.assert(frames.items.len == 0 and ops.items.len == 0 and visiting.map.count() == 0);
+        defer {
+            frames.clearRetainingCapacity();
+            ops.clearRetainingCapacity();
+            visiting.map.clearRetainingCapacity();
+        }
+        var cycles: usize = 0;
+        const root_epoch = self.graph.structure_epoch;
 
         var delivered: RequestCompletion = undefined;
         var has_delivery = false;
         var assumed = false;
-        if (try self.enterRequestCompletion(request_node, produced_node, visiting, &ops, &assumed)) |relation| {
-            if (memo) |m| try m.relations.put(.{ .request = self.graph.rootNode(request_node), .produced = self.graph.rootNode(produced_node) }, relation);
+        if (try self.enterRequestCompletion(request_node, produced_node, visiting, ops, &assumed, memo)) |relation| {
+            if (memo) |m| try m.put(self, .{ .request = self.graph.rootNode(request_node), .produced = self.graph.rootNode(produced_node) }, relation, root_epoch);
             return relation;
         }
         try frames.append(self.allocator, .{
@@ -29503,6 +29504,8 @@ const BodyContext = struct {
             .ops_start = 0,
             .next = 0,
             .relation = .unchanged,
+            .cycles_at_entry = cycles,
+            .epoch = root_epoch,
         });
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
@@ -29531,11 +29534,12 @@ const BodyContext = struct {
                     frame.next += 1;
                     const ops_start = ops.items.len;
                     assumed = false;
-                    if (try self.enterRequestCompletion(op.request, op.produced, visiting, &ops, &assumed)) |relation| {
+                    const child_epoch = self.graph.structure_epoch;
+                    if (try self.enterRequestCompletion(op.request, op.produced, visiting, ops, &assumed, memo)) |relation| {
                         if (assumed) {
-                            for (frames.items) |*open| open.assumed = true;
+                            cycles += 1;
                         } else if (memo) |m| {
-                            try m.relations.put(.{ .request = self.graph.rootNode(op.request), .produced = self.graph.rootNode(op.produced) }, relation);
+                            try m.put(self, .{ .request = self.graph.rootNode(op.request), .produced = self.graph.rootNode(op.produced) }, relation, child_epoch);
                         }
                         delivered = relation;
                         has_delivery = true;
@@ -29545,6 +29549,8 @@ const BodyContext = struct {
                             .ops_start = ops_start,
                             .next = ops_start,
                             .relation = .unchanged,
+                            .cycles_at_entry = cycles,
+                            .epoch = child_epoch,
                         });
                     }
                     continue;
@@ -29555,7 +29561,7 @@ const BodyContext = struct {
             const done = frames.pop().?;
             visiting.leave(done.pair);
             ops.shrinkRetainingCapacity(done.ops_start);
-            if (memo) |m| if (!done.assumed) try m.relations.put(done.pair, finished.?);
+            if (memo) |m| if (done.cycles_at_entry == cycles) try m.put(self, done.pair, finished.?, done.epoch);
             if (frames.items.len == 0) return finished.?;
             delivered = finished.?;
             has_delivery = true;
@@ -29571,10 +29577,16 @@ const BodyContext = struct {
         visiting: *RequestCompletionPath,
         ops: *std.ArrayListUnmanaged(RequestCompletionOp),
         assumed: *bool,
+        memo: ?*CompletionMemo,
     ) Allocator.Error!?RequestCompletion {
         const gpa = self.allocator;
+        self.graph.countDiagnostic("completion_pair_entries");
         const request_root = self.graph.rootNode(request_node);
         const produced_root = self.graph.rootNode(produced_node);
+        if (memo) |m| if (m.get(self.graph, .{ .request = request_root, .produced = produced_root })) |relation| {
+            self.graph.countDiagnostic("completion_memo_hits");
+            return relation;
+        };
         if (request_root == produced_root) return .unchanged;
         if (try self.nodeIsProvenUninhabited(request_root) and
             !try self.nodeIsProvenUninhabited(produced_root))
@@ -29584,10 +29596,12 @@ const BodyContext = struct {
 
         const pair = RequestCompletionPair{ .request = request_root, .produced = produced_root };
         if (!try visiting.enter(pair)) {
+            self.graph.countDiagnostic("completion_cycle_assumptions");
             assumed.* = true;
             return .unchanged;
         }
         errdefer visiting.leave(pair);
+        self.graph.countDiagnostic("completion_pair_expansions");
         const start = ops.items.len;
         const relation: ?RequestCompletion = relation: {
             if ((try self.checkedPublicInspectableBacking(produced_root))) |backing| {
@@ -37308,7 +37322,13 @@ const BodyContext = struct {
         node: NodeId,
         backing_access: UninhabitedBackingAccess,
     ) Allocator.Error!bool {
-        self.inhabitation_entered.clearRetainingCapacity();
+        self.graph.countDiagnostic("inhabitation_queries");
+        if (self.inhabitation_epoch != self.graph.structure_epoch) {
+            self.graph.countDiagnostic("inhabitation_invalidations");
+            for (&self.node_uninhabited_memo) |*memo| memo.clearRetainingCapacity();
+            self.inhabitation_epoch = self.graph.structure_epoch;
+        }
+        std.debug.assert(self.inhabitation_entered.count() == 0);
         var scan = NodeUninhabitedScan{ .body = self, .backing_access = backing_access };
         return try NodeUninhabitedScan.Evaluation.runWith(self.allocator, &self.node_uninhabited_scratch, &scan, node);
     }
@@ -66732,30 +66752,124 @@ test "completion path retains ancestors across distinct sibling visits" {
     path.leave(ancestor);
 }
 
+/// Owns exactly the state used by the two graph analyses; no checked program
+/// or backend is needed to exercise their identity and mutation contracts.
+const CompletionAnalysisFixture = struct {
+    allocator: Allocator,
+    types: Type.Store,
+    name_store: names.NameStore,
+    graph: *InstGraph,
+    builder: Builder,
+    ctx: BodyContext,
+    diagnostics: solve.GraphDiagnostics,
+
+    fn init(self: *@This(), allocator: Allocator) Allocator.Error!void {
+        self.allocator = allocator;
+        self.types = Type.Store.init(allocator);
+        errdefer self.types.deinit();
+        self.name_store = names.NameStore.init(allocator);
+        errdefer self.name_store.deinit();
+        self.graph = try InstGraph.create(allocator, &self.types, &self.name_store);
+        self.diagnostics = .{};
+        self.graph.setDiagnostics(&self.diagnostics);
+        self.builder = undefined;
+        self.builder.app_module_identity = null;
+        self.builder.timing = null;
+        self.ctx = undefined;
+        self.ctx.allocator = allocator;
+        self.ctx.builder = &self.builder;
+        self.ctx.graph = self.graph;
+        self.ctx.inhabitation_visiting = .{};
+        self.ctx.inhabitation_entered = .empty;
+        self.ctx.node_uninhabited_memo = .{ .empty, .empty };
+        self.ctx.node_uninhabited_scratch = .{};
+        self.ctx.inhabitation_epoch = 0;
+        self.ctx.completion_memo = .{};
+        self.ctx.completion_scratch = .{};
+    }
+
+    fn deinit(self: *@This()) void {
+        self.ctx.completion_scratch.deinit(self.allocator);
+        self.ctx.completion_memo.deinit(self.allocator);
+        self.ctx.node_uninhabited_scratch.deinit(self.allocator);
+        for (&self.ctx.node_uninhabited_memo) |*memo| memo.deinit(self.allocator);
+        self.ctx.inhabitation_entered.deinit(self.allocator);
+        self.ctx.inhabitation_visiting.deinit(self.allocator);
+        self.graph.destroy();
+        self.name_store.deinit();
+        self.types.deinit();
+    }
+
+    fn expectRelation(self: *@This(), expected: BodyContext.RequestCompletion, request: NodeId, produced: NodeId) !void {
+        var path = BodyContext.RequestCompletionPath.init(self.allocator);
+        defer path.deinit();
+        for (0..2) |_| {
+            try std.testing.expectEqual(expected, try self.ctx.requestCompletionRelation(request, produced, &path, &self.ctx.completion_memo));
+            try std.testing.expectEqual(@as(usize, 0), path.map.count());
+        }
+        // The uncached relation and a fresh inhabitation scope must agree.
+        for (&self.ctx.node_uninhabited_memo) |*memo| memo.clearRetainingCapacity();
+        try std.testing.expectEqual(expected, try self.ctx.requestCompletionRelation(request, produced, &path, null));
+    }
+
+    fn expectUninhabited(self: *@This(), node: NodeId, access: BodyContext.UninhabitedBackingAccess, expected: bool) !void {
+        for (0..2) |_| try std.testing.expectEqual(expected, try self.ctx.nodeIsProvenUninhabitedInner(node, access));
+        for (&self.ctx.node_uninhabited_memo) |*memo| memo.clearRetainingCapacity();
+        try std.testing.expectEqual(expected, try self.ctx.nodeIsProvenUninhabitedInner(node, access));
+    }
+};
+
+test "completion analysis shared subgraph work" {
+    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const allocator = counting.allocator();
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const ctx = &fixture.ctx;
+    const diagnostics = &fixture.diagnostics;
+    const shared = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    var request = shared;
+    var produced = shared;
+    for (0..16) |_| {
+        request = try graph.newNode(.{ .box = request });
+        produced = try graph.newNode(.{ .box = produced });
+    }
+    const request_items = try graph.arena().alloc(NodeId, 32);
+    const produced_items = try graph.arena().alloc(NodeId, 32);
+    @memset(request_items, request);
+    @memset(produced_items, produced);
+    request = try graph.newNode(.{ .tuple = request_items });
+    produced = try graph.newNode(.{ .tuple = produced_items });
+    const allocations_before = counting.allocations;
+    for (0..128) |_| {
+        try std.testing.expect(!try ctx.resultCompletesRequest(request, produced));
+        try std.testing.expect(!try ctx.nodeIsProvenUninhabited(request));
+    }
+    try std.testing.expectEqual(@as(u64, 17), diagnostics.completion_pair_expansions);
+    try std.testing.expectEqual(@as(u64, 18), diagnostics.inhabitation_node_expansions);
+    try std.testing.expectEqual(@as(usize, 18), ctx.completion_memo.relations.count());
+    try std.testing.expectEqual(@as(usize, 18), ctx.node_uninhabited_memo[0].count());
+    try std.testing.expectEqual(@as(u64, 158), diagnostics.completion_memo_hits);
+    try std.testing.expect(counting.allocations - allocations_before <= 20);
+
+    const allocations_warm = counting.allocations;
+    const work_warm = diagnostics.*;
+    for (0..256) |_| {
+        try std.testing.expect(!try ctx.resultCompletesRequest(request, produced));
+        try std.testing.expect(!try ctx.nodeIsProvenUninhabited(request));
+    }
+    try std.testing.expectEqual(allocations_warm, counting.allocations);
+    try std.testing.expectEqual(work_warm.completion_pair_expansions, diagnostics.completion_pair_expansions);
+    try std.testing.expectEqual(work_warm.inhabitation_node_expansions, diagnostics.inhabitation_node_expansions);
+}
+
 test "completion relation preserves recursive and shared DAG outcomes" {
     const allocator = std.testing.allocator;
-    var types = Type.Store.init(allocator);
-    defer types.deinit();
-    var name_store = names.NameStore.init(allocator);
-    defer name_store.deinit();
-    const graph = try InstGraph.create(allocator, &types, &name_store);
-    defer graph.destroy();
-    var builder: Builder = undefined;
-    builder.app_module_identity = null;
-    builder.timing = null;
-    var ctx: BodyContext = undefined;
-    ctx.allocator = allocator;
-    ctx.builder = &builder;
-    ctx.graph = graph;
-    ctx.inhabitation_visiting = .{};
-    defer ctx.inhabitation_visiting.deinit(allocator);
-    ctx.inhabitation_entered = .empty;
-    defer ctx.inhabitation_entered.deinit(allocator);
-    ctx.settled_node_uninhabited = .{ .empty, .empty };
-    defer for (&ctx.settled_node_uninhabited) |*memo| memo.deinit(allocator);
-    ctx.node_uninhabited_scratch = .{};
-    defer ctx.node_uninhabited_scratch.deinit(allocator);
-
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
     for ([_]BodyContext.RequestCompletion{ .unchanged, .completed, .mismatch }) |expected| {
         // Each side is a recursive list of pairs. Repeated tuple edges below
         // revisit the same cycle after a sibling traversal has left the path.
@@ -66771,16 +66885,210 @@ test "completion relation preserves recursive and shared DAG outcomes" {
             .{ .primitive = .i64 });
         produced_items[1] = try graph.newNode(.{ .primitive = if (expected == .mismatch) .str else .i64 });
 
+        if (expected == .completed) {
+            request_items[1] = try graph.newNode(.{ .list = request_items[1] });
+            produced_items[1] = try graph.newNode(.{ .list = produced_items[1] });
+        }
+
         const request_siblings = try graph.arena().alloc(NodeId, 64);
         const produced_siblings = try graph.arena().alloc(NodeId, 64);
         @memset(request_siblings, request_items[0]);
         @memset(produced_siblings, produced_items[0]);
         const request = try graph.newNode(.{ .tuple = request_siblings });
         const produced = try graph.newNode(.{ .tuple = produced_siblings });
-        var path = BodyContext.RequestCompletionPath.init(allocator);
-        defer path.deinit();
-        try std.testing.expectEqual(expected, try ctx.requestCompletionRelation(request, produced, &path, null));
-        try std.testing.expectEqual(@as(usize, 0), path.map.count());
+        try fixture.expectRelation(expected, request, produced);
+        // Every enclosing relation observed a cycle and must remain absent.
+        try std.testing.expect(!fixture.ctx.completion_memo.relations.contains(.{ .request = request, .produced = produced }));
+        try std.testing.expect(!fixture.ctx.completion_memo.relations.contains(.{ .request = request_tuple, .produced = produced_tuple }));
+        try std.testing.expect(fixture.diagnostics.completion_cycle_assumptions > 0);
+    }
+}
+
+test "completion analysis invalidates joins and keeps unrelated allocation and path compression reusable" {
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const variable = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const request = try graph.newNode(.{ .box = variable });
+    const produced = try graph.newNode(.{ .box = try graph.newNode(.{ .primitive = .i64 }) });
+    try fixture.expectRelation(.mismatch, request, produced);
+    try fixture.expectUninhabited(request, .inspectable_only, false);
+
+    const empty = try graph.newNode(.empty_tag_union);
+    try graph.unify(variable, empty);
+    try fixture.expectRelation(.completed, request, produced);
+    try fixture.expectUninhabited(request, .inspectable_only, true);
+    try std.testing.expect(fixture.diagnostics.completion_invalidations > 0);
+    try std.testing.expect(fixture.diagnostics.inhabitation_invalidations > 0);
+
+    const epoch = graph.structure_epoch;
+    const work = fixture.diagnostics;
+    _ = try graph.newNode(.{ .primitive = .str });
+    _ = graph.rootNode(variable);
+    _ = graph.rootNode(empty);
+    try std.testing.expect(try fixture.ctx.resultCompletesRequest(request, produced));
+    try std.testing.expect(try fixture.ctx.nodeIsProvenUninhabited(request));
+    try std.testing.expectEqual(epoch, graph.structure_epoch);
+    try std.testing.expectEqual(work.completion_pair_expansions, fixture.diagnostics.completion_pair_expansions);
+    try std.testing.expectEqual(work.inhabitation_node_expansions, fixture.diagnostics.inhabitation_node_expansions);
+}
+
+test "completion analysis retires facts across lazy expansion and tag reordering" {
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const scalar = try fixture.types.add(.{ .primitive = .i64 });
+    const boxed = try fixture.types.add(.{ .box = scalar });
+    const request = try graph.importMonoIndependent(boxed);
+    const produced = try graph.newNode(.{ .box = try graph.newNode(.{ .primitive = .i64 }) });
+    const epoch = graph.structure_epoch;
+    var path = BodyContext.RequestCompletionPath.init(std.testing.allocator);
+    defer path.deinit();
+    try std.testing.expectEqual(.unchanged, try fixture.ctx.requestCompletionRelation(request, produced, &path, &fixture.ctx.completion_memo));
+    try std.testing.expect(graph.structure_epoch != epoch);
+    // This traversal expanded leaves. Its outer answer cannot be published
+    // as though the whole walk had observed the final epoch.
+    try std.testing.expect(!fixture.ctx.completion_memo.relations.contains(.{ .request = request, .produced = produced }));
+    try fixture.expectRelation(.unchanged, request, produced);
+    try std.testing.expect(fixture.ctx.completion_memo.relations.contains(.{ .request = request, .produced = produced }));
+
+    const first = try fixture.name_store.internTagLabel("A");
+    const last = try fixture.name_store.internTagLabel("Z");
+    const empty = try graph.newNode(.empty_tag_union);
+    const tags = [_]InstTag{
+        .{ .name = first, .checked_name = first, .payloads = &.{} },
+        .{ .name = last, .checked_name = last, .payloads = &.{} },
+    };
+    const left = try graph.newNode(.{ .tag_union = .{ .tags = try graph.arena().dupe(InstTag, &.{ tags[1], tags[0] }), .ext = empty } });
+    const right = try graph.newNode(.{ .tag_union = .{ .tags = try graph.arena().dupe(InstTag, &tags), .ext = empty } });
+    try fixture.expectRelation(.mismatch, left, right);
+    const unsorted_epoch = graph.structure_epoch;
+    graph.sortTagHead(left);
+    try std.testing.expect(graph.structure_epoch != unsorted_epoch);
+    const sorted_epoch = graph.structure_epoch;
+    graph.sortTagHead(right);
+    graph.sortTagHead(left);
+    try std.testing.expectEqual(sorted_epoch, graph.structure_epoch);
+    try fixture.expectRelation(.unchanged, left, right);
+}
+
+test "completion analysis separates backing visibility authority and changed backing evidence" {
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const module = try fixture.name_store.internModuleIdentity(&@as([32]u8, @splat(0x94)));
+    const name = try fixture.name_store.internTypeName("Wrapped");
+    const empty = try graph.newNode(.empty_tag_union);
+    const scalar = try graph.newNode(.{ .primitive = .i64 });
+    inline for (.{ .inspectable, .runtime_layout_only }) |use| {
+        inline for (.{ .checked_public, .generated_private }) |authority| {
+            const wrapped_empty = try graph.newNode(try graph.namedContent(.{
+                .named_type = .{ .module = .{}, .ty = @fromBackingInt(1), .ty_module = .{} },
+                .def = .{ .module = module, .type_name = name },
+                .kind = .nominal,
+                .builtin_owner = null,
+                .args = &.{},
+                .backing = .{ .node = empty, .use = use, .authority = authority },
+            }));
+            try fixture.expectUninhabited(wrapped_empty, .inspectable_only, use == .inspectable);
+            try fixture.expectUninhabited(wrapped_empty, .runtime_layout, true);
+            const wrapped_scalar = try graph.namedValueNodeWithBacking(wrapped_empty, scalar);
+            try fixture.expectRelation(if (use == .inspectable and authority == .checked_public) .completed else .mismatch, scalar, wrapped_scalar);
+            try fixture.expectUninhabited(wrapped_scalar, .runtime_layout, false);
+            // A changed evidence source has its own producer-assigned node;
+            // equal nominal identity does not reuse the old backing's answer.
+            try fixture.expectUninhabited(wrapped_empty, .runtime_layout, true);
+        }
+    }
+}
+
+test "completion analysis preserves open empty rows and invalidates payload replacements" {
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const empty = try graph.newNode(.empty_tag_union);
+    const open = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
+    const open_row = try graph.newNode(.{ .tag_union = .{ .tags = &.{}, .ext = open } });
+    try fixture.expectUninhabited(empty, .inspectable_only, true);
+    try fixture.expectUninhabited(open_row, .inspectable_only, false);
+    try graph.unify(open, empty);
+    try fixture.expectUninhabited(open_row, .inspectable_only, true);
+
+    const name = try fixture.name_store.internTagLabel("Value");
+    const row = try graph.newNode(.{ .tag_union = .{
+        .tags = try graph.arena().dupe(InstTag, &.{.{ .name = name, .checked_name = name, .payloads = try graph.arena().dupe(NodeId, &.{empty}) }}),
+        .ext = empty,
+    } });
+    try fixture.expectUninhabited(row, .inspectable_only, true);
+    const scalar = try graph.newNode(.{ .primitive = .i64 });
+    try fixture.expectRelation(.completed, row, scalar);
+    try graph.replaceTagPayloadNode(row, name, 0, scalar);
+    try fixture.expectUninhabited(row, .inspectable_only, false);
+    try fixture.expectRelation(.mismatch, row, scalar);
+}
+
+test "completion analysis does not publish a recursive inhabitation assumption" {
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const components = try graph.arena().alloc(NodeId, 2);
+    const outer = try graph.newNode(.{ .tuple = components });
+    const inner = try graph.newNode(.{ .box = outer });
+    components[0] = inner;
+    components[1] = try graph.newNode(.empty_tag_union);
+    try std.testing.expect(try fixture.ctx.nodeIsProvenUninhabited(outer));
+    // While outer was active, inner provisionally answered false. A later
+    // query of inner must discover the empty sibling rather than reuse it.
+    try std.testing.expect(!fixture.ctx.node_uninhabited_memo[0].contains(inner));
+    try fixture.expectUninhabited(inner, .inspectable_only, true);
+    try std.testing.expect(fixture.diagnostics.inhabitation_cycle_assumptions > 0);
+}
+
+test "completion analysis scratch and partial memos survive every allocation failure" {
+    const Probe = struct {
+        fn run(ctx: *BodyContext, inhabited: NodeId, request: NodeId, produced: NodeId) !bool {
+            try std.testing.expect(!try ctx.nodeIsProvenUninhabited(inhabited));
+            return ctx.resultCompletesRequest(request, produced);
+        }
+    };
+    var fail_offset: usize = 0;
+    while (true) : (fail_offset += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+        var fixture: CompletionAnalysisFixture = undefined;
+        try fixture.init(failing.allocator());
+        defer fixture.deinit();
+        const graph = fixture.graph;
+        const empty = try graph.newNode(.empty_tag_union);
+        const scalar = try graph.newNode(.{ .primitive = .i64 });
+        var request = empty;
+        var produced = scalar;
+        for (0..12) |_| {
+            // Lists keep the outer type inhabited, so completion must visit
+            // every child before finding the empty-to-scalar completion.
+            request = try graph.newNode(.{ .list = request });
+            produced = try graph.newNode(.{ .list = produced });
+        }
+        const inhabited = try graph.newNode(.{ .box = scalar });
+        failing.fail_index = failing.alloc_index + fail_offset;
+        const result = Probe.run(&fixture.ctx, inhabited, request, produced) catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expectEqual(@as(usize, 0), fixture.ctx.completion_scratch.path.count());
+            try std.testing.expectEqual(@as(usize, 0), fixture.ctx.completion_scratch.frames.items.len);
+            try std.testing.expectEqual(@as(usize, 0), fixture.ctx.completion_scratch.ops.items.len);
+            try std.testing.expectEqual(@as(usize, 0), fixture.ctx.inhabitation_entered.count());
+            try std.testing.expectEqual(@as(usize, 0), fixture.ctx.inhabitation_visiting.count());
+            failing.fail_index = std.math.maxInt(usize);
+            try std.testing.expect(try Probe.run(&fixture.ctx, inhabited, request, produced));
+            continue;
+        };
+        try std.testing.expect(result);
+        try std.testing.expect(fail_offset > 0);
+        break;
     }
 }
 
@@ -69187,15 +69495,13 @@ fn methodOwnerFromType(types: *const Type.Store, ty: Type.TypeId) ?static_dispat
 const NodeUninhabitedScan = struct {
     body: *BodyContext,
     backing_access: BodyContext.UninhabitedBackingAccess,
-    /// Encounters whose answer later graph work can change: an unresolved
-    /// node, a named node's backing, or a node already on the path. A node
-    /// whose expansion saw none has a settled answer.
-    unsettled_hits: usize = 0,
+    /// Active-path assumptions cannot become reusable answers.
+    cycle_hits: usize = 0,
 
     const Evaluation = AnyAll.Evaluation(NodeId, NodeUninhabitedScan);
 
-    fn settled(self: *NodeUninhabitedScan) *collections.DenseMapUnmanaged(NodeId, bool) {
-        return &self.body.settled_node_uninhabited[@backingInt(self.backing_access)];
+    fn memo(self: *NodeUninhabitedScan) *collections.DenseMapUnmanaged(NodeId, bool) {
+        return &self.body.node_uninhabited_memo[@backingInt(self.backing_access)];
     }
 
     pub fn enter(self: *NodeUninhabitedScan, items: Evaluation.Items, node: NodeId) Allocator.Error!Evaluation.Expansion {
@@ -69205,14 +69511,24 @@ const NodeUninhabitedScan = struct {
         if (body.inhabitation_visiting.bit_length <= root_index) {
             try body.inhabitation_visiting.resize(body.allocator, root_index + 1, false);
         }
+        body.graph.countDiagnostic("inhabitation_node_entries");
         if (body.inhabitation_visiting.isSet(root_index)) {
-            self.unsettled_hits += 1;
+            body.graph.countDiagnostic("inhabitation_cycle_assumptions");
+            self.cycle_hits += 1;
             return .{ .value = false };
         }
-        if (self.settled().get(root)) |answer| return .{ .value = answer };
-        // An unread leaf is exactly its finished type, whose answer is
-        // settled.
-        if (body.graph.leafType(root)) |ty| return .{ .value = try body.typeIsProvenUninhabitedWith(ty, self.backing_access) };
+        if (self.memo().get(root)) |answer| {
+            body.graph.countDiagnostic("inhabitation_memo_hits");
+            return .{ .value = answer };
+        }
+        body.graph.countDiagnostic("inhabitation_node_expansions");
+        // An unread leaf is exactly its immutable finished type. This query
+        // does not expand graph content or change the epoch.
+        if (body.graph.leafType(root)) |ty| {
+            const answer = try body.typeIsProvenUninhabitedWith(ty, self.backing_access);
+            try self.memo().put(body.allocator, root, answer);
+            return .{ .value = answer };
+        }
 
         const expansion: Evaluation.Expansion = switch ((try body.graph.content(root))) {
             .redirect => |target| blk: {
@@ -69222,7 +69538,6 @@ const NodeUninhabitedScan = struct {
             .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns a leaf
             .empty_tag_union => .{ .value = true },
             .named => |named| blk: {
-                self.unsettled_hits += 1;
                 const backing = named.backing orelse break :blk .{ .value = false };
                 if (backing.use != .inspectable and self.backing_access != .runtime_layout) break :blk .{ .value = false };
                 try items.add(backing.node);
@@ -69250,10 +69565,7 @@ const NodeUninhabitedScan = struct {
                 }
                 break :blk .{ .group = .all };
             },
-            .unresolved => blk: {
-                self.unsettled_hits += 1;
-                break :blk .{ .value = false };
-            },
+            .unresolved => .{ .value = false },
             .primitive,
             .list,
             .func,
@@ -69264,8 +69576,10 @@ const NodeUninhabitedScan = struct {
             => .{ .value = false },
         };
         if (expansion == .group) {
+            try body.inhabitation_entered.put(body.allocator, root, self.cycle_hits);
             body.inhabitation_visiting.set(root_index);
-            try body.inhabitation_entered.put(body.allocator, root, self.unsettled_hits);
+        } else {
+            try self.memo().put(body.allocator, root, expansion.value);
         }
         return expansion;
     }
@@ -69276,7 +69590,7 @@ const NodeUninhabitedScan = struct {
         body.inhabitation_visiting.unset(@backingInt(root));
         const hits_before = (body.inhabitation_entered.fetchRemove(root) orelse return).value;
         const answer = result orelse return;
-        if (self.unsettled_hits == hits_before) try self.settled().put(body.allocator, root, answer);
+        if (self.cycle_hits == hits_before) try self.memo().put(body.allocator, root, answer);
     }
 };
 

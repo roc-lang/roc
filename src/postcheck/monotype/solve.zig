@@ -1909,6 +1909,20 @@ pub const InterfaceConstraints = struct {
 /// `InstGraph.diagnostics` remains null unless detailed diagnostics were
 /// requested, so ordinary lowering does not count hot-path operations.
 pub const GraphDiagnostics = struct {
+    // Request-completion and inhabitation work, separate from allocation.
+    completion_queries: u64 = 0,
+    completion_pair_entries: u64 = 0,
+    completion_pair_expansions: u64 = 0,
+    completion_memo_hits: u64 = 0,
+    completion_cycle_assumptions: u64 = 0,
+    completion_invalidations: u64 = 0,
+    inhabitation_queries: u64 = 0,
+    inhabitation_node_entries: u64 = 0,
+    inhabitation_node_expansions: u64 = 0,
+    inhabitation_memo_hits: u64 = 0,
+    inhabitation_cycle_assumptions: u64 = 0,
+    inhabitation_invalidations: u64 = 0,
+
     /// Node identities retained by argument-class snapshots.
     argument_class_members_snapshotted: u64 = 0,
     /// Visited-set slots initialized or touched by structural backing walks.
@@ -2751,7 +2765,8 @@ pub const InstGraph = struct {
         _ = self.arena_impl.reset(.retain_capacity);
     }
 
-    fn countDiagnostic(self: *InstGraph, comptime field: []const u8) void {
+    /// Count graph work only when the owner requested diagnostics.
+    pub fn countDiagnostic(self: *InstGraph, comptime field: []const u8) void {
         if (self.diagnostics) |diagnostics| {
             @field(diagnostics, field) += 1;
         }
@@ -7821,14 +7836,19 @@ pub const InstGraph = struct {
     }
 
     /// Normalize only a head that a row reader actually consumes. This state
-    /// changes neither type meaning nor snapshot dependencies, so recording it
-    /// does not invalidate relation stamps or observable graph snapshots.
+    /// changes neither type meaning nor snapshot dependencies. Reordering
+    /// retires order-sensitive analysis answers, but not unification stamps
+    /// or observable graph snapshots.
     pub fn sortTagHead(self: *InstGraph, root: NodeId) void {
         const row = &self.nodes.items[@backingInt(root)].tag_union;
         if (row.tags_sorted) return;
         const tags = row.tags;
         if (!std.sort.isSorted(InstTag, tags, self.name_store, instTagLessThan)) {
             std.mem.sortUnstable(InstTag, tags, self.name_store, instTagLessThan);
+            // Completion compares row entries in their stored order. Its
+            // answers must not survive a reordering, although type meaning,
+            // containment versions, and resolvedness are unchanged.
+            self.structure_epoch +%= 1;
         }
         for (tags, 0..) |tag, index| {
             if (index != 0) std.debug.assert(tags[index - 1].name != tag.name);
