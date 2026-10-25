@@ -765,8 +765,10 @@ pub const ModuleState = struct {
     external_dependents: std.ArrayList(ModuleRef),
     /// Diagnostic reports
     reports: std.ArrayList(Report),
-    /// Reports already present when type checking began: parsing and
+    /// Reports already present before checked-cache lookup: parsing and
     /// canonicalization produced them, and their own caches reproduce them.
+    /// Checking (including the deferred import drain) and evaluation append
+    /// to the same report list without removing these earlier reports.
     pre_check_report_count: usize = 0,
     /// Minimum dependency depth from root
     depth: u32,
@@ -801,6 +803,13 @@ pub const ModuleState = struct {
             return semantic.module_env;
         }
         return null;
+    }
+
+    /// Earlier-stage reports have already been replayed before checked-cache
+    /// lookup. Staging and publication allow them, but no new checking or
+    /// evaluation reports, which the checked cache does not replay.
+    fn hasOnlyPreCheckReports(self: *const ModuleState) bool {
+        return self.reports.items.len == self.pre_check_report_count;
     }
 
     pub fn checkedArtifact(self: *ModuleState) ?*check.CheckedArtifact.CheckedModuleArtifact {
@@ -2258,8 +2267,9 @@ pub const Coordinator = struct {
                     .checked_source => |module_env| module_env,
                     .static_builtin, .cached_entry => continue,
                 };
-                // A module with reports is never cached.
-                if (mod.reports.items.len == 0) self.stageCheckedModuleEnv(mod, artifact);
+                // Evaluation may still add reports; final publication checks
+                // this condition again and discards any ineligible staged part.
+                if (mod.hasOnlyPreCheckReports()) self.stageCheckedModuleEnv(mod, artifact);
                 env.types.deinit();
                 env.types = try @import("types").Store.init(env.gpa);
                 mod.solver_types_released = true;
@@ -3538,7 +3548,7 @@ pub const Coordinator = struct {
         // compilation evaluated roots it lacked.
         const evaluated_more = if (mod.reopened_unevaluated) |before| unevaluatedRequestCount(artifact) < before else true;
         mod.reopened_unevaluated = null;
-        if (mod.reports.items.len == mod.pre_check_report_count and evaluated_more) {
+        if (mod.hasOnlyPreCheckReports() and evaluated_more) {
             if (artifact.pairing_arena == null) {
                 if (self.cacheEnabled()) try eval.CompileTimeReuse.publishPortability(artifact);
                 self.storeCheckedModuleInCache(mod, artifact);
