@@ -1056,6 +1056,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// One contiguous range of the code buffer with a known producer.
         pub const CodeRegion = struct {
+            payload: ?@import("ProcArtifact.zig").AssembledPayload = null,
             start: usize,
             end: usize,
             /// Offset from `start` that references to this region resolve to.
@@ -23022,6 +23023,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Every range of the code buffer with its producer, in emission order.
+        /// Assembly copies canonical bytes and changes only relocation sites.
+        /// The source set owns this borrow until extraction retains its owner.
+        pub fn retainAssembledPayload(self: *Self, start: usize, payload: @import("ProcArtifact.zig").AssembledPayload) void {
+            const region = &self.code_regions.items[self.code_regions.items.len - 1];
+            std.debug.assert(region.start == start and region.end - region.start == payload.code.len);
+            region.payload = payload;
+        }
+
         pub fn codeRegions(self: *const Self) []const CodeRegion {
             return self.code_regions.items;
         }

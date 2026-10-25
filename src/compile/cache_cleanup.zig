@@ -293,7 +293,11 @@ fn cleanupObjectPacks(std_io: Io, cache_base: []const u8, format_version: u32, n
             if (namespace_entry.kind != .directory) continue;
             if (!std.mem.startsWith(u8, namespace_entry.name, cache_config.object_pack_namespace_prefix)) continue;
             if (!std.mem.eql(u8, namespace_entry.name, current_namespace)) {
-                version_dir.deleteTree(std_io, namespace_entry.name) catch {
+                // Another live compiler may still own records in an older
+                // format. Remove only unpinned files, preserving stable locks.
+                purgeUnpinned(std_io, version_dir, namespace_entry.name);
+                version_dir.deleteDir(std_io, namespace_entry.name) catch |err| {
+                    if (err == error.DirNotEmpty) continue;
                     if (maybe_stats) |stats| stats.errors += 1;
                     continue;
                 };
@@ -303,6 +307,20 @@ fn cleanupObjectPacks(std_io: Io, cache_base: []const u8, format_version: u32, n
             var namespace_dir = version_dir.openDir(std_io, namespace_entry.name, .{ .iterate = true }) catch continue;
             defer namespace_dir.close(std_io);
             cleanupPackNamespace(std_io, namespace_dir, now_ns, maybe_stats);
+        }
+    }
+}
+
+fn purgeUnpinned(io: Io, parent: Dir, name: []const u8) void {
+    var dir = parent.openDir(io, name, .{ .iterate = true }) catch return;
+    defer dir.close(io);
+    var it = dir.iterate();
+    while (it.next(io) catch null) |entry| {
+        if (entry.kind == .directory) {
+            purgeUnpinned(io, dir, entry.name);
+            dir.deleteDir(io, entry.name) catch {};
+        } else if (entry.kind == .file and !std.mem.endsWith(u8, entry.name, ".lock")) {
+            _ = @import("base").retained_cache.remove(dir, io, entry.name);
         }
     }
 }
@@ -356,13 +374,10 @@ fn ageFilesIn(std_io: Io, dir: Dir, max_age_ns: i96, now_ns: i128, maybe_stats: 
             ageFilesIn(std_io, child, max_age_ns, now_ns, maybe_stats);
             continue;
         }
-        if (file_entry.kind != .file) continue;
+        if (file_entry.kind != .file or std.mem.endsWith(u8, file_entry.name, ".lock")) continue;
         const last_use = lastUseNs(dir, std_io, file_entry.name) orelse continue;
         if (now_ns - last_use <= max_age_ns) continue;
-        dir.deleteFile(std_io, file_entry.name) catch {
-            if (maybe_stats) |stats| stats.errors += 1;
-            continue;
-        };
+        if (!@import("base").retained_cache.remove(dir, std_io, file_entry.name)) continue;
         if (maybe_stats) |stats| stats.cache_files_deleted += 1;
     }
 }
@@ -404,10 +419,7 @@ fn enforceSizeLimit(std_io: Io, cache_base: []const u8, limits: Limits, maybe_st
     std.mem.sort(SizedFile, files.items, {}, SizedFile.lessThan);
     for (files.items) |file| {
         if (total <= limits.max_size_bytes) break;
-        base_dir.deleteFile(std_io, file.path) catch {
-            if (maybe_stats) |stats| stats.errors += 1;
-            continue;
-        };
+        if (!@import("base").retained_cache.remove(base_dir, std_io, file.path)) continue;
         total -= file.size;
         if (maybe_stats) |stats| stats.evicted_files_deleted += 1;
     }
@@ -950,4 +962,34 @@ test "size bound evicts least recently used files across families until under th
     try std.testing.expectError(error.FileNotFound, pack.access(std.testing.io, "middle.rpk", .{}));
     try exe.access(std.testing.io, "newest", .{});
     try exe.access(std.testing.io, "newest.lock", .{});
+}
+
+test "object pack sweep respects native record ownership during age size and format eviction" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(root);
+    const dir = try std.fs.path.join(a, &.{ root, "compiler", "objects-v16", "proc-test-dev", "local", "zero", "payload" });
+    defer a.free(dir);
+    const now = nowNs(io);
+    try writeTestFile(dir, "record.rpa", "held", now - 2 * Config.LOCAL_PACK_MAX_AGE_NS);
+    const path = try std.fs.path.join(a, &.{ dir, "record.rpa" });
+    defer a.free(path);
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash("held", &hash, .{});
+    const owner = try @import("base").retained_cache.Owner.create(a, io, @splat(0));
+    var live = true;
+    defer if (live) owner.release();
+    _ = try owner.acquire(path, hash, .native_payload_v1);
+    for ([_]u32{ 16, 17 }) |format| {
+        // Size eviction also runs, with a zero-byte budget.
+        sweep(io, root, .{ .object_pack_format_version = format, .max_size_bytes = 0 }, now + 2 * Config.LOCAL_PACK_MAX_AGE_NS, null);
+        try Dir.cwd().access(io, path, .{});
+    }
+    owner.release();
+    live = false;
+    sweep(io, root, .{ .object_pack_format_version = 16, .max_size_bytes = 0 }, now + 2 * Config.LOCAL_PACK_MAX_AGE_NS, null);
+    try std.testing.expectError(error.FileNotFound, Dir.cwd().access(io, path, .{}));
 }

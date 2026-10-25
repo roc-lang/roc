@@ -50,6 +50,9 @@ fn codeRefForm(form: Form) LirCodeGenMod.SymbolicRefForm {
 
 /// A producer-identified target whose code need not have been emitted yet.
 pub const SymbolicReference = struct {
+    /// A cache component binds its own optional definition explicitly. Appended
+    /// components may contain other versions of the same site-named procedure.
+    binding: union(enum) { unresolved, absent, local: u32 } = .unresolved,
     site: u32,
     form: Form,
     /// A producer-reserved in-body veneer, still repatched by final placement.
@@ -160,6 +163,10 @@ pub const content_data_prefix = lir.Program.content_data_symbol_prefix;
 
 /// One lifted region of machine code.
 pub const Artifact = struct {
+    /// Producer-validated canonical payload. Relocations and dependency bindings
+    /// remain separate metadata; a byte-changing producer must clear this.
+    payload_record: ?*const base.retained_cache.Record = null,
+    metadata_origin: ?*const MetadataOrigin = null,
     kind: Kind,
     code: []const u8,
     /// Offset within `code` that references to this artifact resolve to.
@@ -180,6 +187,28 @@ pub const Artifact = struct {
     loc: base.SourceLoc = .none,
 };
 
+/// An artifact's immutable dependency-component identity and producer metadata.
+/// The record owner also owns source and the dependency arrays.
+pub const MetadataOrigin = struct {
+    record: *const base.retained_cache.Record,
+    source: *const Set,
+    index: u32,
+    refs: []const Binding,
+    symbolic: []const ?Binding,
+};
+
+/// Exact content-addressed dependency endpoint, including its component ordinal.
+pub const Binding = struct { component: [32]u8, index: u32 };
+
+/// Canonical bytes retained across relocation-only assembly. Data metadata may
+/// have content names rebound; its ordered raw bytes retain the payload identity.
+pub const AssembledPayload = struct {
+    record: *const base.retained_cache.Record,
+    metadata_origin: ?*const MetadataOrigin,
+    code: []const u8,
+    data: []const DataItem,
+};
+
 /// An ordered set of artifacts covering one code buffer. Order is emission
 /// order, which `assemble` reproduces.
 pub const Set = struct {
@@ -188,9 +217,37 @@ pub const Set = struct {
     /// The module content identity of each source-file index the artifacts'
     /// lines use (`LirStore.sourceFileModuleIdentity`).
     source_files: []const [32]u8 = &.{},
+    record_owners: []const *base.retained_cache.Owner = &.{},
+
+    /// Allocate the owner list before transferring the arena to a result.
+    /// No retain happens until the last fallible allocation has succeeded.
+    fn retainRecordOwners(a: Allocator, artifacts: []const Artifact) Allocator.Error![]const *base.retained_cache.Owner {
+        var owners = std.AutoHashMap(*base.retained_cache.Owner, void).init(a);
+        defer owners.deinit();
+        for (artifacts) |artifact| {
+            if (artifact.payload_record) |record| try owners.put(record.owner, {});
+            if (artifact.metadata_origin) |origin| try owners.put(origin.record.owner, {});
+        }
+        const retained = try a.alloc(*base.retained_cache.Owner, owners.count());
+        var it = owners.keyIterator();
+        var i: usize = 0;
+        while (it.next()) |owner| : (i += 1) retained[i] = owner.*;
+        for (retained) |owner| owner.retain();
+        return retained;
+    }
 
     pub fn deinit(self: *Set) void {
+        for (self.record_owners) |owner| owner.release();
         self.arena.deinit();
+    }
+
+    /// Resolve within the producer's explicit binding domain.
+    pub fn symbolicDefinition(self: *const Set, ref: SymbolicReference) ?u32 {
+        return switch (ref.binding) {
+            .unresolved => self.definitionOf(ref.target),
+            .absent => null,
+            .local => |index| index,
+        };
     }
 
     /// The index of the artifact defining `target`, a symbolic reference's
@@ -357,7 +414,8 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
     }
     const owned = try artifacts.toOwnedSlice(a);
     const owned_source_files = try source_files.toOwnedSlice(a);
-    return .{ .arena = arena, .artifacts = owned, .source_files = owned_source_files };
+    const retained = try Set.retainRecordOwners(arena.allocator(), owned);
+    return .{ .arena = arena, .artifacts = owned, .source_files = owned_source_files, .record_owners = retained };
 }
 
 /// Deep-copy sets compiled from programs of one Solved program, which name a
@@ -460,13 +518,17 @@ pub fn combineDistinct(allocator: Allocator, sets: []const *const Set) Allocator
             try copyArtifacts(a, &artifacts, &.{ .arena = undefined, .artifacts = &.{source} }, null);
             const refs: []Reference = @constCast(artifacts.items[first].refs);
             for (refs, source.refs) |*ref, original| ref.target = map[original.target];
+            for (@constCast(artifacts.items[first].symbolic_refs), source.symbolic_refs) |*ref, original| if (original.binding == .local) {
+                ref.binding = .{ .local = map[original.binding.local] };
+            };
             try nameDataByContent(a, &artifacts.items[first], &names);
         }
     }
     // Both slices come from the arena before it is copied into the set.
     const owned_artifacts = try artifacts.toOwnedSlice(a);
     const owned_source_files = try a.dupe([32]u8, source_files);
-    return .{ .arena = arena, .artifacts = owned_artifacts, .source_files = owned_source_files };
+    const retained = try Set.retainRecordOwners(arena.allocator(), owned_artifacts);
+    return .{ .arena = arena, .artifacts = owned_artifacts, .source_files = owned_source_files, .record_owners = retained };
 }
 
 /// Replace every program-local constant name `artifact` carries or refers
@@ -499,7 +561,8 @@ fn copySet(allocator: Allocator, set: *const Set) Allocator.Error!Set {
     var artifacts = std.ArrayList(Artifact).empty;
     try copyArtifacts(a, &artifacts, set, null);
     const owned = try artifacts.toOwnedSlice(a);
-    return .{ .arena = arena, .artifacts = owned };
+    const retained = try Set.retainRecordOwners(arena.allocator(), owned);
+    return .{ .arena = arena, .artifacts = owned, .record_owners = retained };
 }
 
 /// Append deep copies of `set`'s artifacts, rebasing set-local references
@@ -517,6 +580,9 @@ fn copyArtifacts(a: Allocator, artifacts: *std.ArrayList(Artifact), set: *const 
         for (refs) |*ref| ref.target += first;
         artifact.refs = refs;
         const symbolic_refs = try a.dupe(SymbolicReference, source.symbolic_refs);
+        for (symbolic_refs) |*ref| if (ref.binding == .local) {
+            ref.binding.local += first;
+        };
         for (symbolic_refs) |*ref| switch (ref.target) {
             .rc_helper => |name| ref.target = .{ .rc_helper = try a.dupe(u8, name) },
             .proc, .boxy_thunk => {},
@@ -1105,7 +1171,12 @@ pub fn extractPrepared(
 
         // Every data item the region names, then every item those name, so
         // an artifact carries the whole constant graph it points into.
-        const region_data = try captureData(allocator, arena_allocator, region_relocations.items, prepared);
+        const retained_payload = region.payload;
+        const region_data = if (retained_payload) |payload| data: {
+            const items = try arena_allocator.alloc(DataItem, payload.data.len);
+            for (payload.data, items) |item, *out| out.* = try cloneData(arena_allocator, item);
+            break :data items;
+        } else try captureData(allocator, arena_allocator, region_relocations.items, prepared);
 
         // Lines and failure sites are in code offset order, so each region's
         // are one contiguous run found by search. A failing call's return
@@ -1122,11 +1193,16 @@ pub fn extractPrepared(
             if (site.offset > region.end) break;
             try failure_sites.append(arena_allocator, .{ .offset = @intCast(site.offset - region.start), .meaning = site.meaning });
         }
-        const artifact_code = try arena_allocator.dupe(u8, code[region.start..region.end]);
-        codegen.normalizeArtifactCode(region.start, artifact_code);
-        for (region_refs.items) |ref| CG.normalizeArtifactRefSite(artifact_code, ref.site, codeRefForm(ref.form), if (ref.veneer) |offset| offset else null);
-        for (symbolic_refs.items) |ref| CG.normalizeArtifactRefSite(artifact_code, ref.site, codeRefForm(ref.form), if (ref.veneer) |offset| offset else null);
+        const artifact_code = if (retained_payload) |payload| try arena_allocator.dupe(u8, payload.code) else code_bytes: {
+            const bytes = try arena_allocator.dupe(u8, code[region.start..region.end]);
+            codegen.normalizeArtifactCode(region.start, bytes);
+            for (region_refs.items) |ref| CG.normalizeArtifactRefSite(bytes, ref.site, codeRefForm(ref.form), if (ref.veneer) |offset| offset else null);
+            for (symbolic_refs.items) |ref| CG.normalizeArtifactRefSite(bytes, ref.site, codeRefForm(ref.form), if (ref.veneer) |offset| offset else null);
+            break :code_bytes bytes;
+        };
         artifacts[index] = .{
+            .payload_record = if (retained_payload) |payload| payload.record else null,
+            .metadata_origin = if (retained_payload) |payload| payload.metadata_origin else null,
             .kind = kind,
             .code = artifact_code,
             .entry = @intCast(region.entry),
@@ -1148,7 +1224,8 @@ pub fn extractPrepared(
         };
     }
 
-    return .{ .arena = arena, .artifacts = artifacts };
+    const retained = try Set.retainRecordOwners(arena.allocator(), artifacts);
+    return .{ .arena = arena, .artifacts = artifacts, .record_owners = retained };
 }
 
 fn refSite(ref: anytype) ?usize {
@@ -1469,10 +1546,14 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
             const artifact = set.artifacts[index];
             for (artifact.refs) |ref| try artifact_work.append(allocator, ref.target);
             for (artifact.symbolic_refs) |ref| {
-                const target = switch (ref.target) {
-                    .proc => |identity| by_proc.get(identity),
-                    .boxy_thunk => |identity| by_thunk.get(identity),
-                    .rc_helper => |name| by_name.get(name),
+                const target = switch (ref.binding) {
+                    .local => |target_index| @as(?u32, target_index),
+                    .absent => null,
+                    .unresolved => switch (ref.target) {
+                        .proc => |identity| by_proc.get(identity),
+                        .boxy_thunk => |identity| by_thunk.get(identity),
+                        .rc_helper => |name| by_name.get(name),
+                    },
                 };
                 if (target) |target_index| try artifact_work.append(allocator, target_index);
             }
@@ -1514,6 +1595,9 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
         for (refs) |*ref| ref.target = new_index[ref.target];
         artifact.refs = refs;
         const symbolic_refs = try a.dupe(SymbolicReference, source.symbolic_refs);
+        for (symbolic_refs) |*ref| if (ref.binding == .local) {
+            ref.binding.local = new_index[ref.binding.local];
+        };
         for (symbolic_refs) |*ref| switch (ref.target) {
             .rc_helper => |name| ref.target = .{ .rc_helper = try a.dupe(u8, name) },
             .proc, .boxy_thunk => {},
@@ -1534,7 +1618,8 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
     // Allocated before the arena is copied into the result, which must own
     // every node.
     const source_files = try a.dupe([32]u8, set.source_files);
-    return .{ .arena = arena, .artifacts = artifacts, .source_files = source_files };
+    const retained = try Set.retainRecordOwners(arena.allocator(), artifacts);
+    return .{ .arena = arena, .artifacts = artifacts, .source_files = source_files, .record_owners = retained };
 }
 
 /// A program's machine code in its one layout: every artifact of the code
@@ -1658,6 +1743,9 @@ pub fn canonicalize(allocator: Allocator, set: *const Set, host_visible: []const
         for (refs) |*ref| ref.target = position[ref.target];
         out.refs = refs;
         const symbolic_refs = try a.dupe(SymbolicReference, source.symbolic_refs);
+        for (symbolic_refs) |*ref| if (ref.binding == .local) {
+            ref.binding.local = position[ref.binding.local];
+        };
         for (symbolic_refs) |*ref| switch (ref.target) {
             .rc_helper => |name| ref.target = .{ .rc_helper = try a.dupe(u8, name) },
             .proc, .boxy_thunk => {},
@@ -1698,10 +1786,8 @@ pub fn canonicalize(allocator: Allocator, set: *const Set, host_visible: []const
     }.lessThan);
 
     const source_files = try a.dupe([32]u8, set.source_files);
-    return .{
-        .set = .{ .arena = arena, .artifacts = artifacts, .source_files = source_files },
-        .data = data[0..data_len],
-    };
+    const retained = try Set.retainRecordOwners(arena.allocator(), artifacts);
+    return .{ .set = .{ .arena = arena, .artifacts = artifacts, .source_files = source_files, .record_owners = retained }, .data = data[0..data_len] };
 }
 
 fn renamedData(a: Allocator, item: DataItem, names: *const ContentNames) Allocator.Error!DataItem {
@@ -1940,6 +2026,7 @@ fn appendRuntimeRefs(comptime CG: type, codegen: *CG, artifact: Artifact, start:
 }
 
 fn appendMetadata(comptime CG: type, codegen: *CG, artifact: Artifact, start: usize, lines: LineBinding) Allocator.Error!void {
+    if (artifact.payload_record) |record| codegen.retainAssembledPayload(start, .{ .record = record, .metadata_origin = artifact.metadata_origin, .code = artifact.code, .data = artifact.data });
     switch (artifact.kind) {
         .proc => |identity| {
             try codegen.registerAssembledProc(identity, start + artifact.entry);
@@ -2139,45 +2226,69 @@ pub const ProcSymbols = enum {
 /// through a stable reference to an artifact of the set (to a procedure
 /// only as `proc_symbols` says), transitively.
 pub fn markReferrers(allocator: Allocator, set: *const Set, marked: []bool, proc_symbols: ProcSymbols) Allocator.Error!void {
-    std.debug.assert(marked.len == set.artifacts.len);
+    return markNewReferrers(allocator, set, marked, 0, proc_symbols);
+}
+
+/// Extend facts over an append-only graph. Old nodes have no edges into the
+/// appended suffix; their already settled facts and bindings remain immutable.
+/// Loaded components carry explicit bindings, avoiding a scan of older nodes.
+pub fn markNewReferrers(allocator: Allocator, set: *const Set, marked: []bool, first: usize, proc_symbols: ProcSymbols) Allocator.Error!void {
+    std.debug.assert(marked.len == set.artifacts.len and first <= marked.len);
+    if (first == marked.len) return;
     var by_proc = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
     defer by_proc.deinit();
     var by_thunk = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
     defer by_thunk.deinit();
     var by_helper = std.StringHashMap(u32).init(allocator);
     defer by_helper.deinit();
-    for (set.artifacts, 0..) |artifact, index| switch (artifact.kind) {
-        .proc => |identity| _ = try by_proc.getOrPutValue(identity, @intCast(index)),
-        .boxy_thunk => |identity| _ = try by_thunk.getOrPutValue(identity, @intCast(index)),
-        .rc_helper => |name| _ = try by_helper.getOrPutValue(name, @intCast(index)),
-        .entrypoint, .message_pool_run, .branch_island => {},
+    const unresolved = blk: {
+        for (set.artifacts[first..]) |artifact| for (artifact.symbolic_refs) |ref| {
+            if (ref.binding == .unresolved) break :blk true;
+        };
+        break :blk false;
     };
-    // Reverse edges: who places whom.
-    var referrers = try allocator.alloc(std.ArrayList(u32), set.artifacts.len);
+    if (unresolved) {
+        std.debug.assert(first == 0);
+        for (set.artifacts, 0..) |artifact, index| switch (artifact.kind) {
+            .proc => |identity| _ = try by_proc.getOrPutValue(identity, @intCast(index)),
+            .boxy_thunk => |identity| _ = try by_thunk.getOrPutValue(identity, @intCast(index)),
+            .rc_helper => |name| _ = try by_helper.getOrPutValue(name, @intCast(index)),
+            .entrypoint, .message_pool_run, .branch_island => {},
+        };
+    }
+    var referrers = try allocator.alloc(std.ArrayList(u32), marked.len - first);
     defer {
         for (referrers) |*list| list.deinit(allocator);
         allocator.free(referrers);
     }
     for (referrers) |*list| list.* = .empty;
-    for (set.artifacts, 0..) |artifact, index| {
-        for (artifact.refs) |ref| try referrers[ref.target].append(allocator, @intCast(index));
+    for (set.artifacts[first..], first..) |artifact, index| {
+        for (artifact.refs) |ref| {
+            if (ref.target < first) {
+                marked[index] = marked[index] or marked[ref.target];
+            } else try referrers[ref.target - first].append(allocator, @intCast(index));
+        }
         for (artifact.symbolic_refs) |ref| {
-            const target = switch (ref.target) {
-                .proc => |identity| switch (proc_symbols) {
-                    .follow => by_proc.get(identity),
-                    .skip => null,
+            if (proc_symbols == .skip and ref.target == .proc) continue;
+            const target = switch (ref.binding) {
+                .local => |target| @as(?u32, target),
+                .absent => null,
+                .unresolved => switch (ref.target) {
+                    .proc => |identity| by_proc.get(identity),
+                    .boxy_thunk => |identity| by_thunk.get(identity),
+                    .rc_helper => |name| by_helper.get(name),
                 },
-                .boxy_thunk => |identity| by_thunk.get(identity),
-                .rc_helper => |name| by_helper.get(name),
             } orelse continue;
-            try referrers[target].append(allocator, @intCast(index));
+            if (target < first) {
+                marked[index] = marked[index] or marked[target];
+            } else try referrers[target - first].append(allocator, @intCast(index));
         }
     }
     var work = std.ArrayList(u32).empty;
     defer work.deinit(allocator);
-    for (marked, 0..) |is_marked, index| if (is_marked) try work.append(allocator, @intCast(index));
+    for (marked[first..], first..) |is_marked, index| if (is_marked) try work.append(allocator, @intCast(index));
     while (work.pop()) |index| {
-        for (referrers[index].items) |referrer| {
+        for (referrers[index - first].items) |referrer| {
             if (marked[referrer]) continue;
             marked[referrer] = true;
             try work.append(allocator, referrer);
@@ -2303,7 +2414,7 @@ pub fn splice(
                 .proc => |identity| if (procs_by_identity.contains(identity)) continue,
                 .boxy_thunk, .rc_helper => {},
             }
-            if (set.definitionOf(ref.target)) |definition| try stack.append(allocator, definition);
+            if (set.symbolicDefinition(ref)) |definition| try stack.append(allocator, definition);
         }
     }
 
@@ -2499,6 +2610,7 @@ test "artifact metadata queues unresolved targets, preserves same-offset line or
             self.proc_entry = entry;
         }
         pub fn registerAssembledProcLoc(_: *Self, _: lir.ProcIdentity, _: base.SourceLoc) Allocator.Error!void {}
+        pub fn retainAssembledPayload(_: *Self, _: usize, _: AssembledPayload) void {}
         pub fn registerAssembledThunk(_: *Self, _: lir.ProcIdentity, _: usize) Allocator.Error!void {}
         pub fn registerSplicedHelper(_: *Self, _: []const u8, _: usize) Allocator.Error!void {}
         pub fn queueAssembledSymbolicRef(self: *Self, ref: SymbolicReference) Allocator.Error!void {

@@ -8559,7 +8559,7 @@ fn writePackageDevPacksToStore(
         var pack = try compileModulePack(ctx, build_env, root_artifact, imports, relations, artifact, roots, .dev, .lss, RocTarget.detectNative(), false);
         defer pack.deinit();
         const set = &pack.compiled.artifacts.?;
-        try publishDevPack(build_env, store, placement.origin, placement.identity, artifact.codeGenerationKey().bytes, set, &pack.lowered);
+        try publishDevPack(build_env, store, placement.origin, placement.identity, artifact.codeGenerationKey().bytes, set, &pack.lowered, null);
         for ([_]?*pack_store.LoadedPacks{ offers, runtime_packs }) |maybe_packs| {
             const packs = maybe_packs orelse continue;
             try packs.offerIndexed(store, placement.origin, placement.identity);
@@ -8575,6 +8575,7 @@ fn writePacksToStore(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     app_lowered: *const lir.CheckedPipeline.LoweredProgram,
     app_artifacts: ?*const backend.dev.ProcArtifact.Set,
+    loaded_packs: ?*const pack_store.LoadedPacks,
 ) CliMainError!void {
     if (dev_diagnostics.isSet(.pack_trace)) {
         // What this program lowered from source: every procedure by identity,
@@ -8596,7 +8597,7 @@ fn writePacksToStore(
     }
     if (app_artifacts) |set| {
         if (build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
-            try publishDevPack(build_env, store, placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes, set, app_lowered);
+            try publishDevPack(build_env, store, placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes, set, app_lowered, loaded_packs);
         }
     }
 }
@@ -9189,7 +9190,7 @@ fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) Allocator.Error!vo
     var combined = try completed.combinedArtifacts(ctx.gpa);
     defer combined.deinit();
     if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("compile-time pack {d} artifacts\n", .{combined.artifacts.len});
-    try parts.offers.publish(build_env, store, destination.placement.origin, destination.placement.identity, destination.key, &combined);
+    try parts.offers.publish(build_env, store, destination.placement.origin, destination.placement.identity, destination.key, &combined, &cache.packs);
     cache.packs.refreshIndex();
 }
 
@@ -9219,17 +9220,6 @@ fn publishCompileTimeResults(ctx: *CliCtx, build_env: *BuildEnv, root_artifact: 
     try publishDiscoverySummaries(build_env, root_artifact);
 }
 
-/// Whether `root`'s code reaches a procedure a linked object-cache object
-/// provides (`LIR.LirProcSpec.c_abi_entry`).
-fn procReachesLinkedEntry(allocator: Allocator, store: *const lir.LirStore, root: lir.LIR.LirProcSpecId) Allocator.Error!bool {
-    const closure = try lir.PackProgram.procCallClosure(allocator, store, root);
-    defer allocator.free(closure);
-    for (closure, store.getProcSpecs()) |reached, proc| {
-        if (reached and proc.c_abi_entry) return true;
-    }
-    return false;
-}
-
 /// Encode a pack program's artifacts with its spec table: every keyed
 /// specialization whose procedure has an artifact, with the ownership
 /// signature ARC solved for it.
@@ -9247,12 +9237,12 @@ fn packFileBytes(
     return offers.encode(allocator, set);
 }
 
-fn publishDevPack(build_env: *const BuildEnv, store: *const pack_store.Store, origin: BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, set: *const backend.dev.ProcArtifact.Set, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!void {
+fn publishDevPack(build_env: *const BuildEnv, store: *const pack_store.Store, origin: BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, set: *const backend.dev.ProcArtifact.Set, lowered: *const lir.CheckedPipeline.LoweredProgram, loaded_packs: ?*const pack_store.LoadedPacks) Allocator.Error!void {
     const reads = if (lowered.spec_comptime_reads) |*reads| reads else base.invariant("a dev pack producer recorded compile-time reads", .{});
     var offers = PackOffers.init(store.allocator, false);
     defer offers.deinit();
     try offers.addProgram(lowered, reads);
-    try offers.publish(build_env, store, origin, identity, key, set);
+    try offers.publish(build_env, store, origin, identity, key, set, loaded_packs);
 }
 
 /// The procedures a pack may offer, gathered from the programs it is written
@@ -9322,20 +9312,19 @@ const PackOffers = struct {
     ) Allocator.Error!void {
         const allocator = self.literal_converters.allocator;
         const store = &lowered.lir_result.store;
-        const converting = try lir.PackProgram.literalConvertingProcs(allocator, store);
-        defer allocator.free(converting);
-        for (store.getProcSpecs(), converting) |proc, converts| {
+        var facts = try lir.PackProgram.OfferFacts.init(allocator, store);
+        defer facts.deinit();
+        if (dev_diagnostics.isSet(.pack_stats)) std.debug.print("pack offer analysis: statements={d} call_edges={d} propagation_edges={d}\n", .{ facts.statements_visited, facts.call_edges, facts.propagation_edges });
+        for (store.getProcSpecs(), facts.literal_conversion) |proc, converts| {
             if (converts) try self.literal_converters.put(proc.identity, {});
         }
         for (lowered.lir_result.spec_procs.items) |spec_proc| {
             const key_entry = try self.keys.getOrPut(spec_proc.key);
             if (key_entry.found_existing) continue;
             key_entry.value_ptr.* = store.getProcSpecImmediate(spec_proc.proc).cache_provider_module;
-            try self.keyed.append(self.arena.allocator(), try self.candidate(lowered, spec_proc.proc, spec_proc.key, comptime_reads.get(spec_proc.key)));
+            try self.keyed.append(self.arena.allocator(), try self.candidate(lowered, &facts, spec_proc.proc, spec_proc.key, comptime_reads.get(spec_proc.key)));
         }
-        const carriers = try lir.PackProgram.siteCodeCarriers(allocator, store);
-        defer allocator.free(carriers);
-        for (store.getProcSpecs(), carriers, 0..) |proc, carries_site_code, index| {
+        for (store.getProcSpecs(), facts.site_code, 0..) |proc, carries_site_code, index| {
             if (proc.abi != .roc or proc.hosted != null or proc.is_static_initializer) continue;
             const source_fn = proc.source_monotype_fn orelse continue;
             const id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
@@ -9348,13 +9337,14 @@ const PackOffers = struct {
             const key_entry = try self.keys.getOrPut(key);
             if (key_entry.found_existing) continue;
             key_entry.value_ptr.* = proc.cache_provider_module;
-            try self.by_identity.append(self.arena.allocator(), try self.candidate(lowered, id, key, comptime_reads.fnReads(source_fn)));
+            try self.by_identity.append(self.arena.allocator(), try self.candidate(lowered, &facts, id, key, comptime_reads.fnReads(source_fn)));
         }
     }
 
     fn candidate(
         self: *PackOffers,
         lowered: *const lir.CheckedPipeline.LoweredProgram,
+        facts: *const lir.PackProgram.OfferFacts,
         id: lir.LIR.LirProcSpecId,
         key: [32]u8,
         reads: lir.CheckedPipeline.SpecComptimeReads.Lookup,
@@ -9376,7 +9366,7 @@ const PackOffers = struct {
         const withheld = !reads.offerable or
             (self.evaluation and reads.evaluated) or
             proc.rc_variant_demandable or
-            try procReachesLinkedEntry(self.literal_converters.allocator, store, id) or
+            facts.reaches_linked[@backingInt(id)] or
             proc.inlined_at_calls or
             proc.tail_group != null;
         // An entry this program spliced from a pack is offered again with
@@ -9413,6 +9403,10 @@ const PackOffers = struct {
         defer converting_artifacts.deinit(allocator);
         var closure = try SpliceClosure.init(allocator, set);
         defer closure.deinit();
+        const rejected = try allocator.alloc(bool, set.artifacts.len);
+        defer allocator.free(rejected);
+        for (rejected, 0..) |*mark, index| mark.* = converting_artifacts.isSet(index) or closureNamesProgramLocalSymbols(set, &.{@intCast(index)});
+        try backend.dev.ProcArtifact.markReferrers(allocator, set, rejected, .follow);
         for ([_][]const Candidate{ self.keyed.items, self.by_identity.items }, [_]bool{ false, true }) |candidates, by_identity| {
             for (candidates) |offer| {
                 const artifact = closure.offeredProcArtifact(offer.identity) orelse continue;
@@ -9424,8 +9418,7 @@ const PackOffers = struct {
                 // and a constant holding a code pointer names code the pack
                 // may not carry; an entry that reaches either cannot be
                 // linked elsewhere, so it is not offered.
-                const placed = try closure.of(artifact);
-                if (closureNamesProgramLocalSymbols(set, placed) or closureConvertsLiteral(&converting_artifacts, placed)) {
+                if (rejected[artifact]) {
                     withheld += 1;
                     continue;
                 }
@@ -9458,7 +9451,7 @@ const PackOffers = struct {
         return backend.dev.PackFile.write(allocator, set, specs);
     }
 
-    fn publish(self: *const PackOffers, build_env: *const BuildEnv, store: *const pack_store.Store, origin: BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, set: *const backend.dev.ProcArtifact.Set) Allocator.Error!void {
+    fn publish(self: *const PackOffers, build_env: *const BuildEnv, store: *const pack_store.Store, origin: BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, set: *const backend.dev.ProcArtifact.Set, loaded_packs: ?*const pack_store.LoadedPacks) Allocator.Error!void {
         const specs = try self.entries(store.allocator, set);
         defer store.allocator.free(specs);
         const providers = try store.allocator.alloc(BuildEnv.PackPlacement, specs.len);
@@ -9474,7 +9467,7 @@ const PackOffers = struct {
                 }
             }
         }
-        store.writeIndexedForProviders(origin, identity, set, specs, providers) catch |err| switch (err) {
+        store.writeIndexedRetained(origin, identity, set, specs, providers, loaded_packs) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.PackWriteFailed => return,
         };
@@ -9552,10 +9545,15 @@ fn carriesData(artifact: backend.dev.ProcArtifact.Artifact, name: []const u8) bo
 }
 
 /// Test helper: whether the entry at `root` is withheld for program-local symbols.
-fn testNamesProgramLocalSymbols(set: *const backend.dev.ProcArtifact.Set, root: u32) Allocator.Error!bool {
+fn testNamesProgramLocalSymbols(set: *const backend.dev.ProcArtifact.Set, root: u32) !bool {
     var closure = try SpliceClosure.init(std.testing.allocator, set);
     defer closure.deinit();
-    return closureNamesProgramLocalSymbols(set, try closure.of(root));
+    const marks = try std.testing.allocator.alloc(bool, set.artifacts.len);
+    defer std.testing.allocator.free(marks);
+    for (marks, 0..) |*mark, i| mark.* = closureNamesProgramLocalSymbols(set, &.{@intCast(i)});
+    try backend.dev.ProcArtifact.markReferrers(std.testing.allocator, set, marks, .follow);
+    try std.testing.expectEqual(closureNamesProgramLocalSymbols(set, try closure.of(root)), marks[root]);
+    return marks[root];
 }
 
 test "pack withholds an entry whose stable references reach a constant holding a code pointer" {
@@ -11937,7 +11935,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         const store = object_store.?;
         reporter.begin("Publishing Runtime Cache");
         if (loaded_packs) |packs| try packs.publishInterfaces();
-        try writePacksToStore(ctx, &build_env, store, root_artifact, &lowered, if (object_compiler.captured_artifacts) |*set| set else null);
+        try writePacksToStore(ctx, &build_env, store, root_artifact, &lowered, if (object_compiler.captured_artifacts) |*set| set else null, loaded_packs);
         reporter.end();
     }
 
