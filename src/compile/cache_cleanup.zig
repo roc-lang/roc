@@ -345,11 +345,17 @@ fn cleanupPackNamespace(std_io: Io, namespace_dir: Dir, now_ns: i128, maybe_stat
     }
 }
 
-/// Delete the files of `dir` last used more than `max_age_ns` before `now_ns`.
+/// Recursively delete the files of `dir` last used more than `max_age_ns` before `now_ns`.
 fn ageFilesIn(std_io: Io, dir: Dir, max_age_ns: i96, now_ns: i128, maybe_stats: ?*CleanupStats) void {
     var file_it = dir.iterate();
     while (true) {
         const file_entry = (file_it.next(std_io) catch break) orelse break;
+        if (file_entry.kind == .directory) {
+            var child = dir.openDir(std_io, file_entry.name, .{ .iterate = true }) catch continue;
+            defer child.close(std_io);
+            ageFilesIn(std_io, child, max_age_ns, now_ns, maybe_stats);
+            continue;
+        }
         if (file_entry.kind != .file) continue;
         const last_use = lastUseNs(dir, std_io, file_entry.name) orelse continue;
         if (now_ns - last_use <= max_age_ns) continue;

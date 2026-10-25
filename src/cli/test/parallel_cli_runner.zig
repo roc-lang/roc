@@ -8123,7 +8123,7 @@ const PackStoreFiles = struct {
         var walker = try cache.walk(allocator);
         defer walker.deinit();
         while (try walker.next(io)) |entry| {
-            if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".rpk")) continue;
+            if (entry.kind != .file or !(std.mem.endsWith(u8, entry.basename, ".rpk") or std.mem.endsWith(u8, entry.basename, ".rpi") or std.mem.endsWith(u8, entry.basename, ".rpa") or std.mem.endsWith(u8, entry.basename, ".rpd"))) continue;
             const path = try allocator.dupe(u8, entry.path);
             result.paths.append(allocator, path) catch |err| {
                 allocator.free(path);
@@ -10821,6 +10821,8 @@ fn customRecordedProgramOutput(
         return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
     isolated.env_map.put("ROC_CACHE_DIR", cache) catch |err|
         return customInfraFailure(allocator, timer, "failed to isolate the cache: {}", .{err});
+    if (build_options.dev_diagnostics) isolated.env_map.put("ROC_PACK_STATS", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable cache statistics: {}", .{err});
     const steps = [_]struct { source: []const u8, specializes: bool, stdout: []const u8 }{
         .{ .source = source, .specializes = true, .stdout = "45 155\n" },
         .{ .source = source, .specializes = false, .stdout = "45 155\n" },
@@ -10843,6 +10845,18 @@ fn customRecordedProgramOutput(
         const specialized = std.mem.find(u8, run.stdout, "Specializing") != null or std.mem.find(u8, run.stderr, "Specializing") != null;
         if (specialized != step.specializes) {
             return failureFromRun(allocator, timer, run, if (step.specializes) "a changed program linked recorded output" else "an unchanged program was specialized again");
+        }
+        if (build_options.dev_diagnostics and !step.specializes) {
+            var lines = std.mem.splitScalar(u8, run.stderr, '\n');
+            var observed = false;
+            while (lines.next()) |line| {
+                if (!std.mem.startsWith(u8, line, "pack index:")) continue;
+                observed = true;
+                if (std.mem.find(u8, line, "index_bytes=0 ") == null or std.mem.find(u8, line, "payload_opens=0 ") == null) {
+                    return failureFromRun(allocator, timer, run, "recorded output hit consulted procedure offers or payloads");
+                }
+            }
+            if (!observed) return failureFromRun(allocator, timer, run, "missing procedure index statistics");
         }
         if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
             .args = &.{},

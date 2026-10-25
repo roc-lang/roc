@@ -358,7 +358,7 @@ const CompileTimePackParts = struct {
         const root_artifact = root_semantic.checked_artifact orelse return null;
         const placement = build_env.packPlacementForArtifactKey(root_artifact.key) orelse return null;
         const key = pack_store.compileTimePackKey(root_artifact.codeGenerationKey().bytes, publisher);
-        if (try cache.store.has(placement.origin, placement.identity, key)) return null;
+        if (try cache.store.hasIndexed(placement.origin, placement.identity, key)) return null;
         return .{ .placement = placement, .key = key };
     }
 
@@ -8543,7 +8543,7 @@ fn writePackageDevPacksToStore(
             std.debug.print("dev pack candidate {s} ({s})\n", .{ artifact.canonical_names.moduleNameText(artifact.module_identity.module_name), @tagName(placement.origin) });
         }
         if (placement.origin != .pkg) continue;
-        if (try store.has(placement.origin, placement.identity, artifact.codeGenerationKey().bytes)) continue;
+        if (try store.hasIndexed(placement.origin, placement.identity, artifact.codeGenerationKey().bytes)) continue;
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
         defer ctx.gpa.free(roots);
         if (roots.len == 0) continue;
@@ -8553,20 +8553,11 @@ fn writePackageDevPacksToStore(
         var pack = try compileModulePack(ctx, build_env, root_artifact, imports, relations, artifact, roots, .dev, .lss, RocTarget.detectNative(), false);
         defer pack.deinit();
         const set = &pack.compiled.artifacts.?;
-        const bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
-        defer ctx.gpa.free(bytes);
-        // Offer before filing: a provider whose first lookup happens here
-        // loads the old store, then adds exactly the pack just compiled.
+        try publishDevPack(store, placement.origin, placement.identity, artifact.codeGenerationKey().bytes, set, &pack.lowered);
         for ([_]?*pack_store.LoadedPacks{ offers, runtime_packs }) |maybe_packs| {
             const packs = maybe_packs orelse continue;
-            packs.offerPack(bytes) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return error.NativeCompilationFailed,
-            };
+            try packs.offerIndexed(store, placement.origin, placement.identity);
         }
-        store.write(placement.origin, placement.identity, artifact.codeGenerationKey().bytes, bytes) catch |err| {
-            std.log.warn("object cache could not store a package's dev pack: {}", .{err});
-        };
     }
 }
 
@@ -8609,13 +8600,7 @@ fn writePacksToStore(
     }
     if (app_artifacts) |set| {
         if (build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
-            if (!try store.has(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes)) {
-                const bytes = try packFileBytes(ctx.gpa, set, app_lowered);
-                defer ctx.gpa.free(bytes);
-                store.write(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes, bytes) catch |err| {
-                    std.log.warn("object cache could not store the program's pack: {}", .{err});
-                };
-            }
+            try publishDevPack(store, placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes, set, app_lowered);
         }
     }
     // An app module is never imported, so its procedures only ever link into
@@ -8634,7 +8619,7 @@ fn writePacksToStore(
         const placement = build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
         const origin = placement.origin;
         const identity = placement.identity;
-        if (try store.has(origin, identity, artifact.codeGenerationKey().bytes)) continue;
+        if (try store.hasIndexed(origin, identity, artifact.codeGenerationKey().bytes)) continue;
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
         defer ctx.gpa.free(roots);
         if (roots.len == 0) continue;
@@ -8644,11 +8629,7 @@ fn writePacksToStore(
         var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args.opt, currentRuntimeSpecializationStrategy(args.specialization_strategy), target, false);
         defer pack.deinit();
         const set = &(pack.compiled.artifacts orelse continue);
-        const bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
-        defer ctx.gpa.free(bytes);
-        store.write(origin, identity, artifact.codeGenerationKey().bytes, bytes) catch |err| {
-            std.log.warn("object cache could not store a module's pack: {}", .{err});
-        };
+        try publishDevPack(store, origin, identity, artifact.codeGenerationKey().bytes, set, &pack.lowered);
     }
 }
 
@@ -9239,12 +9220,7 @@ fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) Allocator.Error!vo
     // its own program, and the pack offers the procedures of all of them.
     var combined = try completed.combinedArtifacts(ctx.gpa);
     defer combined.deinit();
-    const bytes = try parts.offers.encode(ctx.gpa, &combined);
-    defer ctx.gpa.free(bytes);
-    if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("compile-time pack {d} bytes\n", .{bytes.len});
-    store.write(destination.placement.origin, destination.placement.identity, destination.key, bytes) catch |err| {
-        std.log.warn("object cache could not store the compile-time pack: {}", .{err});
-    };
+    try parts.offers.publish(store, destination.placement.origin, destination.placement.identity, destination.key, &combined);
 }
 
 /// File the discovery summaries of a compilation that reported no error beside
@@ -9299,6 +9275,14 @@ fn packFileBytes(
     defer offers.deinit();
     try offers.addProgram(lowered, comptime_reads);
     return offers.encode(allocator, set);
+}
+
+fn publishDevPack(store: *const pack_store.Store, origin: BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, set: *const backend.dev.ProcArtifact.Set, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!void {
+    const reads = if (lowered.spec_comptime_reads) |*reads| reads else base.invariant("a dev pack producer recorded compile-time reads", .{});
+    var offers = PackOffers.init(store.allocator, false);
+    defer offers.deinit();
+    try offers.addProgram(lowered, reads);
+    try offers.publish(store, origin, identity, key, set);
 }
 
 /// The procedures a pack may offer, gathered from the programs it is written
@@ -9446,9 +9430,9 @@ const PackOffers = struct {
 
     /// Encode `set`, compiled from the gathered programs, with the spec table
     /// of every procedure they offer.
-    fn encode(self: *const PackOffers, allocator: Allocator, set: *const backend.dev.ProcArtifact.Set) Allocator.Error![]u8 {
+    fn entries(self: *const PackOffers, allocator: Allocator, set: *const backend.dev.ProcArtifact.Set) Allocator.Error![]backend.dev.PackFile.SpecEntry {
         var specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
-        defer specs.deinit(allocator);
+        errdefer specs.deinit(allocator);
         const trace = dev_diagnostics.isSet(.pack_trace);
         var withheld: usize = 0;
         var converting_artifacts = try literalConvertingArtifacts(allocator, set, &self.literal_converters);
@@ -9491,7 +9475,27 @@ const PackOffers = struct {
         if (trace) {
             std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld\n", .{ set.artifacts.len, specs.items.len, withheld });
         }
-        return backend.dev.PackFile.write(allocator, set, specs.items);
+        return specs.toOwnedSlice(allocator);
+    }
+
+    fn encode(self: *const PackOffers, allocator: Allocator, set: *const backend.dev.ProcArtifact.Set) Allocator.Error![]u8 {
+        const specs = try self.entries(allocator, set);
+        defer allocator.free(specs);
+        return backend.dev.PackFile.write(allocator, set, specs);
+    }
+
+    fn publish(self: *const PackOffers, store: *const pack_store.Store, origin: BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, set: *const backend.dev.ProcArtifact.Set) Allocator.Error!void {
+        const specs = try self.entries(store.allocator, set);
+        defer store.allocator.free(specs);
+        store.writeIndexed(origin, identity, set, specs) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.PackWriteFailed => return,
+        };
+        // A completion marker is published only after all independent offers.
+        store.completeIndexed(origin, identity, key) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.PackWriteFailed => {},
+        };
     }
 };
 
@@ -9507,88 +9511,7 @@ fn procFingerprint(allocator: Allocator, lowered: *const lir.CheckedPipeline.Low
 /// entry, and everything it reaches through set-local references and stable
 /// references to definitions in the same set. The set's definitions are
 /// indexed once; each query reuses the walk's storage.
-const SpliceClosure = struct {
-    allocator: Allocator,
-    set: *const backend.dev.ProcArtifact.Set,
-    procs: std.AutoHashMap(lir.ProcIdentity, ProcArtifacts),
-    thunks: std.AutoHashMap(lir.ProcIdentity, u32),
-    helpers: std.StringHashMap(u32),
-    /// Artifacts the current query reached; exactly the indices in `order`.
-    seen: std.DynamicBitSetUnmanaged,
-    order: std.ArrayList(u32) = .empty,
-
-    /// The artifacts of one procedure identity: a splice reaches the first,
-    /// and a pack offers the last.
-    const ProcArtifacts = struct { first: u32, last: u32 };
-
-    fn init(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set) Allocator.Error!SpliceClosure {
-        var self = SpliceClosure{
-            .allocator = allocator,
-            .set = set,
-            .procs = std.AutoHashMap(lir.ProcIdentity, ProcArtifacts).init(allocator),
-            .thunks = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator),
-            .helpers = std.StringHashMap(u32).init(allocator),
-            .seen = .{},
-        };
-        errdefer self.deinit();
-        self.seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, set.artifacts.len);
-        for (set.artifacts, 0..) |artifact, index| {
-            switch (artifact.kind) {
-                .proc => |identity| {
-                    const entry = try self.procs.getOrPut(identity);
-                    if (!entry.found_existing) entry.value_ptr.first = @intCast(index);
-                    entry.value_ptr.last = @intCast(index);
-                },
-                .boxy_thunk => |identity| _ = try self.thunks.getOrPutValue(identity, @intCast(index)),
-                .rc_helper => |name| _ = try self.helpers.getOrPutValue(name, @intCast(index)),
-                .entrypoint, .message_pool_run, .branch_island => {},
-            }
-        }
-        return self;
-    }
-
-    /// The artifact a pack offers for the procedure `identity`.
-    fn offeredProcArtifact(self: *const SpliceClosure, identity: lir.ProcIdentity) ?u32 {
-        const artifacts = self.procs.get(identity) orelse return null;
-        return artifacts.last;
-    }
-
-    fn deinit(self: *SpliceClosure) void {
-        self.order.deinit(self.allocator);
-        self.seen.deinit(self.allocator);
-        self.helpers.deinit();
-        self.thunks.deinit();
-        self.procs.deinit();
-    }
-
-    /// Indices of the artifacts a splice of `root` places, valid until the
-    /// next query.
-    fn of(self: *SpliceClosure, root: u32) Allocator.Error![]const u32 {
-        for (self.order.items) |index| self.seen.unset(index);
-        self.order.clearRetainingCapacity();
-        try self.visit(root);
-        var cursor: usize = 0;
-        while (cursor < self.order.items.len) : (cursor += 1) {
-            const artifact = self.set.artifacts[self.order.items[cursor]];
-            for (artifact.refs) |ref| try self.visit(ref.target);
-            for (artifact.symbolic_refs) |ref| {
-                const target = switch (ref.target) {
-                    .proc => |identity| if (self.procs.get(identity)) |artifacts| artifacts.first else null,
-                    .boxy_thunk => |identity| self.thunks.get(identity),
-                    .rc_helper => |name| self.helpers.get(name),
-                };
-                if (target) |index| try self.visit(index);
-            }
-        }
-        return self.order.items;
-    }
-
-    fn visit(self: *SpliceClosure, index: u32) Allocator.Error!void {
-        if (self.seen.isSet(index)) return;
-        try self.order.append(self.allocator, index);
-        self.seen.set(index);
-    }
-};
+const SpliceClosure = pack_store.SpliceClosure;
 
 /// The artifacts of `set` whose procedure converts a specialized custom
 /// literal when it runs (`PackProgram.procConvertsLiteralAtRuntime`).
@@ -11387,7 +11310,7 @@ fn typeCheckBuildCommand(
     try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), reporter, build_env.getTimingInfo());
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
-    if (diag.errors == 0) try preparePackageDevPacks(ctx, build_env, null);
+    if (diag.errors == 0 and !build_env.runtimeOutputCached()) try preparePackageDevPacks(ctx, build_env, null);
     const total_warning_count = diag.warnings + try optimizedDbgWarningsForBuild(ctx, build_env, args.opt);
     const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
         try renderProblem(ctx, .{
@@ -11872,7 +11795,17 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             .linked_stores = if (linked_stores) |*stores| stores else null,
         };
     };
-    if (program_probe) |*probe| build_env.setRuntimeOutputProbe(probe.runtimeOutputProbe());
+    if (program_probe) |*probe| {
+        probe.code_providers[0] = loaded_packs;
+        if (build_env.compile_time_object_cache_owner) |owner| {
+            const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(owner.context));
+            probe.code_providers[1] = &cache.packs;
+        }
+        for (probe.code_providers) |provider| if (provider) |packs| {
+            packs.defer_code_lookup = true;
+        };
+        build_env.setRuntimeOutputProbe(probe.runtimeOutputProbe());
+    }
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
     const diag, const resolved_targets_config = try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
@@ -12240,6 +12173,9 @@ const ProgramOutputProbe = struct {
     linked_stores: ?*const pack_store.LinkedStores,
     key: ?[32]u8 = null,
     found: ?ProgramOutput = null,
+    /// Runtime and compile-time providers may be the same collection. A probe
+    /// miss enables procedure reuse; a hit needs no procedure-pack discovery.
+    code_providers: [2]?*pack_store.LoadedPacks = .{ null, null },
 
     fn runtimeOutputProbe(self: *ProgramOutputProbe) compile.build.RuntimeOutputProbe {
         return .{ .context = self, .cached = cached };
@@ -12247,6 +12183,9 @@ const ProgramOutputProbe = struct {
 
     fn cached(context: *anyopaque, root: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!bool {
         const self: *ProgramOutputProbe = @ptrCast(@alignCast(context));
+        defer for (self.code_providers) |provider| {
+            if (provider) |packs| packs.defer_code_lookup = self.found != null;
+        };
         const imports = try self.build_env.collectImportedArtifactViews(self.gpa, root);
         defer self.gpa.free(imports);
         const relations = try self.build_env.collectRelationArtifactViews(self.gpa, root);

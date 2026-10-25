@@ -646,22 +646,107 @@ and source frames from it.
 
 ### Object Cache Store
 
-Packs live under `<cache root>/<compiler version>/objects-v<pack format>/
-<target>-<opt>/<local|pkg>/<module identity>/<key>.rpk`, and the pack an
-optimized build files for its program, which each optimized build of the
-program replaces, under `<target>-<opt>/optimized/<identity>.rpk`. Every
-other pack's path is a function of its content, so a writer stages it beside its path in a file it
-alone created (`CoreCtx.writeTempFile`), so two writers never share a partly
-written file, renames it into place, and leaves a pack already present alone; builds with runtime
-safety compare the bytes they would have written with the pack in place. The
-background sweep (`cache_cleanup.sweep`) deletes every `objects-v*` namespace
-of a format other than the compiler's own, ages the current namespace's
-`local/` packs (rewritten by every edit) and recorded program outputs
-(`programs/`, see "Recorded Program Output") on one day and its `pkg/` and
-`optimized/` packs on thirty, by last use (`max(atime, mtime)`), and then deletes the least
-recently used persistent cache files of every family until the cache fits
-`CacheConfig.max_size_mb`. Eviction only deletes files; it never changes what
-a build writes.
+The store namespace is `<cache root>/<compiler version>/objects-v<pack format>/
+<target>-<opt>/`. Compiler compatibility, target (including libc/CPU domain),
+optimization policy, specialization strategy and schema isolation remain the
+existing explicit key and namespace contracts. A specialized consumer never
+acquires Boxy code: offer production rejects closures that depend on the
+program's runtime descriptor tables, and indexed metadata admission rejects
+runtime references too. The index does not broaden any target compatibility.
+
+Dev offers live under `<local|pkg>/<module identity>/offers/<specialization
+key>/<offer SHA-256>.rpi`. The versioned bespoke `ROFFER01` record contains a
+little-endian artifact count, one 32-byte payload digest per artifact, and a
+payload-free `PackFile` encoding of the producer's explicit dependency
+closure and its one specialization entry. This preserves procedure identities,
+set-local and symbolic dependencies, relocations, source/debug mappings,
+failure meanings, compile-time root reads and every ARC signature/uniqueness
+field returned in `SpecCacheHit`. Code and static-data bytes are excluded.
+Content names are computed from the original producer-owned data before
+separating payloads; neither the writer nor the reader reconstructs them from
+stripped metadata. Closure order preserves the original set's first-definition
+rule for symbolic references.
+The closure includes available symbolic definitions before the consumer's
+final procedure set is known. Splicing still lets the current program supply
+its own symbolic callees; pinning the producer's closure guarantees availability
+for the definitions it does use without consulting other historical offers.
+
+Each artifact's code and carried data bytes live separately at
+`payload/<SHA-256>.rpa` under the same module directory. `RPAYLD01` stores
+length-prefixed code and data slices in metadata order, with 64-bit
+little-endian lengths. One record is one artifact, including its carried data;
+reading a chosen artifact does not read unrelated procedures from its original
+pack. Offers can share payloads. Metadata duplicates closure descriptions across
+specialization keys; it does not duplicate their code/data in memory. An offer
+has no process-local addresses or implicit filesystem dependencies.
+
+`PackOffers` owns eligibility and specialization metadata. While its artifact
+set still exists, it publishes each required immutable payload through a unique
+staging file and atomic rename, then the content-named offer, and finally a
+`ROCINDEX01` completion marker at `<artifact key>.rpd`. This marker records pack
+preparation, not a lookup manifest. Each distinct offer has its own immutable
+path, so concurrent writers add different offers without a shared manifest or
+lost updates. Equal offers have equal bytes. Republishing can repair corrupt
+optional records. Interrupted writers can leave unreferenced payloads, but never
+make a partially written offer visible. Legacy namespaces are invalidated by
+the pack format bump; no historical-directory migration scan is needed.
+
+`LoadedPacks` registers visible module directories without opening their
+historical files. Lookup visits only the requested specialization's bucket,
+preserving the checked program's provider order (root first, then its visible
+modules), and ordering candidates within each provider by their content digest.
+An ineligible candidate cannot hide a later eligible candidate. Before loading
+payloads it validates metadata integrity and compatibility with the existing
+`reachingAbsentFiles` and `reachingIdentities` rules. In particular, a site-named
+symbolic callee is supplied by the current program, so its historical source
+version does not invalidate its caller. Linked objects retain their established
+precedence and exact-path selection. The completed-result probe does not
+consult the dev offer index or include unrelated history in its key. It defers
+runtime and compile-time procedure lookups until its result is known: a miss
+enables indexed reuse, while a hit leaves demand evaluation using source bodies
+and cached compile-time values, preserving all required diagnostics without
+reading procedure offers. A completed-result hit also needs no package-pack
+preparation.
+
+Both exact warm lookup (when the completed-result cache misses) and cross-edit
+lookup perform O(M) keyed directory probes for M visible modules. Only the K
+candidates for the requested key are enumerated, with O(K log K) filename
+sorting and metadata reads through the first eligible, available candidate;
+unrelated historical keys do not increase metadata bytes read. Candidate
+metadata and sorting grow with duplicates of that key, reported separately
+from code/data. A repeated eligible lookup uses the in-memory specialization
+map and opens no files. Payload bytes and allocations grow only with the
+selected explicit dependency closures, not accumulated source history.
+
+Before returning a body-elision hit, the loader reads and hashes every required
+payload and retains its bytes. Missing, truncated, incompatible or corrupt
+metadata/payloads are optional cache misses; no promised code can subsequently
+disappear through eviction. Successfully read payloads are memoized by digest
+and shared by all selected offers until the loader is destroyed. Decoded
+metadata also remains alive for every borrower. Source edits can retain and
+reuse old code when the existing key and source/debug compatibility rules
+permit it; a stale source location is never accepted just because bytes match.
+Retaining history is independent of eagerly reading it.
+
+Optimized object packs retain their existing locations: a package artifact's
+`<artifact key>.rpk` and the program's `optimized/<identity>.rpk`. Explicit
+pack export/import for developer diagnostics still uses complete `PackFile`
+records. The background sweep deletes obsolete `objects-v*` namespaces and
+recursively ages current `local/` files and recorded `programs/` outputs on one
+day, and `pkg/` and `optimized/` files on thirty, using `max(atime, mtime)`.
+Size eviction also includes indexed metadata and payloads. Either may be
+removed first: a stale reference is detected before a hit, and live readers own
+their bytes. Unused historical payloads remain available until eviction.
+
+`ROC_PACK_STATS`, through the existing gated `base.dev_diagnostics` interface,
+reports metadata bytes, candidate/duplicate counts, payload open attempts,
+unique successfully retained payload records, payload bytes, decoded records,
+requests/hits and missing/corrupt/source/linked rejection counts. Publication
+also reports metadata/payload bytes and elapsed wall-clock nanoseconds.
+`test/cli/pack_index_bench.py` supplies the focused synthetic-history benchmark. Normal builds
+print none of these diagnostics. Performance comparisons use a ReleaseFast
+compiler with developer diagnostics enabled, `roc build --opt=dev`, wall time
+and peak RSS; cold publication is measured separately from lookup.
 
 A pack entry's code is a function of the procedure alone: every reference
 from it into code placed with it, and every reference by identity to code
@@ -765,10 +850,11 @@ ordinary dev pack policy; it neither writes local-module packs nor starts
 background optimization. Existing packs are left alone, and missing or evicted
 packs are rebuilt from the checked modules. A command with errors or
 `--no-cache` prepares none.
-New packs are also offered directly to the command's cache providers, so
-runtime lowering can use them even if compile-time evaluation already loaded
-the store. Decoded packs retain stable addresses as new offers arrive; artifacts
-already handed to evaluation remain valid.
+Newly published index directories are registered with the command's cache
+providers, so runtime lowering sees the new offers even if compile-time
+evaluation already registered the store. Selected metadata and payloads retain
+stable addresses as new offers arrive; artifacts already handed to evaluation
+remain valid.
 
 The wasm32 dev backend cannot splice dev code, so a wasm32 dev build
 reads and writes no dev packs and takes only object packs' entries

@@ -23,7 +23,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 12;
+pub const format_version: u32 = 13;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -67,6 +67,12 @@ pub const ReadError = Allocator.Error || error{
 pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const SpecEntry) Allocator.Error![]u8 {
     var names = try ProcArtifact.ContentNames.init(allocator, set);
     defer names.deinit();
+    return writeWithNames(allocator, set, specs, &names);
+}
+
+/// Encode producer-owned metadata using the content names computed before
+/// code/data bytes are separated into independently addressable records.
+pub fn writeWithNames(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const SpecEntry, names: *const ProcArtifact.ContentNames) Allocator.Error![]u8 {
     var bytes = std.ArrayList(u8).empty;
     errdefer bytes.deinit(allocator);
     var writer = Writer{ .allocator = allocator, .bytes = &bytes };
