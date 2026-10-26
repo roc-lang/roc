@@ -196,31 +196,10 @@ main = g([1.U32, 2.U32])
 								(p-assign (ident "i")))))))))
 	(d-let
 		(p-assign (ident "g"))
-		(e-lambda
-			(args
-				(p-assign (ident "l")))
-			(e-block
-				(s-let
-					(p-assign (ident "_a1"))
-					(e-call (constraint-fn-var 274)
-						(e-lookup-local
-							(p-assign (ident "f1")))
-						(e-runtime-error (tag "erroneous_value_use"))))
-				(s-let
-					(p-assign (ident "_a2"))
-					(e-call (constraint-fn-var 279)
-						(e-lookup-local
-							(p-assign (ident "f2")))
-						(e-runtime-error (tag "erroneous_value_use"))))
-				(e-num (value "0")))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 300)
-			(e-runtime-error (tag "erroneous_value_expr"))
-			(e-list
-				(elems
-					(e-typed-int (value "1") (type "U32"))
-					(e-typed-int (value "2") (type "U32")))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure
@@ -229,10 +208,10 @@ main = g([1.U32, 2.U32])
 		(patt (type "a -> b where [a.map : a, (U32 -> U64) -> b]"))
 		(patt (type "a -> b where [a.map : a, (U32 -> U128) -> b]"))
 		(patt (type "Error -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(patt (type "Dec")))
+		(patt (type "Error")))
 	(expressions
 		(expr (type "a -> b where [a.map : a, (U32 -> U64) -> b]"))
 		(expr (type "a -> b where [a.map : a, (U32 -> U128) -> b]"))
 		(expr (type "Error -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
-		(expr (type "Dec"))))
+		(expr (type "Error"))))
 ~~~
