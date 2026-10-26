@@ -1,4 +1,4 @@
-//! Bounded, positional-I/O catalog for the native artifact store.
+//! Bounded catalog with positional writes and retained read mappings.
 //!
 //! Four independent crit-bit indexes share fixed-size records. A key has a
 //! fixed width, so a lookup visits at most key_bits branch records. Mutations
@@ -35,6 +35,7 @@ pub const Error = error{ IoFailure, CorruptCatalog, CapacityExceeded };
 /// Observable work, including recovery. Tests assert bounds on actual I/O.
 pub const Counters = struct {
     reads: usize = 0,
+    mapped_reads: usize = 0,
     writes: usize = 0,
     read_bytes: usize = 0,
     written_bytes: usize = 0,
@@ -135,6 +136,7 @@ pub const Index = struct {
     header: Header,
     counters: *Counters,
     read_cache: ?*ReadCache = null,
+    mapped: ?Io.File.MemoryMap = null,
 
     /// `dir` and the shard lock are borrowed. The lock file is separate from
     /// both files that this protocol replaces or truncates.
@@ -155,20 +157,46 @@ pub const Index = struct {
     /// Reacquire the current published catalog under the kernel shard lock.
     /// Any external transaction invalidates the invocation's decoded pages.
     pub fn refresh(self: *Index) Error!void {
-        errdefer if (self.read_cache) |cache| cache.clear();
+        errdefer {
+            if (self.read_cache) |cache| cache.clear();
+            self.dropMapping();
+        }
         try self.recover();
         const current = try Header.decode(&try self.readRecord(0));
         if ((self.file.length(self.io) catch return error.IoFailure) < current.next * record_size) return error.CorruptCatalog;
-        if (current.sequence != self.header.sequence) if (self.read_cache) |cache| cache.clear();
+        if (current.sequence != self.header.sequence) {
+            if (self.read_cache) |cache| cache.clear();
+            if (self.mapped) |*mapped| mapped.read(self.io) catch return error.IoFailure;
+        }
         self.header = current;
     }
 
+    fn dropMapping(self: *Index) void {
+        if (self.mapped) |*mapped| mapped.destroy(self.io);
+        self.mapped = null;
+    }
+
     pub fn close(self: *Index) void {
+        self.dropMapping();
         self.file.close(self.io);
     }
 
     fn readRecord(self: *Index, id: RecordId) Error!Record {
         if (id > std.math.maxInt(u64) / record_size) return error.CorruptCatalog;
+        if (id != 0 and self.read_cache != null) {
+            if (self.mapped) |mapped| {
+                if (id * record_size >= mapped.memory.len) self.dropMapping();
+            }
+            if (self.mapped == null) {
+                const len = std.math.cast(usize, self.header.next * record_size) orelse return error.CapacityExceeded;
+                self.mapped = self.file.createMemoryMap(self.io, .{ .len = len, .protection = .{ .read = true }, .populate = false }) catch return error.IoFailure;
+            }
+            const memory = self.mapped.?.memory;
+            const offset = std.math.cast(usize, id * record_size) orelse return error.CorruptCatalog;
+            if (offset > memory.len or memory.len - offset < record_size) return error.CorruptCatalog;
+            self.counters.mapped_reads += 1;
+            return memory[offset..][0..record_size].*;
+        }
         var bytes: Record = undefined;
         self.counters.reads += 1;
         self.counters.read_bytes += record_size;
@@ -183,6 +211,7 @@ pub const Index = struct {
         self.counters.writes += 1;
         self.counters.written_bytes += record_size;
         self.file.writePositionalAll(self.io, &bytes, id * record_size) catch return error.IoFailure;
+        if (self.mapped) |*mapped| mapped.read(self.io) catch return error.IoFailure;
     }
 
     pub fn node(self: *Index, id: RecordId) Error!Node {
@@ -673,4 +702,46 @@ test "catalog sessions reuse decoded pages and invalidate external commits and i
     }
     var last = index.transaction();
     try std.testing.expectEqual(@as(Value, @splat(4)), (try last.find(.artifacts, key)).?.value);
+}
+
+test "mapped catalog validates growth and rejects truncation before reading retained memory" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var counters: Counters = .{};
+    var index = try Index.open(tmp.dir, io, &counters);
+    defer index.close();
+    var cache: ReadCache = .{};
+    index.read_cache = &cache;
+    const first: Key = @splat(1);
+    {
+        var tx = index.transaction();
+        _ = try tx.putValue(.artifacts, first, @splat(3));
+        try tx.commit();
+    }
+    {
+        var tx = index.transaction();
+        _ = (try tx.find(.artifacts, first)).?;
+        try std.testing.expect(index.mapped != null);
+    }
+    const old_len = index.mapped.?.memory.len;
+    {
+        var other = try Index.open(tmp.dir, io, &counters);
+        defer other.close();
+        for (2..24) |number| {
+            var tx = other.transaction();
+            _ = try tx.putValue(.artifacts, @splat(@intCast(number)), @splat(7));
+            try tx.commit();
+        }
+    }
+    try index.refresh();
+    try std.testing.expect(index.mapped != null);
+    {
+        var tx = index.transaction();
+        try std.testing.expectEqual(@as(Value, @splat(7)), (try tx.find(.artifacts, @splat(23))).?.value);
+        try std.testing.expect(index.mapped.?.memory.len > old_len);
+    }
+    try index.file.setLength(io, record_size);
+    try std.testing.expectError(error.CorruptCatalog, index.refresh());
+    try std.testing.expect(index.mapped == null);
 }

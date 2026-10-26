@@ -27274,6 +27274,15 @@ read outside shard ownership. Retention leases remain independent of catalog
 ownership. The session owns its descriptors and path until its acquisition owner
 releases the final retained records.
 
+The session reads checked catalog nodes through a retained read-only mapping,
+while headers and redo records still use positional I/O. Every reacquisition
+checks the catalog's current length before using mapped pages. Growth remaps
+only when a requested node lies beyond the current mapping. Local writes and
+external commits synchronize retained mapping contents through the I/O provider;
+a failed refresh discards the mapping. Record bounds and checksums remain
+mandatory. The mapping never substitutes for shard ownership or generation
+leases. Counters distinguish mapped node reads from positional reads.
+
 
 Lambda Solved retains completed erased-callable reachability markings only for
 the exact graph mutation epoch in which a walk made no changes. A later query
