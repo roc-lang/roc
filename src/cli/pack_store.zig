@@ -494,6 +494,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
     const bytes = try PackFile.write(allocator, &set, &.{.{
         .key = key,
         .excerpt = 0,
+        .iterator_fusion_scope = true,
         .rc_borrowed_params = 1,
         .rc_ret_borrowed = false,
         .rc_ret_lenders = 0,
@@ -515,7 +516,9 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
             try std.testing.expectEqual(@as(usize, 1), packs.packs.items.len);
             packs.indexPacks() catch |err|
                 return rejected(&packs, expected_key, err);
-            const hit = packs.specCacheLookup().lookup(expected_key, .dev_code, &.{}) orelse return error.TestUnexpectedResult;
+            // This fault-injection boundary covers loading and atomic indexing.
+            // Admission can allocate separately and decline an offer on OOM.
+            const hit = packs.specs.get(expected_key) orelse return error.TestUnexpectedResult;
             try std.testing.expectEqualSlices(u8, &expected_identity.bytes, &hit.identity);
             try std.testing.expectEqual(@as(u64, 1), hit.rc_borrowed_params);
             // A consumer that cannot splice is never served dev excerpts.
@@ -551,6 +554,13 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
         // layout, so the failure check runs over an allocator that refuses it.
         var deterministic = @import("base").DeterministicAllocator.init(allocator);
         try std.testing.checkAllAllocationFailures(deterministic.allocator(), Attempt.run, .{ dir_path, key, identity });
+        var admitted = LoadedPacks.init(allocator);
+        defer admitted.deinit();
+        try admitted.loadDirInto(io, dir_path, .cache_offers);
+        try admitted.indexPacks();
+        const hit = admitted.specCacheLookup().lookup(key, .dev_code, &.{}) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualSlices(u8, &identity.bytes, &hit.identity);
+        try std.testing.expect(hit.iterator_fusion_scope);
         try std.testing.expectError(error.UnsupportedPackVersion, LoadedPacks.loadDir(allocator, io, dir_path));
     }
     try tmp.dir.createDirPath(io, "malformed");
@@ -1091,7 +1101,7 @@ pub const LoadedPacks = struct {
         const origin = old.set.excerpts[old.index].metadata_origin orelse return false;
         if (!std.mem.eql(u8, &origin.record.owner.domain, &store.domain) or !std.mem.eql(u8, &origin.record.digest, &component) or origin.index != ordinal) return false;
         const hit = self.specs.get(spec.key) orelse return false;
-        if (hit.may_leave_pending != spec.may_leave_pending or hit.rc_borrowed_params != spec.rc_borrowed_params or hit.rc_ret_borrowed != spec.rc_ret_borrowed or
+        if (hit.iterator_fusion_scope != spec.iterator_fusion_scope or hit.may_leave_pending != spec.may_leave_pending or hit.rc_borrowed_params != spec.rc_borrowed_params or hit.rc_ret_borrowed != spec.rc_ret_borrowed or
             hit.rc_ret_lenders != spec.rc_ret_lenders or hit.rc_read_only_params != spec.rc_read_only_params or
             hit.rc_ret_unique != spec.rc_ret_unique or hit.rc_ret_unique_fields != spec.rc_ret_unique_fields or
             !std.mem.eql(u32, hit.rc_ret_conditions, spec.rc_ret_conditions) or hit.comptime_root_reads.len != spec.comptime_root_reads.len) return false;
@@ -1768,6 +1778,7 @@ pub const LoadedPacks = struct {
             .rc_ret_unique = spec.rc_ret_unique,
             .rc_ret_unique_fields = spec.rc_ret_unique_fields,
             .may_leave_pending = spec.may_leave_pending,
+            .iterator_fusion_scope = spec.iterator_fusion_scope,
             .rc_ret_conditions = spec.rc_ret_conditions,
         });
     }
@@ -1794,6 +1805,7 @@ pub const LoadedPacks = struct {
                         .rc_ret_unique = spec.rc_ret_unique,
                         .rc_ret_unique_fields = spec.rc_ret_unique_fields,
                         .may_leave_pending = spec.may_leave_pending,
+                        .iterator_fusion_scope = spec.iterator_fusion_scope,
                         .rc_ret_conditions = spec.rc_ret_conditions,
                     },
                     .pack = @intCast(pack_index),

@@ -23,7 +23,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 18;
+pub const format_version: u32 = 19;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// excerpt holding its procedure, and the ownership signature and
@@ -36,6 +36,8 @@ pub const SpecEntry = struct {
     test_compatible: bool = false,
     /// Whether the native body can return before an erased call completes.
     may_leave_pending: bool = false,
+    /// Retained even when Monotype elides the producer body.
+    iterator_fusion_scope: bool = false,
     /// The compile-time roots the procedure's code reads, which a linking
     /// program demands (`Common.SpecCacheHit.comptime_root_reads`).
     comptime_root_reads: []const lir.CheckedPipeline.ComptimeRootRead = &.{},
@@ -680,6 +682,7 @@ fn writeSpecs(writer: *Writer, specs: []const SpecEntry) Allocator.Error!void {
         try writer.word(spec.excerpt);
         try writer.byte(@intFromBool(spec.test_compatible));
         try writer.byte(@intFromBool(spec.may_leave_pending));
+        try writer.byte(@intFromBool(spec.iterator_fusion_scope));
         try writer.word(@intCast(spec.comptime_root_reads.len));
         for (spec.comptime_root_reads) |root_read| {
             try writer.raw(&root_read.module);
@@ -710,6 +713,11 @@ fn readSpecs(reader: *Reader, arena_allocator: Allocator, count: u32, excerpt_co
                 else => return error.MalformedPack,
             },
             .may_leave_pending = switch (try reader.byte()) {
+                0 => false,
+                1 => true,
+                else => return error.MalformedPack,
+            },
+            .iterator_fusion_scope = switch (try reader.byte()) {
                 0 => false,
                 1 => true,
                 else => return error.MalformedPack,
@@ -921,6 +929,7 @@ test "pack bytes round-trip every excerpt field and spec entry" {
             .rc_ret_unique = true,
             .rc_ret_unique_fields = 0b10,
             .may_leave_pending = true,
+            .iterator_fusion_scope = true,
             .rc_ret_conditions = &.{ 0x0001_02ff, 0x0000_0403 },
             .comptime_root_reads = &.{
                 .{ .module = @as([32]u8, @splat(0x11)), .root = 3 },
@@ -946,6 +955,7 @@ test "pack bytes round-trip every excerpt field and spec entry" {
     try testing.expect(pack.specs[0].rc_ret_unique);
     try testing.expectEqual(specs[0].rc_ret_unique_fields, pack.specs[0].rc_ret_unique_fields);
     try testing.expect(pack.specs[0].may_leave_pending);
+    try testing.expect(pack.specs[0].iterator_fusion_scope);
     try testing.expectEqualSlices(u32, specs[0].rc_ret_conditions, pack.specs[0].rc_ret_conditions);
     try testing.expectEqualDeep(specs[0].comptime_root_reads, pack.specs[0].comptime_root_reads);
     const proc = pack.set.excerpts[0];

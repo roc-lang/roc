@@ -8866,6 +8866,7 @@ fn objectPackBytes(
             .rc_ret_unique = proc.rc_ret_unique,
             .rc_ret_unique_fields = proc.rc_ret_unique_fields,
             .may_leave_pending = proc.may_leave_pending,
+            .iterator_fusion_scope = proc.iterator_fusion_scope,
             .rc_ret_conditions = try GuardedList.dupe(arena, u32, store.getU32Span(proc.rc_ret_conditions)),
         });
     }
@@ -9165,6 +9166,7 @@ const PackOffers = struct {
         withheld: bool,
         test_compatible: bool,
         may_leave_pending: bool,
+        iterator_fusion_scope: bool,
         rc_borrowed_params: u64,
         rc_ret_borrowed: bool,
         rc_ret_lenders: u64,
@@ -9286,6 +9288,7 @@ const PackOffers = struct {
             .rc_ret_unique = proc.rc_ret_unique,
             .rc_ret_unique_fields = proc.rc_ret_unique_fields,
             .may_leave_pending = proc.may_leave_pending,
+            .iterator_fusion_scope = proc.iterator_fusion_scope,
             .rc_ret_conditions = try GuardedList.dupe(arena, u32, store.getU32Span(proc.rc_ret_conditions)),
             .name = try arena.dupe(u8, store.procDebugName(id) orelse ""),
             .fingerprint = fingerprint,
@@ -9338,6 +9341,7 @@ const PackOffers = struct {
                     .rc_ret_unique = offer.rc_ret_unique,
                     .rc_ret_unique_fields = offer.rc_ret_unique_fields,
                     .may_leave_pending = offer.may_leave_pending,
+                    .iterator_fusion_scope = offer.iterator_fusion_scope,
                     .rc_ret_conditions = offer.rc_ret_conditions,
                 });
             }

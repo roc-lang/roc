@@ -456,6 +456,8 @@ pub const SpecCacheHit = struct {
     identity: [32]u8,
     /// The producer's tail-drive summary for this procedure's native body.
     may_leave_pending: bool = false,
+    /// Producer-authored iterator normalization scope, part of source identity.
+    iterator_fusion_scope: bool = false,
     /// The entry is a linked object reached through its C-ABI entry rather
     /// than spliced code (`LIR.LirProcSpec.c_abi_entry`).
     c_abi_entry: bool = false,

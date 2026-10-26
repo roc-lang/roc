@@ -1038,6 +1038,13 @@ domain. The index broadens no compatibility beyond the declared domain, and a
 record from a shared domain elides a body only for a consumer with the exact
 same provider capability (`CodeProvision`).
 
+A served procedure also carries the producer's iterator-normalization scope.
+Closure lifting restores that scope from the cache before computing lifted
+source identity. An elided body cannot acquire its producer's scope by running
+normalization again. Native pack publication, retention, linked entries and
+spliced entries preserve the same explicit scope fact; omitting it changes
+procedure identity even when the native bytes and request key are unchanged.
+
 Within the procedure domain, catalog variants separate offers, metadata,
 payloads, completion markers and interface summaries. Offers are grouped by
 specialization key and keyed by the digest of their complete record. Each
