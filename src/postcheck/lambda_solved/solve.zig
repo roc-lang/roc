@@ -223,6 +223,9 @@ pub const WorkCounters = struct {
     clones: u64 = 0,
     unify_pairs: u64 = 0,
     active_cycles: u64 = 0,
+    erasure_queries: u64 = 0,
+    erasure_cache_hits: u64 = 0,
+    erasure_nodes: u64 = 0,
     exact_clone_queries: u64 = 0,
     exact_clone_hits: u64 = 0,
     arg_scope_queries: u64 = 0,
@@ -280,6 +283,8 @@ pub fn run(
 
 const Solver = struct {
     counters: ?*WorkCounters = null,
+    erased_reachability: collections.DenseMapUnmanaged(Type.TypeVarId, void) = .empty,
+    erased_reachability_epoch: u64 = 0,
     /// Scratch and completed proofs owned by the function being solved.
     /// Disjoint queries share certificates until this producer scope ends.
     exact_clone_proofs: ExactCloneProofs = .{},
@@ -565,6 +570,7 @@ const Solver = struct {
     }
 
     fn deinit(self: *Solver) void {
+        self.erased_reachability.deinit(self.allocator);
         self.exact_clone_proofs.deinit(self.allocator);
         self.exact_clone_work.deinit(self.allocator);
         self.exact_clone_pairs.deinit(self.allocator);
@@ -1863,9 +1869,26 @@ const Solver = struct {
     }
 
     fn markErasedCallablesReachedByType(self: *Solver, ty: Type.TypeVarId) Allocator.Error!void {
+        self.countWork(.erasure_queries, 1);
+        const epoch = self.program.types.analysis_changes.epoch;
+        if (self.erased_reachability_epoch != epoch) {
+            self.erased_reachability.clearRetainingCapacity();
+            self.erased_reachability_epoch = epoch;
+        }
+        if (self.erased_reachability.contains(self.program.types.rootCompressed(ty))) {
+            self.countWork(.erasure_cache_hits, 1);
+            return;
+        }
         var visited = self.solved_set_pool.acquire();
         defer self.solved_set_pool.release(&visited);
         try self.markErasedCallablesReachedByTypeInner(ty, &visited);
+        // A walk that performed unification or expanded a leaf keeps no
+        // certificate. Only a completed walk over an unchanged graph proves
+        // that every visited root already has the marking's entire effect.
+        if (self.program.types.analysis_changes.epoch == epoch) {
+            var roots = visited.keyIterator();
+            while (roots.next()) |root| try self.erased_reachability.put(self.allocator, root.*, {});
+        }
     }
 
     /// Marking a root erases every callable it reaches, and marking it again
@@ -1883,6 +1906,11 @@ const Solver = struct {
         while (pending.pop()) |next| {
             const root = types.rootCompressed(next);
             if ((try visited.getOrPut(root)).found_existing) continue;
+            if (self.erased_reachability_epoch == types.analysis_changes.epoch and self.erased_reachability.contains(root)) {
+                self.countWork(.erasure_cache_hits, 1);
+                continue;
+            }
+            self.countWork(.erasure_nodes, 1);
 
             const content = types.get(root);
             const resolved = if (std.meta.activeTag(content) == .mono)
@@ -6779,4 +6807,39 @@ test "exact cyclic clone proof rejects unexpanded leaves that hide a mutable tie
     const count = program.types.varCount();
     try std.testing.expect(!try solver.exactMonoClone(recursive.ty, target));
     try std.testing.expectEqual(count, program.types.varCount());
+}
+
+test "erasure reachability skips completed subgraphs and revisits changed children" {
+    const a = std.testing.allocator;
+    var program = Ast.Program.init(a, emptyLiftedProgramForTest(a));
+    defer program.deinit();
+    var solver = try Solver.init(a, &program);
+    defer solver.deinit();
+    var counts: WorkCounters = .{};
+    solver.counters = &counts;
+    const types = &program.types;
+    const number = try types.add(.{ .primitive = .u64 });
+    const callable = try types.add(.{ .lambda_set = .empty() });
+    const function = try types.add(.{ .func = .{ .args = .empty(), .callable = callable, .ret = number } });
+    const root = try types.add(.{ .list = function });
+    try solver.markErasedCallablesReachedByType(root);
+    try std.testing.expect(types.get(types.root(callable)) == .erased);
+    try solver.markErasedCallablesReachedByType(root);
+    const before = counts.erasure_nodes;
+    for (0..100) |_| try solver.markErasedCallablesReachedByType(root);
+    try std.testing.expectEqual(before, counts.erasure_nodes);
+    const wrapper = try types.add(.{ .box = root });
+    try solver.markErasedCallablesReachedByType(wrapper);
+    try std.testing.expectEqual(before + 1, counts.erasure_nodes);
+    const next_callable = try types.add(.{ .lambda_set = .empty() });
+    const next_function = try types.add(.{ .func = .{ .args = .empty(), .callable = next_callable, .ret = number } });
+    try types.set(root, .{ .list = next_function });
+    try solver.markErasedCallablesReachedByType(wrapper);
+    try std.testing.expect(types.get(types.root(next_callable)) == .erased);
+    const cycle = try types.add(.unbound);
+    try types.set(cycle, .{ .tuple = try types.addSpan(&.{ cycle, wrapper }) });
+    try solver.markErasedCallablesReachedByType(cycle);
+    const after_cycle = counts.erasure_nodes;
+    try solver.markErasedCallablesReachedByType(cycle);
+    try std.testing.expectEqual(after_cycle, counts.erasure_nodes);
 }

@@ -27238,3 +27238,12 @@ session. The page cache is bounded, performs no historical scan, and is never
 read outside shard ownership. Retention leases remain independent of catalog
 ownership. The session owns its descriptors and path until its acquisition owner
 releases the final retained records.
+
+
+Lambda Solved retains completed erased-callable reachability markings only for
+the exact graph mutation epoch in which a walk made no changes. A later query
+can skip a certified root or subgraph at that epoch. Unification, replacement,
+or lazy expansion invalidates reuse through the producer's mutation epoch;
+a walk that changed the graph publishes no certificate. Each active traversal
+still owns its independent cycle set, including during nested marking calls.
+No choice of callable representation changes; this records completed work only.
