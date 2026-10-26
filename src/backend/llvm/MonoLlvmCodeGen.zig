@@ -4182,8 +4182,9 @@ pub const MonoLlvmCodeGen = struct {
     /// The procedures whose bodies check the stack bounds: those on a cycle
     /// of direct calls, and those code can call through a function pointer,
     /// since builtins and the runtime call back into them on cycles LIR cannot
-    /// show. Every other function this module generates that the host,
-    /// builtins, or the runtime can call checks too (`emitStackCheck`).
+    /// show. Every other function this module generates checks too
+    /// (`emitStackCheck`), except the refcount increment helpers, which never
+    /// recurse.
     fn computeStackCheckProcs(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
         self.stack_check_procs.clearRetainingCapacity();
         try self.stack_check_procs.appendNTimes(self.allocator, false, procs.len);
@@ -12647,7 +12648,10 @@ pub const MonoLlvmCodeGen = struct {
         const body = wip.block(0, "rc_body") catch return error.OutOfMemory;
         const done = wip.block(0, "rc_done") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
-        if (self.stack_checks) try self.emitStackCheck(func);
+        // Teardown recurses through the structure it frees; an increment
+        // only reaches the refcounts the value holds directly, so it never
+        // lies on a cycle.
+        if (self.stack_checks and helper_key.op != .incref) try self.emitStackCheck(func);
 
         const value_ptr = wip.arg(0);
         const count_value: ?LlvmBuilder.Value = switch (helper_key.op) {

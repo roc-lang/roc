@@ -24706,8 +24706,9 @@ before checking whether its procedures may come from object packs.
   direct calls. The dev backend places its checks when it flushes its pending
   bodies, where its call graph, table, and frames are known; the LLVM backend
   checks the procedures on LIR call cycles, the procedures whose address is
-  taken, and every helper it generates, and marks each checked function
-  `noinline` so its check stays at its entry.
+  taken, and every helper it generates other than refcount increments, which
+  only reach the refcounts a value holds directly and so never recurse, and
+  marks each checked function `noinline` so its check stays at its entry.
 
 A check compares the stack pointer with `__stack_low` plus the room the check
 needs: how far below the function's entry stack pointer the function and every
