@@ -3,6 +3,7 @@
 //! acquisition; payload production never holds a catalog lock.
 
 const std = @import("std");
+const base = @import("base");
 pub const catalog = @import("cache_index.zig");
 const Io = std.Io;
 const Dir = Io.Dir;
@@ -11,7 +12,7 @@ const put = catalog.put;
 const get = catalog.get;
 
 /// Storage-format namespace shared by all compiler compatibility identities.
-pub const format_directory = "artifacts-v1";
+pub const format_directory = "artifacts-v2";
 /// Fixed number of independently coordinated catalogs.
 pub const shard_count = 16;
 /// One minute in the timestamp units used by retention.
@@ -81,8 +82,8 @@ pub const Identity = struct {
     variant: [32]u8 = @splat(0),
 
     pub fn indexedKey(self: Identity) catalog.Key {
-        var hash = std.crypto.hash.sha2.Sha256.init(.{});
-        hash.update("roc-artifact-group-v1");
+        var hash = base.Sha256.init(.{});
+        hash.update("roc-artifact-group-v2");
         hash.update(&self.namespace);
         hash.update(&self.variant);
         hash.update(&.{@backingInt(self.family)});
@@ -100,7 +101,7 @@ pub const Error = catalog.Error || error{ Busy, Missing, Changed, InvalidArtifac
 /// Hash explicit identity components with SHA-256.
 pub fn hashBytes(bytes: []const u8) [32]u8 {
     var result: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(bytes, &result, .{});
+    base.Sha256.hash(bytes, &result, .{});
     return result;
 }
 
@@ -117,13 +118,15 @@ pub const Metadata = struct {
     size: u64,
     created: i64,
     used: i64,
+    /// Lower bound published in the recency tree. Only maintenance advances it.
+    indexed_used: i64,
     key: catalog.Key,
     slot: u64,
     variant: [32]u8 = @splat(0),
 
     pub fn encode(self: Metadata) catalog.Value {
         var bytes: catalog.Value = @splat(0);
-        @memcpy(bytes[0..8], "ROCART01");
+        @memcpy(bytes[0..8], "ROCART02");
         bytes[8] = @backingInt(self.state);
         bytes[9] = @backingInt(self.family);
         put(u32, &bytes, 12, self.pack_format);
@@ -135,11 +138,12 @@ pub const Metadata = struct {
         @memcpy(bytes[80..144], &self.key);
         put(u64, &bytes, 144, self.slot);
         @memcpy(bytes[152..184], &self.variant);
+        put(i64, &bytes, 184, self.indexed_used);
         return bytes;
     }
 
     pub fn decode(bytes: catalog.Value) Error!Metadata {
-        if (!std.mem.eql(u8, bytes[0..8], "ROCART01")) return error.CorruptCatalog;
+        if (!std.mem.eql(u8, bytes[0..8], "ROCART02") or get(i64, &bytes, 184) > get(i64, &bytes, 72)) return error.CorruptCatalog;
         return .{
             .state = std.enums.fromInt(State, bytes[8]) orelse return error.CorruptCatalog,
             .family = std.enums.fromInt(Family, bytes[9]) orelse return error.CorruptCatalog,
@@ -149,6 +153,7 @@ pub const Metadata = struct {
             .size = get(u64, &bytes, 56),
             .created = get(i64, &bytes, 64),
             .used = get(i64, &bytes, 72),
+            .indexed_used = get(i64, &bytes, 184),
             .key = bytes[80..144].*,
             .slot = get(u64, &bytes, 144),
             .variant = bytes[152..184].*,
@@ -164,7 +169,7 @@ pub const Metadata = struct {
 
     pub fn recency(self: Metadata, slot: u64) catalog.Key {
         var key: catalog.Key = @splat(0);
-        std.mem.writeInt(u64, key[0..8], @as(u64, @bitCast(self.used)) ^ (@as(u64, 1) << 63), .big);
+        std.mem.writeInt(u64, key[0..8], @as(u64, @bitCast(self.indexed_used)) ^ (@as(u64, 1) << 63), .big);
         std.mem.writeInt(u64, key[8..16], slot, .big);
         return key;
     }
@@ -197,11 +202,11 @@ pub const Store = struct {
     }
 
     pub fn shardFor(key: catalog.Key) u4 {
-        return @truncate(key[32]);
+        return @truncate(key[0]);
     }
 
     pub fn reserve(self: *const Store, identity: Identity, size: u64, timestamp: i64) Error!Staging {
-        return self.reserveWith(identity, size, timestamp, false);
+        return self.reserveWith(identity, size, timestamp, true);
     }
 
     fn reserveWith(self: *const Store, identity: Identity, size: u64, timestamp: i64, required: bool) Error!Staging {
@@ -223,6 +228,7 @@ pub const Store = struct {
             .size = size,
             .created = timestamp,
             .used = timestamp,
+            .indexed_used = timestamp,
             .key = key,
             .slot = 0,
         };
@@ -284,15 +290,19 @@ pub const Store = struct {
     }
 
     pub fn acquireKey(self: *const Store, key: catalog.Key, timestamp: i64) Error!?Artifact {
+        return self.acquireKeyObserved(key, timestamp, null);
+    }
+
+    fn acquireKeyObserved(self: *const Store, key: catalog.Key, timestamp: i64, deferred: ?*?RetentionBatch.Observation) Error!?Artifact {
         var counters = catalog.Counters{};
-        var shard = Shard.open(self, shardFor(key), false, &counters) catch |err| switch (err) {
+        var shard = Shard.openRequired(self, shardFor(key), false, &counters) catch |err| switch (err) {
             error.Missing, error.Busy => return null,
             else => return err,
         };
         defer shard.close();
         var tx = shard.index.transaction();
         const found = (try tx.find(.artifacts, key)) orelse return null;
-        var metadata = try Metadata.decode(found.value);
+        var metadata = try currentMetadata(&tx, key, found.value);
         if (metadata.state != .published or metadata.family == .scratch) return null;
         const path = try self.payloadPath(shard.number, metadata.slot, ".data");
         errdefer self.allocator.free(path);
@@ -322,14 +332,13 @@ pub const Store = struct {
         // Acquire storage before releasing metadata protection. An accepted
         // reader owns this open file even if maintenance unlinks its name.
         if (metadata.used < timestamp) {
-            if (!try tx.remove(.recency, metadata.recency(metadata.slot))) return error.CorruptCatalog;
-            metadata.used = timestamp;
-            _ = try tx.putValue(.artifacts, key, metadata.encode());
-            _ = try tx.putValue(.owners, storageKey(metadata.generation), metadata.encode());
-            var value: catalog.Value = @splat(0);
-            @memcpy(value[0..64], &key);
-            _ = try tx.putValue(.recency, metadata.recency(metadata.slot), value);
-            try tx.commit();
+            if (deferred) |observation| {
+                observation.* = .{ .key = key, .slot = metadata.slot, .generation = metadata.generation, .timestamp = timestamp };
+            } else {
+                metadata.used = timestamp;
+                try tx.replaceValue(metadata.slot, storageKey(metadata.generation), metadata.encode());
+                try tx.commit();
+            }
         }
         const actual_size = file.length(self.io) catch return error.IoFailure;
         return .{ .store = self, .file = file, .lease = lease, .path = path, .size = actual_size };
@@ -340,11 +349,11 @@ pub const Store = struct {
     pub fn invalidate(self: *const Store, identity: Identity) Error!void {
         const key = identity.indexedKey();
         var counters = catalog.Counters{};
-        var shard = try Shard.open(self, shardFor(key), false, &counters);
+        var shard = try Shard.openRequired(self, shardFor(key), false, &counters);
         defer shard.close();
         var tx = shard.index.transaction();
         const entry = (try tx.find(.artifacts, key)) orelse return;
-        const metadata = try Metadata.decode(entry.value);
+        const metadata = try currentMetadata(&tx, key, entry.value);
         _ = try shard.retire(key, metadata.generation);
     }
 
@@ -354,37 +363,29 @@ pub const Store = struct {
         return try artifact.read(allocator);
     }
 
-    /// Enumerating offers is foreground work. The key index supplies stable
-    /// ordering within a shard; the caller sorts the combined keys as required
-    /// by the existing deterministic pack-selection contract.
+    /// Group placement is explicit in the indexed key. Enumerating one group
+    /// visits only its shard, under one metadata transaction; unrelated groups
+    /// and historical compiler namespaces require no probes.
     pub fn groupKeys(self: *const Store, allocator: Allocator, identity: Identity) Error![]catalog.Key {
         var keys: std.ArrayList(catalog.Key) = .empty;
         errdefer keys.deinit(allocator);
-        const group = identity.indexedKey()[0..32].*;
-        for (0..shard_count) |number| {
-            var cursor: catalog.Key = @splat(0);
-            @memcpy(cursor[0..32], &group);
-            while (true) {
-                var counters = catalog.Counters{};
-                var shard = Shard.open(self, @intCast(number), false, &counters) catch |err| switch (err) {
-                    error.Missing, error.Busy => break,
-                    else => return err,
-                };
-                defer shard.close();
-                var tx = shard.index.transaction();
-                const entry = (try tx.lowerBound(.artifacts, cursor)) orelse break;
-                if (!std.mem.eql(u8, entry.key[0..32], &group)) break;
-                const metadata = try Metadata.decode(entry.value);
-                if (metadata.state == .published) try keys.append(allocator, entry.key);
-                cursor = entry.key;
-                if (!advanceKey(&cursor)) break;
-            }
+        const group_key = identity.indexedKey();
+        var counters = catalog.Counters{};
+        var shard = Shard.openRequired(self, shardFor(group_key), false, &counters) catch |err| switch (err) {
+            error.Missing => return keys.toOwnedSlice(allocator),
+            else => return err,
+        };
+        defer shard.close();
+        var tx = shard.index.transaction();
+        var cursor: catalog.Key = @splat(0);
+        @memcpy(cursor[0..32], group_key[0..32]);
+        while (try tx.lowerBound(.artifacts, cursor)) |entry| {
+            if (!std.mem.eql(u8, entry.key[0..32], group_key[0..32])) break;
+            const metadata = try Metadata.decode(entry.value);
+            if (metadata.state == .published) try keys.append(allocator, entry.key);
+            cursor = entry.key;
+            if (!advanceKey(&cursor)) break;
         }
-        std.mem.sort(catalog.Key, keys.items, {}, struct {
-            fn less(_: void, a: catalog.Key, b: catalog.Key) bool {
-                return std.mem.order(u8, &a, &b) == .lt;
-            }
-        }.less);
         return keys.toOwnedSlice(allocator);
     }
 
@@ -394,6 +395,128 @@ pub const Store = struct {
         return std.fmt.allocPrint(self.allocator, "{s}/{x:0>2}/{s}{s}", .{ self.root, shard, stem, suffix });
     }
 };
+
+/// Bounded retention observations for a reader retaining generation leases.
+/// Callers flush before releasing their leases. A failed acquisition may close
+/// its lease early; exact generation validation discards an obsolete observation.
+/// The batch owns its store path and may outlive the Store that created it.
+pub const RetentionBatch = struct {
+    const Observation = struct { key: catalog.Key, slot: u64, generation: u64, timestamp: i64 };
+    store: Store,
+    pending: [shard_count][catalog.max_changes]Observation = undefined,
+    counts: [shard_count]u8 = @splat(0),
+
+    pub fn init(store: *const Store) Allocator.Error!RetentionBatch {
+        return .{ .store = .{ .allocator = store.allocator, .io = store.io, .root = try store.allocator.dupe(u8, store.root) } };
+    }
+
+    pub fn deinit(self: *RetentionBatch) void {
+        // Retention publication is optional cache I/O. A failed write never
+        // turns validated code into a failed compilation; leases remain held
+        // until this flush attempt has finished.
+        self.flush() catch {};
+        self.store.deinit();
+    }
+
+    pub fn acquireKey(self: *RetentionBatch, key: catalog.Key, timestamp: i64) Error!?Artifact {
+        const number = Store.shardFor(key);
+        if (self.counts[number] == catalog.max_changes) try self.flushShard(number);
+        var observation: ?Observation = null;
+        const artifact = try self.store.acquireKeyObserved(key, timestamp, &observation);
+        if (observation) |value| {
+            self.pending[number][self.counts[number]] = value;
+            self.counts[number] += 1;
+        }
+        return artifact;
+    }
+
+    pub fn flush(self: *RetentionBatch) Error!void {
+        for (0..shard_count) |number| try self.flushShard(@intCast(number));
+    }
+
+    fn flushShard(self: *RetentionBatch, number: u4) Error!void {
+        const count = self.counts[number];
+        if (count == 0) return;
+        var counters = catalog.Counters{};
+        var shard = try Shard.openRequired(&self.store, number, false, &counters);
+        defer shard.close();
+        var tx = shard.index.transaction();
+        for (self.pending[number][0..count]) |observation| {
+            // A rejected payload may have released its lease. Never apply that
+            // observation to a replacement generation reusing the same slot.
+            if (observation.slot == 0 or observation.slot >= tx.header.next) continue;
+            const row = try tx.node(observation.slot);
+            const expected = storageKey(observation.generation);
+            if (row.kind != .leaf or !std.mem.eql(u8, &row.key, &expected)) continue;
+            var metadata = try Metadata.decode(row.value);
+            if (metadata.slot != observation.slot or metadata.generation != observation.generation or
+                !std.mem.eql(u8, &metadata.key, &observation.key)) return error.CorruptCatalog;
+            if (metadata.state != .published or metadata.used >= observation.timestamp) continue;
+            metadata.used = observation.timestamp;
+            try tx.replaceValue(metadata.slot, expected, metadata.encode());
+        }
+        if (tx.count != 0) try tx.commit();
+        self.counts[number] = 0;
+    }
+};
+
+/// The artifact index supplies the immutable generation and physical owner slot.
+/// Its copied retention fields are not authoritative. Reads and maintenance use
+/// the owner leaf, whose use timestamp a foreground hit updates in one write.
+pub fn currentMetadata(tx: *catalog.Transaction, key: catalog.Key, pointer: catalog.Value) Error!Metadata {
+    const address = try Metadata.decode(pointer);
+    if (!std.mem.eql(u8, &address.key, &key)) return error.CorruptCatalog;
+    const owner = try tx.node(address.slot);
+    const expected = storageKey(address.generation);
+    if (owner.kind != .leaf or !std.mem.eql(u8, &owner.key, &expected)) return error.CorruptCatalog;
+    const metadata = try Metadata.decode(owner.value);
+    if (metadata.slot != address.slot or metadata.generation != address.generation or
+        !std.mem.eql(u8, &metadata.key, &key)) return error.CorruptCatalog;
+    return metadata;
+}
+
+test "artifact reads update only the authoritative owner and replacement uses repaired recency" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(path);
+    var store = try Store.init(a, io, path);
+    defer store.deinit();
+    const identity: Identity = .{ .namespace = @splat(1), .family = .local_pack, .key = @splat(2) };
+    const key = identity.indexedKey();
+    try store.write(identity, "old", 10);
+    {
+        var read = (try store.acquire(identity, 100)).?;
+        defer read.deinit();
+    }
+    {
+        var counters = catalog.Counters{};
+        var shard = try Shard.openRequired(&store, Store.shardFor(key), false, &counters);
+        defer shard.close();
+        var tx = shard.index.transaction();
+        const pointer = (try tx.find(.artifacts, key)).?.value;
+        try std.testing.expectEqual(10, (try Metadata.decode(pointer)).used);
+        const current = try currentMetadata(&tx, key, pointer);
+        try std.testing.expectEqual(100, current.used);
+        try std.testing.expectEqual(10, current.indexed_used);
+        try std.testing.expect(!current.expired(day_ns + 50, identity.pack_format));
+        try shard.refreshRecency(current);
+        var refreshed = shard.index.transaction();
+        const after = try currentMetadata(&refreshed, key, pointer);
+        try std.testing.expectEqual(100, after.indexed_used);
+        var next = after;
+        next.used = 200;
+        try refreshed.replaceValue(next.slot, storageKey(next.generation), next.encode());
+        try std.testing.expectEqual(@as(usize, 1), refreshed.count);
+        try refreshed.commit();
+    }
+    try store.write(identity, "new", 300);
+    const bytes = (try store.read(a, identity, 400)).?;
+    defer a.free(bytes);
+    try std.testing.expectEqualStrings("new", bytes);
+}
 
 /// POSIX flock belongs to the open file description and survives inheritance.
 /// Windows byte-range locks belong to the locking process; use sharing denial
@@ -431,8 +554,30 @@ pub const Shard = struct {
     index: catalog.Index,
     number: u4,
 
+    /// Repair one stale recency lower bound. This is one bounded maintenance
+    /// unit, separate from eviction; a freshly read artifact is never selected
+    /// using the older position it still occupies in the recency index.
+    pub fn refreshRecency(self: *Shard, metadata: Metadata) Error!void {
+        var tx = self.index.transaction();
+        var current = metadata;
+        if (!try tx.remove(.recency, current.recency(current.slot))) return error.CorruptCatalog;
+        current.indexed_used = current.used;
+        try tx.replaceValue(current.slot, storageKey(current.generation), current.encode());
+        var value: catalog.Value = @splat(0);
+        @memcpy(value[0..64], &current.key);
+        _ = try tx.putValue(.recency, current.recency(current.slot), value);
+        try tx.commit();
+    }
+
+    /// Opportunistic maintenance never waits for a foreground transaction.
     pub fn open(store: *const Store, number: u4, create: bool, counters: *catalog.Counters) Error!Shard {
         return openWith(store, number, create, counters, false);
+    }
+
+    /// Foreground readers and publishers wait for short metadata transactions.
+    /// Contention is not absence, corruption, or a reason to discard a write.
+    pub fn openRequired(store: *const Store, number: u4, create: bool, counters: *catalog.Counters) Error!Shard {
+        return openWith(store, number, create, counters, true);
     }
 
     fn openWith(store: *const Store, number: u4, create: bool, counters: *catalog.Counters, required: bool) Error!Shard {
@@ -526,7 +671,7 @@ pub const Staging = struct {
 
     pub fn publish(self: *Staging) Error!void {
         var counters = catalog.Counters{};
-        var shard = try Shard.open(self.store, Store.shardFor(self.key), false, &counters);
+        var shard = try Shard.openRequired(self.store, Store.shardFor(self.key), false, &counters);
         defer shard.close();
         var tx = shard.index.transaction();
         const found = (try tx.find(.owners, storageKey(self.generation))) orelse return error.Changed;
@@ -538,7 +683,7 @@ pub const Staging = struct {
         defer self.store.allocator.free(final_path);
         Dir.cwd().rename(self.path, Dir.cwd(), final_path, self.store.io) catch return error.IoFailure;
         if (try tx.find(.artifacts, self.key)) |previous| {
-            var old = try Metadata.decode(previous.value);
+            var old = try currentMetadata(&tx, self.key, previous.value);
             if (old.state != .published or tx.header.user[1] < old.size) return error.CorruptCatalog;
             if (!try tx.remove(.recency, old.recency(old.slot))) return error.CorruptCatalog;
             tx.header.user[1] -= old.size;
@@ -935,4 +1080,206 @@ test "scratch ownership survives the parent closing its inherited lease" {
     var shard = try Shard.open(&store, Store.shardFor(key), false, &counters);
     defer shard.close();
     try std.testing.expect(try shard.retire(key, generation));
+}
+
+test "foreground artifact contention never becomes a cache miss or lost publication" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+    var store = try Store.init(allocator, io, root);
+    defer store.deinit();
+    const id: Identity = .{ .namespace = @splat(17), .family = .checked, .key = @splat(23) };
+    try store.write(id, "validated bytes", 1);
+    const workers = 8;
+    const Shared = struct {
+        store: *const Store,
+        identity: Identity,
+        ready: std.atomic.Value(usize) = .init(0),
+        start: std.atomic.Value(bool) = .init(false),
+        failed: std.atomic.Value(bool) = .init(false),
+        fn run(self: *@This()) void {
+            _ = self.ready.fetchAdd(1, .release);
+            while (!self.start.load(.acquire)) std.atomic.spinLoopHint();
+            for (0..16) |iteration| {
+                const bytes = (self.store.read(self.store.allocator, self.identity, @intCast(iteration + 2)) catch {
+                    self.failed.store(true, .release);
+                    return;
+                }) orelse {
+                    self.failed.store(true, .release);
+                    return;
+                };
+                defer self.store.allocator.free(bytes);
+                if (!std.mem.eql(u8, bytes, "validated bytes")) self.failed.store(true, .release);
+                self.store.write(self.identity, "validated bytes", @intCast(iteration + 2)) catch {
+                    self.failed.store(true, .release);
+                    return;
+                };
+            }
+        }
+    };
+    var shared = Shared{ .store = &store, .identity = id };
+    var threads: [workers]std.Thread = undefined;
+    var spawned: usize = 0;
+    defer {
+        shared.start.store(true, .release);
+        for (threads[0..spawned]) |thread| thread.join();
+    }
+    for (&threads) |*thread| {
+        thread.* = try std.Thread.spawn(.{}, Shared.run, .{&shared});
+        spawned += 1;
+    }
+    while (shared.ready.load(.acquire) != workers) std.atomic.spinLoopHint();
+    shared.start.store(true, .release);
+    for (threads) |thread| thread.join();
+    spawned = 0;
+    try std.testing.expect(!shared.failed.load(.acquire));
+    const bytes = (try store.read(allocator, id, 20)).?;
+    defer allocator.free(bytes);
+    try std.testing.expectEqualStrings("validated bytes", bytes);
+}
+
+test "artifact groups route all members to one shard and enumerate only published members" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+    var store = try Store.init(allocator, io, root);
+    defer store.deinit();
+    const identity: Identity = .{ .namespace = @splat(7), .family = .local_pack, .group = @splat(11), .key = @splat(0) };
+    const shard = Store.shardFor(identity.indexedKey());
+    for (0..32) |i| {
+        var member = identity;
+        member.key[0] = @intCast(31 - i);
+        try std.testing.expectEqual(shard, Store.shardFor(member.indexedKey()));
+        var stage = try store.reserve(member, 1, 1);
+        defer stage.deinit();
+        try Dir.cwd().writeFile(io, .{ .sub_path = stage.path, .data = "x" });
+        try stage.publish();
+    }
+    var unfinished = identity;
+    unfinished.key[0] = 32;
+    var stage = try store.reserve(unfinished, 1, 1);
+    defer stage.deinit();
+    var other = identity;
+    other.group = @splat(12);
+    var other_stage = try store.reserve(other, 1, 1);
+    defer other_stage.deinit();
+    try Dir.cwd().writeFile(io, .{ .sub_path = other_stage.path, .data = "y" });
+    try other_stage.publish();
+    const keys = try store.groupKeys(allocator, identity);
+    defer allocator.free(keys);
+    try std.testing.expectEqual(32, keys.len);
+    for (keys, 0..) |key, i| {
+        try std.testing.expectEqual(i, key[32]);
+        var reader = (try store.acquireKey(key, 2)).?;
+        defer reader.deinit();
+        const bytes = try reader.read(allocator);
+        defer allocator.free(bytes);
+        try std.testing.expectEqualStrings("x", bytes);
+    }
+    const other_keys = try store.groupKeys(allocator, other);
+    defer allocator.free(other_keys);
+    try std.testing.expectEqual(1, other_keys.len);
+}
+
+test "retained reads batch one exact owner update per generation before releasing leases" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(path);
+    var store = try Store.init(a, io, path);
+    defer store.deinit();
+    var batch = try RetentionBatch.init(&store);
+    defer batch.deinit();
+    var ids: [6]Identity = undefined;
+    var held: [6]?Artifact = @splat(null);
+    defer for (&held) |*item| if (item.*) |*artifact| artifact.deinit();
+    for (&ids, 0..) |*id, i| {
+        id.* = .{ .namespace = @splat(7), .family = .local_pack, .group = @splat(5), .key = @splat(@intCast(i)) };
+        try store.write(id.*, "payload", 10);
+    }
+    for (ids, &held) |id, *item| item.* = (try batch.acquireKey(id.indexedKey(), 20)).?;
+    const key = ids[0].indexedKey();
+    var counters = catalog.Counters{};
+    var sequence: u64 = undefined;
+    {
+        var shard = try Shard.openRequired(&store, Store.shardFor(key), false, &counters);
+        defer shard.close();
+        sequence = shard.index.header.sequence;
+        var tx = shard.index.transaction();
+        for (ids) |id| {
+            const k = id.indexedKey();
+            const ptr = (try tx.find(.artifacts, k)).?;
+            const m = try currentMetadata(&tx, k, ptr.value);
+            try std.testing.expectEqual(10, m.used);
+            try std.testing.expectError(error.Busy, shard.retire(k, m.generation));
+        }
+    }
+    try batch.flush();
+    {
+        var shard = try Shard.openRequired(&store, Store.shardFor(key), false, &counters);
+        defer shard.close();
+        try std.testing.expectEqual(sequence + 1, shard.index.header.sequence);
+        var tx = shard.index.transaction();
+        for (ids) |id| {
+            const k = id.indexedKey();
+            const ptr = (try tx.find(.artifacts, k)).?;
+            try std.testing.expectEqual(20, (try currentMetadata(&tx, k, ptr.value)).used);
+        }
+    }
+    // A newer concurrent reader wins even when an older batch flushes last.
+    var older = (try batch.acquireKey(key, 25)).?;
+    defer older.deinit();
+    var newer = (try store.acquireKey(key, 30)).?;
+    defer newer.deinit();
+    try batch.flush();
+    {
+        var shard = try Shard.openRequired(&store, Store.shardFor(key), false, &counters);
+        defer shard.close();
+        var tx = shard.index.transaction();
+        const ptr = (try tx.find(.artifacts, key)).?;
+        try std.testing.expectEqual(30, (try currentMetadata(&tx, key, ptr.value)).used);
+    }
+}
+
+test "retention batches discard observations of a retired generation" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(path);
+    var store = try Store.init(a, io, path);
+    defer store.deinit();
+    var batch = try RetentionBatch.init(&store);
+    defer batch.deinit();
+    const id: Identity = .{ .namespace = @splat(8), .family = .local_pack, .key = @splat(3) };
+    const key = id.indexedKey();
+    try store.write(id, "rejected", 10);
+    var rejected = (try batch.acquireKey(key, 40)).?;
+    rejected.deinit();
+    var counters = catalog.Counters{};
+    {
+        var shard = try Shard.openRequired(&store, Store.shardFor(key), false, &counters);
+        defer shard.close();
+        var tx = shard.index.transaction();
+        const ptr = (try tx.find(.artifacts, key)).?;
+        try std.testing.expect(try shard.retire(key, (try currentMetadata(&tx, key, ptr.value)).generation));
+    }
+    try store.write(id, "replacement", 20);
+    try batch.flush();
+    {
+        var shard = try Shard.openRequired(&store, Store.shardFor(key), false, &counters);
+        defer shard.close();
+        var tx = shard.index.transaction();
+        const ptr = (try tx.find(.artifacts, key)).?;
+        try std.testing.expectEqual(20, (try currentMetadata(&tx, key, ptr.value)).used);
+    }
 }

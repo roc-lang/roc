@@ -7389,8 +7389,8 @@ fn publishedShimLibraryPath(
 /// leased scratch directory, so subsequent linker/process opens cannot race GC.
 fn cachedFileIdentity(family: compile.artifacts.Family, name: []const u8) compile.artifacts.Identity {
     var id: compile.artifacts.Identity = .{ .namespace = undefined, .family = family, .key = undefined };
-    std.crypto.hash.sha2.Sha256.hash(build_options.compiler_compatibility_id, &id.namespace, .{});
-    std.crypto.hash.sha2.Sha256.hash(name, &id.key, .{});
+    base.Sha256.hash(build_options.compiler_compatibility_id, &id.namespace, .{});
+    base.Sha256.hash(name, &id.key, .{});
     return id;
 }
 
@@ -9142,15 +9142,15 @@ const PackOffers = struct {
     /// differently, so evaluation's code for an entry that reads one is not
     /// the code another program compiles, and such an entry is withheld.
     evaluation: bool,
-    observation_independent: []const bool = &.{},
     offered_count: ?*usize = null,
     /// Every keyed specialization, in program order.
     keyed: std.ArrayList(Candidate) = .empty,
     /// Every procedure offered by its identity (`Common.procIdentityCacheKey`),
     /// which serves specializations no reservation-time key names.
     by_identity: std.ArrayList(Candidate) = .empty,
-    /// The procedures that convert a specialized custom literal when they run.
-    literal_converters: std.AutoHashMap(lir.ProcIdentity, void),
+    /// Procedures with literal conversions or evaluation-owned value reads.
+    /// Their native callers are rejected over the exact captured graph.
+    rejected_procedures: std.AutoHashMap(lir.ProcIdentity, void),
     /// Every key gathered. A key two programs offer names one procedure,
     /// offered once, from the first program; identity keys are hashed apart
     /// from specialization keys, so the two kinds never share one.
@@ -9180,14 +9180,14 @@ const PackOffers = struct {
         return .{
             .arena = base.SingleThreadArena.init(allocator),
             .evaluation = evaluation,
-            .literal_converters = std.AutoHashMap(lir.ProcIdentity, void).init(allocator),
+            .rejected_procedures = std.AutoHashMap(lir.ProcIdentity, void).init(allocator),
             .keys = std.AutoHashMap([32]u8, ?[32]u8).init(allocator),
         };
     }
 
     fn deinit(self: *PackOffers) void {
         self.keys.deinit();
-        self.literal_converters.deinit();
+        self.rejected_procedures.deinit();
         self.arena.deinit();
     }
 
@@ -9197,17 +9197,17 @@ const PackOffers = struct {
         lowered: *const lir.CheckedPipeline.LoweredProgram,
         comptime_reads: *const lir.CheckedPipeline.SpecComptimeReads,
     ) Allocator.Error!void {
-        const allocator = self.literal_converters.allocator;
+        const allocator = self.rejected_procedures.allocator;
         const store = &lowered.lir_result.store;
-        const independent = try lir.PackProgram.observationIndependentProcs(allocator, store);
-        defer allocator.free(independent);
-        self.observation_independent = independent;
-        defer self.observation_independent = &.{};
-        var facts = try lir.PackProgram.OfferFacts.init(allocator, store);
+        var facts = try lir.PackProgram.OfferFacts.initProgram(allocator, &lowered.lir_result);
         defer facts.deinit();
         if (dev_diagnostics.isSet(.pack_stats)) std.debug.print("pack offer analysis: statements={d} call_edges={d} propagation_edges={d}\n", .{ facts.statements_visited, facts.call_edges, facts.propagation_edges });
-        for (store.getProcSpecs(), facts.literal_conversion) |proc, converts| {
-            if (converts) try self.literal_converters.put(proc.identity, {});
+        for (store.getProcSpecs(), facts.literal_conversion, facts.reads_evaluation_value) |proc, converts, evaluation_read| {
+            // Evaluation-owned slots are mutable and may still be empty when
+            // a level's native image is captured. They cannot become readonly
+            // constants in another program. Admission follows the actual native
+            // dependency graph, including specialized higher-order callees.
+            if (converts or (self.evaluation and evaluation_read)) try self.rejected_procedures.put(proc.identity, {});
         }
         for (lowered.lir_result.spec_procs.items) |spec_proc| {
             const key_entry = try self.keys.getOrPut(spec_proc.key);
@@ -9223,7 +9223,10 @@ const PackOffers = struct {
             // under its code key; any other is offered under its identity only
             // when its identity names all of its code and all the code the
             // pack carries with it.
-            if (carries_site_code) continue;
+            if (carries_site_code) {
+                if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("pack withheld-site proc={x} {s}\n", .{ proc.identity.bytes, store.procDebugName(id) orelse "" });
+                continue;
+            }
             const key = postcheck.Common.procIdentityCacheKey(if (proc.code_key) |code| code else proc.identity.bytes);
             const key_entry = try self.keys.getOrPut(key);
             if (key_entry.found_existing) continue;
@@ -9254,22 +9257,18 @@ const PackOffers = struct {
         // entry rather than calling it, and has no body for an entry, so it
         // sees the entry outside every call cycle and would reach it with an
         // ordinary call where the cycle needs a frame-replacing one.
-        const closure = try lir.PackProgram.procCallClosure(self.literal_converters.allocator, store, id);
-        defer self.literal_converters.allocator.free(closure);
-        var test_compatible = true;
-        for (closure, self.observation_independent) |reached, independent| {
-            if (reached and !independent) test_compatible = false;
-        }
+        const test_compatible = !facts.reaches_observation[@backingInt(id)];
         const withheld = (lowered.lir_result.expect_sites.items.len != 0 and !test_compatible) or !reads.offerable or
             (self.evaluation and reads.evaluated) or
             proc.rc_variant_demandable or
             facts.reaches_linked[@backingInt(id)] or
             proc.inlined_at_calls or
             proc.tail_group != null;
+        if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("pack admission key={x} proc={x} withheld={} reads={} evaluated={} variant={} linked={} inline={} tail={} {s}\n", .{ key, proc.identity.bytes, withheld, reads.offerable, self.evaluation and reads.evaluated, proc.rc_variant_demandable, facts.reaches_linked[@backingInt(id)], proc.inlined_at_calls, proc.tail_group != null, store.procDebugName(id) orelse "" });
         // An entry this program spliced from a pack is offered again with
         // its producer's code; only a body lowered here has a fingerprint.
         const fingerprint: ?u64 = if (dev_diagnostics.isSet(.pack_trace) and proc.body != null)
-            try procFingerprint(self.literal_converters.allocator, lowered, id)
+            try procFingerprint(self.rejected_procedures.allocator, lowered, id)
         else
             null;
         return .{
@@ -9297,7 +9296,7 @@ const PackOffers = struct {
         errdefer specs.deinit(allocator);
         const trace = dev_diagnostics.isSet(.pack_trace);
         var withheld: usize = 0;
-        var converting_excerpts = try literalConvertingExcerpts(allocator, set, &self.literal_converters);
+        var converting_excerpts = try markedProcedureExcerpts(allocator, set, &self.rejected_procedures);
         defer converting_excerpts.deinit(allocator);
         var closure = try SpliceClosure.init(allocator, set);
         defer closure.deinit();
@@ -9317,6 +9316,7 @@ const PackOffers = struct {
                 // may not carry; an entry that reaches either cannot be
                 // linked elsewhere, so it is not offered.
                 if (rejected[excerpt]) {
+                    if (trace) std.debug.print("pack withheld-native key={x} proc={x} {s}\n", .{ offer.key, offer.identity.bytes, offer.name });
                     withheld += 1;
                     continue;
                 }
@@ -9393,17 +9393,17 @@ fn procFingerprint(allocator: Allocator, lowered: *const lir.CheckedPipeline.Low
 /// indexed once; each query reuses the walk's storage.
 const SpliceClosure = pack_store.SpliceClosure;
 
-/// The excerpts of `set` whose procedure converts a specialized custom
-/// literal when it runs (`PackProgram.procConvertsLiteralAtRuntime`).
-fn literalConvertingExcerpts(
+/// Excerpts whose procedures carry explicit reasons to withhold a cache offer:
+/// runtime literal conversion or reads of evaluation-owned mutable slots.
+fn markedProcedureExcerpts(
     allocator: Allocator,
     set: *const backend.dev.CodeExcerpt.Set,
-    literal_converters: *const std.AutoHashMap(lir.ProcIdentity, void),
+    rejected_procedures: *const std.AutoHashMap(lir.ProcIdentity, void),
 ) Allocator.Error!std.DynamicBitSetUnmanaged {
     var converting = try std.DynamicBitSetUnmanaged.initEmpty(allocator, set.excerpts.len);
-    if (literal_converters.count() == 0) return converting;
+    if (rejected_procedures.count() == 0) return converting;
     for (set.excerpts, 0..) |excerpt, index| switch (excerpt.kind) {
-        .proc => |identity| if (literal_converters.contains(identity)) converting.set(index),
+        .proc => |identity| if (rejected_procedures.contains(identity)) converting.set(index),
         .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
     };
     return converting;
@@ -9512,7 +9512,7 @@ test "pack withholds an entry whose stable references reach a literal-converting
     var converters = std.AutoHashMap(lir.ProcIdentity, void).init(std.testing.allocator);
     defer converters.deinit();
     try converters.put(converter, {});
-    var converting_excerpts = try literalConvertingExcerpts(std.testing.allocator, &set, &converters);
+    var converting_excerpts = try markedProcedureExcerpts(std.testing.allocator, &set, &converters);
     defer converting_excerpts.deinit(std.testing.allocator);
     var closure = try SpliceClosure.init(std.testing.allocator, &set);
     defer closure.deinit();
@@ -14418,6 +14418,7 @@ fn checkedRuntimeLoweringConfig(
             .erased_capture_prefix = devCapturePrefix(roots, opt, target),
             .specialization_strategy = specialization_strategy,
             .inline_mode = postCheckInlineModeForOpt(opt),
+            .specialize_arc_modes = optimizeLirForOpt(opt),
             .spec_constr_clone_inlining = specConstrCloneInliningForOpt(opt),
             .consume_dead_boxes = switch (roots) {
                 .linked_output => true,
@@ -21929,4 +21930,14 @@ test "bidi controls in diagnostic summary paths remain visible" {
     }
     var iter = base.bidi.Iterator{ .bytes = output.written() };
     try std.testing.expect(iter.next() == null);
+}
+
+test "dev ARC specialization is independent of source inlining" {
+    for ([_]cli_args.OptLevel{ .dev, .interpreter, .speed, .size }) |opt| {
+        const config = checkedRuntimeLoweringConfig(.linked_output, opt, .lss, .x64glibc, false);
+        const expected = opt == .speed or opt == .size;
+        try std.testing.expectEqual(expected, config.target.specialize_arc_modes);
+        try std.testing.expectEqual(expected, lir.CheckedPipeline.LirPolicy.fromTarget(config.target).specialize_arc_modes);
+        if (opt == .dev) try std.testing.expect(config.target.inline_mode != .none);
+    }
 }

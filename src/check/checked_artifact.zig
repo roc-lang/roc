@@ -37945,12 +37945,16 @@ pub fn publishFromTypedModule(
         .names = &canonical_names,
         .types = checked_types.view(),
         .roots = compile_time_roots.roots,
+        .bodies = checked_bodies,
         .top_level_values = &top_level_values,
         .context = .{
             .checking_context = hashCheckingContextIdentity(checking_context_identity),
             .direct_import_keys = hashDirectImportArtifactKeys(direct_import_module_keys),
         },
         .own_identity = module_identity.stable_hash,
+        .imports = inputs.imports,
+        .available = inputs.available_artifacts,
+        .relations = inputs.relation_artifacts,
     });
     defer allocator.free(module_identities.definitions);
     defer allocator.free(module_identities.report_sites);
@@ -37975,6 +37979,7 @@ pub fn publishFromTypedModule(
         .names = &canonical_names,
         .types = checked_types.view(),
         .roots = compile_time_roots.roots,
+        .bodies = checked_bodies,
         .top_level_values = &top_level_values,
         .context = .{
             .checking_context = hashCheckingContextIdentity(test_checking_context),

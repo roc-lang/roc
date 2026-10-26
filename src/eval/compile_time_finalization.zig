@@ -109,6 +109,9 @@ pub const Options = struct {
     /// Runtime outcomes already supplied by the caller. Only their literal
     /// conversion obligations may specialize; these roots never execute.
     discovery_roots: lir.CheckedPipeline.RootRequestSet = .{},
+    /// Prior successful, silent validation; not a stored value. Every root
+    /// absent from this set is still demanded for validation in test/check.
+    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(lir.CheckedPipeline.ComptimeDemandRoot, void) = null,
     max_threads: usize = 0,
     /// Borrow the coordinator's workers after all frontend tasks have finished.
     /// Standalone finalizers without a coordinator lower on their calling thread.
@@ -412,6 +415,9 @@ const DebugEvents = struct {
     };
     allocator: Allocator,
     events: std.ArrayList(Event) = .empty,
+    /// Literal-root messages are emitted directly, without a checked root
+    /// to attach a stored event to. They still prevent silent discovery reuse.
+    emitted: bool = false,
 
     fn deinit(self: *DebugEvents) void {
         for (self.events.items) |event| self.allocator.free(event.message);
@@ -601,6 +607,9 @@ pub const ProgramSession = struct {
     /// The position of each runtime request in the specialized program's root
     /// plan.
     runtime_positions: []u32,
+    /// All compile-time observations, including replayed observations, were
+    /// empty. Together with the caller's error check this certifies discovery.
+    discovery_silent: bool = false,
 
     /// Where a runtime consumer reads completed values from.
     pub const RuntimeStages = union(enum) {
@@ -1242,7 +1251,7 @@ pub fn finalizeProgram(
         finalizationInvariant("program roots omitted their checked owners");
 
     const lss_runtime = if (runtime_target) |target| target.specialization_strategy == .lss else false;
-    const demand_driven = demandDrivenEvaluation(modules, program_roots, lss_runtime);
+    const demand_driven = options.validated_comptime_roots != null or demandDrivenEvaluation(modules, program_roots, lss_runtime);
     const owned_imports = try allocator.dupe(checked.ImportedModuleView, lowering_modules.imports);
     errdefer allocator.free(owned_imports);
     const owned_relations = try allocator.dupe(checked.ImportedModuleView, lowering_modules.root.relation_modules);
@@ -1292,6 +1301,10 @@ pub fn finalizeProgram(
         quiet_options.event_callback = null;
         quiet_options.completion_sink = null;
         quiet_options.keep_artifacts = false;
+        // The first specialization settled discovery-only test roots and
+        // reported their observations. They contribute no runtime entrypoint;
+        // only the runtime program's own literal roots belong in this pass.
+        quiet_options.discovery_roots = .{};
         quiet_options.unfinalized_reports = if (options.unfinalized_reports != null) quiet_unfinalized.reports() else null;
         // The evaluation's run verified the program's restored literal
         // values, and the compile-time pack holds the evaluation's code, so
@@ -1313,7 +1326,7 @@ pub fn finalizeProgram(
             null,
             false,
             lss_runtime,
-            demandDrivenEvaluation(quiet_modules, program_roots, lss_runtime),
+            options.validated_comptime_roots != null or demandDrivenEvaluation(quiet_modules, program_roots, lss_runtime),
         );
         if (respecialized.compile_time_root_count != 0)
             finalizationInvariant("a program specialized again after its evaluation completed demanded a compile-time root again");
@@ -1330,7 +1343,7 @@ pub fn finalizeProgram(
     // Observations replay in sorted order once every root has evaluated:
     // those stored for the roots this program demands, and this
     // compilation's own.
-    const replay_filter: ?*const StoredRootSet = if (demand_driven) &stored_demand else null;
+    const replay_filter: ?*const StoredRootSet = if (demand_driven and options.validated_comptime_roots == null) &stored_demand else null;
     try debug_events.appendCached(options.cached_debug_modules, replay_filter);
     for (modules) |entry| try debug_events.appendStored(entry.module, replay_filter);
     try debug_events.persist(modules);
@@ -1350,6 +1363,7 @@ pub fn finalizeProgram(
         .runtime_stages = runtime_stages,
         .runtime_prepared = runtime_prepared,
         .runtime_positions = runtime_positions,
+        .discovery_silent = debug_events.events.items.len == 0 and !debug_events.emitted,
     };
 }
 
@@ -1414,6 +1428,7 @@ fn specializeAndEvaluate(
     var source_modules = std.ArrayList(checked.ModuleId).empty;
     defer source_modules.deinit(allocator);
     for (modules) |entry| {
+        const module_start = requests.items.len;
         for (entry.module.root_requests.compile_time_requests) |request| {
             // A reopened artifact's roots that an earlier compilation
             // evaluated are read from its store like any other module's.
@@ -1421,6 +1436,7 @@ fn specializeAndEvaluate(
             try requests.append(allocator, request);
             try source_modules.append(allocator, entry.module.key.digest());
         }
+        if (base.dev_diagnostics.isSet(.ctfe_reuse_trace)) std.debug.print("ctfe-reuse pending {s}: {d} roots\n", .{ entry.module.moduleEnvConst().module_name, requests.items.len - module_start });
     }
     const requested_root_count = requests.items.len;
 
@@ -1499,8 +1515,8 @@ fn specializeAndEvaluate(
     var union_roots = program_roots;
     union_roots.requests = requests.items;
     union_roots.source_modules = source_modules.items;
-    // Test roots are addressed by their position in the request list, so
-    // a program that runs tests is never demand-driven.
+    // The Monotype producer translates these positions through its selected
+    // compile-time prefix before a runtime consumer reads them.
     const union_test_metadata = try allocator.dupe(@typeInfo(@TypeOf(program_roots.test_plan_metadata)).pointer.child, if (lss_runtime) program_roots.test_plan_metadata else &.{});
     defer allocator.free(union_test_metadata);
     for (union_test_metadata) |*metadata| metadata.request_index += @intCast(requested_root_count);
@@ -1521,6 +1537,7 @@ fn specializeAndEvaluate(
     const solved_policy = if (lss_runtime) lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?) else check_solved_policy;
     var host_target = compileTimeTarget(options, solved_policy);
     host_target.demand_driven_comptime_roots = demand_driven;
+    host_target.validated_comptime_roots = options.validated_comptime_roots;
     if (options.literal_values) |values| {
         host_target.literal_values = values.lookup();
         host_target.verify_literal_values = options.verify_literal_values;
@@ -1586,7 +1603,7 @@ fn specializeAndEvaluate(
         const fresh_message = for (debug_events.events.items) |event| {
             if (event.fresh) break true;
         } else false;
-        if (options.object_cache != null and !fresh_message) {
+        if (options.object_cache != null and !fresh_message and !debug_events.emitted) {
             result.completed.?.discovery_summaries = try lir.CheckedPipeline.DiscoverySummary.collect(allocator, &prepared.program.lifted);
         }
         if (!shares_solved) {
@@ -5657,6 +5674,7 @@ fn reportDebugMessage(allocator: Allocator, options: Options, module: checked.Mo
 }
 
 fn emitDebugMessage(allocator: Allocator, options: Options, is_repl: bool, message: []const u8) Allocator.Error!void {
+    if (options.debug_events) |events| events.emitted = true;
     if (options.completion_sink) |sink| try sink.debug(sink.context, message);
     if (options.debug_observer) |observer| try observer.observe(observer.context, message);
     if (is_repl) {

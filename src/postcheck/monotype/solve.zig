@@ -133,6 +133,9 @@ pub const InstVariableOrigin = enum(u8) {
     checked_variable,
     row_extension,
     placeholder,
+    /// An explicit parameter of a detached interface relation, filled when
+    /// that relation is joined to its requesting graph. Never defaulted.
+    interface_parameter,
 };
 
 /// Defaulting evidence carried by an unresolved instantiation-graph node until
@@ -158,6 +161,10 @@ pub const InstVariable = struct {
             .origin = .row_extension,
             .row_default = default,
         };
+    }
+
+    pub fn interfaceParameter() InstVariable {
+        return .{ .origin = .interface_parameter };
     }
 
     pub fn placeholder() InstVariable {
@@ -1172,6 +1179,12 @@ pub const InterfaceConstraints = struct {
             // digest, so requests that differ only in the checked occurrence
             // through which a named type was reached share one interface.
             if (T == Type.NamedType) return self.write(names.CheckedModuleDigest, value.module);
+            if (T == @FieldType(InstNode, "tag_union")) {
+                // The actual ordered tags and their extension are constraints;
+                // the producer's memo that this order is sorted is not.
+                try self.write(@TypeOf(value.tags), value.tags);
+                return self.write(NodeId, value.ext);
+            }
             if (T == Type.TypeId) {
                 try self.leaves.append(self.graph.allocator, value);
                 const digest = self.graph.types.representationDigestCached(ns, value, null);
@@ -1397,7 +1410,7 @@ pub const InterfaceConstraints = struct {
                     self.hole_classes[hole] = root;
                     const open_index: u32 = @intCast(self.open_nodes.items.len);
                     self.nodes.items[@backingInt(id)] = .{ .open = open_index };
-                    try self.open_nodes.append(self.graph.allocator, .{ .content = .{ .unresolved = InstVariable.placeholder() } });
+                    try self.open_nodes.append(self.graph.allocator, .{ .content = .{ .unresolved = InstVariable.interfaceParameter() } });
                     return null;
                 }
             }
@@ -3724,7 +3737,7 @@ pub const InstGraph = struct {
             .redirect, .leaf => unreachable, // callers pass a find root, and rootContent of a find root expands a leaf, so it returns structure
             .unresolved => |variable| switch (variable.origin) {
                 .checked_variable, .row_extension => .{ .fixed = 0 },
-                .placeholder => Common.invariant("placeholder reached generated iterator representation finalization"),
+                .placeholder, .interface_parameter => Common.invariant("placeholder reached generated iterator representation finalization"),
             },
             .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole, .func => .{ .fixed = 0 },
             .list, .box => .{ .children = .{ .count = 1, .increment = 0 } },
@@ -3886,7 +3899,7 @@ pub const InstGraph = struct {
                     return switch (variable.origin) {
                         .checked_variable => true,
                         .row_extension => Common.invariant("row extension reached final demand validation without row default"),
-                        .placeholder => Common.invariant("instantiation placeholder reached final demand validation"),
+                        .placeholder, .interface_parameter => Common.invariant("instantiation placeholder reached final demand validation"),
                     };
                 },
                 .named => |named| {
@@ -7282,6 +7295,7 @@ pub const InstGraph = struct {
     fn mergeVariableOrigin(a: InstVariableOrigin, b: InstVariableOrigin) InstVariableOrigin {
         if (a == .checked_variable or b == .checked_variable) return .checked_variable;
         if (a == .row_extension or b == .row_extension) return .row_extension;
+        if (a == .interface_parameter or b == .interface_parameter) return .interface_parameter;
         return .placeholder;
     }
 
@@ -8881,7 +8895,7 @@ const GraphUninhabitedScan = struct {
                     break :blk switch (variable.origin) {
                         .checked_variable => .{ .value = true },
                         .row_extension => Common.invariant("row extension reached final inhabitance validation without row default"),
-                        .placeholder => Common.invariant("instantiation placeholder reached final inhabitance validation"),
+                        .placeholder, .interface_parameter => Common.invariant("instantiation placeholder reached final inhabitance validation"),
                     };
                 },
             },
@@ -10230,7 +10244,7 @@ fn materializeUnresolved(variable: InstVariable) Type.Content {
     return switch (variable.origin) {
         .checked_variable => .{ .tag_union = Type.Span.empty() },
         .row_extension => Common.invariant("row extension reached Monotype materialization without row default"),
-        .placeholder => Common.invariant("instantiation placeholder reached Monotype materialization"),
+        .placeholder, .interface_parameter => Common.invariant("instantiation placeholder reached Monotype materialization"),
     };
 }
 
@@ -15311,4 +15325,28 @@ test "finished witness absence updates after registration and import and resets 
     try std.testing.expect(!try graph.containsFinishedMono(fresh));
     const reset_capture = try InterfaceConstraints.capture(graph, graph.arena(), &.{fresh});
     try std.testing.expect(reset_capture.open_nodes[0].finished == .none);
+}
+
+test "interface request identity ignores the tag sorting memo" {
+    const allocator = std.testing.allocator;
+    var types = Type.Store.init(allocator);
+    defer types.deinit();
+    var ns = names.NameStore.init(allocator);
+    defer ns.deinit();
+    const graph = try InstGraph.create(allocator, &types, &ns);
+    defer graph.destroy();
+    const label = try ns.internTagLabel("Value");
+    var ids: [2]InterfaceConstraints.Identity = undefined;
+    for (&ids, [_]bool{ false, true }) |*identity, sorted| {
+        const value = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+        const payload = try graph.arena().dupe(NodeId, &.{value});
+        const row = try graph.newNode(.{ .tag_union = .{
+            .tags = try graph.arena().dupe(InstTag, &.{.{ .name = label, .checked_name = label, .payloads = payload }}),
+            .ext = try graph.newNode(.empty_tag_union),
+            .tags_sorted = sorted,
+        } });
+        const captured = try InterfaceConstraints.captureRequest(graph, graph.arena(), &.{row});
+        identity.* = try captured.identity(graph);
+    }
+    try std.testing.expect(try ids[0].eql(ids[1], &types, &ns));
 }

@@ -164,6 +164,9 @@ pub const TargetConfig = struct {
     /// compile-time roots it demands (design.md "Demand-Driven Compile-Time
     /// Evaluation").
     demand_driven_comptime_roots: bool = false,
+    /// A test/check command still validates every initializer. A prior silent
+    /// successful validation permits deferring its value until a reader needs it.
+    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(ComptimeDemandRoot, void) = null,
     /// This program's specializations may be written to the object cache, so
     /// Monotype records what each one reads of compile-time evaluation
     /// (`SpecComptimeReads`).
@@ -178,6 +181,9 @@ pub const TargetConfig = struct {
     /// a literal root that evaluation runs to verify the stored value.
     verify_literal_values: bool = false,
     inline_mode: InlineMode = .none,
+    /// Optional ARC mode specialization belongs to the consumer's optimization
+    /// policy, independently of whether source wrappers are inlined.
+    specialize_arc_modes: bool = false,
     /// Direct-call inlining scope for SpecConstr's value-aware clones.
     /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
     /// so post-check time and emitted program size stay bounded. Consulted
@@ -1125,6 +1131,7 @@ pub const SolvedPolicy = struct {
 /// The settings one consumer's LIR generation, procedure passes and ARC run
 /// under. A consumer continuing a shared Solved program brings its own.
 pub const LirPolicy = struct {
+    specialize_arc_modes: bool,
     consume_dead_boxes: bool,
     zero_dict_seed: bool,
     list_in_place_map: bool,
@@ -1538,6 +1545,7 @@ pub fn prepareCheckedModulesMonotype(
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
                 .demand_driven_comptime_roots = target.demand_driven_comptime_roots,
+                .validated_comptime_roots = target.validated_comptime_roots,
                 .comptime_demand_out = if (target.comptime_value_reads) &comptime_demand else null,
                 .spec_comptime_reads_out = if (target.spec_comptime_reads) &spec_comptime_reads else null,
                 .spec_key_aliases_out = &spec_key_aliases,
@@ -1563,10 +1571,21 @@ pub fn prepareCheckedModulesMonotype(
     if (!target.demand_driven_comptime_roots and root_count != roots.requests.len) {
         checkedPipelineInvariant("Monotype lowering published a root count different from its requests");
     }
+    if (target.demand_driven_comptime_roots) {
+        // Only compile-time requests are removed, all from the prefix. Test
+        // reporting retains its original source/result identity while its
+        // execution position follows the producer's selected root prefix.
+        const omitted: u32 = @intCast(roots.requests.len - root_count);
+        for (test_plan_metadata) |*metadata| metadata.request_index -= omitted;
+    }
+    // The validation set is borrowed only by Monotype production, never by
+    // its retained consumers after the coordinator's finalization returns.
+    var retained_target = target;
+    retained_target.validated_comptime_roots = null;
     return .{
         .allocator = allocator,
         .program = mono,
-        .target = target,
+        .target = retained_target,
         .root_count = root_count,
         .test_plan_metadata = test_plan_metadata,
         .comptime_demand = if (target.comptime_value_reads) comptime_demand else null,
@@ -2051,7 +2070,7 @@ fn finishLoweredOutput(
     }
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = arc_roots.items,
-        .specialize = target.inline_mode != .none,
+        .specialize = target.specialize_arc_modes,
         .consume_dead_boxes = target.consume_dead_boxes,
         .thread_confined_rc = target.thread_confined_rc,
         .post_check_executor = if (target.post_check_executor) |*executor| executor else null,
@@ -2414,7 +2433,11 @@ const LirDump = if (!base.dev_diagnostics.available) struct {
             DebugPrint.writeProc(store.allocator, store, layouts, proc_id, &buffer.writer) catch |err| switch (err) {
                 error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
             };
-            std.debug.print("=== LIR {s} (p{d}) ===\n{s}\n", .{ name orelse "<unnamed>", index, buffer.written() });
+            const proc = store.getProcSpecImmediate(proc_id);
+            const fingerprint = DebugPrint.procFingerprint(store.allocator, store, layouts, proc_id) catch |err| switch (err) {
+                error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
+            };
+            std.debug.print("=== LIR {s} (p{d}, identity={x}, fingerprint={x:0>16}, borrowed={x}, ret_borrowed={}, unique={}) ===\n{s}\n", .{ name orelse "<unnamed>", index, proc.identity.bytes, fingerprint, proc.rc_borrowed_params, proc.rc_ret_borrowed, proc.rc_ret_unique, buffer.written() });
         }
     }
 };

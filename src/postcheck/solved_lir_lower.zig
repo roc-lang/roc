@@ -4497,7 +4497,7 @@ const Lowerer = struct {
         const keyed = try self.allocator.alloc(Keyed, tags.len);
         defer self.allocator.free(keyed);
         for (tags, keyed) |tag, *entry| {
-            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+            var hasher = base.Sha256.init(.{});
             const payloads = self.types.span(tag.payloads);
             for (0..payloads.len) |payload_index| {
                 const digest = try self.types.typeDigest(&self.solved.lifted.names, GuardedList.at(payloads, payload_index));

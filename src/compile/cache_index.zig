@@ -210,11 +210,21 @@ pub const Transaction = struct {
     header: Header,
     changes: [max_changes]struct { id: RecordId, node: Node } = undefined,
     count: usize = 0,
+    // The shard lock excludes other writers for this transaction's lifetime.
+    // Pending writes are consulted first. A bounded memo avoids reading the
+    // same catalog path separately for each tree lookup/update in a transaction.
+    read_ids: [64]RecordId = @splat(0),
+    read_nodes: [64]Node = undefined,
 
     pub fn node(self: *Transaction, id: RecordId) Error!Node {
         if (id == 0 or id >= self.header.next) return error.CorruptCatalog;
         for (self.changes[0..self.count]) |change| if (change.id == id) return change.node;
-        return self.index.node(id);
+        const slot = id % self.read_ids.len;
+        if (self.read_ids[slot] == id) return self.read_nodes[slot];
+        const read = try self.index.node(id);
+        self.read_nodes[slot] = read;
+        self.read_ids[slot] = id;
+        return read;
     }
 
     fn set(self: *Transaction, id: RecordId, value: Node) void {
@@ -227,6 +237,15 @@ pub const Transaction = struct {
         std.debug.assert(self.count < max_changes);
         self.changes[self.count] = .{ .id = id, .node = value };
         self.count += 1;
+    }
+
+    /// Update a leaf whose physical identity an earlier indexed lookup supplied.
+    /// The stored key is checked before any mutation; catalog slots are untrusted.
+    pub fn replaceValue(self: *Transaction, id: RecordId, key: Key, value: Value) Error!void {
+        var current = try self.node(id);
+        if (current.kind != .leaf or !std.mem.eql(u8, &current.key, &key)) return error.CorruptCatalog;
+        current.value = value;
+        self.set(id, current);
     }
 
     fn allocate(self: *Transaction, value: Node) Error!RecordId {
@@ -533,4 +552,34 @@ test "corrupt redo is rejected before writing catalog pages" {
     const writes = counters.writes;
     try std.testing.expectError(error.CorruptCatalog, index.recover());
     try std.testing.expectEqual(writes, counters.writes);
+}
+
+test "catalog acquisition retains paths and sees pending writes" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var counters = Counters{};
+    var index = try Index.open(tmp.dir, io, &counters);
+    defer index.close();
+    var key: Key = @splat(1);
+    {
+        var tx = index.transaction();
+        _ = try tx.putValue(.artifacts, key, @splat(1));
+        try tx.commit();
+    }
+    var tx = index.transaction();
+    const found = (try tx.find(.artifacts, key)).?;
+    const reads = counters.reads;
+    for (0..10) |_| try std.testing.expectEqual(found.value, (try tx.find(.artifacts, key)).?.value);
+    try std.testing.expectEqual(reads, counters.reads);
+    _ = try tx.putValue(.artifacts, key, @splat(2));
+    try std.testing.expectEqual(@as(Value, @splat(2)), (try tx.find(.artifacts, key)).?.value);
+    try std.testing.expect(try tx.remove(.artifacts, key));
+    try std.testing.expectEqual(null, try tx.find(.artifacts, key));
+    key[0] = 2;
+    _ = try tx.putValue(.artifacts, key, @splat(3));
+    try std.testing.expectEqual(@as(Value, @splat(3)), (try tx.find(.artifacts, key)).?.value);
+    try tx.commit();
+    var fresh = index.transaction();
+    try std.testing.expectEqual(@as(Value, @splat(3)), (try fresh.find(.artifacts, key)).?.value);
 }

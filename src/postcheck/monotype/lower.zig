@@ -313,6 +313,7 @@ pub const Options = struct {
     /// the compile-time roots the program demands (design.md "Demand-Driven
     /// Compile-Time Evaluation").
     demand_driven_comptime_roots: bool = false,
+    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(EntryRoot, void) = null,
     /// With `comptime_value_reads`, receives the compile-time roots the
     /// program demands and the checked roots each of its compile-time roots
     /// reads.
@@ -414,9 +415,10 @@ pub const ComptimeDemand = struct {
 /// nothing reachable references, such as a callee body an immediate claim
 /// lowered for a caller that kept its own copy, demands nothing.
 ///
-/// The state persists across the lowering's drains. Definitions only grow,
-/// and a definition is summarized once its body is final: after the drain
-/// that completed it.
+/// The state persists across lowering drains. A discovery request may expose
+/// a parked declaration before an evaluation request completes its body.
+/// Explicit body-publication events invalidate that declaration's summary and
+/// revisit it if it was already reachable.
 const ComptimeDemandState = struct {
     const Range = struct { start: u32, len: u32 };
     /// `local` is set when the body evaluates a root in place: code that
@@ -431,6 +433,9 @@ const ComptimeDemandState = struct {
     /// two disjoint ranges of one id space.
     const nested_bit: u32 = 1 << 31;
 
+    /// Previously reached declarations whose final bodies were published
+    /// after an earlier demand round inspected their parked declarations.
+    changed_reached: std.ArrayList(u32) = .empty,
     def_summaries: std.ArrayList(?Summary) = .empty,
     nested_summaries: std.ArrayList(?Summary) = .empty,
     summary_refs: std.ArrayList(u32) = .empty,
@@ -487,6 +492,7 @@ const ComptimeDemandState = struct {
     stored_demanded: std.ArrayList(u32) = .empty,
 
     fn deinit(self: *ComptimeDemandState, allocator: Allocator) void {
+        self.changed_reached.deinit(allocator);
         self.def_summaries.deinit(allocator);
         self.nested_summaries.deinit(allocator);
         self.summary_refs.deinit(allocator);
@@ -600,6 +606,20 @@ const ComptimeDemandState = struct {
 
     fn growTo(allocator: Allocator, list: anytype, len: usize, value: anytype) Allocator.Error!void {
         if (list.items.len < len) try list.appendNTimes(allocator, value, len - list.items.len);
+    }
+
+    /// Body publication is the producer event invalidating an earlier
+    /// summary of a parked declaration. Unreached bodies need no traversal;
+    /// reached ones join the next round at the changed definition itself.
+    fn bodyPublished(self: *ComptimeDemandState, allocator: Allocator, fn_id: Ast.FnId) Allocator.Error!void {
+        const raw = @backingInt(fn_id);
+        if (raw >= self.fn_items.items.len) return;
+        const item = self.fn_items.items[raw] orelse return;
+        self.summarySlot(item).* = null;
+        const reached = self.itemReached(item);
+        if (!reached.*) return;
+        try self.changed_reached.append(allocator, item);
+        reached.* = false;
     }
 
     fn summarySlot(self: *ComptimeDemandState, item: u32) *?Summary {
@@ -997,8 +1017,8 @@ pub const SpecKeyAliases = struct {
 const DeclaredRoot = struct {
     request: checked.RootRequest,
     source_module: checked.ModuleId,
-    def: Ast.DefId,
-    fn_id: Ast.FnId,
+    def: ?Ast.DefId = null,
+    fn_id: ?Ast.FnId = null,
     /// A validation root (`hoisted_validation`): it produces no value for a
     /// read to reach and runs for its effects, so the program demands it
     /// outright.
@@ -4528,6 +4548,13 @@ fn committedTypeRelocation(domain: anytype, program: *Ast.Program) *Type.Store.T
     return &domain.workspace_to_program.?;
 }
 
+// ConstTypeStore nodes are immutable producer data throughout one lowering.
+// The destination owns this map for exactly the lifetime of its Type.Store.
+const ConstTypeMemo = std.AutoHashMapUnmanaged(struct {
+    store: *const check.ConstStore.ConstTypeStore,
+    ty: check.ConstStore.ConstTypeId,
+}, Type.TypeId);
+
 const SpecJobWorkspace = struct {
     allocator: Allocator,
     types: Type.Store,
@@ -4540,6 +4567,7 @@ const SpecJobWorkspace = struct {
     /// it; summaries the coordinator shares are read from its table.
     interface_summaries: InterfaceSummaryCache,
     checked_type_cache: CheckedTypeMemo(Type.TypeId) = .empty,
+    const_type_cache: ConstTypeMemo = .empty,
     captured_types: Type.Store.EpochBoundary,
     captured_names: names.NameStore.EpochBoundary,
     program: ?*Ast.Program = null,
@@ -4653,6 +4681,7 @@ const SpecJobWorkspace = struct {
         if (self.program_to_workspace) |*relocation| relocation.deinit();
         self.interface_summaries.deinit();
         self.checked_type_cache.deinit(self.allocator);
+        self.const_type_cache.deinit(self.allocator);
         self.types.deinit();
         self.name_store.deinit();
         self.superseded.deinit(self.allocator);
@@ -4913,7 +4942,7 @@ const SpecJobWorkerInputs = struct {
     comptime_value_reads: bool,
     literal_roots: bool,
     replay_interface_summaries: base.TestSwitch(true),
-    declared_comptime_root_functions: *const DeclaredComptimeRootFunctions,
+    declared_comptime_roots: *const DeclaredComptimeRoots,
     hosted_catalog: []const HostedCatalogEntry,
     current_loc: base.SourceLoc,
     current_region: base.Region,
@@ -5245,7 +5274,9 @@ fn appendRuntimeSchemaRequestToProgram(
     try program.addRuntimeSchemaRequest(request);
 }
 
-const DeclaredComptimeRootFunctions = std.AutoHashMap(EntryRoot, Ast.FnId);
+// Immutable request ordinals, published before workers start. Function ids
+// are assigned separately by the coordinator only when a declaration is used.
+const DeclaredComptimeRoots = std.AutoHashMap(EntryRoot, u32);
 
 /// Checked module keys cross independent checking environments. Their local
 /// module indices do not; distinct checked modules routinely share an index.
@@ -5258,6 +5289,8 @@ const SourceFileIds = std.AutoHashMap([32]u8, u32);
 /// lowering module id names a row of one program's own module table.
 const LoweringModuleIds = std.AutoHashMap([32]u8, Common.LoweringModuleId);
 
+const CheckedOccurrence = struct { module: checked.ModuleId, ty: checked.CheckedTypeId };
+
 const Builder = struct {
     /// `appModuleIdentity` of this lowering's modules.
     app_module_identity: ?[32]u8,
@@ -5267,6 +5300,7 @@ const Builder = struct {
     /// Checked module key -> position in the lowering input; built lazily on
     /// first lookup (see `buildModuleIndex`).
     module_index: std.AutoHashMap([32]u8, ModuleIndexSlot),
+    module_identity_index: std.AutoHashMapUnmanaged([32]u8, u32) = .empty,
     /// Every input module's view: the root, then imports, then relation
     /// modules. A worker's builder borrows its coordinator's views instead,
     /// so a view it hands back stays valid for the whole run.
@@ -5355,6 +5389,10 @@ const Builder = struct {
     /// Top-level statements of each top module whose types a literal value
     /// identity named, by module key.
     literal_top_statements: std.AutoHashMapUnmanaged([32]u8, collections.DenseMap(can.CIR.Statement.Idx, void)) = .empty,
+    /// Current published representatives of canonical closed checked types.
+    /// Views are immutable for this lowering; a missing key stays missing.
+    persistent_closed_occurrences: std.AutoHashMapUnmanaged([32]u8, ?CheckedOccurrence) = .empty,
+
     /// Compile-time roots by module and site, for the modules whose roots a
     /// stored literal value's reads were looked up in.
     literal_read_sites: std.AutoHashMapUnmanaged(LiteralReadSite, u32) = .empty,
@@ -5364,9 +5402,10 @@ const Builder = struct {
     /// module.
     literal_store_view: ?*ModuleViewData = null,
     replay_interface_summaries: base.TestSwitch(true),
-    declared_comptime_root_functions: DeclaredComptimeRootFunctions,
-    borrowed_comptime_root_functions: ?*const DeclaredComptimeRootFunctions = null,
+    declared_comptime_roots: DeclaredComptimeRoots,
+    borrowed_comptime_roots: ?*const DeclaredComptimeRoots = null,
     demand_driven_comptime_roots: bool,
+    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(EntryRoot, void),
     comptime_demand_out: ?*ComptimeDemand,
     spec_comptime_reads_out: ?*SpecComptimeReads,
     spec_key_aliases_out: ?*SpecKeyAliases,
@@ -5403,6 +5442,7 @@ const Builder = struct {
     symbols: SymbolDomains = .{},
     next_instantiation_scope: u64 = 0,
     type_cache: CheckedTypeMemo(Type.TypeId) = .empty,
+    const_type_cache: ConstTypeMemo = .empty,
     /// Deterministic FIFO of reserved specializations awaiting body lowering.
     /// Wave drains execute entries in dispatch order; an executing body may
     /// append new entries, which the same drain then reaches.
@@ -5671,8 +5711,9 @@ const Builder = struct {
             .literal_values = if (options.literal_roots) options.literal_values else null,
             .verify_literal_values = options.verify_literal_values,
             .replay_interface_summaries = options.replay_interface_summaries,
-            .declared_comptime_root_functions = DeclaredComptimeRootFunctions.init(allocator),
+            .declared_comptime_roots = DeclaredComptimeRoots.init(allocator),
             .demand_driven_comptime_roots = options.demand_driven_comptime_roots,
+            .validated_comptime_roots = options.validated_comptime_roots,
             .comptime_demand_out = options.comptime_demand_out,
             .spec_comptime_reads_out = options.spec_comptime_reads_out,
             .spec_key_aliases_out = options.spec_key_aliases_out,
@@ -5758,6 +5799,7 @@ const Builder = struct {
     /// tables remain immutable until all workers have finished this lowering
     /// run, so a worker's rows name the same owners the coordinator's do.
     fn seedProgramModuleTables(self: *Builder) Allocator.Error!void {
+        try self.seedModuleIdentityIndex();
         std.debug.assert(self.borrowed_source_file_ids == null);
         std.debug.assert(self.borrowed_lowering_module_ids == null);
         std.debug.assert(self.source_file_ids.count() == 0);
@@ -5836,8 +5878,9 @@ const Builder = struct {
         errdefer builder.deinit();
         builder.borrowed_source_file_ids = inputs.source_file_ids;
         builder.borrowed_module_views = inputs.module_views;
+        try builder.seedModuleIdentityIndex();
         builder.borrowed_lowering_module_ids = inputs.lowering_module_ids;
-        builder.borrowed_comptime_root_functions = inputs.declared_comptime_root_functions;
+        builder.borrowed_comptime_roots = inputs.declared_comptime_roots;
         builder.hosted_catalog = try worker.allocator.dupe(HostedCatalogEntry, inputs.hosted_catalog);
         builder.current_loc = inputs.current_loc;
         builder.current_region = inputs.current_region;
@@ -5922,7 +5965,7 @@ const Builder = struct {
         self.nominal_parameter_value_masks.deinit(self.allocator);
         self.source_file_ids.deinit();
         self.lowering_module_ids.deinit();
-        self.declared_comptime_root_functions.deinit();
+        self.declared_comptime_roots.deinit();
         self.declared_roots.deinit(self.allocator);
         self.parked_root_jobs.deinit(self.allocator);
         self.deferred_roots.deinit(self.allocator);
@@ -5935,10 +5978,12 @@ const Builder = struct {
         var top_statements = self.literal_top_statements.valueIterator();
         while (top_statements.next()) |statements| statements.deinit();
         self.literal_top_statements.deinit(self.allocator);
+        self.persistent_closed_occurrences.deinit(self.allocator);
         self.literal_read_sites.deinit(self.allocator);
         self.literal_read_site_modules.deinit(self.allocator);
         if (self.literal_store_view) |view| self.allocator.destroy(view);
         self.module_index.deinit();
+        self.module_identity_index.deinit(self.allocator);
         self.spec_job_task_buffers.deinit(self.allocator);
         self.unshared_summary_domains.deinit(self.allocator);
         if (self.spec_job_commit_domain) |*domain| domain.deinit();
@@ -5976,6 +6021,7 @@ const Builder = struct {
             self.discovery_callees.deinit(self.allocator);
         }
         self.type_cache.deinit(self.allocator);
+        self.const_type_cache.deinit(self.allocator);
         self.const_evidence_memo.deinit();
         self.const_evidence_by_content.deinit();
         self.site_evidence_memo.deinit();
@@ -6195,7 +6241,7 @@ const Builder = struct {
         const scope = self.moduleForKeyBytes(address.family.method_scope) orelse return null;
         const scope_context = scope.compile_time_root_identities.valueContext() orelse return null;
         const program_context = (try self.programValueContext(false)) orelse return null;
-        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        var hash = base.Sha256.init(.{});
         hash.update("roc.interface-provider.v2");
         hash.update(&(callee.code_generation_key orelse callee.key).bytes);
         hash.update(&scope_context);
@@ -6279,7 +6325,7 @@ const Builder = struct {
         };
         std.mem.sort([32]u8, dependencies.items, {}, Order.dependency);
         std.mem.sort([64]u8, requirements.items, {}, Order.requirement);
-        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        var hash = base.Sha256.init(.{});
         hash.update("roc.interface-dependencies.v1");
         var counts: [8]u8 = undefined;
         std.mem.writeInt(u32, counts[0..4], @intCast(dependencies.items.len), .little);
@@ -6678,9 +6724,9 @@ const Builder = struct {
     /// What the lowered program demands of compile-time evaluation, and the
     /// program's roots in their final order: the compile-time roots it
     /// demands, in request order, and then every other root. A declared root
-    /// whose body nothing demanded keeps its reserved declaration, whose body
-    /// crashes; nothing calls it, it is not a root, and reachability drops
-    /// it from every consumer.
+    /// which was never read or validated has no function. A root whose signature
+    /// was prepared but whose body nothing demanded retains its parked crash
+    /// body; it is not a root, and reachability drops it from every consumer.
     fn orderComptimeRoots(self: *Builder) Allocator.Error!void {
         if (!self.comptime_value_reads) return;
         try self.settleLiteralRoots();
@@ -6697,7 +6743,7 @@ const Builder = struct {
             if (self.demand_driven_comptime_roots) {
                 // Only demand lowers a declared root's body, so the roots
                 // whose bodies lowered are exactly the demanded ones.
-                const parked = self.parked_root_jobs.contains(root.fn_id);
+                const parked = if (root.fn_id) |id| self.parked_root_jobs.contains(id) else true;
                 if (!state.demanded.items[index]) {
                     if (!parked) Common.invariant("compile-time root body was lowered without demand");
                     continue;
@@ -6705,18 +6751,19 @@ const Builder = struct {
                 if (parked) Common.invariant("demanded compile-time root body was never lowered");
             }
             const start = reads.items.len;
-            for (try state.rootReads(self.allocator, view, ComptimeDemandState.defItem(root.def))) |read| try reads.append(self.allocator, state.roots.items[read]);
+            for (try state.rootReads(self.allocator, view, ComptimeDemandState.defItem(root.def.?))) |read| try reads.append(self.allocator, state.roots.items[read]);
             try root_reads.append(self.allocator, .{ .start = @intCast(start), .len = @intCast(reads.items.len - start) });
             if (self.demand_driven_comptime_roots) {
-                try self.appendRuntimeSchemaRequestsForDef(root.def);
-                try self.program.addRoot(.{ .def = root.def, .request = root.request, .owner = self.loweringModuleId(root.source_module) });
+                try self.appendRuntimeSchemaRequestsForDef(root.def.?);
+                try self.program.addRoot(.{ .def = root.def.?, .request = root.request, .owner = self.loweringModuleId(root.source_module) });
             }
         }
         if (self.demand_driven_comptime_roots) {
             for (self.deferred_roots.items) |root| try self.program.addRoot(root);
             self.deferred_roots.clearRetainingCapacity();
             for (self.declared_roots.items) |root| {
-                const parked = self.parked_root_jobs.fetchRemove(root.fn_id) orelse continue;
+                const id = root.fn_id orelse continue;
+                const parked = self.parked_root_jobs.fetchRemove(id) orelse continue;
                 try self.finishUndemandedRoot(parked.value);
             }
             if (self.parked_root_jobs.count() != 0) Common.invariant("parked compile-time root body belonged to no declared root");
@@ -7333,6 +7380,7 @@ const Builder = struct {
         defer demanded_later_fn_tys.deinit(self.allocator);
         var requests = all_requests;
         var source_modules = all_source_modules;
+        var selected_discovery_start = discovery_start;
         // A template root's function type is a function of its checked type
         // alone. Compile-time roots reach `lowerTemplate` twice, so each
         // request lowers its type once, and on the lanes when there are any.
@@ -7351,42 +7399,32 @@ const Builder = struct {
                     Common.invariant("shared compile-time request lacked its checked root identity");
                 const source_module = self.rootSourceModule(all_source_modules, i);
                 const source_view = self.moduleForId(source_module);
-                const template = request.procedure_template orelse
-                    Common.invariant("shared compile-time root lacked its declared entry template");
-                // A demand-driven root's queued body is parked until the
-                // program demands it (see `advanceComptimeDemand`).
-                self.parking_root_job = self.demand_driven_comptime_roots;
-                self.parked_root_job = null;
-                const def = try self.lowerTemplate(template, source_view, request.checked_type, request.root_evidence, &fn_tys[i]);
-                self.parking_root_job = false;
                 const key = EntryRoot{ .module = source_module, .root = root_id };
-                const entry = try self.declared_comptime_root_functions.getOrPut(key);
-                const fn_id = self.defFnId(def);
-                if (entry.found_existing and entry.value_ptr.* != fn_id) {
-                    Common.invariant("checked compile-time root reserved different functions for one declared root");
-                }
-                entry.value_ptr.* = fn_id;
+                const ordinal: u32 = @intCast(self.declared_roots.items.len);
+                try self.declared_comptime_roots.put(key, ordinal);
                 try self.declared_roots.append(self.allocator, .{
                     .request = request,
                     .source_module = source_module,
-                    .def = def,
-                    .fn_id = fn_id,
-                    .validation = source_view.compile_time_roots.root(root_id).kind == .hoisted_validation,
+                    .validation = if (self.validated_comptime_roots) |validated|
+                        !validated.contains(key)
+                    else
+                        source_view.compile_time_roots.root(root_id).kind == .hoisted_validation,
                 });
-                if (self.parked_root_job) |job| {
-                    try self.parked_root_jobs.put(self.allocator, fn_id, job);
-                    self.parked_root_job = null;
-                }
+                if (!self.demand_driven_comptime_roots) _ = try self.prepareDeclaredRoot(ordinal, &fn_tys[i]);
             }
             if (self.demand_driven_comptime_roots) {
                 // Declared compile-time roots become program roots once
                 // demand is known (`orderComptimeRoots`); everything else
-                // lowers now. Only a program without an LSS runtime consumer
-                // has discovery roots, and only one with it is demand-driven,
-                // so the filtered positions need no discovery mapping.
-                if (discovery_start != null) Common.invariant("demand-driven compile-time roots received discovery roots");
+                // lowers now. The discovery boundary is a position in the
+                // original request list, so translate it through the same
+                // filtering as the requests. An application can have both
+                // runtime entrypoints and discovery-only test roots.
+                if (discovery_start != null) selected_discovery_start = 0;
                 for (all_requests, 0..) |request, i| {
                     if (request.abi == .compile_time) continue;
+                    if (discovery_start) |start| if (i < start) {
+                        selected_discovery_start.? += 1;
+                    };
                     try demanded_later_requests.append(self.allocator, request);
                     try demanded_later_sources.append(self.allocator, self.rootSourceModule(all_source_modules, i));
                     try demanded_later_fn_tys.append(self.allocator, fn_tys[i]);
@@ -7398,25 +7436,25 @@ const Builder = struct {
         }
         defer self.root_demand = .evaluation;
         const executor = self.post_check_executor orelse {
-            for (requests, 0..) |request, i| try self.lowerRootWithDemand(request, self.rootSourceModule(source_modules, i), rootDemand(discovery_start, i), &root_fn_tys[i]);
+            for (requests, 0..) |request, i| try self.lowerRootWithDemand(request, self.rootSourceModule(source_modules, i), rootDemand(selected_discovery_start, i), &root_fn_tys[i]);
             return;
         };
         if (executor.worker_count <= 1) {
-            for (requests, 0..) |request, i| try self.lowerRootWithDemand(request, self.rootSourceModule(source_modules, i), rootDemand(discovery_start, i), &root_fn_tys[i]);
+            for (requests, 0..) |request, i| try self.lowerRootWithDemand(request, self.rootSourceModule(source_modules, i), rootDemand(selected_discovery_start, i), &root_fn_tys[i]);
             return;
         }
         var index: usize = 0;
         while (index < requests.len) {
             if (requests[index].procedure_use == null) {
-                try self.lowerRootWithDemand(requests[index], self.rootSourceModule(source_modules, index), rootDemand(discovery_start, index), &root_fn_tys[index]);
+                try self.lowerRootWithDemand(requests[index], self.rootSourceModule(source_modules, index), rootDemand(selected_discovery_start, index), &root_fn_tys[index]);
                 index += 1;
                 continue;
             }
             const start = index;
-            const demand = rootDemand(discovery_start, index);
+            const demand = rootDemand(selected_discovery_start, index);
             while (index < requests.len and
                 requests[index].procedure_use != null and
-                rootDemand(discovery_start, index) == demand and
+                rootDemand(selected_discovery_start, index) == demand and
                 index - start < executor.worker_count) : (index += 1)
             {}
             self.root_demand = demand;
@@ -7440,7 +7478,7 @@ const Builder = struct {
     /// instead, and a binding root through its binding.
     fn rootLowersTemplate(self: *const Builder, request: checked.RootRequest) bool {
         if (request.procedure_template == null) return false;
-        if (self.comptime_value_reads and request.abi == .compile_time) return true;
+        if (self.comptime_value_reads and request.abi == .compile_time) return !self.demand_driven_comptime_roots;
         return request.procedure_binding == null and request.procedure_use == null;
     }
 
@@ -7485,7 +7523,7 @@ const Builder = struct {
             .static_data_literals = self.static_data_literals,
             .comptime_value_reads = self.comptime_value_reads,
             .literal_roots = self.literal_roots,
-            .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
+            .declared_comptime_roots = self.borrowed_comptime_roots orelse &self.declared_comptime_roots,
             .hosted_catalog = self.hosted_catalog,
             .current_loc = self.current_loc,
             .current_region = self.current_region,
@@ -7698,7 +7736,7 @@ const Builder = struct {
             .comptime_value_reads = self.comptime_value_reads,
             .literal_roots = self.literal_roots,
             .replay_interface_summaries = self.replay_interface_summaries,
-            .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
+            .declared_comptime_roots = self.borrowed_comptime_roots orelse &self.declared_comptime_roots,
             .hosted_catalog = self.hosted_catalog,
             .current_loc = self.current_loc,
             .current_region = self.current_region,
@@ -7790,8 +7828,10 @@ const Builder = struct {
                 };
                 if (root_id) |root| {
                     if (self.comptimeValueReadDeclared(view, root)) {
-                        const owners = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions;
-                        const fn_id = owners.get(.{ .module = view.key, .root = root }).?;
+                        const owners = self.borrowed_comptime_roots orelse &self.declared_comptime_roots;
+                        const ordinal = owners.get(.{ .module = view.key, .root = root }).?;
+                        var fn_ty: ?Type.TypeId = null;
+                        const fn_id = try self.prepareDeclaredRoot(ordinal, &fn_ty);
                         const initializer = try self.program.addExpr(.{
                             .ty = ret_ty,
                             .data = .{ .call_proc = .{ .callee = Ast.localProcCallee(fn_id), .args = .empty() } },
@@ -9363,6 +9403,43 @@ const Builder = struct {
         self.next_spec_dispatch_index += 1;
     }
 
+    /// Prepare the signature and reserve a body only for an explicitly read
+    /// or validated root. Request ordinals stay immutable across worker epochs.
+    fn prepareDeclaredRoot(self: *Builder, ordinal: u32, fn_ty: *?Type.TypeId) Allocator.Error!Ast.FnId {
+        if (self.borrowed_comptime_roots != null) Common.invariant("worker attempted to reserve a declared root");
+        const root = self.declared_roots.items[ordinal];
+        if (root.fn_id) |id| return id;
+        const source_view = self.moduleForId(root.source_module);
+        const template = root.request.procedure_template orelse
+            Common.invariant("shared compile-time root lacked its checked entry template");
+        const saved_parking = self.parking_root_job;
+        const saved_job = self.parked_root_job;
+        defer {
+            self.parking_root_job = saved_parking;
+            self.parked_root_job = saved_job;
+        }
+        self.parking_root_job = self.demand_driven_comptime_roots;
+        self.parked_root_job = null;
+        const def = try self.lowerTemplate(template, source_view, root.request.checked_type, root.request.root_evidence, fn_ty);
+        const fn_id = self.defFnId(def);
+        self.declared_roots.items[ordinal].def = def;
+        self.declared_roots.items[ordinal].fn_id = fn_id;
+        if (self.parked_root_job) |job| try self.parked_root_jobs.put(self.allocator, fn_id, job);
+        return fn_id;
+    }
+
+    /// Drafts name checked declaration ordinals. Resolve those explicit intents
+    /// before final ids are assigned; no worker mutates the declaration table.
+    fn resolveDeclaredRootCalls(self: *Builder, draft: *BodyDraftStore) Allocator.Error!void {
+        for (0..draft.exprs.items.len) |index| {
+            const data = draft.exprs.items[index].data;
+            if (data != .call_proc or data.call_proc.callee != .declared_root) continue;
+            var fn_ty: ?Type.TypeId = null;
+            const id = try self.prepareDeclaredRoot(data.call_proc.callee.declared_root, &fn_ty);
+            draft.exprs.items[index].data.call_proc.callee = .{ .func = .{ .local = .{ .final = id } } };
+        }
+    }
+
     /// Move a parked compile-time root body into the specialization queue,
     /// under the next dispatch index.
     fn unparkRootJob(self: *Builder, fn_id: Ast.FnId) Allocator.Error!void {
@@ -9380,10 +9457,12 @@ const Builder = struct {
         if (!self.demand_driven_comptime_roots) return false;
         try self.settleLiteralRoots();
         const state = &self.comptime_demand;
-        const view = self.program.view();
+        var view = self.program.view();
         try state.index(self.allocator, self, view);
         var starts = std.ArrayList(u32).empty;
         defer starts.deinit(self.allocator);
+        try starts.appendSlice(self.allocator, state.changed_reached.items);
+        state.changed_reached.clearRetainingCapacity();
         while (state.walked_deferred_roots < self.deferred_roots.items.len) : (state.walked_deferred_roots += 1) {
             try starts.append(self.allocator, ComptimeDemandState.defItem(self.deferred_roots.items[state.walked_deferred_roots].def));
         }
@@ -9395,7 +9474,7 @@ const Builder = struct {
             try starts.append(self.allocator, ComptimeDemandState.defItem(view.literal_roots[state.walked_literal_roots].def));
         }
         // The drain that just finished lowered every body that was queued.
-        for (state.awaiting_bodies.items) |declared| try starts.append(self.allocator, ComptimeDemandState.defItem(self.declared_roots.items[declared].def));
+        for (state.awaiting_bodies.items) |declared| try starts.append(self.allocator, ComptimeDemandState.defItem(self.declared_roots.items[declared].def.?));
         state.awaiting_bodies.clearRetainingCapacity();
         var newly_demanded = std.ArrayList(u32).empty;
         defer newly_demanded.deinit(self.allocator);
@@ -9414,13 +9493,17 @@ const Builder = struct {
             }
             defer newly_demanded.clearRetainingCapacity();
             for (newly_demanded.items) |declared| {
+                var fn_ty: ?Type.TypeId = null;
+                const fn_id = try self.prepareDeclaredRoot(declared, &fn_ty);
+                view = self.program.view();
+                try state.index(self.allocator, self, view);
                 const root = self.declared_roots.items[declared];
-                if (self.parked_root_jobs.contains(root.fn_id)) {
-                    try self.unparkRootJob(root.fn_id);
+                if (self.parked_root_jobs.contains(fn_id)) {
+                    try self.unparkRootJob(fn_id);
                     try state.awaiting_bodies.append(self.allocator, declared);
                 } else {
                     // Another root sharing its reserved body already lowered it.
-                    try starts.append(self.allocator, ComptimeDemandState.defItem(root.def));
+                    try starts.append(self.allocator, ComptimeDemandState.defItem(root.def.?));
                 }
             }
         }
@@ -9837,7 +9920,7 @@ const Builder = struct {
                             .comptime_value_reads = self.comptime_value_reads,
                             .literal_roots = self.literal_roots,
                             .replay_interface_summaries = self.replay_interface_summaries,
-                            .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
+                            .declared_comptime_roots = self.borrowed_comptime_roots orelse &self.declared_comptime_roots,
                             .hosted_catalog = self.hosted_catalog,
                             .current_loc = self.current_loc,
                             .current_region = self.current_region,
@@ -11231,6 +11314,7 @@ const Builder = struct {
         const entry = self.lowered_templates.get(fn_id) orelse
             Common.invariant("lowered procedure template definition disappeared before completion");
         try self.spec_store.markReady(entry.spec, fn_ty, self.specializationTypeDigest(fn_ty));
+        try self.comptime_demand.bodyPublished(self.allocator, fn_id);
     }
 
     fn typedLocalsForArgs(self: *Builder, arg_tys: anytype) Allocator.Error!Ast.Span(Ast.TypedLocal) {
@@ -11764,7 +11848,7 @@ const Builder = struct {
                 const def = try typeDef(self.activeNameStore(), self.app_module_identity, view, nominal.origin_module, nominal.name, nominal.source_decl);
                 self.noteBuiltinTryDef(nominal.builtin, self.activeNameStore(), def);
                 const named: @FieldType(Type.Content, "named") = .{
-                    .named_type = .{ .module = self.declaredModuleForNominal(view, nominal), .ty = frame.checked_ty, .ty_module = moduleDigestFromId(view.key) },
+                    .named_type = try self.canonicalNamedOccurrence(view, frame.checked_ty, self.declaredModuleForNominal(view, nominal)),
                     .def = def,
                     .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
                     .builtin_owner = builtinOwner(nominal.builtin),
@@ -12148,6 +12232,17 @@ const Builder = struct {
         return view.templates.templateHasSingleSourceCall(checked_template.template);
     }
 
+    /// Closed checked occurrences have no instantiation identity. Give both
+    /// freshly lowered and replayed named types the same exact current witness.
+    /// Open occurrences retain their source cells and are never coalesced here.
+    fn canonicalNamedOccurrence(self: *Builder, view: ModuleView, ty: checked.CheckedTypeId, owner: names.CheckedModuleDigest) Allocator.Error!Type.NamedType {
+        const root = view.types.rootRows()[@backingInt(ty)];
+        if (root.contains_identity_variables) return .{ .module = owner, .ty = ty, .ty_module = moduleDigestFromId(view.key) };
+        const provenance = BodyContext.PersistentProvenance{ .builder = self };
+        return (try provenance.resolveNamedType(.{ .closed = .{ .owner = owner.bytes, .key = root.key.bytes } })) orelse
+            Common.invariant("a lowered closed named type has no current canonical occurrence");
+    }
+
     fn moduleForDigest(self: *Builder, module_digest: names.CheckedModuleDigest) ModuleView {
         return self.moduleForKeyBytes(module_digest.bytes) orelse
             Common.invariant("procedure template referenced a checked module that is not in the lowering input");
@@ -12223,17 +12318,17 @@ const Builder = struct {
     /// (used to resolve a defaulted field's declaring module—design.md
     /// "Defaulted Fields").
     fn moduleForIdentityHash(self: *Builder, origin_hash: *const [32]u8) ?ModuleView {
-        const root = self.rootModuleView();
-        if (moduleViewIdentityMatches(root, origin_hash)) return root;
-        for (0..self.modules.imports.len) |index| {
-            const view = self.importModuleView(index);
-            if (moduleViewIdentityMatches(view, origin_hash)) return view;
+        const index = self.module_identity_index.get(origin_hash.*) orelse return null;
+        return &self.moduleViews()[index];
+    }
+
+    fn seedModuleIdentityIndex(self: *Builder) Allocator.Error!void {
+        const views = self.moduleViews();
+        try self.module_identity_index.ensureTotalCapacity(self.allocator, @intCast(views.len));
+        for (views, 0..) |view, index| {
+            const entry = self.module_identity_index.getOrPutAssumeCapacity(view.module_identity.stable_hash);
+            if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
         }
-        for (0..self.modules.root.relation_modules.len) |index| {
-            const view = self.relationModuleView(index);
-            if (moduleViewIdentityMatches(view, origin_hash)) return view;
-        }
-        return null;
     }
 
     fn templateSpecIdentity(
@@ -12477,7 +12572,7 @@ const Builder = struct {
     /// on unbound platform requirements from that manifest.
     fn comptimeValueReadDeclared(self: *Builder, view: ModuleView, root_id: checked.ComptimeRootId) bool {
         if (!self.comptime_value_reads) return false;
-        const declarations = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions;
+        const declarations = self.borrowed_comptime_roots orelse &self.declared_comptime_roots;
         return declarations.contains(.{ .module = view.key, .root = root_id });
     }
 
@@ -15653,6 +15748,7 @@ const Builder = struct {
         }
         try body_draft.finishOwnerRuns();
         try self.resolveDeferredTemplateSpecs(body_draft, &committed_types);
+        try self.resolveDeclaredRootCalls(body_draft);
         var commit_map = try self.buildDraftCommitMap(
             body_draft,
             &committed_types,
@@ -15718,6 +15814,7 @@ const Builder = struct {
         const sealed_roots = try self.allocator.alloc(Type.TypeId, 0);
         errdefer self.allocator.free(sealed_roots);
         try self.resolveDeferredTemplateSpecs(body_draft, committed_types);
+        try self.resolveDeclaredRootCalls(body_draft);
         var commit_map = try self.buildDraftCommitMap(
             body_draft,
             committed_types,
@@ -16923,6 +17020,7 @@ const DirectCallRequest = struct {
 };
 
 const DraftProcCallee = union(enum(u8)) {
+    declared_root: u32,
     func: DraftFnSlot,
     lifted: Ast.LiftedFnId,
 };
@@ -21590,7 +21688,7 @@ const FinalIdOffsets = struct {
                     .final => false,
                 },
             },
-            .lifted => false,
+            .lifted, .declared_root => false,
         };
     }
 
@@ -21603,6 +21701,7 @@ const FinalIdOffsets = struct {
                 },
             } },
             .lifted => |lifted| .{ .lifted = lifted },
+            .declared_root => Common.invariant("unresolved declared root reached Monotype emission"),
         };
     }
 
@@ -27199,7 +27298,7 @@ const BodyContext = struct {
         const nominal = task.nominal;
         task.def = try typeDef(self.nameStoreMut(), self.builder.app_module_identity, self.view, nominal.origin_module, nominal.name, nominal.source_decl);
         self.builder.noteBuiltinTryDef(nominal.builtin, self.nameStore(), task.def);
-        task.named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = task.checked_ty, .ty_module = moduleDigestFromId(self.view.key) };
+        task.named_type = try self.builder.canonicalNamedOccurrence(self.view, task.checked_ty, self.builder.declaredModuleForNominal(self.view, nominal));
         frame.cursor = InstNominalCursor.declared_order;
         return .{ .call = .{ .declared_order = try self.boxInstTask(InstDeclaredOrderTask, .{ .nominal = nominal, .args = task.args }) } };
     }
@@ -27986,9 +28085,51 @@ const BodyContext = struct {
         pub fn validModuleIdentity(self: PersistentProvenance, identity: [32]u8) bool {
             return self.builder.moduleForIdentityHash(&identity) != null;
         }
+        pub fn describeNamedType(self: PersistentProvenance, named: Type.NamedType) PersistentInterface.NamedOccurrence {
+            const view = self.builder.moduleForKeyBytes(named.ty_module.bytes) orelse
+                Common.invariant("persistent named occurrence has no checked artifact");
+            const root = view.types.rootRows()[@backingInt(named.ty)];
+            if (!root.contains_identity_variables) return .{ .closed = .{ .owner = named.module.bytes, .key = root.key.bytes } };
+            return .{ .exact = .{ .owner = named.module.bytes, .occurrence = named.ty_module.bytes, .ty = @backingInt(named.ty) } };
+        }
+        pub fn resolveNamedType(self: PersistentProvenance, stored: PersistentInterface.NamedOccurrence) Allocator.Error!?Type.NamedType {
+            return switch (stored) {
+                .exact => |exact| .{ .module = .{ .bytes = exact.owner }, .ty_module = .{ .bytes = exact.occurrence }, .ty = @fromBackingInt(exact.ty) },
+                .closed => |closed| blk: {
+                    const entry = try self.builder.persistent_closed_occurrences.getOrPut(self.builder.allocator, closed.key);
+                    if (!entry.found_existing) {
+                        var representative: ?CheckedOccurrence = null;
+                        for (self.builder.moduleViews()) |view| {
+                            const root = view.types.rootForKey(.{ .bytes = closed.key }) orelse continue;
+                            if (view.types.rootRows()[@backingInt(root)].contains_identity_variables) continue;
+                            if (representative) |previous| {
+                                if (std.mem.order(u8, &previous.module.bytes, &view.key.bytes) != .gt) continue;
+                            }
+                            representative = .{ .module = view.key, .ty = root };
+                        }
+                        entry.value_ptr.* = representative;
+                    }
+                    const occurrence = entry.value_ptr.* orelse break :blk null;
+                    const view = self.builder.moduleForKeyBytes(occurrence.module.bytes).?;
+                    const owner = switch (view.types.payload(occurrence.ty)) {
+                        .nominal => |nominal| nominal.owner_module,
+                        .alias => |alias| alias.owner_module,
+                        else => break :blk null,
+                    };
+                    if (!std.mem.eql(u8, &owner.bytes, &closed.owner)) break :blk null;
+                    break :blk .{ .module = .{ .bytes = closed.owner }, .ty_module = occurrence.module, .ty = occurrence.ty };
+                },
+            };
+        }
         pub fn validNamedType(self: PersistentProvenance, named: Type.NamedType) bool {
-            if (self.builder.moduleForKeyBytes(named.module.bytes) == null) return false;
-            const occurrence = self.builder.moduleForKeyBytes(named.ty_module.bytes) orelse return false;
+            if (self.builder.moduleForKeyBytes(named.module.bytes) == null) {
+                if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("interface invalid named owner={x}\n", .{named.module.bytes});
+                return false;
+            }
+            const occurrence = self.builder.moduleForKeyBytes(named.ty_module.bytes) orelse {
+                if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("interface invalid occurrence={x} type={d}\n", .{ named.ty_module.bytes, @backingInt(named.ty) });
+                return false;
+            };
             return @backingInt(named.ty) < occurrence.types.payloadCount();
         }
     };
@@ -28942,6 +29083,15 @@ const BodyContext = struct {
         tag: struct { checked_name: names.TagNameId, produced_name: names.TagNameId, checked_len: usize, produced_len: usize },
     };
 
+    /// Completed acyclic witnesses are reusable during one relation traversal
+    /// only while the graph has not changed. Active-path assumptions are never
+    /// published as completed witnesses.
+    const ProducedValueMemo = struct {
+        const Entry = struct { witness: NodeId, epoch: u64 };
+        completed: std.AutoHashMapUnmanaged(ProducedValuePair, Entry) = .empty,
+        cycles: u64 = 0,
+    };
+
     /// A matching container whose children are still relating.
     const ProducedValueFrame = struct {
         checked_node: NodeId,
@@ -28950,6 +29100,8 @@ const BodyContext = struct {
         /// related.
         produced_content: InstNode,
         pair: ProducedValuePair,
+        epoch: u64,
+        cycles: u64,
         ops_start: usize,
         next: usize,
         results_start: usize,
@@ -28971,6 +29123,8 @@ const BodyContext = struct {
         root_produced: NodeId,
         visiting: *std.AutoHashMap(ProducedValuePair, void),
     ) Allocator.Error!NodeId {
+        var memo: ProducedValueMemo = .{};
+        defer memo.completed.deinit(self.allocator);
         var frames: std.ArrayListUnmanaged(ProducedValueFrame) = .empty;
         defer frames.deinit(self.allocator);
         var ops: std.ArrayListUnmanaged(ProducedValueOp) = .empty;
@@ -28981,7 +29135,7 @@ const BodyContext = struct {
             _ = visiting.remove(frame.pair);
         };
 
-        var delivered: ?NodeId = try self.enterProducedValue(root_checked, root_produced, visiting, &frames, &ops, &results);
+        var delivered: ?NodeId = try self.enterProducedValue(root_checked, root_produced, visiting, &memo, &frames, &ops, &results);
         while (true) {
             if (delivered) |node| {
                 if (frames.items.len == 0) return node;
@@ -28995,7 +29149,7 @@ const BodyContext = struct {
                 frames.items[frames.items.len - 1].next += 1;
                 switch (op) {
                     .child => |child| {
-                        delivered = try self.enterProducedValue(child.checked, child.produced, visiting, &frames, &ops, &results);
+                        delivered = try self.enterProducedValue(child.checked, child.produced, visiting, &memo, &frames, &ops, &results);
                         continue;
                     },
                     .field_name => |field| failed = field.checked != field.produced,
@@ -29019,6 +29173,9 @@ const BodyContext = struct {
             const produced_root = self.graph.rootNode(frame.produced_node);
             delivered = witness orelse try self.relateUnmatchedProducedValue(frame.checked_node, frame.produced_node, checked_root, produced_root);
             _ = visiting.remove(frame.pair);
+            if (frame.epoch == self.graph.analysis_changes.epoch and frame.cycles == memo.cycles) {
+                try memo.completed.put(self.allocator, frame.pair, .{ .witness = delivered.?, .epoch = frame.epoch });
+            }
         }
     }
 
@@ -29029,6 +29186,7 @@ const BodyContext = struct {
         checked_node: NodeId,
         produced_node: NodeId,
         visiting: *std.AutoHashMap(ProducedValuePair, void),
+        memo: *ProducedValueMemo,
         frames: *std.ArrayListUnmanaged(ProducedValueFrame),
         ops: *std.ArrayListUnmanaged(ProducedValueOp),
         results: *std.ArrayListUnmanaged(NodeId),
@@ -29039,8 +29197,16 @@ const BodyContext = struct {
         if (checked_root == produced_root) return checked_node;
 
         const pair = ProducedValuePair{ .request = checked_root, .produced = produced_root };
+        if (memo.completed.get(pair)) |known| {
+            if (known.epoch == self.graph.analysis_changes.epoch) return known.witness;
+        }
         const entry = try visiting.getOrPut(pair);
-        if (entry.found_existing) return produced_node;
+        if (entry.found_existing) {
+            memo.cycles += 1;
+            return produced_node;
+        }
+        const epoch = self.graph.analysis_changes.epoch;
+        const cycles = memo.cycles;
         var pushed = false;
         defer if (!pushed) {
             _ = visiting.remove(pair);
@@ -29163,6 +29329,8 @@ const BodyContext = struct {
             .produced_node = produced_node,
             .produced_content = (try self.graph.content(produced_root)),
             .pair = pair,
+            .epoch = epoch,
+            .cycles = cycles,
             .ops_start = ops_start,
             .next = ops_start,
             .results_start = results.items.len,
@@ -37865,11 +38033,11 @@ const BodyContext = struct {
         cell: DraftTypeCell,
         const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
-        const owners = self.builder.borrowed_comptime_root_functions orelse &self.builder.declared_comptime_root_functions;
-        const fn_id = owners.get(.{ .module = view.key, .root = root_id }) orelse
-            Common.invariant("shared root read lacked a declared root function");
+        const owners = self.builder.borrowed_comptime_roots orelse &self.builder.declared_comptime_roots;
+        const ordinal = owners.get(.{ .module = view.key, .root = root_id }) orelse
+            Common.invariant("shared root read lacked its checked declaration");
         const initializer = try self.addExprWithTypeCell(cell, .{ .call_proc = .{
-            .callee = .{ .func = .{ .local = .{ .final = fn_id } } },
+            .callee = .{ .declared_root = ordinal },
             .args = .empty(),
         } });
         return try self.addExprWithTypeCell(cell, .{ .comptime_value = .{
@@ -47585,25 +47753,39 @@ const BodyContext = struct {
         return materialized;
     }
 
+    fn constCaptureTypeCache(self: *BodyContext) *ConstTypeMemo {
+        if (self.typeStore() == &self.builder.program.types) return &self.builder.const_type_cache;
+        const workspace = self.draft.spec_job_workspace orelse
+            Common.invariant("stored-type restoration has no owning destination workspace");
+        std.debug.assert(self.typeStore() == &workspace.types);
+        return &workspace.const_type_cache;
+    }
+
     fn lowerConstCaptureType(
         self: *BodyContext,
         store_view: ModuleView,
         ty: check.ConstStore.ConstTypeId,
     ) Allocator.Error!Type.TypeId {
+        const cache = self.constCaptureTypeCache();
+        const source = &store_view.const_store.type_store;
+        if (cache.get(.{ .store = source, .ty = ty })) |existing| return existing;
         var map = collections.DenseMap(check.ConstStore.ConstTypeId, Type.TypeId).init(self.allocator);
         defer map.deinit();
         const transaction = self.typeStore().beginTransaction();
         errdefer transaction.abort(self.typeStore());
         const speculative = try self.lowerConstCaptureTypeInner(store_view, ty, &map);
+        try cache.ensureUnusedCapacity(self.typeStore().allocator, @intCast(map.count()));
         var result = try self.typeStore().commitTransaction(
             self.nameStore(),
             transaction,
             speculative,
         );
         defer result.deinit();
-        var lowered_types = map.valueIterator();
-        while (lowered_types.next()) |lowered| {
-            lowered.* = result.remapType(lowered.*);
+        // Only committed immutable destination ids enter the durable map.
+        // A failed transaction publishes no entries and cannot poison a retry.
+        var entries = map.iterator();
+        while (entries.next()) |entry| {
+            cache.putAssumeCapacity(.{ .store = source, .ty = entry.key_ptr.* }, result.remapType(entry.value_ptr.*));
         }
         return result.root;
     }
@@ -47707,6 +47889,7 @@ const BodyContext = struct {
         if (map.get(ty)) |existing| return existing;
         const gpa = self.allocator;
         const type_store = &store_view.const_store.type_store;
+        if (self.constCaptureTypeCache().get(.{ .store = type_store, .ty = ty })) |existing| return existing;
         const stored = type_store.get(ty);
         const ops_start = ops.items.len;
         // Stored aliases retain the checked acyclic backing chain. Memoize
@@ -54630,7 +54813,7 @@ const BodyContext = struct {
                 if (variable.row_default) |row_default| break :blk row_default == .empty_tag_union;
                 break :blk switch (variable.origin) {
                     .checked_variable => true,
-                    .row_extension, .placeholder => false,
+                    .row_extension, .placeholder, .interface_parameter => false,
                 };
             },
             .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => false,
@@ -72502,6 +72685,8 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     var builder: Builder = undefined;
     builder.app_module_identity = null;
     builder.program = &program;
+    builder.const_type_cache = .empty;
+    defer builder.const_type_cache.deinit(gpa);
     var ctx: BodyContext = undefined;
     builder.task_storage = .{};
     defer builder.task_storage.deinit(ctx.allocator);
@@ -72527,6 +72712,21 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     const recursive_items = program.types.span(program.types.get(restored_recursive).tuple);
     try std.testing.expectEqual(restored_recursive, GuardedList.at(recursive_items, 0));
     try std.testing.expectEqual(@as(usize, 4), program.types.typeCount());
+    // Repeated restoration of the complete graph and one of its children
+    // performs no traversal allocations, including through a transparent alias.
+    var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
+    ctx.allocator = failing.allocator();
+    try std.testing.expectEqual(result, try ctx.lowerConstCaptureType(view, root));
+    try std.testing.expectEqual(restored_nominal, try ctx.lowerConstCaptureType(view, alias));
+    ctx.allocator = gpa;
+
+    // The same source id in another producer's store is a distinct key.
+    var other = check.ConstStore.ConstStore.init(gpa);
+    defer other.deinit();
+    const other_ty = try other.type_store.append(.{ .primitive = .i64 });
+    view.const_store = &other;
+    const other_result = try ctx.lowerConstCaptureType(view, other_ty);
+    try std.testing.expectEqual(Type.Primitive.i64, program.types.get(other_result).primitive);
 }
 
 test "issue 11737: independent call selects its own nested contract without copying" {
@@ -72664,4 +72864,91 @@ test "issue 12616 completion watches canonical function arguments through old al
     // Neither old alias is written by this join, but both now denote one class.
     try graph.unify(left, right);
     try fixture.expectRelation(.unchanged, request, produced);
+}
+
+test "produced witness relation visits shared container pairs once" {
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    const graph = fixture.graph;
+    const shared = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    var request = shared;
+    var produced = shared;
+    for (0..12) |_| {
+        request = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{ request, request }) });
+        produced = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{ produced, produced }) });
+    }
+    const witness = try fixture.ctx.relateCheckedNodeToProducedValue(request, produced);
+    try std.testing.expectEqual(produced, witness);
+    try std.testing.expect(fixture.diagnostics.completion_queries <= 24);
+}
+
+test "module identity index retains first current view and rejects absent owners" {
+    const allocator = std.testing.allocator;
+    // Only the explicit owner identity participates in this immutable index.
+    var views: [4]ModuleViewData = undefined;
+    for (&views, [_]u8{ 1, 2, 1, 3 }) |*view, byte| view.module_identity.stable_hash = @splat(byte);
+    var builder: Builder = undefined;
+    builder.allocator = allocator;
+    builder.borrowed_module_views = &views;
+    builder.module_identity_index = .empty;
+    defer builder.module_identity_index.deinit(allocator);
+    try builder.seedModuleIdentityIndex();
+    try std.testing.expect(builder.moduleForIdentityHash(&@as([32]u8, @splat(1))).? == &views[0]);
+    try std.testing.expect(builder.moduleForIdentityHash(&@as([32]u8, @splat(2))).? == &views[1]);
+    try std.testing.expect(builder.moduleForIdentityHash(&@as([32]u8, @splat(3))).? == &views[3]);
+    try std.testing.expect(builder.moduleForIdentityHash(&@as([32]u8, @splat(4))) == null);
+}
+
+test "fresh closed named occurrences agree with persistent replay and preserve open identities" {
+    const a = std.testing.allocator;
+    var first = checked.CheckedTypeStore{};
+    defer first.deinit(a);
+    var second = checked.CheckedTypeStore{};
+    defer second.deinit(a);
+    const owner: names.CheckedModuleDigest = .{ .bytes = @splat(42) };
+    const key: [32]u8 = @splat(73);
+    const Fixture = struct {
+        fn add(store: *checked.CheckedTypeStore, identity: [32]u8, open: bool) !checked.CheckedTypeId {
+            const backing = try store.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = @splat(3) }, false);
+            try store.fillSyntheticTypeRoot(std.testing.allocator, backing, .empty_record);
+            const id = try store.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = identity }, open);
+            try store.fillSyntheticTypeRoot(std.testing.allocator, id, .{ .alias = .{
+                .name = @fromBackingInt(@as(u32, 0)),
+                .origin_module = @fromBackingInt(@as(u32, 0)),
+                .owner_module = .{ .bytes = @splat(42) },
+                .backing = backing,
+            } });
+            return id;
+        }
+    };
+    const first_ty = try Fixture.add(&first, key, false);
+    _ = try Fixture.add(&second, @splat(74), false);
+    const second_ty = try Fixture.add(&second, key, false);
+    const open_ty = try Fixture.add(&first, @splat(75), true);
+    var views: [2]ModuleViewData = undefined;
+    views[0].key = .{ .bytes = @splat(20) };
+    views[0].types = first.view();
+    views[1].key = .{ .bytes = @splat(10) };
+    views[1].types = second.view();
+    var builder: Builder = undefined;
+    builder.allocator = a;
+    builder.borrowed_module_views = &views;
+    builder.persistent_closed_occurrences = .empty;
+    defer builder.persistent_closed_occurrences.deinit(a);
+    builder.module_index = @TypeOf(builder.module_index).init(a);
+    defer builder.module_index.deinit();
+    try builder.module_index.put(views[0].key.bytes, .root);
+    try builder.module_index.put(views[1].key.bytes, .{ .import = 0 });
+    const left = try builder.canonicalNamedOccurrence(&views[0], first_ty, owner);
+    const right = try builder.canonicalNamedOccurrence(&views[1], second_ty, owner);
+    const provenance = BodyContext.PersistentProvenance{ .builder = &builder };
+    const restored = (try provenance.resolveNamedType(.{ .closed = .{ .owner = owner.bytes, .key = key } })).?;
+    try std.testing.expectEqualDeep(left, right);
+    try std.testing.expectEqualDeep(left, restored);
+    try std.testing.expectEqual(second_ty, left.ty);
+    try std.testing.expectEqualSlices(u8, &views[1].key.bytes, &left.ty_module.bytes);
+    const open = try builder.canonicalNamedOccurrence(&views[0], open_ty, owner);
+    try std.testing.expectEqual(open_ty, open.ty);
+    try std.testing.expectEqualSlices(u8, &views[0].key.bytes, &open.ty_module.bytes);
 }

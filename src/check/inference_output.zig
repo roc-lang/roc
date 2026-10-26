@@ -105,7 +105,7 @@ pub fn install(self: Self, checker: anytype, scope: *const dependencies.Scope) A
         error.OutOfMemory => return error.OutOfMemory,
         error.IncompatibleReferences => base.invariant("admitted inference references remain valid during diagnostic installation", .{}),
     };
-    defer binding.references.deinit(allocator);
+    defer binding.deinit(allocator);
     for (0..checker.snapshots.record_fields.len()) |i| {
         const id = @as(snapshotFieldIndex(), @fromBackingInt(@as(u32, @intCast(i))));
         var field = checker.snapshots.record_fields.get(id);
@@ -136,7 +136,7 @@ pub fn install(self: Self, checker: anytype, scope: *const dependencies.Scope) A
 /// invariant or a guessed mapping.
 pub fn bindReferences(self: Self, env: *can.ModuleEnv, scope: *const dependencies.Scope) (Allocator.Error || error{IncompatibleReferences})!void {
     var binding = try self.makeBinding(env, scope);
-    defer binding.references.deinit(env.gpa);
+    defer binding.deinit(env.gpa);
     for (self.outcome.record_fields) |record| {
         var field = record;
         try types.store.rebindSourceReferenceValue(&field, &binding);
@@ -146,7 +146,24 @@ pub fn bindReferences(self: Self, env: *can.ModuleEnv, scope: *const dependencie
 
 fn makeBinding(self: Self, env: *can.ModuleEnv, scope: *const dependencies.Scope) Binding.Error!Binding {
     var binding = Binding{ .env = env, .scope = scope };
-    errdefer binding.references.deinit(env.gpa);
+    errdefer binding.deinit(env.gpa);
+    // All references share one owner domain. Preserve first-occurrence
+    // ordinals once, instead of scanning that domain for every foreign node.
+    var ordinals = std.AutoHashMapUnmanaged(base.ModuleIdentity.Hash, u32).empty;
+    defer ordinals.deinit(env.gpa);
+    for (env.checking_dependency.owners.items.items, 0..) |hash, ordinal| {
+        const entry = try ordinals.getOrPut(env.gpa, hash);
+        if (!entry.found_existing) entry.value_ptr.* = @intCast(ordinal);
+    }
+    binding.owners = try env.gpa.alloc(?Binding.Owner, env.module_identities.count());
+    for (binding.owners, 0..) |*owner, index| {
+        owner.* = null;
+        const hash = env.moduleIdentityHash(@fromBackingInt(@as(u32, @intCast(index))));
+        const ordinal = ordinals.get(hash.*) orelse continue;
+        if (ordinal >= scope.owners.items.len) continue;
+        const current = scope.environments.get(scope.owners.items[ordinal]) orelse continue;
+        owner.* = .{ .ordinal = ordinal, .builtin = current.module_role == .builtin };
+    }
     for (self.foreign_references) |reference| {
         if (reference.owner >= scope.owners.items.len) return error.IncompatibleReferences;
         const current = scope.environments.get(scope.owners.items[reference.owner]) orelse return error.IncompatibleReferences;
@@ -165,9 +182,16 @@ fn snapshotFieldIndex() type {
 const Binding = struct {
     pub const Error = Allocator.Error || error{IncompatibleReferences};
     const Key = struct { owner: u32, node: u32 };
+    const Owner = struct { ordinal: u32, builtin: bool };
     env: *can.ModuleEnv,
     scope: *const dependencies.Scope,
+    owners: []?Owner = &.{},
     references: std.AutoHashMapUnmanaged(Key, u32) = .empty,
+
+    fn deinit(self: *Binding, allocator: Allocator) void {
+        allocator.free(self.owners);
+        self.references.deinit(allocator);
+    }
 
     pub fn importNode(self: *Binding, env: *const can.ModuleEnv, import_idx: u32, raw: u32) Error!u32 {
         const resolved = env.imports.getResolvedModule(@fromBackingInt(import_idx)) orelse return error.IncompatibleReferences;
@@ -179,25 +203,28 @@ const Binding = struct {
 
     pub fn node(self: *Binding, owner: base.ModuleIdentity.Idx, raw: u32) Error!u32 {
         if (owner == self.env.selfModuleIdentity()) return raw;
-        const old = self.env.moduleIdentityHash(owner);
-        const previous = self.env.checking_dependency.owners.items.items;
-        const ordinal = for (previous, 0..) |hash, i| {
-            if (base.ModuleIdentity.eql(&hash, old)) break i;
-        } else return error.IncompatibleReferences;
-        if (ordinal >= self.scope.owners.items.len) return error.IncompatibleReferences;
-        const current = self.scope.environments.get(self.scope.owners.items[ordinal]) orelse return error.IncompatibleReferences;
-        if (current.module_role == .builtin) return raw;
-        return self.references.get(.{ .owner = @intCast(ordinal), .node = raw }) orelse error.IncompatibleReferences;
+        const bound = self.owners[@backingInt(owner)] orelse return error.IncompatibleReferences;
+        if (bound.builtin) return raw;
+        return self.references.get(.{ .owner = bound.ordinal, .node = raw }) orelse error.IncompatibleReferences;
     }
 };
 
 test "inference references require exact producer slots" {
+    try testInferenceReferenceBinding(false);
+}
+
+test "inference reference indexes release partial allocation state" {
+    try testInferenceReferenceBinding(true);
+}
+
+fn testInferenceReferenceBinding(allocation_failures: bool) !void {
     const allocator = std.testing.allocator;
     var env = try can.ModuleEnv.init(allocator, "");
     defer env.deinit();
     try env.initCIRFields("Importer");
     try env.setContentIdentity(@splat(1));
     const foreign = try env.internModuleIdentity(&@as(base.ModuleIdentity.Hash, @splat(2)), base.Ident.Idx.NONE);
+    const missing = try env.internModuleIdentity(&@as(base.ModuleIdentity.Hash, @splat(3)), base.Ident.Idx.NONE);
     var dependency = try can.ModuleEnv.init(allocator, "");
     defer dependency.deinit();
     try dependency.initCIRFields("Dependency");
@@ -207,19 +234,35 @@ test "inference references require exact producer slots" {
     var scope = try dependencies.Scope.init(allocator, @splat(1));
     defer scope.deinit();
     try scope.appendDependency(&dependency);
+    // Repeated owner parameters must still resolve through the first slot.
+    _ = try scope.appendOwner(@splat(2));
     env.checking_dependency.owners = try scope.copyOwners(allocator);
 
     var references = [_]ForeignReference{.{ .owner = 1, .node = 17, .slot = 0 }};
     const output = Self{ .foreign_references = &references };
+    if (allocation_failures) {
+        // Admission only reads the already-owned source and dependency data.
+        // Fail allocations in the new binding, independently of fixture setup.
+        return std.testing.checkAllAllocationFailures(allocator, testBindingAllocation, .{ &env, &scope, output });
+    }
     var binding = try output.makeBinding(&env, &scope);
-    defer binding.references.deinit(allocator);
+    defer binding.deinit(allocator);
     try std.testing.expectEqual(@as(u32, 42), try binding.node(foreign, 17));
+    try std.testing.expectEqual(@as(u32, 17), try binding.node(env.selfModuleIdentity(), 17));
+    try std.testing.expectError(error.IncompatibleReferences, binding.node(missing, 17));
     try std.testing.expectError(error.IncompatibleReferences, binding.node(foreign, 42));
     references[0].slot = 1;
     try std.testing.expectError(error.IncompatibleReferences, output.makeBinding(&env, &scope));
-    references[0] = .{ .owner = 2, .node = 17, .slot = 0 };
+    references[0] = .{ .owner = 3, .node = 17, .slot = 0 };
     try std.testing.expectError(error.IncompatibleReferences, output.makeBinding(&env, &scope));
     references[0] = .{ .owner = 1, .node = 17, .slot = 0 };
     const duplicates = Self{ .foreign_references = &.{ references[0], references[0] } };
     try std.testing.expectError(error.IncompatibleReferences, duplicates.makeBinding(&env, &scope));
+}
+
+fn testBindingAllocation(allocator: Allocator, env: *const can.ModuleEnv, scope: *const dependencies.Scope, output: Self) !void {
+    var borrowed = env.*;
+    borrowed.gpa = allocator;
+    var binding = try output.makeBinding(&borrowed, scope);
+    defer binding.deinit(allocator);
 }

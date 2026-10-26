@@ -58,11 +58,19 @@ const Allocator = std.mem.Allocator;
 /// SHA-256 content identity of one procedure.
 pub const Identity = [TypeDigestHasher.digest_length]u8;
 
-const domain = "roc.proc.identity.v3";
+const domain = "roc.proc.identity.v4";
 
 /// Everything one solved program has rendered so far, shared by every
 /// identity rendered over it.
 pub const Memo = struct {
+    const Description = struct { label: Identity, children: []const Identity };
+    allocator: Allocator,
+    /// Canonical one-step descriptions of completed types. A later recursive
+    /// component may be a partial copy of one already reduced, with edges
+    /// both into itself and into that earlier component.
+    descriptions: std.AutoHashMapUnmanaged(Identity, Description) = .empty,
+    descriptions_by_label: std.AutoHashMapUnmanaged(Identity, std.ArrayList(Identity)) = .empty,
+
     /// Digest of every type rendered so far, keyed by its root variable.
     digests: collections.DenseMap(SolvedType.TypeVarId, Identity),
     /// The one-step unfolding of every cyclic group position rendered so far,
@@ -75,6 +83,7 @@ pub const Memo = struct {
 
     pub fn init(allocator: Allocator) Memo {
         return .{
+            .allocator = allocator,
             .digests = collections.DenseMap(SolvedType.TypeVarId, Identity).init(allocator),
             .unfoldings = std.AutoHashMap(Identity, Identity).init(allocator),
             .node_maps = collections.DenseMapPool(SolvedType.TypeVarId, u32).init(allocator),
@@ -82,6 +91,12 @@ pub const Memo = struct {
     }
 
     pub fn deinit(self: *Memo) void {
+        var descriptions = self.descriptions.valueIterator();
+        while (descriptions.next()) |description| self.allocator.free(description.children);
+        self.descriptions.deinit(self.allocator);
+        var labels = self.descriptions_by_label.valueIterator();
+        while (labels.next()) |entries| entries.deinit(self.allocator);
+        self.descriptions_by_label.deinit(self.allocator);
         self.digests.deinit();
         self.unfoldings.deinit();
         self.node_maps.deinit();
@@ -211,6 +226,9 @@ const Engine = struct {
     sorted_labels: std.ArrayList(Identity) = .empty,
     rank_of_member: std.ArrayList(u32) = .empty,
     block_rep: std.ArrayList(u32) = .empty,
+    reuse_matches: std.AutoHashMapUnmanaged(u32, Identity) = .empty,
+    reuse_pending: std.ArrayList(ReusePair) = .empty,
+    const ReusePair = struct { node: u32, digest: Identity };
 
     fn init(renderer: *const Renderer) Engine {
         return .{
@@ -233,6 +251,8 @@ const Engine = struct {
         self.sorted_labels.deinit(self.gpa);
         self.rank_of_member.deinit(self.gpa);
         self.block_rep.deinit(self.gpa);
+        self.reuse_matches.deinit(self.gpa);
+        self.reuse_pending.deinit(self.gpa);
     }
 
     fn run(self: *Engine, root: SolvedType.TypeVarId) Allocator.Error!Identity {
@@ -505,8 +525,10 @@ const Engine = struct {
             const key = self.unfoldingKey(node);
             const digest = self.renderer.memo.unfoldings.get(key) orelse key;
             try self.finalize(node, digest);
+            try self.recordDescription(node);
             return;
         }
+        if (try self.reuseComponent(members)) return;
         try self.resolveCyclicComponent(members);
     }
 
@@ -545,6 +567,86 @@ const Engine = struct {
         if (entry.digest != null) Common.invariant("procedure identity reduction resolved a type twice");
         entry.digest = digest;
         try self.renderer.memo.digests.put(entry.ty, digest);
+    }
+
+    /// The exact non-edge encoding, with a marker at each ordered edge.
+    fn nodeLabel(self: *const Engine, node: u32) Identity {
+        var hasher = TypeDigestHasher.init();
+        writeBytes(&hasher, "type-description");
+        for (self.itemsOf(node)) |item| switch (item) {
+            .bytes => |range| {
+                writeBytes(&hasher, "bytes");
+                writeBytes(&hasher, self.bytesOf(range.start, range.len));
+            },
+            .child => writeBytes(&hasher, "child"),
+        };
+        return hasher.finalResult();
+    }
+
+    fn recordDescription(self: *Engine, node: u32) Allocator.Error!void {
+        const memo = self.renderer.memo;
+        const digest = self.nodes.items[node].digest.?;
+        if (memo.descriptions.contains(digest)) return;
+        const children = try self.gpa.alloc(Identity, self.childrenOf(node).len);
+        var owned = true;
+        errdefer if (owned) self.gpa.free(children);
+        for (self.childrenOf(node), children) |child, *out| out.* = self.childDigest(child);
+        const label = self.nodeLabel(node);
+        try memo.descriptions.put(self.gpa, digest, .{ .label = label, .children = children });
+        owned = false;
+        const candidates = try memo.descriptions_by_label.getOrPut(self.gpa, label);
+        if (!candidates.found_existing) candidates.value_ptr.* = .empty;
+        try candidates.value_ptr.append(self.gpa, digest);
+    }
+
+    /// An SCC boundary is a storage fact, not part of an infinite type.
+    /// Before assigning a new group identity, prove whether this component
+    /// unfolds to an already completed type. All matching head labels are
+    /// considered, and the proof follows every ordered edge to a fixed point.
+    /// This also covers a partial recursive copy which points back into the
+    /// original component, rather than only a one-step acyclic unfolding.
+    fn reuseComponent(self: *Engine, members: []const u32) Allocator.Error!bool {
+        const memo = self.renderer.memo;
+        const candidates = memo.descriptions_by_label.get(self.nodeLabel(members[0])) orelse return false;
+        for (candidates.items) |candidate| {
+            if (!try self.matchesDescription(members[0], candidate)) continue;
+            for (members) |node| {
+                const digest = self.reuse_matches.get(node) orelse
+                    Common.invariant("a recursive type proof omitted a member of its component");
+                try self.finalize(node, digest);
+            }
+            for (members) |node| try memo.unfoldings.put(self.unfoldingKey(node), self.nodes.items[node].digest.?);
+            return true;
+        }
+        return false;
+    }
+
+    fn matchesDescription(self: *Engine, root: u32, digest: Identity) Allocator.Error!bool {
+        self.reuse_matches.clearRetainingCapacity();
+        self.reuse_pending.clearRetainingCapacity();
+        try self.reuse_pending.append(self.gpa, .{ .node = root, .digest = digest });
+        while (self.reuse_pending.pop()) |pair| {
+            if (self.nodes.items[pair.node].digest) |known| {
+                if (!std.mem.eql(u8, &known, &pair.digest)) return false;
+                continue;
+            }
+            const match = try self.reuse_matches.getOrPut(self.gpa, pair.node);
+            if (match.found_existing) {
+                if (!std.mem.eql(u8, match.value_ptr, &pair.digest)) return false;
+                continue;
+            }
+            match.value_ptr.* = pair.digest;
+            const description = self.renderer.memo.descriptions.get(pair.digest) orelse
+                Common.invariant("a completed procedure type lacks its canonical description");
+            if (!std.mem.eql(u8, &description.label, &self.nodeLabel(pair.node))) return false;
+            const children = self.childrenOf(pair.node);
+            if (children.len != description.children.len) return false;
+            for (children, description.children) |child, expected| switch (child) {
+                .digest => |known| if (!std.mem.eql(u8, &known, &expected)) return false,
+                .node => |node| try self.reuse_pending.append(self.gpa, .{ .node = node, .digest = expected }),
+            };
+        }
+        return true;
     }
 
     /// Reduce one cyclic component by bisimulation refinement over content
@@ -688,6 +790,7 @@ const Engine = struct {
             writeU32(&hasher, rank_of_member[pos]);
             try self.finalize(node, hasher.finalResult());
         }
+        for (members) |node| try self.recordDescription(node);
         // A rolled-out copy of any position unfolds to the same one-step
         // encoding, so it folds to that position's digest.
         for (members) |node| {
@@ -718,6 +821,44 @@ fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
     var buffer: [4]u8 = undefined;
     encodeU32(&buffer, value);
     hasher.update(&buffer);
+}
+
+test "procedure identity folds partial recursive copies across component boundaries" {
+    const a = std.testing.allocator;
+    var types = SolvedType.Store.init(a);
+    defer types.deinit();
+    var name_store = names.NameStore.init(a);
+    defer name_store.deinit();
+    var fn_by_symbol = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(a);
+    defer fn_by_symbol.deinit();
+    // A = (A, B), B = List(A). A partial copy C = (C, B) denotes
+    // exactly A, but C is a separate strongly connected component.
+    const original = try types.add(.unbound);
+    const list = try types.add(.{ .list = original });
+    try types.set(original, .{ .tuple = try types.addSpan(&.{ original, list }) });
+    const copy = try types.add(.unbound);
+    try types.set(copy, .{ .tuple = try types.addSpan(&.{ copy, list }) });
+    const scalar = try types.add(.{ .primitive = .u8 });
+    const different_list = try types.add(.{ .list = scalar });
+    const different = try types.add(.unbound);
+    try types.set(different, .{ .tuple = try types.addSpan(&.{ different, different_list }) });
+    for ([_]bool{ false, true }) |copy_first| {
+        var memo = Memo.init(a);
+        defer memo.deinit();
+        const renderer = Renderer{
+            .allocator = a,
+            .types = types.view(),
+            .names = &name_store,
+            .fn_tys = &.{},
+            .source_digests = &.{},
+            .fn_by_symbol = &fn_by_symbol,
+            .memo = &memo,
+        };
+        const first = try renderer.typeDigest(if (copy_first) copy else original);
+        const second = try renderer.typeDigest(if (copy_first) original else copy);
+        try std.testing.expectEqual(first, second);
+        try std.testing.expect(!std.mem.eql(u8, &first, &try renderer.typeDigest(different)));
+    }
 }
 
 test "procedure identity excludes outer callable sets but retains nested callable sets" {

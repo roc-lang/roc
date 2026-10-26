@@ -36,6 +36,8 @@ pub const Store = struct {
     /// Logical scope for procedure packs and discovery summaries.
     procedure_root: []u8,
     native: compile.artifacts.Store,
+    /// One retention observation for this invocation-owned cache reader.
+    read_timestamp: i64,
     variant: [32]u8,
     verbose: bool,
     publication_stats: ?*PublicationStats = null,
@@ -77,7 +79,8 @@ pub const Store = struct {
         errdefer allocator.free(procedure_root);
         const cache_root = try config.getEffectiveCacheDir(allocator);
         defer allocator.free(cache_root);
-        return .{ .allocator = allocator, .roc_ctx = config.roc_ctx, .root = root, .procedure_root = procedure_root, .variant = compile.artifacts.hashBytes(opt_name), .native = try compile.artifacts.Store.init(allocator, config.roc_ctx.std_io, cache_root), .verbose = config.verbose, .domain = backend.dev.NativeProcDomain.init(target, strategy).key() };
+        const native = try compile.artifacts.Store.init(allocator, config.roc_ctx.std_io, cache_root);
+        return .{ .allocator = allocator, .roc_ctx = config.roc_ctx, .root = root, .procedure_root = procedure_root, .variant = compile.artifacts.hashBytes(opt_name), .native = native, .read_timestamp = native.now(), .verbose = config.verbose, .domain = backend.dev.NativeProcDomain.init(target, strategy).key() };
     }
 
     pub fn deinit(self: *Store) void {
@@ -88,8 +91,8 @@ pub const Store = struct {
 
     fn artifactIdentity(self: *const Store, family: compile.artifacts.Family, module: [32]u8, key: [32]u8) compile.artifacts.Identity {
         var result: compile.artifacts.Identity = .{ .namespace = undefined, .family = family, .group = undefined, .key = key, .pack_format = PackFile.format_version, .variant = self.variant };
-        std.crypto.hash.sha2.Sha256.hash(@import("build_options").compiler_compatibility_id, &result.namespace, .{});
-        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        base.Sha256.hash(@import("build_options").compiler_compatibility_id, &result.namespace, .{});
+        var hash = base.Sha256.init(.{});
         hash.update(switch (family) {
             .local_pack, .package_pack, .local_discovery, .package_discovery => self.procedure_root,
             .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .optimized_pack, .program_output, .scratch => self.root,
@@ -103,17 +106,17 @@ pub const Store = struct {
 
     fn indexedIdentity(self: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8, key: [32]u8, kind: IndexedKind) compile.artifacts.Identity {
         var id = self.packIdentity(origin, module, key);
-        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        var hash = base.Sha256.init(.{});
         hash.update(&id.variant);
         hash.update("roc-indexed-procedure-v1");
-        hash.update(@tagName(kind));
+        hash.update(if (kind == .interface) "interface-request-v3" else @tagName(kind));
         hash.final(&id.variant);
         return id;
     }
 
     pub fn linkObjectIdentity(self: *const Store, digest: [32]u8) compile.artifacts.Identity {
         var id = self.artifactIdentity(.program_output, @splat(0), digest);
-        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        var hash = base.Sha256.init(.{});
         hash.update(&id.variant);
         hash.update("roc-native-link-object-v1");
         hash.final(&id.variant);
@@ -121,7 +124,7 @@ pub const Store = struct {
     }
 
     fn readPrefix(self: *const Store, id: compile.artifacts.Identity, len: usize, allocator: Allocator) Allocator.Error!?[]u8 {
-        var artifact = (self.native.acquire(id, self.native.now()) catch |err| switch (err) {
+        var artifact = (self.native.acquire(id, self.read_timestamp) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return null,
         }) orelse return null;
@@ -148,7 +151,7 @@ pub const Store = struct {
     }
 
     fn read(self: *const Store, allocator: Allocator, id: compile.artifacts.Identity) Allocator.Error!?[]u8 {
-        return self.native.read(allocator, id, self.native.now()) catch |err| switch (err) {
+        return self.native.read(allocator, id, self.read_timestamp) catch |err| switch (err) {
             error.OutOfMemory => error.OutOfMemory,
             else => null,
         };
@@ -171,7 +174,7 @@ pub const Store = struct {
 
     pub fn writeDiscovery(self: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
         var key: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(bytes, &key, .{});
+        base.Sha256.hash(bytes, &key, .{});
         try self.writeEntry(self.artifactIdentity(if (origin == .local) .local_discovery else .package_discovery, module, key), bytes);
     }
 
@@ -194,7 +197,7 @@ pub const Store = struct {
     }
 
     pub fn has(self: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8, key: [32]u8) Allocator.Error!bool {
-        var artifact = (self.native.acquire(self.packIdentity(origin, module, key), self.native.now()) catch |err| switch (err) {
+        var artifact = (self.native.acquire(self.packIdentity(origin, module, key), self.read_timestamp) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return false,
         }) orelse return false;
@@ -345,7 +348,7 @@ pub const Store = struct {
     }
 
     fn retainedIdentity(self: *const Store, key: [64]u8) [32]u8 {
-        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        var hash = base.Sha256.init(.{});
         hash.update(self.native.root);
         hash.update(&key);
         return hash.finalResult();
@@ -363,8 +366,8 @@ pub const Store = struct {
         }
     };
 
-    fn acquireRetained(self: *const Store, owner: *base.retained_cache.Owner, key: [64]u8, kind: base.retained_cache.Kind) (Allocator.Error || error{ Unavailable, Corrupt })!*const base.retained_cache.Record {
-        var acquired = (self.native.acquireKey(key, self.native.now()) catch |err| switch (err) {
+    fn acquireRetained(self: *const Store, owner: *base.retained_cache.Owner, batch: *compile.artifacts.RetentionBatch, key: [64]u8, kind: base.retained_cache.Kind) (Allocator.Error || error{ Unavailable, Corrupt })!*const base.retained_cache.Record {
+        var acquired = (batch.acquireKey(key, self.read_timestamp) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.Unavailable,
         }) orelse return error.Unavailable;
@@ -389,7 +392,7 @@ pub const Store = struct {
     fn publishIndexedHeld(self: *const Store, id: compile.artifacts.Identity, bytes: []const u8, stats: *PublicationStats, pins: ?*std.ArrayList(compile.artifacts.Artifact)) (Allocator.Error || error{PackWriteFailed})!bool {
         if (pins) |held| try held.ensureUnusedCapacity(self.allocator, 1);
         stats.records_read += 1;
-        if (self.native.acquire(id, self.native.now()) catch |err| switch (err) {
+        if (self.native.acquire(id, self.read_timestamp) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.PackWriteFailed,
         }) |value| {
@@ -415,7 +418,7 @@ pub const Store = struct {
             else => return error.PackWriteFailed,
         };
         if (pins) |held| {
-            var acquired = (self.native.acquire(id, self.native.now()) catch |err| switch (err) {
+            var acquired = (self.native.acquire(id, self.read_timestamp) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return error.PackWriteFailed,
             }) orelse return error.PackWriteFailed;
@@ -444,7 +447,7 @@ pub const Store = struct {
         };
         defer self.allocator.free(keys);
         for (keys) |key| {
-            var artifact = (self.native.acquireKey(key, self.native.now()) catch |err| switch (err) {
+            var artifact = (self.native.acquireKey(key, self.read_timestamp) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => continue,
             }) orelse continue;
@@ -686,8 +689,8 @@ test "native procedure domain shares packs but isolates final outputs and linked
         defer right.deinit();
         try left.write(.pkg, identity, key, "linked-only package");
         try std.testing.expect(!try right.has(.pkg, identity, key));
-        const left_key = left.identity(.optimized_pack, identity, identity).indexedKey();
-        const right_key = right.identity(.optimized_pack, identity, identity).indexedKey();
+        const left_key = left.artifactIdentity(.optimized_pack, identity, identity).indexedKey();
+        const right_key = right.artifactIdentity(.optimized_pack, identity, identity).indexedKey();
         try std.testing.expect(!std.mem.eql(u8, &left_key, &right_key));
     }
 }
@@ -955,18 +958,23 @@ pub const LoadedPacks = struct {
     };
     const IndexedResult = enum { hit, miss, unavailable };
 
-    /// One checked module/context provider, shared by its procedure requests.
-    const InterfaceFamily = struct {
-        records: std.AutoArrayHashMapUnmanaged([32]u8, []const u8) = .empty,
+    /// A request owns its payload and its synchronization. Independent requests
+    /// can read and validate their files concurrently, including in one module.
+    const InterfaceRecord = struct {
+        mutex: std.Io.Mutex = .init,
+        payload: ?[]const u8 = null,
         loaded: bool = false,
         dirty: bool = false,
+    };
+    const InterfaceFamily = struct {
+        records: std.AutoArrayHashMapUnmanaged([32]u8, *InterfaceRecord) = .empty,
     };
     const Provider = struct { store: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8 };
     const IndexRoot = struct { store: *const Store, origin: compile.BuildEnv.PackOrigin };
     interface_mutex: std.Io.Mutex = .init,
-    /// Worker reads update this under interface_mutex; reported after joining.
+    /// Worker reads update these atomically; reported after joining.
     interface_bytes_loaded: u64 = 0,
-    interface_invalid_families: u64 = 0,
+    interface_invalid_records: u64 = 0,
     interface_families: std.AutoHashMapUnmanaged([32]u8, *InterfaceFamily) = .empty,
     interface_store: ?*const Store = null,
     allocator: Allocator,
@@ -981,6 +989,7 @@ pub const LoadedPacks = struct {
     negative: std.AutoHashMapUnmanaged(MissKey, void) = .empty,
 
     record_owner: ?*base.retained_cache.Owner = null,
+    retention_batches: std.StringHashMapUnmanaged(*compile.artifacts.RetentionBatch) = .empty,
     record_domain: [32]u8 = @splat(0),
     payloads: std.AutoHashMapUnmanaged([32]u8, *const base.retained_cache.Record) = .empty,
     retained_offers: std.AutoHashMapUnmanaged([32]u8, *const base.retained_cache.Record) = .empty,
@@ -1043,6 +1052,26 @@ pub const LoadedPacks = struct {
         const owner = try base.retained_cache.Owner.create(self.allocator, io, self.record_domain);
         self.record_owner = owner;
         return owner;
+    }
+
+    fn retentionBatch(self: *LoadedPacks, store: *const Store) Allocator.Error!*compile.artifacts.RetentionBatch {
+        if (self.retention_batches.get(store.native.root)) |batch| return batch;
+        const owner = try self.recordOwner(store.roc_ctx.std_io);
+        const batch = try store.allocator.create(compile.artifacts.RetentionBatch);
+        errdefer store.allocator.destroy(batch);
+        batch.* = try compile.artifacts.RetentionBatch.init(&store.native);
+        errdefer batch.deinit();
+        try self.retention_batches.ensureUnusedCapacity(self.allocator, 1);
+        try owner.adopt(.{ .context = batch, .deinit = releaseRetentionBatch });
+        self.retention_batches.putAssumeCapacity(batch.store.root, batch);
+        return batch;
+    }
+
+    fn releaseRetentionBatch(context: *anyopaque) void {
+        const batch: *compile.artifacts.RetentionBatch = @ptrCast(@alignCast(context));
+        const allocator = batch.store.allocator;
+        batch.deinit();
+        allocator.destroy(batch);
     }
 
     fn reusesOffer(self: *const LoadedPacks, store: *const Store, spec: PackFile.SpecEntry, provider: compile.BuildEnv.PackPlacement, component: [32]u8, ordinal: u32) bool {
@@ -1110,7 +1139,11 @@ pub const LoadedPacks = struct {
     pub fn refreshIndex(self: *LoadedPacks) void {
         self.negative.clearRetainingCapacity();
         var families = self.interface_families.valueIterator();
-        while (families.next()) |family| family.*.loaded = false;
+        while (families.next()) |family| {
+            for (family.*.records.values()) |record| if (record.payload == null) {
+                record.loaded = false;
+            };
+        }
     }
 
     /// Register freshly published offers in the checked program's provider order.
@@ -1140,7 +1173,7 @@ pub const LoadedPacks = struct {
         const allocator = self.allocator;
         self.index_stats.metadata_opens += 1;
         const owner = try self.recordOwner(store.roc_ctx.std_io);
-        const record = store.acquireRetained(owner, store.indexedIdentity(.local, @splat(0), hash, .metadata).indexedKey(), .native_component_v1) catch |err| switch (err) {
+        const record = store.acquireRetained(owner, try self.retentionBatch(store), store.indexedIdentity(.local, @splat(0), hash, .metadata).indexedKey(), .native_component_v1) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.Corrupt => {
                 self.index_stats.corrupt += 1;
@@ -1361,7 +1394,7 @@ pub const LoadedPacks = struct {
             if (keys.len == 0) self.index_stats.bucket_absent += 1;
             for (keys) |catalog_key| {
                 const owner = try self.recordOwner(root.store.roc_ctx.std_io);
-                const record = root.store.acquireRetained(owner, catalog_key, .native_offer_v3) catch |err| switch (err) {
+                const record = root.store.acquireRetained(owner, try self.retentionBatch(root.store), catalog_key, .native_offer_v3) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                     error.Corrupt => {
                         self.index_stats.corrupt += 1;
@@ -1404,6 +1437,7 @@ pub const LoadedPacks = struct {
             };
             var adopted = false;
             defer if (!adopted) selection.pack.deinit();
+            if (takes == .test_dev_code and !selection.pack.specs[0].test_compatible) continue;
             const metadata = try self.loadMetadata(store, selection.component) orelse {
                 cacheable = false;
                 continue;
@@ -1461,7 +1495,7 @@ pub const LoadedPacks = struct {
         if (self.payloads.get(hash)) |record| return record;
         self.index_stats.payload_opens += 1;
         const owner = try self.recordOwner(store.roc_ctx.std_io);
-        const record = store.acquireRetained(owner, store.indexedIdentity(.local, @splat(0), hash, .payload).indexedKey(), .native_payload_v1) catch |err| switch (err) {
+        const record = store.acquireRetained(owner, try self.retentionBatch(store), store.indexedIdentity(.local, @splat(0), hash, .payload).indexedKey(), .native_payload_v1) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.Corrupt => {
                 self.index_stats.corrupt += 1;
@@ -1894,10 +1928,13 @@ pub const LoadedPacks = struct {
             if (self.record_owner) |owner| std.debug.print("pack acquisitions: {any}\n", .{owner.metrics});
             std.debug.print("pack index: index_bytes={d} bucket_opens={d} bucket_absent={d} negative_hits={d} metadata_opens={d} metadata_bytes={d} candidates={d} duplicates={d} payload_opens={d} payload_files={d} payload_bytes={d} decoded_artifacts={d} requested_artifacts={d} served_artifacts={d} allocation_failures={d} requested={d} served={d} misses={d} source_ineligible={d} linked_ineligible={d} corrupt={d} missing={d}\n", .{ stats.index_bytes, stats.bucket_opens, stats.bucket_absent, stats.negative_hits, stats.metadata_opens, stats.metadata_bytes, stats.candidates, stats.duplicates, stats.payload_opens, stats.payload_files, stats.payload_bytes, stats.decoded_artifacts, stats.requested_artifacts, stats.served_artifacts, stats.allocation_failures, stats.requested, stats.served, stats.misses, stats.source_ineligible, stats.linked_ineligible, stats.corrupt, stats.missing });
         }
-        if (base.dev_diagnostics.isSet(.pack_stats)) std.debug.print("pack interfaces: loaded_bytes={d} invalid_families={d}\n", .{ self.interface_bytes_loaded, self.interface_invalid_families });
+        if (base.dev_diagnostics.isSet(.pack_stats)) std.debug.print("pack interfaces: loaded_bytes={d} invalid_records={d}\n", .{ self.interface_bytes_loaded, self.interface_invalid_records });
         var interface_families = self.interface_families.valueIterator();
         while (interface_families.next()) |family| {
-            for (family.*.records.values()) |bytes| self.allocator.free(bytes);
+            for (family.*.records.values()) |record| {
+                if (record.payload) |bytes| self.allocator.free(bytes);
+                self.allocator.destroy(record);
+            }
             family.*.records.deinit(self.allocator);
             self.allocator.destroy(family.*);
         }
@@ -1914,6 +1951,7 @@ pub const LoadedPacks = struct {
         self.index_dirs.deinit(self.allocator);
         self.payloads.deinit(self.allocator);
         self.retained_offers.deinit(self.allocator);
+        self.retention_batches.deinit(self.allocator);
         defer if (self.record_owner) |owner| owner.release();
         var settlements = self.discovery.valueIterator();
         while (settlements.next()) |list| list.deinit(self.allocator);
@@ -1950,9 +1988,9 @@ pub const LoadedPacks = struct {
         return if (self.pending) |pending| pending.store else self.interface_store;
     }
 
-    /// Caller holds interface_mutex. One read per family and snapshot, including
-    /// absence. Publications update the resident family directly.
-    fn interfaceFamily(self: *LoadedPacks, store: *const Store, key: [32]u8) Allocator.Error!*InterfaceFamily {
+    /// Caller holds interface_mutex. Families own requested records and misses;
+    /// finding one request never reads or decodes its siblings or their history.
+    fn interfaceFamily(self: *LoadedPacks, key: [32]u8) Allocator.Error!*InterfaceFamily {
         const entry = try self.interface_families.getOrPut(self.allocator, key);
         if (!entry.found_existing) {
             errdefer _ = self.interface_families.remove(key);
@@ -1960,86 +1998,80 @@ pub const LoadedPacks = struct {
             family.* = .{};
             entry.value_ptr.* = family;
         }
-        const family = entry.value_ptr.*;
-        if (family.loaded) return family;
-        const bytes = (try store.read(self.allocator, store.indexedIdentity(.local, key, @splat(0), .interface))) orelse {
-            family.loaded = true;
-            return family;
-        };
-        defer self.allocator.free(bytes);
-        self.interface_bytes_loaded +|= bytes.len;
-        self.readInterfaceFamily(family, key, bytes) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.InvalidSummary => {
-                self.interface_invalid_families += 1;
-                family.loaded = true;
-                return family;
-            },
-        };
-        family.loaded = true;
-        return family;
+        return entry.value_ptr.*;
+    }
+
+    /// The map lock protects allocation and lookup only. Record addresses stay
+    /// stable until all specialization workers have joined and this owner dies.
+    fn interfaceRecord(self: *LoadedPacks, io: std.Io, family_key: [32]u8, request: [32]u8) Allocator.Error!*InterfaceRecord {
+        self.interface_mutex.lockUncancelable(io);
+        defer self.interface_mutex.unlock(io);
+        const family = try self.interfaceFamily(family_key);
+        const entry = try family.records.getOrPut(self.allocator, request);
+        if (!entry.found_existing) {
+            errdefer _ = family.records.swapRemove(request);
+            const record = try self.allocator.create(InterfaceRecord);
+            record.* = .{};
+            entry.value_ptr.* = record;
+        }
+        return entry.value_ptr.*;
     }
 
     const InterfaceDecodeError = Allocator.Error || error{InvalidSummary};
+    const interface_header_size = 104;
 
-    fn readInterfaceFamily(self: *LoadedPacks, family: *InterfaceFamily, key: [32]u8, bytes: []const u8) InterfaceDecodeError!void {
-        if (bytes.len < 76 or !std.mem.eql(u8, bytes[0..8], "RIFACE02") or !std.mem.eql(u8, bytes[8..40], &key)) return error.InvalidSummary;
-        if (!std.mem.eql(u8, &Index.digest(bytes[72..]), bytes[40..72])) return error.InvalidSummary;
-        const count = std.mem.readInt(u32, bytes[72..76], .little);
-        var offset: usize = 76;
-        // Validate the whole container before installing any member.
-        for (0..count) |_| {
-            if (bytes.len - offset < 36) return error.InvalidSummary;
-            const len = std.mem.readInt(u32, bytes[offset + 32 ..][0..4], .little);
-            offset += 36;
-            if (len > bytes.len - offset) return error.InvalidSummary;
-            offset += len;
-        }
-        if (offset != bytes.len) return error.InvalidSummary;
-        offset = 76;
-        for (0..count) |_| {
-            const request = bytes[offset..][0..32].*;
-            const len = std.mem.readInt(u32, bytes[offset + 32 ..][0..4], .little);
-            offset += 36;
-            if (!family.records.contains(request)) {
-                const owned = try self.allocator.dupe(u8, bytes[offset..][0..len]);
-                errdefer self.allocator.free(owned);
-                try family.records.put(self.allocator, request, owned);
-            }
-            offset += len;
-        }
+    fn readInterfaceRecord(family: [32]u8, request: [32]u8, bytes: []const u8) InterfaceDecodeError![]const u8 {
+        if (bytes.len < interface_header_size or !std.mem.eql(u8, bytes[0..8], "RIFACE03") or
+            !std.mem.eql(u8, bytes[8..40], &family) or !std.mem.eql(u8, bytes[40..72], &request)) return error.InvalidSummary;
+        const payload = bytes[interface_header_size..];
+        if (!std.mem.eql(u8, bytes[72..104], &Index.digest(payload))) return error.InvalidSummary;
+        return payload;
     }
 
     fn loadInterface(context: *anyopaque, allocator: Allocator, family_key: [32]u8, request: [32]u8) Allocator.Error!?[]u8 {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
         if (self.defer_code_lookup) return null;
         const store = self.interfaceStore() orelse return null;
-        self.interface_mutex.lockUncancelable(store.roc_ctx.std_io);
-        defer self.interface_mutex.unlock(store.roc_ctx.std_io);
-        const family = try self.interfaceFamily(store, family_key);
-        const bytes = family.records.get(request) orelse return null;
-        return try allocator.dupe(u8, bytes);
+        const record = try self.interfaceRecord(store.roc_ctx.std_io, family_key, request);
+        record.mutex.lockUncancelable(store.roc_ctx.std_io);
+        defer record.mutex.unlock(store.roc_ctx.std_io);
+        if (record.loaded) return if (record.payload) |bytes| try allocator.dupe(u8, bytes) else null;
+        const bytes = (try store.read(self.allocator, store.indexedIdentity(.local, family_key, request, .interface))) orelse {
+            record.loaded = true;
+            return null;
+        };
+        defer self.allocator.free(bytes);
+        _ = @atomicRmw(u64, &self.interface_bytes_loaded, .Add, bytes.len, .monotonic);
+        const payload = readInterfaceRecord(family_key, request, bytes) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidSummary => {
+                _ = @atomicRmw(u64, &self.interface_invalid_records, .Add, 1, .monotonic);
+                record.loaded = true;
+                return null;
+            },
+        };
+        record.payload = try self.allocator.dupe(u8, payload);
+        record.loaded = true;
+        return try allocator.dupe(u8, record.payload.?);
     }
 
     fn recordInterface(context: *anyopaque, family_key: [32]u8, request: [32]u8, bytes: []const u8) Allocator.Error!void {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
         if (self.defer_code_lookup) return;
         const store = self.interfaceStore() orelse return;
-        self.interface_mutex.lockUncancelable(store.roc_ctx.std_io);
-        defer self.interface_mutex.unlock(store.roc_ctx.std_io);
-        const family = try self.interfaceFamily(store, family_key);
-        if (family.records.get(request)) |existing| if (std.mem.eql(u8, existing, bytes)) return;
+        const record = try self.interfaceRecord(store.roc_ctx.std_io, family_key, request);
+        record.mutex.lockUncancelable(store.roc_ctx.std_io);
+        defer record.mutex.unlock(store.roc_ctx.std_io);
+        if (record.payload) |existing| if (std.mem.eql(u8, existing, bytes)) return;
         const owned = try self.allocator.dupe(u8, bytes);
-        errdefer self.allocator.free(owned);
-        const entry = try family.records.getOrPut(self.allocator, request);
-        if (entry.found_existing) self.allocator.free(entry.value_ptr.*);
-        entry.value_ptr.* = owned;
-        family.dirty = true;
+        if (record.payload) |old| self.allocator.free(old);
+        record.payload = owned;
+        record.loaded = true;
+        record.dirty = true;
     }
 
-    /// Publish once per changed module/context provider, within the reported cache
-    /// publication phase. Concurrent writers can lose optional variants, never
-    /// mix partial records: every replacement is complete and atomic.
+    /// Each request is an independently published immutable summary. Concurrent
+    /// producers of unrelated requests cannot overwrite one another's records.
     pub fn publishInterfaces(self: *LoadedPacks) Allocator.Error!void {
         const store = self.interfaceStore() orelse return;
         self.interface_mutex.lockUncancelable(store.roc_ctx.std_io);
@@ -2047,27 +2079,24 @@ pub const LoadedPacks = struct {
         var families = self.interface_families.iterator();
         while (families.next()) |entry| {
             const family = entry.value_ptr.*;
-            if (!family.dirty) continue;
-            var bytes = std.ArrayList(u8).empty;
-            defer bytes.deinit(self.allocator);
-            try bytes.appendSlice(self.allocator, "RIFACE02");
-            try bytes.appendSlice(self.allocator, entry.key_ptr);
-            try bytes.appendNTimes(self.allocator, 0, 32);
-            var number: [4]u8 = undefined;
-            std.mem.writeInt(u32, &number, @intCast(family.records.count()), .little);
-            try bytes.appendSlice(self.allocator, &number);
-            for (family.records.keys(), family.records.values()) |request, payload| {
+            for (family.records.keys(), family.records.values()) |request, record| {
+                record.mutex.lockUncancelable(store.roc_ctx.std_io);
+                defer record.mutex.unlock(store.roc_ctx.std_io);
+                if (!record.dirty) continue;
+                const payload = record.payload.?;
+                var bytes = std.ArrayList(u8).empty;
+                defer bytes.deinit(self.allocator);
+                try bytes.appendSlice(self.allocator, "RIFACE03");
+                try bytes.appendSlice(self.allocator, entry.key_ptr);
                 try bytes.appendSlice(self.allocator, &request);
-                std.mem.writeInt(u32, &number, @intCast(payload.len), .little);
-                try bytes.appendSlice(self.allocator, &number);
+                try bytes.appendSlice(self.allocator, &Index.digest(payload));
                 try bytes.appendSlice(self.allocator, payload);
+                _ = store.publishIndexed(store.indexedIdentity(.local, entry.key_ptr.*, request, .interface), bytes.items) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.PackWriteFailed => continue,
+                };
+                record.dirty = false;
             }
-            bytes.items[40..72].* = Index.digest(bytes.items[72..]);
-            _ = store.publishIndexed(store.indexedIdentity(.local, entry.key_ptr.*, @splat(0), .interface), bytes.items) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.PackWriteFailed => continue,
-            };
-            family.dirty = false;
         }
     }
 
@@ -2298,11 +2327,15 @@ test "native test indexed admission pins verified payloads and rejects observati
     try std.testing.expect(lookup.lookup(@splat(12), .dev_code, &.{}) != null);
     try std.testing.expect(lookup.lookup(key, .test_dev_code, &.{}) != null);
     try std.testing.expectEqual(@as(u64, 1), packs.index_stats.payload_files);
-    // Eviction cannot revoke a promise already made to specialization.
+    // Even external deletion cannot revoke already acquired immutable bytes.
     const payload_bytes = try Index.payload(a, set.excerpts[0]);
     defer a.free(payload_bytes);
-    const payload_id = store.indexedIdentity(.local, identity, Index.digest(payload_bytes), .payload);
-    try store.native.invalidate(payload_id);
+    const payload_id = store.indexedIdentity(.local, @splat(0), Index.digest(payload_bytes), .payload);
+    {
+        var artifact = (try store.native.acquire(payload_id, store.read_timestamp)).?;
+        defer artifact.deinit();
+        try std.Io.Dir.cwd().deleteFile(io, artifact.path);
+    }
     const source = packs.spliceSource();
     try std.testing.expect(source.find(source.context, key) != null);
     try std.testing.expect(lookup.lookup(key, .test_dev_code, &.{}) != null);
@@ -2931,9 +2964,9 @@ test "persistent interface families invalidate misses, share records, and reject
     try LoadedPacks.recordInterface(&producer, family, second, "two");
     try producer.publishInterfaces();
     try std.testing.expectEqual(@as(usize, 1), producer.interface_families.count());
-    try std.testing.expect(!producer.interface_families.get(family).?.dirty);
+    try std.testing.expect(!producer.interface_families.get(family).?.records.get(first).?.dirty);
     try LoadedPacks.recordInterface(&producer, family, first, "one");
-    try std.testing.expect(!producer.interface_families.get(family).?.dirty);
+    try std.testing.expect(!producer.interface_families.get(family).?.records.get(first).?.dirty);
     var consumer = LoadedPacks.init(allocator);
     defer consumer.deinit();
     consumer.interface_store = &fixture.store;
@@ -2952,13 +2985,15 @@ test "persistent interface families invalidate misses, share records, and reject
     const three = (try LoadedPacks.loadInterface(&consumer, allocator, family, third)).?;
     defer allocator.free(three);
     try std.testing.expectEqualStrings("three", three);
-    try fixture.store.native.write(fixture.store.indexedIdentity(.local, family, @splat(0), .interface), "RIFACE02truncated", fixture.store.native.now());
+    try fixture.store.native.write(fixture.store.indexedIdentity(.local, family, first, .interface), "RIFACE03truncated", fixture.store.native.now());
     var corrupt = LoadedPacks.init(allocator);
     defer corrupt.deinit();
     corrupt.interface_store = &fixture.store;
     try std.testing.expectEqual(null, try LoadedPacks.loadInterface(&corrupt, allocator, family, first));
-    try std.testing.expectEqual(null, try LoadedPacks.loadInterface(&corrupt, allocator, family, second));
-    try std.testing.expectEqual(@as(u64, 1), corrupt.interface_invalid_families);
+    const intact = (try LoadedPacks.loadInterface(&corrupt, allocator, family, second)).?;
+    defer allocator.free(intact);
+    try std.testing.expectEqualStrings("two", intact);
+    try std.testing.expectEqual(@as(u64, 1), corrupt.interface_invalid_records);
     try LoadedPacks.recordInterface(&corrupt, family, first, "repaired");
     try corrupt.publishInterfaces();
     var repaired = LoadedPacks.init(allocator);
@@ -3318,4 +3353,152 @@ test "native publication preserves symbolic bindings across historical definitio
     try std.testing.expectEqual(@as(u64, 0), stats.payloads_encoded);
     try std.testing.expectEqual(@as(u64, 1), stats.metadata_encoded);
     try std.testing.expectEqual(@as(u64, 2), stats.records_written);
+}
+
+test "pack readers record retention once per invocation without overwriting newer readers" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+    var store = try Store.init(allocator, .{ .cache_dir = root, .roc_ctx = CoreCtx.default(allocator, allocator, io) }, .x64glibc, "dev");
+    defer store.deinit();
+    const id = store.packIdentity(.local, @splat(1), @splat(2));
+    try store.native.write(id, "retained", 1);
+    const Inspect = struct {
+        fn read(s: *Store, identity: compile.artifacts.Identity) !struct { sequence: u64, used: i64 } {
+            var counters = compile.artifacts.catalog.Counters{};
+            var shard = try compile.artifacts.Shard.openRequired(&s.native, compile.artifacts.Store.shardFor(identity.indexedKey()), false, &counters);
+            defer shard.close();
+            var tx = shard.index.transaction();
+            const record = (try tx.find(.artifacts, identity.indexedKey())).?;
+            return .{ .sequence = shard.index.header.sequence, .used = (try compile.artifacts.currentMetadata(&tx, identity.indexedKey(), record.value)).used };
+        }
+    };
+    store.read_timestamp = 20;
+    {
+        const bytes = (try store.read(allocator, id)).?;
+        defer allocator.free(bytes);
+        try std.testing.expectEqualStrings("retained", bytes);
+    }
+    const first = try Inspect.read(&store, id);
+    try std.testing.expectEqual(20, first.used);
+    {
+        const bytes = (try store.read(allocator, id)).?;
+        defer allocator.free(bytes);
+    }
+    const second = try Inspect.read(&store, id);
+    try std.testing.expectEqual(first.sequence, second.sequence);
+    store.read_timestamp = 30;
+    {
+        const bytes = (try store.read(allocator, id)).?;
+        defer allocator.free(bytes);
+    }
+    const newer = try Inspect.read(&store, id);
+    try std.testing.expectEqual(30, newer.used);
+    try std.testing.expect(newer.sequence > second.sequence);
+    store.read_timestamp = 20;
+    {
+        const bytes = (try store.read(allocator, id)).?;
+        defer allocator.free(bytes);
+    }
+    const older = try Inspect.read(&store, id);
+    try std.testing.expectEqual(newer.sequence, older.sequence);
+    try std.testing.expectEqual(30, older.used);
+}
+
+test "interface requests read only their record and independent publications preserve siblings" {
+    var fixture: IndexFixture = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    const allocator = std.testing.allocator;
+    const family: [32]u8 = @splat(37);
+    var first = LoadedPacks.init(allocator);
+    defer first.deinit();
+    first.interface_store = &fixture.store;
+    var second = LoadedPacks.init(allocator);
+    defer second.deinit();
+    second.interface_store = &fixture.store;
+    const target: [32]u8 = @splat(255);
+    try std.testing.expectEqual(null, try LoadedPacks.loadInterface(&second, allocator, family, target));
+    for (0..64) |i| {
+        const request: [32]u8 = @splat(@intCast(i));
+        const payload: [1024]u8 = @splat(@intCast(i));
+        try LoadedPacks.recordInterface(&first, family, request, &payload);
+    }
+    try first.publishInterfaces();
+    // This writer observed absence before the unrelated records existed.
+    try LoadedPacks.recordInterface(&second, family, target, "requested");
+    try second.publishInterfaces();
+    var reader = LoadedPacks.init(allocator);
+    defer reader.deinit();
+    reader.interface_store = &fixture.store;
+    const bytes = (try LoadedPacks.loadInterface(&reader, allocator, family, target)).?;
+    defer allocator.free(bytes);
+    try std.testing.expectEqualStrings("requested", bytes);
+    try std.testing.expectEqual(LoadedPacks.interface_header_size + bytes.len, reader.interface_bytes_loaded);
+    try std.testing.expectEqual(1, reader.interface_families.get(family).?.records.count());
+    const sibling = (try LoadedPacks.loadInterface(&reader, allocator, family, @splat(32))).?;
+    defer allocator.free(sibling);
+    try std.testing.expectEqualSlices(u8, &@as([1024]u8, @splat(32)), sibling);
+}
+
+test "interface requests share same-key reads while independent workers publish and load" {
+    const a = std.testing.allocator;
+    var fixture: IndexFixture = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    var producer = LoadedPacks.init(a);
+    defer producer.deinit();
+    producer.interface_store = &fixture.store;
+    var reader = LoadedPacks.init(a);
+    defer reader.deinit();
+    reader.interface_store = &fixture.store;
+    const Worker = struct {
+        packs: *LoadedPacks,
+        index: u8,
+        record: bool,
+        failed: bool = false,
+        fn run(self: *@This()) void {
+            self.work() catch {
+                self.failed = true;
+            };
+        }
+        fn work(self: *@This()) !void {
+            const family: [32]u8 = @splat(61);
+            const shared: [32]u8 = @splat(254);
+            for (0..32) |i| {
+                var key: [32]u8 = @splat(self.index);
+                key[0] = @intCast(i);
+                if (self.record) {
+                    try LoadedPacks.recordInterface(self.packs, family, key, &key);
+                    try LoadedPacks.recordInterface(self.packs, family, shared, &shared);
+                }
+                const bytes = (try LoadedPacks.loadInterface(self.packs, std.testing.allocator, family, key)) orelse return error.TestUnexpectedResult;
+                defer std.testing.allocator.free(bytes);
+                try std.testing.expectEqualSlices(u8, &key, bytes);
+                const common = (try LoadedPacks.loadInterface(self.packs, std.testing.allocator, family, shared)) orelse return error.TestUnexpectedResult;
+                defer std.testing.allocator.free(common);
+                try std.testing.expectEqualSlices(u8, &shared, common);
+            }
+        }
+    };
+    for ([_]*LoadedPacks{ &producer, &reader }, 0..) |packs, pass| {
+        var workers: [8]Worker = undefined;
+        var threads: [8]std.Thread = undefined;
+        var started: usize = 0;
+        {
+            defer for (threads[0..started]) |thread| thread.join();
+            for (&workers, &threads, 0..) |*worker, *thread, i| {
+                worker.* = .{ .packs = packs, .index = @intCast(i + 1), .record = pass == 0 };
+                thread.* = try std.Thread.spawn(.{}, Worker.run, .{worker});
+                started += 1;
+            }
+        }
+        for (workers) |worker| try std.testing.expect(!worker.failed);
+        if (pass == 0) try producer.publishInterfaces();
+    }
+    // Every request is read from storage once, even when all lanes ask for it.
+    try std.testing.expectEqual(@as(u64, (8 * 32 + 1) * (LoadedPacks.interface_header_size + 32)), reader.interface_bytes_loaded);
 }

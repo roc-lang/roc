@@ -60,7 +60,7 @@ pub const Owner = struct {
         self.metrics.bytes_read += bytes.len;
         self.metrics.bytes_hashed += bytes.len;
         var hash: [32]u8 = undefined;
-        std.crypto.hash.sha2.Sha256.hash(bytes, &hash, .{});
+        @import("sha256.zig").Sha256.hash(bytes, &hash, .{});
         if (!std.mem.eql(u8, &hash, &expected)) return error.Corrupt;
         const record = try self.allocator.create(Record);
         errdefer self.allocator.destroy(record);

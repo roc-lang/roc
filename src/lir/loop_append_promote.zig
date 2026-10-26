@@ -1292,6 +1292,18 @@ const Pass = struct {
             try self.scanProc(self.store.getProcSpecImmediate(proc_id).body.?, scan);
             max_join_id = @max(max_join_id, scan.max_join_id);
             if (scan.edges.items.len == 0) break;
+            const has_candidate = candidate: {
+                for (scan.joins.items) |info| {
+                    if (!info.has_back_edge) continue;
+                    const params = self.store.getLocalSpan(self.store.getCFStmtImmediate(info.stmt).join.params);
+                    for (0..GuardedList.borrowLen(params)) |index| {
+                        const param = GuardedList.at(params, index);
+                        if (self.isListLocal(param) and !attempted.contains(param)) break :candidate true;
+                    }
+                }
+                break :candidate false;
+            };
+            if (!has_candidate) break;
             try self.classifyMetadataTransfers(scan, proc_id);
             try edge_index.rebuild(allocator, scan.edges.items);
             outer: for (scan.joins.items) |info| {
@@ -5027,7 +5039,9 @@ test "promote ignores a join without a back edge" {
         .ret_layout = f.list,
     }, .none);
 
+    const before = @import("use_order.zig").topology_builds;
     try run(store, &f.layouts);
+    try testing.expectEqual(before, @import("use_order.zig").topology_builds);
 
     try testing.expect(store.getCFStmtImmediate(append_call).* == .assign_call);
     const unchanged = store.getCFStmtImmediate(loop).join;

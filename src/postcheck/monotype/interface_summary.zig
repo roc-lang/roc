@@ -10,7 +10,16 @@ const Allocator = std.mem.Allocator;
 const Constraints = Solve.InterfaceConstraints;
 const GuardedList = @import("collections").GuardedList;
 const invariant = base.invariant;
-const magic = "RIFSUM02";
+const magic = "RIFSUM04";
+
+/// A checked occurrence either names its immutable artifact directly, or
+/// names a closed checked type by canonical content. The latter has no
+/// instantiation identity and can be bound to any current published root
+/// with that exact key; its nominal owner remains content-addressed.
+pub const NamedOccurrence = union(enum) {
+    exact: struct { owner: [32]u8, occurrence: [32]u8, ty: u32 },
+    closed: struct { owner: [32]u8, key: [32]u8 },
+};
 
 /// Work performed by the compact codec, independent of wall-clock timing.
 pub const Stats = struct { types: u64 = 0, composites: u64 = 0, references: u64 = 0, defaults: u64 = 0 };
@@ -21,6 +30,11 @@ pub const Summary = union(enum) { unchanged, constraints: Constraints };
 pub const EncodeError = Allocator.Error || error{NotRepresentable};
 /// Allocation failure or an invalid optional cache record.
 pub const DecodeError = Allocator.Error || error{InvalidSummary};
+
+fn invalidSummary(comptime line: u32) error{InvalidSummary} {
+    if (base.dev_diagnostics.isSet(.pack_trace)) std.debug.print("interface invalid summary line={d}\n", .{line});
+    return error.InvalidSummary;
+}
 
 /// Encode only the immutable graph reachable from the settled relation. The
 /// context supplies exact checked artifact addresses for executable defaults.
@@ -75,12 +89,12 @@ pub fn decodeForRequest(arena: Allocator, types: *Type.Store, ns: *names.NameSto
     var scratch = std.heap.ArenaAllocator.init(types.allocator);
     defer scratch.deinit();
     var reader: Reader(@TypeOf(context)) = .{ .arena = scratch.allocator(), .names = ns, .leaves = leaves, .bytes = bytes, .context = context };
-    if (!std.mem.startsWith(u8, reader.bytes, magic)) return error.InvalidSummary;
+    if (!std.mem.startsWith(u8, reader.bytes, magic)) return invalidSummary(@src().line);
     reader.bytes = reader.bytes[magic.len..];
     reader.counts = try reader.read([3]u32);
     reader.type_count = try reader.read(u32);
-    if (try reader.read(u32) != leaves.len) return error.InvalidSummary;
-    if (reader.type_count > reader.bytes.len or leaves.len > std.math.maxInt(u32) - reader.type_count) return error.InvalidSummary;
+    if (try reader.read(u32) != leaves.len) return invalidSummary(@src().line);
+    if (reader.type_count > reader.bytes.len or leaves.len > std.math.maxInt(u32) - reader.type_count) return invalidSummary(@src().line);
     const summary = try reader.read(Summary);
     const nodes = try scratch.allocator().alloc(WireType, reader.type_count);
     for (nodes) |*node| {
@@ -91,17 +105,19 @@ pub fn decodeForRequest(arena: Allocator, types: *Type.Store, ns: *names.NameSto
             .primitive, .erased, .zst, .hole => {},
         }
     }
-    if (reader.bytes.len != 0) return error.InvalidSummary;
+    if (reader.bytes.len != 0) return invalidSummary(@src().line);
     switch (summary) {
-        .unchanged => if (!allow_unchanged or !std.meta.eql(reader.counts, [3]u32{ 0, 0, 0 }) or nodes.len != 0) return error.InvalidSummary,
+        .unchanged => if (!allow_unchanged or !std.meta.eql(reader.counts, [3]u32{ 0, 0, 0 }) or nodes.len != 0) return invalidSummary(@src().line),
         .constraints => |c| {
-            if (root_count) |expected| if (c.roots.len != expected) return error.InvalidSummary;
-            if (c.nodes.len != reader.counts[0] or c.open_nodes.len != reader.counts[1] or c.kinds.len != reader.counts[2]) return error.InvalidSummary;
-            for (c.nodes) |node| if (node == .open and node.open >= c.open_nodes.len) return error.InvalidSummary;
+            if (root_count) |expected| if (c.roots.len != expected) return invalidSummary(@src().line);
+            if (c.nodes.len != reader.counts[0] or c.open_nodes.len != reader.counts[1] or c.kinds.len != reader.counts[2]) return invalidSummary(@src().line);
+            for (c.nodes) |node| if (node == .open and node.open >= c.open_nodes.len) return invalidSummary(@src().line);
             for (c.open_nodes) |node| {
-                if (node.content == .redirect or node.content == .leaf) return error.InvalidSummary;
-                if (node.content == .unresolved and node.content.unresolved.origin == .placeholder) return error.InvalidSummary;
-                if (node.related_group != .none and @backingInt(node.related_group) >= c.open_nodes.len) return error.InvalidSummary;
+                if (node.content == .redirect or node.content == .leaf) return invalidSummary(@src().line);
+                if (node.content == .unresolved and node.content.unresolved.origin == .placeholder) return invalidSummary(@src().line);
+                if (node.content == .unresolved and node.content.unresolved.origin == .interface_parameter and
+                    (node.content.unresolved.numeric_default_phase != null or node.content.unresolved.row_default != null)) return invalidSummary(@src().line);
+                if (node.related_group != .none and @backingInt(node.related_group) >= c.open_nodes.len) return invalidSummary(@src().line);
             }
         },
     }
@@ -222,7 +238,7 @@ fn validateTypeGraph(allocator: Allocator, leaf_count: usize, summary: Summary, 
         seen[index] = true;
         try queue.appendSlice(allocator, edges.edges.items[starts[index]..starts[index + 1]]);
     }
-    for (seen) |reachable| if (!reachable) return error.InvalidSummary;
+    for (seen) |reachable| if (!reachable) return invalidSummary(@src().line);
 
     // Checking rejects alias-only cycles. A recursive type must cross a real
     // constructor, so an unguarded alias cycle is corrupt external input.
@@ -239,7 +255,7 @@ fn validateTypeGraph(allocator: Allocator, leaf_count: usize, summary: Summary, 
             const ref = @backingInt(backing.ty);
             if (ref < leaf_count) break;
             index = ref - leaf_count;
-            if (colors[index] == .active) return error.InvalidSummary;
+            if (colors[index] == .active) return invalidSummary(@src().line);
         }
         index = start;
         while (colors[index] == .active) {
@@ -311,8 +327,8 @@ const Relocation = struct {
 /// Checked callable-type ordinals are provenance; producer-issued callable keys
 /// carry their relation, as in `Ast.fnEvidenceDigest`.
 pub fn requestKey(request: Constraints.Identity, evidence: [32]u8, procedure: [8]u8) [32]u8 {
-    var hash = std.crypto.hash.sha2.Sha256.init(.{});
-    hash.update("roc.interface-request.v2");
+    var hash = base.Sha256.init(.{});
+    hash.update("roc.interface-request.v3");
     hash.update(&procedure);
     hash.update(request.bytes);
     hash.update(&evidence);
@@ -431,6 +447,7 @@ fn Writer(comptime Context: type) type {
         }
 
         fn write(self: *Self, comptime T: type, value: T) EncodeError!void {
+            if (T == Type.NamedType) return self.write(NamedOccurrence, self.context.describeNamedType(value));
             if (T == Type.TypeId) {
                 self.stats.references += 1;
                 return self.write(u32, try self.reference(value));
@@ -503,16 +520,21 @@ fn Reader(comptime Context: type) type {
         type_count: u32 = 0,
 
         fn read(self: *Self, comptime T: type) DecodeError!T {
+            if (T == Type.NamedType) {
+                const named = (try self.context.resolveNamedType(try self.read(NamedOccurrence))) orelse return invalidSummary(@src().line);
+                if (!self.context.validNamedType(named)) return invalidSummary(@src().line);
+                return named;
+            }
             if (T == Type.TypeId) {
                 self.stats.references += 1;
                 const index = try self.read(u32);
-                if (index >= self.leaves.len + self.type_count) return error.InvalidSummary;
+                if (index >= self.leaves.len + self.type_count) return invalidSummary(@src().line);
                 return @fromBackingInt(index);
             }
             if (T == Type.MaybeTypeId) return .of(try self.read(?Type.TypeId));
             if (T == names.ModuleIdentityId) {
                 const digest = try self.read([32]u8);
-                if (!self.context.validModuleIdentity(digest)) return error.InvalidSummary;
+                if (!self.context.validModuleIdentity(digest)) return invalidSummary(@src().line);
                 return self.names.internModuleIdentity(&digest);
             }
             if (T == names.TypeNameId) return self.names.internTypeName(try self.read([]const u8));
@@ -523,14 +545,14 @@ fn Reader(comptime Context: type) type {
                 const identity = try self.read([32]u8);
                 const artifact = try self.read([32]u8);
                 const expr = try self.read(u32);
-                const current = self.context.defaultArtifact(identity, expr) orelse return error.InvalidSummary;
-                if (!std.mem.eql(u8, &artifact, &current)) return error.InvalidSummary;
+                const current = self.context.defaultArtifact(identity, expr) orelse return invalidSummary(@src().line);
+                if (!std.mem.eql(u8, &artifact, &current)) return invalidSummary(@src().line);
                 return .{ .module = try self.names.internModuleIdentity(&identity), .expr_node = expr };
             }
             if (T == Solve.NodeId or T == Solve.MaybeNodeId or T == Solve.FieldKindId) {
                 const index = try self.read(u32);
                 if (T == Solve.MaybeNodeId and index == std.math.maxInt(u32)) return @fromBackingInt(index);
-                if (index >= self.counts[if (T == Solve.FieldKindId) 2 else 0]) return error.InvalidSummary;
+                if (index >= self.counts[if (T == Solve.FieldKindId) 2 else 0]) return invalidSummary(@src().line);
                 return @fromBackingInt(index);
             }
             const result: T = switch (@typeInfo(T)) {
@@ -542,7 +564,7 @@ fn Reader(comptime Context: type) type {
                 .@"union" => |info| blk: {
                     const tag = try self.read(info.tag_type.?);
                     inline for (info.field_names, info.field_types) |field, F| if (tag == @field(info.tag_type.?, field)) break :blk @unionInit(T, field, try self.read(F));
-                    return error.InvalidSummary;
+                    return invalidSummary(@src().line);
                 },
                 .optional => |info| if (try self.read(bool)) try self.read(info.child) else null,
                 .pointer => |info| blk: {
@@ -554,7 +576,7 @@ fn Reader(comptime Context: type) type {
                     if (info.size != .slice) @compileError("unbounded summary pointer");
                     const len = try self.read(u32);
                     // Every supported element consumes at least one byte.
-                    if (len > self.bytes.len) return error.InvalidSummary;
+                    if (len > self.bytes.len) return invalidSummary(@src().line);
                     const values = try self.arena.alloc(info.child, len);
                     for (values) |*value| value.* = try self.read(info.child);
                     break :blk values;
@@ -568,20 +590,20 @@ fn Reader(comptime Context: type) type {
                     const value = try self.read(info.tag_type);
                     if (info.mode == .exhaustive) {
                         inline for (info.field_values) |v| if (value == v) break :blk @fromBackingInt(value);
-                        return error.InvalidSummary;
+                        return invalidSummary(@src().line);
                     }
                     break :blk @fromBackingInt(value);
                 },
                 .bool => switch (try self.read(u8)) {
                     0 => false,
                     1 => true,
-                    else => return error.InvalidSummary,
+                    else => return invalidSummary(@src().line),
                 },
                 .int => blk: {
                     const U = @Int(.unsigned, @bitSizeOf(T));
                     const size = (@bitSizeOf(T) + 7) / 8;
-                    if (size > self.bytes.len) return error.InvalidSummary;
-                    if (@bitSizeOf(T) % 8 != 0 and self.bytes[size - 1] >= (@as(u16, 1) << (@bitSizeOf(T) % 8))) return error.InvalidSummary;
+                    if (size > self.bytes.len) return invalidSummary(@src().line);
+                    if (@bitSizeOf(T) % 8 != 0 and self.bytes[size - 1] >= (@as(u16, 1) << (@bitSizeOf(T) % 8))) return invalidSummary(@src().line);
                     var value: U = 0;
                     for (self.bytes[0..size], 0..) |b, i| value |= std.math.shl(U, @as(U, @truncate(b)), i * 8);
                     self.bytes = self.bytes[size..];
@@ -590,19 +612,19 @@ fn Reader(comptime Context: type) type {
                 .void => {},
                 .type, .noreturn, .float, .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @compileError("unsupported summary field: " ++ @typeName(T)),
             };
-            if (T == Type.NamedType) if (!self.context.validNamedType(result)) return error.InvalidSummary;
+            if (T == Type.NamedType) if (!self.context.validNamedType(result)) return invalidSummary(@src().line);
             if (T == WireNamed or T == @typeInfo(@FieldType(Solve.InstNode, "named")).pointer.child or T == Solve.InstIteratorPublicSource) {
-                if (!self.context.validNamedDefinition(self.names, result.named_type, result.def, result.kind, result.builtin_owner)) return error.InvalidSummary;
+                if (!self.context.validNamedDefinition(self.names, result.named_type, result.def, result.kind, result.builtin_owner)) return invalidSummary(@src().line);
             }
             if (T == WireType) switch (result) {
                 .record => |fields| {
                     for (fields, 0..) |field, i| {
-                        if (i > 0 and std.mem.order(u8, self.names.recordFieldLabelText(fields[i - 1].name), self.names.recordFieldLabelText(field.name)) != .lt) return error.InvalidSummary;
-                        if (field.kind_state == .undetermined and (field.value_ty.get() == null or field.ty != field.value_ty.get().? or field.default != null)) return error.InvalidSummary;
+                        if (i > 0 and std.mem.order(u8, self.names.recordFieldLabelText(fields[i - 1].name), self.names.recordFieldLabelText(field.name)) != .lt) return invalidSummary(@src().line);
+                        if (field.kind_state == .undetermined and (field.value_ty.get() == null or field.ty != field.value_ty.get().? or field.default != null)) return invalidSummary(@src().line);
                     }
                 },
                 .tag_union => |tags| for (tags, 0..) |tag, i| {
-                    if (i > 0 and std.mem.order(u8, self.names.tagLabelText(tags[i - 1].name), self.names.tagLabelText(tag.name)) != .lt) return error.InvalidSummary;
+                    if (i > 0 and std.mem.order(u8, self.names.tagLabelText(tags[i - 1].name), self.names.tagLabelText(tag.name)) != .lt) return invalidSummary(@src().line);
                 },
                 .primitive, .named, .tuple, .list, .box, .func, .erased, .zst, .hole => {},
             };
@@ -614,12 +636,30 @@ fn Reader(comptime Context: type) type {
 const TestProvenance = struct {
     artifact: [32]u8 = @splat(7),
     available: bool = true,
+    closed_key: ?[32]u8 = null,
+    occurrence_version: u8 = 0,
     pub fn defaultArtifact(self: @This(), identity: [32]u8, expr: u32) ?[32]u8 {
         if (!self.available or identity[0] != 1 or expr > 2) return null;
         return self.artifact;
     }
     pub fn validModuleIdentity(self: @This(), identity: [32]u8) bool {
         return self.available and identity[0] == 1;
+    }
+    pub fn describeNamedType(self: @This(), named: Type.NamedType) NamedOccurrence {
+        if (self.closed_key) |key| return .{ .closed = .{ .owner = named.module.bytes, .key = key } };
+        return .{ .exact = .{ .owner = named.module.bytes, .occurrence = named.ty_module.bytes, .ty = @backingInt(named.ty) } };
+    }
+    pub fn resolveNamedType(self: @This(), occurrence: NamedOccurrence) Allocator.Error!?Type.NamedType {
+        return switch (occurrence) {
+            .exact => |exact| .{ .module = .{ .bytes = exact.owner }, .ty_module = .{ .bytes = exact.occurrence }, .ty = @fromBackingInt(exact.ty) },
+            .closed => |closed| blk: {
+                const key = self.closed_key orelse break :blk null;
+                if (!std.mem.eql(u8, &key, &closed.key)) break :blk null;
+                var module: [32]u8 = @splat(0);
+                module[1] = self.occurrence_version;
+                break :blk .{ .module = .{ .bytes = closed.owner }, .ty_module = .{ .bytes = module }, .ty = @fromBackingInt(1) };
+            },
+        };
     }
     pub fn validNamedType(self: @This(), named: Type.NamedType) bool {
         return self.available and named.module.bytes[0] == 0 and named.ty_module.bytes[0] == 0 and @backingInt(named.ty) == 1;
@@ -1074,4 +1114,88 @@ test "persistent interface equivalent input leaves use the first request positio
     defer arena.deinit();
     const result = try decode(arena.allocator(), &dest, &ns, &.{ first_input, second_input }, bytes, TestProvenance{});
     try std.testing.expectEqual(first_input, result.constraints.nodes[0].mono);
+}
+
+test "persistent parametric interfaces retain explicit holes and reject unfinished placeholders" {
+    const gpa = std.testing.allocator;
+    var ns = names.NameStore.init(gpa);
+    defer ns.deinit();
+    var types = Type.Store.init(gpa);
+    defer types.deinit();
+    const graph = try Solve.InstGraph.create(gpa, &types, &ns);
+    defer graph.destroy();
+    const scalar = try graph.newNode(.{ .primitive = .u8 });
+    const list = try graph.newNode(.{ .list = scalar });
+    var holes: [1]?Solve.NodeId = undefined;
+    const captured = try Constraints.captureRequestWithHoles(graph, graph.arena(), &.{ list, scalar }, &.{scalar}, &holes);
+    const bytes = try encode(gpa, &types, &ns, &.{}, .{ .constraints = captured }, TestProvenance{});
+    defer gpa.free(bytes);
+    const reopened = (try decode(graph.arena(), &types, &ns, &.{}, bytes, TestProvenance{})).constraints;
+    for ([_]Constraints{ captured, reopened }) |summary| {
+        const instance = try summary.instantiate(graph);
+        try std.testing.expectEqual(Solve.InstVariableOrigin.interface_parameter, (try graph.content(instance[1])).unresolved.origin);
+        try std.testing.expect(graph.sameClass((try graph.content(instance[0])).list, instance[1]));
+        const actual = try graph.newNode(.{ .primitive = .str });
+        try graph.unify(instance[1], actual);
+        try std.testing.expectEqual(Type.Primitive.str, (try graph.content((try graph.content(instance[0])).list)).primitive);
+    }
+    const parameter: Summary = .{ .constraints = .{
+        .roots = &.{@fromBackingInt(0)},
+        .nodes = &.{.{ .open = 0 }},
+        .open_nodes = &.{.{ .content = .{ .unresolved = Solve.InstVariable.interfaceParameter() } }},
+        .kinds = &.{},
+    } };
+    var checked_variable = parameter;
+    checked_variable.constraints.open_nodes = &.{.{ .content = .{ .unresolved = Solve.InstVariable.checkedVariable(null, null) } }};
+    const malformed = try encode(gpa, &types, &ns, &.{}, parameter, TestProvenance{});
+    defer gpa.free(malformed);
+    const comparison = try encode(gpa, &types, &ns, &.{}, checked_variable, TestProvenance{});
+    defer gpa.free(comparison);
+    try std.testing.expectEqual(malformed.len, comparison.len);
+    var differences: usize = 0;
+    for (malformed, comparison) |*byte, other| if (byte.* != other) {
+        try std.testing.expectEqual(@as(u8, @backingInt(Solve.InstVariableOrigin.interface_parameter)), byte.*);
+        byte.* = @backingInt(Solve.InstVariableOrigin.placeholder);
+        differences += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 1), differences);
+    try std.testing.expectError(error.InvalidSummary, decode(graph.arena(), &types, &ns, &.{}, malformed, TestProvenance{}));
+}
+
+test "persistent interface closed occurrences rebind by canonical key across artifacts" {
+    const a = std.testing.allocator;
+    var ns = names.NameStore.init(a);
+    defer ns.deinit();
+    var types = Type.Store.init(a);
+    defer types.deinit();
+    const scalar = try types.internPrimitive(&ns, .u64);
+    var old_module: [32]u8 = @splat(0);
+    old_module[1] = 3;
+    const alias = try types.add(.{ .named = .{
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(1), .ty_module = .{ .bytes = old_module } },
+        .def = .{ .module = try ns.internModuleIdentity(&@as([32]u8, @splat(1))), .type_name = try ns.internTypeName("Alias") },
+        .kind = .alias,
+        .args = .empty(),
+        .backing = .{ .ty = scalar, .use = .inspectable },
+    } });
+    var nodes: [1]Constraints.Node = undefined;
+    const summary = typeSummary(alias, &nodes);
+    const key: [32]u8 = @splat(42);
+    const bytes = try encode(a, &types, &ns, &.{}, summary, TestProvenance{ .closed_key = key });
+    defer a.free(bytes);
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const decoded = (try decode(arena.allocator(), &types, &ns, &.{}, bytes, TestProvenance{ .closed_key = key, .occurrence_version = 9 })).constraints;
+    const named = types.get(decoded.nodes[0].mono).named;
+    try std.testing.expectEqual(@as(u8, 9), named.named_type.ty_module.bytes[1]);
+    try std.testing.expectEqualSlices(u8, &@as([32]u8, @splat(0)), &named.named_type.module.bytes);
+    try std.testing.expectError(error.InvalidSummary, decode(arena.allocator(), &types, &ns, &.{}, bytes, TestProvenance{}));
+    try std.testing.expectError(error.InvalidSummary, decode(arena.allocator(), &types, &ns, &.{}, bytes, TestProvenance{ .closed_key = @splat(43) }));
+    try std.testing.expectError(error.InvalidSummary, decode(arena.allocator(), &types, &ns, &.{}, bytes, TestProvenance{ .closed_key = key, .available = false }));
+    // Identity-bearing occurrences keep their exact artifact; they are never
+    // silently promoted to the canonical closed-root contract.
+    const exact = try encode(a, &types, &ns, &.{}, summary, TestProvenance{});
+    defer a.free(exact);
+    const exact_decoded = (try decode(arena.allocator(), &types, &ns, &.{}, exact, TestProvenance{ .closed_key = key, .occurrence_version = 9 })).constraints;
+    try std.testing.expectEqual(@as(u8, 3), types.get(exact_decoded.nodes[0].mono).named.named_type.ty_module.bytes[1]);
 }

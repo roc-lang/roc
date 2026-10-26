@@ -635,6 +635,16 @@ checked module key. Editing the body of a closed app function therefore
 leaves every procedure reaching it unchanged, and every other procedure keeps
 one identity across apps.
 
+Procedure type identity depends on the infinite type, never its allocation
+sharing or strongly connected component boundaries. The identity reducer retains
+completed canonical node descriptions (non-edge content and ordered child
+identities). Before naming a new recursive component, it checks every matching
+head against those descriptions with a complete bisimulation proof. A partial
+recursive copy pointing both into itself and into an earlier component takes
+the earlier type's identity. Acyclic unfolding alone is insufficient: equivalent
+types can have different component decompositions. These immutable descriptions
+belong to the solved program's identity memo, not to a serialized compiler graph.
+
 Names a procedure's code carries for the procedures it was built from are
 content identities too. A fused call variant (`body_clone.cloneCallVariant`)
 digests its leading arguments' and return's layouts by content, never by
@@ -812,14 +822,24 @@ existence does not mean that a process owns the lock. Process death releases
 kernel ownership; no PID timeout or persistent lock marker establishes liveness.
 
 The store has sixteen shard files with 512-byte metadata records and fixed-width
-crit-bit indexes for logical artifacts, allocation generations, and recency. A
-lookup visits at most 512 branch records regardless of cache size. Lookups and
+crit-bit indexes for logical artifacts, allocation generations, and recency.
+The first 256 key bits identify an artifact group; that group digest selects
+one shard for every member. A group enumeration opens only that catalog and
+walks its ordered key range under one metadata transaction. The group identity
+domain is versioned when this placement contract changes; older records remain
+available to bounded maintenance, never to current lookups through old routing.
+A lookup visits at most 512 branch records regardless of cache size. Lookups and
 updates use positional I/O, not whole-catalog reads or rewrites. Transactions
 have at most 24 changed records in one checksummed redo record, published before
 changing catalog records. Recovery
 finishes that transaction before admitting readers. There is no accumulating
 log to replay at startup. Payload generation and streaming happen outside
-catalog locks. A corrupt record or an I/O failure is an ordinary cache failure,
+catalog locks. Foreground lookup, reservation, publication and enumeration
+wait for these short metadata transactions: a competing compiler worker is not
+a cache miss and must not cause a completed write to be dropped. Maintenance
+uses a separate nonblocking acquisition and skips busy shards. Generation
+leases remain nonblocking during retirement, so maintenance never waits for a
+live artifact reader. A corrupt record or an I/O failure is an ordinary cache failure,
 never a compiler invariant. Corrupt catalogs disable that shard rather than
 trusting its paths or scanning all payloads during a foreground operation.
 These are process-interruption guarantees, not a promise of power-loss durability.
@@ -843,6 +863,27 @@ another consumer will open later must be pinned for that consumer's lifetime.
 An artifact disappearing before acquisition is a cache miss. Existing cache
 header, key, layout, and dependency-closure validation remains authoritative;
 maintenance metadata never makes an otherwise invalid cache hit acceptable.
+
+An invocation-owned native pack reader records its opening timestamp as the
+retention observation for every acquisition in that reader. Repeated reads do
+not rewrite recency metadata. A later invocation advances the observation;
+an older concurrent reader cannot move it backward. Publication records its
+own current timestamp, and generation leases still protect live acquisitions
+regardless of retention age. Watch invocations open new readers for each build.
+
+The generation's owner leaf is authoritative for retention. The logical artifact
+index supplies its immutable generation and physical slot; a reader validates
+that slot's stored generation and key before using it. A hit advances the exact
+use timestamp with one owner-leaf update under the normal redo protocol, without
+rewriting the logical index or moving the recency index. The recency position
+records a separate lower bound on use time. Before size eviction, maintenance
+repairs one stale position as a bounded unit and reselects the oldest candidate;
+it never evicts using that stale position. Age expiration reads the authoritative
+use time directly. Replacement and retirement remove the owner's indexed
+position. This protocol uses the artifacts-v2 storage namespace. Catalog
+transactions memoize a bounded set of decoded reads while holding the shard
+lock, consulting pending writes first; the memo never crosses a transaction.
+
 
 Maintenance checkpoints name logical slots and operation phases, never opaque
 filesystem directory positions. A pass captures a finite allocation boundary;
@@ -933,6 +974,12 @@ corrupt or incompatible optional entries are misses, never a reason to compile
 a missing body after admission. Publication uses only the code actually emitted
 for required tests, and complete result hits never enter this runtime consumer.
 
+A proof invalidated by a graph write detaches its node subscriptions immediately,
+without allocation or freeing its certificate. Further writes in the same batch
+cannot notify that dirty proof again. The owner drains proof-to-proof propagation
+and releases certificates at its next query boundary; no active query loses the
+storage it borrows.
+
 ### Native publication analysis ownership
 
 Offer collection owns one analysis of the frozen LIR store for each program.
@@ -943,8 +990,15 @@ unkeyed-procedure boundary. Worklists mark each procedure at most once per
 property, including cycles. These facts expire with that LIR graph; they are
 never reused across a mutation or inferred from native instructions.
 
-Native offer admission similarly propagates program-local and literal-conversion
-restrictions over the exact splice graph once. Publication gathers the union
+Native offer admission similarly propagates program-local, literal-conversion,
+and evaluation-owned-value restrictions over the exact splice graph once.
+A compile-time producer marks every procedure reading a static value or failure
+slot owned by evaluation, using the LIR producer's slot metadata. Its captured
+bytes may precede initialization and cannot be published as immutable constants.
+The mark follows native dependencies, including higher-order callees missing
+from the pre-closure Monotype call graph. Runtime producers use their finalized
+constants and do not have this evaluation-only restriction. Observation
+eligibility propagates over the shared LIR call graph once as well. Publication gathers the union
 of selected roots in a single traversal. Neither boolean query materializes a
 transitive closure per candidate. Explicit closures needed by persisted records
 are accounted separately from eligibility analysis.
@@ -2793,9 +2847,13 @@ discovery request otherwise.
 Literal roots registered in discovery bodies are evaluated exactly as before,
 so `roc check` reports every rejected or crashing conversion a build reports.
 
-An LSS runtime consumer needs every runtime body specialized anyway and
-continues the evaluation's program, so a build with one still names its
-program roots in full. Its compile-time consumer lowers and evaluates the
+An LSS runtime consumer needs its own runtime bodies specialized and continues
+the evaluation's program. An application build names its entrypoints as runtime
+roots; tests discovered in its modules are compile-time discovery roots, just
+like tests whose runtime outcomes have already been cached. These test bodies
+must still validate specialization-dependent literals and replay compile-time
+observations, but do not become runtime demand merely because an unrelated
+application entrypoint has a runtime consumer. Its compile-time consumer lowers and evaluates the
 same compile-time and literal roots, and closed specializations keep the
 same object-cache keys in either program, so compiled compile-time code
 serves both.
@@ -2806,6 +2864,31 @@ templates, source and reaching templates, and custom literal types, and the disc
 parked, unparked, and upgraded requests, and never-run stubs.
 
 #### Discovery Summaries
+
+Closed test roots also retain a discovery certificate under the checked
+producer's semantic dependency identity (`test_rows`), native compile-time
+target and platform/app relation. That identity covers all branches, referenced
+implementations, types, literal conversions and dispatch, independently of
+source positions and unrelated tests. After finalization reports no errors and
+no compile-time observations (fresh or replayed), every test root whose discovery
+was requested or whose runtime body was specialized receives a certificate.
+An existing certificate settles discovery of the same semantic root without
+lowering its signature or body. It does not authorize executing or omitting a
+test: test execution still follows its separate outcome cache. Pending module
+compile-time roots and their diagnostics remain ordinary finalization work.
+
+Certificates are compact, checksummed manifests per source placement, with one
+semantic key per settled root, in the indexed discovery artifact family and
+compiler compatibility namespace. A changed dependency, conversion or relation
+misses naturally. Missing, corrupt or incompatible manifests settle nothing.
+Literal-root messages emitted directly, without a checked root event, also
+mark the finalization as observing and prevent both root certificates and
+specialization discovery summaries from being published.
+An unsuccessful or observing finalization publishes no certificates; therefore
+omitting discovery never loses an error or compile-time message. An application
+build and a test run may both produce these facts, since both perform literal
+discovery for the same closed test bodies.
+
 
 A compilation whose evaluation succeeds settles the discovery of every keyed
 specialization it lowered: every literal root the specialization's closure
@@ -3289,8 +3372,10 @@ are addressed by their position in the request list, and a program with such
 an exhaustiveness diagnostic because only evaluating every root decides
 whether that diagnostic is reported. Each exclusion is decided from the
 checked program and the command, never from cache state. Discovery roots
-("Demand-Driven Compile-Time Specialization") exist only without an LSS
-runtime consumer, so a demand-driven compilation never has them.
+("Demand-Driven Compile-Time Specialization") may accompany an LSS runtime
+consumer: tests of an application build discover literals without becoming
+runtime entrypoints. Filtering parked compile-time roots translates the
+discovery boundary into the retained request list explicitly.
 
 Monotype declares every requested compile-time root up front: it reserves the
 root's entry template, so a read anywhere, including in a parallel worker's
@@ -3304,7 +3389,12 @@ walk does not follow it. After each drain of the queue, the walk extends from
 the program's entries, and from the definitions of demanded roots whose
 bodies that drain lowered, over the definitions the drain committed; every
 parked root a reachable definition reads moves into the queue, and the next
-drain lowers it. The rounds end when nothing reachable demands another root.
+drain lowers it. A discovery request can expose a parked procedure declaration before a later
+round's evaluation request completes its body. Body publication explicitly
+invalidates any earlier demand summary for that declaration, and a declaration
+already reached joins the next demand round at its newly published body. No
+caller graph is rescanned: unchanged summaries and reached edges remain valid.
+The rounds end when nothing reachable demands another root.
 A definition nothing reachable references demands nothing, though it was
 committed: an immediate claim, for one, lowers a callee's reserved body for a
 caller that keeps its own copy. The roots whose bodies lowered are exactly the
@@ -3385,6 +3475,14 @@ would without the previous entry. Per-program literal roots, which belong to
 no checked module, are reused the same way from a file their program keeps
 (below).
 
+Restoring a stored constant's type into Monotype memoizes the immutable source
+type by its owning `ConstTypeStore` and type id. The memo belongs to the exact
+destination `Type.Store`: the coordinator and every specialization workspace
+own separate maps. Only successfully committed destination ids are published;
+transaction-local ids and ids from another workspace never enter that map.
+This shares immutable type descriptions, not Lambda Solved's mutable row
+occurrences, which continue to follow the Row Joins contract.
+
 **Value identity.** Each compile-time root carries a value identity
 (`CompileTimeRootIdentity.value`), a digest computed when the checked module
 is written, before evaluation, from explicit checked data. Two roots with
@@ -3408,11 +3506,17 @@ covers:
   dispatch target and every `to_inspect` override a root's evaluation can
   select is covered by name.
 - The root's own computation. For a top-level value or callable binding, its
-  definition identity. For a hoisted root, the definition identity of the
-  definition that encloses it, its expression's source bytes, the
-  definition identities of the definitions that expression names, and its
-  hoisted body kind. Two hoisted roots of one definition that agree in all of
-  these, and in type, compute the same value. For a literal conversion root, the
+  definition identity. For a hoisted root, its expression's source bytes,
+  the definition identities of the definitions that expression names, its
+  resolved imported references, its hoisted body kind and extraction patterns,
+  and the checked type graph of every expression it contains, with sharing
+  preserved across those types. A lexical binding read additionally names the
+  enclosing declaration's full identity; that declaration supplies the binding.
+  The enclosing declaration's name identifies the site, but its unrelated code
+  is not a value dependency of a root without lexical reads. Local type
+  declarations retain the type digest's version-specific provenance, including
+  when a local type occurs only inside the computation. Two hoisted roots of one
+  declaration that agree in these facts compute the same value. For a literal conversion root, the
   literal's source bytes alone: the literal is closed, and the conversion it
   runs is selected by its checked type. For a top-level `expect`, its
   statement's source bytes and the definition identities of the definitions
@@ -3436,6 +3540,17 @@ the components they reference; references are by name, which the source
 bytes spell, so the identity is independent of node ids and source positions.
 Whitespace inside a definition is part of its source bytes and changes its
 identity; that is a missed reuse, never a wrong one.
+
+A stored nominal value may retain a checked type occurrence in the module that
+stored it even when a different, unchanged module declares its nominal type.
+Across an edit, reuse admission can relocate that occurrence through the old
+checked root's canonical type key to a root published by the new checked module.
+Every local occurrence in the value and its stored type must have this explicit
+correspondence before any copy is installed. The copy changes only the occurrence
+module and checked root id. A missing key rejects reuse; a type declared by the
+edited module, local defaults, functions and generated types retain their existing
+exclusions. This relocation permits ordinary full-dependency value identities;
+it does not relax the module-independent contract for reuse across imported edits.
 
 **Site.** Each root also carries a site (`CompileTimeRootIdentity.site`), the
 position-stable name of the root within its module: a top-level root's
@@ -3477,6 +3592,19 @@ of it (a phantom parameter of an imported nominal); its value identity still
 covers that type's declaration and methods through the type world. A stored
 constant's type names every nominal it mentions, so a constant whose type
 mentions one of the module's own types is not portable.
+
+A completed value with no module-version references may also reuse the checked
+producer's semantic dependency identity (`test_rows`) when an imported artifact
+changes. This identity includes the referenced implementations, semantic type
+contexts, checking policy, and file inputs. Admission requires both the value
+and its stored type to contain no named type, field default, callable or other
+module-version reference, and its recorded root-read set to be empty. These
+conditions are checked against the previous published result, not guessed from
+source syntax. Debug observations are copied and replayed in the ordinary root
+order. Values carrying version-specific references keep their artifact-key
+identity contract; semantic equality alone does not authorize retaining an old
+checked-type occurrence or root id. Verification builds independently evaluate
+and compare these transplants just like other compile-time value reuse.
 
 **Transplant.** On a checked module cache miss, before evaluation, the
 coordinator locates the module's previous entry through a pointer filed under
@@ -5534,6 +5662,11 @@ graph and are preserved; only their foreign declaration locators change. A
 reference without a published correspondence rejects the optional capsule. No
 name, printed signature or numerical coincidence supplies a missing mapping.
 This relocation changes no solved type relationship or dispatch decision.
+Admission indexes the old owner parameters once, preserving their first
+occurrence and equality partition, then binds each stored dense module identity
+to its current owner ordinal and builtin status. Every foreign reference reads
+that binding directly; it never rescans the owner list. An unavailable owner
+remains unavailable and rejects a reference exactly as a missing slot does.
 
 Diagnostic provenance has a separate admission contract. Stored outcomes retain
 checking problems and canonicalization diagnostics in order, together with all
@@ -10990,6 +11123,17 @@ narrower type would be joined through it by type identity rather than by
 flow, and one tag label standing in both with two payload types would then
 be unified.
 
+A fresh callable-free cyclic leaf may join an existing instance without
+expansion only after an exact clone proof. That proof reads the immutable
+Monotype and the current solved graph, compares their complete shape and
+nominal metadata, and verifies that every repeated mutable source type already
+names one target class. Shape equivalence alone is insufficient: expanding a
+cycle can tie otherwise distinct target rows. An unexpanded mutable target does not establish that proof, even when its
+subtree is acyclic: a hidden occurrence can share a mutable cell with a sibling.
+An inherited argument/clone context likewise requires its own explicit proof. Certificates
+subscribe to every solved node they read and retire on semantic writes. An
+unsuccessful proof leaves the ordinary unification relation unchanged.
+
 **`.boxy`.** Boxy plans a representation per checked type identity, and its
 planner computes the joins before planning any type (`computeRowJoins`, in
 `analyzeProgram`). It seeds a union-find over `CheckedTypeIdentity` from
@@ -15488,6 +15632,11 @@ preceding explicit relations. Applying defaults is never part of cache identity.
 Digests select buckets; exact input constraints and evidence are the collision
 authorities.
 
+An interface identity omits the tag row's `tags_sorted` memo. It still names
+every tag, payload, extension and relation in their captured order; whether a
+producer already recorded that this order is sorted supplies no constraint.
+Captured and replayed rows retain their own sorting memo for traversal.
+
 A request's input omits the finished-type witness of every open class. The
 witness records how the requesting graph reached a class, not what the request
 constrains: a body lowered at its sealed request imports every cell of its root
@@ -15521,7 +15670,13 @@ source-interface or constructor evidence, forced-dynamic iterator identity, or
 generated or iterator representation authority. Structure reaching a hole stays
 open instead of settling, so requests that differ only in their holes' contents
 share one input identity and one summary, and relating the summary back to a
-request fills its holes. A cell that is unresolved or carries representation
+request fills its holes. Captured holes carry the explicit `interface_parameter`
+origin. This is completed relation data and survives persistent serialization;
+it is distinct from an unfinished instantiation `placeholder`, which the cache
+loader rejects. An interface parameter has no default and must be bound before
+final demand validation or materialization, just as an unfinished placeholder
+must be filled. Unification with a checked variable preserves the checked
+variable's defaulting evidence. A cell that is unresolved or carries representation
 authority is captured as itself: relating it back would not be plain
 unification. An unfinished expansion is joined only by the instantiation it
 expands: each hole slot of the joining request names the class the expanding
@@ -22214,6 +22369,12 @@ the callers with a code key, may demand its outcome variant
 (`Solution.outcomeSpanForCall`), while every other caller uses its pinned
 base.
 
+A complete outcome table whose restitution masks are all zero declares no
+additional ownership convention. The solver publishes an empty capability for
+it: no caller can demand a restituting variant, no second source-liveness graph
+is needed, and the table cannot prevent object-cache admission. A nonempty
+capability retains every outcome row, including zero masks on consuming paths.
+
 The initial closed capability is deliberately exact and total. It applies only
 to a direct Roc procedure whose committed return layout is a top-level tag
 union whose committed representation contains RC state (so the certifier can
@@ -23435,6 +23596,12 @@ local's membership in the chain is not evidence about all of its definitions.
 A loop-parameter write that brings an outside list into the chain also prevents
 slack-based loop versioning: its new allocation may have less spare capacity
 than the loop head measured, even when that write measures fresh metadata.
+
+The procedure scan identifies loop back edges and their list parameters before
+metadata-transfer analysis builds control-flow use ordering. A round with no
+remaining list parameter to consider requires no transfer analysis. This includes
+straight-line helpers, non-loop joins, and the final scan after every candidate
+has been considered; already planned loop versioning still runs.
 
 A byte append (`list_append_le_bytes`) is a promotion site like a checked
 append. Under a limit with at least a word of slack it runs unchecked, storing
@@ -25100,8 +25267,10 @@ demands, its Solved program is not the one a runtime consumer continues.
 The program is specialized again from the checked modules, now holding
 every demanded value stored, exactly as a compilation that found them all
 in the cache specializes it (`ProgramSession.RuntimeStages.respecialized`).
-That specialization demands no compile-time root; it registers the
-program's literal roots again and evaluates them, and their outcomes, which
+Discovery-only test roots have already completed their obligations and do not
+join this second specialization. Runtime roots still register every conversion
+their own code uses. That specialization demands no compile-time root; it registers the
+runtime program's literal roots again and evaluates them, and their outcomes, which
 the first evaluation already reported, report nowhere. A literal root is
 not stored by any compilation, so both kinds of compilation read literal
 roots' completed values from the stages that evaluated them, the same way.
@@ -26921,3 +27090,132 @@ the pass/fail bar while the language is 128-bit-only.
   ordering compares on `U64x2` are omitted because no cataloged kernel
   uses them and hardware support is ragged; any of them can be added later
   without disturbing existing meaning.
+
+
+### Successful Initializer Validation Without Value Rebinding
+
+A test command validates all module initializers, including initializers no
+executing test reads. Successful silent evaluation also publishes a semantic
+validation certificate under the checked producer's dependency identity, native
+target and platform/app relation. This fact is independent of the stored value:
+it contains no type-store positions or nominal occurrences to rebind.
+
+On an edit, previously validated initializers can remain unevaluated until a
+runtime, compile-time or literal root reads their values. Every initializer
+without a valid certificate is still mandatory, including an unused initializer
+whose source or dependency changed. The producer receives this explicit set and
+seeds demand with every uncertified root; dependency closure still evaluates any
+certified value that a reader needs. This preserves test/check validation rules
+without repeating unused nominal-value construction. Missing or corrupt records
+certify nothing. Failed or observing finalizations publish no facts, and ordinary
+cached compile-time observations continue to replay without demand filtering.
+
+Test execution metadata is translated through the producer's selected
+compile-time prefix. Its source order and result slots remain unchanged. A
+certificate never authorizes omitting test execution or copying a stored value.
+
+
+The consumer's `specialize_arc_modes` policy controls general ARC mode
+specialization independently of `inline_mode`. Dev's source-stable wrapper
+inlining does not authorize optional ARC variants. Compile-time evaluation uses
+the dev policy even when it shares a Solved producer with a speed/size consumer;
+each LIR continuation receives its own ARC policy. Mandatory owned-field-take
+and outcome-restitution forms remain enabled, as specified above.
+
+
+A fresh context-free cyclic Monotype leaf may also use the exact clone proof
+when it contains functions. A fresh function's callable cell is unbound, so
+joining it with an existing function cell contributes no lambda member. The
+proof still checks every argument/result shape and requires each repeated
+mutable source type (including each function type) to name one existing class.
+Thus it cannot lose a recursive tie or merge distinct callable occurrences.
+Forced-dynamic types, enclosing argument scopes, and externally observable
+clone contexts retain their ordinary relation. The read-only proof does not
+expand target nodes; graph writes invalidate its recorded dependencies.
+
+
+Lambda Solved memoizes whether a positional Monotype expansion can read a
+binding in an argument scope. The answer depends only on the immutable
+Monotype graph and that scope's binding-key set. The binding producer clears
+the scope's answers whenever it adds a new key; changing a destination cell
+cannot change the answer. Independent scopes have independent answers. This
+avoids repeating a whole immutable shape traversal at every unification
+without weakening the existing argument-tie condition.
+
+Persistent Monotype interface summaries are indexed by both checked provider
+family and exact request identity. A lookup loads only that request's record,
+validates its family, request and payload digest, then retains owned bytes.
+It never reads other requests or their historical variants. Absence is cached
+only until publication refreshes the lookup snapshot. Each changed request is
+published independently, so concurrent writers of different requests cannot
+replace one another's summaries. These records retain the native procedure
+compatibility domain; the RIFACE03 boundary isolates the per-request format.
+
+A produced-value witness traversal retains completed acyclic container pairs
+for the current graph mutation epoch. Repeated paths through a shared DAG
+reuse the same witness. A graph mutation invalidates reuse, and a traversal
+that depended on an active-path recursive assumption publishes no witness.
+The table ends with the relation traversal; it carries no result between bodies.
+
+
+Persistent interface records distinguish checked occurrence provenance from
+nominal ownership. An occurrence of a closed checked type is serialized by its
+canonical checked type key and its nominal owner's exact artifact key. Reopening
+binds that key only to a current published closed root with the same key and
+owner. Representatives are chosen deterministically by artifact-key order and
+memoized for the immutable lowering input set. A missing key rejects the optional
+record. Types containing identity variables keep their exact artifact and root id;
+no variable identity is reconstructed or merged. Nominal declaration, generated
+representation and default-expression validation remain mandatory after rebinding.
+
+Each Monotype builder indexes its immutable input views by module content
+identity before lowering. The first view in root/import/relation order wins,
+exactly as in the input's linear lookup. Workers build the same index over their
+borrowed views. Persistent summary validation and default-owner resolution use
+this index rather than scanning all modules for every named type.
+
+Compile-time root declaration is an immutable checked request ordinal, not an
+eager Monotype specialization. Demand-driven runs publish the entire declaration
+manifest before workers start, without lowering its initializer signatures or
+probing their native cache entries. A read records its declared ordinal in its
+private draft; ordered coordinator commit prepares that root's real function and
+replaces the explicit intent before final Monotype emission. Validation demand
+prepares roots through the same operation. Unread, unvalidated declarations create
+no type graph, specialization, function, or crash stub. Prepared roots retain the
+existing parked-body protocol and demand order; allocation failure aborts the
+compilation. Worker-visible request ordinals never change during compilation.
+
+
+Interface-cache synchronization follows request identity. The family map lock
+publishes stable request records; each record has its own lock covering load,
+validation, replacement and publication. Independent requests can perform file
+I/O concurrently, including requests in the same module. Repeated concurrent
+reads of one request share its loaded payload or its snapshot-local miss.
+Refresh and destruction occur after specialization workers join. The map lock
+is always acquired before any record lock when both are needed; a record owner
+never acquires the map lock. Statistics are aggregated atomically.
+
+
+Freshly lowered named types and persistent interface replay select the same
+current checked occurrence for a closed checked type key and nominal owner.
+The checker's `contains_identity_variables` fact determines whether an occurrence
+has instantiation identity. Closed occurrences use the existing deterministic
+artifact-key representative; open occurrences retain their exact source module
+and type id. This changes only checked provenance: Monotype arguments, backing,
+generated representation, declared layout and default expressions remain the
+explicit products of their existing producers. Lambda solving can consequently
+recognize identical closed shapes without differences introduced solely by
+whether an interface arrived from a cache or from fresh lowering.
+
+
+Native artifact acquisition owners may batch exact retention observations while
+holding their generation leases. Each shard batch contains at most the catalog's
+24 changed-record limit and commits owner-leaf updates through the same redo
+protocol. The current generation, physical slot and artifact key are revalidated;
+newer observations never move backward. The owner flushes before releasing any
+retained record lease, including when captured code outlives the original loader.
+Rejected acquisitions can release early; an observation for a subsequently retired
+generation is discarded rather than applied to its replacement. Process death
+releases the leases and may lose unpublished retention observations, but cannot
+invalidate already accepted immutable bytes. Failed optional retention writes do
+not fail compilation. No age approximation or whole-catalog scan is introduced.

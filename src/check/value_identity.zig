@@ -57,6 +57,7 @@ pub const Inputs = struct {
     names: *const canonical.CanonicalNameStore,
     types: CheckedTypeStoreView,
     roots: []const CompileTimeRoot,
+    bodies: *const checked_artifact.CheckedBodyStore,
     top_level_values: *const checked_artifact.TopLevelValueTable,
     /// The checked artifact key's inputs outside the module's own source:
     /// the checking context and the direct imports' keys.
@@ -77,7 +78,7 @@ pub const ContextHashes = struct {
     direct_import_keys: [32]u8,
 };
 
-const domain = "roc.compile_time_value_identity.v1";
+const domain = "roc.compile_time_value_identity.v2";
 
 /// The definition identity of a definition the module exports, by the
 /// digest of its name.
@@ -868,6 +869,48 @@ const State = struct {
         return ordinal;
     }
 
+    /// A hoisted expression is typed independently of its owner's unrelated
+    /// expressions. Retain the checked types of its complete expression graph,
+    /// including sharing between those types. A read of a lexical binding
+    /// additionally names its enclosing declaration, which supplies that binding.
+    fn hoistedTypeContext(self: *State, root: CIR.Expr.Idx, hash: *Sha256) Allocator.Error!bool {
+        var pending = std.ArrayList(CIR.Expr.Idx).empty;
+        defer pending.deinit(self.allocator);
+        var seen = collections.DenseMap(CIR.Expr.Idx, void).init(self.allocator);
+        defer seen.deinit();
+        var types = std.ArrayList(CheckedTypeId).empty;
+        defer types.deinit(self.allocator);
+        var lexical = false;
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |expr| {
+            if ((try seen.getOrPut(expr)).found_existing) continue;
+            const expression = self.inputs.env.store.getExpr(expr);
+            const id = self.inputs.bodies.exprIdForSource(expr) orelse
+                base.invariant("hoisted expression has no published checked body", .{});
+            const body = self.inputs.bodies.expr(id);
+            hashBytes(hash, @tagName(expression));
+            hashBytes(hash, @tagName(body.data));
+            try types.append(self.allocator, body.ty);
+            switch (expression) {
+                .e_lookup_local => |lookup| if (!self.pattern_to_def.contains(lookup.pattern_idx)) {
+                    lexical = true;
+                },
+                .e_closure => |closure| for (self.inputs.env.store.sliceCaptures(closure.captures)) |capture_id| {
+                    const capture = self.inputs.env.store.getCapture(capture_id);
+                    if (!self.pattern_to_def.contains(capture.pattern_idx)) lexical = true;
+                },
+                else => {},
+            }
+            try appendExprChildren(self.inputs.env, expr, &pending, self.allocator);
+        }
+        hash.update(&try self.type_walk.digestRoots(types.items));
+        return lexical;
+    }
+
+    fn hashHoistedPattern(self: *const State, hash: *Sha256, pattern: CIR.Pattern.Idx) void {
+        hashBytes(hash, self.regionText(self.inputs.env.store.getPatternRegion(pattern)));
+    }
+
     fn rootIdentity(
         self: *State,
         root: CompileTimeRoot,
@@ -903,17 +946,32 @@ const State = struct {
                 hashTag(&class, "hoisted");
                 class.update(&self.ownerKey(owner));
                 hashBytes(&class, @tagName(root.kind));
-                if (owner) |resolved| switch (resolved) {
-                    .def => |def_idx| class.update(&self.definitionIdentity(def_idx)),
-                    .expect => |statement| {
-                        hashBytes(&class, self.regionText(env.store.getStatementRegion(statement)));
-                        hashDigests(&class, try self.referencedIdentities(expectBody(env, statement)));
-                    },
-                    .type_default => |statement| hashBytes(&class, self.regionText(env.store.getStatementRegion(statement))),
-                } else hashTag(&class, "unowned");
+                const lexical = try self.hoistedTypeContext(hoisted.expr, &class);
+                if (lexical) {
+                    const resolved = owner orelse base.invariant("a hoisted lexical dependency has no enclosing declaration", .{});
+                    switch (resolved) {
+                        .def => |def_idx| class.update(&self.definitionIdentity(def_idx)),
+                        .expect => |statement| {
+                            hashBytes(&class, self.regionText(env.store.getStatementRegion(statement)));
+                            hashDigests(&class, try self.referencedIdentities(expectBody(env, statement)));
+                            if (self.inputs.test_dependencies) class.update(&try self.importedReferences(expectBody(env, statement)));
+                        },
+                        .type_default => |statement| hashBytes(&class, self.regionText(env.store.getStatementRegion(statement))),
+                    }
+                }
                 hashBytes(&class, if (root.hoisted_body) |body| @tagName(body) else "no-body");
+                if (root.hoisted_body) |body| switch (body) {
+                    .expr => {},
+                    .pattern_extraction => |extraction| {
+                        self.hashHoistedPattern(&class, extraction.scrutinee_pattern);
+                        self.hashHoistedPattern(&class, extraction.result_pattern);
+                    },
+                    .pattern_validation => |validation| self.hashHoistedPattern(&class, validation.scrutinee_pattern),
+                    .pattern_error, .valueless_binding => |pattern| self.hashHoistedPattern(&class, pattern),
+                };
                 hashBytes(&class, self.regionText(env.store.getExprRegion(hoisted.expr)));
                 hashDigests(&class, try self.referencedIdentities(hoisted.expr));
+                class.update(&try self.importedReferences(hoisted.expr));
                 class.update(&type_digest);
                 const class_digest = class.finalResult();
                 value.update(&class_digest);
@@ -989,11 +1047,20 @@ const TypeDigest = struct {
     }
 
     fn digest(self: *TypeDigest, root: CheckedTypeId) Allocator.Error![32]u8 {
+        return self.digestRoots(&.{root});
+    }
+
+    fn digestRoots(self: *TypeDigest, roots: []const CheckedTypeId) Allocator.Error![32]u8 {
         self.visited.clearRetainingCapacity();
         self.stack.clearRetainingCapacity();
         var hasher = Sha256.init(.{});
         hashTag(&hasher, "checked-type");
-        try self.stack.append(self.allocator, root);
+        hashU32(&hasher, @intCast(roots.len));
+        var root_index = roots.len;
+        while (root_index > 0) {
+            root_index -= 1;
+            try self.stack.append(self.allocator, roots[root_index]);
+        }
         var next_position: u32 = 0;
         // Children are pushed in reverse so they pop, and are written, in order.
         var children = std.ArrayList(CheckedTypeId).empty;

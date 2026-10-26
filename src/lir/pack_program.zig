@@ -512,6 +512,10 @@ pub const OfferFacts = struct {
     literal_conversion: []bool,
     site_code: []bool,
     reaches_linked: []bool,
+    reaches_observation: []bool,
+    /// Direct reads of evaluation-owned slots. Native publication propagates
+    /// this restriction over the actual excerpt graph, including lifted calls.
+    reads_evaluation_value: []bool,
     statements_visited: usize = 0,
     call_edges: usize = 0,
     propagation_edges: usize = 0,
@@ -521,6 +525,14 @@ pub const OfferFacts = struct {
     }
 
     pub fn init(allocator: Allocator, store: *const LirStore) Allocator.Error!OfferFacts {
+        return initWithSlots(allocator, store, &.{});
+    }
+
+    pub fn initProgram(allocator: Allocator, program: *const core.Program.Result) Allocator.Error!OfferFacts {
+        return initWithSlots(allocator, &program.store, program.static_data_values.items);
+    }
+
+    fn initWithSlots(allocator: Allocator, store: *const LirStore, slots: []const core.Program.StaticDataValue) Allocator.Error!OfferFacts {
         var arena = collections.SingleThreadArena.init(allocator);
         errdefer arena.deinit();
         const a = arena.allocator();
@@ -528,6 +540,9 @@ pub const OfferFacts = struct {
         const converts = try a.alloc(bool, n);
         const carries = try a.alloc(bool, n);
         const linked = try a.alloc(bool, n);
+        const observed = try a.alloc(bool, n);
+        const evaluation_reads = try a.alloc(bool, n);
+        @memset(evaluation_reads, false);
         @memset(converts, false);
         @memset(carries, false);
         const starts = try a.alloc(u32, n + 1);
@@ -540,6 +555,7 @@ pub const OfferFacts = struct {
         for (store.getProcSpecs(), 0..) |proc, index| {
             starts[index] = std.math.cast(u32, targets.items.len) orelse return error.OutOfMemory;
             linked[index] = proc.c_abi_entry;
+            observed[index] = proc.body == null;
             for (visited.items) |id| seen[@backingInt(id)] = false;
             visited.clearRetainingCapacity();
             if (proc.body) |body| try work.append(a, body);
@@ -549,6 +565,11 @@ pub const OfferFacts = struct {
                 try visited.append(a, id);
                 statements += 1;
                 const stmt = store.getCFStmtImmediate(id);
+                if (stmt.* == .expect or stmt.* == .expect_err) observed[index] = true;
+                if (stmt.* == .assign_literal and stmt.assign_literal.value == .static_data and slots.len != 0) {
+                    const slot = slots[@backingInt(stmt.assign_literal.value.static_data.id)];
+                    if (slot.compile_time_root != null) evaluation_reads[index] = true;
+                }
                 if (stmt.* == .crash and store.stmtRowOrDefault(stmt.crash.extra).literal_rejection != null) converts[index] = true;
                 if (proc.code_key == null) {
                     var scope = store.stmtInlineScope(id);
@@ -566,7 +587,7 @@ pub const OfferFacts = struct {
         const reverse = try collections.csr.transpose(a, starts, targets.items);
         var propagation_edges: usize = 0;
         var pending = std.ArrayList(u32).empty;
-        for ([_][]bool{ linked, carries }, 0..) |marks, property| {
+        for ([_][]bool{ linked, carries, observed }, 0..) |marks, property| {
             for (marks, 0..) |marked, index| if (marked) try pending.append(a, @intCast(index));
             while (pending.pop()) |callee| {
                 for (reverse.targets[reverse.starts[callee]..reverse.starts[callee + 1]]) |caller| {
@@ -578,7 +599,7 @@ pub const OfferFacts = struct {
                 }
             }
         }
-        return .{ .arena = arena, .literal_conversion = converts, .site_code = carries, .reaches_linked = linked, .statements_visited = statements, .call_edges = targets.items.len, .propagation_edges = propagation_edges };
+        return .{ .arena = arena, .literal_conversion = converts, .site_code = carries, .reaches_linked = linked, .reaches_observation = observed, .reads_evaluation_value = evaluation_reads, .statements_visited = statements, .call_edges = targets.items.len, .propagation_edges = propagation_edges };
     }
 };
 
@@ -876,4 +897,75 @@ test "offer facts visit shared cyclic call graphs once and retain all admission 
         for (closure, store.getProcSpecs()) |reached, proc| linked = linked or (reached and proc.c_abi_entry);
         try std.testing.expectEqual(linked, facts.reaches_linked[i]);
     }
+}
+
+test "native offers record evaluation-owned slots even without Monotype read summaries" {
+    const a = std.testing.allocator;
+    var program = try core.Program.Result.init(a, .u64);
+    defer program.deinit();
+    const store = &program.store;
+    try program.static_data_values.append(a, .{
+        .initializer = null,
+        .layout_idx = .u64,
+        .compile_time_root = .{
+            .module = .{},
+            .root = .{ .literal = @fromBackingInt(0) },
+            .const_locator = null,
+            .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 0, .failed_offset = 0, .message_offset = 0 } },
+        },
+    });
+    try program.static_data_values.append(a, .{ .initializer = null, .layout_idx = .u64 });
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+    for (0..2) |i| {
+        const read = try store.addCFStmt(.{ .assign_literal = .{
+            .target = value,
+            .value = .{ .static_data = .{ .id = @fromBackingInt(@intCast(i)) } },
+            .next = ret,
+        } }, .test_fixture);
+        _ = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(@intCast(i)),
+            .args = .empty(),
+            .body = read,
+            .ret_layout = .u64,
+        }, .none);
+    }
+    var facts = try OfferFacts.initProgram(a, &program);
+    defer facts.deinit();
+    try std.testing.expectEqualSlices(bool, &.{ true, false }, facts.reads_evaluation_value);
+    try std.testing.expectEqualSlices(bool, &.{ false, false }, facts.reaches_observation);
+}
+
+test "native observation admission propagates through shared cycles once" {
+    const a = std.testing.allocator;
+    var store = LirStore.init(a);
+    defer store.deinit();
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+    const observed = try store.addCFStmt(.{ .expect = .{ .condition = value, .next = ret, .site = null } }, .test_fixture);
+    const n = 128;
+    for (0..n + 1) |i| {
+        _ = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(@intCast(i)),
+            .args = .empty(),
+            .body = ret,
+            .ret_layout = .u64,
+        }, .none);
+    }
+    for (0..n) |i| {
+        const call = try store.addCFStmt(.{ .assign_call = .{
+            .target = value,
+            .proc = @fromBackingInt(@intCast((i + 1) % n)),
+            .args = .empty(),
+            .next = if (i == 0) observed else ret,
+        } }, .test_fixture);
+        store.getProcSpecPtr(@fromBackingInt(@intCast(i))).body = call;
+    }
+    var facts = try OfferFacts.init(a, &store);
+    defer facts.deinit();
+    for (facts.reaches_observation[0..n]) |marked| try std.testing.expect(marked);
+    try std.testing.expect(!facts.reaches_observation[n]);
+    try std.testing.expectEqual(@as(usize, n), facts.propagation_edges);
 }

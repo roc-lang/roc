@@ -286,7 +286,15 @@ fn evict(store: *const artifacts.Store, limits: Limits, now: i64, checkpoint: *C
     }
     const key = oldest.value[0..64].*;
     const entry = (try tx.find(.artifacts, key)) orelse return error.CorruptCatalog;
-    const metadata = try artifacts.Metadata.decode(entry.value);
+    const metadata = try artifacts.currentMetadata(&tx, key, entry.value);
+    if (!std.mem.eql(u8, &oldest.key, &metadata.recency(metadata.slot))) return error.CorruptCatalog;
+    if (metadata.indexed_used != metadata.used) {
+        try shard.refreshRecency(metadata);
+        var refreshed = shard.index.transaction();
+        const next = try refreshed.lowerBound(.recency, @splat(0));
+        checkpoint.candidates[number] = if (next) |item| item.key else null;
+        return;
+    }
     if (shard.retire(key, metadata.generation)) |removed| {
         if (removed) stats.deletions += 1;
         checkpoint.bytes[number] = shardBytes(&shard);
@@ -328,6 +336,40 @@ const Fixture = struct {
         return .{ .namespace = @splat(1), .family = .checked, .key = key };
     }
 };
+
+test "maintenance repairs stale recency before evicting the actual oldest generation" {
+    var fixture = try Fixture.init();
+    defer fixture.deinit();
+    const hot = Fixture.identity(1);
+    const number = artifacts.Store.shardFor(hot.indexedKey());
+    var other: u32 = 2;
+    while (artifacts.Store.shardFor(Fixture.identity(other).indexedKey()) != number) : (other += 1) {}
+    const cold = Fixture.identity(other);
+    try fixture.store.write(hot, "hot!", 10);
+    try fixture.store.write(cold, "cold", 20);
+    {
+        var read = (try fixture.store.acquire(hot, 100)).?;
+        defer read.deinit();
+    }
+    var checkpoint: Checkpoint = .{ .phase = .evict };
+    {
+        var counters = catalog.Counters{};
+        var shard = try artifacts.Shard.open(&fixture.store, number, false, &counters);
+        defer shard.close();
+        checkpoint.bytes[number] = shardBytes(&shard);
+        var tx = shard.index.transaction();
+        checkpoint.candidates[number] = (try tx.lowerBound(.recency, @splat(0))).?.key;
+    }
+    var stats = Stats{};
+    const limits: Limits = .{ .max_size_bytes = 4, .object_pack_format_version = 1 };
+    try evict(&fixture.store, limits, 100, &checkpoint, &stats);
+    try std.testing.expectEqual(@as(usize, 0), stats.deletions);
+    try evict(&fixture.store, limits, 100, &checkpoint, &stats);
+    try std.testing.expectEqual(@as(usize, 1), stats.deletions);
+    try std.testing.expectEqual(null, try fixture.store.acquire(cold, 100));
+    var retained = (try fixture.store.acquire(hot, 100)).?;
+    defer retained.deinit();
+}
 
 test "short saturated invocations checkpoint bounded units and reach the end of a large shard" {
     var fixture = try Fixture.init();
@@ -545,8 +587,9 @@ test "a deletion whose checkpoint fails is safe to repeat" {
     try fixture.store.write(Fixture.identity(0), "expired", 1);
     var root = try fixture.store.openRoot(false);
     defer root.close(std.testing.io);
-    var checkpoint: Checkpoint = .{ .phase = .age };
-    checkpoint.boundaries[0] = 1;
+    const shard = artifacts.Store.shardFor(Fixture.identity(0).indexedKey());
+    var checkpoint: Checkpoint = .{ .phase = .age, .shard = shard };
+    checkpoint.boundaries[shard] = 1;
     try checkpoint.save(root, std.testing.io);
     try root.createDir(std.testing.io, "maintenance.tmp", .default_dir);
     const limits: Limits = .{ .max_size_bytes = 100, .object_pack_format_version = 1 };

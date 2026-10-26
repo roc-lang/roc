@@ -10,6 +10,7 @@ pub fn Changes(comptime Node: type) type {
         const Self = @This();
         /// Intrusive subscription owned by a published proof's dependency array.
         pub const Watch = struct {
+            subscribed: bool = false,
             previous: ?*Watch = null,
             next: ?*Watch = null,
             context: *anyopaque,
@@ -43,6 +44,8 @@ pub fn Changes(comptime Node: type) type {
         }
         /// Register already allocated dependency storage. No producer write allocates.
         pub fn subscribe(self: *Self, node: Node, watch: *Watch) void {
+            std.debug.assert(!watch.subscribed);
+            watch.subscribed = true;
             const head = &self.records.items[@backingInt(node)];
             watch.previous = null;
             watch.next = head.*;
@@ -51,16 +54,19 @@ pub fn Changes(comptime Node: type) type {
         }
         /// Detach in constant time, including after the node column has grown.
         pub fn unsubscribe(self: *Self, node: Node, watch: *Watch) void {
+            if (!watch.subscribed) return;
+            watch.subscribed = false;
             if (watch.previous) |previous| previous.next = watch.next else self.records.items[@backingInt(node)] = watch.next;
             if (watch.next) |next| next.previous = watch.previous;
         }
         /// Queue invalidation only; active queries may still borrow certificates.
         pub fn mark(self: *Self, node: Node) void {
             self.epoch += 1;
-            var cursor = self.records.items[@backingInt(node)];
-            while (cursor) |watch| {
+            while (self.records.items[@backingInt(node)]) |watch| {
+                // Detach before notifying: invalidating a proof also detaches
+                // its other node dependencies, possibly on this same node.
+                self.unsubscribe(node, watch);
                 watch.notify(watch.context, self.epoch);
-                cursor = watch.next;
             }
         }
     };
@@ -88,6 +94,7 @@ pub fn Cache(comptime Key: type, comptime Node: type) type {
             valid: bool = true,
             pending_next: ?*Proof = null,
             notifications: *Notifications,
+            changes: *MutationIndex,
             slot: usize,
             dependencies: []Link,
             keys: []Key,
@@ -95,6 +102,13 @@ pub fn Cache(comptime Key: type, comptime Node: type) type {
             fn invalidate(self: *Proof) void {
                 if (!self.valid) return;
                 self.valid = false;
+                // The certificate remains owned until refresh, but no further
+                // producer writes can make it more invalid. Unsubscribe now so
+                // long mutation batches never repeatedly visit a dirty proof.
+                for (self.dependencies) |*link| switch (link.dependency) {
+                    .node => |node| self.changes.unsubscribe(node, &link.watch),
+                    .proof => {},
+                };
                 self.pending_next = self.notifications.head;
                 self.notifications.head = self;
                 self.notifications.invalidations += 1;
@@ -217,7 +231,7 @@ pub fn Cache(comptime Key: type, comptime Node: type) type {
             errdefer gpa.free(links);
             const keys = try gpa.alloc(Key, entries.len);
             errdefer gpa.free(keys);
-            proof.* = .{ .notifications = self.notifications.?, .slot = self.groups.items.len, .dependencies = links, .keys = keys };
+            proof.* = .{ .notifications = self.notifications.?, .changes = self.changes.?, .slot = self.groups.items.len, .dependencies = links, .keys = keys };
             var linked: usize = 0;
             errdefer for (links[0..linked]) |*link| self.unlink(gpa, link);
             for (dependencies, links) |dependency, *link| {
@@ -353,4 +367,36 @@ fn allocationFailureFixture(gpa: Allocator) !void {
 
 test "proof publication allocation failures detach every graph subscription" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, allocationFailureFixture, .{});
+}
+
+test "a dirty proof unsubscribes before later writes in the same batch" {
+    const a = std.testing.allocator;
+    const Node = enum(u32) { a, b, c };
+    const Graph = struct {
+        changes: Changes(Node) = .{},
+        fn proofChanges(self: *@This()) *Changes(Node) {
+            return &self.changes;
+        }
+    };
+    var graph = Graph{};
+    defer graph.changes.deinit(a);
+    try graph.changes.ensureTotalCapacityPrecise(a, 3);
+    for (0..3) |_| graph.changes.appendAssumeCapacity();
+    var cache = Cache(u32, Node){};
+    defer cache.deinit(a);
+    cache.refresh(a, 0, &graph);
+    try cache.publish(a, &.{.{ .key = 1, .value = 1 }}, &.{ .{ .node = .a }, .{ .node = .b } });
+    try cache.publish(a, &.{.{ .key = 2, .value = 2 }}, &.{ .{ .node = .a }, .{ .node = .a } });
+    try cache.publish(a, &.{.{ .key = 3, .value = 3 }}, &.{.{ .node = .c }});
+    graph.changes.mark(.a);
+    for (0..4096) |_| {
+        graph.changes.mark(.a);
+        graph.changes.mark(.b);
+    }
+    cache.refresh(a, graph.changes.epoch, &graph);
+    try std.testing.expectEqual(@as(usize, 2), cache.invalidation_edges);
+    try std.testing.expectEqual(@as(usize, 2), cache.invalidations);
+    try std.testing.expect(cache.get(1) == null);
+    try std.testing.expect(cache.get(2) == null);
+    try std.testing.expect(cache.get(3) != null);
 }

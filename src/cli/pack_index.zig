@@ -16,7 +16,7 @@ pub const Error = PF.ReadError;
 /// Identity and integrity digest of immutable record bytes.
 pub fn digest(bytes: []const u8) [32]u8 {
     var result: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(bytes, &result, .{});
+    base.Sha256.hash(bytes, &result, .{});
     return result;
 }
 

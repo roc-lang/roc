@@ -79,6 +79,36 @@ const UnifyPairContext = struct {
     }
 };
 
+/// The expansion query reads only which Monotypes this scope binds. A new
+/// binding invalidates its memo; updating a binding's destination does not.
+/// No solved-graph mutation can change the immutable Monotype reachability.
+const ArgumentScope = struct {
+    bindings: collections.DenseMap(MonoType.TypeId, Type.TypeVarId),
+    reads: collections.DenseMap(MonoType.TypeId, bool),
+
+    fn init(allocator: Allocator) ArgumentScope {
+        return .{ .bindings = .init(allocator), .reads = .init(allocator) };
+    }
+    fn deinit(self: *ArgumentScope) void {
+        self.bindings.deinit();
+        self.reads.deinit();
+    }
+    fn put(self: *ArgumentScope, ty: MonoType.TypeId, node: Type.TypeVarId) Allocator.Error!void {
+        const entry = try self.bindings.getOrPut(ty);
+        if (!entry.found_existing) self.reads.clearRetainingCapacity();
+        entry.value_ptr.* = node;
+    }
+    fn get(self: *const ArgumentScope, ty: MonoType.TypeId) ?Type.TypeVarId {
+        return self.bindings.get(ty);
+    }
+    fn contains(self: *const ArgumentScope, ty: MonoType.TypeId) bool {
+        return self.bindings.contains(ty);
+    }
+};
+
+const ExactClonePair = struct { mono: MonoType.TypeId, solved: Type.TypeVarId };
+const ExactCloneProofs = @import("../proofs.zig").Cache(ExactClonePair, Type.TypeVarId);
+
 const CompatibilityProofs = @import("../proofs.zig").Cache(UnifyPair, Type.TypeVarId);
 
 const UnifyPairSet = std.HashMap(UnifyPair, void, UnifyPairContext, std.hash_map.default_max_load_percentage);
@@ -193,6 +223,11 @@ pub const WorkCounters = struct {
     clones: u64 = 0,
     unify_pairs: u64 = 0,
     active_cycles: u64 = 0,
+    exact_clone_queries: u64 = 0,
+    exact_clone_hits: u64 = 0,
+    arg_scope_queries: u64 = 0,
+    arg_scope_hits: u64 = 0,
+    arg_scope_walk_nodes: u64 = 0,
     compatibility_queries: u64 = 0,
     compatibility_pairs: u64 = 0,
     /// Revisited pairs within a query, from cycles or shared subgraphs.
@@ -247,6 +282,11 @@ const Solver = struct {
     counters: ?*WorkCounters = null,
     /// Scratch and completed proofs owned by the function being solved.
     /// Disjoint queries share certificates until this producer scope ends.
+    exact_clone_proofs: ExactCloneProofs = .{},
+    exact_clone_work: std.ArrayList(ExactClonePair) = .empty,
+    exact_clone_pairs: std.AutoHashMapUnmanaged(ExactClonePair, void) = .empty,
+    exact_clone_nodes: collections.DenseMapUnmanaged(MonoType.TypeId, Type.TypeVarId) = .empty,
+    exact_clone_dependencies: std.ArrayList(ExactCloneProofs.Dependency) = .empty,
     compatibility_work: std.ArrayList(UnifyPair) = .empty,
     compatibility_visited: UnifyPairSet.Unmanaged = .empty,
     compatibility_proofs: CompatibilityProofs = .{},
@@ -310,7 +350,7 @@ const Solver = struct {
     /// instantiated at, so a backing position of an argument's Monotype is
     /// that argument: a row joined through the backing is the argument's row
     /// too (design.md "Row Joins").
-    arg_scopes: std.ArrayList(collections.DenseMap(MonoType.TypeId, Type.TypeVarId)),
+    arg_scopes: std.ArrayList(ArgumentScope),
     /// The argument scope a leaf created under a scoped expansion reads its
     /// positional components from.
     leaf_arg_scopes: collections.DenseMap(Type.TypeVarId, u32),
@@ -525,6 +565,11 @@ const Solver = struct {
     }
 
     fn deinit(self: *Solver) void {
+        self.exact_clone_proofs.deinit(self.allocator);
+        self.exact_clone_work.deinit(self.allocator);
+        self.exact_clone_pairs.deinit(self.allocator);
+        self.exact_clone_nodes.deinit(self.allocator);
+        self.exact_clone_dependencies.deinit(self.allocator);
         self.compatibility_work.deinit(self.allocator);
         self.compatibility_visited.deinit(self.allocator);
         self.compatibility_proofs.deinit(self.allocator);
@@ -2030,7 +2075,7 @@ const Solver = struct {
 
     fn newArgScope(self: *Solver) Allocator.Error!u32 {
         const index: u32 = @intCast(self.arg_scopes.items.len);
-        try self.arg_scopes.append(self.allocator, collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(self.allocator));
+        try self.arg_scopes.append(self.allocator, ArgumentScope.init(self.allocator));
         return index;
     }
 
@@ -2789,6 +2834,13 @@ const Solver = struct {
         const leaf = leaf_content.mono;
         const id = leaf.id;
         if (!self.leafOriginIs(other, id) and !self.leafOriginIs(other_root, id)) return false;
+        if (self.reaches_cycle.isSet(@backingInt(id)) and
+            !self.contains_forced_dynamic.isSet(@backingInt(id)) and
+            leaf.ctx == Type.no_leaf_context and !self.leaf_arg_scopes.contains(leaf_root) and
+            !try self.monoProvenUninhabited(id))
+        {
+            if (try self.exactMonoClone(id, other_root)) return true;
+        }
         if (self.isCallableFree(id)) {
             if (self.leafSharing(id) != .positional) return false;
             if (self.leaf_arg_scopes.get(leaf_root)) |scope| {
@@ -2804,10 +2856,146 @@ const Solver = struct {
         return true;
     }
 
+    /// Prove that a materialized instance has exactly its source shape and
+    /// already includes every recursive/argument tie a fresh clone
+    /// would impose. Repeated mutable Monotypes must name one target class;
+    /// this is stronger than shape equality and prevents dropping cyclic ties.
+    /// No node is expanded or changed by this query. Producer writes invalidate
+    /// the certificate through the graph-owned reverse dependency index.
+    fn exactMonoClone(self: *Solver, mono: MonoType.TypeId, solved: Type.TypeVarId) Allocator.Error!bool {
+        self.countWork(.exact_clone_queries, 1);
+        const key: ExactClonePair = .{ .mono = mono, .solved = self.program.types.rootCompressed(solved) };
+        self.exact_clone_proofs.refresh(self.allocator, self.program.types.analysis_changes.epoch, &self.program.types);
+        if (self.exact_clone_proofs.get(key)) |known| {
+            self.countWork(.exact_clone_hits, 1);
+            return known.value != 0;
+        }
+        self.exact_clone_work.clearRetainingCapacity();
+        self.exact_clone_pairs.clearRetainingCapacity();
+        self.exact_clone_nodes.clearRetainingCapacity();
+        self.exact_clone_dependencies.clearRetainingCapacity();
+        try self.exact_clone_work.append(self.allocator, key);
+        const matches = try self.walkExactMonoClone();
+        try self.exact_clone_proofs.publish(self.allocator, &.{.{ .key = key, .value = @intFromBool(matches) }}, self.exact_clone_dependencies.items);
+        return matches;
+    }
+
+    fn exactCloneSpans(self: *Solver, mono: MonoType.Span, solved: Type.Span) Allocator.Error!bool {
+        if (mono.len != solved.count()) return false;
+        for (self.lifted.types.span(mono), 0..) |child, i| {
+            try self.exact_clone_work.append(self.allocator, .{ .mono = child, .solved = self.program.types.spanItem(solved, i) });
+        }
+        return true;
+    }
+
+    fn walkExactMonoClone(self: *Solver) Allocator.Error!bool {
+        const mono_store = self.lifted.types;
+        const solved_store = &self.program.types;
+        while (self.exact_clone_work.pop()) |pair| {
+            const root = solved_store.rootCompressed(pair.solved);
+            if ((try self.exact_clone_pairs.getOrPut(self.allocator, .{ .mono = pair.mono, .solved = root })).found_existing) continue;
+            // Every representative we read is a dependency, including one
+            // which fails the sharing check below.
+            try self.exact_clone_dependencies.append(self.allocator, .{ .node = root });
+            const entry = try self.exact_clone_nodes.getOrPut(self.allocator, pair.mono);
+            if (entry.found_existing) {
+                if (entry.value_ptr.* == root) continue;
+                if (!self.isCloneInvariant(pair.mono)) return false;
+            } else entry.value_ptr.* = root;
+            const actual = solved_store.get(root);
+            if (actual == .mono) {
+                if (actual.mono.id != pair.mono) return false;
+                // Even an acyclic unexpanded subtree can hide a mutable
+                // occurrence shared with a sibling (for example a function's
+                // return cell). Its source shape is not evidence that those
+                // target cells are already tied. Only immutable subtrees can
+                // establish this proof without exposing their contents.
+                if (!self.isCloneInvariant(pair.mono)) return false;
+                continue;
+            }
+            const expected = mono_store.get(pair.mono);
+            switch (expected) {
+                .primitive => |prim| if (actual != .primitive or prim != actual.primitive) return false,
+                .zst => if (actual != .zst) return false,
+                .hole => if (actual != .hole) return false,
+                .func => |function| {
+                    if (actual != .func or !try self.exactCloneSpans(function.args, actual.func.args)) return false;
+                    // The fresh clone's callable cell would be unbound. Joining
+                    // it with this cell changes nothing, irrespective of the
+                    // existing cell's lambda members. The repeated-node map
+                    // still requires every repeated function occurrence to
+                    // name one class, preserving the clone's callable ties.
+                    try self.exact_clone_work.append(self.allocator, .{ .mono = function.ret, .solved = actual.func.ret });
+                },
+                .erased => return false,
+                .list => |child| {
+                    if (actual != .list) return false;
+                    try self.exact_clone_work.append(self.allocator, .{ .mono = child, .solved = actual.list });
+                },
+                .box => |child| {
+                    if (actual != .box) return false;
+                    try self.exact_clone_work.append(self.allocator, .{ .mono = child, .solved = actual.box });
+                },
+                .tuple => |items| {
+                    if (actual != .tuple or !try self.exactCloneSpans(items, actual.tuple)) return false;
+                },
+                .record => |fields| {
+                    if (actual != .record or fields.len != actual.record.count()) return false;
+                    for (mono_store.fieldSpan(fields), 0..) |field, i| {
+                        const other = solved_store.fieldItem(actual.record, i);
+                        if (field.name != other.name or !std.meta.eql(field.default, other.default)) return false;
+                        if ((field.value_ty.get() == null) != (other.value_ty == null)) return false;
+                        try self.exact_clone_work.append(self.allocator, .{ .mono = field.ty, .solved = other.ty });
+                        if (field.value_ty.get()) |ty| try self.exact_clone_work.append(self.allocator, .{ .mono = ty, .solved = other.value_ty.? });
+                    }
+                },
+                .tag_union => |tags| {
+                    if (actual != .tag_union or tags.len != actual.tag_union.count()) return false;
+                    for (mono_store.tagSpan(tags), 0..) |tag, i| {
+                        const other = solved_store.tagItem(actual.tag_union, i);
+                        if (tag.name != other.name or tag.checked_name != other.checked_name or !try self.exactCloneSpans(tag.payloads, other.payloads)) return false;
+                    }
+                },
+                .named => |named| {
+                    if (actual != .named) return false;
+                    const other = actual.named;
+                    if (!std.meta.eql(named.named_type, other.named_type) or !std.meta.eql(named.def, other.def) or named.kind != other.kind or named.builtin_owner != other.builtin_owner) return false;
+                    if (!try self.exactCloneSpans(named.args, other.args) or (named.backing == null) != (other.backing == null) or named.declared_order.len != other.declared_order.count()) return false;
+                    if (named.backing) |backing| {
+                        if (backing.use != other.backing.?.use or backing.authority != other.backing.?.authority) return false;
+                        try self.exact_clone_work.append(self.allocator, .{ .mono = backing.ty, .solved = other.backing.?.ty });
+                    }
+                    for (mono_store.declaredFieldSpan(named.declared_order), 0..) |field, i| {
+                        const other_field = solved_store.declaredFieldItem(other.declared_order, i);
+                        switch (field) {
+                            .named => |name| if (other_field != .named or name != other_field.named) return false,
+                            .padding => |ty| {
+                                if (other_field != .padding) return false;
+                                try self.exact_clone_work.append(self.allocator, .{ .mono = ty, .solved = other_field.padding });
+                            },
+                        }
+                    }
+                },
+            }
+        }
+        return true;
+    }
+
     /// A positional leaf can inherit a scope whose bindings are ancestors or
     /// unrelated arguments. Only bindings its expansion actually reads can
     /// make that expansion observable. Named children start their own scope.
     fn expansionReadsArgScope(self: *Solver, root: MonoType.TypeId, scope: u32) Allocator.Error!bool {
+        self.countWork(.arg_scope_queries, 1);
+        if (self.arg_scopes.items[scope].reads.get(root)) |answer| {
+            self.countWork(.arg_scope_hits, 1);
+            return answer;
+        }
+        const answer = try self.walkExpansionArgScope(root, scope);
+        try self.arg_scopes.items[scope].reads.put(root, answer);
+        return answer;
+    }
+
+    fn walkExpansionArgScope(self: *Solver, root: MonoType.TypeId, scope: u32) Allocator.Error!bool {
         var seen = self.mono_set_pool.acquire();
         defer self.mono_set_pool.release(&seen);
         var pending = std.ArrayList(MonoType.TypeId).empty;
@@ -2817,6 +3005,7 @@ const Solver = struct {
         while (pending.pop()) |id| {
             if (seen.contains(id)) continue;
             try seen.put(id, {});
+            self.countWork(.arg_scope_walk_nodes, 1);
             if (id != root and self.arg_scopes.items[scope].contains(id)) return true;
             if (self.leafSharing(id) != .positional) continue;
             switch (types.get(id)) {
@@ -6414,4 +6603,180 @@ test "issue 12616 field presence changes retire compatibility proofs" {
     try std.testing.expect(!try solver.typesCompatible(a, b));
     try types.set(b, .{ .record = required });
     try std.testing.expect(try solver.typesCompatible(a, b));
+}
+
+test "exact cyclic clone proofs avoid repeated expansion and reject widened or untied rows" {
+    const a = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(a);
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
+    const end = try lifted.names.internTagLabel("End");
+    const next = try lifted.names.internTagLabel("Next");
+    const other = try lifted.names.internTagLabel("Other");
+    const recursive = try lifted.types.beginRecursive();
+    const list = try lifted.types.add(.{ .list = recursive.ty });
+    lifted.types.finishRecursive(recursive, .{ .tag_union = try lifted.types.addTags(&.{
+        .{ .name = end, .checked_name = end, .payloads = .empty() },
+        .{ .name = next, .checked_name = next, .payloads = try lifted.types.addSpan(&.{list}) },
+    }) });
+    const pair_mono = try lifted.types.add(.{ .tuple = try lifted.types.addSpan(&.{ recursive.ty, recursive.ty }) });
+    var program = Ast.Program.init(a, lifted);
+    lifted_owned = false;
+    defer program.deinit();
+    var solver = try Solver.init(a, &program);
+    defer solver.deinit();
+    var counts: WorkCounters = .{};
+    solver.counters = &counts;
+    const root = try solver.lowerTypeFresh(recursive.ty);
+    const tags = (try solver.resolvedContent(root)).tag_union;
+    const list_var = program.types.spanItem(program.types.tagItem(tags, 1).payloads, 0);
+    _ = try solver.resolvedContent(list_var);
+    try std.testing.expect(try solver.exactMonoClone(recursive.ty, root));
+    const expanded = counts.expansions;
+    const before = program.types.varCount();
+    for (0..128) |_| {
+        const fresh = try solver.lowerTypeFresh(recursive.ty);
+        try solver.unify(fresh, root);
+        try std.testing.expectEqual(program.types.root(root), program.types.root(fresh));
+    }
+    try std.testing.expectEqual(expanded, counts.expansions);
+    try std.testing.expectEqual(before + 128, program.types.varCount());
+    try std.testing.expect(counts.exact_clone_hits >= 128);
+
+    // Bisimilar recursive subtrees are not sufficient: a fresh clone's
+    // repeated recursive source id would tie these two distinct rows together.
+    const second = try solver.lowerTypeFresh(recursive.ty);
+    const second_tags = (try solver.resolvedContent(second)).tag_union;
+    const second_list = program.types.spanItem(program.types.tagItem(second_tags, 1).payloads, 0);
+    _ = try solver.resolvedContent(second_list);
+    const untied = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ root, second }) });
+    try solver.leaf_origins.put(untied, pair_mono);
+    try std.testing.expect(!try solver.exactMonoClone(pair_mono, untied));
+    const fresh_pair = try solver.lowerTypeFresh(pair_mono);
+    try solver.unify(fresh_pair, untied);
+    try std.testing.expectEqual(program.types.root(root), program.types.root(second));
+
+    // A semantic write invalidates an earlier successful certificate. Exact
+    // source shape no longer holds, and ordinary unification keeps the union.
+    const canonical = program.types.rootCompressed(root);
+    const current_tags = (try solver.resolvedContent(canonical)).tag_union;
+    const first_tag = program.types.tagItem(current_tags, 0);
+    const next_tag = program.types.tagItem(current_tags, 1);
+    try program.types.set(canonical, .{ .tag_union = try program.types.addTags(&.{
+        first_tag, next_tag, .{ .name = other, .checked_name = other, .payloads = .empty() },
+    }) });
+    try std.testing.expect(!try solver.exactMonoClone(recursive.ty, canonical));
+    const fresh = try solver.lowerTypeFresh(recursive.ty);
+    try solver.unify(fresh, canonical);
+    try std.testing.expectEqual(@as(usize, 3), (try solver.resolvedContent(fresh)).tag_union.count());
+}
+
+test "exact cyclic clone proofs preserve populated callable cells and reject untied functions" {
+    const a = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(a);
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
+    const end = try lifted.names.internTagLabel("End");
+    const next = try lifted.names.internTagLabel("Next");
+    const recursive = try lifted.types.beginRecursive();
+    const callback = try lifted.types.add(.{ .func = .{ .args = .empty(), .ret = recursive.ty } });
+    lifted.types.finishRecursive(recursive, .{ .tag_union = try lifted.types.addTags(&.{
+        .{ .name = end, .checked_name = end, .payloads = .empty() },
+        .{ .name = next, .checked_name = next, .payloads = try lifted.types.addSpan(&.{callback}) },
+    }) });
+    const pair = try lifted.types.add(.{ .tuple = try lifted.types.addSpan(&.{ callback, callback }) });
+    var program = Ast.Program.init(a, lifted);
+    lifted_owned = false;
+    defer program.deinit();
+    var solver = try Solver.init(a, &program);
+    defer solver.deinit();
+    var counts: WorkCounters = .{};
+    solver.counters = &counts;
+    const root = try solver.lowerTypeFresh(recursive.ty);
+    const tags = (try solver.resolvedContent(root)).tag_union;
+    const callback_var = program.types.spanItem(program.types.tagItem(tags, 1).payloads, 0);
+    const function = (try solver.resolvedContent(callback_var)).func;
+    const members = try program.types.addMembers(&.{.{ .lambda = @fromBackingInt(1), .captures = .empty() }});
+    try program.types.set(function.callable, .{ .lambda_set = members });
+    try std.testing.expect(try solver.exactMonoClone(recursive.ty, root));
+    const expansions = counts.expansions;
+    for (0..128) |_| {
+        const fresh = try solver.lowerTypeFresh(recursive.ty);
+        try solver.unify(fresh, root);
+        try std.testing.expectEqual(program.types.root(root), program.types.root(fresh));
+    }
+    try std.testing.expectEqual(expansions, counts.expansions);
+    try std.testing.expectEqual(@as(usize, 1), (try solver.resolvedContent(function.callable)).lambda_set.count());
+    const other_callable = try program.types.add(.unbound);
+    const other_callback = try program.types.add(.{ .func = .{ .args = function.args, .ret = function.ret, .callable = other_callable } });
+    const untied = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ callback_var, other_callback }) });
+    try std.testing.expect(!try solver.exactMonoClone(pair, untied));
+}
+
+test "argument scope expansion queries reuse exact answers and invalidate on new bindings" {
+    const a = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(a);
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
+    const tag = try lifted.names.internTagLabel("A");
+    const row = try lifted.types.add(.{ .tag_union = try lifted.types.addTags(&.{.{ .name = tag, .checked_name = tag, .payloads = .empty() }}) });
+    const shape = try lifted.types.add(.{ .tuple = try lifted.types.addSpan(&.{ row, row }) });
+    var program = Ast.Program.init(a, lifted);
+    lifted_owned = false;
+    defer program.deinit();
+    var solver = try Solver.init(a, &program);
+    defer solver.deinit();
+    var counts: WorkCounters = .{};
+    solver.counters = &counts;
+    const scope = try solver.newArgScope();
+    try std.testing.expect(!try solver.expansionReadsArgScope(shape, scope));
+    const walked = counts.arg_scope_walk_nodes;
+    for (0..128) |_| try std.testing.expect(!try solver.expansionReadsArgScope(shape, scope));
+    try std.testing.expectEqual(walked, counts.arg_scope_walk_nodes);
+    try std.testing.expectEqual(@as(u64, 128), counts.arg_scope_hits);
+    const node = try solver.lowerTypeFresh(row);
+    try solver.arg_scopes.items[scope].put(row, node);
+    try std.testing.expect(try solver.expansionReadsArgScope(shape, scope));
+    const changed_walked = counts.arg_scope_walk_nodes;
+    const replacement = try solver.lowerTypeFresh(row);
+    try solver.arg_scopes.items[scope].put(row, replacement);
+    try std.testing.expect(try solver.expansionReadsArgScope(shape, scope));
+    try std.testing.expectEqual(changed_walked, counts.arg_scope_walk_nodes);
+    const independent = try solver.newArgScope();
+    try std.testing.expect(!try solver.expansionReadsArgScope(shape, independent));
+}
+
+test "exact cyclic clone proof rejects unexpanded leaves that hide a mutable tie" {
+    const a = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(a);
+    var lifted_owned = true;
+    errdefer if (lifted_owned) lifted.deinit();
+    const end = try lifted.names.internTagLabel("End");
+    const next = try lifted.names.internTagLabel("Next");
+    const u8_type = try lifted.types.add(.{ .primitive = .u8 });
+    const inner = try lifted.types.add(.{ .func = .{ .args = .empty(), .ret = u8_type } });
+    const outer = try lifted.types.add(.{ .func = .{ .args = .empty(), .ret = inner } });
+    const recursive = try lifted.types.beginRecursive();
+    lifted.types.finishRecursive(recursive, .{ .tag_union = try lifted.types.addTags(&.{
+        .{ .name = end, .checked_name = end, .payloads = .empty() },
+        .{ .name = next, .checked_name = next, .payloads = try lifted.types.addSpan(&.{ recursive.ty, outer, inner }) },
+    }) });
+    var program = Ast.Program.init(a, lifted);
+    lifted_owned = false;
+    defer program.deinit();
+    var solver = try Solver.init(a, &program);
+    defer solver.deinit();
+    const target = try program.types.add(.unbound);
+    const outer_leaf = try solver.lowerTypeFresh(outer);
+    const inner_instance = try solver.lowerTypeFresh(inner);
+    _ = try solver.resolvedContent(inner_instance);
+    try program.types.set(target, .{ .tag_union = try program.types.addTags(&.{
+        .{ .name = end, .checked_name = end, .payloads = .empty() },
+        .{ .name = next, .checked_name = next, .payloads = try program.types.addSpan(&.{ target, outer_leaf, inner_instance }) },
+    }) });
+    // Expanding a fresh R ties its inner function occurrence to the return
+    // of outer. The unexpanded target outer has no such established tie.
+    const count = program.types.varCount();
+    try std.testing.expect(!try solver.exactMonoClone(recursive.ty, target));
+    try std.testing.expectEqual(count, program.types.varCount());
 }

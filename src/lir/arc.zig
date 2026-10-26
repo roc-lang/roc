@@ -18197,3 +18197,28 @@ test "ARC ownership iteration skips absent resources and preserves release order
     try testing.expectEqual(null, empty.next());
     for (keys) |key| try testing.expect(owned.contains(locals[key]));
 }
+
+test "ARC outcome capability excludes conventions that return no ownership units" {
+    for ([_]bool{ false, true }) |stable| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
+        const outcome_layout = try f.layouts.putTagUnion(&.{ f.list_i64, f.list_i64 });
+        const param = try f.local(f.list_i64);
+        const choose = try f.local(.i64);
+        const result = try f.local(outcome_layout);
+        const ret = try f.ret(result);
+        const left = try f.assignTag(result, 0, param, ret);
+        const right = try f.assignTag(result, 1, param, ret);
+        const body = try f.switchStmt(choose, left, right, null);
+        const proc = try f.addProc(&.{ param, choose }, body, outcome_layout);
+        f.store.getProcSpecPtr(proc).stable_signature = stable;
+        const rc = [_]bool{ true, false, true };
+        {
+            var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+            defer solution.deinit();
+            try testing.expect(solution.availableOutcomeSpanOf(proc).isEmpty());
+        }
+        try insert(&f.store, &f.layouts, .{ .specialize = false });
+        try testing.expect(!f.store.getProcSpec(proc).rc_variant_demandable);
+    }
+}
