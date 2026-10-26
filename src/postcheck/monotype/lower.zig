@@ -26665,6 +26665,9 @@ const BodyContext = struct {
     };
 
     const InstStep = union(enum) {
+        /// A child type request carries only its checked identity. Most hits
+        /// need no frame and never copy an uninitialized continuation payload.
+        node: checked.CheckedTypeId,
         call: InstTask,
         ret: InstResult,
     };
@@ -26724,6 +26727,18 @@ const BodyContext = struct {
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
             switch (try self.stepInst(frame, input)) {
+                .node => |checked_ty| {
+                    var task = InstNodeTask{ .checked_ty = checked_ty };
+                    if (try self.probeInstNode(&task)) |existing| {
+                        input = .{ .node = existing };
+                    } else {
+                        const pushed = try frames.addOne(self.allocator);
+                        pushed.cursor = 0;
+                        pushed.index = 0;
+                        pushed.task = .{ .node = task };
+                        input = null;
+                    }
+                },
                 .call => |called| {
                     const pushed = frames.addOne(self.allocator) catch |err| {
                         self.destroyInstTaskBox(called);
@@ -26734,18 +26749,6 @@ const BodyContext = struct {
                     pushed.index = 0;
                     writeActiveVariant(InstTask, &pushed.task, called);
                     input = null;
-                    // Most checked types are already instantiated in their
-                    // scope; such a request answers without keeping a frame.
-                    if (pushed.task == .node) {
-                        const probed = self.probeInstNode(&pushed.task.node) catch |err| {
-                            frames.items.len -= 1;
-                            return err;
-                        };
-                        if (probed) |existing| {
-                            frames.items.len -= 1;
-                            input = .{ .node = existing };
-                        }
-                    }
                 },
                 .ret => |result| {
                     self.destroyInstTaskBox(frames.items[frames.items.len - 1].task);
@@ -26795,7 +26798,7 @@ const BodyContext = struct {
     }
 
     fn instNodeStep(checked_ty: checked.CheckedTypeId) InstStep {
-        return .{ .call = .{ .node = .{ .checked_ty = checked_ty } } };
+        return .{ .node = checked_ty };
     }
 
     fn instSliceStep(checked_tys: []const checked.CheckedTypeId) InstStep {
