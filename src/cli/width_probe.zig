@@ -12,7 +12,7 @@
 //! the terminal instead of reading its name. `TERM`, `TERM_PROGRAM` and
 //! `VTE_VERSION` name a terminfo entry or carry an inherited environment: this
 //! very process inherits `VTE_VERSION` while owning no terminal at all. `TERM`
-//! also cannot separate GNOME Terminal (which lays `👩‍👩‍👦‍👦` out in eight cells)
+//! also cannot separate GNOME Terminal (which lays `🧑‍💻` out in four cells)
 //! from WezTerm (which draws it as one glyph), since both report
 //! `xterm-256color`; tmux and ssh rewrite it again. Terminfo has no
 //! character-width capabilities at all. Selecting a width model from any of
@@ -44,7 +44,7 @@ const Sample = struct {
 };
 
 const samples = [_]Sample{
-    .{ .bytes = "👩‍👩‍👦‍👦", .separate_width = 8 },
+    .{ .bytes = "🧑‍💻", .separate_width = 4 },
     .{ .bytes = "\u{263A}\u{FE0F}", .separate_width = 1 },
 };
 
