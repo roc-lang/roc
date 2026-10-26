@@ -693,6 +693,11 @@ const EmbeddedTargetObjects = struct {
     /// program works wherever a standalone dev build works at all.
     boxy_runtime: ?[]const u8 = null,
     boxy_runtime_digest: ?[32]u8 = null,
+    /// A wasm target's builtins and boxy runtime for platforms that reserve
+    /// low memory, whose runtime functions check the stack bounds wherever
+    /// they recurse (`builtins.stack_guard`).
+    builtins_extern_stack_checked: ?[]const u8 = null,
+    boxy_runtime_stack_checked: ?[]const u8 = null,
 
     const DefaultPlatform = enum { none, runtime, runtime_and_compiler_rt };
 
@@ -715,6 +720,10 @@ const EmbeddedTargetObjects = struct {
             .boxy_runtime_digest = embeddedBlake3("boxy_runtime_" ++ name),
             .boxy_runtime = embedded(dir ++ "roc_boxy_runtime" ++ ext),
         };
+        if (target.toCpuArch() == .wasm32) {
+            objects.builtins_extern_stack_checked = embedded(dir ++ "roc_builtins_extern_stack_checked.o");
+            objects.boxy_runtime_stack_checked = embedded(dir ++ "roc_boxy_runtime_stack_checked.o");
+        }
         switch (default_platform) {
             .none => {},
             .runtime, .runtime_and_compiler_rt => {
@@ -10170,6 +10179,7 @@ fn writeSealedWasmObject(
     lir_result: *const lir.Program.Result,
     public_definitions: []const []const u8,
     allowed_undefined_functions: []const []const u8,
+    stack_checks: bool,
 ) CliMainError![]const u8 {
     const unsealed_bytes = try module.encodeRelocatable(ctx.gpa);
     defer ctx.gpa.free(unsealed_bytes);
@@ -10183,18 +10193,25 @@ fn writeSealedWasmObject(
     try compiler_inputs.append(unsealed_path);
     try compiler_inputs.append(compiler_rt_path);
     if (lirResultNeedsBoxyRuntime(lir_result)) {
-        const runtime_bytes = EmbeddedTargetObjects.forTarget(target).boxy_runtime orelse return error.UnsupportedTarget;
+        const objects = EmbeddedTargetObjects.forTarget(target);
+        const runtime_bytes = (if (stack_checks) objects.boxy_runtime_stack_checked else objects.boxy_runtime) orelse return error.UnsupportedTarget;
         const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_boxy_runtime_support.o" });
         backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, runtime_bytes) catch return error.WasmOutputWriteFailed;
         try compiler_inputs.append(runtime_path);
     }
     var sealed_public_definitions = public_definitions;
-    if (target.cpuLevel() == .v1) {
-        const accessors_bytes = try backend.wasm.StackAccessors.encodeObject(ctx.gpa);
-        defer ctx.gpa.free(accessors_bytes);
-        const accessors_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_stack_accessors.o" });
-        backend.writeFileWindowsAvSafe(ctx.io.std_io, accessors_path, accessors_bytes) catch return error.WasmOutputWriteFailed;
-        try compiler_inputs.append(accessors_path);
+    const stack_support = backend.wasm.StackSupport.Contents{
+        .accessors = target.cpuLevel() == .v1,
+        .overflow = stack_checks,
+    };
+    if (stack_support.accessors or stack_support.overflow) {
+        const support_bytes = try backend.wasm.StackSupport.encodeObject(ctx.gpa, stack_support);
+        defer ctx.gpa.free(support_bytes);
+        const support_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_stack_support.o" });
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, support_path, support_bytes) catch return error.WasmOutputWriteFailed;
+        try compiler_inputs.append(support_path);
+    }
+    if (stack_support.accessors) {
         const accessor_names = [_][]const u8{ shim_symbols.roc_wasm_stack_pointer, shim_symbols.roc_wasm_set_stack_pointer };
         sealed_public_definitions = try std.mem.concat(ctx.arena, []const u8, &.{ public_definitions, &accessor_names });
     }
@@ -10203,8 +10220,16 @@ fn writeSealedWasmObject(
         return failLink(ctx, err, "wasm32");
     };
 
-    const composed_bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, composed_path, ctx.gpa, .unlimited);
+    var composed_bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, composed_path, ctx.gpa, .unlimited);
     defer ctx.gpa.free(composed_bytes);
+    // Every compiler-owned definition is composed now, so every frame size a
+    // stack-bound check depends on is known.
+    if (stack_checks) {
+        if (try backend.wasm.StackRoom.fillCheckRooms(ctx.gpa, composed_bytes)) |filled| {
+            ctx.gpa.free(composed_bytes);
+            composed_bytes = filled;
+        }
+    }
     var sealed_module = backend.wasm.WasmModule.preload(ctx.gpa, composed_bytes, .relocatable_for_sealing) catch |err| {
         std.log.err("Failed to inspect composed Roc wasm object {s}: {}", .{ composed_path, err });
         return err;
@@ -10499,6 +10524,7 @@ fn writeDevWasmObject(
     linked_packs: []const *const backend.dev.PackFile.ObjectPack,
     target: RocTarget,
     executor: ?base.post_check_task_executor.Executor,
+    stack_checks: bool,
 ) CliMainError![]const u8 {
     if (entrypoints.len == 0) {
         base.invariant("wasm object invariant violated: no exported platform entrypoints", .{});
@@ -10533,10 +10559,12 @@ fn writeDevWasmObject(
     // Register the runtime and hosted symbol imports while the module has no
     // defined functions yet; a function import added later would shift every
     // defined function index.
+    if (stack_checks) try codegen.configureStackChecks(try staticDataFunctionPointerTargets(ctx, static_data_exports));
     try codegen.registerHostedSymbolTargets(lowered.lir_result.store.getProcSpecs());
     if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) try codegen.registerBoxySymbolTargets();
 
-    const builtins_bytes = EmbeddedTargetObjects.forTarget(target).builtins_extern;
+    const target_objects = EmbeddedTargetObjects.forTarget(target);
+    const builtins_bytes = if (stack_checks) target_objects.builtins_extern_stack_checked.? else target_objects.builtins_extern;
     if (builtins_bytes.len > 0) {
         var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, .relocatable_for_merge) catch |err| {
             std.log.err("Failed to preload wasm builtins: {}", .{err});
@@ -10604,7 +10632,30 @@ fn writeDevWasmObject(
         &lowered.lir_result,
         try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
         pack_imports.items,
+        stack_checks,
     );
+}
+
+/// Whether code compiled for a wasm platform must check its stack bounds:
+/// only when the platform reserves low memory, so the stack cannot sit at
+/// address 0 where an overflow traps by itself.
+fn wasmStackChecks(wasm: ?roc_target.WasmTargetConfig) bool {
+    const global_base = if (wasm) |config| config.global_base else null;
+    return switch (linker.wasmStackLayout(global_base)) {
+        .stack_first => false,
+        .data_first => true,
+    };
+}
+
+/// The functions static data calls through the function table, by symbol.
+fn staticDataFunctionPointerTargets(ctx: *CliCtx, static_data_exports: []const backend.StaticDataExport) Allocator.Error![]const []const u8 {
+    var names = std.ArrayList([]const u8).empty;
+    for (static_data_exports) |data_export| {
+        for (data_export.relocations) |relocation| {
+            if (relocation.kind == .function_pointer) try names.append(ctx.arena, relocation.target_symbol_name);
+        }
+    }
+    return names.toOwnedSlice(ctx.arena);
 }
 
 /// Links one relocatable wasm app object against the platform's wasm inputs
@@ -10684,6 +10735,7 @@ fn rocBuildWasm(
     }
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
+    const stack_checks = wasmStackChecks(link_inputs.wasm);
 
     // The intermediate objects have fixed names, so concurrent builds sharing
     // one directory would link each other's half-written files.
@@ -10695,7 +10747,7 @@ fn rocBuildWasm(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const obj_path = try writeDevWasmObject(ctx, scratch_dir, lowered, entrypoints, static_data_exports, linked_packs, target, executor);
+        const obj_path = try writeDevWasmObject(ctx, scratch_dir, lowered, entrypoints, static_data_exports, linked_packs, target, executor, stack_checks);
         try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{obj_path});
         return;
     }
@@ -10717,6 +10769,7 @@ fn rocBuildWasm(
         linked_packs,
         target,
         executor,
+        stack_checks,
     );
 
     try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, obj_path, scratch_dir);
@@ -11042,6 +11095,9 @@ fn compileLlvmAppObject(
     static_data_exports: []const backend.StaticDataExport,
     enable_default_platform_runtime: bool,
     enable_default_platform_hosted_calls: bool,
+    // Whether the program is for a wasm platform that reserves low memory,
+    // so generated code and the linked builtins check the stack bounds.
+    stack_checks: bool,
     // When present, the caller has an active "LLVM IR Generation" phase covering
     // LIR-to-bitcode lowering; this transitions it to a distinct
     // "LLVM Optimize + Emit" phase at the point LLVM takes over the bitcode.
@@ -11069,6 +11125,7 @@ fn compileLlvmAppObject(
         codegen.enable_default_platform_runtime = enable_default_platform_runtime;
         codegen.enable_default_platform_hosted_calls = enable_default_platform_hosted_calls;
         codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and emit_debug_info;
+        codegen.stack_checks = stack_checks;
         codegen.debug_producer = "roc " ++ @import("compiler_version").compiler_version;
         defer codegen.deinit();
 
@@ -11143,6 +11200,7 @@ fn compileLlvmAppObject(
             // through extern symbols, never through a RocOps parameter.
             .host_call_extern = true,
             .sha256_rounds = Sha256Rounds.forCpu(std_target.cpu),
+            .stack_checked = stack_checks,
         },
         .pic = pic,
         .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
@@ -11203,6 +11261,7 @@ fn writeCombinedLlvmWasmObject(
     static_data_exports: []const backend.StaticDataExport,
     opt: cli_args.OptLevel,
     owned_inputs: *std.ArrayList([]u8),
+    stack_checks: bool,
 ) CliMainError![]const u8 {
     var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
     defer wasm_module.deinit();
@@ -11228,6 +11287,7 @@ fn writeCombinedLlvmWasmObject(
         lir_result,
         try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
         try wasmRocHostRequirements(ctx.arena, &lir_result.store),
+        stack_checks,
     );
 }
 
@@ -11248,6 +11308,7 @@ fn rocBuildWasmLlvm(
         base.invariant("LLVM wasm build invariant violated: no exported platform entrypoints", .{});
     }
 
+    const stack_checks = wasmStackChecks(if (targets_config.getLinkSpec(target)) |spec| spec.wasm else null);
     const app_object = try compileLlvmAppObject(
         ctx,
         args,
@@ -11258,6 +11319,7 @@ fn rocBuildWasmLlvm(
         static_data_exports,
         false,
         false,
+        stack_checks,
         reporter,
     );
     defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
@@ -11272,7 +11334,7 @@ fn rocBuildWasmLlvm(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
+        const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs, stack_checks);
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, &.{combined_obj});
         return;
     }
@@ -11282,7 +11344,7 @@ fn rocBuildWasmLlvm(
         return error.UnsupportedTarget;
     }
 
-    const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
+    const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs, stack_checks);
     try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, combined_obj, app_object.artifact_dir);
 }
 
@@ -11674,6 +11736,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
             static_data_exports,
             enable_default_platform_runtime,
             args.synthetic_default_platform,
+            false,
             &reporter,
         );
 
@@ -11969,7 +12032,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // compilations as a check does, before the runtime program takes the
     // shared Solved program.
     if (diag.errors == 0) try publishCompileTimeResults(ctx, &build_env, root_artifact);
-    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (loaded_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_stores != null, currentRuntimeSpecializationStrategy(args.specialization_strategy)));
+    // Object packs hold code compiled without stack-bound checks, so a
+    // program for a platform that reserves low memory compiles every
+    // procedure itself.
+    const stack_checks = target_arch == .wasm32 and wasmStackChecks(if (resolved_targets_config.getLinkSpec(target)) |spec| spec.wasm else null);
+    const serving_packs = if (stack_checks) null else loaded_packs;
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (serving_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, serving_packs != null, linked_stores != null and !stack_checks, currentRuntimeSpecializationStrategy(args.specialization_strategy)));
     defer lowered.deinit();
     // The program links the objects defining the entries it took, and no
     // other.
