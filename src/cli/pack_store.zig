@@ -1016,7 +1016,8 @@ pub const LoadedPacks = struct {
     /// Per dev pack and asking program, whether a splice of each artifact
     /// would place a line or a location in a module version the program does
     /// not lower against (`linesOutsideProgram`).
-    lines_outside: std.AutoHashMapUnmanaged(ProgramPack, std.ArrayList(bool)) = .empty,
+    lines_outside: std.AutoHashMapUnmanaged(ProgramPack, SourceEligibility) = .empty,
+
     /// Per object pack, whether the program takes one of its entries, so it
     /// links the pack's object; settled from the lowered program
     /// (`settleLinkedObjects`).
@@ -1046,6 +1047,16 @@ pub const LoadedPacks = struct {
     /// Neither lookup may expose a partial index or retry a failed collection.
     state: enum { pending, ready, unavailable } = .pending,
     failure: ?LoadError = null,
+
+    const SourceEligibility = struct {
+        present_files: std.ArrayList(bool) = .empty,
+        marks: std.ArrayList(bool) = .empty,
+
+        fn deinit(self: *SourceEligibility, allocator: Allocator) void {
+            self.present_files.deinit(allocator);
+            self.marks.deinit(allocator);
+        }
+    };
 
     fn recordOwner(self: *LoadedPacks, io: std.Io) Allocator.Error!*base.retained_cache.Owner {
         if (self.record_owner) |owner| return owner;
@@ -2204,17 +2215,25 @@ pub const LoadedPacks = struct {
 
     fn sourceMarks(self: *LoadedPacks, set: *const backend.dev.CodeExcerpt.Set, modules: Common.ProgramModules) Allocator.Error![]bool {
         const slot = try self.lines_outside.getOrPut(self.allocator, ProgramPack.of(set, modules));
-        if (!slot.found_existing) slot.value_ptr.* = .empty;
-        const first = slot.value_ptr.items.len;
-        if (first == set.excerpts.len) return slot.value_ptr.items;
+        if (!slot.found_existing) slot.value_ptr.* = .{};
+        const facts = slot.value_ptr;
+        const first = facts.marks.items.len;
+        if (first == set.excerpts.len) return facts.marks.items;
+        // File identities and their bindings are immutable as the set grows.
+        // Test each new file once, rather than once per source location.
+        const old_files = facts.present_files.items.len;
+        try facts.present_files.ensureTotalCapacity(self.allocator, set.source_files.len);
+        for (set.source_files[old_files..]) |identity| {
+            facts.present_files.appendAssumeCapacity(Common.programHasModule(modules, identity));
+        }
         // Keep the old prefix on allocation failure; retry only the new suffix.
-        try slot.value_ptr.resize(self.allocator, set.excerpts.len);
-        errdefer slot.value_ptr.items.len = first;
-        const marks = slot.value_ptr.items;
+        try facts.marks.resize(self.allocator, set.excerpts.len);
+        errdefer facts.marks.items.len = first;
+        const marks = facts.marks.items;
         for (set.excerpts[first..], marks[first..]) |artifact, *marked| {
-            marked.* = artifact.loc.hasLocation() and !Common.programHasModule(modules, set.source_files[artifact.loc.file]);
+            marked.* = artifact.loc.hasLocation() and !facts.present_files.items[artifact.loc.file];
             for (artifact.lines) |line| {
-                if (line.loc.hasLocation() and !Common.programHasModule(modules, set.source_files[line.loc.file])) marked.* = true;
+                if (line.loc.hasLocation() and !facts.present_files.items[line.loc.file]) marked.* = true;
             }
         }
         try backend.dev.CodeExcerpt.markNewReferrers(self.allocator, set, marks, first, .skip);
@@ -2567,6 +2586,38 @@ const IndexFixture = struct {
         return allocator.dupe(u8, record.path);
     }
 };
+
+test "indexed source eligibility extends file facts and keeps programs independent" {
+    const F = IndexFixture;
+    var packs = LoadedPacks.init(F.allocator);
+    defer packs.deinit();
+    var artifacts = [_]backend.dev.CodeExcerpt.Excerpt{ F.excerpt(1, "first"), F.excerpt(2, "second"), F.excerpt(3, "caller") };
+    artifacts[0].loc = .{ .file = 0, .line = 1, .column = 1 };
+    artifacts[1].lines = &.{.{ .offset = 0, .loc = .{ .file = 1, .line = 2, .column = 1 }, .region = base.Region.zero() }};
+    artifacts[2].refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }};
+    const files = [_][32]u8{ @splat(7), @splat(8) };
+    var set = backend.dev.CodeExcerpt.Set{ .arena = undefined, .excerpts = artifacts[0..1], .source_files = files[0..1] };
+    try std.testing.expectEqualSlices(bool, &.{false}, try packs.sourceMarks(&set, &.{files[0]}));
+    set.excerpts = &artifacts;
+    set.source_files = &files;
+    try std.testing.expectEqualSlices(bool, &.{ false, true, true }, try packs.sourceMarks(&set, &.{files[0]}));
+    try std.testing.expectEqualSlices(bool, &.{ true, false, false }, try packs.sourceMarks(&set, &.{files[1]}));
+    try std.testing.expectEqualSlices(bool, &.{ false, true, true }, try packs.sourceMarks(&set, &.{files[0]}));
+}
+
+test "indexed graph without marked seeds needs no propagation allocation" {
+    const F = IndexFixture;
+    var artifacts = [_]backend.dev.CodeExcerpt.Excerpt{ F.excerpt(1, "caller"), F.excerpt(2, "callee") };
+    artifacts[0].refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }};
+    const set = backend.dev.CodeExcerpt.Set{ .arena = undefined, .excerpts = &artifacts };
+    var marked = [_]bool{ false, false };
+    var failures = std.testing.FailingAllocator.init(F.allocator, .{ .fail_index = 0 });
+    try backend.dev.CodeExcerpt.markNewReferrers(failures.allocator(), &set, &marked, 0, .skip);
+    try std.testing.expectEqualSlices(bool, &.{ false, false }, &marked);
+    marked[1] = true;
+    try backend.dev.CodeExcerpt.markNewReferrers(F.allocator, &set, &marked, 0, .skip);
+    try std.testing.expectEqualSlices(bool, &.{ true, true }, &marked);
+}
 
 test "indexed object cache reads only requested closure regardless of unrelated history" {
     var fixture: IndexFixture = undefined;

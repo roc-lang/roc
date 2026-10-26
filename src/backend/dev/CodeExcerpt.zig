@@ -2235,6 +2235,8 @@ pub fn markReferrers(allocator: Allocator, set: *const Set, marked: []bool, proc
 pub fn markNewReferrers(allocator: Allocator, set: *const Set, marked: []bool, first: usize, proc_symbols: ProcSymbols) Allocator.Error!void {
     std.debug.assert(marked.len == set.excerpts.len and first <= marked.len);
     if (first == marked.len) return;
+    // With no seed anywhere in the graph, no dependency can propagate one.
+    if (std.mem.indexOfScalar(bool, marked, true) == null) return;
     var by_proc = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
     defer by_proc.deinit();
     var by_thunk = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);

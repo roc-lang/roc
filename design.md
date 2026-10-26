@@ -1068,6 +1068,12 @@ it. Source eligibility and linked-entry facts extend over the appended suffix,
 using settled dependency facts. Decoded component owners and validated record
 leases outlive every captured set that refers to their provenance.
 
+Source eligibility retains exact program membership per appended source-file
+identity. Locations consume those file facts instead of searching the program's
+module list for each line. With no marked seed anywhere in a splice graph,
+reachability propagation has no work; a marked seed still receives the complete
+dependency propagation. Allocation failure preserves only completed prefixes.
+
 Payloads and metadata share content-addressed catalog storage under the
 local zero-provider identity within the procedure domain. They are independent of the producing module and obey the
 local native-cache retention window. Offers still route to their explicit
