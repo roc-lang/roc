@@ -96,7 +96,7 @@ fn value(comptime T: type, bytes: []const u8, offset: u64) Error!T {
 
 fn cString(bytes: []const u8, offset: u64) Error![]const u8 {
     const rest = try slice(bytes, offset, bytes.len - @min(offset, bytes.len));
-    const end = std.mem.indexOfScalar(u8, rest, 0) orelse return error.MalformedObject;
+    const end = std.mem.findScalar(u8, rest, 0) orelse return error.MalformedObject;
     return rest[0..end];
 }
 
@@ -260,7 +260,7 @@ fn readCoff(arena: Allocator, bytes: []const u8) Error!Object {
         const name = if (std.mem.readInt(u32, entry[0..4], .little) == 0)
             try cString(bytes, string_table_offset + std.mem.readInt(u32, entry[4..8], .little))
         else
-            entry[0 .. std.mem.indexOfScalar(u8, entry[0..8], 0) orelse 8];
+            entry[0 .. std.mem.findScalar(u8, entry[0..8], 0) orelse 8];
         const symbol_value = std.mem.readInt(u32, entry[8..12], .little);
         const section_number = std.mem.readInt(i16, entry[12..14], .little);
         const symbol_type = std.mem.readInt(u16, entry[14..16], .little);
