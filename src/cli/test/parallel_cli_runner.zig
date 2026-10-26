@@ -12,6 +12,7 @@
 //!   --threads <N>        Max concurrent child processes (default: CPU count)
 //!   --timeout <ms>       Per-test timeout in ms (default: 120000, 240000 with glue)
 //!   --include-llvm       Include size and speed LLVM backend jobs
+//!   --llvm-only          Run only the size and speed LLVM backend jobs
 //!   --specialize=<yes|no> Override the runtime lowering strategy for platform jobs
 //!   --cross-target <name> Build platform cases for this target without running them
 //!   --glue-roc <path>    Roc binary to use for glue generation (default: <roc_binary>)
@@ -154,6 +155,25 @@ const OptMode = enum(u8) {
 
 const base_test_opts = [_]OptMode{ .interpreter, .dev };
 const llvm_test_opts = [_]OptMode{ .size, .speed };
+
+/// Which execution modes a runner invocation builds cases for.
+const BackendSelection = enum {
+    /// The interpreter, the dev backend, and cases with no execution mode.
+    base,
+    /// Every case.
+    base_and_llvm,
+    /// Only the cases that run the LLVM backend's size or speed mode.
+    llvm,
+
+    fn admits(self: BackendSelection, backend: ?OptMode) bool {
+        const is_llvm = backend == .size or backend == .speed;
+        return switch (self) {
+            .base => !is_llvm,
+            .base_and_llvm => true,
+            .llvm => is_llvm,
+        };
+    }
+};
 
 const GlueExecutionMode = enum(u8) {
     default,
@@ -686,7 +706,7 @@ fn buildCases(
     io: std.Io,
     allocator: Allocator,
     filters: []const []const u8,
-    include_llvm: bool,
+    backends: BackendSelection,
     suites: SuiteSelection,
     glue_options: GlueRunnerOptions,
     cross_target: ?[]const u8,
@@ -700,29 +720,26 @@ fn buildCases(
                 if (target_info.requires_linux and builtin.os.tag != .linux) continue;
                 try appendCrossCompilePlatformSpecs(allocator, &cases, platform, target, filters);
             } else {
-                for (&base_test_opts) |opt| {
+                for (&(base_test_opts ++ llvm_test_opts)) |opt| {
+                    if (!backends.admits(opt)) continue;
                     try appendPlatformSpecs(allocator, &cases, platform, opt, filters);
-                }
-                if (include_llvm) {
-                    for (&llvm_test_opts) |opt| {
-                        try appendPlatformSpecs(allocator, &cases, platform, opt, filters);
-                    }
                 }
             }
         }
     }
 
     if (suites.includes(.echo)) {
-        try appendStaticCases(allocator, &cases, &echo_cases, filters, include_llvm);
+        try appendStaticCases(allocator, &cases, &echo_cases, filters, backends);
     }
     if (suites.includes(.glue)) {
-        try appendStaticCases(allocator, &cases, &glue_cases, filters, include_llvm);
-        try appendGlueRuntimeCases(allocator, &cases, filters, glue_options);
+        try appendStaticCases(allocator, &cases, &glue_cases, filters, backends);
+        // Glue runtime cases choose their execution mode with --glue-opt.
+        if (backends.admits(null)) try appendGlueRuntimeCases(allocator, &cases, filters, glue_options);
     }
     if (suites.includes(.subcommands)) {
-        try appendStaticCases(allocator, &cases, &subcommand_cases, filters, include_llvm);
+        try appendStaticCases(allocator, &cases, &subcommand_cases, filters, backends);
     }
-    if (suites.includes(.snapshot_programs)) {
+    if (suites.includes(.snapshot_programs) and backends.admits(null)) {
         try appendSnapshotProgramCases(io, allocator, &cases, filters);
     }
 
@@ -876,10 +893,10 @@ fn appendStaticCases(
     cases: *std.ArrayListUnmanaged(CliCase),
     source: []const CliCase,
     filters: []const []const u8,
-    include_llvm: bool,
+    backends: BackendSelection,
 ) CliRunnerError!void {
     for (source) |source_case| {
-        if (!include_llvm and (source_case.backend == .size or source_case.backend == .speed)) continue;
+        if (!backends.admits(source_case.backend)) continue;
         if (!matchesFilters(source_case, filters)) continue;
         var case = source_case;
         case.id = cases.items.len;
@@ -18787,6 +18804,7 @@ fn printUsage() void {
         \\  --threads <N>        Max concurrent workers (default: CPU count)
         \\  --timeout <ms>       Per-test timeout in ms (default: 120000, 240000 with glue)
         \\  --include-llvm       Include size and speed LLVM backend jobs
+        \\  --llvm-only          Run only the size and speed LLVM backend jobs
         \\  --specialize=<yes|no> Override the runtime lowering strategy for platform jobs
         \\  --cross-target <name> Build platform cases for this target without running them
         \\  --glue-roc <path>    Roc binary to use for glue generation (default: <roc_binary>)
@@ -18803,6 +18821,13 @@ const ParsedRunnerArgs = struct {
     glue_roc: ?[]const u8 = null,
     specialization_arg: ?[]const u8 = null,
     cross_target: ?[]const u8 = null,
+    llvm_only: bool = false,
+
+    fn backends(self: ParsedRunnerArgs) BackendSelection {
+        if (self.llvm_only) return .llvm;
+        if (self.standard.include_llvm) return .base_and_llvm;
+        return .base;
+    }
 };
 
 fn parseSuiteName(value: []const u8) ?Suite {
@@ -18839,6 +18864,7 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
     var glue_roc: ?[]const u8 = null;
     var specialization_arg: ?[]const u8 = null;
     var cross_target: ?[]const u8 = null;
+    var llvm_only = false;
     var saw_suite = false;
     var i: usize = 1;
     while (i < raw_args.len) : (i += 1) {
@@ -18859,6 +18885,10 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
                 std.debug.print("unknown suite: {s}\n", .{value});
                 return error.InvalidArgs;
             }
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--llvm-only")) {
+            llvm_only = true;
             continue;
         }
         if (std.mem.eql(u8, arg, "--glue-roc")) {
@@ -18950,6 +18980,10 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
         std.debug.print("--cross-target can only be used with the platforms suite\n", .{});
         return error.InvalidArgs;
     }
+    if (cross_target != null and llvm_only) {
+        std.debug.print("--cross-target and --llvm-only cannot be combined\n", .{});
+        return error.InvalidArgs;
+    }
 
     return .{
         .standard = harness.parseStandardArgsFromSlice(try standard_args.toOwnedSlice(allocator), allocator) catch |err| switch (err) {
@@ -18964,6 +18998,7 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
         .glue_roc = glue_roc,
         .specialization_arg = specialization_arg,
         .cross_target = cross_target,
+        .llvm_only = llvm_only,
     };
 }
 
@@ -19050,7 +19085,7 @@ test "cross target builds one build-only case per matching platform spec" {
         std.testing.io,
         arena.allocator(),
         &.{"test/fx/"},
-        false,
+        .base,
         suites,
         .{},
         "x64musl",
@@ -19108,7 +19143,7 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
     glue_execution_mode = parsed.glue_options.execution_mode;
     platform_specialization_arg = parsed.specialization_arg;
 
-    const tests = try buildCases(init.io, spec_arena.allocator(), args.filters, args.include_llvm, parsed.suites, parsed.glue_options, parsed.cross_target);
+    const tests = try buildCases(init.io, spec_arena.allocator(), args.filters, parsed.backends(), parsed.suites, parsed.glue_options, parsed.cross_target);
     if (tests.len == 0) return;
     const timeout_ms = effectiveTimeoutMs(args, parsed.suites);
 
@@ -19127,10 +19162,12 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
     std.debug.print("{d} tests, {d} workers, {d}s timeout", .{ tests.len, max_children, timeout_ms / 1000 });
     if (parsed.cross_target) |target| {
         std.debug.print(", cross target: {s}\n\n", .{target});
-    } else if (args.include_llvm) {
-        std.debug.print(", backends: interpreter, dev, size, speed\n\n", .{});
     } else {
-        std.debug.print(", backends: interpreter, dev\n\n", .{});
+        switch (parsed.backends()) {
+            .base => std.debug.print(", backends: interpreter, dev\n\n", .{}),
+            .base_and_llvm => std.debug.print(", backends: interpreter, dev, size, speed\n\n", .{}),
+            .llvm => std.debug.print(", backends: size, speed\n\n", .{}),
+        }
     }
     if (parsed.suites.includes(.glue)) {
         std.debug.print("Glue generator: {s}, glue-opt={s}\n\n", .{
@@ -19201,8 +19238,8 @@ test "static CLI cases honor LLVM availability before name filters" {
     defer arena.deinit();
     var suites = SuiteSelection{};
     suites.add(.subcommands);
-    for ([_]bool{ false, true }) |include_llvm| {
-        const cases = try buildCases(std.testing.io, arena.allocator(), &.{"issue 11563:"}, include_llvm, suites, .{}, null);
+    for ([_]BackendSelection{ .base, .base_and_llvm, .llvm }) |backends| {
+        const cases = try buildCases(std.testing.io, arena.allocator(), &.{"issue 11563:"}, backends, suites, .{}, null);
         var speed_count: usize = 0;
         var other_count: usize = 0;
         for (cases) |case| {
@@ -19212,8 +19249,26 @@ test "static CLI cases honor LLVM availability before name filters" {
                 other_count += 1;
             }
         }
-        try std.testing.expectEqual(@as(usize, @intFromBool(include_llvm)), speed_count);
-        try std.testing.expectEqual(@as(usize, 3), other_count);
+        try std.testing.expectEqual(@as(usize, @intFromBool(backends != .base)), speed_count);
+        try std.testing.expectEqual(@as(usize, if (backends == .llvm) 0 else 3), other_count);
+    }
+}
+
+test "the LLVM-only selection builds every size and speed case and nothing else" {
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    var suites = SuiteSelection{};
+    suites.addAll();
+    const all = try buildCases(std.testing.io, arena.allocator(), &.{}, .base_and_llvm, suites, .{}, null);
+    const llvm = try buildCases(std.testing.io, arena.allocator(), &.{}, .llvm, suites, .{}, null);
+    var expected: usize = 0;
+    for (all) |case| {
+        if (case.backend == .size or case.backend == .speed) expected += 1;
+    }
+    try std.testing.expectEqual(expected, llvm.len);
+    for (llvm, 0..) |case, index| {
+        try std.testing.expect(case.backend == .size or case.backend == .speed);
+        try std.testing.expectEqual(index, case.id);
     }
 }
 
