@@ -1650,7 +1650,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         .executor = target.post_check_executor,
         .metrics_out = spec_constr_metrics,
     };
-    var procedure_usage = if (target.inline_mode != .none) blk: {
+    var procedure_usage = if (target.inline_mode != .none and target.inline_mode != .procedures) blk: {
         var spec_constr_timing_scope = PipelineStageScope.begin(target.timing, .spec_constr);
         defer spec_constr_timing_scope.end();
         const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsageWithOptions(allocator, &lifted, target.spec_constr_clone_inlining, spec_constr_options);

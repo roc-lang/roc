@@ -9188,8 +9188,8 @@ record the same continuation proof rather than relying on downstream discovery.
 
 The explicit `InlineMode` controls the optional specialization work:
 
-- `.none` skips Monotype Lifted SpecConstr and produces an empty solved inline
-  plan. The interpreter selects this.
+- `.none` runs only iterator fusion from Monotype Lifted SpecConstr and
+  produces an empty solved inline plan. The interpreter selects this.
 - `.wrappers` runs SpecConstr and produces wrapper and exact-single-use inline
   decisions from Lambda Solved. Size and speed modes select this.
 - `.wrappers_and_source_single_use` makes the same wrapper decisions, and
@@ -9197,8 +9197,10 @@ The explicit `InlineMode` controls the optional specialization work:
   separately compiled callers the same inline decisions.
 - `.procedures` retains standalone procedures rather than substituting their
   bodies. Dev builds and compile-time evaluation select it so unchanged
-  procedures remain eligible for early native-code reuse. SpecConstr still
-  performs iterator fusion; the LIR passes that bound list copying still run.
+  procedures remain eligible for early native-code reuse. Like `.none`, it
+  runs only iterator fusion, without general SpecConstr normalization,
+  specialization, or procedure-usage collection for an empty inline plan.
+  The LIR passes that bound list copying still run.
   Dev SpecConstr (`.iterator_fusion` clone inlining) clones no workers for call patterns or
   callables (`CloneInlining.specializesCallPatterns`): which clones a function
   gets depends on every call the program makes to it, so a body rewritten to
@@ -9215,8 +9217,8 @@ function-reference/direct-call operands. A call whose function is a function
 definition written as its callee, such as `x |> (|a| a + n)`, is lifted as a
 direct call to that function with the definition's capture values as its
 capture operands, evaluated before the arguments; it constructs no function
-value. When `.none` skips SpecConstr, the
-pipeline consumes that output directly and must not repeat capture analysis.
+value. The iterator-only pass used by `.none` and `.procedures` preserves
+this ownership boundary: the pipeline must not repeat capture analysis.
 SpecConstr can change free-variable use while cloning and rewriting function
 bodies, so SpecConstr owns one exact capture finalization before it returns its
 Monotype Lifted output. No later pipeline stage repeats that finalization.
