@@ -2076,9 +2076,9 @@ const Pass = struct {
     }
 
     /// Begin seeding a region's facts: the same fact arrives from several
-    /// seeds (global facts, the raw meet, the stable meet, persisted loop
-    /// facts), and a repeat would spend the fact cap and slow the merge
-    /// meets, so seeds are deduplicated as they arrive.
+    /// seeds (the raw meet, the stable meet, persisted loop facts), and a
+    /// repeat would spend the fact cap and slow the merge meets, so seeds
+    /// are deduplicated as they arrive.
     fn beginSeeding(self: *Pass) void {
         self.fact_seen.clearRetainingCapacity();
         self.seeding = true;

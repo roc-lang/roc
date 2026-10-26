@@ -1,6 +1,5 @@
 RemainderDivisorFactScope := {}
 
-# repro for https://github.com/roc-lang/roc/issues/12556
 # A remainder inside a `List.map` closure proves its divisor nonzero only on
 # paths that run the remainder. Mapping an empty list never runs it, so
 # `n == 0` stays true after the map.
