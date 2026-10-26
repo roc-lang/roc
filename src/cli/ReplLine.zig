@@ -7,6 +7,7 @@ const builtin = @import("builtin");
 
 const ansi_term = @import("ansi_term.zig");
 const unicode = @import("unicode.zig");
+const width_probe = @import("width_probe.zig");
 const Unix = @import("Unix.zig");
 const Windows = @import("Windows.zig");
 const base = @import("base");
@@ -489,6 +490,11 @@ allocator: Allocator,
 history: History,
 kill_ring: ?[]const u8,
 replay_index: ?usize,
+/// How this terminal renders sequences whose width Unicode data cannot settle,
+/// measured once per session by `width_probe`.
+width_model: unicode.WidthModel,
+/// Whether the width probe has already run, so it never runs twice.
+width_probed: bool,
 
 pub fn init(allocator: Allocator) ReplLine {
     return ReplLine{
@@ -496,6 +502,8 @@ pub fn init(allocator: Allocator) ReplLine {
         .history = History.init(allocator),
         .kill_ring = null,
         .replay_index = null,
+        .width_model = .{},
+        .width_probed = false,
     };
 }
 
@@ -526,6 +534,9 @@ const LineState = struct {
     prompt_width: usize,
     out: *std.Io.Writer,
     in: std.Io.File,
+    /// How this terminal renders sequences whose width Unicode data cannot
+    /// settle, measured once per session.
+    width_model: unicode.WidthModel,
     /// UTF-8 byte offset of the cursor. This is always a grapheme boundary;
     /// terminal-cell positioning is computed separately from the buffer prefix.
     col_offset: usize,
@@ -541,7 +552,7 @@ const LineState = struct {
 };
 
 fn cursorColumn(state: *const LineState) error{InvalidUtf8}!usize {
-    return state.prompt_width + try unicode.displayWidth(state.line_buffer.items[0..state.col_offset], state.prompt_width);
+    return state.prompt_width + try unicode.displayWidth(state.line_buffer.items[0..state.col_offset], state.prompt_width, state.width_model);
 }
 
 fn setEditorCursor(state: *LineState) CommandError!void {
@@ -1037,7 +1048,29 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
     defer arena_allocator.deinit();
     const temp = arena_allocator.allocator();
 
-    const prompt_width = try ansi_term.computeDisplayWidth(prompt);
+    const old = switch (SUPPORTED_OS) {
+        .posix => try Unix.init(),
+        .windows => try Windows.init(),
+    };
+    defer old.deinit();
+
+    if (SUPPORTED_OS == .windows) {
+        try ansi_term.setCursorColumn(out, 0);
+        try ansi_term.clearFromCursorToLineEnd(out);
+    }
+
+    // Ask the terminal how wide it draws the emoji sequences Unicode data
+    // cannot settle. This runs after raw mode, so the reply is not held by
+    // line discipline, and before the first prompt, so nothing is drawn yet.
+    // Keystrokes typed during the probe are handed to the parser below.
+    var probe_input = std.ArrayList(u8).empty;
+    defer probe_input.deinit(temp);
+    if (!self.width_probed and width_probe.interactive(in)) {
+        self.width_probed = true;
+        self.width_model = try width_probe.measure(std_io, in, out, &probe_input, temp);
+    }
+
+    const prompt_width = try ansi_term.computeDisplayWidth(prompt, self.width_model);
 
     var state = ReplLine.LineState{
         .prompt = prompt,
@@ -1054,18 +1087,8 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
         .kill_ring = &self.kill_ring,
         .replay_index = &self.replay_index,
         .ctrl_c_armed = false,
+        .width_model = self.width_model,
     };
-
-    const old = switch (SUPPORTED_OS) {
-        .posix => try Unix.init(),
-        .windows => try Windows.init(),
-    };
-    defer old.deinit();
-
-    if (SUPPORTED_OS == .windows) {
-        try ansi_term.setCursorColumn(out, 0);
-        try ansi_term.clearFromCursorToLineEnd(out);
-    }
 
     // Enable bracketed paste so we can distinguish a multi-line paste from
     // multiple individually typed Enter presses.
@@ -1103,9 +1126,14 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
         }
 
         if (events.items.len == 0) {
-            const new_bytes = try in.readStreaming(std_io, &.{&read_buf});
-            if (new_bytes == 0) continue;
-            try parser.feed(read_buf[0..new_bytes], &events, temp);
+            if (probe_input.items.len > 0) {
+                try parser.feed(probe_input.items, &events, temp);
+                probe_input.clearRetainingCapacity();
+            } else {
+                const new_bytes = try in.readStreaming(std_io, &.{&read_buf});
+                if (new_bytes == 0) continue;
+                try parser.feed(read_buf[0..new_bytes], &events, temp);
+            }
         }
 
         var done = false;
@@ -1649,6 +1677,7 @@ test "Keyboard commands: advanced bindings" {
         .kill_ring = &kill_ring,
         .replay_index = &dummy_replay_index,
         .ctrl_c_armed = false,
+        .width_model = .{},
     };
     defer state.line_buffer.deinit(testing.allocator);
 
@@ -1761,6 +1790,7 @@ fn testLineState(out: *std.Io.Writer, kill_ring: *?[]const u8, replay_index: *?u
         .kill_ring = kill_ring,
         .replay_index = replay_index,
         .ctrl_c_armed = false,
+        .width_model = .{},
     };
 }
 
@@ -2045,6 +2075,7 @@ test "History: transient line preservation" {
         .kill_ring = &kill_ring,
         .replay_index = &dummy_replay_index,
         .ctrl_c_armed = false,
+        .width_model = .{},
     };
 
     // Simulate typing a transient command "third draft"
@@ -2107,6 +2138,7 @@ test "History: replay index" {
         .kill_ring = &kill_ring,
         .replay_index = &replay_index,
         .ctrl_c_armed = false,
+        .width_model = .{},
     };
     defer state.line_buffer.deinit(temp);
 
@@ -2136,6 +2168,7 @@ test "History: replay index" {
         .kill_ring = &kill_ring,
         .replay_index = &replay_index,
         .ctrl_c_armed = false,
+        .width_model = .{},
     };
     defer state2.line_buffer.deinit(temp);
 
