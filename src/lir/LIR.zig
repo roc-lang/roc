@@ -2116,6 +2116,9 @@ pub const LirProcSpec = struct {
     /// `unless_caller_drives` statement: its entry records whether the
     /// erased-call runtime made the call.
     reads_caller_drives: bool = false,
+    /// Producer-owned tail-drive summary. Cached bodies retain this fact so
+    /// callers make a pending erased call before reading its result.
+    may_leave_pending: bool = false,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.
     tail_transform: TailTransform = .none,
     /// Set by ARC on every procedure that makes or receives a same-SCC tail

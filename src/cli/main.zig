@@ -8865,6 +8865,7 @@ fn objectPackBytes(
             .rc_read_only_params = proc.rc_read_only_params,
             .rc_ret_unique = proc.rc_ret_unique,
             .rc_ret_unique_fields = proc.rc_ret_unique_fields,
+            .may_leave_pending = proc.may_leave_pending,
             .rc_ret_conditions = try GuardedList.dupe(arena, u32, store.getU32Span(proc.rc_ret_conditions)),
         });
     }
@@ -9163,6 +9164,7 @@ const PackOffers = struct {
         /// A rule read from the program's code withholds it.
         withheld: bool,
         test_compatible: bool,
+        may_leave_pending: bool,
         rc_borrowed_params: u64,
         rc_ret_borrowed: bool,
         rc_ret_lenders: u64,
@@ -9283,6 +9285,7 @@ const PackOffers = struct {
             .rc_read_only_params = proc.rc_read_only_params,
             .rc_ret_unique = proc.rc_ret_unique,
             .rc_ret_unique_fields = proc.rc_ret_unique_fields,
+            .may_leave_pending = proc.may_leave_pending,
             .rc_ret_conditions = try GuardedList.dupe(arena, u32, store.getU32Span(proc.rc_ret_conditions)),
             .name = try arena.dupe(u8, store.procDebugName(id) orelse ""),
             .fingerprint = fingerprint,
@@ -9334,6 +9337,7 @@ const PackOffers = struct {
                     .rc_read_only_params = offer.rc_read_only_params,
                     .rc_ret_unique = offer.rc_ret_unique,
                     .rc_ret_unique_fields = offer.rc_ret_unique_fields,
+                    .may_leave_pending = offer.may_leave_pending,
                     .rc_ret_conditions = offer.rc_ret_conditions,
                 });
             }

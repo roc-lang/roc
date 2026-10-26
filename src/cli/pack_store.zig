@@ -1080,7 +1080,7 @@ pub const LoadedPacks = struct {
         const origin = old.set.excerpts[old.index].metadata_origin orelse return false;
         if (!std.mem.eql(u8, &origin.record.owner.domain, &store.domain) or !std.mem.eql(u8, &origin.record.digest, &component) or origin.index != ordinal) return false;
         const hit = self.specs.get(spec.key) orelse return false;
-        if (hit.rc_borrowed_params != spec.rc_borrowed_params or hit.rc_ret_borrowed != spec.rc_ret_borrowed or
+        if (hit.may_leave_pending != spec.may_leave_pending or hit.rc_borrowed_params != spec.rc_borrowed_params or hit.rc_ret_borrowed != spec.rc_ret_borrowed or
             hit.rc_ret_lenders != spec.rc_ret_lenders or hit.rc_read_only_params != spec.rc_read_only_params or
             hit.rc_ret_unique != spec.rc_ret_unique or hit.rc_ret_unique_fields != spec.rc_ret_unique_fields or
             !std.mem.eql(u32, hit.rc_ret_conditions, spec.rc_ret_conditions) or hit.comptime_root_reads.len != spec.comptime_root_reads.len) return false;
@@ -1756,6 +1756,7 @@ pub const LoadedPacks = struct {
             .rc_read_only_params = spec.rc_read_only_params,
             .rc_ret_unique = spec.rc_ret_unique,
             .rc_ret_unique_fields = spec.rc_ret_unique_fields,
+            .may_leave_pending = spec.may_leave_pending,
             .rc_ret_conditions = spec.rc_ret_conditions,
         });
     }
@@ -1781,6 +1782,7 @@ pub const LoadedPacks = struct {
                         .rc_read_only_params = spec.rc_read_only_params,
                         .rc_ret_unique = spec.rc_ret_unique,
                         .rc_ret_unique_fields = spec.rc_ret_unique_fields,
+                        .may_leave_pending = spec.may_leave_pending,
                         .rc_ret_conditions = spec.rc_ret_conditions,
                     },
                     .pack = @intCast(pack_index),

@@ -21932,6 +21932,14 @@ callee can return with a call pending, and on each deferred call:
   by its function pointer and the procedure asks with its own, so a value no
   callee read cannot answer for a different procedure entered later.
 
+The pass also publishes `LirProcSpec.may_leave_pending`, its exact procedure
+summary, into native cache offers. Reusing a body-less native entry seeds the
+consumer's propagation with that producer fact, including when no locally
+compiled body contains a deferred call. Callers must drive or forward that
+pending work before treating its result slot as a value. The versioned pack
+format records the summary alongside the ownership ABI; an older entry without
+the fact is incompatible, never assumed to return a completed value.
+
 A call's result may be converted to another representation before it is
 returned, by statements after the call. The pass marks a direct call or a
 deferred call `returns_pending` when its value reaches the return through

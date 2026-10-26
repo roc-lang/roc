@@ -3333,6 +3333,7 @@ const Lowerer = struct {
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
             .external = cached != null,
+            .may_leave_pending = if (cached) |hit| hit.may_leave_pending else false,
             .cache_key = cached_key,
             .code_key = code_key,
             .source_monotype_fn = if (source_fn.source) |template| if (template.frozen_fn) |mono_fn| @backingInt(mono_fn) else null else null,
