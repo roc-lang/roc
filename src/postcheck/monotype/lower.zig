@@ -72591,9 +72591,15 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
     builder.active_body_draft = null;
     builder.type_cache = .empty;
     defer builder.type_cache.deinit(gpa);
-    var view_data: ModuleViewData = undefined;
-    const view = &view_data;
+    var views: [1]ModuleViewData = undefined;
+    const view = &views[0];
+    builder.borrowed_module_views = &views;
+    builder.persistent_closed_occurrences = .empty;
+    defer builder.persistent_closed_occurrences.deinit(gpa);
+    builder.module_index = @TypeOf(builder.module_index).init(gpa);
+    defer builder.module_index.deinit();
     view.key = .{};
+    try builder.module_index.put(view.key.bytes, .root);
     view.names = &source_names;
     view.types = checked_types.view();
     // The program seeds this module as its lowering input, as the coordinator does.

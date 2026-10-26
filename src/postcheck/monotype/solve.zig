@@ -7527,7 +7527,13 @@ pub const InstGraph = struct {
                         if (left_named.backing) |left_backing| {
                             if (right_named.backing) |right_backing| {
                                 if (left_backing.authority == right_backing.authority) {
-                                    try pending.append(self.allocator, .{ .left = left_backing.node, .right = right_backing.node, .row_width = row_width });
+                                    // Each backing may pass through the other
+                                    // nominal instance after a structural lift.
+                                    // Resolve that edge before merging the two
+                                    // owners, which would turn it into a cycle.
+                                    const left_node = try self.backingBeforeNamedJoin(left, left_named, right);
+                                    const right_node = try self.backingBeforeNamedJoin(right, right_named, left);
+                                    try pending.append(self.allocator, .{ .left = left_node, .right = right_node, .row_width = row_width });
                                 } else {
                                     const private_is_left = left_backing.authority == .generated_private;
                                     const private_is_right = right_backing.authority == .generated_private;
@@ -7686,6 +7692,41 @@ pub const InstGraph = struct {
         const moved = try self.newNode(other_content);
         try self.union_(named_node, other);
         try pending.append(self.allocator, .{ .left = backing_node, .right = moved, .row_width = row_width });
+    }
+
+    /// The named relation has established that these two owner roots will
+    /// denote one instance. That explicit relation authorizes following the
+    /// other owner even before its argument pairs have been processed.
+    fn backingBeforeNamedJoin(self: *InstGraph, root: NodeId, owner: *const InstNamed, related_owner: NodeId) Allocator.Error!NodeId {
+        const declared = owner.backing.?;
+        var current = self.find(declared.node);
+        var next = (try self.namedJoinBackingNext(current, owner, related_owner)) orelse return current;
+        var seen = self.node_set_pool.acquire();
+        defer self.node_set_pool.release(&seen);
+        while (true) {
+            if ((try seen.getOrPut(current)).found_existing) {
+                // A pre-existing recursive backing remains recursive. This
+                // operation only prevents a join from creating a new cycle.
+                return declared.node;
+            }
+            current = next;
+            next = (try self.namedJoinBackingNext(current, owner, related_owner)) orelse break;
+        }
+        if (declared.node != current) {
+            var normalized = owner.*;
+            normalized.backing = .{ .node = current, .use = declared.use, .authority = declared.authority };
+            _ = try self.replaceContentWithoutSnapshotInvalidation(root, try self.namedContent(normalized));
+        }
+        return current;
+    }
+
+    fn namedJoinBackingNext(self: *InstGraph, current: NodeId, owner: *const InstNamed, related_owner: NodeId) Allocator.Error!?NodeId {
+        if (current != related_owner) return self.structuralBackingNext(current, owner);
+        const content_ = try self.rootContent(current);
+        if (content_ != .named) unreachable; // both owners were matched as named roots
+        const backing = content_.named.backing orelse
+            Common.invariant("related nominal owner has no declared backing");
+        return self.find(backing.node);
     }
 
     const StructuralBacking = struct {
@@ -15349,4 +15390,53 @@ test "interface request identity ignores the tag sorting memo" {
         identity.* = try captured.identity(graph);
     }
     try std.testing.expect(try ids[0].eql(ids[1], &types, &ns));
+}
+
+test "nominal joins after lifting another instance backing preserve structure in either order" {
+    const Case = struct {
+        fn run(a: Allocator) !void {
+            for (0..4) |variant| {
+                const reverse = variant & 1 != 0;
+                const phantom = variant & 2 != 0;
+                var types = Type.Store.init(a);
+                defer types.deinit();
+                var ns = names.NameStore.init(a);
+                defer ns.deinit();
+                const graph = try InstGraph.create(a, &types, &ns);
+                defer graph.destroy();
+                const module = try ns.internModuleIdentity(&@as([32]u8, @splat(0x74)));
+                const name = try ns.internTypeName("Wrapped");
+                const first_backing = try graph.newNode(.empty_record);
+                const second_backing = try graph.newNode(.empty_record);
+                const first = try graph.newNode(try graph.namedContent(.{
+                    .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+                    .def = .{ .module = module, .type_name = name },
+                    .kind = .nominal,
+                    .builtin_owner = null,
+                    .args = if (phantom) try graph.arena().dupe(NodeId, &.{try graph.newNode(.{ .primitive = .u64 })}) else &.{},
+                    .backing = .{ .node = first_backing, .use = .inspectable },
+                }));
+                var second_content = (try graph.content(first)).named.*;
+                second_content.backing.?.node = second_backing;
+                if (phantom) second_content.args = try graph.arena().dupe(NodeId, &.{try graph.newNode(.{ .primitive = .u64 })});
+                const second = try graph.newNode(try graph.namedContent(second_content));
+                try graph.unify(first, second_backing);
+                if (reverse) try graph.unify(second, first) else try graph.unify(first, second);
+                const retained = (try graph.namedNodes(first)).backing.?.node;
+                try std.testing.expect(!graph.sameClass(first, retained));
+                try std.testing.expect((try graph.content(retained)) == .empty_record);
+            }
+        }
+    };
+    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    try Case.run(counting.allocator());
+    for (0..counting.alloc_index) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
+        // Optional scratch retention may fail after the relation succeeds.
+        // Both success and propagated OOM must leave no owned allocations.
+        Case.run(failing.allocator()) catch |err| switch (err) {
+            error.OutOfMemory => {},
+            else => return err,
+        };
+    }
 }

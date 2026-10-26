@@ -16242,6 +16242,13 @@ leaf the same way. An equal structural value elsewhere in the scope is a
 different occurrence, and relating it to a nominal lifts its class into that
 nominal; a backing sharing that class would come to name the nominal it backs,
 and joining the two nominal instances would make a nominal its own backing.
+Structural relations can also make one instance's backing pass through another
+instance of the same nominal. Before joining those owners, the relation resolves
+their backing paths using the explicit equality of the two owner roots, including
+when their argument relations are still pending. Otherwise merging the roots
+would turn that path into a new self-reference. This preserves each backing's
+access and authority; backings of different authorities remain separate, and a
+backing cycle that already existed retains its recursive meaning.
 
 An import enters the graph as a leaf: a node standing for the finished type
 whose structure nothing has read yet. Reading a leaf's content expands one
