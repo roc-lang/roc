@@ -1339,10 +1339,11 @@ is a member of a lambda set in the signature of a procedure without a code
 key, or an app function such a procedure's code reaches. These are exactly
 the procedures a program taking that procedure from a pack lowers for it,
 and they follow from the program's types and source, so every program finds
-the same ones whatever it took from a pack. Every other procedure with a code
+the same ones whatever it took from a pack. When `owned_proc_signatures` is disabled, every other procedure with a code
 key is called only by code compiled with its current body, whose code key
 changes with that body, so ARC solves its signature and variants like any
-other procedure's. A stable procedure keeps its outcome variant ("Outcome-
+other procedure's. Dev policy pins those procedures too, as declared under
+"Mode Specialization". A stable procedure keeps its outcome variant ("Outcome-
 Conditioned Argument Restitution") for callers with a code key; a caller
 without one calls its pinned base. A variant of a procedure with a code key
 has a code key derived from it, since the variant's code is the source's.
@@ -9179,11 +9180,13 @@ The explicit `InlineMode` controls the optional specialization work:
 - `.wrappers` runs SpecConstr and produces wrapper and exact-single-use inline
   decisions from Lambda Solved. Size and speed modes select this.
 - `.wrappers_and_source_single_use` makes the same wrapper decisions, and
-  decides single use by the source instead of the program (below). Dev mode
-  selects this, because the object cache links dev procedures into programs
-  other than the one compiling them, and only decisions that depend on source
-  alone are the same in all of them. For the same reason dev SpecConstr
-  (`.iterator_fusion` clone inlining) clones no workers for call patterns or
+  decides single use by the source instead of the program (below), giving
+  separately compiled callers the same inline decisions.
+- `.procedures` retains standalone procedures rather than substituting their
+  bodies. Dev builds and compile-time evaluation select it so unchanged
+  procedures remain eligible for early native-code reuse. SpecConstr still
+  performs iterator fusion; the LIR passes that bound list copying still run.
+  Dev SpecConstr (`.iterator_fusion` clone inlining) clones no workers for call patterns or
   callables (`CloneInlining.specializesCallPatterns`): which clones a function
   gets depends on every call the program makes to it, so a body rewritten to
   call one would depend on the rest of the program.
@@ -22335,11 +22338,15 @@ procedure's uniqueness results rather than solving them again, so callers of a c
 procedure prove exactly the uniqueness they would against its body.
 
 Every program must lower a procedure an entry offers to the same LIR, since
-any of them may link it. Dev inlining depends only on source
-(`.wrappers_and_source_single_use`), so a pack program makes the inline
-decisions any program makes, and it keeps as a procedure every keyed
-specialization except a body its calls inline. A program that takes its
-cache hits during specialization, as a pack program does, could not inline a
+any of them may link it. Dev mode retains standalone procedures
+(`.procedures`), independent of cache state or the surrounding program.
+Its explicit `owned_proc_signatures` LIR policy pins each procedure to the
+type-determined owned base ABI, with demand holes borrowed and returns owned.
+Compile-time evaluation and dev-policy object-pack production select that
+same policy. Optimized runtime consumers keep inferred base signatures.
+Mandatory outcome-restitution variants remain available to callers that can
+demand them; this policy changes no ownership correctness rule. A program
+that takes its cache hits during specialization, as a pack program does, could not inline a
 body a hit replaced, so an entry is never a procedure whose calls the plan
 inlines (`inlined_at_calls`). Generated code names nothing a
 program numbers: a Debug invariant check names its procedure by content
@@ -22349,6 +22356,14 @@ LIR fingerprint with program numbering canonicalized, by the key a pack
 serves it by, and the CLI suite checks that each offered key has one
 fingerprint across a build, an edited warm build, and the edited source's
 cold build.
+
+Dev procedure ownership policy is explicit input to direct LIR lowering, not
+inferred from cache hits, source locations, or the presence of code keys.
+`LirPolicy` preserves it across shared-program consumer continuations. The
+existing site-call stability rule still applies to consumers that infer base
+signatures but use site code keys. Standalone dev procedures trade call-boundary
+optimization for cache reuse; iterator fusion, tag-case fusion, TRMC, and loop
+append promotion retain their existing semantics and eligibility.
 
 ### Outcome-Conditioned Argument Restitution
 

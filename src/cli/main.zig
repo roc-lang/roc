@@ -14269,7 +14269,7 @@ test "runtime specialization strategy helpers" {
 test "post-check optimization scope per opt level" {
     try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.speed));
     try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.size));
-    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers_and_source_single_use, postCheckInlineModeForOpt(.dev));
+    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.procedures, postCheckInlineModeForOpt(.dev));
     try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.none, postCheckInlineModeForOpt(.interpreter));
     try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.speed));
     try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.size));
@@ -14436,6 +14436,7 @@ fn checkedRuntimeLoweringConfig(
             .list_in_place_map = listInPlaceMapForOpt(opt),
             .zero_dict_seed = zeroDictSeedForOpt(opt),
             .site_code_keys = siteCodeKeysForOpt(opt),
+            .owned_proc_signatures = opt == .dev,
             .tag_reachability = tagReachabilityForOpt(opt),
             .prove_ranges = proveRangesForOpt(opt),
             .scalarize_joins = optimizeLirForOpt(opt),
@@ -14473,6 +14474,7 @@ test "native test generic procedures use the ordinary native dev representation 
     try std.testing.expectEqual(build.target.erased_capture_prefix, tests.target.erased_capture_prefix);
     try std.testing.expectEqual(build.target.target_usize, tests.target.target_usize);
     try std.testing.expectEqual(build.target.inline_expects, tests.target.inline_expects);
+    try std.testing.expect(build.target.owned_proc_signatures);
     try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, tests.target.code_provision);
     try std.testing.expect(tests.target.spec_cache == null);
 }

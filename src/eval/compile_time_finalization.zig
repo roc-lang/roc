@@ -1132,6 +1132,7 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
         .proc_debug_names = true,
         .spec_cache = if (options.object_cache) |cache| cache.spec_cache else null,
         .site_code_keys = true,
+        .owned_proc_signatures = true,
         .code_provision = if (!compilerHostMustUseInterpreterForCtfe() and backend.host_lir_codegen_available and options.object_cache != null)
             .host_dev_objects
         else

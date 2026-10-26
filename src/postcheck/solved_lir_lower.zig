@@ -185,6 +185,8 @@ pub const Options = struct {
     /// (`CheckedPipeline.TargetConfig.site_code_keys`); required whenever
     /// `spec_cache` is set.
     site_code_keys: bool = false,
+    /// Explicit dev ownership policy, independent of cache availability.
+    owned_proc_signatures: bool = false,
     inline_plan: SolvedInline.Plan = .{},
     /// Lower every keyed specialization's procedure body, even one whose every
     /// call was inlined, so a pack program can offer it.
@@ -908,6 +910,7 @@ const Lowerer = struct {
     spec_cache: ?Common.SpecCacheLookup,
     spec_cache_takes: Common.SpecCacheTakes,
     site_code_keys: bool,
+    owned_proc_signatures: bool,
     /// The module identities of this program's source files, which the
     /// object cache serves entries for (`Common.ProgramModules`).
     program_modules: Common.ProgramModules = &.{},
@@ -1282,6 +1285,7 @@ const Lowerer = struct {
             .spec_cache = options.spec_cache,
             .spec_cache_takes = options.spec_cache_takes,
             .site_code_keys = options.site_code_keys,
+            .owned_proc_signatures = options.owned_proc_signatures,
             .root_manifest = options.root_manifest,
             .fn_queue_index = 0,
             .initializer_queue_index = 0,
@@ -1500,7 +1504,8 @@ const Lowerer = struct {
         self.result.deinit();
     }
 
-    /// Mark every procedure with a code key that code without one can call
+    /// The explicit owned-ABI policy pins every procedure. Otherwise, mark
+    /// every procedure with a code key that code without one can call
     /// (`LIR.LirProcSpec.stable_signature`): a member of a lambda set in the
     /// signature of a procedure without a code key, or an app function such
     /// a procedure's code reaches (`Lifted.Program.appCalleesReachedBy`).
@@ -1510,6 +1515,13 @@ const Lowerer = struct {
     /// from a pack, so every program marks the same procedures. Every
     /// specialization of a marked source function is marked.
     fn markStableSignatures(self: *Lowerer) Common.LowerError!void {
+        if (self.owned_proc_signatures) {
+            for (self.fn_entries.items) |entry| {
+                const proc = entry.proc orelse continue;
+                self.result.store.getProcSpecPtr(proc).stable_signature = true;
+            }
+            return;
+        }
         // Without code keys no procedure is stable.
         if (!self.site_code_keys) return;
         const stable_sources = try self.allocator.alloc(bool, self.solved.lifted.fnCount());

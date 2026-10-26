@@ -13,13 +13,14 @@ const GuardedList = collections.GuardedList;
 /// Post-check inline analysis mode.
 pub const Mode = enum {
     none,
+    /// Retain standalone procedures, with iterator fusion in SpecConstr.
+    procedures,
     /// Inline wrappers, and bodies the whole program calls exactly once.
     wrappers,
     /// Inline wrappers, and bodies whose module's source calls them at
     /// exactly one site (`FnTemplate.single_source_call`). Both depend only on
     /// source, never on which other procedures a program contains, so every
-    /// program inlines the same calls. Dev builds use this: the object cache
-    /// links a dev procedure into programs other than the one compiling it.
+    /// program inlines the same calls, including separately compiled callers.
     wrappers_and_source_single_use,
 };
 
@@ -109,7 +110,7 @@ pub fn analyze(
     keep_keyed_specializations: bool,
 ) std.mem.Allocator.Error!OwnedPlan {
     return switch (mode) {
-        .none => OwnedPlan.empty(allocator),
+        .none, .procedures => OwnedPlan.empty(allocator),
         .wrappers => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .program),
         .wrappers_and_source_single_use => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .source),
     };

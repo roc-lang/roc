@@ -135,11 +135,9 @@ pub const WorkMetrics = struct {
     lir_continuations: u32 = 0,
 };
 
-/// The inlining a dev build specializes under. The object cache links dev
-/// procedures into other programs, so dev decides inlining from source alone,
-/// the same in every program; compile-time evaluation specializes under it
-/// too, so its code is the code a dev build compiles.
-pub const dev_inline_mode: InlineMode = .wrappers_and_source_single_use;
+/// Dev keeps standalone procedures eligible for reuse in other programs.
+/// Compile-time evaluation uses the same source-independent policy.
+pub const dev_inline_mode: InlineMode = .procedures;
 
 /// SpecConstr's clone-inlining scope for dev builds and compile-time
 /// evaluation.
@@ -219,6 +217,9 @@ pub const TargetConfig = struct {
     /// procedures' signatures freely. Required whenever `spec_cache` serves
     /// the program.
     site_code_keys: bool = false,
+    /// Keep the dev procedure ownership ABI independent of caller demand.
+    /// Optimized consumers leave this off and infer their base signatures.
+    owned_proc_signatures: bool = false,
     /// Keep every keyed specialization procedure through compaction; a pack
     /// program offers them from its manifest whether or not its export
     /// wrappers inlined their calls.
@@ -1138,6 +1139,7 @@ pub const LirPolicy = struct {
     proc_debug_names: bool,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
     site_code_keys: bool,
+    owned_proc_signatures: bool,
     code_provision: CodeProvision,
     keep_specialization_procs: bool,
     promote_loop_appends: base.TestSwitch(true),
@@ -1869,6 +1871,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .spec_cache = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
         .spec_cache_takes = target.code_provision.specCacheTakes(),
         .site_code_keys = target.site_code_keys,
+        .owned_proc_signatures = target.owned_proc_signatures,
         .inline_plan = prepared.inline_plan.view(),
         .keep_specialization_procs = target.keep_specialization_procs,
         .post_check_executor = target.post_check_executor,
@@ -2396,6 +2399,17 @@ fn convertRuntimeSchemas(
 
 fn checkedPipelineInvariant(comptime message: []const u8) noreturn {
     base.invariant("checked pipeline invariant violated: {s}", .{message});
+}
+
+test "LIR ownership policy survives shared consumer continuation without a cache" {
+    for ([_]bool{ false, true }) |owned| {
+        const producer: TargetConfig = .{ .owned_proc_signatures = owned };
+        const policy = LirPolicy.fromTarget(producer);
+        var consumer: TargetConfig = .{ .owned_proc_signatures = !owned };
+        policy.applyTo(&consumer);
+        try std.testing.expectEqual(owned, consumer.owned_proc_signatures);
+        try std.testing.expect(consumer.spec_cache == null);
+    }
 }
 
 test "checked pipeline declarations are referenced" {
