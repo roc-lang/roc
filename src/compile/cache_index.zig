@@ -113,6 +113,20 @@ pub const Node = struct {
     }
 };
 
+/// Decoded pages retained by one catalog reader. Reopening metadata ownership
+/// validates the published sequence before these pages can be read again.
+pub const ReadCache = struct {
+    ids: [64]RecordId = @splat(0),
+    nodes: [64]Node = undefined,
+    fn clear(self: *ReadCache) void {
+        @memset(&self.ids, 0);
+    }
+    fn invalidate(self: *ReadCache, id: RecordId) void {
+        const slot = id % self.ids.len;
+        if (self.ids[slot] == id) self.ids[slot] = 0;
+    }
+};
+
 /// Open catalog with bounded recovery and positional record access.
 pub const Index = struct {
     dir: Dir,
@@ -120,6 +134,7 @@ pub const Index = struct {
     file: Io.File,
     header: Header,
     counters: *Counters,
+    read_cache: ?*ReadCache = null,
 
     /// `dir` and the shard lock are borrowed. The lock file is separate from
     /// both files that this protocol replaces or truncates.
@@ -137,6 +152,17 @@ pub const Index = struct {
         return result;
     }
 
+    /// Reacquire the current published catalog under the kernel shard lock.
+    /// Any external transaction invalidates the invocation's decoded pages.
+    pub fn refresh(self: *Index) Error!void {
+        errdefer if (self.read_cache) |cache| cache.clear();
+        try self.recover();
+        const current = try Header.decode(&try self.readRecord(0));
+        if ((self.file.length(self.io) catch return error.IoFailure) < current.next * record_size) return error.CorruptCatalog;
+        if (current.sequence != self.header.sequence) if (self.read_cache) |cache| cache.clear();
+        self.header = current;
+    }
+
     pub fn close(self: *Index) void {
         self.file.close(self.io);
     }
@@ -152,6 +178,7 @@ pub const Index = struct {
     }
 
     fn writeRecord(self: *Index, id: RecordId, bytes: Record) Error!void {
+        if (self.read_cache) |cache| cache.invalidate(id);
         if (id > std.math.maxInt(u64) / record_size) return error.CorruptCatalog;
         self.counters.writes += 1;
         self.counters.written_bytes += record_size;
@@ -160,6 +187,14 @@ pub const Index = struct {
 
     pub fn node(self: *Index, id: RecordId) Error!Node {
         if (id == 0 or id >= self.header.next) return error.CorruptCatalog;
+        if (self.read_cache) |cache| {
+            const slot = id % cache.ids.len;
+            if (cache.ids[slot] == id) return cache.nodes[slot];
+            const value = try Node.decode(&try self.readRecord(id), self.header.next);
+            cache.ids[slot] = id;
+            cache.nodes[slot] = value;
+            return value;
+        }
         return Node.decode(&try self.readRecord(id), self.header.next);
     }
 
@@ -582,4 +617,60 @@ test "catalog acquisition retains paths and sees pending writes" {
     try tx.commit();
     var fresh = index.transaction();
     try std.testing.expectEqual(@as(Value, @splat(3)), (try fresh.find(.artifacts, key)).?.value);
+}
+
+test "catalog sessions reuse decoded pages and invalidate external commits and interrupted redo" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var counters = Counters{};
+    var index = try Index.open(tmp.dir, io, &counters);
+    defer index.close();
+    var cache: ReadCache = .{};
+    index.read_cache = &cache;
+    const key: Key = @splat(3);
+    {
+        var tx = index.transaction();
+        _ = try tx.putValue(.artifacts, key, @splat(1));
+        try tx.commit();
+    }
+    {
+        var tx = index.transaction();
+        _ = (try tx.find(.artifacts, key)).?;
+    }
+    const before = counters.reads;
+    for (0..10) |_| {
+        var tx = index.transaction();
+        try std.testing.expectEqual(@as(Value, @splat(1)), (try tx.find(.artifacts, key)).?.value);
+    }
+    try std.testing.expectEqual(before, counters.reads);
+    {
+        var other = try Index.open(tmp.dir, io, &counters);
+        defer other.close();
+        var tx = other.transaction();
+        _ = try tx.putValue(.artifacts, key, @splat(2));
+        try tx.commit();
+    }
+    try index.refresh();
+    {
+        var tx = index.transaction();
+        try std.testing.expectEqual(@as(Value, @splat(2)), (try tx.find(.artifacts, key)).?.value);
+    }
+    {
+        var other = try Index.open(tmp.dir, io, &counters);
+        defer other.close();
+        var tx = other.transaction();
+        _ = try tx.putValue(.artifacts, key, @splat(3));
+        try tx.prepare();
+        // A writer died after publishing redo, before publishing the header.
+    }
+    try index.refresh();
+    {
+        var tx = index.transaction();
+        try std.testing.expectEqual(@as(Value, @splat(3)), (try tx.find(.artifacts, key)).?.value);
+        _ = try tx.putValue(.artifacts, key, @splat(4));
+        try tx.commit();
+    }
+    var last = index.transaction();
+    try std.testing.expectEqual(@as(Value, @splat(4)), (try last.find(.artifacts, key)).?.value);
 }

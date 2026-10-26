@@ -300,6 +300,10 @@ pub const Store = struct {
             else => return err,
         };
         defer shard.close();
+        return self.acquireFromShard(key, timestamp, deferred, &shard);
+    }
+
+    fn acquireFromShard(self: *const Store, key: catalog.Key, timestamp: i64, deferred: ?*?RetentionBatch.Observation, shard: *Shard) Error!?Artifact {
         var tx = shard.index.transaction();
         const found = (try tx.find(.artifacts, key)) orelse return null;
         var metadata = try currentMetadata(&tx, key, found.value);
@@ -376,6 +380,12 @@ pub const Store = struct {
             else => return err,
         };
         defer shard.close();
+        return groupKeysInShard(allocator, group_key, &shard);
+    }
+
+    fn groupKeysInShard(allocator: Allocator, group_key: catalog.Key, shard: *Shard) Error![]catalog.Key {
+        var keys: std.ArrayList(catalog.Key) = .empty;
+        errdefer keys.deinit(allocator);
         var tx = shard.index.transaction();
         var cursor: catalog.Key = @splat(0);
         @memcpy(cursor[0..32], group_key[0..32]);
@@ -405,6 +415,9 @@ pub const RetentionBatch = struct {
     store: Store,
     pending: [shard_count][catalog.max_changes]Observation = undefined,
     counts: [shard_count]u8 = @splat(0),
+    shards: [shard_count]?Shard = @splat(null),
+    caches: [shard_count]catalog.ReadCache = @splat(.{}),
+    counters: catalog.Counters = .{},
 
     pub fn init(store: *const Store) Allocator.Error!RetentionBatch {
         return .{ .store = .{ .allocator = store.allocator, .io = store.io, .root = try store.allocator.dupe(u8, store.root) } };
@@ -415,6 +428,7 @@ pub const RetentionBatch = struct {
         // turns validated code into a failed compilation; leases remain held
         // until this flush attempt has finished.
         self.flush() catch {};
+        for (&self.shards) |*entry| if (entry.*) |*shard| shard.close();
         self.store.deinit();
     }
 
@@ -422,12 +436,40 @@ pub const RetentionBatch = struct {
         const number = Store.shardFor(key);
         if (self.counts[number] == catalog.max_changes) try self.flushShard(number);
         var observation: ?Observation = null;
-        const artifact = try self.store.acquireKeyObserved(key, timestamp, &observation);
+        const shard = self.acquireShard(number) catch |err| switch (err) {
+            error.Missing => return null,
+            else => return err,
+        };
+        defer shard.lock.unlock(self.store.io);
+        const artifact = try self.store.acquireFromShard(key, timestamp, &observation, shard);
         if (observation) |value| {
             self.pending[number][self.counts[number]] = value;
             self.counts[number] += 1;
         }
         return artifact;
+    }
+
+    fn acquireShard(self: *RetentionBatch, number: u4) Error!*Shard {
+        if (self.shards[number]) |*shard| {
+            shard.lock.lock(self.store.io, .exclusive) catch return error.IoFailure;
+            errdefer shard.lock.unlock(self.store.io);
+            try shard.index.refresh();
+            return shard;
+        }
+        var shard = try Shard.openRequired(&self.store, number, false, &self.counters);
+        shard.index.read_cache = &self.caches[number];
+        self.shards[number] = shard;
+        return &self.shards[number].?;
+    }
+
+    pub fn groupKeys(self: *RetentionBatch, allocator: Allocator, identity: Identity) Error![]catalog.Key {
+        const group_key = identity.indexedKey();
+        const shard = self.acquireShard(Store.shardFor(group_key)) catch |err| switch (err) {
+            error.Missing => return allocator.alloc(catalog.Key, 0),
+            else => return err,
+        };
+        defer shard.lock.unlock(self.store.io);
+        return Store.groupKeysInShard(allocator, group_key, shard);
     }
 
     pub fn flush(self: *RetentionBatch) Error!void {
@@ -437,9 +479,8 @@ pub const RetentionBatch = struct {
     fn flushShard(self: *RetentionBatch, number: u4) Error!void {
         const count = self.counts[number];
         if (count == 0) return;
-        var counters = catalog.Counters{};
-        var shard = try Shard.openRequired(&self.store, number, false, &counters);
-        defer shard.close();
+        const shard = try self.acquireShard(number);
+        defer shard.lock.unlock(self.store.io);
         var tx = shard.index.transaction();
         for (self.pending[number][0..count]) |observation| {
             // A rejected payload may have released its lease. Never apply that

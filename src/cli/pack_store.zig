@@ -1383,7 +1383,7 @@ pub const LoadedPacks = struct {
         for (self.index_roots.items) |root| {
             self.index_stats.bucket_opens += 1;
             const group = root.store.indexedIdentity(root.origin, key, @splat(0), .offer);
-            const keys = root.store.native.groupKeys(allocator, group) catch |err| switch (err) {
+            const keys = (try self.retentionBatch(root.store)).groupKeys(allocator, group) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => {
                     cacheable = false;

@@ -27219,3 +27219,22 @@ generation is discarded rather than applied to its replacement. Process death
 releases the leases and may lose unpublished retention observations, but cannot
 invalidate already accepted immutable bytes. Failed optional retention writes do
 not fail compilation. No age approximation or whole-catalog scan is introduced.
+
+
+Loop append promotion builds metadata lifetime topology only when an unattempted
+list loop parameter reaches an operation the pass can rewrite. Its producer-owned
+scan edges and exact forward closure establish this necessary condition; aliases,
+parameter writes, and cyclic paths remain in that closure. Unrelated appends do
+not require analyzing a read-only loop. A candidate that passes this condition
+still receives the complete existing metadata, ownership, and rewrite checks.
+
+
+Native acquisition batches retain open catalog and coordination handles, but
+release the kernel shard lock between operations. Every reacquisition recovers
+pending redo and validates the current catalog header sequence. A changed
+sequence invalidates all retained decoded pages; local writes invalidate the
+changed pages. Group enumeration and exact acquisition share this invocation-owned
+session. The page cache is bounded, performs no historical scan, and is never
+read outside shard ownership. Retention leases remain independent of catalog
+ownership. The session owns its descriptors and path until its acquisition owner
+releases the final retained records.
