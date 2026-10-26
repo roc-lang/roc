@@ -215,16 +215,23 @@ pub const Index = struct {
     }
 
     pub fn node(self: *Index, id: RecordId) Error!Node {
+        var storage: Node = undefined;
+        return (try self.nodeRef(id, &storage)).*;
+    }
+
+    /// Borrowed only until another node read, refresh, or transaction write.
+    fn nodeRef(self: *Index, id: RecordId, storage: *Node) Error!*const Node {
         if (id == 0 or id >= self.header.next) return error.CorruptCatalog;
         if (self.read_cache) |cache| {
             const slot = id % cache.ids.len;
-            if (cache.ids[slot] == id) return cache.nodes[slot];
-            const value = try Node.decode(&try self.readRecord(id), self.header.next);
-            cache.ids[slot] = id;
-            cache.nodes[slot] = value;
-            return value;
+            if (cache.ids[slot] != id) {
+                cache.nodes[slot] = try Node.decode(&try self.readRecord(id), self.header.next);
+                cache.ids[slot] = id;
+            }
+            return &cache.nodes[slot];
         }
-        return Node.decode(&try self.readRecord(id), self.header.next);
+        storage.* = try Node.decode(&try self.readRecord(id), self.header.next);
+        return storage;
     }
 
     pub fn transaction(self: *Index) Transaction {
@@ -281,14 +288,21 @@ pub const Transaction = struct {
     read_nodes: [64]Node = undefined,
 
     pub fn node(self: *Transaction, id: RecordId) Error!Node {
+        return (try self.nodeRef(id)).*;
+    }
+
+    /// Borrow until the next node read or mutation. Traversals consume each
+    /// branch before advancing, so they need not copy its leaf-sized payload.
+    fn nodeRef(self: *Transaction, id: RecordId) Error!*const Node {
         if (id == 0 or id >= self.header.next) return error.CorruptCatalog;
-        for (self.changes[0..self.count]) |change| if (change.id == id) return change.node;
+        for (self.changes[0..self.count]) |*change| if (change.id == id) return &change.node;
         const slot = id % self.read_ids.len;
-        if (self.read_ids[slot] == id) return self.read_nodes[slot];
-        const read = try self.index.node(id);
-        self.read_nodes[slot] = read;
-        self.read_ids[slot] = id;
-        return read;
+        if (self.index.read_cache != null) return self.index.nodeRef(id, &self.read_nodes[slot]);
+        if (self.read_ids[slot] != id) {
+            _ = try self.index.nodeRef(id, &self.read_nodes[slot]);
+            self.read_ids[slot] = id;
+        }
+        return &self.read_nodes[slot];
     }
 
     fn set(self: *Transaction, id: RecordId, value: Node) void {
@@ -338,7 +352,7 @@ pub const Transaction = struct {
         var id = self.header.roots[@backingInt(tree)];
         var lower_bit: usize = 0;
         while (id != 0) {
-            const entry = try self.node(id);
+            const entry = try self.nodeRef(id);
             switch (entry.kind) {
                 .leaf => return if (std.mem.eql(u8, &entry.key, &key)) .{ .id = id, .value = entry.value } else null,
                 .free => return error.CorruptCatalog,
@@ -360,7 +374,7 @@ pub const Transaction = struct {
         var count: usize = 0;
         var lower_bit: usize = 0;
         while (id != 0) {
-            const entry = try self.node(id);
+            const entry = try self.nodeRef(id);
             switch (entry.kind) {
                 .free => return error.CorruptCatalog,
                 .leaf => {
@@ -397,7 +411,7 @@ pub const Transaction = struct {
         var id = start;
         var lower_bit: usize = 0;
         while (id != 0) {
-            const entry = try self.node(id);
+            const entry = try self.nodeRef(id);
             switch (entry.kind) {
                 .free => return error.CorruptCatalog,
                 .leaf => return .{ .id = id, .key = entry.key, .value = entry.value },
