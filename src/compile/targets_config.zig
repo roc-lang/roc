@@ -74,6 +74,13 @@ pub const WasmTargetConfig = struct {
     initial_stack_size_ident: ?[]const u8 = null,
     global_base_ident: ?[]const u8 = null,
 
+    /// Whether the host owns the addresses below `global_base`, so the stack
+    /// sits above static data and compiled code checks its bounds. Known from
+    /// the header alone, before a `global_base` naming a constant resolves.
+    pub fn reservesLowMemory(self: WasmTargetConfig) bool {
+        return self.global_base != null or self.global_base_ident != null;
+    }
+
     fn deinit(self: WasmTargetConfig, allocator: Allocator) void {
         if (self.exports) |exports| {
             for (exports) |name| allocator.free(name);
@@ -96,6 +103,7 @@ pub const TargetConfigResolveReason = enum {
     expected_import_memory,
     expected_unsigned_integer,
     integer_out_of_range,
+    expected_positive_integer,
 
     pub fn message(self: TargetConfigResolveReason) []const u8 {
         return switch (self) {
@@ -106,6 +114,7 @@ pub const TargetConfigResolveReason = enum {
             .expected_import_memory => "must resolve to Zeroed, Uninitialized, or No",
             .expected_unsigned_integer => "must resolve to a non-negative whole number",
             .integer_out_of_range => "resolves to a number outside the supported range",
+            .expected_positive_integer => "must resolve to a whole number greater than 0",
         };
     }
 };
@@ -259,6 +268,7 @@ pub const TargetEntryProblem = enum {
     expected_import_memory,
     expected_unsigned_integer,
     integer_out_of_range,
+    expected_positive_integer,
 };
 
 /// A target entry config field in a platform header that `fromAST` rejected.
@@ -292,6 +302,7 @@ pub const InvalidTargetEntryDiagnostic = struct {
             .expected_import_memory => try std.fmt.allocPrint(allocator, "The {s} target's `{s}` must be `Zeroed`, `Uninitialized`, `No`, or the name of a top-level constant.", .{ target_name, self.field_name }),
             .expected_unsigned_integer => try std.fmt.allocPrint(allocator, "The {s} target's `{s}` must be a non-negative whole number or the name of a top-level constant.", .{ target_name, self.field_name }),
             .integer_out_of_range => try std.fmt.allocPrint(allocator, "The {s} target's `{s}` is outside the supported range.", .{ target_name, self.field_name }),
+            .expected_positive_integer => try std.fmt.allocPrint(allocator, "The {s} target's `{s}` must be greater than 0.", .{ target_name, self.field_name }),
         };
         defer allocator.free(headline);
 
@@ -313,6 +324,9 @@ pub const InvalidTargetEntryDiagnostic = struct {
             .expected_unsigned_integer,
             .integer_out_of_range,
             => {},
+            .expected_positive_integer => try report.document.addReflowingTextWithBackticks(
+                "Every address below `global_base` belongs to the host. A platform whose host reserves no low memory leaves `global_base` out.",
+            ),
         }
         const region_info = base.RegionInfo.position(env.source, env.line_starts.items.items, self.region.start.offset, self.region.end.offset) catch {
             return report;
@@ -736,7 +750,10 @@ pub const TargetsConfig = struct {
                 .minimum_memory => try parseUnsignedField(usize, allocator, ast, value, &wasm.minimum_memory, &wasm.minimum_memory_ident, target, name, name_region, diagnostic),
                 .maximum_memory => try parseUnsignedField(usize, allocator, ast, value, &wasm.maximum_memory, &wasm.maximum_memory_ident, target, name, name_region, diagnostic),
                 .initial_stack_size => try parseUnsignedField(usize, allocator, ast, value, &wasm.initial_stack_size, &wasm.initial_stack_size_ident, target, name, name_region, diagnostic),
-                .global_base => try parseUnsignedField(u32, allocator, ast, value, &wasm.global_base, &wasm.global_base_ident, target, name, name_region, diagnostic),
+                .global_base => {
+                    try parseUnsignedField(u32, allocator, ast, value, &wasm.global_base, &wasm.global_base_ident, target, name, name_region, diagnostic);
+                    if (wasm.global_base == 0) return reject(diagnostic, .expected_positive_integer, target, name, name_region);
+                },
             }
         }
 
@@ -899,10 +916,10 @@ fn resolveWasmCheckedConstants(
     diagnostic: *TargetConfigResolveDiagnostic,
 ) error{TargetConfigInvalid}!void {
     try resolveWasmImportMemoryField(allocator, checked_module, target, output, "import_memory", &wasm.import_memory, &wasm.import_memory_ident, diagnostic);
-    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "minimum_memory", &wasm.minimum_memory, &wasm.minimum_memory_ident, diagnostic);
-    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "maximum_memory", &wasm.maximum_memory, &wasm.maximum_memory_ident, diagnostic);
-    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "initial_stack_size", &wasm.initial_stack_size, &wasm.initial_stack_size_ident, diagnostic);
-    try resolveWasmUnsignedField(u32, allocator, checked_module, target, output, "global_base", &wasm.global_base, &wasm.global_base_ident, diagnostic);
+    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "minimum_memory", 0, &wasm.minimum_memory, &wasm.minimum_memory_ident, diagnostic);
+    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "maximum_memory", 0, &wasm.maximum_memory, &wasm.maximum_memory_ident, diagnostic);
+    try resolveWasmUnsignedField(usize, allocator, checked_module, target, output, "initial_stack_size", 0, &wasm.initial_stack_size, &wasm.initial_stack_size_ident, diagnostic);
+    try resolveWasmUnsignedField(u32, allocator, checked_module, target, output, "global_base", 1, &wasm.global_base, &wasm.global_base_ident, diagnostic);
 }
 
 fn resolveWasmImportMemoryField(
@@ -931,7 +948,7 @@ fn resolveWasmImportMemoryField(
 }
 
 /// Resolves an unsigned wasm config field named by `ident_slot` to a value
-/// that fits in `T`.
+/// that fits in `T` and is at least `minimum`, which is 0 or 1.
 fn resolveWasmUnsignedField(
     comptime T: type,
     allocator: Allocator,
@@ -939,6 +956,7 @@ fn resolveWasmUnsignedField(
     target: RocTarget,
     output: OutputKind,
     field_name: []const u8,
+    minimum: T,
     out: *?T,
     ident_slot: *?[]const u8,
     diagnostic: *TargetConfigResolveDiagnostic,
@@ -957,6 +975,10 @@ fn resolveWasmUnsignedField(
         diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = .integer_out_of_range };
         return error.TargetConfigInvalid;
     };
+    if (narrowed < minimum) {
+        diagnostic.* = .{ .target = target, .output = output, .field_name = field_name, .ident_name = ident, .reason = .expected_positive_integer };
+        return error.TargetConfigInvalid;
+    }
     out.* = narrowed;
     allocator.free(ident);
     ident_slot.* = null;
@@ -1533,6 +1555,13 @@ test "fromAST rejects a global_base literal outside u32" {
         \\        wasm32: { inputs: ["host.wasm", app], exports: [], global_base: 0x1_0000_0000 },
         \\
     , .integer_out_of_range, .wasm32, "global_base");
+}
+
+test "fromAST rejects a zero global_base" {
+    try expectInvalidTargetEntry(
+        \\        wasm32: { inputs: ["host.wasm", app], exports: [], global_base: 0 },
+        \\
+    , .expected_positive_integer, .wasm32, "global_base");
 }
 
 test "fromAST accepts nested relative target paths" {

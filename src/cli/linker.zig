@@ -121,7 +121,7 @@ pub const WasmStackLayout = union(enum) {
 /// address 0 only when the host reserves none of the low addresses.
 pub fn wasmStackLayout(global_base: ?u32) WasmStackLayout {
     const reserved = global_base orelse return .stack_first;
-    if (reserved == 0) return .stack_first;
+    if (reserved == 0) base.invariant("wasm link invariant violated: a zero global_base passed target configuration", .{});
     return .{ .data_first = reserved };
 }
 
@@ -244,8 +244,8 @@ pub const LinkConfig = struct {
 
     /// The first address the Roc program may use in a freestanding WASM link.
     /// Every address below it belongs to the host, so the stack cannot occupy
-    /// address 0 and static data starts here instead. Null or zero means the
-    /// program owns all of linear memory.
+    /// address 0 and static data starts here instead. Null means the program
+    /// owns all of linear memory.
     wasm_global_base: ?u32 = null,
 
     /// Function exports from the platform host object that are part of the

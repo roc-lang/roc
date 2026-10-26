@@ -10640,11 +10640,8 @@ fn writeDevWasmObject(
 /// only when the platform reserves low memory, so the stack cannot sit at
 /// address 0 where an overflow traps by itself.
 fn wasmStackChecks(wasm: ?roc_target.WasmTargetConfig) bool {
-    const global_base = if (wasm) |config| config.global_base else null;
-    return switch (linker.wasmStackLayout(global_base)) {
-        .stack_first => false,
-        .data_first => true,
-    };
+    const config = wasm orelse return false;
+    return config.reservesLowMemory();
 }
 
 /// The functions static data calls through the function table, by symbol.
@@ -11938,7 +11935,14 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // place of compiling the procedures they offer.
     var linked_stores: ?pack_store.LinkedStores = null;
     defer if (linked_stores) |*stores| stores.deinit();
-    if (object_cache_enabled and llvm_available) {
+    // Object packs hold code compiled without stack-bound checks, so a
+    // program for a platform that reserves low memory links none and
+    // compiles every procedure itself.
+    const header_targets_config = build_env.getPlatformTargetsConfig() orelse {
+        base.invariant("roc build invariant violated: a resolved platform has no targets config", .{});
+    };
+    const reserves_low_memory = target_arch == .wasm32 and wasmStackChecks(if (header_targets_config.getLinkSpec(target)) |spec| spec.wasm else null);
+    if (object_cache_enabled and llvm_available and !reserves_low_memory) {
         const store_config = CacheConfig{ .enabled = true, .verbose = args.verbose, .roc_ctx = ctx.coreCtx() };
         linked_stores = initLinkedStores(ctx.gpa, store_config, target) catch |err| {
             std.log.warn("object cache unavailable: {}", .{err});
@@ -12032,12 +12036,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // compilations as a check does, before the runtime program takes the
     // shared Solved program.
     if (diag.errors == 0) try publishCompileTimeResults(ctx, &build_env, root_artifact);
-    // Object packs hold code compiled without stack-bound checks, so a
-    // program for a platform that reserves low memory compiles every
-    // procedure itself.
-    const stack_checks = target_arch == .wasm32 and wasmStackChecks(if (resolved_targets_config.getLinkSpec(target)) |spec| spec.wasm else null);
-    const serving_packs = if (stack_checks) null else loaded_packs;
-    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (serving_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, serving_packs != null, linked_stores != null and !stack_checks, currentRuntimeSpecializationStrategy(args.specialization_strategy)));
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (loaded_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_stores != null, currentRuntimeSpecializationStrategy(args.specialization_strategy)));
     defer lowered.deinit();
     // The program links the objects defining the entries it took, and no
     // other.
