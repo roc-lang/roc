@@ -18404,6 +18404,14 @@ bindings require structural expansion. Non-generic named types do not open
 argument scopes. This preserves argument/backing row ties without expanding
 an entire state graph merely because it occurs inside a generic wrapper.
 
+The solver computes the exact set of argument positions reachable during a
+Monotype's expansion once, independently of any argument scope. A query
+intersects that immutable set with the scope's bindings. The expansion root
+itself is not an argument position; nested named types are positions but their
+children belong to the nested type's own scope. Adding a binding invalidates
+that scope's answer memo without invalidating immutable reachability. Replacing
+a bound destination changes neither membership nor reachability.
+
 Unification never splits a class. A pair's deferred link runs after the pair's
 children are unified, and in a cyclic type those children can bring either
 endpoint into another class first; for example, each generated interpolation

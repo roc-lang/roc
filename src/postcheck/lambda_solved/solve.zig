@@ -356,6 +356,7 @@ const Solver = struct {
     /// that argument: a row joined through the backing is the argument's row
     /// too (design.md "Row Joins").
     arg_scopes: std.ArrayList(ArgumentScope),
+    expansion_arg_reachability: collections.DenseMapUnmanaged(MonoType.TypeId, []MonoType.TypeId) = .empty,
     /// The argument scope a leaf created under a scoped expansion reads its
     /// positional components from.
     leaf_arg_scopes: collections.DenseMap(Type.TypeVarId, u32),
@@ -613,6 +614,9 @@ const Solver = struct {
         self.leaf_context_shapes.deinit(self.allocator);
         for (self.arg_scopes.items) |*scope| scope.deinit();
         self.arg_scopes.deinit(self.allocator);
+        var reachability = self.expansion_arg_reachability.valueIterator();
+        while (reachability.next()) |ids| self.allocator.free(ids.*);
+        self.expansion_arg_reachability.deinit(self.allocator);
         self.leaf_arg_scopes.deinit();
         self.reaches_cycle.deinit(self.allocator);
         self.shared_clones.deinit();
@@ -3018,12 +3022,28 @@ const Solver = struct {
             self.countWork(.arg_scope_hits, 1);
             return answer;
         }
-        const answer = try self.walkExpansionArgScope(root, scope);
+        const reachable = try self.expansionArgReachability(root);
+        var bindings = self.arg_scopes.items[scope].bindings.keyIterator();
+        const answer = found: {
+            while (bindings.next()) |binding| {
+                var lo: usize = 0;
+                var hi: usize = reachable.len;
+                while (lo < hi) {
+                    const mid = lo + (hi - lo) / 2;
+                    if (@backingInt(reachable[mid]) < @backingInt(binding.*)) lo = mid + 1 else hi = mid;
+                }
+                if (lo < reachable.len and reachable[lo] == binding.*) break :found true;
+            }
+            break :found false;
+        };
         try self.arg_scopes.items[scope].reads.put(root, answer);
         return answer;
     }
 
-    fn walkExpansionArgScope(self: *Solver, root: MonoType.TypeId, scope: u32) Allocator.Error!bool {
+    /// The exact immutable positions at which expansion can read a binding.
+    /// Every scope asks about this same graph, stopping at nested named types.
+    fn expansionArgReachability(self: *Solver, root: MonoType.TypeId) Allocator.Error![]const MonoType.TypeId {
+        if (self.expansion_arg_reachability.get(root)) |known| return known;
         var seen = self.mono_set_pool.acquire();
         defer self.mono_set_pool.release(&seen);
         var pending = std.ArrayList(MonoType.TypeId).empty;
@@ -3034,7 +3054,7 @@ const Solver = struct {
             if (seen.contains(id)) continue;
             try seen.put(id, {});
             self.countWork(.arg_scope_walk_nodes, 1);
-            if (id != root and self.arg_scopes.items[scope].contains(id)) return true;
+
             if (self.leafSharing(id) != .positional) continue;
             switch (types.get(id)) {
                 .named, .primitive, .zst, .erased, .func, .hole => {},
@@ -3049,7 +3069,18 @@ const Solver = struct {
                 },
             }
         }
-        return false;
+        _ = seen.remove(root);
+        const reachable = try self.allocator.alloc(MonoType.TypeId, seen.count());
+        errdefer self.allocator.free(reachable);
+        var ids = seen.keyIterator();
+        for (reachable) |*id| id.* = ids.next().?.*;
+        std.mem.sort(MonoType.TypeId, reachable, {}, struct {
+            fn less(_: void, a: MonoType.TypeId, b: MonoType.TypeId) bool {
+                return @backingInt(a) < @backingInt(b);
+            }
+        }.less);
+        try self.expansion_arg_reachability.put(self.allocator, root, reachable);
+        return reachable;
     }
 
     fn linkUntouchedLeafToInstance(
@@ -6772,6 +6803,13 @@ test "argument scope expansion queries reuse exact answers and invalidate on new
     try std.testing.expectEqual(changed_walked, counts.arg_scope_walk_nodes);
     const independent = try solver.newArgScope();
     try std.testing.expect(!try solver.expansionReadsArgScope(shape, independent));
+    try std.testing.expectEqual(walked, counts.arg_scope_walk_nodes);
+    // A root binding does not count as a position within its own expansion.
+    try solver.arg_scopes.items[independent].put(shape, node);
+    try std.testing.expect(!try solver.expansionReadsArgScope(shape, independent));
+    try solver.arg_scopes.items[independent].put(row, node);
+    try std.testing.expect(try solver.expansionReadsArgScope(shape, independent));
+    try std.testing.expectEqual(walked, counts.arg_scope_walk_nodes);
 }
 
 test "exact cyclic clone proof rejects unexpanded leaves that hide a mutable tie" {
