@@ -2910,6 +2910,113 @@ fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeI
     }
 }
 
+/// A checked function type's request-determined result row variable, or
+/// `none` (see `requestDeterminedResultRowVariable`).
+const RequestDeterminedResultRow = union(enum) {
+    none,
+    variable: checked.CheckedTypeId,
+};
+
+/// The variable a function type's result row ends in, when that variable
+/// seals to the empty row and nothing else in the type reaches it: the
+/// function's direct result row or the error row of its `Try` result, the
+/// positions `closedResultRowOrNull` reads. Such a variable is determined by
+/// the function's result alone, so a template that quantifies it is
+/// specialized at whatever row its request's result holds there (design.md
+/// "Closed Result Rows At Template Boundaries"). The type reaches the
+/// variable only through the chain of links from the result down to it; any
+/// other path—an argument, a payload, a link shared with another
+/// position—makes the variable an input the request does not determine.
+fn requestDeterminedResultRowVariable(
+    allocator: Allocator,
+    view: ModuleView,
+    checked_fn_root: checked.CheckedTypeId,
+) Allocator.Error!?checked.CheckedTypeId {
+    const function = switch (resolvedPayload(view, checked_fn_root).payload) {
+        .function => |function| function,
+        .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+    };
+    var chain: std.ArrayList(checked.CheckedTypeId) = .empty;
+    defer chain.deinit(allocator);
+    var others: std.ArrayList(checked.CheckedTypeId) = .empty;
+    defer others.deinit(allocator);
+    try others.appendSlice(allocator, function.args);
+
+    var current = function.ret;
+    var behind_try = false;
+    const variable = while (true) {
+        if (chain.items.len >= view.types.payloadCount()) {
+            Common.invariant("checked result row chain was cyclic");
+        }
+        try chain.append(allocator, current);
+        const payload = checkedPayload(view, current);
+        switch (payload) {
+            .alias => |alias| {
+                try others.appendSlice(allocator, alias.args);
+                current = alias.backing;
+            },
+            .nominal => |nominal| {
+                if (behind_try or nominal.builtin != .try_) return null;
+                if (nominal.args.len != 2) {
+                    Common.invariant("Builtin.Try checked type did not have exactly two type arguments");
+                }
+                behind_try = true;
+                try others.append(allocator, nominal.args[0]);
+                try others.appendSlice(allocator, nominal.padding_field_types);
+                current = nominal.args[1];
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| try others.appendSlice(allocator, tag.argsSlice(view.types));
+                current = tag_union.ext;
+            },
+            .flex, .rigid => |row_variable| {
+                if (!payload.variableSealsToRowDefault() or row_variable.row_default != .empty_tag_union) return null;
+                break current;
+            },
+            .pending, .err, .record, .tuple, .function, .empty_record, .empty_tag_union => return null,
+        }
+    };
+
+    var visited = collections.DenseMap(checked.CheckedTypeId, void).init(allocator);
+    defer visited.deinit();
+    for (chain.items) |link| try visited.put(link, {});
+    while (others.pop()) |ty| {
+        if (visited.contains(ty)) {
+            for (chain.items) |link| {
+                if (link == ty) return null;
+            }
+            continue;
+        }
+        try visited.put(ty, {});
+        switch (checkedPayload(view, ty)) {
+            .pending => Common.invariant("pending checked type reached Monotype result row scan"),
+            .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+            .alias => |alias| {
+                try others.appendSlice(allocator, alias.args);
+                try others.append(allocator, alias.backing);
+            },
+            .record => |record| {
+                for (record.fields) |field| try others.append(allocator, field.ty);
+                try others.append(allocator, record.ext);
+            },
+            .tuple => |items| try others.appendSlice(allocator, items),
+            .nominal => |nominal| {
+                try others.appendSlice(allocator, nominal.args);
+                try others.appendSlice(allocator, nominal.padding_field_types);
+            },
+            .function => |inner| {
+                try others.appendSlice(allocator, inner.args);
+                try others.append(allocator, inner.ret);
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| try others.appendSlice(allocator, tag.argsSlice(view.types));
+                try others.append(allocator, tag_union.ext);
+            },
+        }
+    }
+    return variable;
+}
+
 /// Whether two tag spans list the same labels in the same order, each at
 /// the same payload arity.
 fn sameTagLabels(left: []const InstTag, right: []const InstTag) bool {
@@ -5468,6 +5575,9 @@ const Builder = struct {
     /// Whether each checked type reaches the error type (see
     /// `checkedTypeContainsError`).
     checked_type_contains_error: CheckedTypeMemo(bool) = .empty,
+    /// Each checked function type's request-determined result row variable
+    /// (see `requestDeterminedResultRowVariable`).
+    request_determined_result_rows: CheckedTypeMemo(RequestDeterminedResultRow) = .empty,
     /// Whether each checked type is representation-fixed (see
     /// `checkedTypeRepresentationFixed`).
     checked_type_representation_fixed: CheckedTypeMemo(bool) = .empty,
@@ -5944,6 +6054,7 @@ const Builder = struct {
         self.const_expr_cache.deinit();
         self.nested_site_cache.deinit();
         self.checked_type_contains_error.deinit(self.allocator);
+        self.request_determined_result_rows.deinit(self.allocator);
         self.checked_type_representation_fixed.deinit(self.allocator);
         var scheme_var_slots = self.scheme_var_slots.valueIterator();
         while (scheme_var_slots.next()) |slots| slots.deinit(self.allocator);
@@ -5985,6 +6096,55 @@ const Builder = struct {
         if (self.counters) |counters| {
             @field(counters, field) += @intCast(amount);
         }
+    }
+
+    /// `subst` for specializing `template` at a request, with the slot of the
+    /// template's request-determined result row variable
+    /// (`requestDeterminedResultRowVariable`) replaced by a fresh cell. The
+    /// request's result alone determines that variable, so relating the
+    /// template's root to the request binds the cell, and the template's root
+    /// and body read the row the request's result holds there. The variable
+    /// a use site recorded for that slot is the use's own row, which can be
+    /// narrower than the row the request's result flows into (design.md
+    /// "Closed Result Rows At Template Boundaries").
+    fn requestDeterminedSubstitution(
+        self: *Builder,
+        graph: *InstGraph,
+        view: ModuleView,
+        template: *const checked.CheckedProcedureTemplate,
+        subst: SpecSubstitution,
+    ) Allocator.Error!SpecSubstitution {
+        if (subst.len == 0) return subst;
+        const address = checkedTypeAddress(view, template.checked_fn_root);
+        const known = self.request_determined_result_rows.get(address) orelse known: {
+            const found: RequestDeterminedResultRow = if (try requestDeterminedResultRowVariable(
+                self.allocator,
+                view,
+                template.checked_fn_root,
+            )) |variable| .{ .variable = variable } else .none;
+            try self.request_determined_result_rows.put(self.allocator, address, found);
+            break :known found;
+        };
+        const variable = switch (known) {
+            .none => return subst,
+            .variable => |variable| variable,
+        };
+        const scheme_vars = view.templates.templateSchemeVars(template);
+        if (subst.len != scheme_vars.len) {
+            Common.invariant("template specialization substitution length differed from its scheme's quantified variables");
+        }
+        const slot = (try self.schemeVarSlot(scheme_vars, variable)) orelse return subst;
+        if (subst[slot] == .checked_error) return subst;
+        const row_variable = switch (checkedPayload(view, variable)) {
+            .flex, .rigid => |row_variable| row_variable,
+            .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => Common.invariant("request-determined result row was not a variable"),
+        };
+        const released = try graph.arena().dupe(SubstSlot, subst);
+        released[slot] = .{ .node = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(
+            row_variable.numeric_default_phase,
+            row_variable.row_default,
+        ) }) };
+        return released;
     }
 
     /// The slot of `variable` among a scheme's quantified variables. Small
@@ -10696,6 +10856,7 @@ const Builder = struct {
             }
             return .{ .local = .{ .draft = spec.fn_id } };
         }
+        edge.subst = try self.requestDeterminedSubstitution(source_ctx.graph, view, &template, edge.subst);
         const is_local = moduleBytesEqual(view.key.bytes, names.procTemplateModuleDigest(template_ref).bytes);
         const fn_def: Ast.FnDef = switch (template.target) {
             .hosted => self.fnDefForHostedTemplate(template_ref, is_local),
@@ -28130,7 +28291,7 @@ const BodyContext = struct {
             slot.* = .{ .node = roots[slot_index] };
             slot_index += 1;
         };
-        edge.subst = detached_subst;
+        edge.subst = try self.builder.requestDeterminedSubstitution(self.graph, callee_view, &template, detached_subst);
         const replay_index = replay_state.entries.items.len;
         try replay_state.entries.append(self.allocator, .{
             .address = address,
