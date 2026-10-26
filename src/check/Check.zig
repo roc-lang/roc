@@ -7784,39 +7784,63 @@ fn recordSettledRowRoot(
     if (!entry.found_existing) entry.value_ptr.* = origin;
 }
 
+/// One variable the settled walk is about to visit.
 const SettledTypeReach = struct {
     var_: Var,
-    starts_row: bool,
-    /// The walk has finished every type reachable from `var_` (already
-    /// resolved) through structure.
-    exit: bool = false,
+    at: packed struct(u32) {
+        starts_row: bool,
+        /// The number of variables on the walk's path to this one.
+        depth: u31,
+    },
 };
 
-/// Where a variable is in the settled walk's depth-first traversal.
-const SettledWalkState = enum { in_progress, done };
-
-/// The settled walk's traversal state, shared across every seed.
+/// The settled walk's traversal state, shared across every seed. The walk
+/// reaches most of the module's types, so its sets are bitsets over every
+/// variable in the store.
 const SettledWalk = struct {
-    visited: collections.DenseMap(Var, SettledWalkState),
+    /// Each variable the walk reached.
+    visited: std.DynamicBitSetUnmanaged,
+    /// Each variable on the walk's current path, so an edge back to it closes
+    /// a cycle.
+    in_progress: std.DynamicBitSetUnmanaged,
+    /// The variables on the current path. A variable reached at depth `d`
+    /// finishes every variable deeper than `d - 1` on the path: the walk is
+    /// depth-first, so those have nothing left to visit.
+    path: std.ArrayListUnmanaged(Var) = .empty,
     stack: std.ArrayListUnmanaged(SettledTypeReach) = .empty,
     /// Types reached through an edge that is not part of a type's structure
     /// (a function's effect dependencies, a type variable's method
-    /// requirements), each walked as a root of its own once the stack is
+    /// requirements), each walked as a root of its own once the path is
     /// empty, so no cycle is closed through such an edge.
     cut_roots: std.ArrayListUnmanaged(Var) = .empty,
     /// One entry per edge that closed a cycle through structure, which no
     /// type may have. Empty for a program without an infinite type.
     cycles: std.ArrayListUnmanaged(SettledCycle) = .empty,
 
-    fn init(gpa: Allocator) SettledWalk {
-        return .{ .visited = collections.DenseMap(Var, SettledWalkState).init(gpa) };
+    fn init(gpa: Allocator, types: *const types_mod.Store) Allocator.Error!SettledWalk {
+        const var_count: usize = @intCast(types.len());
+        var visited = try std.DynamicBitSetUnmanaged.initEmpty(gpa, var_count);
+        errdefer visited.deinit(gpa);
+        return .{
+            .visited = visited,
+            .in_progress = try std.DynamicBitSetUnmanaged.initEmpty(gpa, var_count),
+        };
     }
 
     fn deinit(self: *SettledWalk, gpa: Allocator) void {
-        self.visited.deinit();
+        self.visited.deinit(gpa);
+        self.in_progress.deinit(gpa);
+        self.path.deinit(gpa);
         self.stack.deinit(gpa);
         self.cut_roots.deinit(gpa);
         self.cycles.deinit(gpa);
+    }
+
+    /// Finish the variables on the path deeper than `depth`.
+    fn finishPathTo(self: *SettledWalk, depth: u31) void {
+        while (self.path.items.len > depth) {
+            self.in_progress.unset(@backingInt(self.path.pop().?));
+        }
     }
 };
 
@@ -7848,8 +7872,10 @@ fn appendSettledTypeReachVars(
     stack: *std.ArrayListUnmanaged(SettledTypeReach),
     vars: []const Var,
     starts_row: bool,
+    depth: u31,
 ) std.mem.Allocator.Error!void {
-    for (vars) |var_| try stack.append(self.gpa, .{ .var_ = var_, .starts_row = starts_row });
+    try stack.ensureUnusedCapacity(self.gpa, vars.len);
+    for (vars) |var_| stack.appendAssumeCapacity(.{ .var_ = var_, .at = .{ .starts_row = starts_row, .depth = depth } });
 }
 
 /// Walk every type reachable from one published root, recording the row
@@ -7868,63 +7894,68 @@ fn walkSettledRoot(
     semantic_row_roots: *collections.DenseMapUnmanaged(Var, Var),
 ) std.mem.Allocator.Error!void {
     const walk_stack = &walk.stack;
-    try walk_stack.append(self.gpa, .{ .var_ = origin, .starts_row = true });
+    try walk_stack.append(self.gpa, .{ .var_ = origin, .at = .{ .starts_row = true, .depth = 0 } });
     while (true) {
         const entry = walk_stack.pop() orelse {
+            walk.finishPathTo(0);
             const cut_root = walk.cut_roots.pop() orelse break;
-            try walk_stack.append(self.gpa, .{ .var_ = cut_root, .starts_row = true });
+            try walk_stack.append(self.gpa, .{ .var_ = cut_root, .at = .{ .starts_row = true, .depth = 0 } });
             continue;
         };
-        if (entry.exit) {
-            try walk.visited.put(entry.var_, .done);
-            continue;
-        }
-        if (entry.starts_row) {
+        walk.finishPathTo(entry.at.depth);
+        if (entry.at.starts_row) {
             try self.recordSettledRowRoot(semantic_row_roots, entry.var_, origin);
         }
 
         const resolved = self.types.resolveVar(entry.var_);
-        const state = try walk.visited.getOrPut(resolved.var_);
-        if (state.found_existing) {
-            if (state.value_ptr.* == .in_progress) {
+        const index: usize = @backingInt(resolved.var_);
+        if (walk.visited.isSet(index)) {
+            if (walk.in_progress.isSet(index)) {
                 try walk.cycles.append(self.gpa, .{ .head = resolved.var_, .origin = origin });
             }
             continue;
         }
-        state.value_ptr.* = .in_progress;
-        try walk_stack.append(self.gpa, .{ .var_ = resolved.var_, .starts_row = false, .exit = true });
+        walk.visited.set(index);
+        walk.in_progress.set(index);
+        try walk.path.append(self.gpa, resolved.var_);
+        const depth = entry.at.depth + 1;
 
         switch (resolved.desc.content) {
             .alias => |alias| {
-                try walk_stack.append(self.gpa, .{
+                try walk_stack.ensureUnusedCapacity(self.gpa, 1);
+                walk_stack.appendAssumeCapacity(.{
                     .var_ = self.types.getAliasBackingVar(alias),
-                    .starts_row = entry.starts_row,
+                    .at = .{ .starts_row = entry.at.starts_row, .depth = depth },
                 });
-                try self.appendSettledTypeReachVars(walk_stack, self.types.sliceAliasArgs(alias), true);
+                try self.appendSettledTypeReachVars(walk_stack, self.types.sliceAliasArgs(alias), true, depth);
             },
             .structure => |flat_type| switch (flat_type) {
-                .tuple => |tuple| try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(tuple.elems), true),
-                .nominal_type => |nominal| try self.appendSettledTypeReachVars(walk_stack, self.types.sliceNominalArgs(nominal), true),
+                .tuple => |tuple| try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(tuple.elems), true, depth),
+                .nominal_type => |nominal| try self.appendSettledTypeReachVars(walk_stack, self.types.sliceNominalArgs(nominal), true, depth),
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    try walk_stack.append(self.gpa, .{ .var_ = func.ret, .starts_row = true });
-                    try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(func.args), true);
+                    try walk_stack.ensureUnusedCapacity(self.gpa, 1);
+                    walk_stack.appendAssumeCapacity(.{ .var_ = func.ret, .at = .{ .starts_row = true, .depth = depth } });
+                    try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(func.args), true, depth);
                     try walk.cut_roots.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
                 },
                 .record => |record| {
-                    try walk_stack.append(self.gpa, .{ .var_ = record.ext, .starts_row = false });
                     const fields = self.types.getRecordFieldsSlice(record.fields);
+                    // A field holds its type and at most one presence variable.
+                    try walk_stack.ensureUnusedCapacity(self.gpa, 1 + 2 * fields.len);
+                    walk_stack.appendAssumeCapacity(.{ .var_ = record.ext, .at = .{ .starts_row = false, .depth = depth } });
                     for (fields.items(.presence)) |presence| {
-                        try walk_stack.append(self.gpa, .{ .var_ = presence.typeVar(), .starts_row = true });
+                        walk_stack.appendAssumeCapacity(.{ .var_ = presence.typeVar(), .at = .{ .starts_row = true, .depth = depth } });
                         if (presence.presenceVar()) |presence_var| {
-                            try walk_stack.append(self.gpa, .{ .var_ = presence_var, .starts_row = true });
+                            walk_stack.appendAssumeCapacity(.{ .var_ = presence_var, .at = .{ .starts_row = true, .depth = depth } });
                         }
                     }
                 },
                 .tag_union => |tag_union| {
-                    try walk_stack.append(self.gpa, .{ .var_ = tag_union.ext, .starts_row = false });
+                    try walk_stack.ensureUnusedCapacity(self.gpa, 1);
+                    walk_stack.appendAssumeCapacity(.{ .var_ = tag_union.ext, .at = .{ .starts_row = false, .depth = depth } });
                     const tags = self.types.getTagsSlice(tag_union.tags);
                     for (tags.items(.args)) |args| {
-                        try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(args), true);
+                        try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(args), true, depth);
                     }
                 },
                 .empty_record, .empty_tag_union => {},
@@ -7947,8 +7978,6 @@ test "settled row reachability uses caller-owned scratch across all seeds" {
     const checker = &test_env.checker;
     const store = checker.types;
     const shared_capacity = checker.var_set.capacity();
-    var walk = SettledWalk.init(checker.gpa);
-    defer walk.deinit(checker.gpa);
     var owners: collections.DenseMapUnmanaged(Var, Var) = .empty;
     defer owners.deinit(std.testing.allocator);
     var root = try store.fresh();
@@ -7957,10 +7986,12 @@ test "settled row reachability uses caller-owned scratch across all seeds" {
             .elems = try store.appendVars(&.{ root, root }),
         } } });
     }
+    var walk = try SettledWalk.init(checker.gpa, store);
+    defer walk.deinit(checker.gpa);
     try checker.walkSettledRoot(root, &walk, &owners);
-    try std.testing.expectEqual(@as(u32, 257), walk.visited.count());
+    try std.testing.expectEqual(@as(usize, 257), walk.visited.count());
     try checker.walkSettledRoot(root, &walk, &owners);
-    try std.testing.expectEqual(@as(u32, 257), walk.visited.count());
+    try std.testing.expectEqual(@as(usize, 257), walk.visited.count());
     try std.testing.expectEqual(shared_capacity, checker.var_set.capacity());
     try std.testing.expectEqual(@as(usize, 0), walk.stack.items.len);
     try std.testing.expectEqual(@as(usize, 0), walk.cycles.items.len);
@@ -7990,7 +8021,7 @@ test "settled walk finds a cycle through structure and none through a method req
     }});
     try store.setVarContent(receiver, .{ .flex = Flex.init().withConstraints(constraints) });
     {
-        var walk = SettledWalk.init(checker.gpa);
+        var walk = try SettledWalk.init(checker.gpa, store);
         defer walk.deinit(checker.gpa);
         try checker.walkSettledRoot(receiver, &walk, &owners);
         try std.testing.expectEqual(@as(usize, 0), walk.cycles.items.len);
@@ -8014,7 +8045,7 @@ test "settled walk finds a cycle through structure and none through a method req
         }}),
     ) });
     {
-        var walk = SettledWalk.init(checker.gpa);
+        var walk = try SettledWalk.init(checker.gpa, store);
         defer walk.deinit(checker.gpa);
         try checker.walkSettledRoot(cyclic_receiver, &walk, &owners);
         try std.testing.expect(walk.cycles.items.len != 0);
@@ -12956,7 +12987,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.runLateImplicitOpenExtAudit(&env);
 
     {
-        var settled_walk = SettledWalk.init(self.gpa);
+        var settled_walk = try SettledWalk.init(self.gpa, self.types);
         defer settled_walk.deinit(self.gpa);
         try self.validateSettledValueRows(&env, &settled_walk);
         try self.rejectSettledInfiniteTypes(settled_walk.cycles.items, null);
@@ -18381,7 +18412,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.runLateImplicitOpenExtAudit(&env);
 
     {
-        var settled_walk = SettledWalk.init(self.gpa);
+        var settled_walk = try SettledWalk.init(self.gpa, self.types);
         defer settled_walk.deinit(self.gpa);
         try self.validateSettledValueRows(&env, &settled_walk);
         try self.rejectSettledInfiniteTypes(settled_walk.cycles.items, expr_idx);
