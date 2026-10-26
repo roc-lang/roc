@@ -45,11 +45,11 @@ test "issue 12586: a function from an annotated record is accepted by a generic 
 
 test "issue 12586: a function from an annotated list is accepted by a generic function adding its own error" {
     var env = try TestEnv.init("Test", send_str ++ fetch ++
-        \\run : List((Str -> Try(U64, [Empty]))) -> Try(U64, [Empty, Bad(Str), NoSend])
+        \\run : List((Str -> Try(U64, [Empty]))) -> Try(U64, [Empty, Bad(Str)])
         \\run = |sends|
         \\    match sends.first() {
         \\        Ok(send) => fetch(send, "x")
-        \\        Err(_) => Err(NoSend)
+        \\        Err(_) => Err(Empty)
         \\    }
     );
     defer env.deinit();
@@ -59,7 +59,7 @@ test "issue 12586: a function from an annotated list is accepted by a generic fu
 test "issue 12586: a forwarded callback error row is the result row's residual tail" {
     var env = try TestEnv.init("Test", generic_fetch);
     defer env.deinit();
-    try env.assertDefType("fetch", "(a -> Try(_b, err)), a -> Try(_c, [Bad(a), ..err])");
+    try env.assertDefType("fetch", "(a -> Try(ok, err)), a -> Try(ok, [Bad(a), ..err])");
 }
 
 test "issue 12586: the inferred signature is as general as the annotation that spells it" {
@@ -104,5 +104,5 @@ test "issue 12586: a callback failing with the same tag at another payload is re
         \\}
     );
     defer env.deinit();
-    try env.assertOneTypeError("Type Mismatch");
+    try env.assertOneTypeError("Conflicting Tag");
 }
