@@ -14049,9 +14049,9 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    /// The most register pieces a scalar splits into: a 16-byte value in
-    /// 8-byte pieces.
-    const max_scalar_pieces = 2;
+    /// The most register pieces a scalar splits into: WebAssembly 1.0 passes
+    /// a 128-bit vector one lane per argument, and `U8x16` has 16 lanes.
+    const max_scalar_pieces = 128 / 8;
 
     /// The memory-typed scalar a register-passed parameter arrives as,
     /// consuming its parameters from `param_cursor`.
