@@ -8895,13 +8895,15 @@ fn customLinkedObjectPack(
     return null;
 }
 
-/// A `--opt=size` wasm32 build files a URL package's object pack, and every
-/// later wasm32 dev build composes it into the app's object; each dev module
-/// must return exactly what a module built without the store returns and
-/// leave the same allocations outstanding. One entry takes and returns a vector, which
-/// `wasm32v1` passes by lane, and every `wasm32v1` module must use no feature
-/// past WebAssembly 1.0. Two independent stores must write byte-identical
-/// object packs.
+/// A `--opt=size` wasm32 build files a URL package's object pack and the
+/// app's own, which serves every later wasm32 dev build of the same source.
+/// Once the app is edited, its own entries stop serving and the dev build
+/// composes the package's entries into the app's object. Each dev module must
+/// return exactly what a module built without the store from the same source
+/// returns and leave the same allocations outstanding. One entry takes and
+/// returns a vector, which `wasm32v1` passes by lane, and every `wasm32v1`
+/// module must use no feature past WebAssembly 1.0. Two independent stores
+/// must write byte-identical object packs.
 fn customWasmLinkedObjectPack(
     io: std.Io,
     allocator: Allocator,
@@ -8909,14 +8911,13 @@ fn customWasmLinkedObjectPack(
     timer: *harness.Timer,
     timeout_ms: u64,
 ) ?TestResult {
-    const roc_file = "test/wasm/linked_object_pack/App.roc";
     const expected = "sum of squares to 10: 385\n506\nU8x16(20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20)";
+    const edited_expected = "sum of squares to 11: 506\n650\nU8x16(22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22)";
     // At least `describe`, `double_lanes`, and `sum_squares_from`, which the
-    // one-line `sum_squares` inlines into the app; the app's own optimized
-    // pack serves its procedures too.
+    // one-line `sum_squares` inlines into the app.
     const package_entries = 3;
     for ([_][]const u8{ "wasm32", "wasm32v1" }) |target_name| {
-        if (wasmLinkedObjectPackForTarget(io, allocator, env, timer, timeout_ms, roc_file, expected, package_entries, target_name)) |failure| return failure;
+        if (wasmLinkedObjectPackForTarget(io, allocator, env, timer, timeout_ms, expected, edited_expected, package_entries, target_name)) |failure| return failure;
     }
     return null;
 }
@@ -8927,11 +8928,13 @@ fn wasmLinkedObjectPackForTarget(
     env: *const CaseEnv,
     timer: *harness.Timer,
     timeout_ms: u64,
-    roc_file: []const u8,
     expected: []const u8,
+    edited_expected: []const u8,
     package_entries: usize,
     target_name: []const u8,
 ) ?TestResult {
+    const dir_name = std.fmt.allocPrint(allocator, "wasm_linked_pack_app_{s}", .{target_name}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate staged app dir name: {}", .{err});
     const target_arg = std.fmt.allocPrint(allocator, "--target={s}", .{target_name}) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate target argument: {}", .{err});
     const size_namespace = std.fmt.allocPrint(allocator, "{s}-size", .{target_name}) catch |err|
@@ -8940,7 +8943,18 @@ fn wasmLinkedObjectPackForTarget(
         return customInfraFailure(allocator, timer, "failed to allocate store namespace: {}", .{err});
     var stores: [2][]const u8 = undefined;
     var uncached_outstanding: ?i64 = null;
+    var edited_uncached_outstanding: ?i64 = null;
     for (&stores, 0..) |*store_root, store_index| {
+        // Every store builds the app at one path, so both file its pack
+        // under one placement.
+        var app: []const u8 = undefined;
+        if (stageEditableApp(io, allocator, env, timer, .{
+            .dir_name = dir_name,
+            .platform = "test/wasm/static-lib-platform/main.roc",
+            .platform_spelling = "../static-lib-platform/main.roc",
+            .sources = &.{"test/wasm/linked_object_pack/App.roc"},
+            .app_name = "App.roc",
+        }, &app)) |failure| return failure;
         const cache_root = std.fmt.allocPrint(allocator, "{s}/wasm_linked_pack_cache_{s}_{d}", .{ env.dirs.work_dir, target_name, store_index }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
         seedLinkedObjectPackage(io, allocator, cache_root) catch |err|
@@ -8958,13 +8972,24 @@ fn wasmLinkedObjectPackForTarget(
         }
         store_env.env_map.put("ROC_PACK_STATS", "1") catch |err|
             return customInfraFailure(allocator, timer, "failed to enable pack statistics: {}", .{err});
-        const builds = [_]struct { name: []const u8, kind: enum { uncached, optimized, cached } }{
+        const builds = [_]struct { name: []const u8, kind: enum { uncached, optimized, cached }, edited: bool = false }{
             .{ .name = "uncached", .kind = .uncached },
             .{ .name = "optimized", .kind = .optimized },
             .{ .name = "cold", .kind = .cached },
             .{ .name = "warm", .kind = .cached },
+            .{ .name = "edited_uncached", .kind = .uncached, .edited = true },
+            .{ .name = "edited", .kind = .cached, .edited = true },
         };
         for (builds) |build| {
+            if (build.edited and build.kind == .uncached) {
+                const source = std.Io.Dir.cwd().readFileAlloc(io, app, allocator, .limited(1024 * 1024)) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to read the app: {}", .{err});
+                if (std.mem.find(u8, source, "n = seed + 10") == null) return customInfraFailure(allocator, timer, "edit target is not in the app", .{});
+                const edited = std.mem.replaceOwned(u8, allocator, source, "n = seed + 10", "n = seed + 11") catch |err|
+                    return customInfraFailure(allocator, timer, "failed to edit the app: {}", .{err});
+                std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = edited }) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to write the edited app: {}", .{err});
+            }
             const output_path = std.fmt.allocPrint(allocator, "{s}/wasm_linked_pack_{s}_{d}_{s}.wasm", .{ env.dirs.work_dir, target_name, store_index, build.name }) catch |err|
                 return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
             const out_arg = outputArg(allocator, output_path) catch |err|
@@ -8976,7 +9001,7 @@ fn wasmLinkedObjectPackForTarget(
                 .optimized => &.{ "build", target_arg, "--opt=size", out_arg },
                 .cached => &.{ "build", target_arg, "--opt=dev", out_arg },
             };
-            const built = runRocInEnv(io, allocator, &store_env, args, roc_file, .relative, &.{}, null, build_timeout) catch |err|
+            const built = runRocInEnv(io, allocator, &store_env, args, app, .absolute, &.{}, null, build_timeout) catch |err|
                 return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
             if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
                 return failureFromRun(allocator, timer, built, "wasm32 build did not succeed");
@@ -8987,9 +9012,13 @@ fn wasmLinkedObjectPackForTarget(
                 const marker = "linked procs: ";
                 const at = std.mem.find(u8, built.stderr, marker) orelse
                     return failureFromRun(allocator, timer, built, "the cached build did not report pack statistics");
-                if (countAfterMarker(built.stderr[at + marker.len ..]) < package_entries) {
-                    return failureFromRun(allocator, timer, built, "the cached build did not serve every package export from the URL package's object pack");
+                const linked = countAfterMarker(built.stderr[at + marker.len ..]);
+                // Unedited, the app's own pack serves it; edited, only the
+                // package's entries can.
+                if (build.edited and linked < package_entries) {
+                    return failureFromRun(allocator, timer, built, "the edited build did not serve every package export from the URL package's object pack");
                 }
+                if (linked == 0) return failureFromRun(allocator, timer, built, "the cached build linked no entry of the optimized build's packs");
             }
             if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
             if (std.mem.eql(u8, target_name, "wasm32v1")) {
@@ -9001,16 +9030,18 @@ fn wasmLinkedObjectPackForTarget(
             defer wasm.deinit();
             const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
                 return customFailure(allocator, timer, "the {s} {s} module failed: {}", .{ target_name, build.name, err });
-            if (!std.mem.eql(u8, result, expected)) {
+            const build_expected = if (build.edited) edited_expected else expected;
+            if (!std.mem.eql(u8, result, build_expected)) {
                 return customFailure(allocator, timer, "the {s} {s} module returned \"{s}\"", .{ target_name, build.name, result });
             }
             const outstanding = wasmOutstandingAllocations(&wasm) catch |err|
                 return customFailure(allocator, timer, "failed to read the {s} {s} module's allocation counts: {}", .{ target_name, build.name, err });
-            if (uncached_outstanding) |reference| {
+            const reference_slot = if (build.edited) &edited_uncached_outstanding else &uncached_outstanding;
+            if (reference_slot.*) |reference| {
                 if (outstanding != reference) {
                     return customFailure(allocator, timer, "the {s} {s} module left {d} allocations outstanding, the uncached one {d}", .{ target_name, build.name, outstanding, reference });
                 }
-            } else uncached_outstanding = outstanding;
+            } else reference_slot.* = outstanding;
         }
     }
     var first = PackStoreFiles.read(io, allocator, stores[0]) catch |err|
