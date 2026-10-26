@@ -26826,6 +26826,8 @@ const BodyContext = struct {
             function_ret: checked.CheckedTypeId,
             tag_union_ext: checked.CheckedTypeId,
             nominal,
+            list_elem,
+            box_elem,
         };
     };
 
@@ -26939,6 +26941,8 @@ const BodyContext = struct {
                     } });
                 },
                 .nominal => break :built result.get(.node),
+                .list_elem => break :built try self.graph.newNode(.{ .list = result.get(.node) }),
+                .box_elem => break :built try self.graph.newNode(.{ .box = result.get(.node) }),
             };
             switch (checkedPayload(self.view, task.checked_ty)) {
                 .pending => Common.invariant("pending checked type reached Monotype instantiation"),
@@ -26985,6 +26989,15 @@ const BodyContext = struct {
                     return .{ .call = .{ .tags = .{ .tags = tag_union.tags } } };
                 },
                 .nominal => |nominal| {
+                    if (nominal.representation == .builtin) switch (checked.builtinRuntimeEncoding(nominal.representation.builtin)) {
+                        .primitive => |primitive| break :built try self.graph.newNode(.{ .primitive = primitive }),
+                        .list, .box => {
+                            if (nominal.args.len != 1) Common.invariant("checked builtin container must have exactly one type argument");
+                            task.next = if (checked.builtinRuntimeEncoding(nominal.representation.builtin) == .list) .list_elem else .box_elem;
+                            return instNodeStep(nominal.args[0]);
+                        },
+                        .bool_tag_union, .try_nominal, .iterator, .parse_tag_union_spec, .fields, .field, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
+                    };
                     task.next = .nominal;
                     return .{ .call = .{ .nominal = try self.boxInstTask(InstNominalTask, .{ .checked_ty = task.checked_ty, .nominal = nominal }) } };
                 },
@@ -27214,10 +27227,9 @@ const BodyContext = struct {
     /// Cursor states of a nominal instantiation.
     const InstNominalCursor = struct {
         const start = 0;
-        const builtin_elem = 1;
-        const args = 2;
-        const backing = 3;
-        const declared_order = 4;
+        const args = 1;
+        const backing = 2;
+        const declared_order = 3;
     };
 
     fn stepInstNominal(self: *BodyContext, frame: *InstFrame, task: *InstNominalTask, input: ?InstResult) Allocator.Error!InstStep {
@@ -27226,18 +27238,8 @@ const BodyContext = struct {
             InstNominalCursor.start => {
                 switch (nominal.representation) {
                     .builtin => |builtin| switch (checked.builtinRuntimeEncoding(builtin)) {
-                        .primitive => |primitive| return .{ .ret = .{ .node = try self.graph.newNode(.{ .primitive = primitive }) } },
+                        .primitive, .list, .box => Common.invariant("simple builtin reached nominal instantiation frame"),
                         .bool_tag_union => {},
-                        .list => {
-                            if (nominal.args.len != 1) Common.invariant("checked List nominal must have exactly one type argument");
-                            frame.cursor = InstNominalCursor.builtin_elem;
-                            return instNodeStep(nominal.args[0]);
-                        },
-                        .box => {
-                            if (nominal.args.len != 1) Common.invariant("checked Box nominal must have exactly one type argument");
-                            frame.cursor = InstNominalCursor.builtin_elem;
-                            return instNodeStep(nominal.args[0]);
-                        },
                         .try_nominal,
                         .iterator,
                         .parse_tag_union_spec,
@@ -27255,14 +27257,6 @@ const BodyContext = struct {
                 }
                 frame.cursor = InstNominalCursor.args;
                 return instSliceStep(nominal.args);
-            },
-            InstNominalCursor.builtin_elem => {
-                const elem = input.?.get(.node);
-                return .{ .ret = .{ .node = try self.graph.newNode(switch (checked.builtinRuntimeEncoding(nominal.representation.builtin)) {
-                    .list => .{ .list = elem },
-                    .box => .{ .box = elem },
-                    .primitive, .bool_tag_union, .try_nominal, .iterator, .parse_tag_union_spec, .fields, .field, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => Common.invariant("builtin nominal element resumed for a builtin without one"),
-                }) } };
             },
             InstNominalCursor.args => {
                 task.args = input.?.get(.nodes);
