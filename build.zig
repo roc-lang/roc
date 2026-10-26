@@ -2829,7 +2829,17 @@ pub fn build(b: *std.Build) void {
     _ = llvm_embedded_files.addCopyFile(sha256_x86_sha_bc_file, "sha256_x86_sha.bc");
     _ = llvm_embedded_files.addCopyFile(sha256_aarch64_sha2_bc_file, "sha256_aarch64_sha2.bc");
 
-    const llvm_embedded_source: []const u8 =
+    // The private runtime every native LLVM object links, one per target that
+    // `llvmPrivateRuntimeTarget` names.
+    var private_runtime_entries: std.ArrayList(u8) = .empty;
+    for (std.enums.values(roc_target.RocTarget)) |runtime_target| {
+        if (runtime_target.llvmPrivateRuntimeTarget() != runtime_target) continue;
+        const file_name = b.fmt("private_runtime_{s}.bc", .{@tagName(runtime_target)});
+        _ = llvm_embedded_files.addCopyFile(addLlvmPrivateRuntimeBitcode(b, runtime_target), file_name);
+        private_runtime_entries.print(b.allocator, "    .{{ .target = .{s}, .bitcode = @embedFile(\"{s}\") }},\n", .{ @tagName(runtime_target), file_name }) catch @panic("OOM");
+    }
+
+    const llvm_embedded_fixed_source: []const u8 =
         \\pub const builtins32_bc = @embedFile("builtins32.bc");
         \\pub const builtins64_bc = @embedFile("builtins64.bc");
         \\pub const builtins32_core_bc = @embedFile("builtins32_core.bc");
@@ -2842,11 +2852,15 @@ pub fn build(b: *std.Build) void {
         \\pub const sha256_x86_sha_bc = @embedFile("sha256_x86_sha.bc");
         \\pub const sha256_aarch64_sha2_bc = @embedFile("sha256_aarch64_sha2.bc");
         \\pub const builtins_bc = builtins64_bc;
+        \\pub const PrivateRuntime = struct { target: @import("roc_target").RocTarget, bitcode: []const u8 };
+        \\pub const private_runtimes = [_]PrivateRuntime{
         \\
     ;
+    const llvm_embedded_source = b.fmt("{s}{s}}};\n", .{ llvm_embedded_fixed_source, private_runtime_entries.items });
 
     const llvm_embedded_module = b.createModule(.{
         .root_source_file = llvm_embedded_files.add("llvm_embedded.zig", llvm_embedded_source),
+        .imports = &.{.{ .name = "roc_target", .module = roc_modules.roc_target }},
     });
     roc_exe.step.dependOn(&llvm_embedded_files.step);
     roc_exe.root_module.addImport("llvm_embedded", llvm_embedded_module);
@@ -5498,6 +5512,40 @@ fn addSha256RoundsBitcode(b: *std.Build, comptime rounds_name: []const u8, query
     });
     obj.root_module.omit_frame_pointer = true;
     obj.root_module.stack_check = false;
+    obj.use_llvm = true;
+    obj.bundle_compiler_rt = false;
+    _ = obj.getEmittedBin();
+    return obj.getEmittedLlvmBc();
+}
+
+/// LLVM bitcode for src/builtins/llvm_private_runtime.zig compiled for
+/// `runtime_target` at the lowest CPU level that target names, so one runtime
+/// serves every CPU level of the target.
+fn addLlvmPrivateRuntimeBitcode(b: *std.Build, runtime_target: roc_target.RocTarget) std.Build.LazyPath {
+    const lowest_cpu_target = runtime_target.baselineCpuTarget() orelse runtime_target;
+    const resolved = b.resolveTargetQuery(lowest_cpu_target.llvmTargetQuery());
+    const compiler_rt_module = b.createModule(.{
+        .root_source_file = std.Build.LazyPath.zig_lib.path(b, "compiler_rt.zig"),
+        .target = resolved,
+        .optimize = .fast,
+        .strip = true,
+        .pic = true,
+        .single_threaded = true,
+    });
+    const obj = b.addObject(.{
+        .name = b.fmt("roc_llvm_private_runtime_{s}", .{@tagName(runtime_target)}),
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/llvm_private_runtime.zig"),
+            .target = resolved,
+            .optimize = .fast,
+            .strip = true,
+            .pic = true,
+            .single_threaded = true,
+            .imports = &.{.{ .name = "compiler_rt", .module = compiler_rt_module }},
+        }),
+    });
+    obj.root_module.stack_check = false;
+    obj.root_module.link_libc = false;
     obj.use_llvm = true;
     obj.bundle_compiler_rt = false;
     _ = obj.getEmittedBin();

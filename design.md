@@ -24589,18 +24589,42 @@ fault within `stack_overflow_proximity` of the stack pointer is reported as
 reported as a segmentation fault together with its fault address. A fault that
 is not a stack overflow is never reported as one.
 
+A native object the LLVM backend builds needs nothing from its platform but
+the `roc_*` symbols. LLVM's code generator lowers some operations to calls
+after optimization: block copies and fills to `memcpy`, `memmove` and
+`memset` (`bzero` for a zero fill on Darwin), a float remainder to `fmod`,
+rounding on a CPU without rounding instructions to `floor` and its siblings,
+and a stack frame larger than a page on Windows to `__chkstk` or
+`___chkstk_ms`. Every such object therefore links a private runtime,
+src/builtins/llvm_private_runtime.zig (Zig's compiler-rt, plus `bzero` on
+Darwin), compiled to bitcode for the lowest CPU of each target
+`RocTarget.llvmPrivateRuntimeTarget` names. The backend links it after the
+builtins, gives every routine `shim_symbols.llvm_private_runtime_set` names
+internal linkage, and lists them in `llvm.compiler.used`. That keeps each
+definition until the code generator has introduced its calls, so every call
+binds to the object's own definition, without retaining a routine in a final
+link that references none of them, since each sits in its own section. The
+rest of the runtime is internal before linking and remains only where a
+routine uses it. An x64 MSVC object that uses floating point defines
+`_fltused` the same way, but as a global symbol: LLVM's x86 assembly printer
+always declares it global, so the object supplies the CRT's marker instead of
+asking for it. The CLI test "roc build --opt=speed objects call only private
+runtime routines" builds test/cli/LlvmPrivateRuntimeRoutines.roc for every
+native target and checks that the program's own code calls each routine, that
+the object defines it locally, and that nothing but `roc_*` is left
+undefined.
+
 A freestanding default platform (Linux, FreeBSD, NetBSD) links no C runtime,
 so it also owns a compiler-rt carrier: one target-specific object defining
 compiler-rt and the C math and memory routines that code generation calls for
 operations the target has no instruction for, such as `fmod` for a float
 remainder or `floor` on a baseline x86-64 CPU. The shared-memory run link and
 every standalone default-platform link consume the carrier as an explicit
-input after the Roc objects: an LLVM app object comes from target-independent
-builtin bitcode and bundles no compiler-rt of its own, and the dev backend's
-builtins object bundles none on the BSDs. Default platforms that link a C
-runtime (macOS, Windows) resolve those routines from it and have no carrier.
-Each routine occupies its own section and the carrier has no debug info, so a
-link keeps only the routines it references.
+input after the Roc objects: the default platform's own objects use it, and
+the dev backend's builtins object bundles no compiler-rt on the BSDs. Default
+platforms that link a C runtime (macOS, Windows) resolve those routines from
+it and have no carrier. Each routine occupies its own section and the carrier
+has no debug info, so a link keeps only the routines it references.
 
 An object the compiler loads into its own process has no link at all: an
 optimized `roc test`, REPL evaluation or glue run compiles through LLVM and

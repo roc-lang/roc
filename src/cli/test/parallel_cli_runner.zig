@@ -27,6 +27,7 @@ const Allocator = std.mem.Allocator;
 const harness = @import("test_harness");
 const platform_config = @import("platform_config.zig");
 const util = @import("util.zig");
+const object_symbols = @import("object_symbols.zig");
 const collections = @import("collections");
 const base = @import("base");
 const bytebox = @import("bytebox");
@@ -503,6 +504,7 @@ const CustomCase = enum {
     issue_11355_boxy_built_try_low_levels,
     build_default_app_interpreter_args,
     build_interpreter_owns_intermediates,
+    llvm_objects_leave_only_roc_symbols,
     build_glibc_target_non_linux_error,
     build_windows_shared_library,
     uncached_test_subset,
@@ -3609,6 +3611,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11995: roc build --opt=dev default-platform executable for a glibc target runs", .body = .{ .custom = .issue_11995_build_default_app_glibc_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default-platform executable receives args (interpreter)", .backend = .interpreter, .body = .{ .custom = .build_default_app_interpreter_args } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build writes intermediates only to its own scratch directory (interpreter)", .backend = .interpreter, .body = .{ .custom = .build_interpreter_owns_intermediates } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=speed objects call only private runtime routines and leave only roc_ symbols for every native target", .timeout_ms = 600_000, .body = .{ .custom = .llvm_objects_leave_only_roc_symbols } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with file not found error", .body = .{ .command = .{ .args = &.{"build"}, .roc_file = "nonexistent_file.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "FileNotFound" }, .{ .stream = .stderr, .text = "not found" }, .{ .stream = .stderr, .text = "not found" }, .{ .stream = .stderr, .text = "Failed" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with invalid target error", .body = .{ .command = .{ .args = &.{ "build", "--target=invalid_target_name" }, .roc_file = "test/int/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "Invalid target" }, .{ .stream = .stderr, .text = "invalid" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 shared module succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -5287,6 +5290,7 @@ fn runCustomCase(
         }),
         .build_default_app_interpreter_args => customBuildDefaultAppArgs(io, allocator, &env, &timer, timeout_ms, .interpreter, null),
         .build_interpreter_owns_intermediates => customBuildInterpreterOwnsIntermediates(io, allocator, &env, &timer, timeout_ms),
+        .llvm_objects_leave_only_roc_symbols => customLlvmObjectsLeaveOnlyRocSymbols(io, allocator, &env, &timer, timeout_ms),
         .build_glibc_target_non_linux_error => customGlibcTargetNonLinux(io, allocator, &env, &timer, timeout_ms),
         .build_windows_shared_library => customWindowsSharedLibrary(io, allocator, &env, &timer, timeout_ms),
         .uncached_test_subset => customUncachedTestSubset(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .dev),
@@ -12957,6 +12961,163 @@ fn customBuildInterpreterOwnsIntermediates(
         }
     }
 
+    return null;
+}
+
+/// A native target `roc build --opt=speed` builds for, and the routines LLVM's
+/// code generator calls from the test program's code on that target.
+const LlvmRuntimeTarget = struct {
+    name: []const u8,
+    called: []const []const u8,
+    /// Routines the object must define although no relocation refers to them.
+    defined: []const []const u8 = &.{},
+};
+
+const llvm_runtime_base = [_][]const u8{ "memcpy", "memmove", "memset", "fmod", "fmodf" };
+const llvm_runtime_base_v1 = llvm_runtime_base ++ [_][]const u8{ "floor", "floorf", "ceil", "ceilf", "trunc", "truncf" };
+const llvm_runtime_base_chkstk = llvm_runtime_base ++ [_][]const u8{"__chkstk"};
+
+const llvm_runtime_targets = [_]LlvmRuntimeTarget{
+    .{ .name = "x64musl", .called = &llvm_runtime_base },
+    .{ .name = "x64v1musl", .called = &llvm_runtime_base_v1 },
+    .{ .name = "x64glibc", .called = &llvm_runtime_base },
+    .{ .name = "x64v1glibc", .called = &llvm_runtime_base_v1 },
+    .{ .name = "x64freebsd", .called = &llvm_runtime_base },
+    .{ .name = "x64v1freebsd", .called = &llvm_runtime_base_v1 },
+    .{ .name = "x64netbsd", .called = &llvm_runtime_base },
+    .{ .name = "x64v1netbsd", .called = &llvm_runtime_base_v1 },
+    .{ .name = "x64mac", .called = &llvm_runtime_base },
+    .{ .name = "x64v1mac", .called = &llvm_runtime_base_v1 },
+    .{ .name = "x64win", .called = &llvm_runtime_base_chkstk, .defined = &.{"_fltused"} },
+    .{ .name = "x64v1win", .called = &(llvm_runtime_base_v1 ++ [_][]const u8{"__chkstk"}), .defined = &.{"_fltused"} },
+    .{ .name = "x64mingw", .called = &(llvm_runtime_base ++ [_][]const u8{"___chkstk_ms"}) },
+    .{ .name = "x64v1mingw", .called = &(llvm_runtime_base_v1 ++ [_][]const u8{"___chkstk_ms"}) },
+    .{ .name = "arm64musl", .called = &llvm_runtime_base },
+    .{ .name = "arm64v1musl", .called = &llvm_runtime_base },
+    .{ .name = "arm64glibc", .called = &llvm_runtime_base },
+    .{ .name = "arm64v1glibc", .called = &llvm_runtime_base },
+    .{ .name = "arm64mac", .called = &(llvm_runtime_base ++ [_][]const u8{"bzero"}) },
+    .{ .name = "arm64win", .called = &llvm_runtime_base_chkstk },
+    .{ .name = "arm64v1win", .called = &llvm_runtime_base_chkstk },
+    .{ .name = "arm64mingw", .called = &llvm_runtime_base_chkstk },
+    .{ .name = "arm64v1mingw", .called = &llvm_runtime_base_chkstk },
+};
+
+const llvm_private_runtime_expected_stdout =
+    "0.5 0.5 3 4 4 3 4 4 1.8708286933869707 1.8708287 7\n" ++
+    "7999999999999999999972 399999999999999999998 3 400000000000000000001 2 0 7999999999999999999972 500000000000000000001 2e21 2e21 3 3\n" ++
+    "1199999999 0 0 6000000005 6000000000 3 3\n" ++
+    "9.0 0.6 3\n" ++
+    "3998 1999 2003 2001 8192 1026.5";
+
+/// The native target this host runs, if the test builds for it.
+fn llvmRuntimeHostTarget() ?[]const u8 {
+    const x64 = builtin.cpu.arch == .x86_64;
+    const arm64 = builtin.cpu.arch == .aarch64;
+    if (builtin.os.tag == .linux and x64) return "x64musl";
+    if (builtin.os.tag == .linux and arm64) return "arm64musl";
+    if (builtin.os.tag == .macos and x64) return "x64mac";
+    if (builtin.os.tag == .macos and arm64) return "arm64mac";
+    if (builtin.os.tag == .windows and x64) return "x64win";
+    if (builtin.os.tag == .windows and arm64) return "arm64win";
+    return null;
+}
+
+/// Whether `name` is defined by the private runtime itself, so a reference
+/// from it is the runtime's own code rather than code generated for Roc.
+fn isPrivateRuntimeCode(name: []const u8) bool {
+    for (builtins.shim_symbols.llvm_private_runtime_set) |routine| {
+        if (std.mem.eql(u8, name, routine)) return true;
+    }
+    return std.mem.startsWith(u8, name, "compiler_rt.") or std.mem.startsWith(u8, name, "llvm_private_runtime.");
+}
+
+/// The single kept app object a `--keep-temp` build for `target` left under `cache_path`.
+fn findKeptLlvmAppObject(io: std.Io, allocator: Allocator, cache_path: []const u8, target: []const u8) CliRunnerError!?[]const u8 {
+    const prefix = try std.fmt.allocPrint(allocator, "roc_app_llvm_{s}_speed_", .{target});
+    var cache_dir = try std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true });
+    defer cache_dir.close(io);
+    var walker = try cache_dir.walk(allocator);
+    defer walker.deinit();
+    var found: ?[]const u8 = null;
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.startsWith(u8, entry.basename, prefix)) continue;
+        // The kept directory also holds the object's bitcode under the same name.
+        if (!std.mem.endsWith(u8, entry.basename, ".o")) continue;
+        if (found != null) return null;
+        found = try std.fs.path.join(allocator, &.{ cache_path, entry.path });
+    }
+    return found;
+}
+
+/// LLVM's code generator lowers some operations to calls (block copies and
+/// fills, float remainders, rounding on a CPU without rounding instructions,
+/// stack probes on Windows). For every native target, the test program's
+/// object must call each of those routines from its own code, define each
+/// one locally, and leave no symbol but a `roc_*` one undefined. The program
+/// built for this host must also print the right results.
+fn customLlvmObjectsLeaveOnlyRocSymbols(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const roc_file = "test/cli/LlvmPrivateRuntimeRoutines.roc";
+    for (llvm_runtime_targets) |target| {
+        const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, target.name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, output_path) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+        const target_arg = std.fmt.allocPrint(allocator, "--target={s}", .{target.name}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate target arg: {}", .{err});
+
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", "--opt=speed", "--no-cache", "--keep-temp", target_arg, out_arg },
+            .roc_file = roc_file,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        })) |failure| return failure;
+
+        const object_path = (findKeptLlvmAppObject(io, allocator, env.dirs.roc_cache_dir, target.name) catch |err|
+            return customInfraFailure(allocator, timer, "failed to search the compiler cache: {}", .{err})) orelse
+            return customFailure(allocator, timer, "{s}: expected exactly one kept LLVM app object in {s}", .{ target.name, env.dirs.roc_cache_dir });
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, object_path, allocator, .unlimited) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read {s}: {}", .{ object_path, err });
+        const object = object_symbols.read(allocator, bytes) catch |err|
+            return customFailure(allocator, timer, "{s}: failed to read {s}: {}", .{ target.name, object_path, err });
+
+        for (object.undefined) |name| {
+            if (!std.mem.startsWith(u8, name, "roc_")) {
+                return customFailure(allocator, timer, "{s}: {s} leaves {s} for its platform to supply", .{ target.name, object_path, name });
+            }
+        }
+        for (target.called) |routine| {
+            if (!object.definesLocally(routine)) {
+                return customFailure(allocator, timer, "{s}: {s} does not define {s} locally", .{ target.name, object_path, routine });
+            }
+            const called = for (object.references) |reference| {
+                if (std.mem.eql(u8, reference.target, routine) and !isPrivateRuntimeCode(reference.source)) break true;
+            } else false;
+            if (!called) {
+                return customFailure(allocator, timer, "{s}: no code generated for the program in {s} calls {s}", .{ target.name, object_path, routine });
+            }
+        }
+        for (target.defined) |routine| {
+            if (!object.defines(routine)) {
+                return customFailure(allocator, timer, "{s}: {s} does not define {s}", .{ target.name, object_path, routine });
+            }
+        }
+
+        const host_target = llvmRuntimeHostTarget() orelse continue;
+        if (!std.mem.eql(u8, host_target, target.name)) continue;
+        const executable_path = runnableOutputPath(io, allocator, output_path) catch |err|
+            return customInfraFailure(allocator, timer, "failed to find built executable: {}", .{err});
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{ executable_path, "a", "b" }, env.dirs.work_dir, .{
+            .args = &.{},
+            .stdout_exact = llvm_private_runtime_expected_stdout,
+            .stderr_exact = "",
+        })) |failure| return failure;
+    }
     return null;
 }
 
