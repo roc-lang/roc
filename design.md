@@ -10863,6 +10863,21 @@ stands for every empty row, so an empty error row is widened by pointing its
 position—the `Err` payload and the `Try` argument—at the request's row rather
 than by rewriting the node.
 
+When the closed row ends in a variable the template QUANTIFIES, and nothing
+else in the template's type reaches that variable—no argument, payload or
+other position—the variable is determined by the result alone
+(`requestDeterminedResultRowVariable`). The specialization's substitution
+gives that slot a fresh cell instead of the variable the use site recorded
+(`requestDeterminedSubstitution`), so relating the template's root to the
+request binds it to the request's row, and the root and the body read that
+row. Nothing is widened in place. The recorded variable is the USE's own
+row. For a reference inside the template's own recursive group, the checker
+records no instantiation, so it is the enclosing specialization's binding,
+which can be narrower than the row the request's result flows into. Seeding
+the template with it and widening afterwards would rewrite cells that other
+types share, such as an indexed nominal backing, while the body still read
+the narrower row.
+
 The set of positions a use may WIDEN is kept within the row coercion's reach
 by construction rather than by a second rule that could drift: polarity's
 per-use opening is withheld at generation time from every position outside
