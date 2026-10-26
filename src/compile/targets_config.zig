@@ -351,7 +351,8 @@ pub const TargetsConfigDiagnostic = union(enum) {
         filename: []const u8,
     ) Allocator.Error!reporting.Report {
         return switch (self) {
-            inline else => |diagnostic| diagnostic.toReport(allocator, env, filename),
+            .path => |diagnostic| diagnostic.toReport(allocator, env, filename),
+            .entry => |diagnostic| diagnostic.toReport(allocator, env, filename),
         };
     }
 };
@@ -745,7 +746,7 @@ pub const TargetsConfig = struct {
                     .tag_literal => |tag| wasm.import_memory = WasmImportMemory.fromTagName(ast.resolve(tag)) orelse
                         return reject(diagnostic, .expected_import_memory, target, name, name_region),
                     .ident => |ident| try storeIdent(allocator, ast, ident, &wasm.import_memory_ident),
-                    else => return reject(diagnostic, .expected_import_memory, target, name, name_region),
+                    .int_literal, .string_literal, .list, .files, .malformed => return reject(diagnostic, .expected_import_memory, target, name, name_region),
                 },
                 .minimum_memory => try parseUnsignedField(usize, allocator, ast, value, &wasm.minimum_memory, &wasm.minimum_memory_ident, target, name, name_region, diagnostic),
                 .maximum_memory => try parseUnsignedField(usize, allocator, ast, value, &wasm.maximum_memory, &wasm.maximum_memory_ident, target, name, name_region, diagnostic),
@@ -787,7 +788,7 @@ pub const TargetsConfig = struct {
                 .out_of_range => .integer_out_of_range,
                 .not_unsigned => .expected_unsigned_integer,
             },
-            else => .expected_unsigned_integer,
+            .string_literal, .tag_literal, .list, .files, .malformed => .expected_unsigned_integer,
         };
         diagnostic.* = .{ .entry = .{ .problem = problem, .target = target, .field_name = field_name, .region = region } };
         return error.InvalidTargetConfig;
@@ -1538,7 +1539,7 @@ test "fromAST rejects an export that is not a string" {
 
 test "fromAST rejects an unknown import_memory tag" {
     try expectInvalidTargetEntry(
-        \\        wasm32: { inputs: ["host.wasm", app], exports: [], import_memory: Zerod },
+        \\        wasm32: { inputs: ["host.wasm", app], exports: [], import_memory: Shared },
         \\
     , .expected_import_memory, .wasm32, "import_memory");
 }

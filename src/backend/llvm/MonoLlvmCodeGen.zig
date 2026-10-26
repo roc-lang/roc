@@ -4163,10 +4163,9 @@ pub const MonoLlvmCodeGen = struct {
         var fn_attrs = std.ArrayList(LlvmBuilder.Attribute.Index).empty;
         defer fn_attrs.deinit(self.allocator);
         for (existing.func(builder).slice(builder)) |attribute| {
-            switch (attribute.getKind(builder)) {
-                .alwaysinline, .inlinehint, .@"noinline" => continue,
-                else => try fn_attrs.append(self.allocator, attribute),
-            }
+            const kind = attribute.getKind(builder);
+            if (kind == .alwaysinline or kind == .inlinehint or kind == .@"noinline") continue;
+            try fn_attrs.append(self.allocator, attribute);
         }
         try fn_attrs.append(self.allocator, builder.attr(.@"noinline") catch return error.OutOfMemory);
 
@@ -4215,7 +4214,7 @@ pub const MonoLlvmCodeGen = struct {
                             .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .static_data => {},
                         }
                     },
-                    else => {},
+                    .init_uninitialized, .assign_ref, .assign_call_erased, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
                 }
                 try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id, arena);
             }

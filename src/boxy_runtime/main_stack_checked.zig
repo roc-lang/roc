@@ -7,6 +7,7 @@
 const builtins = @import("builtins");
 const runtime = @import("main.zig");
 
+/// This object is linked into a platform's program, like `main.zig`.
 pub const roc_host_role: builtins.host_abi.HostRole = .platform;
 /// Turns on `builtins.stack_guard` throughout this object.
 pub const roc_wasm_stack_checks = true;

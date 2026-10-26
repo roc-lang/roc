@@ -35,6 +35,7 @@ const Allocator = std.mem.Allocator;
 pub const stack_low_symbol = "__stack_low";
 const stack_pointer_symbol = "__stack_pointer";
 
+/// Why `fillCheckRooms` could not analyse an object.
 pub const Error = Allocator.Error || WasmModule.ParseError;
 
 /// Return a copy of `object_bytes`, a relocatable wasm object, in which every
