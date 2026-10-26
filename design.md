@@ -6422,7 +6422,7 @@ stores the built value into it. A worker reads the value from its captured slot
 once on entry, before any of its code runs, and keeps the slot in scope for the
 callables it builds that capture the binder too.
 
-The settled-state occurs sweep rejects an anonymous-recursive or infinite type
+The settled infinite-type check rejects an anonymous-recursive or infinite type
 at a local binding root. The root's initializer has the rejected type and its
 binders carry parts of it, so the statement and every use of its binders
 become runtime errors, as for a rejected pattern/RHS relation.
@@ -10938,6 +10938,26 @@ The settled walk owns isolated scratch shared across all its output roots and
 released when the walk ends. Its module-sized visited set must not enlarge the
 common checker scratch used by subsequent small queries.
 
+The same walk is the checked module's infinite-type check. No checked type is
+infinite or anonymously recursive: a cycle in a type must pass through a
+nominal's backing, and the value graph sees a nominal application's arguments
+only, so every cycle the walk can close through structure is rejected. The walk
+is depth-first and marks each variable in progress until everything it reaches
+through structure is done, so an edge back to an in-progress variable is
+exactly such a cycle, found whichever root reaches it first. A type
+variable's method requirements and a function's effect dependencies are not
+part of a type's structure: the walk visits their types as roots of their own
+once nothing is in progress, so a requirement that refers back to its receiver
+(`a.plus : a, a -> a`) closes no cycle while a cycle inside a requirement's
+own types still does. A module without an infinite type pays only the walk it
+already makes for rows. When the walk closed a cycle, each binding root
+(the REPL expression, then local bindings, then definitions) is checked with
+the occurs check, which follows the same edges, and the tightest root whose
+type reaches a cycle reports it by name and becomes `.err`. A cycle no
+rejected root's type reaches, such as one in a lambda passed straight to a
+call, is reported at the output root whose walk found it, and one of the
+cycle's variables becomes `.err` after every report has its snapshot.
+
 Normalization needs no metadata on type variables and adds no work where no
 label repeats: detection rides on the unifier's gather,
 the key writer's row sort, and the settled row walk, which already compare
@@ -13423,8 +13443,9 @@ Other solved-graph mutations:
   generalized, as declared in Static Dispatch At The Checked Boundary
   ("Evidence params"). Each same-name callable pair on a receiver still flex
   at the boundary's rank is related through an ordinary committed probe; a
-  probe that cannot establish the pair rolls back, reports the method
-  conflict, and poisons the receiver. A relation that defers checks is
+  probe that cannot establish the pair, or that makes the related callable's
+  type infinite, rolls back, reports the method conflict, and poisons the
+  receiver. A relation that defers checks is
   redone after recording the two method types, so a deferred check that later
   fails reports the method conflict and poisons the definition.
 - `deduplicateGeneralizedDispatchRequirements` (`setVarContent` of a retained
@@ -16837,7 +16858,12 @@ when a receiver is still a type variable at its definition's generalization
 boundary, its requirements of one method become one requirement: the boundary
 relates their callables before it defaults literals and generalizes, and an
 inferred scheme never holds two requirements of one method on one type.
-Requirements that cannot be one are a type mismatch. The report says the use
+Requirements that cannot be one are a type mismatch. That includes a relation
+that would make the method's type infinite, which no type can be (two uses of
+`row.i32()` whose results must be both `a` and `{ id: a }`); unification
+admits the cycle, so the boundary checks the related callable for one and
+rolls the relation back, unless either callable's type was already infinite,
+which the settled walk reports instead. The report says the use
 requires the type to have two different methods of that name and shows both
 method types, at the use that introduced the second requirement, or at the
 definition when another definition introduced it; the receiver is poisoned so
