@@ -2040,6 +2040,12 @@ test "a remainder bounds its divisor only where the remainder ran" {
     // there even past a merge.
     const dominated = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| {\n    r = a % b\n    c = if a > 3 { r } else { a }\n    if b == 0 { 1 } else { c }\n}\n", two_bytes, "num_rem_by");
     try std.testing.expectEqual(@as(usize, 0), dominated.is_eq);
+    // A loop after the remainder keeps its ordering with the divisor, so
+    // `b - r` in the body is proven where `c - r` is not.
+    const looped = try ruleCounts("calc : U8, U8, U8 -> U8\ncalc = |a, b, _c| {\n    r = a % b\n    var $acc = 0\n    for x in [a, b] {\n        $acc = $acc.bitwise_xor(x.bitwise_and(b - r))\n    }\n    $acc\n}\n", three_bytes, "num_rem_by");
+    const looped_unrelated = try ruleCounts("calc : U8, U8, U8 -> U8\ncalc = |a, b, c| {\n    r = a % b\n    var $acc = 0\n    for x in [a, b] {\n        $acc = $acc.bitwise_xor(x.bitwise_and(c - r))\n    }\n    $acc\n}\n", three_bytes, "num_rem_by");
+    try std.testing.expectEqual(looped_unrelated.sub_proven + 1, looped.sub_proven);
+    try std.testing.expectEqual(looped_unrelated.sub_crash, looped.sub_crash + 1);
 }
 
 test "a right shift is at most its operand and a left shift by a constant scales its range" {

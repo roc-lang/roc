@@ -755,8 +755,9 @@ const FactOrigin = union(enum) {
     /// Established by running this statement, so it holds only where the
     /// statement dominates.
     definition: CFStmtId,
-    /// Survived a merge meet whose incoming copies had differing origins.
-    /// Its truth rests on the meet, not on a single dominating edge.
+    /// Rests on no single statement: met over a merge's incoming edges
+    /// (whose copies may differ in origin) or derived from other facts and
+    /// value ranges already in the fact base.
     meet,
 };
 
@@ -5142,7 +5143,7 @@ const Pass = struct {
                     },
                     .assign_literal => |s| {
                         try self.visited.put(current, {});
-                        try self.modelLiteral(s.target, s.value, self.store.literalExtra(s.value).list_len);
+                        try self.modelLiteral(current, s.target, s.value, self.store.literalExtra(s.value).list_len);
                         current = s.next;
                     },
                     .assign_tag => |s| {
@@ -5424,7 +5425,7 @@ const Pass = struct {
 
     // Statement value modeling and check rewrites
 
-    fn modelLiteral(self: *Pass, target: LocalId, value: LIR.LiteralValue, list_len: ?u64) ResourceError!void {
+    fn modelLiteral(self: *Pass, stmt: CFStmtId, target: LocalId, value: LIR.LiteralValue, list_len: ?u64) ResourceError!void {
         // A list literal's item count is known where it is read: a bytes
         // literal carries it, and lowering states it for a static list of
         // copies. The value is a fresh list whose length term equals that
@@ -5439,8 +5440,8 @@ const Pass = struct {
             if (try self.unknownFor(self.localLayout(target))) |list_node| {
                 if (try self.freshRoot(0, std.math.maxInt(i64))) |len_node| {
                     if (try self.constNode(len)) |count| {
-                        try self.addFact(.{ .a = count, .b = len_node, .c = 0, .origin = .meet });
-                        try self.addFact(.{ .a = len_node, .b = count, .c = 0, .origin = .meet });
+                        try self.addFact(.{ .a = count, .b = len_node, .c = 0, .origin = .{ .definition = stmt } });
+                        try self.addFact(.{ .a = len_node, .b = count, .c = 0, .origin = .{ .definition = stmt } });
                         try self.len_terms.put(list_node, len_node);
                         if (self.isSingleAssign(target)) {
                             try self.len_roots.put(len_node, self.stableLocalOf(target));
