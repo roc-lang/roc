@@ -10188,6 +10188,16 @@ fn writeSealedWasmObject(
         backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, runtime_bytes) catch return error.WasmOutputWriteFailed;
         try compiler_inputs.append(runtime_path);
     }
+    var sealed_public_definitions = public_definitions;
+    if (target.cpuLevel() == .v1) {
+        const accessors_bytes = try backend.wasm.StackAccessors.encodeObject(ctx.gpa);
+        defer ctx.gpa.free(accessors_bytes);
+        const accessors_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_stack_accessors.o" });
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, accessors_path, accessors_bytes) catch return error.WasmOutputWriteFailed;
+        try compiler_inputs.append(accessors_path);
+        const accessor_names = [_][]const u8{ shim_symbols.roc_wasm_stack_pointer, shim_symbols.roc_wasm_set_stack_pointer };
+        sealed_public_definitions = try std.mem.concat(ctx.arena, []const u8, &.{ public_definitions, &accessor_names });
+    }
     const composed_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_app_composed_wasm32.o" });
     linker.linkWasmObjectsRelocatable(ctx, composed_path, compiler_inputs.items) catch |err| {
         return failLink(ctx, err, "wasm32");
@@ -10200,7 +10210,7 @@ fn writeSealedWasmObject(
         return err;
     };
     defer sealed_module.deinit();
-    try sealed_module.sealRocObject(public_definitions, allowed_undefined_functions);
+    try sealed_module.sealRocObject(sealed_public_definitions, allowed_undefined_functions);
     try sealed_module.verifyNoLinkObjectContract();
     try sealed_module.patchRelocatableSymbolFlags(composed_bytes);
     const output_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, output_filename });
@@ -10610,6 +10620,21 @@ fn linkWasmOutput(
 ) CliMainError!void {
     const object_files = try ctx.arena.alloc([]const u8, 1);
     object_files[0] = obj_path;
+    const stack_size = configuredWasmStackBytes(args, link_inputs.wasm);
+    const global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null;
+    const maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null;
+    switch (linker.wasmStackLayout(global_base)) {
+        .stack_first => if (maximum_memory) |bytes| {
+            const limit = linker.stackFirstMaximumMemory(stack_size);
+            if (bytes > limit) return ctx.fail(.{ .wasm_maximum_memory_too_large = .{
+                .target = link_inputs.target_name,
+                .maximum_memory = bytes,
+                .limit = limit,
+                .stack_size = stack_size,
+            } });
+        },
+        .data_first => {},
+    }
     const link_config = linker.LinkConfig{
         .target_format = .wasm,
         .target_abi = null,
@@ -10623,14 +10648,14 @@ fn linkWasmOutput(
         .can_exit_early = false,
         .disable_output = false,
         .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
-        .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
-        .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
+        .wasm_maximum_memory = maximum_memory,
+        .wasm_stack_size = stack_size,
         .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
         .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
         .wasm_debug_info = args.debug,
         .wasm_optimize = wasmOptimizeMode(args.opt),
         .wasm_cpu_level = target.cpuLevel(),
-        .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
+        .wasm_global_base = global_base,
         .wasm_exports = requiredWasmPlatformExports(link_inputs),
         .platform_files_dir = link_inputs.platform_files_dir,
         .scratch_dir = scratch_dir,
