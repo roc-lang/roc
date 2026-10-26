@@ -31,8 +31,10 @@ const Unix = @import("Unix.zig");
 const Windows = @import("Windows.zig");
 
 /// How long to wait for the terminal's reply to one cursor-position report
-/// before concluding that it does not answer.
-pub const report_timeout_ms: u32 = 150;
+/// before concluding that it does not answer. A terminal that answers at all
+/// answers in well under a millisecond, so this only bounds how long the probe
+/// holds the screen when nothing is coming back.
+pub const report_timeout_ms: u32 = 60;
 
 const Sample = struct {
     bytes: []const u8,
@@ -76,6 +78,17 @@ pub fn measure(
 ) (std.Io.File.ReadStreamingError || std.Io.Writer.Error || std.mem.Allocator.Error)!unicode.WidthModel {
     var model = unicode.WidthModel{};
 
+    // Hold the samples in one synchronized frame, so a terminal that supports
+    // synchronized updates commits the whole probe at once and never paints
+    // the samples on screen. A terminal that does not support it ignores these
+    // two sequences and shows the samples for as long as the probe takes.
+    try out.writeAll(begin_synchronized_update);
+    try out.flush();
+    defer {
+        out.writeAll(end_synchronized_update) catch {};
+        out.flush() catch {};
+    }
+
     for (samples, 0..) |sample, sample_index| {
         const width = try measureSample(std_io, in, out, temp, sample, unexpected) orelse break;
         const merged = width == merged_glyph_width;
@@ -94,6 +107,8 @@ pub fn measure(
 }
 
 const erase_line = "\x1b[K";
+const begin_synchronized_update = "\x1b[?2026h";
+const end_synchronized_update = "\x1b[?2026l";
 
 /// Returns the cell width of `sample` as reported by the terminal, or null when
 /// the terminal did not answer.
