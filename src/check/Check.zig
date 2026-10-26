@@ -1274,6 +1274,9 @@ where_method_use_record_by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
 /// deferred onto the types it related, keyed by the obligation's callable. One
 /// that fails reports the method conflict that forced it.
 merged_method_obligations: std.AutoHashMapUnmanaged(Var, MergedMethodObligation) = .empty,
+/// The definitions each merged method obligation's boundary generalized
+/// (`MergedMethodObligation.definitions`), retired when the obligation fails.
+merged_method_definitions: std.ArrayListUnmanaged(BoundaryDefinition) = .empty,
 /// Explicit derivation edges for constraints copied while instantiating a
 /// selected method target. This distinguishes target-owned recursive
 /// obligations from unrelated caller constraints merely grounded by the same
@@ -1890,6 +1893,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .scratch_replay_walked = .scratch,
     .where_method_use_record_by_fn_var = .keyed,
     .merged_method_obligations = .keyed,
+    .merged_method_definitions = .keyed,
     .dispatch_derivations = .keyed,
     .dispatch_derivation_by_child_fn_var = .keyed,
     .method_name_mints = .keyed,
@@ -2294,6 +2298,17 @@ const BoundaryRoot = struct {
     /// The pattern that binds the root, where a diagnostic about the
     /// definition as a whole is reported.
     binding: ?Var = null,
+    /// The definition this root generalizes, which a boundary whose
+    /// generalization is rejected retires. Every root passed to a
+    /// generalization boundary's defaulting carries it.
+    definition: ?BoundaryDefinition = null,
+};
+
+/// The right-hand side and the binder of a definition a generalization
+/// boundary generalizes. An inner lambda that no binding names has no binder.
+const BoundaryDefinition = struct {
+    expr: CIR.Expr.Idx,
+    pattern: ?CIR.Pattern.Idx,
 };
 
 /// One dispatch-constrained receiver var awaiting the local ambiguity
@@ -7542,7 +7557,7 @@ fn refineMethodTypeMismatch(self: *Self, problem_idx: problem.Problem.Idx) Alloc
     if (ctx != .method_type) return;
     const requirement_fn_var = ctx.method_type.requirement_fn_var orelse return;
     if (self.merged_method_obligations.get(requirement_fn_var)) |merged| {
-        self.problems.problems.items[@backingInt(problem_idx)] = try self.methodConflictProblem(merged, requirement_fn_var);
+        self.problems.problems.items[@backingInt(problem_idx)] = try self.methodConflictProblem(merged.conflict, merged.first_fn_var, merged.use_var, requirement_fn_var);
         return;
     }
     const requirement = self.instantiatedDispatchCopy(requirement_fn_var) orelse return;
@@ -19807,6 +19822,7 @@ fn stepGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.Er
                     .interface = ModuleEnv.varFrom(member_def.expr),
                     .annotation = member_def.annotation,
                     .binding = ModuleEnv.varFrom(member_def.pattern),
+                    .definition = .{ .expr = member_def.expr, .pattern = member_def.pattern },
                 });
             }
 
@@ -27122,6 +27138,7 @@ const ExprCheckFrame = struct {
                 .owner = self.expr_var_raw,
                 .interface = self.expr_var,
                 .binding = if (self.binding_pattern) |pattern_idx| ModuleEnv.varFrom(pattern_idx) else null,
+                .definition = .{ .expr = self.expr_idx, .pattern = self.binding_pattern },
             }, env);
             const roots = [_]BoundaryRoot{.{ .owner = self.expr_var_raw, .interface = self.expr_var, .annotation = self.annotation }};
             _ = try checker.relateBoundaryPredeclaredUses(&roots, env);
@@ -27510,6 +27527,7 @@ fn finishExprFrame(self: *Self, state: *ExprKernelActivity, frame: *ExprCheckFra
                 .interface = state.finishing.?.frame.expr_var,
                 .annotation = state.finishing.?.frame.annotation,
                 .binding = if (state.finishing.?.frame.binding_pattern) |pattern_idx| ModuleEnv.varFrom(pattern_idx) else null,
+                .definition = .{ .expr = state.finishing.?.frame.expr_idx, .pattern = state.finishing.?.frame.binding_pattern },
             };
             return .{ .push = .{ .boundary = .{ .roots = (&state.boundary_root)[0..1] } } };
         },
@@ -29758,7 +29776,12 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 // recursive top-level group's boundary does.
                 try self.checkStaticDispatchConstraints(env, false);
                 try self.judgeRecordDestructBinds(env);
-                try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = decl_pattern_var, .interface = decl_pattern_var, .binding = decl_pattern_var }, env);
+                try self.defaultLiteralsAtGeneralizationBoundary(.{
+                    .owner = decl_pattern_var,
+                    .interface = decl_pattern_var,
+                    .binding = decl_pattern_var,
+                    .definition = .{ .expr = decl_stmt.expr, .pattern = decl_stmt.pattern },
+                }, env);
                 try self.judgePendingAccessesAtBoundary(env);
                 self.unify_scratch.clearPersistentOpenings();
                 try self.linkDeferredUsesFrom(env.rank());
@@ -35450,7 +35473,9 @@ fn checkResolvedAssociatedTarget(
         .value => {},
     }
 
-    if (is_this_module and self.rejected_value_annotations.contains(target_def.pattern)) {
+    if (is_this_module and (self.rejected_value_annotations.contains(target_def.pattern) or
+        self.erroneous_value_patterns.contains(target_def.pattern)))
+    {
         try self.markErroneousNameUse(expr_idx, expr_var);
         return;
     }
@@ -40403,8 +40428,9 @@ fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRo
 /// Relate two requirements of one method on a type about to be generalized.
 /// When they cannot be one relation, the uses that introduced them require
 /// the type to have two different methods of that name, which no type can:
-/// that is reported as a method conflict, and the type is poisoned so it
-/// reports nothing further.
+/// that is reported as a method conflict. The type is poisoned so it reports
+/// nothing further, and every definition the boundary generalizes is retired
+/// (`retireBoundaryDefinition`), since the type is part of what they share.
 fn relateSameMethodRequirements(
     self: *Self,
     retained: StaticDispatchConstraint,
@@ -40431,7 +40457,7 @@ fn relateSameMethodRequirements(
             .conflict = try self.methodConflict(retained, duplicate, receiver_var),
             .first_fn_var = retained_fn_var,
             .use_var = self.methodConflictUseVar(duplicate, roots),
-            .definition_var = roots[0].owner,
+            .definitions = try self.recordMergedMethodDefinitions(roots),
         };
         var redo = try self.beginCommitProbe(env);
         const redo_result = try redo.unify(retained_fn_var, duplicate.fn_var);
@@ -40450,15 +40476,61 @@ fn relateSameMethodRequirements(
     probe.rollback();
     if (!result.isProblem()) return .erroneous;
 
-    try self.appendMethodConflict(.{
-        .conflict = try self.methodConflict(retained, duplicate, receiver_var),
-        .first_fn_var = retained_fn_var,
-        .use_var = self.methodConflictUseVar(duplicate, roots),
-        .definition_var = roots[0].owner,
-    }, duplicate.fn_var);
+    _ = try self.problems.appendProblem(try self.methodConflictProblem(
+        try self.methodConflict(retained, duplicate, receiver_var),
+        retained_fn_var,
+        self.methodConflictUseVar(duplicate, roots),
+        duplicate.fn_var,
+    ));
     self.types.assertNoSavepointActive();
     try self.types.poisonOnMismatch(receiver_var, receiver_var);
+    for (roots) |root| {
+        const definition = root.definition orelse
+            base.invariant("check invariant violated: generalization boundary root has no definition", .{});
+        try self.retireBoundaryDefinition(definition);
+    }
     return .conflict;
+}
+
+/// Record the definitions a boundary generalizes for the obligations relating
+/// its same-method requirements deferred, so one that fails retires them.
+fn recordMergedMethodDefinitions(self: *Self, roots: []const BoundaryRoot) Allocator.Error!MergedMethodObligation.Definitions {
+    const start: u32 = @intCast(self.merged_method_definitions.items.len);
+    try self.merged_method_definitions.ensureUnusedCapacity(self.gpa, roots.len);
+    for (roots) |root| {
+        self.merged_method_definitions.appendAssumeCapacity(root.definition orelse
+            base.invariant("check invariant violated: generalization boundary root has no definition", .{}));
+    }
+    return .{ .start = start, .len = @intCast(roots.len) };
+}
+
+/// A merged method obligation failed: report the method conflict it was
+/// deferred from and retire the definitions whose generalized type the
+/// relation produced.
+fn failMergedMethodObligation(self: *Self, merged: MergedMethodObligation, second_fn_var: Var) Allocator.Error!void {
+    _ = try self.problems.appendProblem(try self.methodConflictProblem(merged.conflict, merged.first_fn_var, merged.use_var, second_fn_var));
+    try self.retireMergedMethodDefinitions(merged);
+}
+
+fn retireMergedMethodDefinitions(self: *Self, merged: MergedMethodObligation) Allocator.Error!void {
+    const start = merged.definitions.start;
+    for (self.merged_method_definitions.items[start .. start + merged.definitions.len]) |definition| {
+        try self.retireBoundaryDefinition(definition);
+    }
+}
+
+/// A definition whose generalization was rejected has no type to run under:
+/// its right-hand side becomes the runtime error, and its binder binds
+/// nothing, so every use of it is erroneous at the use (design.md "Every
+/// Rejection Is Explicit Recovery").
+fn retireBoundaryDefinition(self: *Self, definition: BoundaryDefinition) Allocator.Error!void {
+    try self.markErroneousValueExpr(definition.expr);
+    const pattern = definition.pattern orelse return;
+    if (self.cir.store.getPattern(pattern) == .assign) {
+        try self.markErroneousValuePattern(pattern);
+    } else {
+        try self.markPatternBindingsErroneous(pattern);
+    }
 }
 
 /// A method conflict between two requirements of one method, where it is
@@ -40467,7 +40539,11 @@ const MergedMethodObligation = struct {
     conflict: problem.MethodConflict,
     first_fn_var: Var,
     use_var: Var,
-    definition_var: Var,
+    /// The definitions the boundary generalized, in
+    /// `merged_method_definitions`.
+    definitions: Definitions,
+
+    const Definitions = struct { start: u32, len: u32 };
 };
 
 fn methodConflict(self: *Self, first: StaticDispatchConstraint, second: StaticDispatchConstraint, receiver_var: Var) Allocator.Error!problem.MethodConflict {
@@ -40480,19 +40556,21 @@ fn methodConflict(self: *Self, first: StaticDispatchConstraint, second: StaticDi
     };
 }
 
-fn appendMethodConflict(self: *Self, merged: MergedMethodObligation, second_fn_var: Var) Allocator.Error!void {
-    _ = try self.problems.appendProblem(try self.methodConflictProblem(merged, second_fn_var));
-}
-
-fn methodConflictProblem(self: *Self, merged: MergedMethodObligation, second_fn_var: Var) Allocator.Error!problem.Problem {
+fn methodConflictProblem(
+    self: *Self,
+    conflict: problem.MethodConflict,
+    first_fn_var: Var,
+    use_var: Var,
+    second_fn_var: Var,
+) Allocator.Error!problem.Problem {
     return .{ .type_mismatch = .{
         .types = .{
-            .expected_var = merged.first_fn_var,
-            .expected_snapshot = try self.snapshotVarForError(merged.first_fn_var),
-            .actual_var = merged.use_var,
+            .expected_var = first_fn_var,
+            .expected_snapshot = try self.snapshotVarForError(first_fn_var),
+            .actual_var = use_var,
             .actual_snapshot = try self.snapshotVarForError(second_fn_var),
         },
-        .method_conflict = merged.conflict,
+        .method_conflict = conflict,
     } };
 }
 
@@ -48593,12 +48671,11 @@ inline fn processDeferredDispatchEntry(
                         // An obligation relating two requirements of one
                         // method deferred was reported as that method
                         // conflict (`refineMethodTypeMismatch`), and the
-                        // definition whose type the relation produced is
-                        // poisoned with it.
+                        // definitions whose type the relation produced are
+                        // retired with it.
                         if (fn_result == .problem) {
                             if (self.merged_method_obligations.get(constraint.fn_var)) |merged| {
-                                self.types.assertNoSavepointActive();
-                                try self.types.poisonOnMismatch(merged.definition_var, merged.definition_var);
+                                try self.retireMergedMethodDefinitions(merged);
                             }
                         }
                     },
@@ -57878,14 +57955,12 @@ fn reportConstraintErrorAt(
 
     // An obligation that relating two requirements of one method deferred
     // fails because the uses needed two different methods of that name. The
-    // definition's type was generalized from that relation, so it is poisoned
-    // with the obligation: its uses report nothing further.
+    // definitions' type was generalized from that relation, so they are
+    // retired with the obligation: their uses report nothing further.
     if (self.merged_method_obligations.get(constraint.fn_var)) |merged| {
-        try self.appendMethodConflict(merged, constraint.fn_var);
+        try self.failMergedMethodObligation(merged, constraint.fn_var);
         try self.poisonConstraintFailure(dispatcher_var, constraint, env, explicit_error_expr);
         try self.markStaticDispatchRejected(constraint);
-        self.types.assertNoSavepointActive();
-        try self.types.poisonOnMismatch(merged.definition_var, merged.definition_var);
         return;
     }
 

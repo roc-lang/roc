@@ -1476,6 +1476,14 @@ checker recovery. The recovery rules:
   A relation over values that are not erroneous keeps its report: genuine
   independent errors, such as `Str.concat(1.U8, "x")` or `[1.U8, "s"]` beside
   such a cascade, are still reported.
+- A definition whose generalization a method conflict rejects (Static
+  Dispatch At The Checked Boundary, "Evidence params") is retired, with every
+  other definition its boundary generalizes: each right-hand side becomes the
+  runtime error and each binder binds nothing, so every use is erroneous at
+  the use, in this module and, through the checked artifact's `checked_error`
+  procedure bindings, in every module that imports it. Poisoning the receiver
+  alone would leave a lambda whose parameter type is erroneous, which
+  post-check lowering instantiates.
 - An uninitialized `var` whose annotation contains an error binds nothing:
   its binders are erroneous and the declaration is a runtime error.
 - An expression statement whose expression's checked type contains an error
@@ -13424,9 +13432,10 @@ Other solved-graph mutations:
   ("Evidence params"). Each same-name callable pair on a receiver still flex
   at the boundary's rank is related through an ordinary committed probe; a
   probe that cannot establish the pair rolls back, reports the method
-  conflict, and poisons the receiver. A relation that defers checks is
-  redone after recording the two method types, so a deferred check that later
-  fails reports the method conflict and poisons the definition.
+  conflict, poisons the receiver, and retires every definition the boundary
+  generalizes. A relation that defers checks is redone after recording the
+  two method types and the boundary's definitions, so a deferred check that
+  later fails reports the method conflict and retires those definitions.
 - `deduplicateGeneralizedDispatchRequirements` (`setVarContent` of a retained
   constraint list, `unifyEquivalentGeneralizedCallables` committed probe)—
   policy: evidence-param collapse of same-shape requirements as declared in
@@ -16841,7 +16850,11 @@ Requirements that cannot be one are a type mismatch. The report says the use
 requires the type to have two different methods of that name and shows both
 method types, at the use that introduced the second requirement, or at the
 definition when another definition introduced it; the receiver is poisoned so
-it reports nothing further. An annotation that declares two such requirements
+it reports nothing further, and every definition the boundary generalizes is
+retired: the receiver belongs to the type they share, so none of them has a
+type to run under (Every Rejection Is Explicit Recovery). When relating the
+requirements defers checks onto the types it related, a deferred check that
+later fails is that same mismatch and retires the same definitions. An annotation that declares two such requirements
 is the same mismatch, reported at the second requirement. A requirement a
 use copies out of a definition's type fails at that use, not inside the
 definition: its report shows the code in the definition that introduced it,
