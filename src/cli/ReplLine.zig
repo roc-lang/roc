@@ -75,19 +75,37 @@ pub fn stdinRawModeActive() bool {
     };
 }
 
+/// The arrow keys, as decoded from a terminal escape sequence.
+pub const ArrowDirection = enum { up, down, left, right };
+
+/// One key decoded from a terminal escape sequence. `InputParser` produces
+/// these directly, so command dispatch never has to re-read raw bytes.
+pub const Key = union(enum) {
+    arrow: ArrowDirection,
+    home,
+    end,
+    insert,
+    delete,
+    page_up,
+    page_down,
+    /// `ESC` followed by one ASCII byte (Alt-key combinations such as
+    /// `ESC b`). The byte is kept so the binding table can name the ones the
+    /// editor supports.
+    alt: u8,
+    /// A terminal key sequence that the parser recognizes as a key but that
+    /// the editor has no binding for. It is consumed here so it never reaches
+    /// the text path.
+    unbound,
+};
+
 /// One unit of meaning produced by `InputParser` from a raw byte stream.
 pub const InputEvent = union(enum) {
     /// One ASCII byte to be processed normally (text, control key, etc.).
     byte: u8,
     /// One complete, validated non-ASCII Unicode scalar value.
     codepoint: u21,
-    /// A 2-byte ESC sequence (ESC X)—typically Alt-key combinations.
-    esc2: [2]u8,
-    /// A 3-byte CSI sequence (ESC [ X)—typically arrow keys.
-    csi3: [3]u8,
-    /// A 4-byte CSI sequence terminated by `~` (ESC [ D ~)—Delete, Insert,
-    /// Home, End, PgUp, and PgDn.
-    csi_tilde: [4]u8,
+    /// One fully decoded terminal key sequence.
+    key: Key,
     /// A bracketed paste began (consumed an `ESC[200~` marker).
     paste_start,
     /// A byte inside an active bracketed paste. May be any value, including
@@ -97,14 +115,104 @@ pub const InputEvent = union(enum) {
     paste_end,
 };
 
+/// One entry in the explicit table of terminal key sequences the editor
+/// decodes. Terminals disagree on how they encode Home and End, so every
+/// encoding in common use is listed rather than guessed from `TERM`.
+const KeySequence = struct {
+    bytes: []const u8,
+    key: Key,
+};
+
+/// Every escape sequence the editor recognizes, with the key it denotes.
+///
+/// - `ESC[A`..`ESC[D`: arrow keys (normal cursor mode).
+/// - `ESC[H` / `ESC[F`: Home / End (normal cursor mode, xterm family, VTE).
+/// - `ESCOA`..`ESCOD`, `ESCOH`, `ESCOF`: the same keys in application cursor
+///   mode, where the third byte follows `ESC O` instead of `ESC [`.
+/// - `ESC[1~` / `ESC[7~` / `ESC[4~` / `ESC[8~`: Home / End as sent by tmux,
+///   screen, the Linux console, st, and rxvt.
+/// - `ESC[D~`: Insert (2), Delete (3), PgUp (5), PgDn (6).
+/// - `ESC[1;5H` / `ESC[1;5F`: Ctrl+Home / Ctrl+End. The editor treats them
+///   exactly like Home / End, which is why they decode to the same keys.
+///
+/// Anything else is an `unbound` key: recognized as a key sequence, consumed,
+/// and never inserted as text.
+const key_sequences = [_]KeySequence{
+    .{ .bytes = "\x1b[A", .key = .{ .arrow = .up } },
+    .{ .bytes = "\x1b[B", .key = .{ .arrow = .down } },
+    .{ .bytes = "\x1b[C", .key = .{ .arrow = .right } },
+    .{ .bytes = "\x1b[D", .key = .{ .arrow = .left } },
+    .{ .bytes = "\x1b[H", .key = .home },
+    .{ .bytes = "\x1b[F", .key = .end },
+    .{ .bytes = "\x1bOA", .key = .{ .arrow = .up } },
+    .{ .bytes = "\x1bOB", .key = .{ .arrow = .down } },
+    .{ .bytes = "\x1bOC", .key = .{ .arrow = .right } },
+    .{ .bytes = "\x1bOD", .key = .{ .arrow = .left } },
+    .{ .bytes = "\x1bOH", .key = .home },
+    .{ .bytes = "\x1bOF", .key = .end },
+    .{ .bytes = "\x1b[1~", .key = .home },
+    .{ .bytes = "\x1b[7~", .key = .home },
+    .{ .bytes = "\x1b[4~", .key = .end },
+    .{ .bytes = "\x1b[8~", .key = .end },
+    .{ .bytes = "\x1b[2~", .key = .insert },
+    .{ .bytes = "\x1b[3~", .key = .delete },
+    .{ .bytes = "\x1b[5~", .key = .page_up },
+    .{ .bytes = "\x1b[6~", .key = .page_down },
+    .{ .bytes = "\x1b[1;5H", .key = .home },
+    .{ .bytes = "\x1b[1;5F", .key = .end },
+};
+
+/// The table entry whose bytes are a prefix of `seq` (and fully present).
+fn matchingKeySequence(seq: []const u8) ?KeySequence {
+    for (&key_sequences) |entry| {
+        if (seq.len >= entry.bytes.len and std.mem.startsWith(u8, seq, entry.bytes)) return entry;
+    }
+    return null;
+}
+
+/// Whether `seq` is a strict prefix of a table entry, meaning the rest of the
+/// sequence may still arrive in the next read.
+fn isPrefixOfKeySequence(seq: []const u8) bool {
+    if (seq.len == 0) return false;
+    for (&key_sequences) |entry| {
+        if (seq.len < entry.bytes.len and std.mem.startsWith(u8, entry.bytes, seq)) return true;
+    }
+    return false;
+}
+
+const CsiExtent = union(enum) {
+    /// The sequence including its final byte is `complete.len` bytes long.
+    complete: usize,
+    /// No final byte has arrived yet.
+    incomplete,
+    /// A byte that cannot appear in a CSI sequence was reached; `malformed`
+    /// bytes of the sequence precede it.
+    malformed: usize,
+};
+
+/// Measure the CSI sequence starting at `seq[0]` (ESC) per ECMA-48: parameter
+/// bytes 0x30-0x3F, then intermediate bytes 0x20-0x2F, then one final byte in
+/// 0x40-0x7E.
+fn csiExtent(seq: []const u8) CsiExtent {
+    std.debug.assert(seq.len >= 2 and seq[0] == control_code.esc and seq[1] == '[');
+    var i: usize = 2;
+    while (i < seq.len and seq[i] >= 0x30 and seq[i] <= 0x3f) : (i += 1) {}
+    while (i < seq.len and seq[i] >= 0x20 and seq[i] <= 0x2f) : (i += 1) {}
+    if (i == seq.len) return .incomplete;
+    if (seq[i] >= 0x40 and seq[i] <= 0x7e) return .{ .complete = i + 1 };
+    return .{ .malformed = i };
+}
+
 /// Parses the raw byte stream coming from the terminal. Holds enough state
 /// across `feed` calls to reassemble escape sequences split across reads,
 /// and tracks whether we are currently inside a bracketed paste.
 pub const InputParser = struct {
     /// Scratch space for the tail of the previous chunk when it ended on an
-    /// incomplete escape sequence or UTF-8 codepoint. The longest sequence we
-    /// track is the 6-byte `ESC[200~` / `ESC[201~` marker, so 5 bytes suffice.
-    carry: [5]u8 = undefined,
+    /// incomplete escape sequence or UTF-8 codepoint. Only the last 5 bytes of
+    /// the 6-byte `ESC[200~` / `ESC[201~` markers can be pending, but an
+    /// unrecognized CSI keeps its parameter bytes here too, so the buffer is
+    /// sized for the longest sequence the editor is willing to hold.
+    carry: [16]u8 = undefined,
     carry_len: usize = 0,
     in_paste: bool = false,
 
@@ -160,70 +268,102 @@ pub const InputParser = struct {
             }
 
             const key = buf[i];
-            if (key == control_code.esc and i + 1 < total and buf[i + 1] == '[') {
-                // Arrow keys are the 3-byte ESC [ X form. Keypad-style keys
-                // (Delete, Insert, Home, End, PgUp, PgDn) are the 4-byte
-                // ESC [ D ~ form, so a digit in the 3rd position means the
-                // sequence isn't complete until we've seen the 4th byte. The
-                // 6-byte bracketed-paste markers are disambiguated from the
-                // 4-byte ESC[2~ (Insert) form by the 4th byte: '0' or '1'
-                // means paste marker, '~' means ESC[2~.
-                if (total - i < 3) {
-                    self.saveCarry(buf[i..total]);
+            if (key == control_code.esc) {
+                const seq = buf[i..total];
+                if (seq.len == 1) {
+                    // Lone ESC at the end of the buffer—could be the start of a
+                    // longer sequence whose tail is in the next chunk.
+                    self.saveCarry(seq);
                     return;
                 }
-                if (buf[i + 2] == '2') {
-                    if (total - i < 4) {
-                        self.saveCarry(buf[i..total]);
+
+                if (seq[1] == '[' and seq.len >= 3 and seq[2] == '2') {
+                    // The bracketed-paste markers are 6 bytes and share their
+                    // `ESC[2` prefix with Insert (`ESC[2~`). The 4th byte
+                    // decides: '0' or '1' means a paste marker, '~' means
+                    // Insert, which the key table below handles.
+                    if (seq.len < 4) {
+                        self.saveCarry(seq);
                         return;
                     }
-                    const fourth = buf[i + 3];
-                    if (fourth == '0' or fourth == '1') {
-                        if (total - i < ansi_term.PASTE_START.len) {
-                            self.saveCarry(buf[i..total]);
+                    if (seq[3] == '0' or seq[3] == '1') {
+                        if (seq.len < ansi_term.PASTE_START.len) {
+                            self.saveCarry(seq);
                             return;
                         }
-                        if (std.mem.eql(u8, buf[i .. i + ansi_term.PASTE_START.len], ansi_term.PASTE_START)) {
+                        if (std.mem.startsWith(u8, seq, ansi_term.PASTE_START)) {
                             try events.append(gpa, .paste_start);
                             self.in_paste = true;
                             i += ansi_term.PASTE_START.len;
                             continue;
                         }
-                        if (std.mem.eql(u8, buf[i .. i + ansi_term.PASTE_END.len], ansi_term.PASTE_END)) {
+                        if (std.mem.startsWith(u8, seq, ansi_term.PASTE_END)) {
                             // Stray paste-end outside paste mode; ignore.
                             i += ansi_term.PASTE_END.len;
                             continue;
                         }
                         // Doesn't match a known paste marker; fall through to
-                        // the generic 3-byte CSI handling below.
+                        // the key table and unbound-key handling below.
                     }
                 }
 
-                if (std.ascii.isDigit(buf[i + 2])) {
-                    if (total - i < 4) {
-                        self.saveCarry(buf[i..total]);
+                if (matchingKeySequence(seq)) |entry| {
+                    try events.append(gpa, .{ .key = entry.key });
+                    i += entry.bytes.len;
+                    continue;
+                }
+
+                if (isPrefixOfKeySequence(seq)) {
+                    self.saveCarry(seq);
+                    return;
+                }
+
+                if (seq[1] == '[') {
+                    const extent = csiExtent(seq);
+                    switch (extent) {
+                        .complete, .malformed => |len| {
+                            // A CSI sequence with no binding (function keys,
+                            // modified arrows, ...). Consume the whole thing so
+                            // its parameter bytes never reach the text path.
+                            try events.append(gpa, .{ .key = .unbound });
+                            i += len;
+                        },
+                        .incomplete => {
+                            if (seq.len >= self.carry.len) {
+                                try events.append(gpa, .{ .key = .unbound });
+                                i += seq.len;
+                                continue;
+                            }
+                            self.saveCarry(seq);
+                            return;
+                        },
+                    }
+                    continue;
+                }
+
+                if (seq[1] == 'O') {
+                    if (seq.len < 3) {
+                        self.saveCarry(seq);
                         return;
                     }
-                    if (buf[i + 3] == '~') {
-                        try events.append(gpa, .{
-                            .csi_tilde = .{ buf[i], buf[i + 1], buf[i + 2], buf[i + 3] },
-                        });
-                        i += 4;
-                        continue;
-                    }
+                    // SS3 sequence with no table entry (F1-F4, keypad, ...).
+                    try events.append(gpa, .{ .key = .unbound });
+                    i += 3;
+                    continue;
                 }
 
-                try events.append(gpa, .{ .csi3 = .{ buf[i], buf[i + 1], buf[i + 2] } });
-                i += 3;
-            } else if (key == control_code.esc and i + 1 < total and buf[i + 1] < 0x80 and buf[i + 1] != '[') {
-                // 2-byte ESC sequence (ESC X)
-                try events.append(gpa, .{ .esc2 = .{ buf[i], buf[i + 1] } });
-                i += 2;
-            } else if (key == control_code.esc and i + 1 >= total) {
-                // Lone ESC at the end of the buffer—could be the start of a
-                // longer sequence whose tail is in the next chunk.
-                self.saveCarry(buf[i..total]);
-                return;
+                if (seq[1] < 0x80) {
+                    // 2-byte ESC sequence (ESC X)—Alt + one ASCII key.
+                    try events.append(gpa, .{ .key = .{ .alt = seq[1] } });
+                    i += 2;
+                    continue;
+                }
+
+                // ESC followed by a non-ASCII byte: consume the ESC on its own
+                // so the following codepoint is still decoded as text.
+                try events.append(gpa, .{ .key = .unbound });
+                i += 1;
+                continue;
             } else if (key < 0x80) {
                 try events.append(gpa, .{ .byte = key });
                 i += 1;
@@ -356,8 +496,6 @@ const LineState = struct {
     /// terminal-cell positioning is computed separately from the buffer prefix.
     col_offset: usize,
     line_buffer: std.ArrayList(u8),
-    bytes_read: usize,
-    in_buffer: [8]u8,
     history: *History,
     history_index: ?usize,
     transient_line: ?[]const u8,
@@ -398,8 +536,8 @@ fn insertText(state: *LineState, text: []const u8) CommandError!void {
     try redrawLine(state);
 }
 
-fn printChar(state: *LineState) CommandError!void {
-    try insertText(state, state.in_buffer[0..1]);
+fn printByte(state: *LineState, byte: u8) CommandError!void {
+    try insertText(state, &.{byte});
 }
 
 fn printCodepoint(state: *LineState, codepoint: u21) CommandError!void {
@@ -722,52 +860,52 @@ fn historyForward(state: *LineState) CommandError!void {
     try redrawLine(state);
 }
 
-fn findCommandFn(state: *LineState) CommandFn {
-    const key = state.in_buffer[0];
-    if (key >= ' ' and key <= '~') return printChar;
-    if (key == ansi_term.BACKSPACE) return deleteBefore;
-    if (key == ansi_term.ctrlKey('D')) return exitRepl;
-    if (key == ansi_term.ctrlKey('L')) return clearScreen;
-    if (key == ansi_term.ctrlKey('C')) return handleCtrlC;
-    if (key == ansi_term.ctrlKey('A')) return moveCursorToStart;
-    if (key == ansi_term.ctrlKey('E')) return moveCursorToEnd;
-    if (key == ansi_term.ctrlKey('K')) return killLineToEnd;
-    if (key == ansi_term.ctrlKey('U')) return deleteToStart;
-    if (key == ansi_term.ctrlKey('W')) return deleteWordBackward;
-    if (key == ansi_term.ctrlKey('Y')) return yank;
-    if (key == ansi_term.ctrlKey('B')) return moveCursorLeft;
-    if (key == ansi_term.ctrlKey('F')) return moveCursorRight;
-    if (key == ansi_term.ctrlKey('H')) return deleteBefore;
-    if (key == control_code.lf or key == control_code.cr) return acceptLine;
-    if (key != control_code.esc) return doNothing;
+/// Whether a single ASCII byte is inserted as text rather than handled as a
+/// control key.
+fn isTextByte(byte: u8) bool {
+    return byte >= ' ' and byte <= '~';
+}
 
-    if (state.bytes_read == 4 and state.in_buffer[1] == '[' and state.in_buffer[3] == '~') {
-        // ESC [ D ~: Delete (3), Home (1/7), End (4/8), Insert (2), PgUp (5),
-        // PgDn (6). Keys without a binding are swallowed instead of inserting
-        // the trailing `~` as text.
-        return switch (state.in_buffer[2]) {
-            '3' => deleteForward,
-            '1', '7' => moveCursorToStart,
-            '4', '8' => moveCursorToEnd,
-            else => doNothing,
-        };
-    }
+/// The command bound to one ASCII control byte (Enter, Backspace, Ctrl-letter,
+/// ...). `isTextByte` bytes are handled by the caller, which inserts them.
+fn commandForControlByte(byte: u8) CommandFn {
+    if (byte == ansi_term.BACKSPACE) return deleteBefore;
+    if (byte == ansi_term.ctrlKey('D')) return exitRepl;
+    if (byte == ansi_term.ctrlKey('L')) return clearScreen;
+    if (byte == ansi_term.ctrlKey('C')) return handleCtrlC;
+    if (byte == ansi_term.ctrlKey('A')) return moveCursorToStart;
+    if (byte == ansi_term.ctrlKey('E')) return moveCursorToEnd;
+    if (byte == ansi_term.ctrlKey('K')) return killLineToEnd;
+    if (byte == ansi_term.ctrlKey('U')) return deleteToStart;
+    if (byte == ansi_term.ctrlKey('W')) return deleteWordBackward;
+    if (byte == ansi_term.ctrlKey('Y')) return yank;
+    if (byte == ansi_term.ctrlKey('B')) return moveCursorLeft;
+    if (byte == ansi_term.ctrlKey('F')) return moveCursorRight;
+    if (byte == ansi_term.ctrlKey('H')) return deleteBefore;
+    if (byte == control_code.lf or byte == control_code.cr) return acceptLine;
+    return doNothing;
+}
 
-    if (state.bytes_read >= 3 and state.in_buffer[1] == '[') {
-        const direction = state.in_buffer[2];
-        if (direction == ansi_term.LEFT) return moveCursorLeft;
-        if (direction == ansi_term.RIGHT) return moveCursorRight;
-        if (direction == ansi_term.UP) return historyBackward;
-        if (direction == ansi_term.DOWN) return historyForward;
-    } else if (state.bytes_read == 2) {
-        return switch (state.in_buffer[1]) {
+/// The command bound to one decoded terminal key sequence.
+fn commandForKey(key: Key) CommandFn {
+    return switch (key) {
+        .arrow => |direction| switch (direction) {
+            .up => historyBackward,
+            .down => historyForward,
+            .left => moveCursorLeft,
+            .right => moveCursorRight,
+        },
+        .home => moveCursorToStart,
+        .end => moveCursorToEnd,
+        .delete => deleteForward,
+        .insert, .page_up, .page_down, .unbound => doNothing,
+        .alt => |byte| switch (byte) {
             'b', 'B' => moveWordLeft,
             'f', 'F' => moveWordRight,
             'd', 'D' => killWordForward,
             else => doNothing,
-        };
-    }
-    return doNothing;
+        },
+    };
 }
 
 /// All possible errors that can occur during line reading.
@@ -876,8 +1014,6 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
         .line_buffer = std.ArrayList(u8).empty,
         .temp = temp,
         .outlive = outlive,
-        .bytes_read = undefined,
-        .in_buffer = undefined,
         .history = &self.history,
         .history_index = null,
         .transient_line = null,
@@ -931,32 +1067,19 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
             const is_ctrl_c = std.meta.activeTag(event) == .byte and event.byte == ansi_term.ctrlKey('C');
             if (!is_ctrl_c) state.ctrl_c_armed = false;
 
+            var cmd: CommandFn = doNothing;
             switch (event) {
                 .byte => |b| {
-                    state.in_buffer[0] = b;
-                    state.bytes_read = 1;
+                    if (isTextByte(b)) {
+                        try printByte(&state, b);
+                        continue;
+                    }
+                    cmd = commandForControlByte(b);
                 },
+                .key => |key| cmd = commandForKey(key),
                 .codepoint => |codepoint| {
                     try printCodepoint(&state, codepoint);
                     continue;
-                },
-                .esc2 => |seq| {
-                    state.in_buffer[0] = seq[0];
-                    state.in_buffer[1] = seq[1];
-                    state.bytes_read = 2;
-                },
-                .csi3 => |seq| {
-                    state.in_buffer[0] = seq[0];
-                    state.in_buffer[1] = seq[1];
-                    state.in_buffer[2] = seq[2];
-                    state.bytes_read = 3;
-                },
-                .csi_tilde => |seq| {
-                    state.in_buffer[0] = seq[0];
-                    state.in_buffer[1] = seq[1];
-                    state.in_buffer[2] = seq[2];
-                    state.in_buffer[3] = seq[3];
-                    state.bytes_read = 4;
                 },
                 .paste_start => {
                     paste_buffer.clearRetainingCapacity();
@@ -980,8 +1103,6 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
                     continue;
                 },
             }
-
-            const cmd = ReplLine.findCommandFn(&state);
 
             if (cmd != historyForward and cmd != historyBackward and cmd != acceptLine) {
                 state.replay_index.* = null;
@@ -1081,7 +1202,7 @@ test "InputParser: 3-byte CSI arrow key in one chunk" {
     var events = try collectEvents(&parser, &.{"\x1b[A"});
     defer events.deinit(testing.allocator);
     try expectEventsEqual(&.{
-        .{ .csi3 = .{ 0x1b, '[', 'A' } },
+        .{ .key = .{ .arrow = .up } },
     }, events.items);
     try testing.expectEqual(@as(usize, 0), parser.carry_len);
 }
@@ -1091,19 +1212,20 @@ test "InputParser: 3-byte CSI split as ESC then [A" {
     var events = try collectEvents(&parser, &.{ "\x1b", "[A" });
     defer events.deinit(testing.allocator);
     try expectEventsEqual(&.{
-        .{ .csi3 = .{ 0x1b, '[', 'A' } },
+        .{ .key = .{ .arrow = .up } },
     }, events.items);
     try testing.expectEqual(@as(usize, 0), parser.carry_len);
 }
 
-test "InputParser: bare ESC followed by non-[ bytes is parsed as a 2-byte ESC sequence" {
-    // Once a non-`[` byte appears after ESC, it is parsed as a 2-byte ESC sequence.
+test "InputParser: ESC O P (F1) is one unbound 3-byte SS3 sequence" {
+    // ESC O <final> is a 3-byte SS3 sequence. Since nothing binds F1, the whole
+    // sequence is consumed as a single unbound key instead of leaking `P` into
+    // the line buffer as text.
     var parser = InputParser{};
     var events = try collectEvents(&parser, &.{"\x1bOP"});
     defer events.deinit(testing.allocator);
     try expectEventsEqual(&.{
-        .{ .esc2 = .{ 0x1b, 'O' } },
-        .{ .byte = 'P' },
+        .{ .key = .unbound },
     }, events.items);
     try testing.expectEqual(@as(usize, 0), parser.carry_len);
 }
@@ -1251,7 +1373,7 @@ test "InputParser: ESC[2~ (Insert) is not a paste marker" {
     var events = try collectEvents(&parser, &.{"\x1b[2~"});
     defer events.deinit(testing.allocator);
     try expectEventsEqual(&.{
-        .{ .csi_tilde = .{ 0x1b, '[', '2', '~' } },
+        .{ .key = .insert },
     }, events.items);
     try testing.expect(!parser.in_paste);
 }
@@ -1261,7 +1383,7 @@ test "InputParser: ESC[2~ split with ~ in next chunk" {
     var events = try collectEvents(&parser, &.{ "\x1b[2", "~" });
     defer events.deinit(testing.allocator);
     try expectEventsEqual(&.{
-        .{ .csi_tilde = .{ 0x1b, '[', '2', '~' } },
+        .{ .key = .insert },
     }, events.items);
     try testing.expect(!parser.in_paste);
 }
@@ -1271,7 +1393,7 @@ test "InputParser: ESC[3~ (Delete) is one 4-byte sequence" {
     var events = try collectEvents(&parser, &.{"\x1b[3~"});
     defer events.deinit(testing.allocator);
     try expectEventsEqual(&.{
-        .{ .csi_tilde = .{ 0x1b, '[', '3', '~' } },
+        .{ .key = .delete },
     }, events.items);
     try testing.expectEqual(@as(usize, 0), parser.carry_len);
     try testing.expect(!parser.in_paste);
@@ -1282,7 +1404,7 @@ test "InputParser: ESC[3~ split before the ~ is carried" {
     var events = try collectEvents(&parser, &.{ "\x1b[3", "~" });
     defer events.deinit(testing.allocator);
     try expectEventsEqual(&.{
-        .{ .csi_tilde = .{ 0x1b, '[', '3', '~' } },
+        .{ .key = .delete },
     }, events.items);
     try testing.expectEqual(@as(usize, 0), parser.carry_len);
     try testing.expect(!parser.in_paste);
@@ -1293,7 +1415,7 @@ test "InputParser: ESC[3 alone is carried, then emits one event" {
     var events = try collectEvents(&parser, &.{ "\x1b[3", "~x" });
     defer events.deinit(testing.allocator);
     try expectEventsEqual(&.{
-        .{ .csi_tilde = .{ 0x1b, '[', '3', '~' } },
+        .{ .key = .delete },
         .{ .byte = 'x' },
     }, events.items);
     try testing.expect(!parser.in_paste);
@@ -1304,20 +1426,39 @@ test "InputParser: ESC[1~ and ESC[4~ (Home/End) are 4-byte sequences" {
     var events = try collectEvents(&parser, &.{ "\x1b[1~", "\x1b[4~" });
     defer events.deinit(testing.allocator);
     try expectEventsEqual(&.{
-        .{ .csi_tilde = .{ 0x1b, '[', '1', '~' } },
-        .{ .csi_tilde = .{ 0x1b, '[', '4', '~' } },
+        .{ .key = .home },
+        .{ .key = .end },
     }, events.items);
 }
 
-test "InputParser: malformed paste-start (ESC[200X) falls through" {
+test "InputParser: ESC[1;5H and ESC[1;5F (Ctrl+Home/End) decode as Home/End" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{ "\x1b[1;5H", "\x1b[1;5F" });
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .key = .home },
+        .{ .key = .end },
+    }, events.items);
+}
+
+test "InputParser: modified arrows and page keys are unbound, never text" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{ "\x1b[1;5D", "\x1b[1;5C", "\x1b[5~", "\x1b[6~" });
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .key = .unbound },
+        .{ .key = .unbound },
+        .{ .key = .page_up },
+        .{ .key = .page_down },
+    }, events.items);
+}
+
+test "InputParser: ESC[200X is not a paste marker and becomes an unbound key" {
     var parser = InputParser{};
     var events = try collectEvents(&parser, &.{"\x1b[200X"});
     defer events.deinit(testing.allocator);
     try expectEventsEqual(&.{
-        .{ .csi3 = .{ 0x1b, '[', '2' } },
-        .{ .byte = '0' },
-        .{ .byte = '0' },
-        .{ .byte = 'X' },
+        .{ .key = .unbound },
     }, events.items);
     try testing.expect(!parser.in_paste);
 }
@@ -1454,8 +1595,6 @@ test "Keyboard commands: advanced bindings" {
         .in = undefined,
         .col_offset = 0,
         .line_buffer = line_buffer,
-        .bytes_read = 0,
-        .in_buffer = undefined,
         .history = undefined,
         .history_index = null,
         .transient_line = null,
@@ -1568,8 +1707,6 @@ fn testLineState(out: *std.Io.Writer, kill_ring: *?[]const u8, replay_index: *?u
         .in = undefined,
         .col_offset = 0,
         .line_buffer = std.ArrayList(u8).empty,
-        .bytes_read = 0,
-        .in_buffer = undefined,
         .history = undefined,
         .history_index = null,
         .transient_line = null,
@@ -1590,17 +1727,15 @@ fn typeBytes(state: *LineState, bytes: []const u8) (CommandError || error{TestUn
         try parser.feed(&.{byte}, &events, testing.allocator);
         for (events.items) |event| switch (event) {
             .byte => |b| {
-                state.in_buffer[0] = b;
-                state.bytes_read = 1;
-                try findCommandFn(state)(state);
+                if (isTextByte(b)) {
+                    try printByte(state, b);
+                } else {
+                    try commandForControlByte(b)(state);
+                }
             },
+            .key => |key| try commandForKey(key)(state),
             .codepoint => |codepoint| try printCodepoint(state, codepoint),
-            .csi_tilde => |seq| {
-                @memcpy(state.in_buffer[0..4], &seq);
-                state.bytes_read = 4;
-                try findCommandFn(state)(state);
-            },
-            .esc2, .csi3, .paste_start, .paste_byte, .paste_end => return error.TestUnexpectedResult,
+            .paste_start, .paste_byte, .paste_end => return error.TestUnexpectedResult,
         };
     }
     std.debug.assert(parser.carry_len == 0);
@@ -1766,9 +1901,9 @@ test "InputParser: 2-byte ESC sequence" {
     var events = try collectEvents(&parser, &.{"\x1bb\x1bf\x1bd"});
     defer events.deinit(testing.allocator);
     try expectEventsEqual(&.{
-        .{ .esc2 = .{ 0x1b, 'b' } },
-        .{ .esc2 = .{ 0x1b, 'f' } },
-        .{ .esc2 = .{ 0x1b, 'd' } },
+        .{ .key = .{ .alt = 'b' } },
+        .{ .key = .{ .alt = 'f' } },
+        .{ .key = .{ .alt = 'd' } },
     }, events.items);
 }
 
@@ -1820,8 +1955,6 @@ test "History: transient line preservation" {
         .in = undefined, // not used in history functions
         .col_offset = 0,
         .line_buffer = std.ArrayList(u8).empty,
-        .bytes_read = 0,
-        .in_buffer = undefined,
         .history = &history,
         .history_index = null,
         .transient_line = null,
@@ -1884,8 +2017,6 @@ test "History: replay index" {
         .in = undefined,
         .col_offset = 0,
         .line_buffer = std.ArrayList(u8).empty,
-        .bytes_read = 0,
-        .in_buffer = undefined,
         .history = &history,
         .history_index = null,
         .transient_line = null,
@@ -1915,8 +2046,6 @@ test "History: replay index" {
         .in = undefined,
         .col_offset = 0,
         .line_buffer = std.ArrayList(u8).empty,
-        .bytes_read = 0,
-        .in_buffer = undefined,
         .history = &history,
         .history_index = null,
         .transient_line = null,
