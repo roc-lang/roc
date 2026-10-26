@@ -85,6 +85,9 @@ pub const InputEvent = union(enum) {
     esc2: [2]u8,
     /// A 3-byte CSI sequence (ESC [ X)—typically arrow keys.
     csi3: [3]u8,
+    /// A 4-byte CSI sequence terminated by `~` (ESC [ D ~)—Delete, Insert,
+    /// Home, End, PgUp, and PgDn.
+    csi_tilde: [4]u8,
     /// A bracketed paste began (consumed an `ESC[200~` marker).
     paste_start,
     /// A byte inside an active bracketed paste. May be any value, including
@@ -158,11 +161,13 @@ pub const InputParser = struct {
 
             const key = buf[i];
             if (key == control_code.esc and i + 1 < total and buf[i + 1] == '[') {
-                // Default: 3-byte CSI sequence (ESC [ X). The exception is the
-                // 6-byte bracketed-paste markers, which are disambiguated from
-                // other ESC[2... sequences (e.g. Insert is ESC[2~) by the 4th
-                // byte: '0' or '1' means paste marker, anything else is just a
-                // 3-byte CSI.
+                // Arrow keys are the 3-byte ESC [ X form. Keypad-style keys
+                // (Delete, Insert, Home, End, PgUp, PgDn) are the 4-byte
+                // ESC [ D ~ form, so a digit in the 3rd position means the
+                // sequence isn't complete until we've seen the 4th byte. The
+                // 6-byte bracketed-paste markers are disambiguated from the
+                // 4-byte ESC[2~ (Insert) form by the 4th byte: '0' or '1'
+                // means paste marker, '~' means ESC[2~.
                 if (total - i < 3) {
                     self.saveCarry(buf[i..total]);
                     return;
@@ -191,6 +196,20 @@ pub const InputParser = struct {
                         }
                         // Doesn't match a known paste marker; fall through to
                         // the generic 3-byte CSI handling below.
+                    }
+                }
+
+                if (std.ascii.isDigit(buf[i + 2])) {
+                    if (total - i < 4) {
+                        self.saveCarry(buf[i..total]);
+                        return;
+                    }
+                    if (buf[i + 3] == '~') {
+                        try events.append(gpa, .{
+                            .csi_tilde = .{ buf[i], buf[i + 1], buf[i + 2], buf[i + 3] },
+                        });
+                        i += 4;
+                        continue;
                     }
                 }
 
@@ -426,6 +445,22 @@ fn deleteBefore(state: *LineState) CommandError!void {
     );
     state.line_buffer.shrinkRetainingCapacity(state.line_buffer.items.len - removed_len);
     state.col_offset = try unicode.graphemeBoundaryAtOrAfter(state.line_buffer.items, previous);
+    try redrawLine(state);
+}
+
+fn deleteForward(state: *LineState) CommandError!void {
+    if (state.col_offset == state.line_buffer.items.len) return;
+    state.history_index = null;
+
+    const next = try unicode.nextGraphemeBoundary(state.line_buffer.items, state.col_offset);
+    const removed_len = next - state.col_offset;
+    std.mem.copyForwards(
+        u8,
+        state.line_buffer.items[state.col_offset .. state.line_buffer.items.len - removed_len],
+        state.line_buffer.items[next..],
+    );
+    state.line_buffer.shrinkRetainingCapacity(state.line_buffer.items.len - removed_len);
+    state.col_offset = try unicode.graphemeBoundaryAtOrAfter(state.line_buffer.items, state.col_offset);
     try redrawLine(state);
 }
 
@@ -706,6 +741,18 @@ fn findCommandFn(state: *LineState) CommandFn {
     if (key == control_code.lf or key == control_code.cr) return acceptLine;
     if (key != control_code.esc) return doNothing;
 
+    if (state.bytes_read == 4 and state.in_buffer[1] == '[' and state.in_buffer[3] == '~') {
+        // ESC [ D ~: Delete (3), Home (1/7), End (4/8), Insert (2), PgUp (5),
+        // PgDn (6). Keys without a binding are swallowed instead of inserting
+        // the trailing `~` as text.
+        return switch (state.in_buffer[2]) {
+            '3' => deleteForward,
+            '1', '7' => moveCursorToStart,
+            '4', '8' => moveCursorToEnd,
+            else => doNothing,
+        };
+    }
+
     if (state.bytes_read >= 3 and state.in_buffer[1] == '[') {
         const direction = state.in_buffer[2];
         if (direction == ansi_term.LEFT) return moveCursorLeft;
@@ -903,6 +950,13 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
                     state.in_buffer[1] = seq[1];
                     state.in_buffer[2] = seq[2];
                     state.bytes_read = 3;
+                },
+                .csi_tilde => |seq| {
+                    state.in_buffer[0] = seq[0];
+                    state.in_buffer[1] = seq[1];
+                    state.in_buffer[2] = seq[2];
+                    state.in_buffer[3] = seq[3];
+                    state.bytes_read = 4;
                 },
                 .paste_start => {
                     paste_buffer.clearRetainingCapacity();
@@ -1197,8 +1251,7 @@ test "InputParser: ESC[2~ (Insert) is not a paste marker" {
     var events = try collectEvents(&parser, &.{"\x1b[2~"});
     defer events.deinit(testing.allocator);
     try expectEventsEqual(&.{
-        .{ .csi3 = .{ 0x1b, '[', '2' } },
-        .{ .byte = '~' },
+        .{ .csi_tilde = .{ 0x1b, '[', '2', '~' } },
     }, events.items);
     try testing.expect(!parser.in_paste);
 }
@@ -1208,10 +1261,52 @@ test "InputParser: ESC[2~ split with ~ in next chunk" {
     var events = try collectEvents(&parser, &.{ "\x1b[2", "~" });
     defer events.deinit(testing.allocator);
     try expectEventsEqual(&.{
-        .{ .csi3 = .{ 0x1b, '[', '2' } },
-        .{ .byte = '~' },
+        .{ .csi_tilde = .{ 0x1b, '[', '2', '~' } },
     }, events.items);
     try testing.expect(!parser.in_paste);
+}
+
+test "InputParser: ESC[3~ (Delete) is one 4-byte sequence" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"\x1b[3~"});
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .csi_tilde = .{ 0x1b, '[', '3', '~' } },
+    }, events.items);
+    try testing.expectEqual(@as(usize, 0), parser.carry_len);
+    try testing.expect(!parser.in_paste);
+}
+
+test "InputParser: ESC[3~ split before the ~ is carried" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{ "\x1b[3", "~" });
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .csi_tilde = .{ 0x1b, '[', '3', '~' } },
+    }, events.items);
+    try testing.expectEqual(@as(usize, 0), parser.carry_len);
+    try testing.expect(!parser.in_paste);
+}
+
+test "InputParser: ESC[3 alone is carried, then emits one event" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{ "\x1b[3", "~x" });
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .csi_tilde = .{ 0x1b, '[', '3', '~' } },
+        .{ .byte = 'x' },
+    }, events.items);
+    try testing.expect(!parser.in_paste);
+}
+
+test "InputParser: ESC[1~ and ESC[4~ (Home/End) are 4-byte sequences" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{ "\x1b[1~", "\x1b[4~" });
+    defer events.deinit(testing.allocator);
+    try expectEventsEqual(&.{
+        .{ .csi_tilde = .{ 0x1b, '[', '1', '~' } },
+        .{ .csi_tilde = .{ 0x1b, '[', '4', '~' } },
+    }, events.items);
 }
 
 test "InputParser: malformed paste-start (ESC[200X) falls through" {
@@ -1500,6 +1595,11 @@ fn typeBytes(state: *LineState, bytes: []const u8) (CommandError || error{TestUn
                 try findCommandFn(state)(state);
             },
             .codepoint => |codepoint| try printCodepoint(state, codepoint),
+            .csi_tilde => |seq| {
+                @memcpy(state.in_buffer[0..4], &seq);
+                state.bytes_read = 4;
+                try findCommandFn(state)(state);
+            },
             .esc2, .csi3, .paste_start, .paste_byte, .paste_end => return error.TestUnexpectedResult,
         };
     }
@@ -1575,6 +1675,35 @@ test "cursor movement and backspace operate on grapheme clusters" {
 
     try testing.expectEqualStrings("ab", state.line_buffer.items);
     try testing.expectEqual(@as(?usize, 3), lastCursorColumn(aw.writer.buffered()));
+}
+
+test "Delete key (ESC[3~) deletes the grapheme after the cursor" {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    var kill_ring: ?[]const u8 = null;
+    defer if (kill_ring) |text| testing.allocator.free(text);
+    var replay_index: ?usize = null;
+    var state = testLineState(&aw.writer, &kill_ring, &replay_index);
+    defer state.line_buffer.deinit(testing.allocator);
+
+    try typeBytes(&state, "aéb");
+    try moveCursorToStart(&state);
+
+    // Deletes 'a', leaving the cursor at the start of "éb".
+    try typeBytes(&state, "\x1b[3~");
+    try testing.expectEqualStrings("éb", state.line_buffer.items);
+    try testing.expectEqual(@as(usize, 0), state.col_offset);
+
+    // Deletes the whole 'é' grapheme (two bytes) rather than one byte of it.
+    try typeBytes(&state, "\x1b[3~");
+    try testing.expectEqualStrings("b", state.line_buffer.items);
+    try testing.expectEqual(@as(usize, 0), state.col_offset);
+
+    // At the end of the line, Delete does nothing.
+    try moveCursorToEnd(&state);
+    try typeBytes(&state, "\x1b[3~");
+    try testing.expectEqualStrings("b", state.line_buffer.items);
+    try testing.expectEqual(@as(usize, 1), state.col_offset);
 }
 
 test "edits that join adjacent graphemes keep the cursor on a boundary" {
