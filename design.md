@@ -27247,3 +27247,13 @@ or lazy expansion invalidates reuse through the producer's mutation epoch;
 a walk that changed the graph publishes no certificate. Each active traversal
 still owns its independent cycle set, including during nested marking calls.
 No choice of callable representation changes; this records completed work only.
+
+
+Cross-store immutable Monotype import resolves each newly reached source node's
+producer-cached full structural digest against the destination's committed
+interner before allocating speculative rows. A matching committed representative
+is reused directly; only absent content is copied and sealed. The full reached
+closure still receives relocation entries, including recursive members and
+children of reused roots. This shares immutable type content, never mutable
+instantiation cells or ownership scopes. All fallible work precedes relocation
+publication, and allocation failure preserves the original store and mapping.
