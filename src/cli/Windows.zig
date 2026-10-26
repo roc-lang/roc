@@ -92,3 +92,27 @@ pub fn stdinRawModeActive() bool {
     if (0 == windows.GetConsoleMode(std.Io.File.stdin().handle, &input_mode)) return false;
     return input_mode & enable_line_input == 0;
 }
+
+pub const WaitInputError = error{GetNumberOfConsoleInputEventsFailure};
+
+/// How long to sleep between console-input polls. Console input handles cannot
+/// be waited on with `WaitForSingleObject`, so readiness is polled.
+const input_poll_step_ms: u32 = 5;
+
+/// Waits until the console has input pending, or `timeout_ms` elapses. Returns
+/// whether input is available.
+pub fn waitInputReady(timeout_ms: u32) WaitInputError!bool {
+    const h_in = std.Io.File.stdin().handle;
+    var waited: u32 = 0;
+    while (true) {
+        var pending: windows.DWORD = 0;
+        if (0 == windows.GetNumberOfConsoleInputEvents(h_in, &pending)) {
+            return error.GetNumberOfConsoleInputEventsFailure;
+        }
+        if (pending != 0) return true;
+        if (waited >= timeout_ms) return false;
+        const step = @min(input_poll_step_ms, timeout_ms - waited);
+        windows.Sleep(step);
+        waited += step;
+    }
+}

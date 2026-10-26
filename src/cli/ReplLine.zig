@@ -67,6 +67,16 @@ pub const NEW_LINE = switch (SUPPORTED_OS) {
     .windows => "\r\n",
 };
 
+/// How long a lone `ESC` byte at the end of a read is held back before it is
+/// decoded as the Escape key.
+///
+/// The terminal sends the Escape key and the first byte of an escape sequence
+/// as the same `ESC`, so the parser has to wait for more input to tell them
+/// apart. A real sequence arrives as one write from the terminal, so the rest
+/// is either already buffered or shows up within a few milliseconds; 50 ms is
+/// well above that and well below a human noticing the delay on Escape.
+const escape_sequence_timeout_ms: u32 = 50;
+
 /// Whether the terminal attached to stdin is currently in raw mode.
 pub fn stdinRawModeActive() bool {
     return switch (SUPPORTED_OS) {
@@ -92,6 +102,11 @@ pub const Key = union(enum) {
     /// `ESC b`). The byte is kept so the binding table can name the ones the
     /// editor supports.
     alt: u8,
+    /// A lone `ESC` byte: the Escape key itself. The parser holds an `ESC` at
+    /// the end of a read in case the rest of an escape sequence is still in
+    /// flight, and the caller emits this key once the terminal has been quiet
+    /// for `escape_sequence_timeout_ms`.
+    escape,
     /// A terminal key sequence that the parser recognizes as a key but that
     /// the editor has no binding for. It is consumed here so it never reaches
     /// the text path.
@@ -379,6 +394,25 @@ pub const InputParser = struct {
                 i += sequence_len;
             }
         }
+    }
+
+    /// Whether the parser is holding back a lone `ESC` byte that could still
+    /// turn out to be the start of an escape sequence.
+    pub fn pendingEscape(self: *const InputParser) bool {
+        return self.carry_len == 1 and self.carry[0] == control_code.esc;
+    }
+
+    /// Resolve a pending lone `ESC` into the Escape key. The caller invokes
+    /// this once the terminal has been quiet for `escape_sequence_timeout_ms`,
+    /// so the held byte can no longer be the start of a longer sequence.
+    pub fn flushPendingEscape(
+        self: *InputParser,
+        events: *std.ArrayList(InputEvent),
+        gpa: Allocator,
+    ) Allocator.Error!void {
+        std.debug.assert(self.pendingEscape());
+        self.carry_len = 0;
+        try events.append(gpa, .{ .key = .escape });
     }
 
     fn saveCarry(self: *InputParser, tail: []const u8) void {
@@ -898,7 +932,7 @@ fn commandForKey(key: Key) CommandFn {
         .home => moveCursorToStart,
         .end => moveCursorToEnd,
         .delete => deleteForward,
-        .insert, .page_up, .page_down, .unbound => doNothing,
+        .insert, .page_up, .page_down, .escape, .unbound => doNothing,
         .alt => |byte| switch (byte) {
             'b', 'B' => moveWordLeft,
             'f', 'F' => moveWordRight,
@@ -916,8 +950,8 @@ pub const ReadLineError =
     std.Io.Writer.Error ||
     CommandError ||
     switch (SUPPORTED_OS) {
-        .posix => Unix.Error,
-        .windows => Windows.Error,
+        .posix => Unix.Error || Unix.WaitInputError,
+        .windows => Windows.Error || Windows.WaitInputError,
     };
 
 /// Result of reading a line of input: either the line bytes or end-of-input.
@@ -1054,11 +1088,25 @@ fn helper(self: *ReplLine, outlive: Allocator, std_io: std.Io, prompt: []const u
     while (true) : ({
         try out.flush();
     }) {
-        const new_bytes = try in.readStreaming(std_io, &.{&read_buf});
-        if (new_bytes == 0) continue;
-
         events.clearRetainingCapacity();
-        try parser.feed(read_buf[0..new_bytes], &events, temp);
+
+        // A lone `ESC` from the previous read is held in the parser in case the
+        // rest of an escape sequence is still in flight. Wait briefly for the
+        // terminal to send more before blocking on the next read; if it stays
+        // quiet, that `ESC` was the Escape key.
+        if (parser.pendingEscape()) {
+            const input_ready = switch (SUPPORTED_OS) {
+                .posix => try Unix.waitInputReady(escape_sequence_timeout_ms),
+                .windows => try Windows.waitInputReady(escape_sequence_timeout_ms),
+            };
+            if (!input_ready) try parser.flushPendingEscape(&events, temp);
+        }
+
+        if (events.items.len == 0) {
+            const new_bytes = try in.readStreaming(std_io, &.{&read_buf});
+            if (new_bytes == 0) continue;
+            try parser.feed(read_buf[0..new_bytes], &events, temp);
+        }
 
         var done = false;
         for (events.items) |event| {
@@ -1905,6 +1953,42 @@ test "InputParser: 2-byte ESC sequence" {
         .{ .key = .{ .alt = 'f' } },
         .{ .key = .{ .alt = 'd' } },
     }, events.items);
+}
+
+test "InputParser: a lone ESC stays pending as a possible sequence start" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"\x1b"});
+    defer events.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 0), events.items.len);
+    try testing.expect(parser.pendingEscape());
+}
+
+test "InputParser: flushing a pending ESC decodes the Escape key" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"\x1b"});
+    defer events.deinit(testing.allocator);
+
+    try parser.flushPendingEscape(&events, testing.allocator);
+    try expectEventsEqual(&.{.{ .key = .escape }}, events.items);
+    try testing.expect(!parser.pendingEscape());
+    try testing.expectEqual(@as(usize, 0), parser.carry_len);
+
+    // The parser is reusable after flushing the timeout path.
+    events.clearRetainingCapacity();
+    try parser.feed("a", &events, testing.allocator);
+    try expectEventsEqual(&.{.{ .byte = 'a' }}, events.items);
+}
+
+test "InputParser: ESC followed by a byte before the timeout is still Alt" {
+    var parser = InputParser{};
+    var events = try collectEvents(&parser, &.{"\x1b"});
+    defer events.deinit(testing.allocator);
+
+    try testing.expect(parser.pendingEscape());
+    try parser.feed("b", &events, testing.allocator);
+    try expectEventsEqual(&.{.{ .key = .{ .alt = 'b' } }}, events.items);
+    try testing.expect(!parser.pendingEscape());
 }
 
 test "History: basic appending and deduplication" {
