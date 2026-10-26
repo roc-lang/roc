@@ -27235,6 +27235,12 @@ scan edges and exact forward closure establish this necessary condition; aliases
 parameter writes, and cyclic paths remain in that closure. Unrelated appends do
 not require analyzing a read-only loop. A candidate that passes this condition
 still receives the complete existing metadata, ownership, and rewrite checks.
+The pass tests its structural prerequisites (complete definitions, supported
+parameter writes, and tracked carrier uses) before building ordered-use
+metadata. These prerequisites depend on carrier membership, not on whether an
+edge carries existing metadata or starts new metadata. A surviving candidate
+then receives the full lifetime classification; that classification can only
+remove candidate rewrite sites and is shared until a rewrite changes the body.
 
 
 Native acquisition batches retain open catalog and coordination handles, but

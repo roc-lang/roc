@@ -1321,7 +1321,7 @@ const Pass = struct {
                 break :candidate false;
             };
             if (!has_candidate) break;
-            try self.classifyMetadataTransfers(scan, proc_id);
+            var metadata_classified = false;
             outer: for (scan.joins.items) |info| {
                 if (!info.has_back_edge) continue;
                 const join = self.store.getCFStmtImmediate(info.stmt).join;
@@ -1333,7 +1333,7 @@ const Pass = struct {
                     if (!self.isListLocal(param)) continue;
                     if (attempted.contains(param)) continue;
                     try attempted.put(param, {});
-                    if (try self.promoteParam(scan, edge_index, proc_args, info.stmt, param, &max_join_id, new_locals)) {
+                    if (try self.promoteParam(scan, edge_index, proc_args, proc_id, &metadata_classified, info.stmt, param, &max_join_id, new_locals)) {
                         promoting = true;
                         break :outer;
                     }
@@ -1361,6 +1361,8 @@ const Pass = struct {
         scan: *Scan,
         edge_index: *const EdgeIndex,
         proc_args: *collections.DenseMap(LocalId, void),
+        proc_id: LIR.LirProcSpecId,
+        metadata_classified: *bool,
         loop_stmt: CFStmtId,
         list_param: LocalId,
         max_join_id: *u32,
@@ -1476,6 +1478,30 @@ const Pass = struct {
             const tracked = scan.tracked_uses.get(source.*) orelse 0;
             if (total != tracked) return false;
         }
+
+        // All structural prerequisites hold. Only now build ordered-use
+        // topology to decide which transfers preserve metadata. Until this
+        // point carried and entry edges differ in no prerequisite above:
+        // both define the same carrier and require the same wiring.
+        if (!metadata_classified.*) {
+            try self.classifyMetadataTransfers(scan, proc_id);
+            metadata_classified.* = true;
+        }
+        rewrite_site_count = 0;
+        has_sets = false;
+        for (scan.edges.items) |*edge| {
+            edge.flow = if (!carriers.contains(edge.target)) .outside else if (carriers.contains(edge.source) and edge.preserves_metadata) .carried else .entry;
+            if (edge.flow != .carried) continue;
+            switch (edge.kind) {
+                .append_call, .range_append, .le_bytes_append, .reserve_op => rewrite_site_count += 1,
+                .set_op => {
+                    rewrite_site_count += 1;
+                    has_sets = true;
+                },
+                .param_write, .alias, .refresh_op, .unsafe_append => {},
+            }
+        }
+        if (rewrite_site_count == 0) return false;
 
         // Qualified: thread the slack.
         try self.apply(scan, &chain_defs, &chain_params, has_sets, loop_stmt, list_param, max_join_id, new_locals);
@@ -4998,7 +5024,9 @@ test "promote leaves a tainted chain alone" {
         .ret_layout = f.list,
     }, .none);
 
+    const before = @import("use_order.zig").topology_builds;
     try run(store, &f.layouts);
+    try testing.expectEqual(before, @import("use_order.zig").topology_builds);
 
     // Nothing changed: the call is still a call and the loop still has one
     // parameter.
