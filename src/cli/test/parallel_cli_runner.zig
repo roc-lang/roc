@@ -13080,15 +13080,24 @@ fn writeGeneratedTypeModule(
 }
 
 /// Count published entries of the explicitly selected module-cache family.
+/// The committed entries of one module cache section (`mod` or `can`). Other
+/// caches share the checked family, such as inference capsules, so entries are
+/// selected by the section's own scope, as the compiler's cache manager files
+/// them.
 fn countModuleCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u8, section: []const u8) CliRunnerError!usize {
     const family: artifact_store.Family = if (std.mem.eql(u8, section, "mod")) .checked else .canonicalized;
-    const entries = try indexedCacheEntries(io, allocator, cache_path);
-    defer allocator.free(entries);
-    var count: usize = 0;
-    for (entries) |entry| if (entry.state == .published and entry.family == family) {
-        count += 1;
-    };
-    return count;
+    const scope = try std.fs.path.join(allocator, &.{ cache_path, "compat-" ++ build_options.compiler_compatibility_id, section });
+    defer allocator.free(scope);
+    var store = try artifact_store.Store.init(allocator, io, cache_path);
+    defer store.deinit();
+    const keys = try store.groupKeys(allocator, .{
+        .namespace = artifact_store.hashBytes(build_options.compiler_compatibility_id),
+        .family = family,
+        .group = artifact_store.hashBytes(scope),
+        .key = @splat(0),
+    });
+    defer allocator.free(keys);
+    return keys.len;
 }
 
 /// The `--timings` row that covers LLVM's optimization pipeline and object
