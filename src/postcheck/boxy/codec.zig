@@ -1006,9 +1006,11 @@ const Gen = struct {
             .callable => |callable| {
                 const table = program_.module(self.fam().module).view.static_dispatch_plans;
                 const node = table.evidenceNode(callable.node);
-                const target_module = program_.moduleByIdx(node.target.module_idx);
-                const template = target_module.view.checked_procedure_templates.lookupByDef(node.target.def_idx) orelse
-                    invariant("a generated codec call's target has no procedure template");
+                const template = switch (node.target.kind) {
+                    .procedure => |procedure| procedure.template,
+                    .local_proc => invariant("generated codec calls of local procedures are not yet lowered by Boxy"),
+                    .structural => invariant("a generated codec call's callable evidence names a structural target"),
+                };
                 const callee = try program_.templateRefWorker(template);
                 // The edge's substitution names each scheme variable's
                 // instantiation, and the target's own evidence is the edge's
