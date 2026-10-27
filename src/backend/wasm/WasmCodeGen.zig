@@ -8535,6 +8535,13 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitBoxyRuntimeCall(.list);
             try self.bindReturnedScalar(dst, .i32);
         },
+        .desc_presence_slot => |d| {
+            try self.emitProcLocal(d.missing);
+            try self.emitProcLocal(d.present);
+            try self.emitProcLocal(d.payload);
+            try self.emitBoxyRuntimeCall(.presence_slot);
+            try self.bindReturnedScalar(dst, .i32);
+        },
         .desc_box => |d| {
             try self.emitProcLocal(d.payload);
             try self.emitBoxyRuntimeCall(.box);
@@ -8753,6 +8760,14 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitBytesAddress(h.value);
             try self.emitBoxyRuntimeCall(.hash);
             try self.bindReturnedScalar(dst, .i64);
+        },
+        .numeral => |n| {
+            const t = try self.dynTarget(dst);
+            try self.emitProcLocal(n.desc);
+            try self.emitProcLocal(n.table);
+            try self.emitTargetAddress(t);
+            try self.emitBoxyRuntimeCall(.numeral);
+            try self.finishTarget(dst, t);
         },
         .inspect => |i| {
             const t = try self.dynTarget(dst);
