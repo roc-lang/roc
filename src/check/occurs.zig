@@ -63,6 +63,19 @@ pub fn occurs(types_store: *Store, scratch: *Scratch, var_: Var) std.mem.Allocat
     return occursWithMode(types_store, scratch, var_, .args_only);
 }
 
+/// Check `var_`'s own type, without the method requirements of the
+/// variables in it. A cycle through a requirement is never closed, so this
+/// finds exactly the cycles within `var_`'s type; each requirement's type is
+/// a type of its own, which `occurs` checks as a root.
+pub fn occursOwnType(types_store: *Store, scratch: *Scratch, var_: Var) std.mem.Allocator.Error!Result {
+    scratch.reset();
+    var check_occurs = CheckOccurs.init(types_store, scratch, .args_only);
+    check_occurs.requirements = .skip;
+    const result = try check_occurs.occurs(var_, Edge.none);
+    std.debug.assert(!check_occurs.found_valid_cycle);
+    return result;
+}
+
 /// Check a nominal declaration for invalid recursion, resolving nominal
 /// backings through the store's declaration table (see
 /// `NominalBackingMode.declaration_table`). `var_` is the declaration's
@@ -142,6 +155,9 @@ const CheckOccurs = struct {
     cut: CutEdge = .none,
     /// Whether the traversal closed a valid cycle.
     found_valid_cycle: bool = false,
+    /// Whether the traversal checks each method requirement it reaches as a
+    /// root of its own (`pushConstraintCutRoots`).
+    requirements: enum { check, skip } = .check,
 
     /// Init CheckOccurs
     ///
@@ -373,6 +389,10 @@ const CheckOccurs = struct {
     /// the seen stack: a cycle through the requirement is never closed, while
     /// cycles within its types still are.
     fn pushConstraintCutRoots(self: *Self, range: types.StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!void {
+        switch (self.requirements) {
+            .check => {},
+            .skip => return,
+        }
         for (self.types_store.sliceStaticDispatchConstraints(range)) |constraint| {
             try self.scratch.cut_roots.append(self.scratch.gpa, constraint.fn_var);
         }

@@ -40650,13 +40650,13 @@ fn relateSameMethodRequirements(
             if (!result.isProblem()) return .erroneous;
             break :conflict true;
         }
-        if ((try occurs.occurs(self.types, &self.occurs_scratch, retained_fn_var)) == .valid) break :conflict false;
+        if ((try occurs.occursOwnType(self.types, &self.occurs_scratch, retained_fn_var)) == .valid) break :conflict false;
         // The method's type is infinite. When either requirement's type
         // already was, the relation did not make it so: that type is the
         // problem, and the settled walk reports it.
         probe.rollback();
-        if ((try occurs.occurs(self.types, &self.occurs_scratch, retained_fn_var)) == .valid and
-            (try occurs.occurs(self.types, &self.occurs_scratch, duplicate.fn_var)) == .valid) break :conflict true;
+        if ((try occurs.occursOwnType(self.types, &self.occurs_scratch, retained_fn_var)) == .valid and
+            (try occurs.occursOwnType(self.types, &self.occurs_scratch, duplicate.fn_var)) == .valid) break :conflict true;
         probe = try self.beginCommitProbe(env);
         const redo_result = try probe.unify(retained_fn_var, duplicate.fn_var);
         std.debug.assert(redo_result.isEstablished());
