@@ -11,7 +11,8 @@ const builtins = @import("builtins");
 const layout_mod = @import("layout.zig");
 const graph_mod = @import("./graph.zig");
 const rc_helper = @import("./rc_helper.zig");
-const field_order = @import("./field_order.zig");
+const layout_shape = @import("layout_shape");
+const field_order = layout_shape.field_order;
 const digest_mod = @import("./digest.zig");
 
 const target = base.target;
@@ -519,6 +520,7 @@ pub const Store = struct {
             .scalar => base.invariant("layout.Store invariant violated: scalar layouts have fixed indices and no intern key", .{}),
             .zst => try self.startInternKey(.zst),
             .hole => try self.startInternKey(.hole),
+            .dynamic => try self.startInternKey(.dynamic),
             .box => {
                 try self.startInternKey(.box);
                 try self.appendInternKeyIdx(layout.getIdx());
@@ -2921,7 +2923,7 @@ pub const Store = struct {
                         try pending.append(allocator, .{ actual_field.layout, expected_field.layout });
                     }
                 },
-                .scalar, .box_of_zst, .list_of_zst, .closure, .erased_callable, .zst, .ptr, .hole, .tag_union => return false,
+                .scalar, .box_of_zst, .list_of_zst, .closure, .erased_callable, .zst, .ptr, .hole, .tag_union, .dynamic => return false,
             }
         }
         return true;
@@ -2936,7 +2938,7 @@ pub const Store = struct {
         return switch (value.tag) {
             .hole => true,
             .list, .box => self.getLayout(value.getIdx()).tag == .hole,
-            .scalar, .box_of_zst, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
+            .scalar, .box_of_zst, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .dynamic => false,
         };
     }
 
@@ -3014,7 +3016,7 @@ pub const Store = struct {
         const struct_data = self.getStructData(layout.getStruct().idx);
         return StructInfo{
             .data = struct_data,
-            .alignment = layout.getStruct().sort_key.alignment(self.targetUsize()),
+            .alignment = layout.getStruct().sort_key.alignment(self.targetUsize().alignment()),
             .byte_size = struct_data.size.get(self.targetUsize()),
             .fields = self.struct_fields.sliceRange(struct_data.getFields()),
             .contains_refcounted = self.layoutContainsRefcounted(layout),
@@ -3028,7 +3030,7 @@ pub const Store = struct {
         return TagUnionInfo{
             .idx = layout.getTagUnion().idx,
             .data = tu_data,
-            .alignment = layout.getTagUnion().sort_key.alignment(self.targetUsize()),
+            .alignment = layout.getTagUnion().sort_key.alignment(self.targetUsize().alignment()),
             .byte_size = tu_data.size.get(self.targetUsize()),
             .discriminant_offset = tu_data.discriminant_offset.get(self.targetUsize()),
             .variants = self.tag_union_variants.sliceRange(tu_data.getVariants()),
@@ -3069,16 +3071,6 @@ pub const Store = struct {
     /// Get the canonical size of a struct at an explicit pointer width.
     pub fn getStructSizeAt(self: *const Self, struct_idx: StructIdx, target_usize: target.TargetUsize) u32 {
         return self.getStructData(struct_idx).size.get(target_usize);
-    }
-
-    /// Get the offset of a struct field at the given sorted index.
-    /// Effective alignment (in bytes) of a struct field for offset/size
-    /// computation. Padding spacers are always alignment 1—their value
-    /// layout's alignment is ignored so they never introduce internal padding
-    /// nor inflate the struct's alignment.
-    fn structFieldAlignmentBytes(field: StructField, size_align: SizeAlign) u32 {
-        if (field.is_padding) return 1;
-        return @intCast(size_align.alignment.toByteUnits());
     }
 
     /// Record a newly committed struct's field offsets for both pointer
@@ -3232,6 +3224,11 @@ pub const Store = struct {
         return .zst;
     }
 
+    /// The layout every `.boxy` dynamic local has (see `Layout.dynamic`).
+    pub fn dynamicLayout(self: *Self) Allocator.Error!Idx {
+        return self.insertLayout(Layout.dynamic());
+    }
+
     /// Get both the size and alignment of a layout in a single call.
     /// This is more efficient than calling layoutSize and alignment separately
     /// since both values often share computation paths.
@@ -3269,7 +3266,8 @@ pub const Store = struct {
                 .opaque_ptr => target_usize.size(),
                 .vector => 16,
             },
-            .box, .box_of_zst, .erased_callable, .ptr => target_usize.size(),
+            // A dynamic local holds the address of its bytes.
+            .box, .box_of_zst, .erased_callable, .ptr, .dynamic => target_usize.size(),
             .list, .list_of_zst => builtins.list.RocList.word_count * target_usize.size(),
             .struct_ => self.getStructData(layout.getStruct().idx).size.get(target_usize),
             // A closure's captures follow its header, aligned; captures
@@ -3306,48 +3304,45 @@ pub const Store = struct {
         const offsets = &self.scratch_field_offsets;
         offsets.clearRetainingCapacity();
         try offsets.ensureTotalCapacity(self.allocator, fields.len);
-        var ends = layout_mod.WidthValues(u32).both(0, 0);
-        var max_alignments = layout_mod.WidthValues(u32).both(1, 1);
-        var sort_key: layout_mod.SortKey = .align_1;
+        var measures: [2]layout_shape.StructMeasure = .{ .{}, .{} };
         for (fields) |field| {
             const field_layout = self.getLayout(field.layout);
-            if (!field.is_padding) sort_key = sort_key.max(field_layout.sortKey());
+            const sort_key = field_layout.sortKey();
             var field_offsets: layout_mod.WidthValues(u32) = undefined;
             inline for (.{ target.TargetUsize.u32, target.TargetUsize.u64 }) |target_usize| {
                 const width = @backingInt(target_usize);
                 const size_align = self.layoutSizeAlignAt(field_layout, target_usize);
-                const field_align = structFieldAlignmentBytes(field, size_align);
-                max_alignments.per_target[width] = @max(max_alignments.per_target[width], field_align);
-                const offset = std.mem.alignForward(u32, ends.per_target[width], field_align);
-                field_offsets.per_target[width] = offset;
-                ends.per_target[width] = offset + size_align.size;
+                field_offsets.per_target[width] = measures[width].place(.{
+                    .size = size_align.size,
+                    .alignment = @intCast(size_align.alignment.toByteUnits()),
+                    .sort_key = sort_key,
+                    .is_padding = field.is_padding,
+                });
             }
             offsets.appendAssumeCapacity(field_offsets);
         }
+        const m32 = measures[@backingInt(target.TargetUsize.u32)].finish();
+        const m64 = measures[@backingInt(target.TargetUsize.u64)].finish();
         return .{
-            .sizes = layout_mod.WidthValues(u32).both(
-                std.mem.alignForward(u32, ends.get(.u32), max_alignments.get(.u32)),
-                std.mem.alignForward(u32, ends.get(.u64), max_alignments.get(.u64)),
-            ),
-            .sort_key = sort_key,
+            .sizes = layout_mod.WidthValues(u32).both(m32.size, m64.size),
+            .sort_key = m64.sort_key,
         };
     }
 
     /// A tag union's total size and discriminant offset for one target.
     const TagUnionMetrics = struct { size: u32, discriminant_offset: u32 };
     fn tagUnionMetricsAt(self: *const Self, variant_layouts: []const Idx, discriminant_size: u8, target_usize: target.TargetUsize) TagUnionMetrics {
-        var max_payload_size: u32 = 0;
-        var max_payload_alignment: u32 = 1;
+        var measure = layout_shape.TagUnionMeasure.init(discriminant_size);
         for (variant_layouts) |variant_idx| {
             const variant_layout = self.getLayout(variant_idx);
-            max_payload_size = @max(max_payload_size, self.sizeAt(variant_layout, target_usize));
-            max_payload_alignment = @max(max_payload_alignment, @as(u32, @intCast(variant_layout.alignment(target_usize).toByteUnits())));
+            measure.addPayload(.{
+                .size = self.sizeAt(variant_layout, target_usize),
+                .alignment = @intCast(variant_layout.alignment(target_usize).toByteUnits()),
+                .sort_key = variant_layout.sortKey(),
+            });
         }
-        const disc_align: u32 = @intCast(TagUnionData.alignmentForDiscriminantSize(discriminant_size).toByteUnits());
-        const disc_offset: u32 = @intCast(std.mem.alignForward(u32, max_payload_size, disc_align));
-        const tu_align = @max(max_payload_alignment, disc_align);
-        const total_size: u32 = @intCast(std.mem.alignForward(u32, disc_offset + discriminant_size, tu_align));
-        return .{ .size = total_size, .discriminant_offset = disc_offset };
+        const metrics = measure.finish();
+        return .{ .size = metrics.size, .discriminant_offset = metrics.discriminant_offset };
     }
 
     /// Get the size in bytes of a layout, given the store's target usize.
@@ -3358,7 +3353,7 @@ pub const Store = struct {
     /// The alignment class of a tag union from its variant payloads and
     /// discriminant size. Used at commit time.
     fn tagUnionVariantsSortKey(self: *const Self, variant_layouts: []const Idx, discriminant_size: u8) layout_mod.SortKey {
-        var key = layout_mod.SortKey.fromAlignBytes(TagUnionData.alignmentForDiscriminantSize(discriminant_size).toByteUnits());
+        var key = layout_shape.discriminantSortKey(discriminant_size);
         for (variant_layouts) |variant_idx| {
             key = key.max(self.getLayout(variant_idx).sortKey());
         }
@@ -3395,6 +3390,9 @@ pub const Store = struct {
             .zst => false,
             // A hole stands for an element no procedure body touches.
             .hole => false,
+            // A dynamic local is one opaque owned unit: its descriptor decides
+            // at runtime whether anything in it is refcounted.
+            .dynamic => true,
             .struct_ => self.getStructData(l.getStruct().idx).contains_refcounted,
             .tag_union => self.getTagUnionData(l.getTagUnion().idx).contains_refcounted,
             .closure => blk: {

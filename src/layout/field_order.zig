@@ -15,7 +15,7 @@
 //! store and the glue generator, not here.
 
 const std = @import("std");
-const SortKey = @import("layout.zig").SortKey;
+const SortKey = @import("shape.zig").SortKey;
 
 /// The total ordering key of one structural field.
 pub const StructuralField = struct {

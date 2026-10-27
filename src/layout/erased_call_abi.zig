@@ -1,7 +1,10 @@
-//! Canonical packed-argument layout for the erased-callable ABI.
+//! Canonical packed-argument layout for the erased-callable ABI: the
+//! arguments in declaration order, each at its natural alignment, measured
+//! by the shared `shape.StructMeasure`.
 
 const std = @import("std");
 const layout = @import("layout.zig");
+const shape = @import("layout_shape");
 const Store = @import("store.zig").Store;
 
 /// Total storage requirements for an erased-call argument buffer.
@@ -14,21 +17,21 @@ pub const Metrics = struct {
 pub fn plan(store: *const Store, arg_layouts: []const layout.Idx, offsets: []u32) Metrics {
     std.debug.assert(arg_layouts.len == offsets.len);
 
-    var size: u32 = 0;
-    var max_alignment: u32 = 1;
+    var measure: shape.StructMeasure = .{};
     for (arg_layouts, offsets) |arg_layout, *offset| {
-        const runtime_layout = store.runtimeRepresentationLayoutIdx(arg_layout);
-        const size_align = store.layoutSizeAlign(store.getLayout(runtime_layout));
-        const alignment: u32 = @intCast(@max(size_align.alignment.toByteUnits(), 1));
-        size = std.mem.alignForward(u32, size, alignment);
-        offset.* = size;
-        size += size_align.size;
-        max_alignment = @max(max_alignment, alignment);
+        const runtime_layout = store.getLayout(store.runtimeRepresentationLayoutIdx(arg_layout));
+        const size_align = store.layoutSizeAlign(runtime_layout);
+        offset.* = measure.place(.{
+            .size = size_align.size,
+            .alignment = @intCast(size_align.alignment.toByteUnits()),
+            .sort_key = runtime_layout.sortKey(),
+        });
     }
 
+    const metrics = measure.finish();
     return .{
-        .size = std.mem.alignForward(u32, size, max_alignment),
-        .alignment = max_alignment,
+        .size = metrics.size,
+        .alignment = metrics.alignment,
     };
 }
 

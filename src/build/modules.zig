@@ -226,6 +226,7 @@ pub const ModuleType = enum {
     builtins,
     ctx,
     build_options,
+    layout_shape,
     layout,
     static_data,
     eval,
@@ -315,9 +316,15 @@ pub const ModuleType = enum {
                 .root = null,
                 .tests = .{ .no_tests = "generated constants" },
             },
+            // The std-only shape arithmetic and field order the layout store
+            // and the Boxy runtime share.
+            .layout_shape => .{
+                .root = "src/layout/shape.zig",
+                .tests = .{ .unit = .{ .aggregators = &.{"layout shape declarations are referenced"} } },
+            },
             .layout => .{
                 .root = "src/layout/mod.zig",
-                .deps = &.{ .tracy, .collections, .base, .types, .builtins, .can },
+                .deps = &.{ .tracy, .collections, .base, .types, .builtins, .can, .layout_shape },
                 .tests = .{ .unit = .{ .aggregators = &.{"layout tests"} } },
             },
             .static_data => .{
@@ -548,6 +555,7 @@ pub const RocModules = struct {
     tracy: *Module,
     ctx: *Module,
     build_options: *Module,
+    layout_shape: *Module,
     layout: *Module,
     static_data: *Module,
     eval: *Module,

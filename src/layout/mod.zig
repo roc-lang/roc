@@ -71,10 +71,14 @@ pub const ScalarInfo = @import("layout.zig").ScalarInfo;
 pub const abi = @import("abi/mod.zig");
 pub const erased_call_abi = @import("erased_call_abi.zig");
 
+// The std-only shape arithmetic (alignment classes, struct and tag union
+// measuring) the layout store and the Boxy runtime share.
+pub const shape = @import("layout_shape");
+
 // Record field ordering used by the layout store when committing record
 // layouts. `roc glue` consumes the committed order rather than reordering
 // fields itself, so both describe the same memory layout.
-pub const field_order = @import("field_order.zig");
+pub const field_order = shape.field_order;
 
 // Re-export store functionality
 pub const Store = @import("store.zig").Store;
@@ -139,7 +143,6 @@ test "layout tests" {
     std.testing.refAllDecls(@import("digest.zig"));
     std.testing.refAllDecls(@import("erased_call_abi.zig"));
     std.testing.refAllDecls(@import("store.zig"));
-    std.testing.refAllDecls(@import("field_order.zig"));
     std.testing.refAllDecls(@import("abi/mod.zig"));
     std.testing.refAllDecls(@import("abi/aarch64.zig"));
     std.testing.refAllDecls(@import("abi/x86_64.zig"));
