@@ -8623,7 +8623,9 @@ pub const Interpreter = struct {
             },
             .box_payload_addr => |b| {
                 const payload = try self.descAt(frame, b.desc);
-                const word = (try self.localWord(frame, b.box)) & ~builtins.utils.DATA_PTR_TAG_MASK;
+                // The box word lives in the box local's bytes, which a dynamic local
+                // holds by address.
+                const word = @as(*const usize, @ptrCast(@alignCast(try self.localBytes(frame, b.box)))).* & ~builtins.utils.DATA_PTR_TAG_MASK;
                 // A box of a zero-sized payload holds no allocation.
                 const address: [*]u8 = if (payload.size == 0 or word == 0) boxy.walk.zeroSizedPtr() else @ptrFromInt(word);
                 try self.setComponentTarget(frame, stmt_id, target, address);
