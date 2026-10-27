@@ -2427,6 +2427,7 @@ pub fn build(b: *std.Build) void {
     llvm_codegen_module.addImport("build_options", roc_modules.build_options);
     llvm_codegen_module.addImport("roc_target", roc_modules.roc_target);
     llvm_codegen_module.addImport("vendor_llvm_ir", roc_modules.vendor_llvm_ir);
+    llvm_codegen_module.addImport("boxy_runtime", roc_modules.boxy_runtime);
 
     // On macOS the linked roc executable exports every global symbol of its
     // statically linked LLVM, LLD, Binaryen, zlib and zstd, and dyld walks
@@ -4200,6 +4201,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "build_options", .module = roc_modules.build_options },
                 .{ .name = "roc_target", .module = roc_modules.roc_target },
                 .{ .name = "vendor_llvm_ir", .module = roc_modules.vendor_llvm_ir },
+                .{ .name = "boxy_runtime", .module = roc_modules.boxy_runtime },
             },
         }),
         .filters = test_filters,

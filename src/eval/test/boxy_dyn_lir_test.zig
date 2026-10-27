@@ -1,8 +1,9 @@
 //! Hand-built `.boxy` LIR programs: dynamic locals, descriptor composition,
 //! dynamic values, dictionaries, and list operations that take an element
 //! descriptor (design.md "`.boxy` Runtime Lowering"). Each runs on the
-//! interpreter and, where this host has a native code generator, on the dev
-//! backend in this process, which must produce the same result bytes.
+//! interpreter, on the LLVM backend, and, where this host has a native code
+//! generator, on the dev backend, all in this process; every backend must
+//! produce the same result bytes.
 
 const std = @import("std");
 const base = @import("base");
@@ -14,6 +15,8 @@ const backend = @import("backend");
 const roc_target = @import("roc_target");
 const Interpreter = @import("../interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("../runtime_host.zig");
+const InspectedRun = @import("../inspected_run.zig");
+const object_image = @import("../object_image.zig");
 
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
@@ -191,28 +194,76 @@ const Run = struct {
         self.env.deinit();
     }
 
-    /// The interpreter's result, after checking the dev backend's matches it.
+    /// The interpreter's result, after checking the LLVM and dev backends'
+    /// match it.
     fn eval(self: *Run, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx) !Interpreter.EvalResult {
         const result = try self.interpreter.eval(.{ .proc_id = proc_id, .ret_layout = ret_layout });
+        try self.expectSame(result, ret_layout, try self.runLlvm(proc_id, ret_layout));
         if (comptime !backend.host_lir_codegen_available) return result;
-        const size = self.builder.layouts.layoutSize(self.builder.layouts.getLayout(ret_layout));
-        const dev_bytes = try allocator.alignedAlloc(u8, .@"16", @max(size, 1));
-        defer allocator.free(dev_bytes);
-        @memset(dev_bytes, 0);
-        try self.runDev(proc_id, ret_layout, dev_bytes);
-        if (ret_layout == .str) {
-            const dev_str: *const RocStr = @ptrCast(dev_bytes.ptr);
-            defer dev_str.decref(self.env.get_ops());
-            try std.testing.expectEqualStrings(readStr(result.value), dev_str.asSlice());
-        } else {
-            try std.testing.expectEqualSlices(u8, result.value.ptr[0..size], dev_bytes[0..size]);
-        }
+        try self.expectSame(result, ret_layout, try self.runDev(proc_id, ret_layout));
         return result;
     }
 
+    /// Check a backend's result bytes against the interpreter's, and release
+    /// them.
+    fn expectSame(self: *Run, result: Interpreter.EvalResult, ret_layout: layout_mod.Idx, bytes: []align(16) u8) !void {
+        defer allocator.free(bytes);
+        const size = self.builder.layouts.layoutSize(self.builder.layouts.getLayout(ret_layout));
+        if (ret_layout == .str) {
+            const backend_str: *const RocStr = @ptrCast(bytes.ptr);
+            defer backend_str.decref(self.env.get_ops());
+            try std.testing.expectEqualStrings(readStr(result.value), backend_str.asSlice());
+        } else {
+            try std.testing.expectEqualSlices(u8, result.value.ptr[0..size], bytes[0..size]);
+        }
+    }
+
+    /// Zeroed storage for a result of `ret_layout`.
+    fn resultBytes(self: *Run, ret_layout: layout_mod.Idx) ![]align(16) u8 {
+        const size = self.builder.layouts.layoutSize(self.builder.layouts.getLayout(ret_layout));
+        const bytes = try allocator.alignedAlloc(u8, .@"16", @max(size, 1));
+        @memset(bytes, 0);
+        return bytes;
+    }
+
+    /// Compile every procedure with the LLVM backend and run `proc_id` in
+    /// this process, returning its result bytes.
+    fn runLlvm(self: *Run, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx) ![]align(16) u8 {
+        const llvm_compile = @import("llvm_compile");
+        const b = self.builder;
+        const entrypoints = [_]llvm_compile.MonoLlvmCodeGen.Entrypoint{.{
+            .symbol_name = "roc_eval_main",
+            .proc = proc_id,
+            .arg_layouts = &.{},
+            .ret_layout = ret_layout,
+        }};
+        var bitcode = generate: {
+            var codegen = llvm_compile.MonoLlvmCodeGen.init(allocator, &b.store);
+            defer codegen.deinit();
+            codegen.layout_store = &b.layouts;
+            codegen.static_data_addresses = b.statics.items;
+            break :generate try codegen.generateEntrypointModule("roc_boxy_dyn_test", &entrypoints);
+        };
+        defer bitcode.deinit();
+        var compile_options = try InspectedRun.llvmCompileOptions(allocator, b.layouts.targetUsize(), llvm_compile.bindings.IrOptimizationLevel.O3);
+        defer compile_options.deinit(allocator);
+        const object_bytes = try llvm_compile.compileBitcodeModulesToObject(allocator, std.Options.debug_io, &.{bitcode.bitcode}, compile_options.options);
+        defer allocator.free(object_bytes);
+        var image = try object_image.load(allocator, object_bytes);
+        defer image.deinit();
+        const EntryFn = *const fn ([*]u8, ?*anyopaque) callconv(.c) void;
+        const entry = image.lookup(EntryFn, "roc_eval_main") orelse return error.MissingEntrypoint;
+        const out = try self.resultBytes(ret_layout);
+        errdefer allocator.free(out);
+        const entered = builtins.in_process_host.enter(self.env.get_ops(), null);
+        defer builtins.in_process_host.leave(entered);
+        entry(out.ptr, null);
+        return out;
+    }
+
     /// Compile every procedure with the dev backend and run `proc_id` in this
-    /// process, writing its result to `out`.
-    fn runDev(self: *Run, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx, out: []u8) !void {
+    /// process, returning its result bytes.
+    fn runDev(self: *Run, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx) ![]align(16) u8 {
         const b = self.builder;
         var static_strings = try backend.StaticStringData.build(allocator, &b.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
         defer static_strings.deinit();
@@ -228,9 +279,12 @@ const Run = struct {
             codegen.getUnwindFunctions(),
         );
         defer executable.deinit();
+        const out = try self.resultBytes(ret_layout);
+        errdefer allocator.free(out);
         const entered = builtins.in_process_host.enter(self.env.get_ops(), null);
         defer builtins.in_process_host.leave(entered);
         executable.callRocABI(@ptrCast(out.ptr), null);
+        return out;
     }
 };
 
