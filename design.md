@@ -17253,9 +17253,13 @@ Evidence paths describe the normalized logical type, never checked-store row
 topology. Record and tag extension chains, including transparent aliases along
 those chains, are traversed by the evidence-param producer but are not emitted
 as path steps; a field or tag payload in any tail is addressed directly by its
-label from the logical row root. A static-dispatch requirement on an open-row
-remainder is pathless because closure erases that remainder as a standalone
-component; ordinary checked edges can still supply it, while a
+label from the logical row root. A use can lift a scheme's anonymous record or
+tag union into a nominal whose backing it matches, so a record-field or tag
+step that reaches a named type at a use reads that type's structural backing
+(`InstGraph.shapeRoot` in Monotype, `structureBackingRep` in Boxy); the step
+still names the structure the scheme wrote. A static-dispatch requirement on
+an open-row remainder is pathless because closure erases that remainder as a
+standalone component; ordinary checked edges can still supply it, while a
 compiler-generated edge cannot synthesize it from the closed callable. The
 CheckedModule boundary validates both the path grammar and that every nonempty
 path resolves over its template's checked callable type before Monotype may

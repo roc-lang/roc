@@ -4967,4 +4967,30 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "31" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/12624
+        // `run`'s scheme reads `exec`'s result as an anonymous tag union, and
+        // the callback's `?` lifts it into `Try` at this call. The `Ok`
+        // payload's `trim` dispatch is left to the callable, so its evidence
+        // path's tag step reaches the `Try` and must read its backing.
+        .name = "issue 12624: callable-derived evidence path reads a Try lifted from the scheme's tag union",
+        .source_kind = .module,
+        .source =
+        \\run = |exec| {
+        \\    match exec("a") {
+        \\        Ok(output) => Ok(output.trim())
+        \\        Err(e) => Err("${Str.inspect(e)}")
+        \\    }
+        \\}
+        \\
+        \\main = match run(|_s| {
+        \\    _ = Err(Boom)?
+        \\    crash "unreachable"
+        \\}) {
+        \\    Ok(_) => "ok"
+        \\    Err(msg) => msg
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"Boom\"" },
+    },
 };

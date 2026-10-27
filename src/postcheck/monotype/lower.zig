@@ -52111,8 +52111,11 @@ const BodyContext = struct {
     /// known in the live specialization graph. Entries left open here are
     /// retained by ConstStore and resolved when that stored function is used.
     /// Applies one checked evidence path node to the graph node its parent
-    /// selects. A tag label selects its tag union; the payload index after it
-    /// selects the payload.
+    /// selects. A tag label selects the node holding its row; the payload
+    /// index after it selects the payload. Record-field and tag payload reads
+    /// go through the node's structural root, because a use may lift the
+    /// scheme's anonymous record or tag union into a nominal whose backing it
+    /// matches.
     const EvidencePathNodeStepper = struct {
         body: *BodyContext,
         view: ModuleView,
@@ -52135,20 +52138,19 @@ const BodyContext = struct {
         path_node: u32,
     ) Allocator.Error!?NodeId {
         const step = path_nodes[path_node].step;
-        const content = (try self.graph.content(node));
         switch (step.stepKind()) {
-            .fn_arg => switch (content) {
+            .fn_arg => switch (try self.graph.content(node)) {
                 .func => |function| {
                     if (step.data >= function.args.len) return null;
                     return function.args[step.data];
                 },
                 .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
             },
-            .fn_ret => switch (content) {
+            .fn_ret => switch (try self.graph.content(node)) {
                 .func => |function| return function.ret,
                 .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
             },
-            .alias_arg, .nominal_arg => switch (content) {
+            .alias_arg, .nominal_arg => switch (try self.graph.content(node)) {
                 .named => |named| {
                     if (step.data >= named.args.len) return null;
                     return named.args[step.data];
@@ -52159,38 +52161,29 @@ const BodyContext = struct {
                 },
                 .redirect, .leaf, .unresolved, .primitive, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
             },
-            .alias_backing, .nominal_backing => switch (content) {
+            .alias_backing, .nominal_backing => switch (try self.graph.content(node)) {
                 .named => |named| return (named.backing orelse return null).node,
                 .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
             },
-            .tuple_elem => switch (content) {
+            .tuple_elem => switch (try self.graph.content(node)) {
                 .tuple => |items| {
                     if (step.data >= items.len) return null;
                     return items[step.data];
                 },
                 .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
             },
-            .record_field => switch (content) {
-                .record => return try self.graph.recordFieldValueNode(node, try recordFieldName(self.nameStoreMut(), view, @fromBackingInt(step.data))),
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
-            },
-            .tag_payload_tag => switch (content) {
-                .tag_union => return node,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
-            },
+            .record_field => return try self.graph.recordFieldValueNode(node, try recordFieldName(self.nameStoreMut(), view, @fromBackingInt(step.data))),
+            .tag_payload_tag => return node,
             .tag_payload_index => {
                 const tag_node = path_nodes[path_node].parent;
                 if (tag_node == static_dispatch.no_evidence_path_node) return null;
                 const tag_step = path_nodes[tag_node].step;
                 if (tag_step.stepKind() != .tag_payload_tag) return null;
-                return switch (content) {
-                    .tag_union => try self.graph.tagPayloadNode(
-                        node,
-                        try tagName(self.nameStoreMut(), view, @fromBackingInt(@intCast(tag_step.data))),
-                        step.data,
-                    ),
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => null,
-                };
+                return try self.graph.tagPayloadNode(
+                    node,
+                    try tagName(self.nameStoreMut(), view, @fromBackingInt(@intCast(tag_step.data))),
+                    step.data,
+                );
             },
         }
     }
