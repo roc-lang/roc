@@ -925,11 +925,16 @@ const FnSource = struct {
 
 const FnPlan = struct {
     used_args: []bool,
+    /// Arguments the function calls as callables, itself or by passing them
+    /// to a callee that does. A known callable there lets an inlined body call
+    /// it directly; call-pattern specialization does not key on it.
+    called_args: []bool,
     source: FnSource,
     specs: std.ArrayList(Spec),
 
     fn deinit(self: *FnPlan, allocator: Allocator) void {
         allocator.free(self.used_args);
+        allocator.free(self.called_args);
         self.specs.deinit(allocator);
     }
 };
@@ -1679,7 +1684,10 @@ const Pass = struct {
         const plans = try allocator.alloc(FnPlan, program.fnCount());
         errdefer allocator.free(plans);
         var initialized_plans: usize = 0;
-        errdefer for (plans[0..initialized_plans]) |plan| allocator.free(plan.used_args);
+        errdefer for (plans[0..initialized_plans]) |plan| {
+            allocator.free(plan.used_args);
+            allocator.free(plan.called_args);
+        };
 
         for (plans, 0..) |*plan, index| {
             const fn_ = program.getFnAt(index);
@@ -1687,8 +1695,12 @@ const Pass = struct {
             const used_args = try allocator.alloc(bool, args.len);
             errdefer allocator.free(used_args);
             @memset(used_args, false);
+            const called_args = try allocator.alloc(bool, args.len);
+            errdefer allocator.free(called_args);
+            @memset(called_args, false);
             plan.* = .{
                 .used_args = used_args,
+                .called_args = called_args,
                 .source = .{
                     .body = fn_.body,
                     .size = try fnBodySizeWithin(allocator, program, fn_.body, spec_constr_body_expr_threshold),
@@ -2568,7 +2580,7 @@ const Pass = struct {
     }
 
     /// Mark the arguments of `fn_id` that `expr_id` uses in a shape-relevant
-    /// position. Every effect is a monotone flag or a deduplicated caller
+    /// position, and those it calls as callables. Every effect is a monotone flag or a deduplicated caller
     /// edge for `fn_id`, so the walk visits positions in any order on its
     /// own work stack.
     fn markArgUsesInExpr(self: *Pass, fn_id: Ast.FnId, expr_id: Ast.ExprId, changed: *bool) Allocator.Error!void {
@@ -2594,45 +2606,54 @@ const Pass = struct {
                                 }
                             }
                             const args = self.program.exprSpan(call.args);
-                            const callee_uses = self.plans[callee_raw].used_args;
-                            if (args.len != callee_uses.len) Common.invariant("direct call arity differed from lifted function arity while propagating argument uses");
+                            const callee_plan = &self.plans[callee_raw];
+                            if (args.len != callee_plan.used_args.len) Common.invariant("direct call arity differed from lifted function arity while propagating argument uses");
                             for (0..args.len) |index| {
-                                if (callee_uses[index]) self.markArgUseIfLocal(fn_id, GuardedList.at(args, index), changed);
+                                const arg = GuardedList.at(args, index);
+                                if (callee_plan.used_args[index]) self.markArgIfLocal(fn_id, .used, arg, changed);
+                                if (callee_plan.called_args[index]) self.markArgIfLocal(fn_id, .called, arg, changed);
                             }
                         }
                     },
-                    .field_access => |field| self.markArgUseIfLocal(fn_id, field.receiver, changed),
-                    .tuple_access => |access| self.markArgUseIfLocal(fn_id, access.tuple, changed),
-                    .match_ => |match| self.markArgUseIfLocal(fn_id, match.scrutinee, changed),
+                    .call_value => |call| self.markArgIfLocal(fn_id, .called, call.callee, changed),
+                    .field_access => |field| self.markArgIfLocal(fn_id, .used, field.receiver, changed),
+                    .tuple_access => |access| self.markArgIfLocal(fn_id, .used, access.tuple, changed),
+                    .match_ => |match| self.markArgIfLocal(fn_id, .used, match.scrutinee, changed),
                     .loop_ => |loop| {
                         // A loop-carried argument is a shape-relevant use: the
                         // split scalarizes the slot only when the entry shape is
                         // known, so a caller must expose the construction it
                         // passes here.
                         const initial_values = self.program.exprSpan(loop.initial_values);
-                        for (0..initial_values.len) |index| self.markArgUseIfLocal(fn_id, GuardedList.at(initial_values, index), changed);
+                        for (0..initial_values.len) |index| self.markArgIfLocal(fn_id, .used, GuardedList.at(initial_values, index), changed);
                     },
                     // Retained locals describe ownership liveness, not
                     // value-shape demand. They follow any substitution
                     // selected by operational consumers, but must never cause
                     // argument specialization; the standard child list
                     // excludes them.
-                    .join_point, .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .structural_eq, .structural_hash, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
+                    .join_point, .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .low_level, .structural_eq, .structural_hash, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
                 }
                 try Ast.appendChildren(self.allocator, self.program, id, &stack);
             },
         };
     }
 
-    fn markArgUseIfLocal(self: *Pass, fn_id: Ast.FnId, expr_id: Ast.ExprId, changed: *bool) void {
+    const ArgUse = enum { used, called };
+
+    fn markArgIfLocal(self: *Pass, fn_id: Ast.FnId, use: ArgUse, expr_id: Ast.ExprId, changed: *bool) void {
         const local = localExpr(self.program, expr_id) orelse return;
         const args = self.program.typedLocalSpan(self.program.getFn(fn_id).args);
         for (0..args.len) |index| {
             const arg = GuardedList.at(args, index);
             if (arg.local == local) {
-                const used = &self.plans[@backingInt(fn_id)].used_args[index];
-                if (!used.*) {
-                    used.* = true;
+                const plan = &self.plans[@backingInt(fn_id)];
+                const flag = switch (use) {
+                    .used => &plan.used_args[index],
+                    .called => &plan.called_args[index],
+                };
+                if (!flag.*) {
+                    flag.* = true;
                     changed.* = true;
                 }
                 return;
@@ -6814,7 +6835,7 @@ const Cloner = struct {
                     return .{ .call = .{ .plain = .{ .expr = expr_id } } };
                 }
                 const callee = Ast.localDirectCallee(call) orelse return .{ .call = .{ .plain = .{ .expr = expr_id } } };
-                const has_known_shape_arg = try self.directCallHasKnownShapeArg(call.args);
+                const has_known_shape_arg = try self.directCallHasKnownShapeArg(callee, call.args);
                 // A direct call carries its callee's captures by the callee's
                 // own capture locals: the residual call imports those locals
                 // into the enclosing function. In a context where a capture
@@ -12635,9 +12656,17 @@ const Cloner = struct {
         return result;
     }
 
-    fn directCallHasKnownShapeArg(self: *Cloner, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!bool {
+    /// Whether the call passes a known shape at a position `callee` uses
+    /// shape-relevantly or calls. A known shape the callee only stores or
+    /// forwards opaquely gives inlining nothing to simplify.
+    fn directCallHasKnownShapeArg(self: *Cloner, callee: Ast.FnId, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!bool {
+        const callee_raw = @backingInt(callee);
+        if (callee_raw >= self.pass.plans.len) return false;
+        const callee_plan = &self.pass.plans[callee_raw];
         const args = self.pass.program.exprSpan(args_span);
+        if (args.len != callee_plan.used_args.len) Common.invariant("direct call arity differed from lifted function arity while admitting an inline");
         for (0..args.len) |index| {
+            if (!callee_plan.used_args[index] and !callee_plan.called_args[index]) continue;
             const arg = GuardedList.at(args, index);
             if (try self.exprHasKnownShape(arg)) return true;
         }
