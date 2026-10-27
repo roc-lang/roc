@@ -322,7 +322,9 @@ pub const Store = struct {
             else => return err,
         };
         errdefer lease.close(self.io);
-        const file = Dir.cwd().openFile(self.io, path, .{}) catch |err| {
+        var data_buffer: [140]u8 = undefined;
+        const relative_data = std.fmt.bufPrint(&data_buffer, "{s}.data", .{stem}) catch return error.PathTooLong;
+        const file = shard.dir.openFile(self.io, relative_data, .{}) catch |err| {
             return switch (err) {
                 error.FileNotFound => blk: {
                     self.allocator.free(path);

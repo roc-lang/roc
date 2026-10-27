@@ -182,6 +182,13 @@ pub const Index = struct {
     }
 
     fn readRecord(self: *Index, id: RecordId) Error!Record {
+        var storage: Record = undefined;
+        return (try self.readRecordRef(id, &storage)).*;
+    }
+
+    /// Borrow mapped bytes only while the caller owns the shard. Decoding
+    /// validates those bytes directly, without first copying the whole record.
+    fn readRecordRef(self: *Index, id: RecordId, storage: *Record) Error!*const Record {
         if (id > std.math.maxInt(u64) / record_size) return error.CorruptCatalog;
         if (id != 0 and self.read_cache != null) {
             if (self.mapped) |mapped| {
@@ -195,14 +202,13 @@ pub const Index = struct {
             const offset = std.math.cast(usize, id * record_size) orelse return error.CorruptCatalog;
             if (offset > memory.len or memory.len - offset < record_size) return error.CorruptCatalog;
             self.counters.mapped_reads += 1;
-            return memory[offset..][0..record_size].*;
+            return memory[offset..][0..record_size];
         }
-        var bytes: Record = undefined;
         self.counters.reads += 1;
         self.counters.read_bytes += record_size;
-        const len = self.file.readPositionalAll(self.io, &bytes, id * record_size) catch return error.IoFailure;
-        if (len != bytes.len) return error.CorruptCatalog;
-        return bytes;
+        const len = self.file.readPositionalAll(self.io, storage, id * record_size) catch return error.IoFailure;
+        if (len != storage.len) return error.CorruptCatalog;
+        return storage;
     }
 
     fn writeRecord(self: *Index, id: RecordId, bytes: Record) Error!void {
@@ -225,7 +231,8 @@ pub const Index = struct {
         if (self.read_cache) |cache| {
             const slot = id % cache.ids.len;
             if (cache.ids[slot] != id) {
-                cache.nodes[slot] = try Node.decode(&try self.readRecord(id), self.header.next);
+                var bytes: Record = undefined;
+                cache.nodes[slot] = try Node.decode(try self.readRecordRef(id, &bytes), self.header.next);
                 cache.ids[slot] = id;
             }
             return &cache.nodes[slot];

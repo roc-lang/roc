@@ -27325,6 +27325,10 @@ external commits synchronize retained mapping contents through the I/O provider;
 a failed refresh discards the mapping. Record bounds and checksums remain
 mandatory. The mapping never substitutes for shard ownership or generation
 leases. Counters distinguish mapped node reads from positional reads.
+Mapped node decoding borrows the checked record bytes while shard ownership
+holds; no pointer into that mapping escapes decoding. Payload acquisition opens
+the file relative to the already owned shard directory, with the same generation
+lease and size validation as absolute-path acquisition.
 
 
 Lambda Solved retains completed erased-callable reachability markings only for
