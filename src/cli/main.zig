@@ -713,10 +713,8 @@ const EmbeddedTargetObjects = struct {
             .builtins_extern = embedded(dir ++ "roc_builtins_extern" ++ ext),
             .builtins_extern_digest = embeddedBlake3("builtins_extern_" ++ name),
         };
-        if (target.toCpuArch() != .wasm32) {
-            objects.boxy_runtime = embedded(dir ++ "roc_boxy_runtime" ++ ext);
-            objects.boxy_runtime_digest = embeddedBlake3("boxy_runtime_" ++ name);
-        }
+        objects.boxy_runtime = embedded(dir ++ "roc_boxy_runtime" ++ ext);
+        objects.boxy_runtime_digest = embeddedBlake3("boxy_runtime_" ++ name);
         switch (default_platform) {
             .none => {},
             .runtime, .runtime_and_compiler_rt => {
@@ -10450,6 +10448,19 @@ fn writeDevWasmObject(
         var merge_result = try codegen.module.mergeModuleForObject(&builtins_module);
         merge_result.deinit();
     }
+    // A program with the `.boxy` runtime contract calls the Boxy runtime's
+    // `roc_desc_*` entry points, which this object then defines.
+    const boxy_runtime = lowered.lir_result.store.runtime_contract == .boxy;
+    if (boxy_runtime) {
+        const runtime_bytes = EmbeddedTargetObjects.forTarget(target).boxy_runtime orelse return error.UnsupportedTarget;
+        var runtime_module = backend.wasm.WasmModule.preload(ctx.gpa, runtime_bytes, .relocatable_for_merge) catch |err| {
+            std.log.err("Failed to preload the wasm Boxy runtime: {}", .{err});
+            return err;
+        };
+        defer runtime_module.deinit();
+        var merge_result = try codegen.module.mergeModuleForObject(&runtime_module);
+        merge_result.deinit();
+    }
     // The object packs whose C-ABI entries serve this program's linked
     // procedures. Their imports are the runtime and hosted functions their
     // code calls, which the platform provides like this program's own.
@@ -10474,6 +10485,12 @@ fn writeDevWasmObject(
         return err;
     };
     codegen.configureBuiltinRelocs(builtin_symbols);
+    if (boxy_runtime) {
+        codegen.configureBoxyRuntimeRelocs(backend.wasm.BoxyRuntimeSignatures.populateForRelocs(&codegen.module) catch |err| {
+            std.log.err("Failed to locate wasm Boxy runtime symbols after object merge: {}", .{err});
+            return err;
+        });
+    }
 
     const static_rc_helpers = try backend.collectRequiredRcHelpers(ctx.gpa, static_data_exports);
     defer ctx.gpa.free(static_rc_helpers);

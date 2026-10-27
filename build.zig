@@ -5237,11 +5237,17 @@ fn addEvalWasmRuntimeModules(
     link_builtins.addFileArg(builtins_obj.getEmittedBin());
     link_builtins.addFileArg(compiler_rt_obj.getEmittedBin());
 
+    // The Boxy runtime a `.boxy` program's module merges next to the
+    // builtins, whose compiler-rt it shares.
+    const boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_{s}_eval", .{name}), target, optimize);
+
     const builtins_files = b.addWriteFiles();
     _ = builtins_files.addCopyFile(merged_builtins, "roc_builtins.o");
+    _ = builtins_files.addCopyFile(boxy_runtime_obj.getEmittedBin(), "roc_boxy_runtime.o");
     const builtins_module = b.createModule(.{
         .root_source_file = builtins_files.add(b.fmt("{s}_builtins.zig", .{name}),
             \\pub const bytes = @embedFile("roc_builtins.o");
+            \\pub const boxy_runtime_bytes = @embedFile("roc_boxy_runtime.o");
             \\
         ),
     });
@@ -6027,7 +6033,7 @@ fn addMainExe(
         cross_builtins_extern_obj.root_module.stack_protector = false;
 
         const builtins_extern_ext = if (cross_target.query.os_tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
-        if (!cross_is_wasm) {
+        {
             const cross_boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}), cross_resolved_target, optimize);
             const boxy_runtime_ext = if (cross_target.query.os_tag == .windows) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
             embedded_digests.addArg(b.fmt("boxy_runtime_{s}", .{cross_target.name}));

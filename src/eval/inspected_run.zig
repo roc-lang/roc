@@ -494,7 +494,11 @@ pub fn generateWasmModule(allocator: Allocator, program: Program, cpu_level: roc
         .default => wasm32_builtins.bytes,
         .v1 => wasm32v1_builtins.bytes,
     };
-    return codegen.generateModule(program.main_proc, proc.ret_layout, builtins_object) catch |err| switch (err) {
+    const boxy_runtime_object = switch (cpu_level) {
+        .default => wasm32_builtins.boxy_runtime_bytes,
+        .v1 => wasm32v1_builtins.boxy_runtime_bytes,
+    };
+    return codegen.generateModule(program.main_proc, proc.ret_layout, builtins_object, boxy_runtime_object) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.HostedFunctionTypeMismatch => return error.Internal,
     };

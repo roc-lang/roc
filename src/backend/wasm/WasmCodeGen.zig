@@ -89,6 +89,8 @@ const BodyArtifact = @import("BodyArtifact.zig");
 const task_waves = @import("../task_waves.zig");
 const tasks = base.post_check_task_executor;
 const BuiltinSignatures = @import("builtin_signatures.zig");
+const BoxyRuntimeSignatures = @import("boxy_runtime_signatures.zig");
+const boxy_runtime = @import("boxy_runtime");
 const index_types = @import("index_types.zig");
 const Op = WasmModule.Op;
 const ValType = WasmModule.ValType;
@@ -360,6 +362,12 @@ wasm_stack_bytes: u32 = 1024 * 1024,
 wasm_memory_pages: u32 = 0,
 /// Explicit strategy for calls to compiler-provided helper/builtin functions.
 external_calls: ExternalCalls = .unconfigured,
+/// The Boxy runtime's entry points in the module, set exactly for a program
+/// with the `.boxy` runtime contract.
+boxy_runtime_symbols: ?BoxyRuntimeSignatures.SymbolTable = null,
+/// The procedure being compiled's tail carry parameter, if it takes one
+/// (`procCarriesTailArgs`).
+carry_local: ?u32 = null,
 /// Undefined `__stack_pointer` symbol used only while emitting relocatable app objects.
 stack_pointer_symbol: ?SymbolIndex = null,
 /// Undefined `__indirect_function_table` symbol used only while emitting relocatable app objects.
@@ -452,6 +460,12 @@ pub fn initWithModule(
 /// Configure helper calls to use relocations against builtin wasm symbols.
 pub fn configureBuiltinRelocs(self: *Self, symbols: BuiltinSignatures.SymbolTable) void {
     self.external_calls = .{ .builtin_relocs = symbols };
+}
+
+/// Configure `.boxy` dynamic operations to call the Boxy runtime's entry
+/// points through relocations against their symbols.
+pub fn configureBoxyRuntimeRelocs(self: *Self, symbols: BoxyRuntimeSignatures.SymbolTable) void {
+    self.boxy_runtime_symbols = symbols;
 }
 
 /// Configure relocatable stack-pointer operands to target the imported global symbol.
@@ -1718,6 +1732,7 @@ pub fn generateModule(
     root_proc_id: LIR.LirProcSpecId,
     result_layout: layout.Idx,
     wasm32_builtins_object: []const u8,
+    wasm32_boxy_runtime_object: []const u8,
 ) HostedSymbolError!GenerateResult {
     // generateModule always runs data DCE, so every generated static-data
     // address must carry the relocation edge that makes its segment live.
@@ -1759,6 +1774,35 @@ pub fn generateModule(
         wasmInvariantFmt("WASM/codegen invariant violated: merged eval module is missing a builtin symbol", .{});
     };
     self.configureBuiltinRelocs(builtin_symbols);
+
+    // A program with the `.boxy` runtime contract calls the Boxy runtime,
+    // which merges next to the builtins whose compiler support it shares.
+    if (self.store.runtime_contract == .boxy) {
+        var runtime_module = WasmModule.preload(self.allocator, wasm32_boxy_runtime_object, .relocatable_for_merge) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.HasInternalGlobals,
+            error.InvalidLinkingVersion,
+            error.InvalidMagic,
+            error.InvalidSection,
+            error.InvalidVersion,
+            error.MissingLinkingSection,
+            error.Overflow,
+            error.UnexpectedEnd,
+            => wasmInvariantFmt("WASM/codegen invariant violated: invalid eval Boxy runtime object: {s}", .{@errorName(err)}),
+        };
+        defer runtime_module.deinit();
+        var runtime_merge = self.module.mergeModule(&runtime_module) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.DuplicateSymbol,
+            error.FunctionTypeMismatch,
+            error.InvalidSection,
+            => wasmInvariantFmt("WASM/codegen invariant violated: eval Boxy runtime merge failed: {s}", .{@errorName(err)}),
+        };
+        runtime_merge.deinit();
+        self.configureBoxyRuntimeRelocs(BoxyRuntimeSignatures.populateForRelocs(&self.module) catch {
+            wasmInvariantFmt("WASM/codegen invariant violated: merged eval module is missing a Boxy runtime symbol", .{});
+        });
+    }
 
     // Compile all procedures before the synthetic main wrapper.
     const proc_specs = self.store.getProcSpecs();
@@ -5862,6 +5906,7 @@ fn bodyWorker(self: *const Self, allocator: Allocator, recorder: *BodyArtifact.R
     worker.frozen = self;
     worker.recorder = recorder;
     worker.external_calls = self.external_calls;
+    worker.boxy_runtime_symbols = self.boxy_runtime_symbols;
     worker.runtime_symbol_targets = self.runtime_symbol_targets;
     worker.on_drop_type_idx = self.on_drop_type_idx;
     worker.indirect_call_types_registered = self.indirect_call_types_registered;
@@ -5977,8 +6022,9 @@ fn tailDriverIndex(self: *const Self, proc: LirProcSpec) Allocator.Error!?usize 
     return null;
 }
 
-/// Offset of each argument in the tail area's argument region, and the
-/// region's total size, for one callee signature.
+/// Offset of each argument, then of each hidden parameter
+/// (`hiddenParams`), in the tail area's argument region, and the region's
+/// total size, for one callee signature.
 fn tailArgOffsets(self: *Self, proc: LirProcSpec, offsets: ?[]u32) Allocator.Error!u32 {
     const args = self.store.getLocalSpan(proc.args);
     var offset: u32 = 0;
@@ -5990,6 +6036,11 @@ fn tailArgOffsets(self: *Self, proc: LirProcSpec, offsets: ?[]u32) Allocator.Err
             16;
         if (offsets) |out| out[i] = offset;
         offset += std.mem.alignForward(u32, size, 16);
+    }
+    const hidden_count = self.hiddenParams(proc).count();
+    for (0..hidden_count) |i| {
+        if (offsets) |out| out[args.len + i] = offset;
+        offset += 16;
     }
     return offset;
 }
@@ -6089,7 +6140,8 @@ fn compileTailDrivers(self: *Self) Allocator.Error!void {
             self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
             const proc = self.store.getProcSpec(member);
             const args = self.store.getLocalSpan(proc.args);
-            const offsets = try self.allocator.alloc(u32, args.len);
+            const hidden_count = self.hiddenParams(proc).count();
+            const offsets = try self.allocator.alloc(u32, args.len + hidden_count);
             defer self.allocator.free(offsets);
             _ = try self.tailArgOffsets(proc, offsets);
             for (0..args.len) |i| {
@@ -6099,6 +6151,11 @@ fn compileTailDrivers(self: *Self) Allocator.Error!void {
                     const vt = try self.resolveValType(arg_layout);
                     try self.emitLoadOpSized(vt, valTypeByteSize(vt), 0);
                 }
+            }
+            // The result pointer and the tail carry are words.
+            for (0..hidden_count) |i| {
+                try self.emitDataAddressConst(area, @intCast(tail_area_args_offset + offsets[args.len + i]));
+                try self.emitLoadOp(.i32, 0);
             }
             try self.emitCall(self.registered_procs.get(@backingInt(member)) orelse unreachable); // compileTailDrivers runs after pass 1 registered every tail-group member
             try self.emitLocalSet(result_local);
@@ -6145,18 +6202,34 @@ fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args
     const args = self.store.getLocalSpan(call_args);
     const params = self.store.getLocalSpan(proc.args);
     if (args.len != params.len) wasmInvariantFmt("WASM/codegen invariant violated: frame-replacing call arity mismatch", .{});
+    const hidden = self.hiddenParams(proc);
     var offsets_buffer: [16 * @sizeOf(u32)]u8 align(@alignOf(u32)) = undefined;
     var offsets_sfa = std.heap.BufferFirstAllocator.init(&offsets_buffer, self.allocator);
     const offsets_alloc = offsets_sfa.allocator();
-    const offsets = try offsets_alloc.alloc(u32, params.len);
+    const offsets = try offsets_alloc.alloc(u32, params.len + hidden.count());
     defer offsets_alloc.free(offsets);
     _ = try self.tailArgOffsets(proc, offsets);
 
+    // Dynamic arguments move into a carry the callee owns, because their
+    // bytes may live in the frame being replaced. This procedure's own carry,
+    // which they may have lived in, is released as it returns.
+    const moved = try offsets_alloc.alloc(u32, params.len);
+    defer offsets_alloc.free(moved);
+    const carry: ?u32 = if (hidden.carry) try self.emitTailCarry(args, params, moved) else null;
+
     for (0..args.len) |i| {
         const arg = GuardedList.at(args, i);
-        const param_layout = self.procLocalLayoutIdx(GuardedList.at(params, i));
+        const param = GuardedList.at(params, i);
+        const param_layout = self.procLocalLayoutIdx(param);
         const slot_offset: i32 = @intCast(tail_area_args_offset + offsets[i]);
-        if (try self.isCompositeLayout(param_layout)) {
+        if (self.localDyn(param) != null) {
+            if (carry == null) wasmInvariantFmt("WASM/codegen invariant violated: frame-replacing call passes a dynamic argument to a procedure without a tail carry", .{});
+            try self.emitDataAddressConst(area, slot_offset);
+            try self.emitLocalGet(moved[i]);
+            try self.emitStoreOp(.i32, 0);
+        } else if (self.localDyn(arg) != null) {
+            wasmInvariantFmt("WASM/codegen invariant violated: dynamic local {d} passed to a closed parameter", .{@backingInt(arg)});
+        } else if (try self.isCompositeLayout(param_layout)) {
             const size = try self.layoutByteSize(self.runtimeRepresentationLayoutIdx(param_layout));
             const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitProcLocal(arg);
@@ -6170,6 +6243,21 @@ fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args
             try self.emitProcLocal(arg);
             try self.emitStoreOp(try self.resolveValType(param_layout), 0);
         }
+    }
+    var hidden_index: usize = params.len;
+    if (hidden.result) {
+        // The callee writes its result where this procedure's caller asked
+        // for this procedure's.
+        const own_result = self.currentDynResult() orelse wasmInvariantFmt("WASM/codegen invariant violated: frame-replacing call with a dynamic result from a procedure without one", .{});
+        try self.emitDataAddressConst(area, @intCast(tail_area_args_offset + offsets[hidden_index]));
+        try self.emitLocalGet((try self.procLocalBinding(own_result)).idx);
+        try self.emitStoreOp(.i32, 0);
+        hidden_index += 1;
+    }
+    if (carry) |carry_local| {
+        try self.emitDataAddressConst(area, @intCast(tail_area_args_offset + offsets[hidden_index]));
+        try self.emitLocalGet(carry_local);
+        try self.emitStoreOp(.i32, 0);
     }
     try self.emitDataAddressConst(area, 0);
     try self.emitI32Const(@intCast(tailMemberNumber(driver, proc_id)));
@@ -6235,7 +6323,7 @@ fn buildProcArgCountsTable(self: *Self, proc_specs: []const LirProcSpec) Allocat
 fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
     const key: u32 = @backingInt(proc_id);
 
-    if (proc.abi == .erased_callable) {
+    if (proc.abi == .erased_callable or proc.abi == .erased_record) {
         // Matches `builtins.erased_callable.ErasedCallableFn`: pointers for
         // ops, ret, args, capture, reuse, and out_desc.
         const type_idx = try self.internFuncType(&.{ .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
@@ -6258,6 +6346,10 @@ fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) 
         const vt = try self.resolveValType(self.store.getLocal(arg).layout_idx);
         param_types.append(self.allocator, vt) catch return error.OutOfMemory;
     }
+    // The hidden result pointer and tail carry follow the explicit arguments.
+    const hidden = self.hiddenParams(proc);
+    if (hidden.result) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
+    if (hidden.carry) param_types.append(self.allocator, .i32) catch return error.OutOfMemory;
     const ret_vt = try self.resolveValType(proc.ret_layout);
     const type_idx = try self.internFuncType(param_types.items, &.{ret_vt});
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
@@ -6298,8 +6390,12 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     self.caller_drives_local = null;
     self.cf_depth = 0;
     self.in_proc = true;
+    const saved_carry_local = self.carry_local;
+    defer self.carry_local = saved_carry_local;
+    self.carry_local = null;
 
-    if (proc.abi == .erased_callable) {
+    const erased_abi = proc.abi == .erased_callable or proc.abi == .erased_record;
+    if (erased_abi) {
         // Local 0 is the erased-callable ABI's ops slot, which generated code ignores.
         _ = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     }
@@ -6317,12 +6413,20 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
             reuse_ptr,
         );
         break :blk ret_ptr;
+    } else if (proc.abi == .erased_record) blk: {
+        // The reuse and `out_desc` slots are never read.
+        const ret_ptr, const args_ptr, const capture_ptr, _, _ = try self.allocAnonymousLocals(.i32, 5);
+        try self.bindErasedRecordParams(proc, ret_ptr, args_ptr, capture_ptr);
+        break :blk ret_ptr;
     } else blk: {
         // Bind parameters to locals.
         for (0..args.len) |i| {
             const arg = GuardedList.at(args, i);
             _ = try self.bindProcParamLocal(arg);
         }
+        const hidden = self.hiddenParams(proc);
+        if (hidden.result) _ = try self.bindProcParamLocal(proc.dyn_result.?);
+        if (hidden.carry) self.carry_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         break :blk null;
     };
 
@@ -6393,16 +6497,25 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         // End of ret block
         self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
-        if (proc.abi == .erased_callable) {
+        // A dynamic result was written to the caller's storage by `ret`.
+        if (erased_abi and proc.dyn_result == null) {
             try self.emitErasedCallableAdapterReturnStore(erased_ret_ptr.?, proc.ret_layout);
+        }
+        // This procedure owns its tail carry, which its dynamic parameters
+        // point into, and releases it when it returns or replaces its frame.
+        if (self.carry_local) |carry| {
+            try self.emitLocalGet(carry);
+            try self.emitBoxyRuntimeCall(.carry_free);
         }
     }
 
     // Locals declaration (beyond function parameters).
-    const param_count: u32 = if (proc.abi == .erased_callable)
+    const param_count: u32 = if (erased_abi)
         6
-    else
-        @intCast(args.len);
+    else blk: {
+        const hidden = self.hiddenParams(proc);
+        break :blk @intCast(args.len + @intFromBool(hidden.result) + @intFromBool(hidden.carry));
+    };
     try self.encodeLocalsDecl(&self.currentBody().preamble, param_count);
 
     // Prologue (if stack memory used)
@@ -6438,7 +6551,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         try self.emitStackPointerGlobal(Op.global_set);
     }
 
-    if (proc.abi != .erased_callable) {
+    if (!erased_abi) {
         // Push the stored proc return value as the function result.
         try self.emitLocalGet(self.proc_return_local);
     }
@@ -7108,7 +7221,10 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
 
     const stmt = self.store.getCFStmt(stmt_id);
     switch (stmt) {
-        .dyn => base.invariant("WASM/codegen invariant violated: the wasm backend does not lower `dyn` statements yet", .{}),
+        .dyn => |dyn_stmt| {
+            try self.generateDyn(dyn_stmt.target, self.store.stmtRow(dyn_stmt.data));
+            try work.append(wa, .{ .node = .{ .stmt_id = dyn_stmt.next, .stop = stop } });
+        },
         .assign_ref => |assign| {
             try self.generateRefOp(assign.op, self.procLocalLayoutIdx(assign.target));
             try self.bindAssignedLocal(assign.target);
@@ -7124,6 +7240,10 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         },
         .assign_call => |assign| if (self.store.stmtRowOrDefault(assign.extra).replaces_frame) {
             try self.generateFrameReplacingCall(assign.proc, assign.args);
+        } else if (self.callIsDynamic(assign.proc, assign.target)) {
+            if (self.store.stmtRowOrDefault(assign.extra).drive.canDriveHere()) wasmInvariantFmt("WASM/codegen invariant violated: a call with dynamic operands drives pending erased calls", .{});
+            try self.generateDynCall(assign.proc, assign.args, assign.target);
+            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         } else {
             const extra = self.store.stmtRowOrDefault(assign.extra);
             try self.generateCall(.{
@@ -7163,7 +7283,10 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try self.bindAssignedLocal(assign_stmt.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign_stmt.next, .stop = stop } });
         },
-        .assign_low_level => |assign| {
+        .assign_low_level => |assign| if (self.store.stmtRowOrDefault(assign.extra).dyn_elem_desc) {
+            try self.generateDynElemLowLevel(assign);
+            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
+        } else {
             if (!self.precomputed_overflow_results.contains(stmt_key)) {
                 const fusion = OverflowFusion.findResultConsumer(self.store, stmt_id);
                 if (fusion) |matched| {
@@ -7234,8 +7357,12 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
         .set_local => |assign| {
-            try self.emitProcLocal(assign.value);
-            try self.bindAssignedLocal(assign.target);
+            if (self.localDyn(assign.target) != null or self.localDyn(assign.value) != null) {
+                try self.generateDynSetLocal(assign.target, assign.value);
+            } else {
+                try self.emitProcLocal(assign.value);
+                try self.bindAssignedLocal(assign.target);
+            }
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
         .debug => |debug_stmt| {
@@ -7268,8 +7395,12 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try work.append(wa, .{ .node = .{ .stmt_id = expect_stmt.next, .stop = stop } });
         },
         .ret => |r| {
-            try self.emitProcLocal(r.value);
-            try self.emitLocalSet(self.proc_return_local);
+            if (self.currentDynResult()) |result| {
+                try self.generateDynResultReturn(result, r.value);
+            } else {
+                try self.emitProcLocal(r.value);
+                try self.emitLocalSet(self.proc_return_local);
+            }
             try self.emitBr(self.cf_depth - 1);
         },
         .switch_stmt => |sw| {
@@ -7855,6 +7986,1005 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
     }
 }
 
+// ── `.boxy` dynamic values (design.md "Dynamic Values In LIR") ──
+//
+// A dynamic local's wasm local holds the address of its bytes, which its
+// descriptor describes. Descriptor, name, and dictionary locals hold one
+// word. Every operation the descriptor decides is a call to the Boxy
+// runtime's `roc_desc_*` entry points.
+
+const desc_size_offset: u32 = boxy_runtime.TypeDesc.layout(.u32).of(.size);
+const desc_alignment_offset: u32 = boxy_runtime.TypeDesc.layout(.u32).of(.alignment);
+const BoxyListOp = boxy_runtime.compiled.ListOp;
+const BoxyListOpRequest = boxy_runtime.compiled.ListOpRequest;
+const BoxyFieldInput = boxy_runtime.compose.FieldInput;
+const BoxyVariantInput = boxy_runtime.compose.VariantInput;
+
+/// The size and alignment of a field of an `extern struct` the wasm32 Boxy
+/// runtime reads: a pointer, an integer, an enum, or an array of those.
+fn wasm32FieldSizeAlign(comptime F: type) struct { size: u32, alignment: u32 } {
+    return switch (@typeInfo(F)) {
+        .pointer => .{ .size = wasm_word_size, .alignment = wasm_word_size },
+        .optional => |optional| switch (@typeInfo(optional.child)) {
+            .pointer => .{ .size = wasm_word_size, .alignment = wasm_word_size },
+            else => @compileError("a Boxy runtime request field is optional only when it is a pointer"),
+        },
+        .array => |array| blk: {
+            const elem = wasm32FieldSizeAlign(array.child);
+            break :blk .{ .size = elem.size * array.len, .alignment = elem.alignment };
+        },
+        .@"enum" => |info| wasm32FieldSizeAlign(info.tag_type),
+        .int => .{ .size = @sizeOf(F), .alignment = @sizeOf(F) },
+        else => @compileError("unsupported Boxy runtime request field type: " ++ @typeName(F)),
+    };
+}
+
+/// The byte offset of `field` in the wasm32 C layout of `T`.
+fn wasm32FieldOffset(comptime T: type, comptime field: []const u8) u32 {
+    comptime {
+        const info = @typeInfo(T).@"struct";
+        var end: u32 = 0;
+        for (info.field_names, info.field_types) |name, F| {
+            const size_align = wasm32FieldSizeAlign(F);
+            end = std.mem.alignForward(u32, end, size_align.alignment);
+            if (std.mem.eql(u8, name, field)) return end;
+            end += size_align.size;
+        }
+        @compileError("no field " ++ field ++ " in " ++ @typeName(T));
+    }
+}
+
+/// The byte size of the wasm32 C layout of `T`.
+fn wasm32StructSize(comptime T: type) u32 {
+    comptime {
+        const info = @typeInfo(T).@"struct";
+        var end: u32 = 0;
+        var max_alignment: u32 = 1;
+        for (info.field_types) |F| {
+            const size_align = wasm32FieldSizeAlign(F);
+            end = std.mem.alignForward(u32, end, size_align.alignment) + size_align.size;
+            max_alignment = @max(max_alignment, size_align.alignment);
+        }
+        return std.mem.alignForward(u32, end, max_alignment);
+    }
+}
+
+/// The hidden trailing parameters of a `.roc` procedure's wasm signature,
+/// after its explicit arguments: the address of its dynamic result's
+/// storage, then its tail carry.
+const HiddenParams = struct {
+    result: bool,
+    carry: bool,
+
+    fn count(self: HiddenParams) usize {
+        return @as(usize, @intFromBool(self.result)) + @intFromBool(self.carry);
+    }
+};
+
+fn hiddenParams(self: *const Self, proc: LirProcSpec) HiddenParams {
+    return .{
+        .result = proc.abi == .roc and proc.dyn_result != null,
+        .carry = procCarriesTailArgs(self.store, proc),
+    };
+}
+
+/// Whether `proc` takes a tail carry: a last hidden parameter holding the
+/// storage a frame-replacing call moved its dynamic arguments into, because
+/// their bytes lived in the frame it replaced. Such a procedure has a dynamic
+/// parameter and can receive frame-replacing calls; it releases its carry
+/// when it returns or replaces its own frame. Every other caller passes none.
+fn procCarriesTailArgs(store: *const LirStore, proc: LirProcSpec) bool {
+    if (!isTailGroupMember(proc)) return false;
+    const params = store.getLocalSpan(proc.args);
+    for (0..params.len) |i| {
+        if (store.getLocal(GuardedList.at(params, i)).dyn != null) return true;
+    }
+    return false;
+}
+
+fn localDyn(self: *const Self, local: ProcLocalId) ?LIR.DynLocal {
+    return self.store.getLocal(local).dyn;
+}
+
+/// The `result` dynamic local of the procedure being compiled, when its
+/// result is dynamic.
+fn currentDynResult(self: *const Self) ?ProcLocalId {
+    const proc_id = self.current_proc_id orelse return null;
+    return self.store.getProcSpec(proc_id).dyn_result;
+}
+
+fn emitBoxyRuntimeCall(self: *Self, entry: BoxyRuntimeSignatures.Entry) Allocator.Error!void {
+    const symbols = self.boxy_runtime_symbols orelse wasmInvariantFmt(
+        "WASM/codegen invariant violated: Boxy runtime not configured before roc_desc_{s}",
+        .{@tagName(entry)},
+    );
+    const symbol = symbols.get(entry);
+    try self.currentBody().emitRelocatableCall(self.allocator, symbol, self.functionIndexForSymbol(symbol));
+}
+
+/// Push the address of a local's bytes: a dynamic local's address, a
+/// composite's memory, or a frame slot a primitive's bytes are stored to.
+fn emitBytesAddress(self: *Self, local: ProcLocalId) Allocator.Error!void {
+    if (self.localDyn(local) != null) return self.emitLocalGet((try self.procLocalBinding(local)).idx);
+    const layout_idx = self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(local));
+    const size = try self.layoutStorageByteSize(layout_idx);
+    if (size == 0) return self.emitI32Const(0);
+    if (try self.isCompositeLayout(layout_idx)) return self.emitProcLocal(local);
+    const slot = try self.allocStackMemory(size, try self.layoutStorageByteAlign(layout_idx));
+    const address = try self.emitFpOffsetToNewLocal(slot);
+    try self.emitProcLocal(local);
+    try self.emitStoreToMemSized(address, 0, try self.procLocalValType(local), size);
+    try self.emitLocalGet(address);
+}
+
+/// Push the `vt` value at the start of a local's bytes: a closed primitive's
+/// own value, or a load through a composite's or dynamic local's address.
+fn emitLeadingValue(self: *Self, local: ProcLocalId, vt: ValType) Allocator.Error!void {
+    if (self.localDyn(local) == null and !try self.isCompositeLocal(local)) {
+        const local_vt = try self.procLocalValType(local);
+        if (local_vt != vt) wasmInvariantFmt("WASM/codegen invariant violated: {s} local {d} read as {s}", .{ @tagName(local_vt), @backingInt(local), @tagName(vt) });
+        return self.emitProcLocal(local);
+    }
+    try self.emitBytesAddress(local);
+    try self.emitLoadOp(vt, 0);
+}
+
+const LocalArrayKind = enum {
+    /// Each element is the word the local holds.
+    words,
+    /// Each element is the address of the local's bytes.
+    bytes,
+};
+
+/// Lay out one word per local of `span` in a frame array and return the
+/// local holding the array's address.
+fn emitLocalArray(self: *Self, span: ProcLocalSpan, kind: LocalArrayKind) Allocator.Error!u32 {
+    const locals = self.store.getLocalSpan(span);
+    const slot = try self.allocStackMemory(@intCast(@max(locals.len, 1) * wasm_word_size), wasm_word_size);
+    const array = try self.emitFpOffsetToNewLocal(slot);
+    for (0..locals.len) |i| {
+        const local = GuardedList.at(locals, i);
+        try self.emitLocalGet(array);
+        switch (kind) {
+            .words => try self.emitProcLocal(local),
+            .bytes => try self.emitBytesAddress(local),
+        }
+        try self.emitStoreOp(.i32, @intCast(i * wasm_word_size));
+    }
+    return array;
+}
+
+/// Where a statement writes a target's bytes: a dynamic local's own
+/// storage, or a fresh frame slot whose bytes then become the closed local's
+/// value. Each payload is the wasm local holding the address.
+const DynTarget = union(enum) {
+    dynamic: u32,
+    closed: u32,
+    zero_sized,
+};
+
+fn dynTarget(self: *Self, dst: ProcLocalId) Allocator.Error!DynTarget {
+    if (self.localDyn(dst)) |dyn| {
+        if (dyn.storage == .view) wasmInvariantFmt("WASM/codegen invariant violated: a statement wrote the bytes of view local {d}", .{@backingInt(dst)});
+        return .{ .dynamic = (try self.procLocalBinding(dst)).idx };
+    }
+    const layout_idx = self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(dst));
+    const size = try self.layoutStorageByteSize(layout_idx);
+    if (size == 0) return .zero_sized;
+    const slot = try self.allocStackMemory(size, @max(try self.layoutStorageByteAlign(layout_idx), wasm_word_size));
+    return .{ .closed = try self.emitFpOffsetToNewLocal(slot) };
+}
+
+fn emitTargetAddress(self: *Self, t: DynTarget) Allocator.Error!void {
+    switch (t) {
+        .dynamic, .closed => |address| try self.emitLocalGet(address),
+        .zero_sized => try self.emitI32Const(0),
+    }
+}
+
+/// Bind a closed target to the bytes a statement wrote to its frame slot.
+fn finishTarget(self: *Self, dst: ProcLocalId, t: DynTarget) Allocator.Error!void {
+    switch (t) {
+        .dynamic => {},
+        .closed => |address| {
+            const layout_idx = self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(dst));
+            try self.emitLocalGet(address);
+            if (!try self.isCompositeLayout(layout_idx)) try self.emitLoadOpForLayout(layout_idx, 0);
+            try self.emitLocalSet((try self.procLocalBinding(dst)).idx);
+        },
+        .zero_sized => {
+            try self.emitZeroValue(try self.procLocalValType(dst));
+            try self.emitLocalSet((try self.procLocalBinding(dst)).idx);
+        },
+    }
+}
+
+/// Bind a closed target to the `vt` value on the operand stack, which is
+/// the target's bytes.
+fn bindReturnedScalar(self: *Self, dst: ProcLocalId, vt: ValType) Allocator.Error!void {
+    if (self.localDyn(dst) != null) wasmInvariantFmt("WASM/codegen invariant violated: dynamic local {d} received a scalar result", .{@backingInt(dst)});
+    const layout_idx = self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(dst));
+    switch (try WasmLayout.wasmReprWithStore(layout_idx, self.getLayoutStore(), self.cpu_level != .v1)) {
+        .primitive => |target_vt| {
+            if (target_vt != vt) wasmInvariantFmt("WASM/codegen invariant violated: {s} result bound to a {s} local", .{ @tagName(vt), @tagName(target_vt) });
+        },
+        .stack_memory => |size| {
+            const value = try self.emitSetNewLocal(vt);
+            const slot = try self.allocStackMemory(size, @max(try self.layoutStorageByteAlign(layout_idx), valTypeByteSize(vt)));
+            const address = try self.emitFpOffsetToNewLocal(slot);
+            try self.emitLocalGets(.{ address, value });
+            try self.emitStoreOp(vt, 0);
+            try self.emitLocalGet(address);
+        },
+    }
+    try self.emitLocalSet((try self.procLocalBinding(dst)).idx);
+}
+
+/// A component address on the operand stack: a `view` target takes it, a
+/// closed target loads the component's bytes.
+fn bindComponentAddress(self: *Self, dst: ProcLocalId) Allocator.Error!void {
+    if (self.localDyn(dst)) |dyn| {
+        if (dyn.storage != .view) wasmInvariantFmt("WASM/codegen invariant violated: component address target {d} is not a view", .{@backingInt(dst)});
+        return self.emitLocalSet((try self.procLocalBinding(dst)).idx);
+    }
+    const layout_idx = self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(dst));
+    const size = try self.layoutStorageByteSize(layout_idx);
+    const binding = try self.procLocalBinding(dst);
+    if (size == 0) {
+        self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
+        try self.emitZeroValue(binding.val_type);
+    } else if (try self.isCompositeLayout(layout_idx)) {
+        const source = try self.emitSetNewLocal(.i32);
+        const slot = try self.allocStackMemory(size, @max(try self.layoutStorageByteAlign(layout_idx), wasm_word_size));
+        const copy = try self.emitFpOffsetToNewLocal(slot);
+        try self.emitMemCopy(copy, 0, source, size);
+        try self.emitLocalGet(copy);
+    } else {
+        try self.emitLoadOpForLayout(layout_idx, 0);
+    }
+    try self.emitLocalSet(binding.idx);
+}
+
+/// Copy a value's bytes from `src` into `dst` through `desc`. Reference
+/// counts are untouched.
+fn emitDescCopy(self: *Self, desc: ProcLocalId, dst: DynTarget, src: ProcLocalId) Allocator.Error!void {
+    try self.emitProcLocal(desc);
+    try self.emitTargetAddress(dst);
+    try self.emitBytesAddress(src);
+    try self.emitBoxyRuntimeCall(.copy);
+}
+
+/// `set_local`, or a join parameter's initialization, where either side is
+/// dynamic: the value's bytes are copied.
+fn generateDynSetLocal(self: *Self, dst: ProcLocalId, value: ProcLocalId) Allocator.Error!void {
+    const desc = if (self.localDyn(dst)) |dyn| dyn.desc else self.localDyn(value).?.desc;
+    const target = try self.dynTarget(dst);
+    try self.emitDescCopy(desc, target, value);
+    try self.finishTarget(dst, target);
+}
+
+/// An `incref`, `decref`, or `free` of a dynamic local, through its
+/// descriptor.
+fn generateDynRc(self: *Self, value: ProcLocalId, op: layout.RcOp, count: u32) Allocator.Error!void {
+    const desc = self.localDyn(value).?.desc;
+    switch (op) {
+        .incref => {
+            try self.emitProcLocal(desc);
+            try self.emitBytesAddress(value);
+            try self.emitI32Const(@intCast(count));
+            try self.emitBoxyRuntimeCall(.incref);
+        },
+        .decref => {
+            try self.emitProcLocal(desc);
+            try self.emitBytesAddress(value);
+            try self.emitBoxyRuntimeCall(.decref);
+        },
+        .free, .host_drop => wasmInvariantFmt("WASM/codegen invariant violated: {s} of dynamic local {d}", .{ @tagName(op), @backingInt(value) }),
+    }
+}
+
+/// The return of a procedure whose result is dynamic: the value's bytes are
+/// written to the caller's result storage, whose address a `.roc`
+/// procedure also returns.
+fn generateDynResultReturn(self: *Self, result: ProcLocalId, value: ProcLocalId) Allocator.Error!void {
+    const result_local = (try self.procLocalBinding(result)).idx;
+    try self.emitDescCopy(self.localDyn(result).?.desc, .{ .dynamic = result_local }, value);
+    try self.emitLocalGet(result_local);
+    try self.emitLocalSet(self.proc_return_local);
+}
+
+/// Bind the parameters of a procedure entered through the uniform
+/// erased-callable ABI as a `.boxy` worker receives it
+/// (`ProcAbi.erased_record`): the result pointer, the argument record
+/// pointer, and the capture pointer.
+fn bindErasedRecordParams(self: *Self, proc: LirProcSpec, ret_ptr: u32, args_ptr: u32, capture_ptr: u32) Allocator.Error!void {
+    if (proc.dyn_result) |result| {
+        try self.emitLocalGet(ret_ptr);
+        try self.emitLocalSet((try self.procLocalBinding(result)).idx);
+    }
+    const capture_param = proc.erased_capture_arg orelse wasmInvariantFmt("WASM/codegen invariant violated: erased_record proc has no capture parameter", .{});
+    const params = self.store.getLocalSpan(proc.args);
+    var explicit_count: usize = 0;
+    for (0..params.len) |i| {
+        const param = GuardedList.at(params, i);
+        const binding = try self.procLocalBinding(param);
+        if (param == capture_param) {
+            try self.emitLocalGet(capture_ptr);
+            try self.emitLocalSet(binding.idx);
+            continue;
+        }
+        explicit_count += 1;
+        if (self.localDyn(param) != null) {
+            try self.emitLocalGet(args_ptr);
+            try self.emitLocalSet(binding.idx);
+            continue;
+        }
+        const layout_idx = self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(param));
+        const size = try self.layoutStorageByteSize(layout_idx);
+        if (size == 0) {
+            try self.emitZeroValue(binding.val_type);
+        } else if (try self.isCompositeLayout(layout_idx)) {
+            const slot = try self.allocStackMemory(size, @max(try self.layoutStorageByteAlign(layout_idx), wasm_word_size));
+            const copy = try self.emitFpOffsetToNewLocal(slot);
+            try self.emitMemCopy(copy, 0, args_ptr, size);
+            try self.emitLocalGet(copy);
+        } else {
+            try self.emitLocalGet(args_ptr);
+            try self.emitLoadOpForLayout(layout_idx, 0);
+        }
+        try self.emitLocalSet(binding.idx);
+    }
+    if (explicit_count > 1) wasmInvariantFmt("WASM/codegen invariant violated: erased_record proc has {d} explicit parameters", .{explicit_count});
+}
+
+/// Whether a direct call passes or returns dynamic values: the callee has a
+/// dynamic parameter or result, or the target is dynamic.
+fn callIsDynamic(self: *const Self, proc_id: LIR.LirProcSpecId, target: ProcLocalId) bool {
+    const callee = self.store.getProcSpec(proc_id);
+    if (callee.dyn_result != null or self.localDyn(target) != null) return true;
+    const params = self.store.getLocalSpan(callee.args);
+    for (0..params.len) |i| {
+        if (self.localDyn(GuardedList.at(params, i)) != null) return true;
+    }
+    return false;
+}
+
+/// A direct call with dynamic operands. A dynamic parameter receives the
+/// address of its argument's bytes; a dynamic result is written to the
+/// target's storage, whose address follows the explicit arguments.
+fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan, target: ProcLocalId) Allocator.Error!void {
+    const callee = self.store.getProcSpec(proc_id);
+    if (callee.hosted != null or callee.c_abi_entry) wasmInvariantFmt("WASM/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
+    const arg_refs = self.store.getLocalSpan(args);
+    const param_refs = self.store.getLocalSpan(callee.args);
+    if (arg_refs.len != param_refs.len) wasmInvariantFmt(
+        "WASM/codegen invariant violated: call to proc {d} passed {d} args but callee expects {d}",
+        .{ @backingInt(proc_id), arg_refs.len, param_refs.len },
+    );
+    const func_idx = self.tables().registered_procs.get(@backingInt(proc_id)) orelse
+        wasmInvariantFmt("WASM/codegen invariant violated: unresolved proc call target {d}", .{@backingInt(proc_id)});
+
+    for (0..arg_refs.len) |i| {
+        const arg = GuardedList.at(arg_refs, i);
+        if (self.localDyn(GuardedList.at(param_refs, i)) != null) {
+            try self.emitBytesAddress(arg);
+            continue;
+        }
+        if (self.localDyn(arg) != null) wasmInvariantFmt(
+            "WASM/codegen invariant violated: dynamic local {d} passed to a closed parameter of proc {d}",
+            .{ @backingInt(arg), @backingInt(proc_id) },
+        );
+        try self.emitProcLocal(arg);
+    }
+    var result_target: ?DynTarget = null;
+    if (callee.dyn_result != null) {
+        const t = try self.dynTarget(target);
+        result_target = t;
+        try self.emitTargetAddress(t);
+    }
+    // An ordinary call's arguments stay in this frame: no carry.
+    if (procCarriesTailArgs(self.store, callee)) try self.emitI32Const(0);
+    try self.emitCall(func_idx);
+    try self.emitTailDrive(callee);
+
+    if (result_target) |t| {
+        self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
+        return self.finishTarget(target, t);
+    }
+    if (self.localDyn(target) == null) return self.bindAssignedLocal(target);
+
+    // A closed result written to a dynamic target's storage.
+    const ret_layout = self.runtimeRepresentationLayoutIdx(callee.ret_layout);
+    const size = try self.layoutStorageByteSize(ret_layout);
+    const dst = (try self.procLocalBinding(target)).idx;
+    if (size == 0) {
+        self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
+    } else if (try self.isCompositeLayout(ret_layout)) {
+        const source = try self.emitSetNewLocal(.i32);
+        try self.emitMemCopy(dst, 0, source, size);
+    } else {
+        try self.emitStoreToMemSized(dst, 0, try self.resolveValType(ret_layout), size);
+    }
+}
+
+/// Copy the bytes of every argument a frame-replacing call passes to a
+/// dynamic parameter into one fresh carry, each at a 16-byte aligned
+/// offset, and record each copy's address in a local (`moved[i]` for
+/// argument `i`). Returns the local holding the carry.
+fn emitTailCarry(self: *Self, args: anytype, params: anytype, moved: []u32) Allocator.Error!u32 {
+    const cursor = try self.emitI32ConstToNewLocal(0);
+    for (0..args.len) |i| {
+        if (self.localDyn(GuardedList.at(params, i)) == null) continue;
+        const arg = GuardedList.at(args, i);
+        moved[i] = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        try self.emitLocalGet(cursor);
+        try self.emitLocalSet(moved[i]);
+        // cursor += alignForward(size, 16)
+        try self.emitLocalGet(cursor);
+        if (self.localDyn(arg)) |dyn| {
+            try self.emitProcLocal(dyn.desc);
+            try self.emitLoadOp(.i32, desc_size_offset);
+        } else {
+            try self.emitI32Const(@intCast(try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(arg)))));
+        }
+        try self.emitI32Const(15);
+        try self.emitOps(.{Op.i32_add});
+        try self.emitI32Const(-16);
+        try self.emitOps(.{ Op.i32_and, Op.i32_add });
+        try self.emitLocalSet(cursor);
+    }
+    try self.emitLocalGet(cursor);
+    try self.emitBoxyRuntimeCall(.carry_alloc);
+    const carry = try self.emitSetNewLocal(.i32);
+
+    for (0..args.len) |i| {
+        if (self.localDyn(GuardedList.at(params, i)) == null) continue;
+        const arg = GuardedList.at(args, i);
+        try self.emitLocalGet(carry);
+        try self.emitLocalGet(moved[i]);
+        try self.emitOps(.{Op.i32_add});
+        try self.emitLocalSet(moved[i]);
+        if (self.localDyn(arg)) |dyn| {
+            try self.emitDescCopy(dyn.desc, .{ .dynamic = moved[i] }, arg);
+        } else {
+            const size = try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(arg)));
+            if (size != 0) {
+                try self.emitBytesAddress(arg);
+                const source = try self.emitSetNewLocal(.i32);
+                try self.emitMemCopy(moved[i], 0, source, size);
+            }
+        }
+    }
+    return carry;
+}
+
+/// Reserve the procedure's dynamic frame region below its fixed frame and
+/// set the address of every `frame` dynamic local. The region's size is the
+/// sum of the locals' aligned descriptor sizes; the epilogue's restore of the
+/// stack pointer from the frame pointer releases it.
+fn generateDynFrameAlloc(self: *Self) Allocator.Error!void {
+    const proc_id = self.current_proc_id orelse wasmInvariantFmt("WASM/codegen invariant violated: frame_alloc outside a procedure", .{});
+    const locals = self.store.getLocalSpan(self.store.getProcSpec(proc_id).frame_locals);
+    // The epilogue restores the stack pointer only for a procedure with a
+    // frame, so the region's procedure has one.
+    _ = try self.allocStackMemory(0, 1);
+    const total = try self.emitI32ConstToNewLocal(0);
+    const alignment = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    for (0..locals.len) |i| {
+        const local = GuardedList.at(locals, i);
+        const dyn = self.localDyn(local) orelse continue;
+        if (dyn.storage != .frame) continue;
+        const desc = try self.emitProcLocalToNewLocal(dyn.desc, .i32);
+        try self.emitLoadAt(desc, .i32, desc_alignment_offset);
+        try self.emitLocalSet(alignment);
+        // total = alignForward(total, alignment), the local's offset.
+        try self.emitLocalGets(.{ total, alignment });
+        try self.emitOps(.{Op.i32_add});
+        try self.emitI32Const(1);
+        try self.emitOps(.{Op.i32_sub});
+        try self.emitI32Const(0);
+        try self.emitLocalGet(alignment);
+        try self.emitOps(.{ Op.i32_sub, Op.i32_and });
+        self.currentCode().append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
+        WasmModule.leb128WriteU32(self.allocator, self.currentCode(), total) catch return error.OutOfMemory;
+        try self.emitLocalSet((try self.procLocalBinding(local)).idx);
+        try self.emitLocalGet(total);
+        try self.emitLoadAt(desc, .i32, desc_size_offset);
+        try self.emitOps(.{Op.i32_add});
+        try self.emitLocalSet(total);
+    }
+    // stack_pointer -= alignForward(total, 16)
+    try self.emitStackPointerGlobal(Op.global_get);
+    try self.emitLocalGet(total);
+    try self.emitI32Const(15);
+    try self.emitOps(.{Op.i32_add});
+    try self.emitI32Const(-16);
+    try self.emitOps(.{ Op.i32_and, Op.i32_sub });
+    self.currentCode().append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
+    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), total) catch return error.OutOfMemory;
+    try self.emitStackPointerGlobal(Op.global_set);
+
+    // Each local's offset becomes its address in the region.
+    for (0..locals.len) |i| {
+        const local = GuardedList.at(locals, i);
+        const dyn = self.localDyn(local) orelse continue;
+        if (dyn.storage != .frame) continue;
+        const binding = (try self.procLocalBinding(local)).idx;
+        try self.emitLocalGets(.{ binding, total });
+        try self.emitOps(.{Op.i32_add});
+        try self.emitLocalSet(binding);
+    }
+}
+
+/// Push the table index of a procedure, the function pointer of its code.
+fn emitProcTableIndex(self: *Self, proc_id: LIR.LirProcSpecId) Allocator.Error!void {
+    const table_idx = self.tables().proc_table_indices.get(@backingInt(proc_id)) orelse wasmInvariantFmt(
+        "WASM/codegen invariant violated: proc {d} has no table index",
+        .{@backingInt(proc_id)},
+    );
+    try self.emitFunctionTableIndexConst(table_idx);
+}
+
+fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocator.Error!void {
+    if (op == .frame_alloc) return self.generateDynFrameAlloc();
+    const dst = target_or_null orelse wasmInvariantFmt("WASM/codegen invariant violated: dyn {s} has no target", .{@tagName(op)});
+    switch (op) {
+        .frame_alloc => unreachable, // handled above
+        .desc_list => |d| {
+            try self.emitProcLocal(d.elem);
+            try self.emitBoxyRuntimeCall(.list);
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .desc_box => |d| {
+            try self.emitProcLocal(d.payload);
+            try self.emitBoxyRuntimeCall(.box);
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .desc_record => |d| {
+            const names = self.store.getLocalSpan(d.names);
+            const descs = self.store.getLocalSpan(d.descs);
+            if (names.len != descs.len) wasmInvariantFmt("WASM/codegen invariant violated: desc_record has {d} names for {d} descriptors", .{ names.len, descs.len });
+            const entry_size = comptime wasm32StructSize(BoxyFieldInput);
+            const slot = try self.allocStackMemory(@intCast(@max(names.len, 1) * entry_size), wasm_word_size);
+            const fields = try self.emitFpOffsetToNewLocal(slot);
+            for (0..names.len) |i| {
+                const entry: u32 = @intCast(i * entry_size);
+                try self.emitLocalGet(fields);
+                try self.emitProcLocal(GuardedList.at(names, i));
+                try self.emitStoreOp(.i32, entry + comptime wasm32FieldOffset(BoxyFieldInput, "name"));
+                try self.emitLocalGet(fields);
+                try self.emitProcLocal(GuardedList.at(descs, i));
+                try self.emitStoreOp(.i32, entry + comptime wasm32FieldOffset(BoxyFieldInput, "desc"));
+            }
+            try self.emitI32Const(@intCast(names.len));
+            try self.emitLocalGet(fields);
+            if (d.ext) |ext| {
+                try self.emitProcLocal(ext);
+                try self.emitBoxyRuntimeCall(.record_extended);
+            } else {
+                try self.emitBoxyRuntimeCall(.record);
+            }
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .desc_tuple => |d| {
+            const elems = try self.emitLocalArray(d.elems, .words);
+            try self.emitI32Const(@intCast(self.store.getLocalSpan(d.elems).len));
+            try self.emitLocalGet(elems);
+            try self.emitBoxyRuntimeCall(.tuple);
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .desc_args => |d| {
+            const elems = try self.emitLocalArray(d.elems, .words);
+            try self.emitI32Const(@intCast(self.store.getLocalSpan(d.elems).len));
+            try self.emitLocalGet(elems);
+            try self.emitBoxyRuntimeCall(.args);
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .desc_tag_union => |d| {
+            const names = self.store.getLocalSpan(d.names);
+            const counts = self.store.getU32Span(d.payload_counts);
+            if (names.len != counts.len) wasmInvariantFmt("WASM/codegen invariant violated: desc_tag_union has {d} names for {d} payload counts", .{ names.len, counts.len });
+            const payloads = try self.emitLocalArray(d.payloads, .words);
+            const payload_total = self.store.getLocalSpan(d.payloads).len;
+            const entry_size = comptime wasm32StructSize(BoxyVariantInput);
+            const slot = try self.allocStackMemory(@intCast(@max(names.len, 1) * entry_size), wasm_word_size);
+            const variants = try self.emitFpOffsetToNewLocal(slot);
+            var next: usize = 0;
+            for (0..names.len) |i| {
+                const count = GuardedList.at(counts, i);
+                const entry: u32 = @intCast(i * entry_size);
+                try self.emitLocalGet(variants);
+                try self.emitProcLocal(GuardedList.at(names, i));
+                try self.emitStoreOp(.i32, entry + comptime wasm32FieldOffset(BoxyVariantInput, "name"));
+                try self.emitLocalGet(variants);
+                try self.emitI32Const(@intCast(count));
+                try self.emitStoreOp(.i32, entry + comptime wasm32FieldOffset(BoxyVariantInput, "payload_count"));
+                try self.emitLocalGet(variants);
+                try self.emitLocalGet(payloads);
+                if (next != 0) {
+                    try self.emitI32Const(@intCast(next * wasm_word_size));
+                    try self.emitOps(.{Op.i32_add});
+                }
+                try self.emitStoreOp(.i32, entry + comptime wasm32FieldOffset(BoxyVariantInput, "payloads"));
+                next += count;
+            }
+            if (next != payload_total) wasmInvariantFmt("WASM/codegen invariant violated: desc_tag_union payload counts cover {d} of its {d} payloads", .{ next, payload_total });
+            try self.emitI32Const(@intCast(names.len));
+            try self.emitLocalGet(variants);
+            if (d.ext) |ext| {
+                try self.emitProcLocal(ext);
+                try self.emitBoxyRuntimeCall(.tag_union_extended);
+            } else {
+                try self.emitBoxyRuntimeCall(.tag_union);
+            }
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .desc_nominal => |d| {
+            try self.emitProcLocal(d.backing);
+            try self.emitProcLocal(d.name);
+            if (d.methods) |methods| try self.emitProcLocal(methods) else try self.emitI32Const(0);
+            try self.emitI32Const(@intFromBool(d.inspect_opaque));
+            try self.emitBoxyRuntimeCall(.nominal);
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .dict_compose => |d| {
+            const captures = try self.emitLocalArray(d.captures, .words);
+            try self.emitProcTableIndex(d.worker);
+            // No hot-reload header precedes a wasm capture.
+            try self.emitI32Const(0);
+            try self.emitI32Const(@intCast(self.store.getLocalSpan(d.captures).len));
+            try self.emitLocalGet(captures);
+            try self.emitBoxyRuntimeCall(.dict_compose);
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .dict_record => |d| {
+            const methods = try self.emitLocalArray(d.methods, .words);
+            try self.emitI32Const(@intCast(self.store.getLocalSpan(d.methods).len));
+            try self.emitLocalGet(methods);
+            try self.emitBoxyRuntimeCall(.dict_record);
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .dict_method => |d| {
+            try self.emitProcLocal(d.dict);
+            try self.emitLoadOp(.i32, d.index * wasm_word_size);
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .copy => |c| {
+            const t = try self.dynTarget(dst);
+            try self.emitDescCopy(c.desc, t, c.src);
+            try self.finishTarget(dst, t);
+        },
+        .field_addr => |f| {
+            try self.emitProcLocal(f.desc);
+            try self.emitBytesAddress(f.base);
+            try self.emitI32Const(@bitCast(f.semantic_index));
+            try self.emitBoxyRuntimeCall(.field_addr);
+            try self.bindComponentAddress(dst);
+        },
+        .field_addr_named => |f| {
+            try self.emitProcLocal(f.desc);
+            try self.emitBytesAddress(f.base);
+            try self.emitProcLocal(f.name);
+            try self.emitBoxyRuntimeCall(.field_addr_named);
+            try self.bindComponentAddress(dst);
+        },
+        .list_elem_addr => |e| {
+            try self.emitProcLocal(e.elem_desc);
+            try self.emitBytesAddress(e.list);
+            try self.emitProcLocal(e.index);
+            try self.emitBoxyRuntimeCall(.list_elem_addr);
+            try self.bindComponentAddress(dst);
+        },
+        .box_payload_addr => |b| {
+            try self.emitProcLocal(b.desc);
+            try self.emitBytesAddress(b.box);
+            try self.emitBoxyRuntimeCall(.box_payload_addr);
+            try self.bindComponentAddress(dst);
+        },
+        .tag_discriminant => |t| {
+            try self.emitProcLocal(t.desc);
+            try self.emitBytesAddress(t.base);
+            try self.emitBoxyRuntimeCall(.tag_discriminant);
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .tag_discriminant_of => |t| {
+            try self.emitProcLocal(t.desc);
+            try self.emitProcLocal(t.name);
+            try self.emitBoxyRuntimeCall(.tag_discriminant_of);
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .tag_payload_addr => |t| {
+            try self.emitProcLocal(t.desc);
+            try self.emitBytesAddress(t.base);
+            try self.emitProcLocal(t.name);
+            try self.emitI32Const(@bitCast(t.payload_index));
+            try self.emitBoxyRuntimeCall(.tag_payload_addr);
+            try self.bindComponentAddress(dst);
+        },
+        .record => |r| {
+            const fields = try self.emitLocalArray(r.fields, .bytes);
+            const t = try self.dynTarget(dst);
+            try self.emitProcLocal(r.desc);
+            try self.emitTargetAddress(t);
+            try self.emitI32Const(@intCast(self.store.getLocalSpan(r.fields).len));
+            try self.emitLocalGet(fields);
+            try self.emitBoxyRuntimeCall(.build_record);
+            try self.finishTarget(dst, t);
+        },
+        .tag => |tag| {
+            const payloads = try self.emitLocalArray(tag.payloads, .bytes);
+            const t = try self.dynTarget(dst);
+            try self.emitProcLocal(tag.desc);
+            try self.emitProcLocal(tag.name);
+            try self.emitTargetAddress(t);
+            try self.emitI32Const(@intCast(self.store.getLocalSpan(tag.payloads).len));
+            try self.emitLocalGet(payloads);
+            try self.emitBoxyRuntimeCall(.build_tag);
+            try self.finishTarget(dst, t);
+        },
+        .list => |l| {
+            const elems = try self.emitLocalArray(l.elems, .bytes);
+            const t = try self.dynTarget(dst);
+            try self.emitProcLocal(l.elem_desc);
+            try self.emitTargetAddress(t);
+            try self.emitI32Const(@intCast(self.store.getLocalSpan(l.elems).len));
+            try self.emitLocalGet(elems);
+            try self.emitBoxyRuntimeCall(.build_list);
+            try self.finishTarget(dst, t);
+        },
+        .box => |b| {
+            const t = try self.dynTarget(dst);
+            try self.emitProcLocal(b.desc);
+            try self.emitTargetAddress(t);
+            try self.emitBytesAddress(b.payload);
+            try self.emitBoxyRuntimeCall(.build_box);
+            try self.finishTarget(dst, t);
+        },
+        .eq => |e| {
+            try self.emitProcLocal(e.desc);
+            try self.emitBytesAddress(e.lhs);
+            try self.emitBytesAddress(e.rhs);
+            try self.emitBoxyRuntimeCall(.eq);
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .hash => |h| {
+            try self.emitProcLocal(h.desc);
+            try self.emitLeadingValue(h.hasher, .i64);
+            try self.emitBytesAddress(h.value);
+            try self.emitBoxyRuntimeCall(.hash);
+            try self.bindReturnedScalar(dst, .i64);
+        },
+        .inspect => |i| {
+            const t = try self.dynTarget(dst);
+            try self.emitTargetAddress(t);
+            try self.emitProcLocal(i.desc);
+            try self.emitBytesAddress(i.value);
+            try self.emitBoxyRuntimeCall(.inspect);
+            try self.finishTarget(dst, t);
+        },
+        .view => |v| {
+            try self.emitProcLocal(v.address);
+            try self.bindComponentAddress(dst);
+        },
+        .closure => |c| {
+            try self.emitProcTableIndex(c.proc);
+            try self.emitBytesAddress(c.capture);
+            // No hot-reload header or drop on wasm.
+            try self.emitI32Const(0);
+            try self.emitI32Const(0);
+            try self.emitBoxyRuntimeCall(.closure);
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .call_erased => |c| {
+            try self.emitLeadingValue(c.closure, .i32);
+            const payload = try self.emitSetNewLocal(.i32);
+            const t = try self.dynTarget(dst);
+            try self.emitLocalGet(payload);
+            try self.emitLoadOpSized(.i32, 4, 0);
+            try self.emitTargetAddress(t);
+            if (c.args) |args| try self.emitBytesAddress(args) else try self.emitI32Const(0);
+            try self.emitLocalGet(payload);
+            try self.emitI32Const(@intCast(builtins.erased_callable.capture_offset));
+            try self.emitOps(.{Op.i32_add});
+            try self.emitI32Const(0);
+            try self.emitBuiltinCall(.native_callable_call);
+            try self.finishTarget(dst, t);
+        },
+    }
+}
+
+/// Map a list low-level a `.boxy` generic body emits to the runtime's list
+/// operation.
+fn boxyListOp(op: base.LowLevel) ?BoxyListOp {
+    return switch (op) {
+        .list_capacity => .capacity,
+        .list_slack_unique => .slack_unique,
+        .list_owned_unique => .owned_unique,
+        .list_get_unsafe => .get_unsafe,
+        .list_append_unsafe => .append_unsafe,
+        .list_concat => .concat,
+        .list_append_range_within => .append_range_within,
+        .list_copy_range_within => .copy_range_within,
+        .list_append_range_within_unsafe => .append_range_within_unsafe,
+        .list_append_sublist => .append_sublist,
+        .list_prepend => .prepend,
+        .list_swap => .swap,
+        .list_map_can_reuse => .map_can_reuse,
+        .list_item_size_at_most => .item_size_at_most,
+        .list_map_cast_unsafe => .map_cast_unsafe,
+        .list_map_extract_unsafe => .map_extract_unsafe,
+        .list_map_write_unsafe => .map_write_unsafe,
+        .list_sublist => .sublist,
+        .list_sublist_borrowed => .sublist_borrowed,
+        .list_drop_at => .drop_at,
+        .list_replace_unsafe => .replace_unsafe,
+        .list_set => .set,
+        .list_set_in_place_unsafe => .set_in_place_unsafe,
+        .list_with_capacity => .with_capacity,
+        .list_reserve => .reserve,
+        .list_reserve_for_append => .reserve_for_append,
+        .list_clear => .clear,
+        .list_release_excess_capacity => .release_excess_capacity,
+        .list_take_first => .take_first,
+        .list_take_last => .take_last,
+        .list_reverse => .reverse,
+        else => null,
+    };
+}
+
+/// Store the word on the operand stack into field `field` of the list-op
+/// request at the address in `request`.
+fn emitRequestStore(self: *Self, request: u32, comptime field: []const u8, vt: ValType, extra_offset: u32) Allocator.Error!void {
+    const value = try self.emitSetNewLocal(vt);
+    try self.emitLocalGets(.{ request, value });
+    try self.emitStoreOp(vt, (comptime wasm32FieldOffset(BoxyListOpRequest, field)) + extra_offset);
+}
+
+/// A list operation a `.boxy` generic body emits: its last argument is the
+/// element descriptor, and its list, element, and result operands may be
+/// dynamic locals, read and written through their addresses.
+fn generateDynElemLowLevel(self: *Self, assign: anytype) Allocator.Error!void {
+    const all_args = self.store.getLocalSpan(assign.args);
+    if (all_args.len == 0) wasmInvariantFmt("WASM/codegen invariant violated: {s} with an element descriptor has no arguments", .{@tagName(assign.op)});
+    const arg_count = all_args.len - 1;
+    const elem_desc = GuardedList.at(all_args, arg_count);
+    const dst = assign.target;
+    const extra = self.store.stmtRowOrDefault(assign.extra);
+
+    switch (assign.op) {
+        .list_prefetch => {
+            if (self.localDyn(dst) == null) {
+                try self.emitZeroValue(try self.procLocalValType(dst));
+                try self.emitLocalSet((try self.procLocalBinding(dst)).idx);
+            }
+            return;
+        },
+        .list_len => {
+            try self.emitBytesAddress(GuardedList.at(all_args, 0));
+            try self.emitLoadOp(.i32, list_len_offset);
+            try self.emitOps(.{Op.i64_extend_i32_u});
+            return self.bindReturnedScalar(dst, .i64);
+        },
+        .list_map_prepare_reuse => {
+            const t = try self.dynTarget(dst);
+            try self.emitBytesAddress(GuardedList.at(all_args, 0));
+            const source = try self.emitSetNewLocal(.i32);
+            const to = switch (t) {
+                .dynamic, .closed => |address| address,
+                .zero_sized => wasmInvariantFmt("WASM/codegen invariant violated: list_map_prepare_reuse into a zero-sized target", .{}),
+            };
+            try self.emitMemCopy(to, 0, source, roc_list_size);
+            return self.finishTarget(dst, t);
+        },
+        else => {},
+    }
+    const list_op = boxyListOp(assign.op) orelse wasmInvariantFmt(
+        "WASM/codegen invariant violated: low-level {s} has no element-descriptor form",
+        .{@tagName(assign.op)},
+    );
+    if (list_op == .map_can_reuse and !extra.interchangeable.get(self.getLayoutStore().targetUsize())) {
+        // The in-place branch is statically dead on wasm32.
+        try self.emitI32Const(0);
+        return self.bindReturnedScalar(dst, .i32);
+    }
+
+    const request_slot = try self.allocStackMemory(comptime wasm32StructSize(BoxyListOpRequest), 8);
+    const request = try self.emitFpOffsetToNewLocal(request_slot);
+    try self.emitZeroInit(request, comptime wasm32StructSize(BoxyListOpRequest));
+    try self.emitI32Const(@intCast(@backingInt(list_op)));
+    try self.emitRequestStore(request, "op", .i32, 0);
+    try self.emitI32Const(@intCast(extra.unique_args & 3));
+    try self.emitRequestStore(request, "unique_args", .i32, 0);
+    try self.emitProcLocal(elem_desc);
+    try self.emitRequestStore(request, "elem", .i32, 0);
+
+    const Operands = struct { list: ?u32 = 0, list2: ?u32 = null, element: ?u32 = null, n: [3]?u32 = .{ null, null, null } };
+    const operands: Operands = switch (list_op) {
+        .capacity, .slack_unique, .owned_unique, .map_can_reuse, .map_cast_unsafe, .clear, .release_excess_capacity, .reverse => .{},
+        .get_unsafe, .map_extract_unsafe, .item_size_at_most, .drop_at, .reserve, .reserve_for_append, .take_first, .take_last => .{ .n = .{ 1, null, null } },
+        .append_unsafe, .prepend => .{ .element = 1 },
+        .concat => .{ .list2 = 1 },
+        .append_range_within, .append_range_within_unsafe, .swap => .{ .n = .{ 1, 2, null } },
+        .copy_range_within => .{ .n = .{ 1, 2, 3 } },
+        .append_sublist => .{ .list2 = 1, .n = .{ 2, 3, null } },
+        .map_write_unsafe, .replace_unsafe, .set, .set_in_place_unsafe => .{ .element = 2, .n = .{ 1, null, null } },
+        .with_capacity => .{ .list = null, .n = .{ 0, null, null } },
+        // The `{ len, start }` record argument is read below.
+        .sublist, .sublist_borrowed => .{},
+    };
+    inline for (.{ "list", "list2", "element" }) |field| {
+        if (@field(operands, field)) |index| {
+            try self.emitBytesAddress(GuardedList.at(all_args, index));
+            try self.emitRequestStore(request, field, .i32, 0);
+        }
+    }
+    for (operands.n, 0..) |maybe_index, n| {
+        const index = maybe_index orelse continue;
+        try self.emitLeadingValue(GuardedList.at(all_args, index), .i64);
+        try self.emitRequestStore(request, "n", .i64, @intCast(n * 8));
+    }
+    if (list_op == .sublist or list_op == .sublist_borrowed) {
+        const record = GuardedList.at(all_args, 1);
+        const record_layout = self.getLayoutStore().getLayout(self.procLocalLayoutIdx(record));
+        if (record_layout.tag != .struct_) wasmInvariantFmt("WASM/codegen invariant violated: list_sublist's second argument is not a {{ len, start }} record", .{});
+        const record_idx = record_layout.getStruct().idx;
+        const len_offset = try self.structFieldOffsetByOriginalIndexWasm(record_idx, 0);
+        const start_offset = try self.structFieldOffsetByOriginalIndexWasm(record_idx, 1);
+        try self.emitBytesAddress(record);
+        const base_address = try self.emitSetNewLocal(.i32);
+        try self.emitLoadAt(base_address, .i64, start_offset);
+        try self.emitRequestStore(request, "n", .i64, 0);
+        try self.emitLoadAt(base_address, .i64, len_offset);
+        try self.emitRequestStore(request, "n", .i64, 8);
+    }
+
+    // An element, or a dynamic record, is written straight to its target;
+    // every other result to a frame slot first.
+    const dynamic_target = self.localDyn(dst) != null;
+    const direct = list_op == .get_unsafe or list_op == .map_extract_unsafe or (list_op == .replace_unsafe and dynamic_target);
+    const t: DynTarget = if (direct) try self.dynTarget(dst) else blk: {
+        const size: u32 = if (dynamic_target) roc_list_size else try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(dst)));
+        const slot = try self.allocStackMemory(@max(size, 8), 8);
+        break :blk .{ .closed = try self.emitFpOffsetToNewLocal(slot) };
+    };
+    try self.emitTargetAddress(t);
+    try self.emitRequestStore(request, "out", .i32, 0);
+    if (list_op == .replace_unsafe) {
+        if (dynamic_target) {
+            try self.emitProcLocal(self.localDyn(dst).?.desc);
+            try self.emitRequestStore(request, "ret_desc", .i32, 0);
+        } else {
+            const record_layout = self.getLayoutStore().getLayout(self.procLocalLayoutIdx(dst));
+            if (record_layout.tag != .struct_) wasmInvariantFmt("WASM/codegen invariant violated: list_replace_unsafe result is not a record", .{});
+            const record_idx = record_layout.getStruct().idx;
+            const first = self.getLayoutStore().getLayout(self.getLayoutStore().getStructFieldLayoutByOriginalIndex(record_idx, 0));
+            const first_is_list = first.tag == .list or first.tag == .list_of_zst;
+            const first_offset = try self.structFieldOffsetByOriginalIndexWasm(record_idx, 0);
+            const second_offset = try self.structFieldOffsetByOriginalIndexWasm(record_idx, 1);
+            const slot_address = t.closed;
+            try self.emitLocalGet(slot_address);
+            try self.emitI32Const(@intCast(if (first_is_list) first_offset else second_offset));
+            try self.emitOps(.{Op.i32_add});
+            try self.emitRequestStore(request, "out", .i32, 0);
+            try self.emitLocalGet(slot_address);
+            try self.emitI32Const(@intCast(if (first_is_list) second_offset else first_offset));
+            try self.emitOps(.{Op.i32_add});
+            try self.emitRequestStore(request, "out_value", .i32, 0);
+        }
+    }
+
+    try self.emitLocalGet(request);
+    try self.emitBoxyRuntimeCall(.list_op);
+
+    if (!direct and dynamic_target) {
+        // A list result of a dynamic target: move the list's words into its
+        // storage.
+        try self.emitMemCopy((try self.procLocalBinding(dst)).idx, 0, t.closed, roc_list_size);
+        return;
+    }
+    try self.finishTarget(dst, t);
+}
+
 fn generateRcStmt(
     self: *Self,
     value: ProcLocalId,
@@ -7862,6 +8992,7 @@ fn generateRcStmt(
     atomicity: RcAtomicity,
     inc_count: u32,
 ) Allocator.Error!void {
+    if (self.localDyn(value) != null) return self.generateDynRc(value, rc.concrete.op, inc_count);
     const value_local = try self.emitProcLocalToNewLocal(value, try self.procLocalValType(value));
     try self.emitExplicitRcForValueLocal(rc.concrete, atomicity, value_local, try self.procLocalValType(value), inc_count);
 }
