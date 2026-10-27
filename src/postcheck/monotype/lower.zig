@@ -28706,15 +28706,27 @@ const BodyContext = struct {
                 .closed => |closed| blk: {
                     const entry = try self.builder.persistent_closed_occurrences.getOrPut(self.builder.allocator, closed.key);
                     if (!entry.found_existing) {
+                        // The declaring module's own occurrence represents the
+                        // type whenever that module has it, so the choice does
+                        // not move with other modules' keys as they are edited.
+                        // A closed type its owner does not hold is represented
+                        // by the lowest-keyed module that does.
                         var representative: ?CheckedOccurrence = null;
-                        for (self.builder.moduleViews()) |view| {
+                        if (self.builder.moduleForKeyBytes(closed.owner)) |owner_view| {
+                            if (owner_view.types.rootForKey(.{ .bytes = closed.key })) |root| {
+                                if (!owner_view.types.rootRows()[@backingInt(root)].contains_identity_variables) {
+                                    representative = .{ .module = owner_view.key, .ty = root };
+                                }
+                            }
+                        }
+                        if (representative == null) for (self.builder.moduleViews()) |view| {
                             const root = view.types.rootForKey(.{ .bytes = closed.key }) orelse continue;
                             if (view.types.rootRows()[@backingInt(root)].contains_identity_variables) continue;
                             if (representative) |previous| {
                                 if (std.mem.order(u8, &previous.module.bytes, &view.key.bytes) != .gt) continue;
                             }
                             representative = .{ .module = view.key, .ty = root };
-                        }
+                        };
                         entry.value_ptr.* = representative;
                     }
                     const occurrence = entry.value_ptr.* orelse break :blk null;

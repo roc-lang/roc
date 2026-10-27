@@ -27368,8 +27368,11 @@ Persistent interface records distinguish checked occurrence provenance from
 nominal ownership. An occurrence of a closed checked type is serialized by its
 normalized checked type key and its nominal owner's exact entry key. Reopening
 binds that key only to a current committed closed root with the same key and
-owner. Representatives are chosen deterministically by entry-key order and
-memoized for the immutable lowering input set. A missing key rejects the optional
+owner. The representative is the owner's own occurrence when the owner holds
+the closed root, so it does not move when another module's entry key changes
+with an edit; a closed root the owner does not hold is represented by the
+lowest-keyed module that holds it. Representatives are memoized for the
+immutable lowering input set. A missing key rejects the optional
 record. Types containing identity variables keep their exact entry and root id;
 no variable identity is reconstructed or merged. Nominal declaration, generated
 representation and default-expression validation remain mandatory after rebinding.
@@ -27405,8 +27408,8 @@ never acquires the map lock. Statistics are aggregated atomically.
 Freshly lowered named types and persistent interface replay select the same
 current checked occurrence for a closed checked type key and nominal owner.
 The checker's `contains_identity_variables` result determines whether an occurrence
-has instantiation identity. Closed occurrences use the existing deterministic
-entry-key representative; open occurrences retain their exact source module
+has instantiation identity. Closed occurrences use the representative above;
+open occurrences retain their exact source module
 and type id. This changes only checked provenance: Monotype arguments, backing,
 generated representation, declared layout and default expressions remain the
 explicit products of their existing producers. Lambda solving can consequently
