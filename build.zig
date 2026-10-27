@@ -1658,6 +1658,7 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     .{ .app = "box_zst_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "box_zst_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" } },
     .{ .app = "boxed_model_update_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "boxed_model_update_static_lib_app.wasm", .run_args = &.{ "--expected", "ok" } },
     .{ .app = "issue_10836_boxed_low_alignment_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_10836_boxed_low_alignment_static_lib_app.wasm", .run_args = &.{ "--expected", "7,9;11,13;Inc(42)" } },
+    .{ .app = "issue_12560_boxed_bool_not_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_12560_boxed_bool_not_static_lib_app.wasm", .run_args = &.{ "--expected", "ok" } },
     // A constant record whose pointer fields are laid out in the opposite
     // order to their field order: its relocations must still reach the
     // object in offset order, or wasm-ld refuses it (#11419).
