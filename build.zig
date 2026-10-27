@@ -2452,7 +2452,9 @@ pub fn build(b: *std.Build) void {
     // (#10992). Every install of the roc CLI for a macOS target goes through
     // this tool, which removes the export trie and weak-bind info and
     // rewrites the ad-hoc code signature. src/cli/macho/DyldExportStrip.zig
-    // describes what removing this step would take.
+    // describes what removing this step would take. The same pass fails the
+    // build if the executable loads any dylib outside the OS or carries a
+    // run-path search entry.
     const dyld_export_strip_module = b.createModule(.{
         .root_source_file = b.path("src/cli/macho/DyldExportStrip.zig"),
         .imports = &.{
@@ -5656,6 +5658,11 @@ fn addMainExe(
     // SetUnhandledExceptionFilter stack-overflow handler before the interpreter
     // can catch the overflow itself. Reserve 64 MiB to match eval-test-runner.
     exe.stack_size = stack_budget.roc_stack_size;
+    // Every library roc links is static, so no library directory belongs in
+    // the run-path search list. Native builds otherwise add one per library
+    // directory, naming a path on the build machine, which the macOS
+    // load-command check in src/cli/macho/DyldExportStrip.zig rejects.
+    exe.each_lib_rpath = false;
     splitCompilerSections(exe);
     configureBackend(exe, target);
     exe.root_module.addImport("llvm_codegen", llvm_codegen_module);
