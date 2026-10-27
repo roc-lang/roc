@@ -125,6 +125,10 @@ pub const Worker = struct {
 pub const LocalScheme = struct {
     scheme_vars: []const checked.CheckedTypeId,
     dictionaries: []const u32,
+    /// Whether each call passes the scheme's descriptors and dictionaries (a
+    /// local procedure's), or the function value captures them at its
+    /// construction (any other generalized lambda's).
+    per_call: bool,
 };
 
 /// A checked expression by its module in this lowering.
@@ -160,6 +164,8 @@ pub const Program = struct {
     hosted: std.AutoHashMapUnmanaged(TemplateKey, HostedEntry) = .empty,
     /// The generalized-local scope a lambda or closure expression owns.
     local_scopes: std.AutoHashMapUnmanaged(ExprKey, checked.DispatchScopeId) = .empty,
+    /// The lambda and closure expressions local procedures bind.
+    local_procs: std.AutoHashMapUnmanaged(ExprKey, void) = .empty,
 
     pub fn converter(self: *Program) types.Converter {
         return .{ .store = &self.store, .modules = &self.modules };
@@ -289,8 +295,8 @@ pub const Program = struct {
             .captures = try self.arena.allocator().dupe(checked.CheckedCapture, captures),
             .capture_types = try self.arena.allocator().dupe(TypeId, capture_types),
             .dict_scopes = if (own) |scheme| try std.mem.concat(self.arena.allocator(), []const u32, &.{ &.{scheme.dictionaries}, outer_worker.dict_scopes }) else outer_worker.dict_scopes,
-            .own_descs = if (own) |scheme| @intCast(scheme.scheme_vars.len) else 0,
-            .own_dicts = if (own) |scheme| @intCast(scheme.dictionaries.len) else 0,
+            .own_descs = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.scheme_vars.len) else 0) else 0,
+            .own_dicts = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.dictionaries.len) else 0) else 0,
         });
         try self.worker_ids.put(self.allocator, key, id);
         try self.worklist.append(self.allocator, id);
@@ -427,6 +433,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.by_module_idx.deinit(allocator);
         program.hosted.deinit(allocator);
         program.local_scopes.deinit(allocator);
+        program.local_procs.deinit(allocator);
         program.arena.deinit();
     }
     errdefer program.result.deinit();
@@ -455,6 +462,19 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             try program.local_scopes.put(allocator, .{ .module = view.index, .expr = scope.checked_expr }, id);
             switch (bodies.expr(scope.checked_expr).data) {
                 .closure => |closure| try program.local_scopes.put(allocator, .{ .module = view.index, .expr = closure.lambda }, id),
+                else => {},
+            }
+        }
+        // A local procedure's uses all reach it through its binding, so its
+        // own scheme's arguments are passed per call.
+        for (view.view.resolved_value_refs.records) |record| {
+            const local = switch (record.ref) {
+                .local_proc => |local| local,
+                else => continue,
+            };
+            try program.local_procs.put(allocator, .{ .module = view.index, .expr = local.expr }, {});
+            switch (bodies.expr(local.expr).data) {
+                .closure => |closure| try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {}),
                 else => {},
             }
         }

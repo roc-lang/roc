@@ -4714,10 +4714,14 @@ const Inserter = struct {
             .none, .borrow_operands => {
                 step.pre_release = if (try self.transferForFreshBind(owned, target)) self.releaseDecision(target) else null;
             },
-            .borrow_component => |base| {
+            .borrow_component => {
                 if (!self.isBindingBorrowed(target)) {
+                    // An owned component reads its unit from storage that
+                    // keeps its own: the base's, or for a base outside the
+                    // procedure's values (a capture record, an immortal
+                    // dictionary) that storage's.
                     step.pre_release = if (try self.transferForFreshBind(owned, target)) self.releaseDecision(target) else null;
-                    step.retain_assign_ref_target = self.localContainsRefcounted(base);
+                    step.retain_assign_ref_target = self.localContainsRefcounted(target);
                 }
             },
             .alias => |source| {

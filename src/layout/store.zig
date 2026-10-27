@@ -3244,6 +3244,28 @@ pub const Store = struct {
         };
     }
 
+    /// Whether a list of `in_idx` items and a list of `out_idx` items can
+    /// share one allocation at `target_usize`: the same item stride, the same
+    /// allocation alignment class, and the same refcounted-items header
+    /// shape. A list of zero-sized items has no allocation to share.
+    pub fn listItemsInterchangeableAt(self: *const Self, in_idx: Idx, out_idx: Idx, target_usize: target.TargetUsize) bool {
+        const in_item = self.getLayout(in_idx);
+        const in_size = self.sizeAt(in_item, target_usize);
+        if (in_size == 0) return false;
+        const out_item = self.getLayout(out_idx);
+        if (self.sizeAt(out_item, target_usize) != in_size) return false;
+        // The allocation's hidden header and the alignment passed to the
+        // allocator both derive from max(ptr_width, item alignment) and from
+        // whether items are refcounted (which reserves an extra item-count
+        // slot for seamless slices). Both must agree or a later free would
+        // compute the wrong allocation pointer.
+        const ptr_width = target_usize.size();
+        const in_alignment: u32 = @intCast(in_item.alignment(target_usize).toByteUnits());
+        const out_alignment: u32 = @intCast(out_item.alignment(target_usize).toByteUnits());
+        if (@max(ptr_width, in_alignment) != @max(ptr_width, out_alignment)) return false;
+        return self.layoutContainsRefcounted(in_item) == self.layoutContainsRefcounted(out_item);
+    }
+
     /// Whether a list's item layout occupies at most `bound` bytes, decided
     /// per pointer width. A list of zero-sized items always fits.
     pub fn listItemSizeAtMost(self: *const Self, list_layout_idx: Idx, bound: u128) layout_mod.WidthValues(bool) {

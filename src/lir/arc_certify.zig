@@ -6347,7 +6347,10 @@ const Certifier = struct {
                 const defined = target.?;
                 if (!self.isRc(defined)) return;
                 if (!self.isRc(base_local)) {
-                    _ = try self.bindFresh(state, defined, 1, &.{});
+                    // Storage outside the procedure's values (a capture
+                    // record, an immortal dictionary) keeps the component
+                    // alive; an owned use retains it explicitly.
+                    _ = try self.bindBorrowedFromImplicitLive(state, defined);
                 } else {
                     _ = try self.bindFresh(state, defined, 0, &.{state.valueOf(base_local)});
                 }

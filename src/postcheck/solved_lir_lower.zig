@@ -11019,41 +11019,9 @@ const Lowerer = struct {
         if (output_layout) |out| out.* = out_elem_idx;
 
         return layout.WidthValues(bool).both(
-            self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u32),
-            self.listMapInterchangeableAtWidth(in_elem_idx, out_elem_idx, .u64),
+            self.result.layouts.listItemsInterchangeableAt(in_elem_idx, out_elem_idx, .u32),
+            self.result.layouts.listItemsInterchangeableAt(in_elem_idx, out_elem_idx, .u64),
         );
-    }
-
-    /// Whether the input and output element layouts share one allocation at the
-    /// given pointer width. See `listMapLayoutsInterchangeable`.
-    fn listMapInterchangeableAtWidth(
-        self: *Lowerer,
-        in_elem_idx: layout.Idx,
-        out_elem_idx: layout.Idx,
-        target_usize: base.target.TargetUsize,
-    ) bool {
-        const layouts = &self.result.layouts;
-        const in_elem = layouts.getLayout(in_elem_idx);
-        // A list of zero-sized elements has no allocation to reuse.
-        const in_size = layouts.sizeAt(in_elem, target_usize);
-        if (in_size == 0) return false;
-
-        const out_elem = layouts.getLayout(out_elem_idx);
-        if (layouts.sizeAt(out_elem, target_usize) != in_size) return false;
-
-        // The allocation's hidden header and the alignment passed to the
-        // allocator both derive from max(ptr_width, element alignment) and
-        // from whether elements are refcounted (which reserves an extra
-        // element-count slot for seamless slices). Both must agree or a
-        // later free would compute the wrong allocation pointer.
-        const ptr_width = target_usize.size();
-        const in_alignment: u32 = @intCast(in_elem.alignment(target_usize).toByteUnits());
-        const out_alignment: u32 = @intCast(out_elem.alignment(target_usize).toByteUnits());
-        if (@max(ptr_width, in_alignment) != @max(ptr_width, out_alignment)) return false;
-
-        if (layouts.layoutContainsRefcounted(in_elem) != layouts.layoutContainsRefcounted(out_elem)) return false;
-
-        return true;
     }
 
     /// Feed `value` (of `value_ty`) into `hasher`, writing the resulting Hasher

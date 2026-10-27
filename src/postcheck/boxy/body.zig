@@ -368,13 +368,20 @@ pub const Builder = struct {
     }
 
     /// Start a merge of `binders`, recording their current values.
-    pub fn beginMerge(self: *Builder, binders: []const checked.PatternBinderId) Allocator.Error!?MergeId {
-        if (binders.len == 0) return null;
+    pub fn beginMerge(self: *Builder, plan_binders: []const checked.PatternBinderId) Allocator.Error!?MergeId {
+        // A binder the construct reassigns but that is not bound before it
+        // is declared inside it, and goes out of scope with it.
         const arena = self.program.arena.allocator();
+        var in_scope: std.ArrayList(checked.PatternBinderId) = .empty;
+        for (plan_binders) |binder| {
+            if (self.binders.contains(binder)) try in_scope.append(arena, binder);
+        }
+        const binders = in_scope.items;
+        if (binders.len == 0) return null;
         const pre = try arena.alloc(LocalId, binders.len);
         const params = try arena.alloc(LocalId, binders.len);
         for (binders, pre, params) |binder, *before, *param| {
-            before.* = self.binders.get(binder) orelse invariant("a state merge named a binder this body never bound");
+            before.* = self.binders.get(binder).?;
             var local = self.store.getLocal(before.*);
             if (local.dyn) |*dyn| {
                 dyn.storage = .frame;
@@ -1373,9 +1380,24 @@ pub const Builder = struct {
     }
 
     pub fn crashValue(self: *Builder, message: []const u8, ty: TypeId) Allocator.Error!void {
+        try self.pushValue(try self.crashLocal(message, ty));
+    }
+
+    /// Crash with `message`; the returned local of `ty` stands for the value
+    /// no execution reaches.
+    pub fn crashLocal(self: *Builder, message: []const u8, ty: TypeId) Allocator.Error!LocalId {
         const literal = try self.store.insertString(message);
         try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal } } });
-        try self.pushValue(try self.localOf(ty, .frame));
+        return try self.localOf(ty, .frame);
+    }
+
+    /// Lower `expr` now, at the current statement position, and return its
+    /// value: the tasks it pushes run before this returns.
+    pub fn lowerExprNow(self: *Builder, expr: CheckedExprId) Allocator.Error!LocalId {
+        const base_tasks = self.tasks.items.len;
+        try self.push(.{ .expr = expr });
+        while (self.tasks.items.len > base_tasks) try self.step(self.tasks.pop().?);
+        return self.popValue();
     }
 
     // -- Expressions --
@@ -1567,12 +1589,16 @@ pub const Builder = struct {
     pub fn lowerNumeral(self: *Builder, expr_id: CheckedExprId, numeral: checked.CheckedNumeralData) Allocator.Error!void {
         if (numeral.conversion_root) |root| return try self.restoreConversionRoot(root, try self.exprType(expr_id));
         if (numeral.plan) |plan| return try self.lowerLiteralConversion(expr_id, plan, .numeral);
-        const ty = try self.exprType(expr_id);
+        try self.pushValue(try self.builtinNumeral(numeral.literal, try self.exprType(expr_id)));
+    }
+
+    /// A numeric literal at the builtin numeric type `ty`.
+    pub fn builtinNumeral(self: *Builder, literal: NumeralLiteral, ty: TypeId) Allocator.Error!LocalId {
         const primitive = switch (self.program.store.get(ty)) {
             .primitive => |primitive| primitive,
             else => invariant("a builtin numeral's type is not a primitive"),
         };
-        const exact = self.view.view.module_env.exactNumeral(numeral.literal);
+        const exact = self.view.view.module_env.exactNumeral(literal);
         const exact_numeral = checked.exact_numeral;
         const local = try self.closedLocal(@import("layouts.zig").primitiveLayout(primitive));
         const value: LIR.LiteralValue = switch (primitive) {
@@ -1581,7 +1607,7 @@ pub const Builder = struct {
                     inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |p| @field(exact_numeral.Target, @tagName(p)),
                     else => unreachable, // the enclosing prong admits only integers
                 };
-                const bits = exact_numeral.intBits(exact, target) orelse return try self.crashValue("invalid numeric literal", ty);
+                const bits = exact_numeral.intBits(exact, target) orelse return try self.crashLocal("invalid numeric literal", ty);
                 const wide: i128 = switch (bits) {
                     .i128 => |v| v,
                     .u128 => |v| @bitCast(v),
@@ -1593,11 +1619,11 @@ pub const Builder = struct {
             },
             .f32 => .{ .f32_literal = try exact_numeral.floatBits(f32, self.allocator, exact) },
             .f64 => .{ .f64_literal = try exact_numeral.floatBits(f64, self.allocator, exact) },
-            .dec => .{ .dec_literal = (try exact_numeral.decBits(self.allocator, exact)) orelse return try self.crashValue("invalid numeric literal", ty) },
-            else => return try self.crashValue("invalid numeric literal", ty),
+            .dec => .{ .dec_literal = (try exact_numeral.decBits(self.allocator, exact)) orelse return try self.crashLocal("invalid numeric literal", ty) },
+            else => return try self.crashLocal("invalid numeric literal", ty),
         };
         try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = value, .next = undefined } });
-        try self.pushValue(local);
+        return local;
     }
 
     /// A literal whose conversion a compile-time root evaluated: the root's
@@ -1849,6 +1875,7 @@ pub const Builder = struct {
         return .{
             .scheme_vars = lower.poolSlice(checked.CheckedTypeId, templates.scheme_vars_pool, scope.scheme_vars),
             .dictionaries = dictionaries.items,
+            .per_call = self.program.local_procs.contains(.{ .module = self.module, .expr = scope.checked_expr }),
         };
     }
 
@@ -2695,6 +2722,7 @@ pub const Builder = struct {
         const store = &self.program.store;
         var open = !store.isClosed(result_ty);
         for (arg_types) |arg_ty| open = open or !store.isClosed(arg_ty);
+        if (op == .list_map_can_reuse) return try self.pushValue(try self.listMapCanReuse(args, arg_types, result_ty));
         if (!open) {
             const target = try self.localOf(result_ty, .frame);
             // Source arithmetic commits to its operand type's behavior.
@@ -2742,6 +2770,47 @@ pub const Builder = struct {
         try self.pushValue(target);
     }
 
+    /// Whether `List.map` may reuse its input's allocation: the input and
+    /// output element layouts must be interchangeable in one allocation (the
+    /// same rule `.lss` applies), per pointer width, before the runtime
+    /// uniqueness check decides. Elements of open types have no committed
+    /// layout to compare, so their lists are never reused.
+    pub fn listMapCanReuse(self: *Builder, args: []const LocalId, arg_types: []const TypeId, result_ty: TypeId) Allocator.Error!LocalId {
+        if (args.len != 2) invariant("list_map_can_reuse takes a list and a transform");
+        const store = &self.program.store;
+        const in_elem = switch (store.get(try self.structuralType(arg_types[0]))) {
+            .list => |elem| elem,
+            else => invariant("list_map_can_reuse's first operand is not a List"),
+        };
+        const out_elem = switch (store.get(arg_types[1])) {
+            .function => |function| function.ret,
+            else => invariant("list_map_can_reuse's transform is not a function"),
+        };
+        const target = try self.localOf(result_ty, .frame);
+        if (!try self.closed(in_elem) or !try self.closed(out_elem)) {
+            try self.emitLinear(.{ .assign_literal = .{ .target = target, .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u8 } }, .next = undefined } });
+            return target;
+        }
+        const layouts = &self.program.result.layouts;
+        const in_idx = layouts.runtimeRepresentationLayoutIdx(try self.program.layouts.layoutOf(in_elem));
+        const out_idx = layouts.runtimeRepresentationLayoutIdx(try self.program.layouts.layoutOf(out_elem));
+        try self.emitLinear(.{ .assign_low_level = .{
+            .target = target,
+            .op = .list_map_can_reuse,
+            .rc_effect = try self.store.addRcEffect(LIR.LowLevel.list_map_can_reuse.rcEffect()),
+            .extra = try self.store.addStmtRow(LIR.LowLevelExtra, .{
+                .interchangeable = layout.WidthValues(bool).both(
+                    layouts.listItemsInterchangeableAt(in_idx, out_idx, .u32),
+                    layouts.listItemsInterchangeableAt(in_idx, out_idx, .u64),
+                ),
+                .map_output_elem = out_idx,
+            }),
+            .args = try self.store.addLocalSpan(args),
+            .next = undefined,
+        } });
+        return target;
+    }
+
     /// A function value: an erased callable of the lambda's worker, whose
     /// captures hold the captured values and this worker's descriptors.
     pub fn lowerClosure(self: *Builder, expr_id: CheckedExprId, lambda_expr: CheckedExprId, captures: []const checked.CheckedCapture) Allocator.Error!void {
@@ -2772,10 +2841,33 @@ pub const Builder = struct {
             values[index] = self.binders.get(binder) orelse invariant("a closure captured a binder this body never bound");
         }
         const callee = try self.program.lambdaWorker(self.worker_id, lambda_expr, captures, capture_types, fn_ty, generalized);
+        // A generalized lambda that is not a local procedure is instantiated
+        // where it is constructed: its function value captures its own
+        // scheme's descriptors and dictionaries after the enclosing scope's.
+        var descs: []const LocalId = self.var_descs;
+        var dicts: []const LocalId = self.dict_locals;
+        var own_descs: std.ArrayList(LocalId) = .empty;
+        defer own_descs.deinit(self.allocator);
+        var own_dicts: std.ArrayList(LocalId) = .empty;
+        defer own_dicts.deinit(self.allocator);
+        if (generalized) |scheme| if (!scheme.per_call) {
+            const subst = self.siteSubstitution(expr_id);
+            if (subst.len != scheme.scheme_vars.len) invariant("a generalized lambda's construction substitution differs from its scheme");
+            const evidence = self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{};
+            try own_descs.appendSlice(self.allocator, self.var_descs);
+            for (subst) |checked_ty| try own_descs.append(self.allocator, try self.descOf(try self.convert(checked_ty)));
+            for (scheme.dictionaries) |param_index| {
+                if (param_index >= evidence.len) invariant("a generalized lambda's construction evidence does not cover its dictionaries");
+                try own_dicts.append(self.allocator, try self.dictionaryOf(evidence[param_index]));
+            }
+            try own_dicts.appendSlice(self.allocator, self.dict_locals);
+            descs = own_descs.items;
+            dicts = own_dicts.items;
+        };
         if (try self.allClosed(capture_types)) {
-            try self.pushValue(try self.packClosure(callee, values[0..captures.len], capture_types, self.var_descs, self.dict_locals));
+            try self.pushValue(try self.packClosure(callee, values[0..captures.len], capture_types, descs, dicts));
         } else {
-            try self.pushValue(try self.packDynamicClosure(callee, values[0..captures.len], capture_types, self.var_descs, self.dict_locals));
+            try self.pushValue(try self.packDynamicClosure(callee, values[0..captures.len], capture_types, descs, dicts));
         }
     }
 
@@ -3244,9 +3336,40 @@ pub const Builder = struct {
                         try pending.append(self.allocator, .{ .pattern = sub, .value = local, .ty = fields[semantic].ty });
                     }
                 },
+                .numeral_literal => |numeral| {
+                    if (numeral.guard) |guard| {
+                        try self.literalPatternGuard(item, guard, miss);
+                    } else {
+                        const expected = try self.builtinNumeral(numeral.literal, item.ty);
+                        const matches = try self.closedLocal(.bool);
+                        try self.emitLowLevel(matches, .num_is_eq, &.{ item.value, expected });
+                        try self.branchOrMiss(matches, miss);
+                    }
+                },
+                .str_literal => |literal| {
+                    if (literal.guard) |guard| {
+                        try self.literalPatternGuard(item, guard, miss);
+                    } else {
+                        const expected = try self.strLiteral(self.bodies().stringLiteral(literal.literal));
+                        const matches = try self.closedLocal(.bool);
+                        try self.emitLowLevel(matches, .str_is_eq, &.{ item.value, expected });
+                        try self.branchOrMiss(matches, miss);
+                    }
+                },
                 else => invariantFmt("{s} patterns are not yet lowered by Boxy", .{@tagName(pattern.data)}),
             }
         }
+    }
+
+    /// A literal pattern at a type whose literals convert through a method:
+    /// the pattern's binder holds the tested value, and the checked equality
+    /// against the converted literal decides the match.
+    pub fn literalPatternGuard(self: *Builder, item: PatternItem, guard: CheckedExprId, miss: CFStmtId) Allocator.Error!void {
+        const binder = self.bodies().pattern_binder_by_pattern[@backingInt(item.pattern)].get() orelse
+            invariant("a converted literal pattern has no binder for its guard");
+        try self.binders.put(self.allocator, binder, item.value);
+        const matches = try self.lowerExprNow(guard);
+        try self.branchOrMiss(matches, miss);
     }
 
     /// Whether a tag union value holds the payload-free tag `label`: the
