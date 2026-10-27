@@ -2323,6 +2323,66 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"hi!\"" },
     },
     .{
+        // https://github.com/roc-lang/roc/issues/12609
+        // An unannotated inline lambda that dispatches a method on its
+        // parameter is stored in an unannotated record. Nothing in `Hooks`
+        // pins the parameter's type, so the importing module's request must
+        // select `Str.concat`.
+        .name = "issue 12609: inline where-clause lambda read out of a record in an imported module",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Hooks",
+            .source =
+            \\Hooks := [].{
+            \\    hooks = { shout: |s| s.concat("!") }
+            \\}
+            ,
+        }},
+        .source =
+        \\import Hooks
+        \\
+        \\main = {
+        \\    shout = Hooks.hooks.shout
+        \\    shout("hi")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"hi!\"" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12609
+        // The same lambda stored in a tuple and in a list. Each importing use
+        // copies the stored function's type, so two uses can request two
+        // different receiver types.
+        .name = "issue 12609: inline where-clause lambdas in an imported tuple and list run at two types",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Hooks",
+            .source =
+            \\Hooks := [].{
+            \\    pair = (|s| s.concat("!"), 1)
+            \\    fns = [|s| s.concat(s)]
+            \\}
+            ,
+        }},
+        .source =
+        \\import Hooks
+        \\
+        \\main = {
+        \\    (shout, _) = Hooks.pair
+        \\    text = match Hooks.fns {
+        \\        [twice] => twice("ab")
+        \\        _ => ""
+        \\    }
+        \\    bytes = match Hooks.fns {
+        \\        [twice] => twice([1.U8, 2])
+        \\        _ => []
+        \\    }
+        \\    (shout("hi"), text, bytes)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(\"hi!\", \"abab\", [1, 2, 1, 2])" },
+    },
+    .{
         // https://github.com/roc-lang/roc/issues/11170
         // `Str.inspect` of a SIMD vector must render through the vector's
         // `to_inspect` method in `Builtin.roc`, the same string `dbg` prints.
