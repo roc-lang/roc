@@ -10062,6 +10062,19 @@ fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, tar
     return runtime_path;
 }
 
+/// Write the Boxy runtime object a `.boxy` program links next to its app
+/// object.
+fn writeBoxyRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError![]const u8 {
+    const bytes = EmbeddedTargetObjects.forTarget(target).boxy_runtime orelse return error.UnsupportedTarget;
+    const filename = if (target.toOsTag() == .windows) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
+    const object_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, filename });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, bytes) catch |err| {
+        std.log.err("Failed to write Boxy runtime object {s}: {}", .{ object_path, err });
+        return err;
+    };
+    return object_path;
+}
+
 fn writeDefaultPlatformCompilerRtObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError!?[]const u8 {
     const bytes = EmbeddedTargetObjects.forTarget(target).default_compiler_rt orelse return null;
     const object_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_default_compiler_rt.o" });
@@ -11568,6 +11581,11 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         try object_files.append(app_object.object_path);
         if (static_data_obj_path) |path| {
             try object_files.append(path);
+        }
+        // A `.boxy` program's code calls the Boxy runtime's `roc_desc_*`
+        // entry points; a specialized program neither links nor references it.
+        if (lowered.lir_result.store.runtime_contract == .boxy) {
+            try object_files.append(try writeBoxyRuntimeObject(ctx, app_object.artifact_dir, target));
         }
         if (enable_default_platform_runtime) {
             try appendDefaultPlatformLinkInputs(ctx, &object_files, app_object.artifact_dir, target);
