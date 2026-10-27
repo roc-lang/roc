@@ -437,11 +437,18 @@ const State = struct {
         const env = self.inputs.env;
         var owners = collections.DenseMap(CIR.Statement.Idx, Owner).init(self.allocator);
         defer owners.deinit();
+        // Block-local type declarations and a platform's for-clause aliases
+        // are declarations too, outside `type_decls`.
+        var declarations = std.ArrayList(CIR.Statement.Idx).empty;
+        defer declarations.deinit(self.allocator);
+        try declarations.appendSlice(self.allocator, env.store.sliceStatements(env.type_decls));
+        for (env.for_clause_aliases.items.items) |alias| try declarations.append(self.allocator, alias.alias_stmt_idx);
         var expressions = self.owners.keyIterator();
         while (expressions.next()) |expr| {
             if (env.store.getExpr(expr.*) == .e_block) {
                 for (env.store.sliceStatements(env.store.getExpr(expr.*).e_block.stmts)) |statement| {
                     try owners.put(statement, self.owners.get(expr.*).?);
+                    if (declaresType(env.store.getStatement(statement))) try declarations.append(self.allocator, statement);
                 }
             }
         }
@@ -449,7 +456,7 @@ const State = struct {
         defer seen.deinit();
         var owner_digests = std.AutoHashMapUnmanaged(Owner, [32]u8).empty;
         defer owner_digests.deinit(self.allocator);
-        for (env.store.sliceStatements(env.type_decls)) |statement| {
+        for (declarations.items) |statement| {
             const entry = try seen.getOrPut(statement);
             if (entry.found_existing) continue;
             var hash = Sha256.init(.{});
@@ -1339,6 +1346,14 @@ const TypeDigest = struct {
         }
     }
 };
+
+/// Whether `statement` declares a named type.
+fn declaresType(statement: CIR.Statement) bool {
+    return switch (statement) {
+        .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_var_alias => true,
+        .s_decl, .s_var, .s_var_uninitialized, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_type_anno, .s_runtime_error => false,
+    };
+}
 
 fn declarationIdentity(rows: []const DeclarationIdentity, raw: u32) [32]u8 {
     var lo: usize = 0;
