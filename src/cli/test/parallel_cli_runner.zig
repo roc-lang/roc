@@ -14385,7 +14385,22 @@ fn customNativeTestArtifactReuse(io: std.Io, allocator: Allocator, env: *const C
     defer if (failure_transcript) |transcript| allocator.free(transcript);
     for (0..10) |pass| {
         if (pass == 2) {
-            if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "Main.roc", "# invalidate only this module's results\n" ++ main_source)) |failure| return failure;
+            // Invalidate only this module's results: each of its roots computes
+            // the same outcome through different code. (Results are keyed by
+            // what a root computes, so a comment would invalidate nothing.)
+            const invalidated = header ++
+                \\expect {
+                \\    a = Helper.double(20)
+                \\    b = Helper.double(21)
+                \\    expect b > 0
+                \\    a + b == 41 + 41
+                \\}
+                \\expect Helper.observed(3) == 3 + 3
+                \\expect Helper.sum(3) == 40 + 5
+                \\expect Helper.greet({}) == Str.concat("a greeting long enough", " to live on the heap")
+                \\
+            ;
+            if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "Main.roc", invalidated)) |failure| return failure;
         }
         if (pass == 4) {
             if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "Main.roc", header ++ observed_test ++ numeric_test ++ constant_tests)) |failure| return failure;
