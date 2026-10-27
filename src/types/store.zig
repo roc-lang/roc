@@ -1335,19 +1335,6 @@ pub const Store = struct {
         }
     }
 
-    /// Record that `target_var`'s class is the source row of a row coercion
-    /// whose copy is a nominal backing's declared structure, so a nominal
-    /// value never lifts into it either (design.md "Declared Backing
-    /// Structure"). The mark travels with the equivalence class.
-    pub fn markCoercedIntoNominalBackingStructure(self: *Self, target_var: Var) Allocator.Error!void {
-        const resolved = try self.resolveWriteTarget(target_var);
-        if (resolved.desc.flags.nominal_backing_structure) return;
-        self.ground_epoch +%= 1;
-        var desc = resolved.desc;
-        desc.flags.nominal_backing_structure = true;
-        try self.setDesc(resolved.desc_idx, desc);
-    }
-
     /// Record definition-site annotation openness (design.md "Derived Parser
     /// Tag-Row Closure"). Provenance travels with the flex equivalence class.
     pub fn markAnnotationTagExt(self: *Self, target_var: Var) Allocator.Error!void {

@@ -4489,25 +4489,12 @@ equivalence class: merges keep it if either side had it, scheme
 instantiation copies it, and import copying carries it across modules. The
 nominal-versus-anonymous unification entry points reject a lift whose
 anonymous side carries the mark, so the verdict does not depend on which
-relation reached the structure first.
-
-A row coercion (Row Subsumption) separates a value's closed row from the
-re-opened copy its result relates to, so a mark the copy takes from a backing
-would not reach the value's own row, and a nominal value could then lift into
-that row and cross into the declared structure through the coercion. Recording
-an accepted coercion therefore marks each re-opened row's source when its copy
-is marked (`Store.markCoercedIntoNominalBackingStructure`): the source's
-values flow into the declared structure, so the source admits no nominal
-value either. This is a policy rule; it rejects exactly what relating the
-value to the backing without a coercion rejects, and accepts structural values
-the coercion widens into the backing, such as `make : [Info] -> LogEntry`
-forwarding its parameter with `make = |x| Entry(x)`. The rejected side is pinned in
+relation reached the structure first. The rejected side is pinned in
 `src/check/test/type_checking_integration.zig` for a tag payload, a record
 field, a generalized constructor helper, an annotated structural parameter
 that feeds a backing, and an imported backing; the accepted controls keep a
 structural payload and a nominal payload side by side in one backing, and
-pass structural values through a forwarding parameter of the backing's row
-and of a narrower one.
+pass a structural value through a forwarding parameter that feeds it.
 
 ### Settled-State Re-Decision
 
