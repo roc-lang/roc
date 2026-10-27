@@ -6883,7 +6883,23 @@ const HostedArgOrder = struct {
     size: u32,
 };
 
-fn computeHostedArgOffsets(self: *Self, arena: Allocator, arg_layouts: []const layout.Idx, offsets: []u32) Allocator.Error!u32 {
+/// Lay out a hosted call's arguments in a fresh stack slot, most-aligned first,
+/// writing each argument's offset into `offsets`; returns the slot's frame offset.
+/// The slot is aligned to its most-aligned argument, because an `.indirect`
+/// argument hands the host a pointer into it typed at that argument's alignment.
+fn allocHostedArgsSlot(self: *Self, arena: Allocator, arg_layouts: []const layout.Idx, offsets: []u32) Allocator.Error!u32 {
+    const extent = try self.computeHostedArgOffsets(arena, arg_layouts, offsets);
+    // Pad by 8 bytes so a register piece loaded as a full 64-bit word from the tail of the
+    // slot never reads past it.
+    return try self.allocStackMemory(@max(extent.size, 4) + 8, @max(extent.alignment, 4));
+}
+
+const HostedArgsExtent = struct {
+    size: u32,
+    alignment: u32,
+};
+
+fn computeHostedArgOffsets(self: *Self, arena: Allocator, arg_layouts: []const layout.Idx, offsets: []u32) Allocator.Error!HostedArgsExtent {
     std.debug.assert(arg_layouts.len == offsets.len);
 
     var ordered = try arena.alloc(HostedArgOrder, arg_layouts.len);
@@ -6912,7 +6928,10 @@ fn computeHostedArgOffsets(self: *Self, arena: Allocator, arg_layouts: []const l
         offsets[arg.index] = total;
         total += arg.size;
     }
-    return total;
+    return .{
+        .size = total,
+        .alignment = if (ordered.len == 0) 1 else ordered[0].alignment,
+    };
 }
 
 fn copyProcLocalToHostedArgs(
@@ -7497,10 +7516,7 @@ fn emitCAbiCall(
     const ret_ptr_local = try self.emitFpOffsetToNewLocal(ret_slot);
 
     const arg_offsets = try arena.alloc(u32, args.len);
-    const args_size = try self.computeHostedArgOffsets(arena, arg_layouts, arg_offsets);
-    // Pad by 8 bytes so a register piece loaded as a full 64-bit word from the tail of the
-    // slot never reads past it.
-    const args_slot = try self.allocStackMemory(@max(args_size, 4) + 8, 4);
+    const args_slot = try self.allocHostedArgsSlot(arena, arg_layouts, arg_offsets);
     const args_ptr_local = try self.emitFpOffsetToNewLocal(args_slot);
 
     for (0..args.len) |i| {
@@ -17119,6 +17135,42 @@ test "rcAllocationLayout matches wasm32 builtin refcount allocation layout" {
     const refcounted_aligned = rcAllocationLayout(16, true);
     try expectEqual(@as(u32, 16), refcounted_aligned.data_offset);
     try expectEqual(@as(u32, 16), refcounted_aligned.allocation_alignment);
+}
+
+test "a hosted call's args slot is aligned to its most-aligned argument" {
+    const allocator = std.testing.allocator;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+
+    // A record holding a Dec: wasm32 passes it to the host by pointer into the slot.
+    const dec_record = try layouts.putTuple(&.{ layout.Layout.frac(.dec), layout.Layout.int(.u8) });
+    const arg_layouts = [_]layout.Idx{ .u8, dec_record };
+    const lowered = try layout.abi.lower(arena, &layouts, .wasm32, &arg_layouts, .zst, false);
+    try std.testing.expect(lowered.args[1] == .indirect);
+
+    var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
+    defer codegen.deinit();
+    const type_idx = try codegen.module.addFuncType(&.{}, &.{});
+    const defined = try codegen.module.addDefinedFunction(type_idx);
+    const saved = try codegen.saveState();
+    try codegen.beginFunction(defined.local);
+
+    // emitCAbiCall allocates the return slot first; a small one leaves the frame 4-aligned.
+    _ = try codegen.allocStackMemory(4, 4);
+    var offsets: [arg_layouts.len]u32 = undefined;
+    const slot = try codegen.allocHostedArgsSlot(arena, &arg_layouts, &offsets);
+
+    try std.testing.expectEqual(@as(u32, 0), offsets[1]);
+    try std.testing.expectEqual(@as(u32, 0), (slot + offsets[1]) % 16);
+
+    codegen.endFunction();
+    codegen.restoreState(saved);
 }
 
 test "wasm backend fuses overflow predicate with matching wrapping result" {
