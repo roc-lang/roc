@@ -8219,12 +8219,15 @@ fn indexedCacheEntries(io: std.Io, allocator: Allocator, cache_root: []const u8)
 const PackStoreFiles = struct {
     paths: std.ArrayList([]u8) = .empty,
     contents: std.ArrayList([]u8) = .empty,
+    /// Each pack's cache family, parallel to `paths`.
+    families: std.ArrayList(artifact_store.Family) = .empty,
 
     fn deinit(self: *PackStoreFiles, allocator: Allocator) void {
         for (self.paths.items) |path| allocator.free(path);
         for (self.contents.items) |bytes| allocator.free(bytes);
         self.paths.deinit(allocator);
         self.contents.deinit(allocator);
+        self.families.deinit(allocator);
     }
 
     fn read(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError!PackStoreFiles {
@@ -8240,6 +8243,7 @@ const PackStoreFiles = struct {
                 .local_pack, .package_pack, .optimized_pack => {},
                 .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .local_discovery, .package_discovery, .program_output, .scratch => continue,
             }
+            try result.families.append(allocator, entry.family);
             const path = try allocator.dupe(u8, &std.fmt.bytesToHex(entry.key, .lower));
             result.paths.append(allocator, path) catch |err| {
                 allocator.free(path);
@@ -8824,8 +8828,8 @@ fn customPackageDevPacks(
                 return failureFromRun(allocator, timer, ran, message);
             }
             var package_packs: usize = 0;
-            for (files.paths.items) |path| {
-                if (std.mem.find(u8, path, "-dev") != null and std.mem.find(u8, path, std.fs.path.sep_str ++ "pkg" ++ std.fs.path.sep_str) != null) package_packs += 1;
+            for (files.families.items) |family| {
+                if (family == .package_pack) package_packs += 1;
             }
             if (package_packs == 0) return failureFromRun(allocator, timer, ran, "checking wrote no pkg dev packs");
             prepared = files;
@@ -8973,12 +8977,12 @@ fn customLinkedObjectPack(
     // by where this store keeps it, and named by its key, which is the same
     // in every store.
     var object_packs: usize = 0;
-    for (first.paths.items, first.contents.items) |path, bytes| {
-        if (std.mem.find(u8, path, "-speed") == null) continue;
+    for (first.paths.items, first.contents.items, first.families.items) |path, bytes, family| {
+        if (family != .optimized_pack) continue;
         object_packs += 1;
         const key_name = std.fs.path.basename(path);
-        const other = for (second.paths.items, second.contents.items) |other_path, other_bytes| {
-            if (std.mem.find(u8, other_path, "-speed") != null and std.mem.eql(u8, std.fs.path.basename(other_path), key_name)) break other_bytes;
+        const other = for (second.paths.items, second.contents.items, second.families.items) |other_path, other_bytes, other_family| {
+            if (other_family == .optimized_pack and std.mem.eql(u8, std.fs.path.basename(other_path), key_name)) break other_bytes;
         } else return customFailure(allocator, timer, "optimized pack {s} was written by one store and not the other", .{key_name});
         if (!std.mem.eql(u8, bytes, other)) {
             return customFailure(allocator, timer, "optimized pack {s} differs between two stores", .{key_name});
