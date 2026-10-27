@@ -17992,7 +17992,9 @@ fn customRocTestCountsCheckingErrorsWithCachedResults(
         })) |failure| return failure;
     }
 
-    if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "checking_errors.roc", source_prefix ++ "expect identity(1) == 1\n")) |failure| return failure;
+    // The fixed expect differs from the passing ones: an expect identical to
+    // one already passed would reuse its stored result.
+    if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, "checking_errors.roc", source_prefix ++ "expect identity(2) == 2\n")) |failure| return failure;
     for (0..2) |run| {
         if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
             .args = &.{ "test", "--no-color" },
