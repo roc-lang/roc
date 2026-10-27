@@ -27325,3 +27325,24 @@ closure still receives relocation entries, including recursive members and
 children of reused roots. This shares immutable type content, never mutable
 instantiation cells or ownership scopes. All fallible work precedes relocation
 publication, and allocation failure preserves the original store and mapping.
+
+### Persistent completed specialization data
+
+Completed specialization data uses an explicit immutable record schema. It
+does not persist the mutable instantiation graph, worker workspace, allocation
+addresses, or coordinator reservation numbers. Its type closure uses the same
+portable representation as persistent interface constraints: table references
+preserve cycles and sharing, names are stored as content, and named types and
+executable defaults retain checked provenance. A distinct format and schema
+identity separate completed data from interface constraints.
+
+Each record producer supplies its complete dependency identity and an explicit
+validation operation for its non-type references. Loading validates that schema,
+all references, provenance, and the complete reachable type closure before
+starting a destination type-store transaction. All returned storage is allocated
+before committing the transaction. Rebinding after commit is allocation-free.
+Corrupt or obsolete optional records are cache misses; allocation failure is
+propagated. A record is not reusable merely because its serialized types match:
+its source, dispatch context, compile-time inputs, and lowering policy must match
+as well. Persisting a completed result does not change the meaning or ownership
+of captures and does not introduce runtime closure dispatch into specialization.

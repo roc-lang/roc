@@ -11,6 +11,7 @@ const Constraints = Solve.InterfaceConstraints;
 const GuardedList = @import("collections").GuardedList;
 const invariant = base.invariant;
 const magic = "RIFSUM04";
+const frozen_magic = "RIFRZ001";
 
 /// A checked occurrence either names its immutable artifact directly, or
 /// names a closed checked type by canonical content. The latter has no
@@ -154,6 +155,129 @@ pub fn decodeForRequest(arena: Allocator, types: *Type.Store, ns: *names.NameSto
     return result;
 }
 
+/// Persist an explicitly declared immutable payload and its reachable type
+/// closure. Payload slices are owned data, never references into a mutable
+/// graph. The caller's schema tag versions all non-type fields. Unlike an
+/// interface relation, this result has no request-relative type leaves.
+pub fn encodeFrozen(comptime Payload: type, schema: [8]u8, allocator: Allocator, types: *Type.Store, ns: *const names.NameStore, payload: Payload, context: anytype, stats: ?*Stats) EncodeError![]u8 {
+    var writer: Writer(@TypeOf(context)) = .{ .allocator = allocator, .types = types, .names = ns, .leaves = &.{}, .context = context };
+    defer writer.bytes.deinit(allocator);
+    defer writer.references.deinit(allocator);
+    defer writer.pending.deinit(allocator);
+    // No request leaves are indexed in this format.
+    try writer.bytes.appendSlice(allocator, frozen_magic);
+    try writer.write([8]u8, schema);
+    const count_offset = writer.bytes.items.len;
+    try writer.write(u32, 0);
+    try writer.write(Payload, payload);
+    var index: usize = 0;
+    while (index < writer.pending.items.len) : (index += 1) {
+        try writer.writeContent(types.get(writer.pending.items[index]));
+    }
+    writer.stats.types = writer.pending.items.len;
+    std.mem.writeInt(u32, writer.bytes.items[count_offset..][0..4], @intCast(writer.pending.items.len), .little);
+    if (stats) |out| out.* = writer.stats;
+    return writer.bytes.toOwnedSlice(allocator);
+}
+
+/// Read completed immutable data. The context must validate all non-type
+/// references through validateFrozenPayload before any type-store mutation.
+/// That operation sees wire type references and must not dereference them in
+/// the destination store. Returned slices belong to the supplied arena.
+pub fn decodeFrozen(comptime Payload: type, schema: [8]u8, arena: Allocator, types: *Type.Store, ns: *names.NameStore, bytes: []const u8, context: anytype, stats: ?*Stats) DecodeError!Payload {
+    var scratch = std.heap.ArenaAllocator.init(types.allocator);
+    defer scratch.deinit();
+    var reader: Reader(@TypeOf(context)) = .{ .arena = scratch.allocator(), .names = ns, .leaves = &.{}, .bytes = bytes, .context = context };
+    if (!std.mem.startsWith(u8, reader.bytes, frozen_magic)) return invalidSummary(@src().line);
+    reader.bytes = reader.bytes[frozen_magic.len..];
+    if (!std.mem.eql(u8, &(try reader.read([8]u8)), &schema)) return invalidSummary(@src().line);
+    reader.type_count = try reader.read(u32);
+    if (reader.type_count > reader.bytes.len) return invalidSummary(@src().line);
+    const payload = try reader.read(Payload);
+    const nodes = try scratch.allocator().alloc(WireType, reader.type_count);
+    for (nodes) |*node| node.* = try reader.read(WireType);
+    if (reader.bytes.len != 0) return invalidSummary(@src().line);
+    try context.validateFrozenPayload(payload);
+    try validateTypeGraph(scratch.allocator(), 0, payload, nodes);
+    const relocated = try scratch.allocator().alloc(Type.TypeId, nodes.len);
+    const transaction = types.beginTransaction();
+    errdefer transaction.abort(types);
+    for (relocated) |*slot| slot.* = try transaction.reserve(types);
+    const mapper = Relocation{ .types = types, .ids = relocated, .allocator = scratch.allocator() };
+    for (nodes, relocated) |node, slot| transaction.fill(types, slot, try mapper.content(node));
+    var result = try copyFrozen(Payload, arena, payload);
+    if (nodes.len == 0) {
+        transaction.abort(types);
+    } else {
+        var committed = try types.commitTransaction(ns, transaction, relocated[0]);
+        defer committed.deinit();
+        // commitTransaction maps every reserved node, including roots not
+        // reachable from the first root. This walk allocates nothing.
+        for (relocated) |*slot| slot.* = committed.remapType(slot.*);
+        relocateFrozen(Payload, &result, relocated);
+    }
+    reader.stats.types = nodes.len;
+    if (stats) |out| out.* = reader.stats;
+    return result;
+}
+
+// These traversals follow only fixed-depth schema structure and owned slices;
+// recursive user types are integer edges in the separately validated table.
+fn copyFrozen(comptime T: type, arena: Allocator, value: T) Allocator.Error!T {
+    return switch (@typeInfo(T)) {
+        .@"struct" => |info| blk: {
+            var out: T = undefined;
+            inline for (info.field_names, info.field_types) |field, F| @field(out, field) = try copyFrozen(F, arena, @field(value, field));
+            break :blk out;
+        },
+        .@"union" => |info| blk: {
+            inline for (info.field_names, info.field_types) |field, F| if (std.meta.activeTag(value) == @field(info.tag_type.?, field)) break :blk @unionInit(T, field, try copyFrozen(F, arena, @field(value, field)));
+            unreachable;
+        },
+        .optional => |info| if (value) |v| try copyFrozen(info.child, arena, v) else null,
+        .pointer => |info| blk: {
+            if (info.size != .slice) @compileError("frozen payloads contain owned slices, not object pointers");
+            const out = try arena.alloc(info.child, value.len);
+            if (info.child == u8) {
+                @memcpy(out, value);
+            } else for (value, out) |v, *o| o.* = try copyFrozen(info.child, arena, v);
+            break :blk out;
+        },
+        .array => |info| blk: {
+            var out: T = undefined;
+            for (value, &out) |v, *o| o.* = try copyFrozen(info.child, arena, v);
+            break :blk out;
+        },
+        .@"enum", .int, .float, .bool, .void => value,
+        else => @compileError("unsupported frozen payload field: " ++ @typeName(T)),
+    };
+}
+
+fn relocateFrozen(comptime T: type, value: *T, ids: []const Type.TypeId) void {
+    if (T == Type.TypeId) {
+        value.* = ids[@backingInt(value.*)];
+        return;
+    }
+    if (T == Type.MaybeTypeId) {
+        if (value.get()) |ty| value.* = .of(ids[@backingInt(ty)]);
+        return;
+    }
+    switch (@typeInfo(T)) {
+        .@"struct" => |info| inline for (info.field_names, info.field_types) |field, F| relocateFrozen(F, &@field(value, field), ids),
+        .@"union" => |info| inline for (info.field_names, info.field_types) |field, F| {
+            if (std.meta.activeTag(value.*) == @field(info.tag_type.?, field)) return relocateFrozen(F, &@field(value, field), ids);
+        },
+        .optional => |info| if (value.*) |*v| relocateFrozen(info.child, v, ids),
+        .pointer => |info| {
+            if (info.size != .slice) @compileError("frozen payloads contain owned slices, not object pointers");
+            for (@constCast(value.*)) |*v| relocateFrozen(info.child, v, ids);
+        },
+        .array => |info| for (value) |*v| relocateFrozen(info.child, v, ids),
+        .@"enum", .int, .float, .bool, .void => {},
+        else => @compileError("unsupported frozen payload field: " ++ @typeName(T)),
+    }
+}
+
 // This wire graph deliberately has no arena spans or producer indices. Its
 // nesting has fixed schema depth; all user-controlled recursion uses TypeId.
 const WireTag = struct { name: names.TagNameId, checked_name: names.TagNameId, payloads: []const Type.TypeId };
@@ -205,16 +329,16 @@ const TypeEdges = struct {
                 .many, .c => @compileError("unbounded summary pointer"),
             },
             .array => |info| for (value) |v| try self.collect(info.child, v),
-            .@"enum", .int, .bool, .void => {},
+            .@"enum", .int, .float, .bool, .void => {},
             else => @compileError("unsupported summary graph field"),
         }
     }
 };
 
-fn validateTypeGraph(allocator: Allocator, leaf_count: usize, summary: Summary, nodes: []const WireType) DecodeError!void {
+fn validateTypeGraph(allocator: Allocator, leaf_count: usize, summary: anytype, nodes: []const WireType) DecodeError!void {
     var edges: TypeEdges = .{ .allocator = allocator };
     defer edges.edges.deinit(allocator);
-    try edges.collect(Summary, summary);
+    try edges.collect(@TypeOf(summary), summary);
     const roots_end = edges.edges.items.len;
     const starts = try allocator.alloc(usize, nodes.len + 1);
     defer allocator.free(starts);
@@ -483,7 +607,9 @@ fn Writer(comptime Context: type) type {
                 .pointer => |info| switch (info.size) {
                     .slice => {
                         try self.write(u32, std.math.cast(u32, value.len) orelse return error.NotRepresentable);
-                        for (value) |v| try self.write(info.child, v);
+                        if (info.child == u8) {
+                            try self.bytes.appendSlice(self.allocator, value);
+                        } else for (value) |v| try self.write(info.child, v);
                     },
                     .one => try self.write(info.child, value.*),
                     .many, .c => @compileError("unbounded summary pointer"),
@@ -496,12 +622,13 @@ fn Writer(comptime Context: type) type {
                     const size = (@bitSizeOf(T) + 7) / 8;
                     var bits: U = @bitCast(value);
                     for (0..size) |_| {
-                        try self.bytes.append(self.allocator, @truncate(@as(u64, bits)));
+                        try self.bytes.append(self.allocator, @truncate(@as(@Int(.unsigned, @max(8, @bitSizeOf(T))), bits)));
                         bits = std.math.shr(U, bits, 8);
                     }
                 },
+                .float => try self.write(@Int(.unsigned, @bitSizeOf(T)), @bitCast(value)),
                 .void => {},
-                .type, .noreturn, .float, .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @compileError("unsupported summary field: " ++ @typeName(T)),
+                .type, .noreturn, .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @compileError("unsupported summary field: " ++ @typeName(T)),
             }
         }
     };
@@ -578,7 +705,10 @@ fn Reader(comptime Context: type) type {
                     // Every supported element consumes at least one byte.
                     if (len > self.bytes.len) return invalidSummary(@src().line);
                     const values = try self.arena.alloc(info.child, len);
-                    for (values) |*value| value.* = try self.read(info.child);
+                    if (info.child == u8) {
+                        @memcpy(values, self.bytes[0..len]);
+                        self.bytes = self.bytes[len..];
+                    } else for (values) |*value| value.* = try self.read(info.child);
                     break :blk values;
                 },
                 .array => |info| blk: {
@@ -609,8 +739,9 @@ fn Reader(comptime Context: type) type {
                     self.bytes = self.bytes[size..];
                     break :blk @bitCast(value);
                 },
+                .float => @bitCast(try self.read(@Int(.unsigned, @bitSizeOf(T)))),
                 .void => {},
-                .type, .noreturn, .float, .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @compileError("unsupported summary field: " ++ @typeName(T)),
+                .type, .noreturn, .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @compileError("unsupported summary field: " ++ @typeName(T)),
             };
             if (T == Type.NamedType) if (!self.context.validNamedType(result)) return invalidSummary(@src().line);
             if (T == WireNamed or T == @typeInfo(@FieldType(Solve.InstNode, "named")).pointer.child or T == Solve.InstIteratorPublicSource) {
@@ -667,7 +798,120 @@ const TestProvenance = struct {
     pub fn validNamedDefinition(self: @This(), _: *const names.NameStore, named: Type.NamedType, _: Type.TypeDef, _: Type.NamedKind, _: ?check.StaticDispatchRegistry.BuiltinOwner) bool {
         return self.validNamedType(named);
     }
+    pub fn validateFrozenPayload(_: @This(), payload: FrozenTestPayload) DecodeError!void {
+        for (payload.edges) |edge| if (edge >= payload.types.len) return error.InvalidSummary;
+    }
 };
+
+const FrozenTestPayload = struct {
+    types: []const Type.TypeId,
+    edges: []const u32,
+    name: names.RecordFieldNameId,
+    data: []const u8,
+    integer: i128,
+    float: f64,
+    optional: Type.MaybeTypeId,
+};
+
+fn frozenTestBytes(allocator: Allocator) ![]u8 {
+    var ns = names.NameStore.init(allocator);
+    defer ns.deinit();
+    var source = Type.Store.init(allocator);
+    defer source.deinit();
+    const slot = try source.beginRecursive();
+    const function = try source.add(.{ .func = .{ .args = .empty(), .ret = slot.ty } });
+    const name = try ns.internRecordFieldLabel("step");
+    source.finishRecursive(slot, .{ .record = try source.addFields(&.{.{ .name = name, .ty = function, .default = null }}) });
+    // A disconnected root tests that committing the first root also retains
+    // every other explicitly referenced result. The repeated root tests sharing.
+    const primitive = try source.internPrimitive(&ns, .u64);
+    return encodeFrozen(FrozenTestPayload, "TEST0001".*, allocator, &source, &ns, .{
+        .types = &.{ slot.ty, slot.ty, primitive },
+        .edges = &.{ 0, 1, 2 },
+        .name = name,
+        .data = "owned bytes\x00\xff",
+        .integer = std.math.minInt(i128) + 17,
+        .float = @bitCast(@as(u64, 0x7ff8000000000053)),
+        .optional = .of(function),
+    }, TestProvenance{}, null);
+}
+
+test "frozen specialization payload owns data and relocates cyclic shared type roots" {
+    const gpa = std.testing.allocator;
+    const bytes = try frozenTestBytes(gpa);
+    defer gpa.free(bytes);
+    var ns = names.NameStore.init(gpa);
+    defer ns.deinit();
+    _ = try ns.internRecordFieldLabel("unrelated");
+    var dest = Type.Store.init(gpa);
+    defer dest.deinit();
+    _ = try dest.internPrimitive(&ns, .bool);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const result = try decodeFrozen(FrozenTestPayload, "TEST0001".*, arena.allocator(), &dest, &ns, bytes, TestProvenance{}, null);
+    try std.testing.expectEqual(result.types[0], result.types[1]);
+    const field = GuardedList.at(dest.fieldSpan(dest.get(result.types[0]).record), 0);
+    try std.testing.expectEqual(result.types[0], dest.get(field.ty).func.ret);
+    try std.testing.expectEqual(field.ty, result.optional.get().?);
+    try std.testing.expectEqual(Type.Primitive.u64, dest.get(result.types[2]).primitive);
+    try std.testing.expectEqualStrings("step", ns.recordFieldLabelText(result.name));
+    try std.testing.expectEqualStrings("owned bytes\x00\xff", result.data);
+    try std.testing.expectEqual(std.math.minInt(i128) + 17, result.integer);
+    try std.testing.expectEqual(@as(u64, 0x7ff8000000000053), @as(u64, @bitCast(result.float)));
+}
+
+test "frozen specialization payload rejects corrupt schema references and truncation before mutation" {
+    const gpa = std.testing.allocator;
+    const bytes = try frozenTestBytes(gpa);
+    defer gpa.free(bytes);
+    var ns = names.NameStore.init(gpa);
+    defer ns.deinit();
+    var dest = Type.Store.init(gpa);
+    defer dest.deinit();
+    _ = try dest.internPrimitive(&ns, .bool);
+    const before = dest.types.len();
+    for (0..bytes.len) |len| {
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit();
+        try std.testing.expectError(error.InvalidSummary, decodeFrozen(FrozenTestPayload, "TEST0001".*, arena.allocator(), &dest, &ns, bytes[0..len], TestProvenance{}, null));
+        try std.testing.expectEqual(before, dest.types.len());
+        try std.testing.expect(!dest.hasSpeculativeConstruction());
+    }
+    const bad = try gpa.dupe(u8, bytes);
+    defer gpa.free(bad);
+    // Schema byte, type reference, and payload-local edge, respectively.
+    for ([_]usize{ 8, 24, 40 }) |offset| {
+        @memcpy(bad, bytes);
+        bad[offset] = 255;
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit();
+        try std.testing.expectError(error.InvalidSummary, decodeFrozen(FrozenTestPayload, "TEST0001".*, arena.allocator(), &dest, &ns, bad, TestProvenance{}, null));
+        try std.testing.expectEqual(before, dest.types.len());
+        try std.testing.expect(!dest.hasSpeculativeConstruction());
+    }
+}
+
+fn frozenAllocationRoundTrip(gpa: Allocator) !void {
+    const bytes = try frozenTestBytes(gpa);
+    defer gpa.free(bytes);
+    var ns = names.NameStore.init(gpa);
+    defer ns.deinit();
+    var dest = Type.Store.init(gpa);
+    defer dest.deinit();
+    _ = try dest.internPrimitive(&ns, .bool);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const before = dest.types.len();
+    _ = decodeFrozen(FrozenTestPayload, "TEST0001".*, arena.allocator(), &dest, &ns, bytes, TestProvenance{}, null) catch |err| {
+        try std.testing.expectEqual(before, dest.types.len());
+        try std.testing.expect(!dest.hasSpeculativeConstruction());
+        return err;
+    };
+}
+
+test "frozen specialization payload allocation failures roll back construction" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, frozenAllocationRoundTrip, .{});
+}
 
 test "persistent interface constraints relocate request leaves and preserve cycles" {
     const allocator = std.testing.allocator;
