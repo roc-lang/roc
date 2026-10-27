@@ -696,7 +696,12 @@ of a format other than the compiler's own, ages the current namespace's
 `optimized/` packs on thirty, by last use (`max(atime, mtime)`), and then deletes the least
 recently used persistent cache files of every family until the cache fits
 `CacheConfig.max_size_mb`. Eviction only deletes files; it never changes what
-a build writes.
+a build writes. One process sweeps a cache at a time, holding `sweep.lock` at
+the cache root; a process that finds it held leaves the cache to that sweep.
+A file that disappears after the sweep lists it no longer counts toward the
+bound. A pack that disappears after a build lists its directory is no offer,
+like a pack that was never written, and an offer to an object cache that is
+unavailable for the build is dropped, since that cache serves no lookup.
 
 A pack entry's code is a function of the procedure alone: every reference
 from it into code placed with it, and every reference by identity to code

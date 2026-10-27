@@ -124,8 +124,28 @@ fn runCleanup(base: CacheBase, std_io: Io, limits: Limits) void {
     sweep(std_io, base.path(), limits, nowNs(std_io), null);
 }
 
+/// Holds a sweep's exclusive claim on a cache root.
+const sweep_lock_name = "sweep.lock";
+
 /// Every cleanup pass over the cache rooted at `cache_base`, as of `now_ns`.
+/// One process sweeps a cache at a time: sweeps that each evict from their
+/// own listing of the same files would together evict past the size bound,
+/// so a process that finds the cache being swept leaves it to that sweep.
 pub fn sweep(std_io: Io, cache_base: []const u8, limits: Limits, now_ns: i128, maybe_stats: ?*CleanupStats) void {
+    var base = Dir.cwd().openDir(std_io, cache_base, .{}) catch return;
+    defer base.close(std_io);
+    // Opening the existing lock allocates nothing, so a full disk can be swept.
+    const lock = base.createFile(std_io, sweep_lock_name, .{ .truncate = false, .lock = .exclusive, .lock_nonblocking = true }) catch |err| {
+        switch (err) {
+            error.WouldBlock => {},
+            else => if (maybe_stats) |stats| {
+                stats.errors += 1;
+            },
+        }
+        return;
+    };
+    defer lock.close(std_io);
+
     // Remove old flat files without treating current compiler namespaces as legacy.
     cleanupLegacyPersistentCache(std_io, cache_base, maybe_stats);
 
@@ -411,9 +431,17 @@ fn enforceSizeLimit(std_io: Io, cache_base: []const u8, limits: Limits, maybe_st
     std.mem.sort(SizedFile, files.items, {}, SizedFile.lessThan);
     for (files.items) |file| {
         if (total <= limits.max_size_bytes) break;
-        base_dir.deleteFile(std_io, file.path) catch {
-            if (maybe_stats) |stats| stats.errors += 1;
-            continue;
+        base_dir.deleteFile(std_io, file.path) catch |err| switch (err) {
+            // Another deleter (a `roc` of another pack format, say) removed
+            // it since the listing; it no longer counts toward the bound.
+            error.FileNotFound => {
+                total -= file.size;
+                continue;
+            },
+            else => {
+                if (maybe_stats) |stats| stats.errors += 1;
+                continue;
+            },
         };
         total -= file.size;
         if (maybe_stats) |stats| stats.evicted_files_deleted += 1;
@@ -957,6 +985,70 @@ test "size bound evicts least recently used files across families until under th
     try std.testing.expectError(error.FileNotFound, pack.access(std.testing.io, "middle.rpk", .{}));
     try exe.access(std.testing.io, "newest", .{});
     try exe.access(std.testing.io, "newest.lock", .{});
+}
+
+test "a sweep leaves a cache another process is sweeping to that sweep" {
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const cache_base = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "roc" });
+    defer allocator.free(cache_base);
+    const now_ns = nowNs(std.testing.io);
+    const mod_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "mod", "aa" });
+    defer allocator.free(mod_dir);
+    const block: [100]u8 = @splat('x');
+    try writeTestFile(mod_dir, "old.rcache", &block, now_ns);
+
+    var base = try Dir.cwd().openDir(std.testing.io, cache_base, .{});
+    defer base.close(std.testing.io);
+    const held = try base.createFile(std.testing.io, sweep_lock_name, .{ .truncate = false, .lock = .exclusive });
+    var stats = CleanupStats{};
+    sweep(std.testing.io, cache_base, .{ .object_pack_format_version = 7, .max_size_bytes = 0 }, now_ns, &stats);
+    try std.testing.expectEqual(CleanupStats{}, stats);
+    var mod = try Dir.cwd().openDir(std.testing.io, mod_dir, .{});
+    defer mod.close(std.testing.io);
+    try mod.access(std.testing.io, "old.rcache", .{});
+
+    held.close(std.testing.io);
+    sweep(std.testing.io, cache_base, .{ .object_pack_format_version = 7, .max_size_bytes = 0 }, now_ns, &stats);
+    try std.testing.expectEqual(@as(u32, 1), stats.evicted_files_deleted);
+    try std.testing.expectError(error.FileNotFound, mod.access(std.testing.io, "old.rcache", .{}));
+}
+
+test "a file another deleter removed after the listing counts toward the size bound" {
+    // Another deleter removes the oldest file between the sweep's listing and
+    // its own deletion of it, which leaves the cache under the bound.
+    const Deleter = struct {
+        fn deleteFile(_: ?*anyopaque, dir: Dir, path: []const u8) Dir.DeleteFileError!void {
+            if (std.mem.endsWith(u8, path, "oldest.rcache")) {
+                try std.testing.io.vtable.dirDeleteFile(std.testing.io.userdata, dir, path);
+                return error.FileNotFound;
+            }
+            return std.testing.io.vtable.dirDeleteFile(std.testing.io.userdata, dir, path);
+        }
+    };
+    const allocator = std.testing.allocator;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const cache_base = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "roc" });
+    defer allocator.free(cache_base);
+    const now_ns = nowNs(std.testing.io);
+    const hour: i128 = 60 * 60 * std.time.ns_per_s;
+    const mod_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "mod", "aa" });
+    defer allocator.free(mod_dir);
+    const block: [100]u8 = @splat('x');
+    try writeTestFile(mod_dir, "oldest.rcache", &block, now_ns - 2 * hour);
+    try writeTestFile(mod_dir, "newest.rcache", &block, now_ns - hour);
+
+    var vtable = std.testing.io.vtable.*;
+    vtable.dirDeleteFile = Deleter.deleteFile;
+    const io: Io = .{ .userdata = std.testing.io.userdata, .vtable = &vtable };
+    var stats = CleanupStats{};
+    enforceSizeLimit(io, cache_base, .{ .object_pack_format_version = 7, .max_size_bytes = 150 }, &stats);
+    try std.testing.expectEqual(CleanupStats{}, stats);
+    var mod = try Dir.cwd().openDir(std.testing.io, mod_dir, .{});
+    defer mod.close(std.testing.io);
+    try mod.access(std.testing.io, "newest.rcache", .{});
 }
 
 test "scratch cleanup preserves a live link lease and removes an abandoned one" {
