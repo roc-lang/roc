@@ -27366,13 +27366,6 @@ All type structure, named definitions, backing authority, dispatch metadata,
 and ABI boundaries remain in the identity. This whole-analysis boundary is independent of finer-grained
 specialization body caching.
 
-The complete-analysis cache is currently an experiment enabled only by the
-`lambda_analysis_cache` developer diagnostic. Native object reuse changes the
-assembled lifted program between builds, so this coarse boundary has not
-demonstrated useful reuse on the measured applications. Ordinary builds do not
-pay for its input fingerprinting, encoding, or publication. Its immutable codec
-and explicit validation remain available for finer-grained experiments.
-
 Completed Lambda Solved records contain only the type graph reachable from
 output annotations. Serialization resolves redirects and assigns compact local
 ids while preserving cycles and sharing. Discarded unification rows, unreachable
@@ -27400,8 +27393,33 @@ stored value; it never dereferences a persisted ConstNodeId. Sharing and
 cycles in the producer traversal are visited once. The path remains meaningful
 when value nodes have been allocated in a different order.
 
+Sealed lexically dependent template bodies are complete owned draft output.
+Their resolved calls, captures and lexical parent relationships remain in that
+output; they are never published as independent global specializations. The
+sealed template producer explicitly omits transient dispatch evidence for this
+completed-local state. Deferred/global requests retain evidence, and consumers
+require it only in those states. Completed-body replay preserves the local
+ownership flags and parent ordering; it never synthesizes a missing context.
+Default-root nested sites validate against their explicit declaring module
+identity, while their recorded owner template remains separately validated.
+
+The complete-analysis cache is currently an experiment enabled only by the
+`lambda_analysis_cache` developer diagnostic. Native object reuse changes the
+assembled lifted program between builds, so this coarse boundary has not
+demonstrated useful reuse on the measured applications. Ordinary builds do not
+pay for its input fingerprinting, encoding, or publication. Its immutable codec
+and explicit validation remain available for finer-grained experiments.
+
+
 This completed-body cache remains an opt-in developer experiment under
 `completed_body_cache`. Initial restricted coverage reused ordinary bodies but
 missed costly bodies containing static-data requests. Static-value paths extend
 that coverage; overall performance and complete production coverage still need
 validation. Ordinary builds do not load or publish these body records.
+
+Completed-body frontier evidence retains checked target substitutions as
+explicit module-owned checked types and alias identities, including nested
+and callable-contract evidence. ConstStore's function-value evidence encoding
+alone is insufficient: it omits edge-local substitutions still consumed when
+a deferred target specializes. The body record validates and restores these
+inputs, with storage that outlives the shard when global requests retain it.

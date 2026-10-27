@@ -10321,7 +10321,7 @@ const Builder = struct {
         const callee_context = (try self.interfaceCalleeContext(view)) orelse return null;
         const top = (try self.literalTopModules()).?;
         var family = TypeDigestHasher.init();
-        family.update("roc.completed-body-family.v2");
+        family.update("roc.completed-body-family.v4");
         family.update(&view.key.bytes);
         family.update(&(view.code_generation_key orelse view.key).bytes);
         family.update(&scope_context);
@@ -10438,7 +10438,7 @@ const Builder = struct {
             self.allocator.destroy(arena);
         };
         const validation = CompletedBodyValidation{ .builder = self, .job = job, .names = &workspace.name_store };
-        var payload = PersistentInterface.decodeFrozen(FrozenBodyProbe, "BODY0002".*, arena.allocator(), &workspace.types, &workspace.name_store, bytes, BodyContext.PersistentProvenance{ .builder = self, .completed_body_validation = &validation }, null) catch |err| switch (err) {
+        var payload = PersistentInterface.decodeFrozen(FrozenBodyProbe, "BODY0004".*, arena.allocator(), &workspace.types, &workspace.name_store, bytes, BodyContext.PersistentProvenance{ .builder = self, .completed_body_validation = &validation }, null) catch |err| switch (err) {
             error.InvalidSummary => return null,
             error.OutOfMemory => return error.OutOfMemory,
         };
@@ -10458,7 +10458,7 @@ const Builder = struct {
             var spec: SealedTemplateSpec = undefined;
             inline for (@typeInfo(SealedTemplateSpec).@"struct".field_names) |field| {
                 if (comptime std.mem.eql(u8, field, "evidence")) {
-                    spec.evidence = try FrozenEvidenceContext.restore(self, stored.evidence);
+                    spec.evidence = if (stored.evidence) |evidence| try FrozenEvidenceContext.restore(self, evidence) else null;
                 } else if (comptime std.mem.eql(u8, field, "subst")) {
                     spec.subst = try self.allocator.dupe(SealedSubstSlot, stored.subst);
                 } else if (comptime std.mem.eql(u8, field, "codec_contract")) {
@@ -10507,7 +10507,7 @@ const Builder = struct {
         for (draft.sealed_template_specs.items, templates) |source, *out| {
             inline for (@typeInfo(FrozenTemplateProbe).@"struct".field_names) |field| {
                 if (comptime std.mem.eql(u8, field, "evidence")) {
-                    out.evidence = try self.constFnEvidence(rootEvidence(source.template_ref, source.evidence));
+                    out.evidence = if (source.evidence) |evidence| try FrozenDispatchEvidence.capture(self, scratch.allocator(), source.template_ref, evidence) else null;
                 } else if (comptime std.mem.eql(u8, field, "codec_contract")) {
                     out.codec_contract = FrozenCodecProbe.of(source.codec_contract);
                 } else @field(out, field) = @field(source, field);
@@ -10588,7 +10588,7 @@ const Builder = struct {
             return null;
         }
         if (replay and job.completed_body_address == null) return null;
-        const bytes = PersistentInterface.encodeFrozen(FrozenBodyProbe, if (replay) "BODY0002".* else "BODYPR02".*, self.allocator, &workspace.types, &workspace.name_store, payload, BodyContext.PersistentProvenance{ .builder = self }, &stats) catch |err| switch (err) {
+        const bytes = PersistentInterface.encodeFrozen(FrozenBodyProbe, if (replay) "BODY0004".* else "BODYPR02".*, self.allocator, &workspace.types, &workspace.name_store, payload, BodyContext.PersistentProvenance{ .builder = self }, &stats) catch |err| switch (err) {
             error.NotRepresentable => return null,
             error.OutOfMemory => return error.OutOfMemory,
         };
@@ -15261,6 +15261,10 @@ const Builder = struct {
         codec_contract: ?SealedCodecContractContext,
         demand: Demand,
     ) Allocator.Error!ResolvedTemplateSpec {
+        const evidence = if (@TypeOf(spec.evidence) == ?[]const SpecEvidence)
+            spec.evidence orelse Common.invariant("deferred request lost its dispatch evidence")
+        else
+            spec.evidence;
         const draft_fn = &body_draft.fns.items[@backingInt(spec.fn_id)];
         draft_fn.source.mono_fn_ty = .{ .sealed = draft_fn_ty };
         const signature_relation = draft_fn.signature_relation;
@@ -15304,7 +15308,7 @@ const Builder = struct {
                 spec.source_fn_ty,
                 spec.source_fn_key,
                 request_fn_ty,
-                spec.evidence,
+                evidence,
                 request_subst,
                 signature_relation,
                 .already_counted,
@@ -15968,7 +15972,7 @@ const Builder = struct {
                 .source_fn_ty = spec.source_fn_ty,
                 .source_fn_key = spec.source_fn_key,
                 .request_fn_ty = request_ty,
-                .evidence = spec.evidence,
+                .evidence = if (spec.local_context_dependent and spec.state == .lowered) null else spec.evidence,
                 .codec_contract = if (spec.codec_contract) |contract| .{
                     .anchor = contract.anchor,
                     .constructor_ty = try sealer.sealNode(contract.constructor_node),
@@ -16323,7 +16327,7 @@ const Builder = struct {
             try self.lowered_templates.put(fn_id, .{
                 .def = ids.def(draft_def),
                 .spec = spec_id,
-                .evidence = spec.evidence,
+                .evidence = spec.evidence orelse Common.invariant("global template publication lost dispatch evidence"),
                 .topology = try self.retainFnEvidence(evidence),
             });
             try self.markTemplateReady(fn_id, solved_fn_ty);
@@ -18356,7 +18360,9 @@ const SealedTemplateSpec = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     request_fn_ty: Type.TypeId,
-    evidence: []const SpecEvidence,
+    /// A fully lowered lexical body carries its resolved calls in the draft.
+    /// Only deferred or globally publishable requests retain dispatch evidence.
+    evidence: ?[]const SpecEvidence,
     /// The request's substitution sealed in the shard's store epoch.
     subst: SealedSubstitution,
     codec_contract: ?SealedCodecContractContext,
@@ -73418,7 +73424,7 @@ const FrozenTemplateProbe = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     request_fn_ty: Type.TypeId,
-    evidence: StoredConstFnEvidence,
+    evidence: ?FrozenDispatchEvidence,
     /// The request's substitution sealed in the shard's store epoch.
     subst: SealedSubstitution,
     codec_contract: ?FrozenCodecProbe,
@@ -73528,8 +73534,8 @@ const CompletedBodyValidation = struct {
     }
     fn coverage(payload: FrozenBodyProbe) bool {
         if (payload.comptime_value_roots.len != 0 or payload.literal_roots.len != 0 or payload.layout_requests.len != 0 or payload.roots.len != 0) return false;
-        for (payload.templates) |spec| if (spec.requires_local or spec.local_context_dependent or spec.state == .lowering) return false;
-        for (payload.nested) |spec| if (spec.requires_local or spec.local_context_dependent or spec.state == .lowering) return false;
+        for (payload.templates) |spec| if (spec.state == .lowering or ((spec.requires_local or spec.local_context_dependent) and spec.state != .lowered)) return false;
+        for (payload.nested) |spec| if (spec.state == .lowering or ((spec.requires_local or spec.local_context_dependent) and spec.state != .lowered)) return false;
         return true;
     }
     fn staticNode(self: *const CompletedBodyValidation, request: DraftStaticDataRequest, dependency: CompletedBodyStaticDependency) Error!checked.ConstNodeId {
@@ -73586,11 +73592,21 @@ const CompletedBodyValidation = struct {
         for (payload.owner_runs) |owner_run| inline for (@typeInfo(DraftCoreKind).@"enum".field_names, 0..) |column, index| {
             if (owner_run.starts[index] > owner_run.ends[index] or owner_run.ends[index] > @field(payload, column).len) return rejected(@src().line);
         };
+        for (payload.fns, 0..) |fn_, index| switch (fn_.parent_owner) {
+            .draft_fn => |parent| if (@backingInt(parent) >= index) return rejected(@src().line),
+            .root, .reserved_fn => {},
+        };
         for (payload.templates) |spec| {
-            if (spec.requires_local or spec.local_context_dependent or spec.state == .lowering) return rejected(@src().line);
-            try self.evidence(spec.evidence);
+            if (spec.state == .lowering or ((spec.requires_local or spec.local_context_dependent) and spec.state != .lowered)) return rejected(@src().line);
+            const closed_local = spec.local_context_dependent and spec.state == .lowered;
+            if ((spec.evidence == null) != closed_local) return rejected(@src().line);
+            if (closed_local and (spec.def_id != null or spec.lexical_owner == null)) return rejected(@src().line);
+            if (spec.evidence) |stored_evidence| {
+                try self.evidence(stored_evidence.stored);
+                try stored_evidence.validate(self);
+            }
         }
-        for (payload.nested) |spec| if (spec.requires_local or spec.local_context_dependent or spec.state == .lowering) return rejected(@src().line);
+        for (payload.nested) |spec| if (spec.state == .lowering or ((spec.requires_local or spec.local_context_dependent) and spec.state != .lowered)) return rejected(@src().line);
         var walker = Walker{ .validation = self, .payload = &payload };
         var read_only = payload;
         try walker.walk(FrozenBodyProbe, &read_only, false);
@@ -73701,8 +73717,15 @@ const CompletedBodyValidation = struct {
             }
             if (T == Ast.NestedFn) {
                 const owner = try v.procedure(value.owner);
-                if (value.default_root != null) return rejected(@src().line);
-                if (@backingInt(value.site) >= owner.nested_proc_sites.sites.len) return rejected(@src().line);
+                const site_view = if (value.default_root) |identity|
+                    v.builder.moduleForIdentityHash(&identity.bytes) orelse return rejected(@src().line)
+                else
+                    owner;
+                if (@backingInt(value.site) >= site_view.nested_proc_sites.sites.len) return rejected(@src().line);
+                switch (site_view.nested_proc_sites.sites[@backingInt(value.site)].owner) {
+                    .template => |site_owner| if (value.default_root != null or !names.procedureTemplateRefEql(site_owner, value.owner)) return rejected(@src().line),
+                    .default_root => if (value.default_root == null) return rejected(@src().line),
+                }
                 return;
             }
             if (T == DraftTypeCell) {
@@ -73747,13 +73770,106 @@ const CompletedBodyValidation = struct {
     };
 };
 
+/// ConstStore evidence intentionally omits edge-local substitutions. A queued
+/// body frontier can still consume them, so completed bodies retain them in
+/// addition to the value's dispatch identity. The shared walk gives these
+/// entries the same explicit order during capture and restoration.
+const FrozenDispatchEvidence = struct {
+    stored: StoredConstFnEvidence,
+    substitutions: []const ?Substitution,
+
+    const Substitution = struct {
+        module: checked.ModuleId,
+        tys: []const checked.CheckedTypeId,
+        keys: []const names.TypeDigest,
+        alias: ?struct { module: checked.ModuleId, value: static_dispatch.MethodAlias },
+    };
+
+    fn capture(builder: *Builder, allocator: Allocator, owner: names.ProcTemplate, vector: []const SpecEvidence) Allocator.Error!FrozenDispatchEvidence {
+        var walk = SpecEvidenceWalk{};
+        defer walk.deinit(allocator);
+        var substitutions = std.ArrayList(?Substitution).empty;
+        var cursor = vector;
+        while (try walk.next(allocator, &cursor)) |entry| switch (entry) {
+            .target => |target| {
+                const stored: ?Substitution = if (target.substitution) |substitution| blk: {
+                    const keys = try allocator.alloc(names.TypeDigest, substitution.tys.len);
+                    for (substitution.tys, keys) |ty, *key| key.* = substitution.view.types.rootKey(ty);
+                    break :blk .{
+                        .module = substitution.view.key,
+                        .tys = substitution.tys,
+                        .keys = keys,
+                        .alias = if (substitution.alias) |alias| .{ .module = alias.view.key, .value = alias.alias } else null,
+                    };
+                } else null;
+                try substitutions.append(allocator, stored);
+            },
+            else => {},
+        };
+        return .{ .stored = try builder.constFnEvidence(rootEvidence(owner, vector)), .substitutions = substitutions.items };
+    }
+
+    fn validate(self: FrozenDispatchEvidence, validation: *const CompletedBodyValidation) CompletedBodyValidation.Error!void {
+        var targets: usize = 0;
+        for (self.stored.entries.nodes) |entry| if (entry == .target) {
+            targets += 1;
+        };
+        if (targets != self.substitutions.len) return CompletedBodyValidation.rejected(@src().line);
+        for (self.substitutions) |maybe| if (maybe) |substitution| {
+            const view = validation.builder.moduleForKeyBytes(substitution.module.bytes) orelse return CompletedBodyValidation.rejected(@src().line);
+            if (substitution.tys.len != substitution.keys.len) return CompletedBodyValidation.rejected(@src().line);
+            for (substitution.tys, substitution.keys) |ty, key| {
+                if (@backingInt(ty) >= view.types.payloadCount()) return CompletedBodyValidation.rejected(@src().line);
+                if (!std.meta.eql(key, view.types.rootKey(ty))) return CompletedBodyValidation.rejected(@src().line);
+            }
+            if (substitution.alias) |alias| {
+                const alias_view = validation.builder.moduleForKeyBytes(alias.module.bytes) orelse return CompletedBodyValidation.rejected(@src().line);
+                switch (alias.value) {
+                    .top_level => |pattern| {
+                        for (alias_view.callable_eval_templates.templates) |template| {
+                            if (template.pattern == pattern) break;
+                        } else return CompletedBodyValidation.rejected(@src().line);
+                    },
+                    .local => |local| {
+                        if (@backingInt(local.lookup) >= alias_view.bodies.stored_exprs.len) return CompletedBodyValidation.rejected(@src().line);
+                        if (local.dispatch_scope) |scope| if (@backingInt(scope) >= alias_view.templates.dispatch_scopes.len) return CompletedBodyValidation.rejected(@src().line);
+                    },
+                }
+            }
+        };
+    }
+
+    fn restoreSubstitutions(self: FrozenDispatchEvidence, builder: *Builder, vector: []const SpecEvidence) Allocator.Error!void {
+        var walk = SpecEvidenceWalk{};
+        defer walk.deinit(builder.allocator);
+        var cursor = vector;
+        var index: usize = 0;
+        while (try walk.next(builder.allocator, &cursor)) |entry| switch (entry) {
+            .target => |target| {
+                if (index >= self.substitutions.len) Common.invariant("validated body evidence lost a target substitution");
+                @constCast(target).substitution = if (self.substitutions[index]) |substitution| .{
+                    .view = builder.moduleForId(substitution.module),
+                    // Global specialization records may outlive the shard.
+                    .tys = try builder.evidence_arena.allocator().dupe(checked.CheckedTypeId, substitution.tys),
+                    .alias = if (substitution.alias) |alias| .{ .view = builder.moduleForId(alias.module), .alias = alias.value } else null,
+                } else null;
+                index += 1;
+            },
+            else => {},
+        };
+        if (index != self.substitutions.len) Common.invariant("validated body evidence changed target count");
+    }
+};
+
 const FrozenEvidenceContext = struct {
     allocator: Allocator,
     builder: *Builder,
-    fn restore(builder: *Builder, evidence: StoredConstFnEvidence) Allocator.Error![]const SpecEvidence {
+    fn restore(builder: *Builder, evidence: FrozenDispatchEvidence) Allocator.Error![]const SpecEvidence {
         var self = FrozenEvidenceContext{ .allocator = builder.allocator, .builder = builder };
         var cursor: usize = 0;
-        return BodyContext.materializeConstFnEvidenceVector(&self, evidence.entries, &cursor, evidence.frames[0].roots_len);
+        const vector = try BodyContext.materializeConstFnEvidenceVector(&self, evidence.stored.entries, &cursor, evidence.stored.frames[0].roots_len);
+        try evidence.restoreSubstitutions(builder, vector);
+        return vector;
     }
     fn finishStoredEvidenceTarget(self: *FrozenEvidenceContext, target: *SpecEvidenceTarget, stored: check.ConstStore.ConstFnTargetEvidence, nested: NestedSpecEvidence) Allocator.Error!void {
         if (stored.method.kind == .local_proc) Common.invariant("validated completed body retained a local procedure context");
@@ -73766,6 +73882,59 @@ const FrozenEvidenceContext = struct {
         };
     }
 };
+
+test "completed body frontier retains nested target substitutions with owned checked types" {
+    const a = std.testing.allocator;
+    var ns = names.NameStore.init(a);
+    defer ns.deinit();
+    var types = checked.CheckedTypeStore{};
+    defer types.deinit(a);
+    const first = try types.reserveSyntheticTypeRoot(a, .{ .bytes = @splat(7) }, false);
+    try types.fillSyntheticTypeRoot(a, first, .empty_record);
+    const second = try types.reserveSyntheticTypeRoot(a, .{ .bytes = @splat(8) }, false);
+    try types.fillSyntheticTypeRoot(a, second, .empty_tag_union);
+    const owner: checked.ModuleId = .{ .bytes = @splat(11) };
+    var views: [1]ModuleViewData = undefined;
+    views[0].key = owner;
+    views[0].types = types.view();
+    var builder: Builder = undefined;
+    builder.allocator = a;
+    builder.borrowed_module_views = &views;
+    builder.module_index = @TypeOf(builder.module_index).init(a);
+    defer builder.module_index.deinit();
+    try builder.module_index.put(owner.bytes, .root);
+    builder.evidence_arena = base.SingleThreadArena.init(a);
+    defer builder.evidence_arena.deinit();
+    const validation = CompletedBodyValidation{ .builder = &builder, .job = undefined, .names = &ns };
+    var ids = [_]checked.CheckedTypeId{ first, second };
+    var keys = [_]names.TypeDigest{ views[0].types.rootKey(first), views[0].types.rootKey(second) };
+    var substitutions = [_]?FrozenDispatchEvidence.Substitution{
+        .{ .module = owner, .tys = ids[0..1], .keys = keys[0..1], .alias = null },
+        .{ .module = owner, .tys = ids[1..2], .keys = keys[1..2], .alias = null },
+    };
+    var frozen = FrozenDispatchEvidence{ .stored = StoredConstFnEvidence.empty(), .substitutions = &substitutions };
+    frozen.stored.entries.nodes = &.{ .{ .target = 0 }, .{ .target = 1 } };
+    try frozen.validate(&validation);
+    var child: SpecEvidenceTarget = undefined;
+    child.nested = .synthesize;
+    child.callable_contracts = &.{};
+    var parent: SpecEvidenceTarget = undefined;
+    parent.nested = .{ .resolved = &.{.{ .target = &child }} };
+    parent.callable_contracts = &.{};
+    try frozen.restoreSubstitutions(&builder, &.{.{ .target = &parent }});
+    try std.testing.expectEqual(first, parent.substitution.?.tys[0]);
+    try std.testing.expectEqual(second, child.substitution.?.tys[0]);
+    try std.testing.expectEqual(&views[0], child.substitution.?.view);
+    ids[1] = first;
+    try std.testing.expectEqual(second, child.substitution.?.tys[0]);
+    try std.testing.expectError(error.InvalidSummary, frozen.validate(&validation));
+    ids[1] = second;
+    substitutions[1].?.module.bytes[0] ^= 1;
+    try std.testing.expectError(error.InvalidSummary, frozen.validate(&validation));
+    substitutions[1].?.module = owner;
+    frozen.substitutions = substitutions[0..1];
+    try std.testing.expectError(error.InvalidSummary, frozen.validate(&validation));
+}
 
 test "completed body rejects foreign reservations and rebinds its own references" {
     const a = std.testing.allocator;
@@ -73945,4 +74114,74 @@ test "completed body constant path publication terminates on shared cyclic value
     const path = (try paths.path(child)).?;
     try std.testing.expectEqual(child, CompletedConstPaths.follow(&store, root, path).?);
     try std.testing.expectEqual(@as(usize, 0), (try paths.path(root)).?.len);
+}
+
+test "completed body static paths require current producer identity and checked type owner" {
+    const a = std.testing.allocator;
+    var ns = names.NameStore.init(a);
+    defer ns.deinit();
+    var store = checked.ConstStore.init(a);
+    defer store.deinit();
+    const leaf = try store.append(.zst);
+    const root = try store.append(.{ .box = leaf });
+    var types = checked.CheckedTypeStore{};
+    defer types.deinit(a);
+    const ty = try types.reserveSyntheticTypeRoot(a, .{ .bytes = @splat(7) }, false);
+    try types.fillSyntheticTypeRoot(a, ty, .empty_record);
+    const owner: checked.ModuleId = .{ .bytes = @splat(11) };
+    const locator: checked.ConstLocator = .{
+        .artifact = owner,
+        .owner = .{ .top_level_binding = .{ .module_idx = 0, .pattern = @fromBackingInt(0) } },
+        .template = @fromBackingInt(0),
+        .source_scheme = .{ .bytes = @splat(12) },
+    };
+    var templates: checked.ConstTemplateTable = .{};
+    defer templates.templates.deinit(a);
+    try templates.templates.append(a, .{
+        .id = locator.template,
+        .owner = locator.owner,
+        .source_scheme = locator.source_scheme,
+        .state = .{ .stored_const = .{ .node = root, .root = @fromBackingInt(0), .root_type = @fromBackingInt(0) } },
+    });
+    var rows = [_]checked.CompileTimeRootIdentity{.{ .value = @splat(13), .site = @splat(14) }};
+    const identities: checked.CompileTimeRootIdentityTable = .{ .rows = &rows };
+    var views: [1]ModuleViewData = undefined;
+    views[0].key = owner;
+    views[0].const_templates = &templates;
+    views[0].const_store = &store;
+    views[0].types = types.view();
+    views[0].compile_time_root_identities = &identities;
+    var builder: Builder = undefined;
+    builder.allocator = a;
+    builder.borrowed_module_views = &views;
+    builder.module_index = @TypeOf(builder.module_index).init(a);
+    defer builder.module_index.deinit();
+    try builder.module_index.put(owner.bytes, .root);
+    const validation = CompletedBodyValidation{ .builder = &builder, .job = undefined, .names = &ns };
+    var request: DraftStaticDataRequest = .{
+        .const_locator = locator,
+        .module = owner,
+        // The old allocation ids deliberately do not exist in this store.
+        .node = @fromBackingInt(111),
+        .const_node = @fromBackingInt(111),
+        .checked_type = ty,
+        .checked_type_module = owner,
+        .ty = .{ .sealed = @fromBackingInt(0) },
+    };
+    const path = [_]CompletedConstStep{.{ .kind = .box }};
+    const dependency: CompletedBodyStaticDependency = .{
+        .root = @fromBackingInt(0),
+        .identity = rows[0],
+        .checked_type_key = views[0].types.rootKey(ty),
+        .path = &path,
+    };
+    try std.testing.expectEqual(leaf, try validation.staticNode(request, dependency));
+    rows[0].value[0] ^= 1;
+    try std.testing.expectError(error.InvalidSummary, validation.staticNode(request, dependency));
+    rows[0] = dependency.identity;
+    request.checked_type_module.bytes[0] ^= 1;
+    try std.testing.expectError(error.InvalidSummary, validation.staticNode(request, dependency));
+    request.checked_type_module = owner;
+    templates.templates.items[0].state = .reserved;
+    try std.testing.expectError(error.InvalidSummary, validation.staticNode(request, dependency));
 }
