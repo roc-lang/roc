@@ -18209,6 +18209,87 @@ const TemplateIteratorRefs = struct {
     }
 };
 
+/// Nested functions that own a callable-derived dispatch scope, keyed by
+/// checked expression, each mapped to its own type variable.
+///
+/// A function no construction edge generalized (a lambda that supplies a
+/// conditional's, match's, or block's value inside a stored value) shares its
+/// variables with the value holding it. When checking left such a variable
+/// unquantified and constrained, nothing in this module pins it, yet every
+/// importing use copies the value's type and requests the function at a
+/// concrete one. The function's own callable type is then the path to that
+/// receiver, exactly as a generalized nested function's scheme is, so its
+/// scope publishes those requirements as callable-derived parameters instead
+/// of letting the unpinned-dispatch rule commit them to `unreachable`. Only a
+/// function whose type reaches the receiver of a dispatch plan checking left
+/// unquantified owns one; a module with no such plan walks no types.
+fn collectCallableDerivedSchemes(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_bodies: *const CheckedBodyStore,
+    plan_build_data: *const static_dispatch.PlanTableBuildData,
+    local_schemes: *const collections.DenseMap(u32, Var),
+    out: *collections.DenseMap(u32, Var),
+) Allocator.Error!void {
+    const types_store = module.typeStoreConst();
+    var unquantified = collections.DenseMap(Var, void).init(allocator);
+    defer unquantified.deinit();
+    for (plan_build_data.plan_sources) |source| {
+        try noteUnquantifiedReceiver(types_store, source.dispatcher_var, &unquantified);
+    }
+    for (plan_build_data.iterator_plan_sources) |source| {
+        try noteUnquantifiedReceiver(types_store, source.iter_dispatcher_var, &unquantified);
+        try noteUnquantifiedReceiver(types_store, source.next_dispatcher_var, &unquantified);
+    }
+    if (unquantified.count() == 0) return;
+
+    // A closure's scope belongs to the closure, never to the lambda it wraps.
+    var closure_lambdas = collections.DenseMap(CIR.Expr.Idx, void).init(allocator);
+    defer closure_lambdas.deinit();
+    var raw_node: u32 = 0;
+    while (raw_node < module.nodeCount()) : (raw_node += 1) {
+        if (module.nodeTag(@fromBackingInt(@intCast(raw_node))) != .expr_closure) continue;
+        const closure_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node));
+        try closure_lambdas.put(module.expr(closure_expr).data.e_closure.lambda_idx, {});
+    }
+
+    var scratch = dispatch_evidence.Scratch{};
+    defer scratch.deinit(allocator);
+    var params = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
+    defer params.deinit(allocator);
+    raw_node = 0;
+    while (raw_node < module.nodeCount()) : (raw_node += 1) {
+        const tag = module.nodeTag(@fromBackingInt(@intCast(raw_node)));
+        if (tag != .expr_lambda and tag != .expr_closure) continue;
+        const source_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node));
+        if (closure_lambdas.contains(source_expr)) continue;
+        const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse continue;
+        if (local_schemes.contains(@backingInt(checked_expr))) continue;
+        const fn_var = ModuleEnv.varFrom(source_expr);
+        params.clearRetainingCapacity();
+        try dispatch_evidence.enumerateEvidenceParams(allocator, types_store, fn_var, &scratch, &params);
+        for (params.items) |param| {
+            if (param.path_len == 0) continue;
+            if (!unquantified.contains(types_store.resolveVar(param.dispatcher_var).var_)) continue;
+            try out.put(@backingInt(checked_expr), fn_var);
+            break;
+        }
+    }
+}
+
+fn noteUnquantifiedReceiver(
+    types_store: *const types.Store,
+    receiver: Var,
+    out: *collections.DenseMap(Var, void),
+) Allocator.Error!void {
+    const resolved = types_store.resolveVar(receiver);
+    if (resolved.desc.rank == .generalized) return;
+    switch (resolved.desc.content) {
+        .flex => try out.put(resolved.var_, {}),
+        .rigid, .alias, .structure, .field_presence, .err => {},
+    }
+}
+
 fn sealCheckedProcedureTemplateRefs(
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -18220,6 +18301,7 @@ fn sealCheckedProcedureTemplateRefs(
     method_registry: *static_dispatch.MethodRegistry,
     resolved_value_refs: *ResolvedValueRefTable,
     template_iterator_refs: *TemplateIteratorRefs,
+    plan_build_data: *const static_dispatch.PlanTableBuildData,
 ) Allocator.Error!void {
     // Local functions with dispatch obligations: entering one while collecting
     // pushes an evidence scope. Declarations map to their pattern scheme;
@@ -18229,6 +18311,8 @@ fn sealCheckedProcedureTemplateRefs(
     defer local_schemes.deinit();
     var nested_function_uses = collections.DenseMap(u32, u32).init(allocator);
     defer nested_function_uses.deinit();
+    var callable_derived_schemes = collections.DenseMap(u32, Var).init(allocator);
+    defer callable_derived_schemes.deinit();
     {
         const types_store = module.typeStoreConst();
 
@@ -18285,6 +18369,8 @@ fn sealCheckedProcedureTemplateRefs(
             try local_schemes.put(@backingInt(checked_expr), @fromBackingInt(@intCast(record.scheme_root)));
             try nested_function_uses.put(@backingInt(checked_expr), @intCast(record_idx));
         }
+
+        try collectCallableDerivedSchemes(allocator, module, checked_bodies, plan_build_data, &local_schemes, &callable_derived_schemes);
     }
 
     var collector = CheckedTemplateRefCollector.init(
@@ -18295,6 +18381,7 @@ fn sealCheckedProcedureTemplateRefs(
         static_dispatch_plans,
         &local_schemes,
         &nested_function_uses,
+        &callable_derived_schemes,
     );
     defer collector.deinit();
 
@@ -21648,6 +21735,14 @@ const EvidencePass = struct {
         try entries.ensureTotalCapacity(self.allocator, scope_params.len);
         for (scope_params) |param| {
             if ((param.path_len > 0 and param.source != .constraint_callable) or param.source == .scheme_requirement) {
+                // A callable-derived scope's type can also reach a receiver
+                // an enclosing scope binds, which forwards to that scope.
+                if (param.source != .scheme_requirement) {
+                    if (try self.evidenceForVar(param, param.dispatcher_var, param.constraint.fn_var, false)) |evidence| {
+                        entries.appendAssumeCapacity(evidence);
+                        continue;
+                    }
+                }
                 const dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
                     checkedArtifactInvariant("checked nested-procedure evidence dispatcher type was not published", .{});
                 entries.appendAssumeCapacity(.{
@@ -21873,6 +21968,11 @@ const CheckedTemplateRefCollector = struct {
     /// Checked nested function expr -> `SchemeUseRecord` index for the
     /// construction edge that instantiated it.
     nested_function_uses: *const collections.DenseMap(u32, u32),
+    /// Checked nested function expr -> its own type variable, for each
+    /// function that owns a callable-derived scope
+    /// (`collectCallableDerivedSchemes`). A template's root function is never
+    /// one: its template's own parameters already answer for its callable.
+    callable_derived_schemes: *const collections.DenseMap(u32, Var),
     value_refs: std.ArrayList(ResolvedValueRefId),
     dispatch_refs: std.ArrayList(static_dispatch.StaticDispatchPlanId),
     iterator_refs: std.ArrayList(static_dispatch.IteratorForPlanId),
@@ -21903,6 +22003,7 @@ const CheckedTemplateRefCollector = struct {
         static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
         local_schemes: *const collections.DenseMap(u32, Var),
         nested_function_uses: *const collections.DenseMap(u32, u32),
+        callable_derived_schemes: *const collections.DenseMap(u32, Var),
     ) CheckedTemplateRefCollector {
         return .{
             .allocator = allocator,
@@ -21912,6 +22013,7 @@ const CheckedTemplateRefCollector = struct {
             .static_dispatch_plans = static_dispatch_plans,
             .local_schemes = local_schemes,
             .nested_function_uses = nested_function_uses,
+            .callable_derived_schemes = callable_derived_schemes,
             .value_refs = .empty,
             .dispatch_refs = .empty,
             .iterator_refs = .empty,
@@ -22112,7 +22214,8 @@ const CheckedTemplateRefCollector = struct {
             try self.scheme_use_scopes.append(self.allocator, self.currentScope());
         }
 
-        const local_scheme = self.local_schemes.get(raw_expr);
+        const local_scheme = self.local_schemes.get(raw_expr) orelse
+            if (self.template_root_expr != expr_id) self.callable_derived_schemes.get(raw_expr) else null;
         if (local_scheme) |scheme_var| {
             const parent = self.currentScopeId();
             const scheme_root = self.checked_types.rootForSourceVar(self.module, scheme_var) orelse
@@ -37758,6 +37861,7 @@ pub fn publishFromTypedModule(
         &method_registry,
         &resolved_value_refs,
         &template_iterator_refs,
+        &plan_build_data,
     );
 
     const platform_requirement_root_evidence = try allocator.alloc(

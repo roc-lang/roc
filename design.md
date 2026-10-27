@@ -5496,7 +5496,9 @@ expression a scheme, and Monotype would meet a nested function whose scheme
 belongs to no binding it lowers (issue 12016). Its variables instead stay at
 the enclosing rank, so `f = if c |x| x else |x| x` is weak, and a record
 field or list item holding such a conditional stores the lambdas without a
-construction edge.
+construction edge. Evidence for such a lambda's requirements on a variable
+checking left unquantified comes from its callable-derived dispatch scope
+(Static Dispatch In Monotype), not from a scheme.
 
 An annotation cannot make a weak binding polymorphic. An annotation on a weak
 binding that introduces a type variable, named (`a`, `_a`) or an anonymous
@@ -17017,7 +17019,17 @@ is reachable through the function's own callable type is not
 construction edge of an expression-position function stored in a containing
 value (`hooks = { shout: |s| s.concat("!") }`), whose instantiated scheme is
 the dispatch scope that function owns. Both publish their record through one
-rule (`UnpinnedRecordEvidence.from_callable`). Checker output records a
+rule (`UnpinnedRecordEvidence.from_callable`). A lambda that a stored
+conditional, match, or block selects has no construction edge and shares its
+variables with the value holding it, yet an importing use copies that value's
+type exactly as it copies a construction edge's instance. When its own type
+reaches the receiver of a dispatch plan whose variable checking left
+unquantified, the lambda owns a callable-derived dispatch scope whose schema
+is enumerated over its own type (`collectCallableDerivedSchemes`); the
+lambda's own construction then publishes that scope's evidence, forwarding a
+receiver an enclosing scope binds and recording `from_callable` for the
+rest. A template's root function never owns one, and a module with no
+unquantified dispatch receiver walks no types for it. Checker output records a
 `from_callable` marker in that
 requirement's evidence-vector slot. The owning schema's parameter at that
 position supplies the exact method and dispatcher path; the marker carries no

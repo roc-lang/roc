@@ -4137,6 +4137,92 @@ test "issue 12609 lss runs imported stored inline lambdas at two types" {
     try std.testing.expectEqualStrings("(\"hi!\", \"abab\", [1, 2, 1, 2])", output);
 }
 
+test "issue 12609 boxy runs imported lambdas a stored conditional, match, or block selects" {
+    const allocator = std.testing.allocator;
+    const hooks_module =
+        \\Hooks :: [].{
+        \\    flag = Bool.True
+        \\    hooks = {
+        \\        dup: if flag |s| s.concat(s) else |s| s,
+        \\        shout: match 1 {
+        \\            1 => |s| s.concat("!")
+        \\            _ => |s| s
+        \\        },
+        \\        suffix: {
+        \\            tail = "?"
+        \\            |s| s.concat(tail)
+        \\        },
+        \\    }
+        \\}
+    ;
+    const source =
+        \\import Hooks
+        \\
+        \\main = ((Hooks.hooks.dup)("ab"), (Hooks.hooks.dup)([1.U8]), (Hooks.hooks.shout)("hi"), (Hooks.hooks.suffix)("ok"))
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Hooks", .source = hooks_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("(\"abab\", [1, 1], \"hi!\", \"ok?\")", output);
+}
+
+test "issue 12609 lss runs imported lambdas a stored conditional, match, or block selects" {
+    const allocator = std.testing.allocator;
+    const hooks_module =
+        \\Hooks :: [].{
+        \\    flag = Bool.True
+        \\    hooks = {
+        \\        dup: if flag |s| s.concat(s) else |s| s,
+        \\        shout: match 1 {
+        \\            1 => |s| s.concat("!")
+        \\            _ => |s| s
+        \\        },
+        \\        suffix: {
+        \\            tail = "?"
+        \\            |s| s.concat(tail)
+        \\        },
+        \\    }
+        \\}
+    ;
+    const source =
+        \\import Hooks
+        \\
+        \\main = ((Hooks.hooks.dup)("ab"), (Hooks.hooks.dup)([1.U8]), (Hooks.hooks.shout)("hi"), (Hooks.hooks.suffix)("ok"))
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Hooks", .source = hooks_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("(\"abab\", [1, 1], \"hi!\", \"ok?\")", output);
+}
+
 test "issue 11170 boxy generic inspect preserves SIMD descriptor methods" {
     const allocator = std.testing.allocator;
     const source =

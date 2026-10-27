@@ -2383,6 +2383,30 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "(\"hi!\", \"abab\", [1, 2, 1, 2])" },
     },
     .{
+        // https://github.com/roc-lang/roc/issues/12609
+        // A lambda that a stored conditional selects has no construction edge
+        // of its own, so it owns a callable-derived evidence scope: its
+        // requirement on the value's unpinned variable resolves from each
+        // importing request.
+        .name = "issue 12609: imported lambda a stored conditional selects runs at two types",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Hooks",
+            .source =
+            \\Hooks := [].{
+            \\    flag = Bool.True
+            \\    hooks = { dup: if flag |s| s.concat(s) else |s| s }
+            \\}
+            ,
+        }},
+        .source =
+        \\import Hooks
+        \\
+        \\main = ((Hooks.hooks.dup)("ab"), (Hooks.hooks.dup)([1.U8]))
+        ,
+        .expected = .{ .inspect_str = "(\"abab\", [1, 1])" },
+    },
+    .{
         // https://github.com/roc-lang/roc/issues/11170
         // `Str.inspect` of a SIMD vector must render through the vector's
         // `to_inspect` method in `Builtin.roc`, the same string `dbg` prints.
