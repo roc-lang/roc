@@ -364,6 +364,66 @@ pub fn record(cache: *Cache, ops: *RocOps, fields: []const FieldInput) *const Ty
     return cache.intern(key, built, ops);
 }
 
+/// A record of `fields` together with the fields of the record `ext`
+/// describes: an open row's explicit fields and its remainder's.
+pub fn recordExtended(cache: *Cache, ops: *RocOps, fields: []const FieldInput, ext: *const TypeDesc) *const TypeDesc {
+    const ext_fields: []const desc_mod.Field = switch (ext.kind) {
+        .record => ext.fields(),
+        .zst => &.{},
+        else => invariant(ops, "a record row's remainder descriptor is not a record"),
+    };
+    var scratch: Scratch(FieldInput, 32) = .{};
+    defer scratch.deinit(ops);
+    const all = scratch.get(fields.len + ext_fields.len, ops);
+    @memcpy(all[0..fields.len], fields);
+    var count = fields.len;
+    for (ext_fields) |field| {
+        if (field.is_padding != 0) continue;
+        all[count] = .{ .name = field.name orelse invariant(ops, "a record row's remainder has an unnamed field"), .desc = field.desc };
+        count += 1;
+    }
+    return record(cache, ops, all[0..count]);
+}
+
+/// A tag union of `variants` together with the variants of the tag union
+/// `ext` describes: an open row's explicit tags and its remainder's.
+pub fn tagUnionExtended(cache: *Cache, ops: *RocOps, variants: []const VariantInput, ext: *const TypeDesc) *const TypeDesc {
+    const ext_variants: []const desc_mod.Variant = switch (ext.kind) {
+        .tag_union => ext.variants(),
+        .zst => &.{},
+        else => invariant(ops, "a tag row's remainder descriptor is not a tag union"),
+    };
+    var scratch: Scratch(VariantInput, 32) = .{};
+    defer scratch.deinit(ops);
+    const all = scratch.get(variants.len + ext_variants.len, ops);
+    @memcpy(all[0..variants.len], variants);
+    var payload_count: usize = 0;
+    for (ext_variants) |variant| payload_count += variant.payload_count;
+    var payload_scratch: Scratch(*const TypeDesc, 32) = .{};
+    defer payload_scratch.deinit(ops);
+    const payloads = payload_scratch.get(payload_count, ops);
+    var next: usize = 0;
+    for (ext_variants, all[variants.len..]) |variant, *input| {
+        const start = next;
+        switch (variant.payload_count) {
+            0 => {},
+            1 => {
+                payloads[next] = variant.payload;
+                next += 1;
+            },
+            else => {
+                var index: u32 = 0;
+                while (index < variant.payload_count) : (index += 1) {
+                    payloads[next] = variant.payload.fieldBySemanticIndex(index).desc;
+                    next += 1;
+                }
+            },
+        }
+        input.* = .{ .name = variant.name, .payload_count = variant.payload_count, .payloads = payloads.ptr + start };
+    }
+    return tagUnion(cache, ops, all);
+}
+
 /// A nominal record laid out in declared order with C-style padding, as a
 /// record with `_` fields is. `fields` is in declared order; a named field's
 /// semantic index is its label's rank among the named fields, and padding

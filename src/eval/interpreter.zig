@@ -8504,7 +8504,11 @@ pub const Interpreter = struct {
                     .desc = try self.descAt(frame, GuardedList.at(descs, i)),
                 };
                 const immortals = try self.boxyImmortals();
-                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(boxy.compose.record(immortals.composeCache(), &immortals.ops, fields)));
+                const composed = if (d.ext) |ext|
+                    boxy.compose.recordExtended(immortals.composeCache(), &immortals.ops, fields, try self.descAt(frame, ext))
+                else
+                    boxy.compose.record(immortals.composeCache(), &immortals.ops, fields);
+                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(composed));
             },
             .desc_tuple => |d| {
                 const elems = try self.descsAt(frame, d.elems);
@@ -8541,7 +8545,11 @@ pub const Interpreter = struct {
                     return self.invariantFailedError("LIR/interpreter invariant violated: desc_tag_union payload counts cover {d} of its {d} payloads", .{ next, payloads.len });
                 }
                 const immortals = try self.boxyImmortals();
-                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(boxy.compose.tagUnion(immortals.composeCache(), &immortals.ops, variants)));
+                const composed = if (d.ext) |ext|
+                    boxy.compose.tagUnionExtended(immortals.composeCache(), &immortals.ops, variants, try self.descAt(frame, ext))
+                else
+                    boxy.compose.tagUnion(immortals.composeCache(), &immortals.ops, variants);
+                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(composed));
             },
             .desc_nominal => |d| {
                 const backing = try self.descAt(frame, d.backing);

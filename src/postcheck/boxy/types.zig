@@ -199,6 +199,12 @@ pub const Store = struct {
     closed_memo: std.AutoHashMapUnmanaged(ClosedKey, TypeId) = .empty,
     /// The backing of each instantiated nominal node.
     backing_memo: std.AutoHashMapUnmanaged(TypeId, TypeId) = .empty,
+    /// Each module's nominal declarations by nominal key, filled once per
+    /// module on first use.
+    decl_by_key: std.AutoHashMapUnmanaged(DeclKey, checked.CheckedNominalDeclarationId) = .empty,
+    decl_keys_indexed: std.AutoHashMapUnmanaged(ModuleIndex, void) = .empty,
+
+    const DeclKey = struct { module: ModuleIndex, key: names.NominalTypeKey };
 
     const ClosedKey = struct { module: ModuleIndex, ty: checked.CheckedTypeId };
 
@@ -246,6 +252,19 @@ pub const Store = struct {
         self.name_arena.deinit();
         self.closed_memo.deinit(self.allocator);
         self.backing_memo.deinit(self.allocator);
+        self.decl_by_key.deinit(self.allocator);
+        self.decl_keys_indexed.deinit(self.allocator);
+    }
+
+    /// The declaration with nominal key `key` in `view`'s type store.
+    pub fn declarationByKey(self: *Store, view: *const ModuleView, key: names.NominalTypeKey) Allocator.Error!?checked.CheckedNominalDeclarationId {
+        if (!self.decl_keys_indexed.contains(view.index)) {
+            try self.decl_keys_indexed.put(self.allocator, view.index, {});
+            for (view.types().nominal_declarations) |declaration| {
+                try self.decl_by_key.put(self.allocator, .{ .module = view.index, .key = declaration.nominal }, declaration.id);
+            }
+        }
+        return self.decl_by_key.get(.{ .module = view.index, .key = key });
     }
 
     // -- Names --
@@ -780,7 +799,7 @@ pub const Converter = struct {
                     },
                     else => {},
                 }
-                const decl = self.declarationRef(view, nominal);
+                const decl = try self.declarationRef(view, nominal);
                 return try self.store.intern(.{ .nominal = .{
                     .decl = decl orelse .{ .module = module, .decl = @fromBackingInt(std.math.maxInt(u32)) },
                     .args = children,
@@ -804,7 +823,7 @@ pub const Converter = struct {
 
     /// The declaration a nominal payload names, or null for an opaque type
     /// with no backing.
-    fn declarationRef(self: Converter, view: *const ModuleView, nominal: checked.CheckedNominalType) ?DeclRef {
+    fn declarationRef(self: Converter, view: *const ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!?DeclRef {
         return switch (nominal.representation) {
             .opaque_without_backing => null,
             .local_declaration => |decl| .{ .module = view.index, .decl = decl },
@@ -813,11 +832,24 @@ pub const Converter = struct {
                 if (!checked.builtinNominalHasDeclarationBacking(builtin_nominal)) {
                     invariantFmt("builtin nominal {s} has no declaration backing yet reached nominal conversion", .{@tagName(builtin_nominal)});
                 }
-                const declaration = view.types().builtinNominalDeclaration(builtin_nominal) orelse
+                const owner = self.modules.byKey(nominal.owner_module.*);
+                const declaration = owner.types().builtinNominalDeclaration(builtin_nominal) orelse
                     invariantFmt("module has no declaration for builtin nominal {s}", .{@tagName(builtin_nominal)});
-                break :blk .{ .module = view.index, .decl = declaration.id };
+                break :blk .{ .module = owner.index, .decl = declaration.id };
             },
-            .local_box_payload_capability, .imported_box_payload_capability => invariant("box payload capability nominals are not yet lowered by Boxy"),
+            .local_box_payload_capability => |cap| blk: {
+                const capability = view.view.interface_capabilities.boxPayloadCapability(cap.capability);
+                const decl = (try self.store.declarationByKey(view, capability.nominal)) orelse
+                    invariant("a box payload capability names a nominal its module does not declare");
+                break :blk .{ .module = view.index, .decl = decl };
+            },
+            .imported_box_payload_capability => |cap| blk: {
+                const owner = self.modules.byKey(cap.artifact);
+                const capability = owner.view.interface_capabilities.boxPayloadCapability(cap.capability);
+                const decl = (try self.store.declarationByKey(owner, capability.nominal)) orelse
+                    invariant("a box payload capability names a nominal its module does not declare");
+                break :blk .{ .module = owner.index, .decl = decl };
+            },
         };
     }
 

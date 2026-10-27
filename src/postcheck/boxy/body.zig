@@ -69,11 +69,40 @@ const Task = union(enum) {
     /// Pop a Bool and check it as an `expect`.
     finish_expect: CheckedExprId,
     /// Pop the condition of if-branch `index` of `expr`.
-    if_test: struct { expr: CheckedExprId, index: u32, join: LIR.JoinPointId },
+    if_test: struct { expr: CheckedExprId, index: u32, join: LIR.JoinPointId, merge: ?MergeId },
     /// Pop a value and jump to `join` with it.
     jump: LIR.JoinPointId,
+    /// Jump to a join that carries no value (a loop's head or exit).
+    jump_without_value: LIR.JoinPointId,
+    /// Pop a `for` loop's iterable and run the loop.
+    for_start: struct { pattern: CheckedPatternId, body: CheckedExprId, plan: static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId },
+    /// Rebind a merge's binders to their values before its construct.
+    restore_merge: MergeId,
+    /// Rebind a merge's binders to its join's parameters.
+    enter_merge: MergeId,
+    /// Pop a loop condition: enter the body or leave the loop.
+    loop_test: struct { body: CheckedExprId, head: LIR.JoinPointId, exit: LIR.JoinPointId },
+    end_loop,
     /// Continue emitting at `hole`.
     resume_at: CFStmtId,
+    finish_field_access: CheckedExprId,
+    /// Pop a tag union value and compare its discriminant with `tag`'s.
+    finish_discriminant_eq: struct { value_ty: TypeId, tag: check.CheckedNames.TagLabelId, negated: bool },
+    finish_tuple_access: CheckedExprId,
+    /// Pop a value of this type, report it through `dbg`, and push it back.
+    finish_dbg: TypeId,
+    restore: struct { module: ModuleIndex, node: checked.ConstNodeId, ty: TypeId },
+    /// Push the function value a callable-eval binding stored.
+    restore_callable_eval: struct { module: ModuleIndex, template: checked.CallableEvalTemplateId },
+    /// Pop a restored closure's capture values and build it.
+    finish_restore_closure: struct { worker: WorkerId, count: u32 },
+    finish_restore_struct: struct { ty: TypeId, count: u32 },
+    finish_restore_tag: struct { ty: TypeId, name: types.NameId, count: u32 },
+    finish_restore_list: struct { ty: TypeId, count: u32 },
+    /// Push a value of `ty` for an expression whose evaluation diverged.
+    unreachable_value: TypeId,
+    /// Push the `{}` value of a construct whose value nothing reads.
+    unreachable_or_unit,
     /// Push `local` as a value.
     push_value: LocalId,
     /// Pop a value; the enclosing procedure returns it.
@@ -87,6 +116,24 @@ const Task = union(enum) {
     /// Pop a branch guard and continue into the branch's body or the next
     /// branch.
     match_guard: struct { expr: CheckedExprId, index: u32, scrutinee: LocalId, join: LIR.JoinPointId, miss: CFStmtId },
+};
+
+/// A control-flow construct's merge of the binders it reassigns (a checked
+/// state merge plan): their values before it, and the join parameters that
+/// carry their values after it.
+const Merge = struct {
+    binders: []const checked.PatternBinderId,
+    pre: []LocalId,
+    params: []LocalId,
+};
+
+const MergeId = u32;
+
+/// What a join's parameters are: an optional value, then the binders of its
+/// merge.
+const JoinInfo = struct {
+    value: ?LocalId,
+    merge: ?MergeId,
 };
 
 const Builder = struct {
@@ -108,6 +155,11 @@ const Builder = struct {
     entry_hole: CFStmtId = undefined,
     hole: ?CFStmtId = null,
     join_points: std.ArrayList(LIR.JoinPoint) = .empty,
+    /// What each join of this body carries, by join id.
+    join_infos: std.ArrayList(JoinInfo) = .empty,
+    merges: std.ArrayList(Merge) = .empty,
+    /// The exit joins of the loops being lowered, innermost last.
+    loops: std.ArrayList(LIR.JoinPointId) = .empty,
     next_join: u32 = 0,
     values: std.ArrayList(LocalId) = .empty,
     tasks: std.ArrayList(Task) = .empty,
@@ -136,6 +188,9 @@ const Builder = struct {
         self.type_descs.deinit(self.allocator);
         self.name_locals.deinit(self.allocator);
         self.join_points.deinit(self.allocator);
+        self.join_infos.deinit(self.allocator);
+        self.merges.deinit(self.allocator);
+        self.loops.deinit(self.allocator);
         self.values.deinit(self.allocator);
         self.tasks.deinit(self.allocator);
     }
@@ -284,6 +339,49 @@ const Builder = struct {
         return id;
     }
 
+    /// Start a merge of `binders`, recording their current values.
+    fn beginMerge(self: *Builder, binders: []const checked.PatternBinderId) Allocator.Error!?MergeId {
+        if (binders.len == 0) return null;
+        const arena = self.program.arena.allocator();
+        const pre = try arena.alloc(LocalId, binders.len);
+        const params = try arena.alloc(LocalId, binders.len);
+        for (binders, pre, params) |binder, *before, *param| {
+            before.* = self.binders.get(binder) orelse invariant("a state merge named a binder this body never bound");
+            var local = self.store.getLocal(before.*);
+            if (local.dyn) |*dyn| {
+                dyn.storage = .frame;
+                self.has_dynamic_frame = true;
+            }
+            param.* = try self.addLocal(local);
+        }
+        const id: MergeId = @intCast(self.merges.items.len);
+        try self.merges.append(self.allocator, .{ .binders = binders, .pre = pre, .params = params });
+        return id;
+    }
+
+    /// Declare a join carrying an optional value and a merge's binders; the
+    /// builder continues in its remainder. Returns the join's body hole.
+    fn declareMergeJoin(self: *Builder, id: LIR.JoinPointId, value: ?LocalId, merge: ?MergeId) Allocator.Error!CFStmtId {
+        var params: std.ArrayList(LocalId) = .empty;
+        defer params.deinit(self.allocator);
+        if (value) |local| try params.append(self.allocator, local);
+        if (merge) |m| try params.appendSlice(self.allocator, self.merges.items[m].params);
+        const index = @backingInt(id);
+        while (self.join_infos.items.len <= index) try self.join_infos.append(self.allocator, .{ .value = null, .merge = null });
+        self.join_infos.items[index] = .{ .value = value, .merge = merge };
+        return try self.declareJoin(id, params.items);
+    }
+
+    fn restoreMerge(self: *Builder, merge: MergeId) Allocator.Error!void {
+        const m = self.merges.items[merge];
+        for (m.binders, m.pre) |binder, value| try self.binders.put(self.allocator, binder, value);
+    }
+
+    fn enterMerge(self: *Builder, merge: MergeId) Allocator.Error!void {
+        const m = self.merges.items[merge];
+        for (m.binders, m.params) |binder, value| try self.binders.put(self.allocator, binder, value);
+    }
+
     /// Declare join `id` with `params` here; continue in its remainder, and
     /// return the hole of its body.
     fn declareJoin(self: *Builder, id: LIR.JoinPointId, params: []const LocalId) Allocator.Error!CFStmtId {
@@ -297,14 +395,22 @@ const Builder = struct {
         return body;
     }
 
-    fn emitJump(self: *Builder, id: LIR.JoinPointId, value: LocalId) Allocator.Error!void {
-        const params = for (self.join_points.items) |join| {
-            if (join.id == id) break self.store.getLocalSpan(join.params);
-        } else invariant("a jump named a join this body never declared");
-        if (params.len != 1) invariant("a value join has exactly one parameter");
-        const param = LirStore.GuardedList.at(params, 0);
-        // The jump assigns the join's parameter.
-        try self.emitLinear(.{ .set_local = .{ .target = param, .value = value, .mode = .initialize_join_param, .next = undefined } });
+    /// Jump to join `id`, assigning its parameters: `value` to its value
+    /// parameter, and its merge's binders' current values to theirs.
+    fn emitJump(self: *Builder, id: LIR.JoinPointId, value: ?LocalId) Allocator.Error!void {
+        const index = @backingInt(id);
+        const info: JoinInfo = if (index < self.join_infos.items.len) self.join_infos.items[index] else .{ .value = null, .merge = null };
+        if (info.value) |param| {
+            const source = value orelse invariant("a jump to a value join carried no value");
+            try self.emitLinear(.{ .set_local = .{ .target = param, .value = source, .mode = .initialize_join_param, .next = undefined } });
+        }
+        if (info.merge) |merge| {
+            const m = self.merges.items[merge];
+            for (m.binders, m.params) |binder, param| {
+                const current = self.binders.get(binder) orelse invariant("a merged binder lost its value");
+                try self.emitLinear(.{ .set_local = .{ .target = param, .value = current, .mode = .initialize_join_param, .next = undefined } });
+            }
+        }
         try self.emitTerminal(.{ .jump = .{ .target = id } });
     }
 
@@ -403,13 +509,13 @@ const Builder = struct {
             .box => |payload| try out.append(self.allocator, payload),
             .tuple => |items| try out.appendSlice(self.allocator, store.span(items)),
             .record => |record| {
-                if (record.ext != null) invariant("composing the descriptor of an open record row is not yet lowered by Boxy");
+                if (record.ext) |ext| try out.append(self.allocator, ext);
                 const fields = try self.allocator.dupe(types.Field, store.fieldSpan(record.fields));
                 defer self.allocator.free(fields);
                 for (fields) |field| try out.append(self.allocator, try self.program.layouts.fieldStorage(field));
             },
             .tag_union => |tag_union| {
-                if (tag_union.ext != null) invariant("composing the descriptor of an open tag row is not yet lowered by Boxy");
+                if (tag_union.ext) |ext| try out.append(self.allocator, ext);
                 for (store.tagSpan(tag_union.tags)) |tag| try out.appendSlice(self.allocator, store.span(tag.payloads));
             },
             .nominal => try out.append(self.allocator, try self.program.converter().backing(ty)),
@@ -443,7 +549,11 @@ const Builder = struct {
                     name.* = try self.nameDesc(field.name);
                     desc.* = self.type_descs.get(try self.program.layouts.fieldStorage(field)).?;
                 }
-                break :blk .{ .desc_record = .{ .names = try self.store.addLocalSpan(names), .descs = try self.store.addLocalSpan(descs) } };
+                break :blk .{ .desc_record = .{
+                    .names = try self.store.addLocalSpan(names),
+                    .descs = try self.store.addLocalSpan(descs),
+                    .ext = if (record.ext) |ext| self.type_descs.get(ext).? else null,
+                } };
             },
             .tag_union => |tag_union| blk: {
                 const tags = try self.allocator.dupe(types.Tag, store.tagSpan(tag_union.tags));
@@ -464,6 +574,7 @@ const Builder = struct {
                     .names = try self.store.addLocalSpan(names.items),
                     .payload_counts = try self.store.addU32Span(counts.items),
                     .payloads = try self.store.addLocalSpan(payloads.items),
+                    .ext = if (tag_union.ext) |ext| self.type_descs.get(ext).? else null,
                 } };
             },
             .nominal => |nominal| blk: {
@@ -894,6 +1005,9 @@ const Builder = struct {
             .bind => |pattern| try self.bindIrrefutable(pattern, self.popValue()),
             .discard => _ = self.popValue(),
             .push_value => |local| try self.pushValue(local),
+            .unreachable_value => |ty| try self.pushValue(try self.localOf(ty, .frame)),
+            .unreachable_or_unit => try self.pushValue(try self.unitValue()),
+
             .resume_at => |hole| self.hole = hole,
             .ret => {
                 const value = self.popValue();
@@ -905,12 +1019,63 @@ const Builder = struct {
                 }
             },
             .jump => |join| try self.emitJump(join, self.popValue()),
+            .jump_without_value => |join| try self.emitJump(join, null),
+            .restore_merge => |merge| try self.restoreMerge(merge),
+            .enter_merge => |merge| try self.enterMerge(merge),
+            .loop_test => |loop| try self.loopTest(loop.body, loop.head, loop.exit),
+            .end_loop => _ = self.loops.pop(),
+            .for_start => |for_| try self.forStart(for_.pattern, for_.body, for_.plan, for_.mutations),
             .finish_call => |call| {
                 defer self.allocator.free(call.hidden);
                 try self.finishCall(call.callee, call.hidden, call.arg_count, call.result);
             },
             .finish_low_level => |ll| try self.finishLowLevel(ll.op, ll.arg_count, ll.result, ll.arg_types),
             .finish_record => |expr| try self.finishRecord(expr),
+            .restore => |restore| try self.restoreStep(restore.module, restore.node, restore.ty),
+            .restore_callable_eval => |eval| {
+                const owner = self.program.module(eval.module);
+                const template = owner.view.callable_eval_templates.templates[@backingInt(eval.template)];
+                const root = owner.view.compile_time_roots.root(template.root);
+                switch (root.payload) {
+                    .fn_value => |fn_id| try self.restoreFn(eval.module, fn_id),
+                    else => invariantFmt("a callable-eval binding whose root holds {s} is not yet lowered by Boxy", .{@tagName(root.payload)}),
+                }
+            },
+            .finish_restore_closure => |closure| {
+                const values = try self.popValues(closure.count);
+                defer self.allocator.free(values);
+                try self.pushValue(try self.packClosure(closure.worker, values, self.program.worker(closure.worker).capture_types, &.{}, &.{}));
+            },
+            .finish_restore_struct => |restore| {
+                const values = try self.popValues(restore.count);
+                defer self.allocator.free(values);
+                try self.pushValue(try self.buildStruct(try self.structuralType(restore.ty), values));
+            },
+            .finish_restore_tag => |restore| {
+                const values = try self.popValues(restore.count);
+                defer self.allocator.free(values);
+                try self.pushValue(try self.buildTag(restore.ty, restore.name, values));
+            },
+            .finish_restore_list => |restore| try self.finishRestoreList(restore.ty, restore.count),
+            .finish_field_access => |expr| try self.finishFieldAccess(expr),
+            .finish_discriminant_eq => |eq| try self.finishDiscriminantEq(eq.value_ty, eq.tag, eq.negated),
+            .finish_tuple_access => |expr| {
+                const access = self.bodies().expr(expr).data.tuple_access;
+                const tuple = self.popValue();
+                const tuple_ty = try self.structuralType(try self.exprType(access.tuple));
+                const elems = switch (self.program.store.get(tuple_ty)) {
+                    .tuple => |span| self.program.store.span(span),
+                    else => invariant("a tuple access's receiver is not a tuple"),
+                };
+                try self.pushValue(try self.readField(tuple_ty, tuple, access.elem_index, elems[access.elem_index]));
+            },
+            .finish_dbg => |ty| {
+                const value = self.popValue();
+                const message = try self.closedLocal(.str);
+                try self.emitDyn(message, .{ .inspect = .{ .value = value, .desc = try self.descOf(ty) } });
+                try self.emitLinear(.{ .debug = .{ .message = message, .next = undefined } });
+                try self.pushValue(value);
+            },
             .finish_erased_call => |call| try self.finishErasedCall(call.fn_ty, call.arg_count, call.result),
             .finish_tuple => |expr| try self.finishTuple(expr),
             .finish_tag => |expr| try self.finishTag(expr),
@@ -923,7 +1088,7 @@ const Builder = struct {
                 try self.emitLinear(.{ .expect = .{ .condition = cond, .site = try self.expectSite(), .next = undefined } });
                 try self.pushValue(try self.unitValue());
             },
-            .if_test => |test_| try self.ifTest(test_.expr, test_.index, test_.join),
+            .if_test => |test_| try self.ifTest(test_.expr, test_.index, test_.join, test_.merge),
             .match_start => |expr| try self.matchStart(expr),
             .short_circuit => |sc| try self.shortCircuit(sc.is_and, sc.rhs, sc.join),
             .match_branch => |branch| try self.matchBranch(branch.expr, branch.index, branch.scrutinee, branch.join),
@@ -1032,7 +1197,11 @@ const Builder = struct {
             .closure => |closure| try self.lowerClosure(expr_id, closure.lambda, closure.captures),
             .row_coerce => |coerce| try self.push(.{ .expr = coerce.value }),
             .structural_eq => |eq| {
-                if (eq.discriminant != null) invariant("discriminant-only equality is not yet lowered by Boxy");
+                if (eq.discriminant) |discriminant| {
+                    try self.push(.{ .finish_discriminant_eq = .{ .value_ty = try self.exprType(discriminant.value), .tag = discriminant.tag, .negated = eq.negated } });
+                    try self.push(.{ .expr = discriminant.value });
+                    return;
+                }
                 try self.push(.{ .finish_eq = .{ .negated = eq.negated, .operand = try self.exprType(eq.lhs) } });
                 try self.push(.{ .expr = eq.rhs });
                 try self.push(.{ .expr = eq.lhs });
@@ -1052,10 +1221,12 @@ const Builder = struct {
                 const result_ty = try self.exprType(expr_id);
                 const result = try self.localOf(result_ty, .frame);
                 const join = self.freshJoin();
-                const after = try self.declareJoin(join, &.{result});
+                const merge = try self.beginMerge(if (if_.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{});
+                const after = try self.declareMergeJoin(join, result, merge);
                 try self.push(.{ .push_value = result });
+                if (merge) |m| try self.push(.{ .enter_merge = m });
                 try self.push(.{ .resume_at = after });
-                try self.push(.{ .if_test = .{ .expr = expr_id, .index = 0, .join = join } });
+                try self.push(.{ .if_test = .{ .expr = expr_id, .index = 0, .join = join, .merge = merge } });
                 try self.push(.{ .expr = if_.branches[0].cond });
             },
             .match_ => |match| {
@@ -1065,6 +1236,30 @@ const Builder = struct {
             .binop => |binop| switch (binop.op) {
                 .@"and", .@"or" => try self.lowerShortCircuit(expr_id, binop.op == .@"and", binop.lhs, binop.rhs),
                 else => invariantFmt("binary operator {s} reached Boxy lowering outside a dispatch", .{@tagName(binop.op)}),
+            },
+            .for_ => |for_| try self.pushForLoop(for_.pattern, for_.expr, for_.body, for_.plan, for_.mutations),
+            .field_access => |access| {
+                try self.push(.{ .finish_field_access = expr_id });
+                try self.push(.{ .expr = access.receiver });
+            },
+            .tuple_access => |access| {
+                try self.push(.{ .finish_tuple_access = expr_id });
+                try self.push(.{ .expr = access.tuple });
+            },
+            .dbg => |inner| {
+                try self.push(.{ .finish_dbg = try self.exprType(inner) });
+                try self.push(.{ .expr = inner });
+            },
+            .str_from_quote => |quote| {
+                if (quote.conversion_root != null or quote.plan != null) invariant("string literals converted by from_quote are not yet lowered by Boxy");
+                try self.pushValue(try self.strLiteral(self.bodies().stringLiteral(quote.literal)));
+            },
+            .return_ => |ret| {
+                // The expression itself never produces a value; its successor
+                // is unreachable.
+                try self.push(.{ .unreachable_value = try self.exprType(expr_id) });
+                try self.push(.ret);
+                try self.push(.{ .expr = ret.expr });
             },
             .unary_not => |operand| {
                 try self.push(.{ .finish_low_level = .{ .op = .bool_not, .arg_count = 1, .result = try self.exprType(expr_id) } });
@@ -1147,11 +1342,11 @@ const Builder = struct {
     }
 
     fn lowerLookupLocal(self: *Builder, expr_id: CheckedExprId, pattern: CheckedPatternId, resolved: ?checked.ResolvedValueRefId) Allocator.Error!void {
-        _ = expr_id;
         if (resolved) |id| switch (self.resolvedRef(id).ref) {
             .local_param, .local_value, .pattern_binder, .local_mutable_version => |binding| {
                 return try self.pushValue(self.binders.get(binding.binder) orelse invariant("a local lookup named a binder this body never bound"));
             },
+            .top_level_const, .imported_const => |use| return try self.restoreConstUse(use, try self.exprType(expr_id)),
             else => |ref| invariantFmt("local lookup of a {s} is not yet lowered by Boxy", .{@tagName(ref)}),
         };
         const binder = self.bodies().pattern_binder_by_pattern[@backingInt(pattern)].get() orelse invariant("a local lookup named a pattern without a binder");
@@ -1159,11 +1354,245 @@ const Builder = struct {
     }
 
     fn lowerLookupExternal(self: *Builder, expr_id: CheckedExprId, resolved: checked.ResolvedValueRefId) Allocator.Error!void {
-        _ = expr_id;
+        switch (self.resolvedRef(resolved).ref) {
+            .top_level_const, .imported_const => |use| return try self.restoreConstUse(use, try self.exprType(expr_id)),
+            else => {},
+        }
         invariantFmt("external value lookups ({s}) are not yet lowered by Boxy outside calls", .{@tagName(self.resolvedRef(resolved).ref)});
     }
 
+    /// A read of a stored constant: its value's construction at `ty`
+    /// (design.md "Compile-Time Evaluation Strategy").
+    fn restoreConstUse(self: *Builder, use: checked.ConstUseTemplate, ty: TypeId) Allocator.Error!void {
+        const owner = self.program.moduleByKey(use.const_ref.artifact);
+        const template = owner.view.const_templates.get(use.const_ref);
+        switch (template.state) {
+            .stored_const => |stored| try self.push(.{ .restore = .{ .module = owner.index, .node = stored.node, .ty = ty } }),
+            .unimplemented => |unimplemented| {
+                self.region = unimplemented.region;
+                try self.crashValue(@import("../common.zig").unimplemented_declaration_crash, ty);
+            },
+            .reserved, .eval_template => invariant("a constant read at runtime was not stored by compile-time evaluation"),
+        }
+    }
+
+    /// Restore stored constant `node` of `module` at `ty`, pushing tasks for
+    /// its components first.
+    fn restoreStep(self: *Builder, module_index: ModuleIndex, node: checked.ConstNodeId, raw_ty: TypeId) Allocator.Error!void {
+        const const_store = self.program.module(module_index).view.const_store;
+        const store = &self.program.store;
+        if (!store.isClosed(raw_ty)) invariant("restoring a constant at an open type is not yet lowered by Boxy");
+        const ty = try self.structuralType(raw_ty);
+        switch (const_store.get(node)) {
+            .pending => invariant("a stored constant was never filled"),
+            .zst => {
+                const local = try self.localOf(raw_ty, .frame);
+                try self.emitLinear(.{ .assign_struct = .{ .target = local, .fields = LIR.LocalSpan.empty(), .next = undefined } });
+                try self.pushValue(local);
+            },
+            .scalar => |scalar| {
+                const local = try self.localOf(raw_ty, .frame);
+                const value: LIR.LiteralValue = switch (scalar) {
+                    inline .i8, .i16, .i32, .i64, .u8, .u16, .u32 => |v| .{ .i64_literal = .{ .value = v, .layout_idx = self.store.getLocal(local).layout_idx } },
+                    .u64 => |v| .{ .i64_literal = .{ .value = @bitCast(v), .layout_idx = self.store.getLocal(local).layout_idx } },
+                    .i128 => |v| .{ .i128_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = v, .layout_idx = self.store.getLocal(local).layout_idx }) },
+                    .u128 => |v| .{ .i128_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = @bitCast(v), .layout_idx = self.store.getLocal(local).layout_idx }) },
+                    .f32_bits => |bits| .{ .f32_literal = @bitCast(bits) },
+                    .f64_bits => |bits| .{ .f64_literal = @bitCast(bits) },
+                    .dec_bits => |bits| .{ .dec_literal = bits },
+                };
+                try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = value, .next = undefined } });
+                try self.pushValue(local);
+            },
+            .str => |str| try self.pushValue(try self.strLiteral(const_store.strBytes(str))),
+            .crash => |message| {
+                try self.crashValue(const_store.strBytes(message), raw_ty);
+            },
+            .checked_error => |message| {
+                const literal = try self.store.insertString(const_store.strBytes(message));
+                try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal }, .checked_error = true } });
+                try self.pushValue(try self.localOf(raw_ty, .frame));
+            },
+            .nominal => |nominal| try self.push(.{ .restore = .{ .module = module_index, .node = nominal.backing, .ty = ty } }),
+            .box => |child| {
+                const payload = switch (store.get(ty)) {
+                    .box => |payload| payload,
+                    else => invariant("a stored box restored at a non-Box type"),
+                };
+                try self.push(.{ .finish_low_level = .{ .op = .box_box, .arg_count = 1, .result = raw_ty } });
+                try self.push(.{ .restore = .{ .module = module_index, .node = child, .ty = payload } });
+            },
+            .tuple, .record => |children| {
+                const component_types: []const TypeId = switch (store.get(ty)) {
+                    .tuple => |items| store.span(items),
+                    .record => |record| blk: {
+                        const fields = store.fieldSpan(record.fields);
+                        const storage = try self.program.arena.allocator().alloc(TypeId, fields.len);
+                        for (fields, storage) |field, *slot| {
+                            if (field.kind != .inline_slot) invariant("restoring optional record fields is not yet lowered by Boxy");
+                            slot.* = field.ty;
+                        }
+                        break :blk storage;
+                    },
+                    .empty_record => &.{},
+                    else => invariant("a stored product restored at a non-product type"),
+                };
+                if (component_types.len != children.len) invariant("a stored product's arity differs from its type");
+                try self.push(.{ .finish_restore_struct = .{ .ty = raw_ty, .count = @intCast(children.len) } });
+                var index = children.len;
+                while (index > 0) {
+                    index -= 1;
+                    try self.push(.{ .restore = .{ .module = module_index, .node = children[index], .ty = component_types[index] } });
+                }
+            },
+            .tag => |tag| {
+                const union_ty = switch (store.get(self.program.joins.representative(ty))) {
+                    .tag_union => |union_ty| union_ty,
+                    else => invariant("a stored tag restored at a non-tag-union type"),
+                };
+                const name = try store.internName(tag.tag_name);
+                const tags = store.tagSpan(union_ty.tags);
+                const variant = for (tags, 0..) |candidate, index| {
+                    if (candidate.name == name and candidate.payloads.len == tag.payloads.len) break index;
+                } else invariant("a stored tag is absent from its type");
+                const payload_types = store.span(tags[variant].payloads);
+                try self.push(.{ .finish_restore_tag = .{ .ty = raw_ty, .name = name, .count = @intCast(tag.payloads.len) } });
+                var index = tag.payloads.len;
+                while (index > 0) {
+                    index -= 1;
+                    try self.push(.{ .restore = .{ .module = module_index, .node = tag.payloads[index], .ty = payload_types[index] } });
+                }
+            },
+            .list => |list| {
+                const elem = switch (store.get(ty)) {
+                    .list => |elem| elem,
+                    else => invariant("a stored list restored at a non-List type"),
+                };
+                switch (list) {
+                    .nodes => |nodes| {
+                        try self.push(.{ .finish_restore_list = .{ .ty = raw_ty, .count = @intCast(nodes.len) } });
+                        var index = nodes.len;
+                        while (index > 0) {
+                            index -= 1;
+                            try self.push(.{ .restore = .{ .module = module_index, .node = nodes[index], .ty = elem } });
+                        }
+                    },
+                    .empty => try self.finishRestoreList(raw_ty, 0),
+                    .packed_bytes => |packed_list| {
+                        if (packed_list.element == null) invariant("restoring packed product lists is not yet lowered by Boxy");
+                        const local = try self.localOf(raw_ty, .frame);
+                        const bytes = const_store.blobBytes(packed_list.bytes);
+                        const backing = try self.store.insertStringAligned(bytes, 16);
+                        try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .bytes_literal = .{
+                            .bytes = .{ .backing = backing, .offset = 0, .len = @intCast(bytes.len) },
+                            .len = packed_list.len,
+                        } }, .next = undefined } });
+                        try self.pushValue(local);
+                    },
+                }
+            },
+            .fn_value => invariant("restoring stored function values is not yet lowered by Boxy"),
+        }
+    }
+
+    /// Restore stored function value `fn_id` of `module`'s const store as
+    /// an erased callable.
+    fn restoreFn(self: *Builder, module_index: ModuleIndex, fn_id: check.ConstStore.ConstFnId) Allocator.Error!void {
+        const const_store = self.program.module(module_index).view.const_store;
+        const stored = const_store.getFn(fn_id);
+        switch (stored.fn_def) {
+            .local_template, .imported_template => |ref| {
+                const target = try self.program.templateRefWorker(ref);
+                if (self.program.worker(target).scheme_vars.len != 0 or self.program.worker(target).dictionary_params.len != 0) {
+                    invariant("restoring stored generic procedure values is not yet lowered by Boxy");
+                }
+                const entry = try self.program.methodEntryWorker(target);
+                try self.pushValue(try self.composeDictionary(entry, &.{}));
+            },
+            .nested => |nested| {
+                if (nested.default_root != null) invariant("restoring default-root closures is not yet lowered by Boxy");
+                const owner_worker = try self.program.templateRefWorker(nested.owner);
+                const owner = self.program.worker(owner_worker);
+                if (owner.scheme_vars.len != 0 or owner.dictionary_params.len != 0) {
+                    invariant("restoring closures of generic procedures is not yet lowered by Boxy");
+                }
+                const owner_view = self.program.module(owner.module);
+                const site = owner_view.view.nested_proc_sites.sites[@backingInt(nested.site)];
+                const site_expr = site.checked_expr orelse invariant("a stored closure's site has no checked expression");
+                const expr = owner_view.bodies().expr(site_expr);
+                const lambda_expr, const captures: []const checked.CheckedCapture = switch (expr.data) {
+                    .lambda => .{ site_expr, &.{} },
+                    .closure => |closure| .{ closure.lambda, closure.captures },
+                    else => invariant("a stored closure's site is not a lambda or closure"),
+                };
+                const no_vars: types.Env = .{ .module = owner.module, .vars = &.{}, .bound = &.{} };
+                const capture_types = try self.allocator.alloc(TypeId, captures.len);
+                defer self.allocator.free(capture_types);
+                for (captures, capture_types) |capture, *capture_ty| {
+                    capture_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().pattern(capture.pattern).ty, no_vars);
+                }
+                const fn_ty = try self.program.converter().convert(owner.module, expr.ty, no_vars);
+                const worker = try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, fn_ty);
+                try self.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len) } });
+                var index = captures.len;
+                while (index > 0) {
+                    index -= 1;
+                    const stored_capture = for (stored.captures) |candidate| {
+                        if (std.meta.eql(candidate.id, captures[index].capture_id)) break candidate;
+                    } else invariant("a stored closure lacks one of its site's captures");
+                    try self.push(.{ .restore = .{ .module = module_index, .node = stored_capture.value, .ty = capture_types[index] } });
+                }
+            },
+            else => invariantFmt("restoring stored {s} function values is not yet lowered by Boxy", .{@tagName(stored.fn_def)}),
+        }
+    }
+
+    fn finishRestoreList(self: *Builder, ty: TypeId, count: u32) Allocator.Error!void {
+        const values = try self.popValues(count);
+        defer self.allocator.free(values);
+        const target = try self.localOf(ty, .frame);
+        try self.emitLinear(.{ .assign_list = .{ .target = target, .elems = try self.store.addLocalSpan(values), .next = undefined } });
+        try self.pushValue(target);
+    }
+
     /// The worker a procedure use names.
+    /// What a procedure use calls: a template's worker, or a function value
+    /// compile-time evaluation stored.
+    const Callee = union(enum) {
+        worker: WorkerId,
+        callable_eval: struct { module: ModuleIndex, template: checked.CallableEvalTemplateId },
+    };
+
+    fn procedureUseCallee(self: *Builder, use: checked.ProcedureUseTemplate) Allocator.Error!Callee {
+        var current = use;
+        while (true) {
+            switch (current.binding) {
+                .top_level => |top| {
+                    const owner = self.program.moduleByKey(top.artifact);
+                    const binding = owner.view.top_level_procedure_bindings.bindings.items[@backingInt(top.binding)];
+                    switch (binding.body) {
+                        .callable_eval_template => |template_id| {
+                            const template = owner.view.callable_eval_templates.templates[@backingInt(template_id)];
+                            const forwarded = template.forwarded_lookup orelse
+                                return .{ .callable_eval = .{ .module = owner.index, .template = template_id } };
+                            // An exact procedure alias calls what it names.
+                            const ref_id = owner.view.resolved_value_refs.by_checked_expr[@backingInt(forwarded)].get() orelse
+                                invariant("a procedure alias's lookup has no resolved reference");
+                            current = switch (owner.view.resolved_value_refs.records[@backingInt(ref_id)].ref) {
+                                .top_level_proc, .imported_proc, .promoted_top_level_proc => |next| next,
+                                else => |ref| invariantFmt("procedure aliases of a {s} are not yet lowered by Boxy", .{@tagName(ref)}),
+                            };
+                            continue;
+                        },
+                        else => {},
+                    }
+                },
+                else => {},
+            }
+            return .{ .worker = try self.procedureUseWorker(current) };
+        }
+    }
+
     fn procedureUseWorker(self: *Builder, use: checked.ProcedureUseTemplate) Allocator.Error!WorkerId {
         return switch (use.binding) {
             .top_level => |top| blk: {
@@ -1199,7 +1628,15 @@ const Builder = struct {
             else => null,
         };
         const callee: WorkerId = if (resolved) |id| switch (self.resolvedRef(id).ref) {
-            .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| try self.procedureUseWorker(use),
+            .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| switch (try self.procedureUseCallee(use)) {
+                .worker => |worker_id| worker_id,
+                .callable_eval => |eval| {
+                    try self.push(.{ .finish_erased_call = .{ .fn_ty = try self.exprType(call.func), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
+                    try self.pushExprsReversed(call.args);
+                    try self.push(.{ .restore_callable_eval = .{ .module = eval.module, .template = eval.template } });
+                    return;
+                },
+            },
             .local_param, .local_value, .pattern_binder, .local_mutable_version => return try self.lowerValueCall(expr_id, call),
             else => |ref| invariantFmt("calls through a {s} reference are not yet lowered by Boxy", .{@tagName(ref)}),
         } else return try self.lowerValueCall(expr_id, call);
@@ -1471,15 +1908,21 @@ const Builder = struct {
                 invariant("a closure capture named a pattern without a binder");
             values[index] = self.binders.get(binder) orelse invariant("a closure captured a binder this body never bound");
         }
-        @memcpy(values[captures.len..][0..self.var_descs.len], self.var_descs);
-        @memcpy(values[captures.len + self.var_descs.len ..], self.dict_locals);
         const callee = try self.program.lambdaWorker(self.worker_id, lambda_expr, captures, capture_types, fn_ty);
-        const target = try self.localOf(fn_ty, .frame);
+        try self.pushValue(try self.packClosure(callee, values[0..captures.len], capture_types, self.var_descs, self.dict_locals));
+    }
+
+    /// The erased callable of lambda worker `callee` capturing `values`
+    /// (of `capture_types`), then descriptors and dictionaries.
+    fn packClosure(self: *Builder, callee: WorkerId, captured: []const LocalId, capture_types: []const TypeId, descs: []const LocalId, dicts: []const LocalId) Allocator.Error!LocalId {
+        const values = try std.mem.concat(self.allocator, LocalId, &.{ captured, descs, dicts });
+        defer self.allocator.free(values);
+        const target = try self.closedLocal(try self.erasedLayout());
         var capture: ?LocalId = null;
         var capture_layout: ?layout.Idx = null;
         var on_drop: LIR.ErasedCallableOnDrop = .none;
         if (values.len != 0) {
-            const record_layout = try self.captureLayout(capture_types, self.var_descs.len, self.dict_locals.len);
+            const record_layout = try self.captureLayout(capture_types, descs.len, dicts.len);
             const record = try self.closedLocal(record_layout);
             try self.emitLinear(.{ .assign_struct = .{ .target = record, .fields = try self.store.addLocalSpan(values), .next = undefined } });
             capture = record;
@@ -1499,7 +1942,7 @@ const Builder = struct {
             }),
             .next = undefined,
         } });
-        try self.pushValue(target);
+        return target;
     }
 
     /// Pop a function value's arguments and the function value, and call it
@@ -1508,6 +1951,11 @@ const Builder = struct {
         const args = try self.popValues(arg_count);
         defer self.allocator.free(args);
         const closure = self.popValue();
+        try self.pushValue(try self.emitErasedCall(closure, fn_ty, args, result_ty));
+    }
+
+    /// Call the erased callable `closure` of type `fn_ty` with `args`.
+    fn emitErasedCall(self: *Builder, closure: LocalId, fn_ty: TypeId, args: []const LocalId, result_ty: TypeId) Allocator.Error!LocalId {
         const params = switch (self.program.store.get(fn_ty)) {
             .function => |function| self.program.store.span(function.args),
             else => invariant("a called value's type is not a function type"),
@@ -1526,7 +1974,7 @@ const Builder = struct {
         }
         const target = try self.localOf(result_ty, .frame);
         try self.emitDyn(target, .{ .call_erased = .{ .closure = closure, .args = record } });
-        try self.pushValue(target);
+        return target;
     }
 
     fn finishEq(self: *Builder, negated: bool, operand_ty: TypeId) Allocator.Error!void {
@@ -1546,7 +1994,7 @@ const Builder = struct {
         _ = expr_id;
         const result = try self.closedLocal(.bool);
         const join = self.freshJoin();
-        const after = try self.declareJoin(join, &.{result});
+        const after = try self.declareMergeJoin(join, result, null);
         try self.push(.{ .push_value = result });
         try self.push(.{ .resume_at = after });
         try self.push(.{ .short_circuit = .{ .is_and = is_and, .rhs = rhs, .join = join } });
@@ -1574,7 +2022,7 @@ const Builder = struct {
         const ty = try self.exprType(expr_id);
         const values = try self.popValues(@intCast(record.fields.len));
         defer self.allocator.free(values);
-        const record_ty = switch (self.program.store.get(ty)) {
+        const record_ty = switch (self.program.store.get(try self.structuralType(ty))) {
             .record => |value| value,
             .empty_record => return try self.pushValue(try self.unitValue()),
             else => invariant("a record expression's type is not a record"),
@@ -1626,18 +2074,23 @@ const Builder = struct {
         const values = try self.popValues(@intCast(arg_count));
         defer self.allocator.free(values);
         const name = try self.program.store.internName(self.view.nameStore().tagLabelText(label));
+        try self.pushValue(try self.buildTag(ty, name, values));
+    }
+
+    /// The tag `name` of the tag union `ty` (through nominal wrappers) with
+    /// `values` as its payloads.
+    fn buildTag(self: *Builder, ty: TypeId, name: types.NameId, values: []const LocalId) Allocator.Error!LocalId {
         if (!self.program.store.isClosed(ty)) {
             const target = try self.localOf(ty, .frame);
             try self.emitDyn(target, .{ .tag = .{ .desc = try self.descOf(try self.structuralType(ty)), .name = try self.nameDesc(name), .payloads = try self.store.addLocalSpan(values) } });
-            return try self.pushValue(target);
+            return target;
         }
         const rep = self.program.joins.representative(try self.structuralType(ty));
         const union_ty = switch (self.program.store.get(rep)) {
             .tag_union => |value| value,
             .primitive => |primitive| {
                 if (primitive != .bool) invariant("a tag expression's type is a non-Bool primitive");
-                const value = try self.boolValue(std.mem.eql(u8, self.program.store.nameText(name), "True"));
-                return try self.pushValue(value);
+                return try self.boolValue(std.mem.eql(u8, self.program.store.nameText(name), "True"));
             },
             else => invariant("a tag expression's type is not a tag union"),
         };
@@ -1658,7 +2111,7 @@ const Builder = struct {
         } else {
             try self.emitLinear(.{ .assign_tag = .{ .target = target, .variant_index = @intCast(variant), .discriminant = @intCast(variant), .payload = payload, .next = undefined } });
         }
-        try self.pushValue(target);
+        return target;
     }
 
     fn finishList(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
@@ -1686,31 +2139,37 @@ const Builder = struct {
 
     // -- Control flow --
 
-    fn ifTest(self: *Builder, expr_id: CheckedExprId, index: u32, join: LIR.JoinPointId) Allocator.Error!void {
+    fn ifTest(self: *Builder, expr_id: CheckedExprId, index: u32, join: LIR.JoinPointId, merge: ?MergeId) Allocator.Error!void {
         const if_ = self.bodies().expr(expr_id).data.if_;
         const cond = self.popValue();
         const holes = try self.emitBoolSwitch(cond);
         // Pushed in reverse execution order: the then-branch runs first, then
-        // the else side continues at its own hole.
+        // the else side continues at its own hole. Each side starts from the
+        // binder values the construct started with.
         if (index + 1 < if_.branches.len) {
-            try self.push(.{ .if_test = .{ .expr = expr_id, .index = index + 1, .join = join } });
+            try self.push(.{ .if_test = .{ .expr = expr_id, .index = index + 1, .join = join, .merge = merge } });
             try self.push(.{ .expr = if_.branches[index + 1].cond });
         } else {
             try self.push(.{ .jump = join });
             try self.push(.{ .expr = if_.final_else });
         }
+        if (merge) |m| try self.push(.{ .restore_merge = m });
         try self.push(.{ .resume_at = holes.otherwise });
         try self.push(.{ .jump = join });
         try self.push(.{ .expr = if_.branches[index].body });
+        if (merge) |m| try self.restoreMerge(m);
         self.hole = holes.then;
     }
 
     fn matchStart(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
         const scrutinee = self.popValue();
+        const match = self.bodies().expr(expr_id).data.match_;
         const result = try self.localOf(try self.exprType(expr_id), .frame);
         const join = self.freshJoin();
-        const after = try self.declareJoin(join, &.{result});
+        const merge = try self.beginMerge(if (match.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{});
+        const after = try self.declareMergeJoin(join, result, merge);
         try self.push(.{ .push_value = result });
+        if (merge) |m| try self.push(.{ .enter_merge = m });
         try self.push(.{ .resume_at = after });
         try self.push(.{ .match_branch = .{ .expr = expr_id, .index = 0, .scrutinee = scrutinee, .join = join } });
     }
@@ -1723,6 +2182,8 @@ const Builder = struct {
             return;
         }
         const branch = match.branches[index];
+        const join_index = @backingInt(join);
+        if (self.join_infos.items[join_index].merge) |m| try self.restoreMerge(m);
         const patterns = branch.patternsSlice(self.bodies());
         if (patterns.len != 1) invariant("match branches with alternative patterns are not yet lowered by Boxy");
         const miss = try self.newHole();
@@ -1856,6 +2317,78 @@ const Builder = struct {
         }
     }
 
+    /// Whether a tag union value holds the payload-free tag `label`: the
+    /// checker's discriminant-only equality.
+    fn finishDiscriminantEq(self: *Builder, value_ty: TypeId, label: check.CheckedNames.TagLabelId, negated: bool) Allocator.Error!void {
+        const value = self.popValue();
+        const name = try self.program.store.internName(self.view.nameStore().tagLabelText(label));
+        const ty = try self.structuralType(value_ty);
+        const actual = try self.closedLocal(.u32);
+        const expected = try self.closedLocal(.u32);
+        if (self.program.store.isClosed(ty)) {
+            const rep = self.program.joins.representative(ty);
+            const tags = switch (self.program.store.get(rep)) {
+                .tag_union => |union_ty| self.program.store.tagSpan(union_ty.tags),
+                else => invariant("a discriminant equality's operand is not a tag union"),
+            };
+            const variant = for (tags, 0..) |tag, index| {
+                if (tag.name == name and tag.payloads.len == 0) break index;
+            } else invariant("a discriminant equality's tag is absent from its operand's type");
+            const committed = self.program.result.layouts.getLayout(try self.program.layouts.layoutOf(ty));
+            if (committed.tag == .tag_union) {
+                try self.emitLinear(.{ .assign_ref = .{ .target = actual, .op = LIR.RefOp.discriminant(value), .next = undefined } });
+            } else {
+                try self.emitLinear(.{ .assign_literal = .{ .target = actual, .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u32 } }, .next = undefined } });
+            }
+            try self.emitLinear(.{ .assign_literal = .{ .target = expected, .value = .{ .i64_literal = .{ .value = @intCast(variant), .layout_idx = .u32 } }, .next = undefined } });
+        } else {
+            const desc = try self.descOf(ty);
+            try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = value, .desc = desc } });
+            try self.emitDyn(expected, .{ .tag_discriminant_of = .{ .desc = desc, .name = try self.nameDesc(name) } });
+        }
+        const result = try self.closedLocal(.bool);
+        try self.emitLowLevel(result, .num_is_eq, &.{ actual, expected });
+        if (!negated) return try self.pushValue(result);
+        const flipped = try self.closedLocal(.bool);
+        try self.emitLowLevel(flipped, .bool_not, &.{result});
+        try self.pushValue(flipped);
+    }
+
+    /// A record field access: each segment reads one field of the record
+    /// the previous segment produced.
+    fn finishFieldAccess(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+        const access = self.bodies().expr(expr_id).data.field_access;
+        var value = self.popValue();
+        var record_ty = try self.exprType(access.receiver);
+        for (access.segments) |segment| {
+            if (segment.mode != .required) invariant("optional field access is not yet lowered by Boxy");
+            const name = try self.program.store.internName(self.view.nameStore().recordFieldLabelText(segment.field_name));
+            const structural = try self.structuralType(record_ty);
+            const record = switch (self.program.store.get(structural)) {
+                .record => |record| record,
+                else => invariant("a field access's receiver is not a record"),
+            };
+            const fields = self.program.store.fieldSpan(record.fields);
+            const semantic = for (fields, 0..) |field, index| {
+                if (field.name == name) break index;
+            } else null;
+            const field_ty = try self.convert(segment.success_ty);
+            if (record.ext != null) {
+                // An open row: the field's position is known only to the
+                // record's descriptor.
+                const local = try self.localOf(field_ty, .view);
+                try self.emitDyn(local, .{ .field_addr_named = .{ .base = value, .desc = try self.descOf(structural), .name = try self.nameDesc(name) } });
+                value = local;
+            } else {
+                const index = semantic orelse invariant("a field access's field is absent from its record type");
+                if (fields[index].kind != .inline_slot) invariant("required access to an optional field reached Boxy");
+                value = try self.readField(structural, value, @intCast(index), field_ty);
+            }
+            record_ty = field_ty;
+        }
+        try self.pushValue(value);
+    }
+
     /// `ty` with its nominal wrappers peeled: a nominal type shares its
     /// backing's representation, so a tag or record of a nominal type is
     /// built and matched at its backing.
@@ -1922,8 +2455,31 @@ const Builder = struct {
         self.region = stmt.source_region;
         switch (stmt.data) {
             .decl => |decl| {
+                if (decl.recursive) invariant("recursive value declarations are not yet lowered by Boxy");
                 try self.push(.{ .bind = decl.pattern });
                 try self.push(.{ .expr = decl.expr });
+            },
+            .var_ => |var_| {
+                try self.push(.{ .bind = var_.pattern });
+                try self.push(.{ .expr = var_.expr });
+            },
+            .reassign => |reassign| {
+                try self.push(.{ .bind = reassign.pattern });
+                try self.push(.{ .expr = reassign.expr });
+            },
+            .var_uninitialized => |var_| {
+                const local = try self.localOf(try self.patternType(var_.pattern), .frame);
+                try self.emitLinear(.{ .init_uninitialized = .{ .target = local, .next = undefined } });
+                try self.bindIrrefutable(var_.pattern, local);
+            },
+            .while_, .infinite_loop, .breakable_loop => |loop| try self.lowerLoop(loop),
+            .for_ => |for_| {
+                try self.push(.discard);
+                try self.pushForLoop(for_.pattern, for_.expr, for_.body, for_.plan, for_.mutations);
+            },
+            .break_ => {
+                const exit = self.loops.getLastOrNull() orelse invariant("a break outside every loop reached Boxy lowering");
+                try self.emitJump(exit, null);
             },
             .expr => |expr| {
                 try self.push(.discard);
@@ -1947,6 +2503,230 @@ const Builder = struct {
             .promoted_proc => {},
             else => invariantFmt("checked statement {s} is not yet lowered by Boxy", .{@tagName(stmt.data)}),
         }
+    }
+
+    /// A condition-driven loop: a head join carrying the loop's mutated
+    /// binders, entered first with their current values, and an exit join
+    /// carrying them out.
+    fn lowerLoop(self: *Builder, loop: checked.CheckedConditionLoop) Allocator.Error!void {
+        const binders: []const checked.PatternBinderId = if (loop.mutations) |plan| blk: {
+            const range = self.bodies().loopMutations(plan).binders;
+            break :blk self.bodies().patternBinderIdPool()[range.start..][0..range.len];
+        } else &.{};
+        const exit_merge = try self.beginMerge(binders);
+        const head_merge = try self.beginMerge(binders);
+        const exit = self.freshJoin();
+        const head = self.freshJoin();
+        const after = try self.declareMergeJoin(exit, null, exit_merge);
+        const head_body = try self.declareMergeJoin(head, null, head_merge);
+        try self.emitJump(head, null);
+        self.store.shapes.loop = true;
+        // In the head: binders are the head's parameters.
+        self.hole = head_body;
+        if (head_merge) |m| try self.enterMerge(m);
+        try self.loops.append(self.allocator, exit);
+        try self.push(.end_loop);
+        if (exit_merge) |m| try self.push(.{ .enter_merge = m });
+        try self.push(.{ .resume_at = after });
+        try self.push(.{ .loop_test = .{ .body = loop.body, .head = head, .exit = exit } });
+        try self.push(.{ .expr = loop.cond });
+    }
+
+    fn pushForLoop(self: *Builder, pattern: CheckedPatternId, iterable: CheckedExprId, body: CheckedExprId, plan: ?static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId) Allocator.Error!void {
+        const plan_id = plan orelse invariant("a for loop has no checked iterator plan");
+        try self.push(.{ .unreachable_or_unit = {} });
+        try self.push(.{ .for_start = .{ .pattern = pattern, .body = body, .plan = plan_id, .mutations = mutations } });
+        try self.push(.{ .expr = iterable });
+    }
+
+    /// `for pattern in iterable { body }`: the iterable's iterator is the
+    /// loop's state; each step calls `next` and matches its Done, Skip, or
+    /// One tag (design.md "Iterator `for`").
+    fn forStart(self: *Builder, pattern: CheckedPatternId, body: CheckedExprId, plan_id: static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId) Allocator.Error!void {
+        const table = self.view.view.static_dispatch_plans;
+        const plan = table.iterator_for_plans[@backingInt(plan_id)];
+        const iterable = self.popValue();
+        const iterator_ty = try self.convert(plan.iterator_ty);
+        const step_ty = try self.convert(plan.step_ty);
+        const item_ty = try self.convert(plan.item_ty);
+        const iterator = try self.emitDispatch(plan.iter.resolution, plan.iter.callable_ty, &.{iterable}, iterator_ty);
+
+        const binders: []const checked.PatternBinderId = if (mutations) |id| blk: {
+            const range = self.bodies().loopMutations(id).binders;
+            break :blk self.bodies().patternBinderIdPool()[range.start..][0..range.len];
+        } else &.{};
+        const exit_merge = try self.beginMerge(binders);
+        const head_merge = try self.beginMerge(binders);
+        const exit = self.freshJoin();
+        const head = self.freshJoin();
+        const state = try self.localOf(iterator_ty, .frame);
+        const after = try self.declareMergeJoin(exit, null, exit_merge);
+        const head_body = try self.declareMergeJoin(head, state, head_merge);
+        try self.emitJump(head, iterator);
+        self.store.shapes.loop = true;
+
+        self.hole = head_body;
+        if (head_merge) |m| try self.enterMerge(m);
+        const step_value = try self.emitDispatch(plan.next.resolution, plan.next.callable_ty, &.{state}, step_ty);
+        const names = self.view.nameStore();
+        const done = try self.program.store.internName(names.tagLabelText(plan.step_topology.done_tag));
+        const skip = try self.program.store.internName(names.tagLabelText(plan.step_topology.skip_tag));
+        const one = try self.program.store.internName(names.tagLabelText(plan.step_topology.one_tag));
+        const item_name = try self.program.store.internName(names.recordFieldLabelText(plan.step_topology.item_field));
+        const rest_name = try self.program.store.internName(names.recordFieldLabelText(plan.step_topology.rest_field));
+
+        // Done: leave the loop.
+        const not_done_hole = try self.newHole();
+        try self.branchOnTag(step_value, step_ty, done, not_done_hole);
+        try self.emitJump(exit, null);
+        // Skip: continue with its rest.
+        self.hole = not_done_hole;
+        const one_hole = try self.newHole();
+        try self.branchOnTag(step_value, step_ty, skip, one_hole);
+        {
+            const payload = try self.tagPayloadValue(step_value, step_ty, skip, 0);
+            const rest = try self.recordFieldValue(payload.value, payload.ty, rest_name);
+            try self.emitJump(head, rest.value);
+        }
+        // One: bind the item, run the body, continue with its rest.
+        self.hole = one_hole;
+        const payload = try self.tagPayloadValue(step_value, step_ty, one, 0);
+        const item = try self.recordFieldValue(payload.value, payload.ty, item_name);
+        const rest = try self.recordFieldValue(payload.value, payload.ty, rest_name);
+        _ = item_ty;
+        try self.bindIrrefutable(pattern, item.value);
+        try self.loops.append(self.allocator, exit);
+        try self.push(.end_loop);
+        if (exit_merge) |m| try self.push(.{ .enter_merge = m });
+        try self.push(.{ .resume_at = after });
+        try self.push(.{ .jump = head });
+        try self.push(.{ .push_value = rest.value });
+        try self.push(.discard);
+        try self.push(.{ .expr = body });
+    }
+
+    /// Continue at the next statement when `value` (of `ty`) holds tag
+    /// `name`; otherwise continue at `miss`.
+    fn branchOnTag(self: *Builder, value: LocalId, raw_ty: TypeId, name: types.NameId, miss: CFStmtId) Allocator.Error!void {
+        const ty = try self.structuralType(raw_ty);
+        const actual = try self.closedLocal(.u32);
+        const expected = try self.closedLocal(.u32);
+        if (self.program.store.isClosed(ty)) {
+            const variant = self.closedVariant(ty, name);
+            const committed = self.program.result.layouts.getLayout(try self.program.layouts.layoutOf(ty));
+            if (committed.tag == .tag_union) {
+                try self.emitLinear(.{ .assign_ref = .{ .target = actual, .op = LIR.RefOp.discriminant(value), .next = undefined } });
+            } else {
+                try self.emitLinear(.{ .assign_literal = .{ .target = actual, .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u32 } }, .next = undefined } });
+            }
+            try self.emitLinear(.{ .assign_literal = .{ .target = expected, .value = .{ .i64_literal = .{ .value = @intCast(variant.index), .layout_idx = .u32 } }, .next = undefined } });
+        } else {
+            const desc = try self.descOf(ty);
+            try self.emitDyn(actual, .{ .tag_discriminant = .{ .base = value, .desc = desc } });
+            try self.emitDyn(expected, .{ .tag_discriminant_of = .{ .desc = desc, .name = try self.nameDesc(name) } });
+        }
+        const matches = try self.closedLocal(.bool);
+        try self.emitLowLevel(matches, .num_is_eq, &.{ actual, expected });
+        try self.branchOrMiss(matches, miss);
+    }
+
+    const ClosedVariant = struct { index: usize, payloads: []const TypeId };
+
+    fn closedVariant(self: *Builder, ty: TypeId, name: types.NameId) ClosedVariant {
+        const rep = self.program.joins.representative(ty);
+        const tags = switch (self.program.store.get(rep)) {
+            .tag_union => |union_ty| self.program.store.tagSpan(union_ty.tags),
+            else => invariant("a tag test's value is not a tag union"),
+        };
+        for (tags, 0..) |tag, index| {
+            if (tag.name == name) return .{ .index = index, .payloads = self.program.store.span(tag.payloads) };
+        }
+        invariant("a tag test's tag is absent from its type");
+    }
+
+    const TypedValue = struct { value: LocalId, ty: TypeId };
+
+    /// Payload `index` of tag `name` in `value`, which holds that tag.
+    fn tagPayloadValue(self: *Builder, value: LocalId, raw_ty: TypeId, name: types.NameId, index: u32) Allocator.Error!TypedValue {
+        const ty = try self.structuralType(raw_ty);
+        if (!self.program.store.isClosed(ty)) {
+            const union_ty = self.program.store.get(ty).tag_union;
+            const payload_ty = for (self.program.store.tagSpan(union_ty.tags)) |tag| {
+                if (tag.name == name) break self.program.store.span(tag.payloads)[index];
+            } else invariant("a tag payload's tag is absent from its type");
+            const local = try self.localOf(payload_ty, .view);
+            try self.emitDyn(local, .{ .tag_payload_addr = .{ .base = value, .desc = try self.descOf(ty), .name = try self.nameDesc(name), .payload_index = index } });
+            return .{ .value = local, .ty = payload_ty };
+        }
+        const variant = self.closedVariant(ty, name);
+        const payload_ty = variant.payloads[index];
+        const local = try self.localOf(payload_ty, .frame);
+        if (variant.payloads.len == 1) {
+            try self.emitLinear(.{ .assign_ref = .{ .target = local, .op = LIR.RefOp.tagPayload(value, 0, @intCast(variant.index), @intCast(variant.index)), .next = undefined } });
+        } else {
+            const payload_struct = try self.localOf((try self.program.layouts.tagPayload(variant.payloads)).?, .frame);
+            try self.emitLinear(.{ .assign_ref = .{ .target = payload_struct, .op = LIR.RefOp.tagPayloadStruct(value, @intCast(variant.index), @intCast(variant.index)), .next = undefined } });
+            try self.emitLinear(.{ .assign_ref = .{ .target = local, .op = LIR.RefOp.field(payload_struct, index), .next = undefined } });
+        }
+        return .{ .value = local, .ty = payload_ty };
+    }
+
+    /// Field `name` of the record `value`.
+    fn recordFieldValue(self: *Builder, value: LocalId, raw_ty: TypeId, name: types.NameId) Allocator.Error!TypedValue {
+        const ty = try self.structuralType(raw_ty);
+        const record = switch (self.program.store.get(ty)) {
+            .record => |record| record,
+            else => invariant("a record field read's value is not a record"),
+        };
+        const fields = self.program.store.fieldSpan(record.fields);
+        const index = for (fields, 0..) |field, i| {
+            if (field.name == name) break i;
+        } else invariant("a record field read's field is absent from its type");
+        const field_ty = fields[index].ty;
+        return .{ .value = try self.readField(ty, value, @intCast(index), field_ty), .ty = field_ty };
+    }
+
+    /// Call the target a dispatch resolution names with already-lowered
+    /// arguments.
+    fn emitDispatch(self: *Builder, resolution: static_dispatch.CheckedCallResolution, callable_ty: checked.CheckedTypeId, args: []const LocalId, result_ty: TypeId) Allocator.Error!LocalId {
+        const table = self.view.view.static_dispatch_plans;
+        switch (resolution) {
+            .direct_closed, .direct_parametric => |direct| {
+                const node = table.evidenceNode(direct.evidence);
+                if (node.instantiation == .alias) invariant("dispatch targets reached through a procedure alias are not yet lowered by Boxy");
+                const target_module = self.program.moduleByIdx(node.target.module_idx);
+                const template = target_module.view.checked_procedure_templates.lookupByDef(node.target.def_idx) orelse
+                    invariant("a dispatch target has no procedure template");
+                const callee = try self.program.templateRefWorker(template);
+                const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
+                const nested: []const static_dispatch.CheckedEvidence = switch (node.nested) {
+                    .resolved => table.nestedEvidence(node),
+                    .from_callable => if (self.program.worker(callee).dictionary_params.len == 0) &.{} else invariant("callable-derived call evidence is not yet lowered by Boxy"),
+                    .through_alias => invariant("alias-scope call evidence is not yet lowered by Boxy"),
+                };
+                const hidden = try self.hiddenArgs(callee, subst, nested);
+                defer self.allocator.free(hidden);
+                const all = try std.mem.concat(self.allocator, LocalId, &.{ args, hidden });
+                defer self.allocator.free(all);
+                const target = try self.localOf(result_ty, .frame);
+                try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(callee).proc, .args = try self.store.addLocalSpan(all), .next = undefined } });
+                return target;
+            },
+            .evidence_dependent => |dependent| {
+                return try self.emitErasedCall(self.scopeDictionary(dependent.index), try self.convert(callable_ty), args, result_ty);
+            },
+            else => invariantFmt("iterator dispatch resolution {s} is not yet lowered by Boxy", .{@tagName(resolution)}),
+        }
+    }
+
+    fn loopTest(self: *Builder, body: CheckedExprId, head: LIR.JoinPointId, exit: LIR.JoinPointId) Allocator.Error!void {
+        const holes = try self.emitBoolSwitch(self.popValue());
+        self.hole = holes.otherwise;
+        try self.emitJump(exit, null);
+        self.hole = holes.then;
+        try self.push(.{ .jump_without_value = head });
+        try self.push(.discard);
+        try self.push(.{ .expr = body });
     }
 
     /// Bind an irrefutable pattern (a parameter or a `decl`) to `value`.

@@ -1307,7 +1307,9 @@ pub const PackedErasedFnData = struct {
 /// `record`, `tuple`, `tag`, `list`, and `box` consume their value operands
 /// into the target, as `assign_struct`, `assign_tag`, and `assign_list` do;
 /// `eq`, `hash`, `inspect`, and `tag_discriminant` borrow their value
-/// operands; `call_erased` consumes `args` and borrows `closure`.
+/// operands; `call_erased` consumes `args` and borrows `closure`;
+/// `dict_compose` and `dict_record` hold their operands as an aggregate
+/// holds its fields.
 pub const DynOp = union(enum) {
     /// Allocate the procedure's dynamic frame region and set the address of
     /// every `frame` dynamic local. Exactly one per procedure with such
@@ -1320,12 +1322,16 @@ pub const DynOp = union(enum) {
     desc_list: struct { elem: LocalId },
     desc_box: struct { payload: LocalId },
     /// A structural record of the named fields; `names` and `descs` are
-    /// parallel, in any order (the runtime orders by name).
-    desc_record: struct { names: LocalSpan, descs: LocalSpan },
+    /// parallel, in any order (the runtime orders by name). `ext`, for an
+    /// open row, is the descriptor of the row's remainder, whose fields
+    /// join the named ones.
+    desc_record: struct { names: LocalSpan, descs: LocalSpan, ext: ?LocalId = null },
     desc_tuple: struct { elems: LocalSpan },
     /// A tag union. `names` has one entry per variant; `payload_counts`
     /// (parallel) says how many of `payloads`, in order, belong to it.
-    desc_tag_union: struct { names: LocalSpan, payload_counts: U32Span, payloads: LocalSpan },
+    /// `ext`, for an open row, is the descriptor of the row's remainder,
+    /// whose variants join the named ones.
+    desc_tag_union: struct { names: LocalSpan, payload_counts: U32Span, payloads: LocalSpan, ext: ?LocalId = null },
     /// The packed erased-call argument record of `elems`, in declaration
     /// order (`layout.erased_call_abi.plan`).
     desc_args: struct { elems: LocalSpan },

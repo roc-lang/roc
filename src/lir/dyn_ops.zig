@@ -41,10 +41,11 @@ pub fn ownership(op: DynOp) Ownership {
         .desc_tag_union,
         .desc_args,
         .desc_nominal,
-        .dict_compose,
-        .dict_record,
         .tag_discriminant_of,
         => .none,
+        // A dictionary is an immortal erased callable built from its
+        // captures, which it holds as an aggregate holds its fields.
+        .dict_compose, .dict_record => .construct,
         // A dictionary's callables are immortal; the target borrows from it.
         .dict_method => |method| .{ .borrow_component = method.dict },
         .copy => |copy| .{ .alias = copy.src },
@@ -85,11 +86,13 @@ pub const Operands = struct {
             .desc_list => |desc| result.single(desc.elem),
             .desc_box => |desc| result.single(desc.payload),
             .desc_record => |desc| {
+                if (desc.ext) |ext| result.single(ext);
                 result.span(desc.names);
                 result.span(desc.descs);
             },
             .desc_tuple => |desc| result.span(desc.elems),
             .desc_tag_union => |desc| {
+                if (desc.ext) |ext| result.single(ext);
                 result.span(desc.names);
                 result.span(desc.payloads);
             },
@@ -202,6 +205,8 @@ pub fn constructedValues(store: *const LirStore, allocator: std.mem.Allocator, o
         .tag => |tag| try appendSpan(store, allocator, tag.payloads, out),
         .list => |list| try appendSpan(store, allocator, list.elems, out),
         .box => |box| try out.append(allocator, box.payload),
+        .dict_compose => |dict| try appendSpan(store, allocator, dict.captures, out),
+        .dict_record => |dict| try appendSpan(store, allocator, dict.methods, out),
         else => unreachable, // only construct operations consume value operands
     }
 }
@@ -251,12 +256,14 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
         .desc_record => |desc| .{ .desc_record = .{
             .names = try Remap.span(store, context, desc.names),
             .descs = try Remap.span(store, context, desc.descs),
+            .ext = try Remap.opt(context, desc.ext),
         } },
         .desc_tuple => |desc| .{ .desc_tuple = .{ .elems = try Remap.span(store, context, desc.elems) } },
         .desc_tag_union => |desc| .{ .desc_tag_union = .{
             .names = try Remap.span(store, context, desc.names),
             .payload_counts = desc.payload_counts,
             .payloads = try Remap.span(store, context, desc.payloads),
+            .ext = try Remap.opt(context, desc.ext),
         } },
         .desc_args => |desc| .{ .desc_args = .{ .elems = try Remap.span(store, context, desc.elems) } },
         .desc_nominal => |desc| .{ .desc_nominal = .{
