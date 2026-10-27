@@ -28,6 +28,7 @@ const checked = check.CheckedModule;
 const static_dispatch = check.StaticDispatchRegistry;
 const LIR = lir_core.LIR;
 const LirStore = lir_core.LirStore;
+const CheckedArithmetic = lir_core.CheckedArithmetic;
 const LocalId = LIR.LocalId;
 const CFStmtId = LIR.CFStmtId;
 const TypeId = types.TypeId;
@@ -100,6 +101,8 @@ const Builder = struct {
     binders: std.AutoHashMapUnmanaged(checked.PatternBinderId, LocalId) = .empty,
     /// The descriptor local of each scope variable (its hidden parameter).
     var_descs: []LocalId = &.{},
+    /// The dictionaries in scope (`Worker.scope_dictionary_indices` order).
+    dict_locals: []LocalId = &.{},
     type_descs: std.AutoHashMapUnmanaged(TypeId, LocalId) = .empty,
     name_locals: std.AutoHashMapUnmanaged(types.NameId, LocalId) = .empty,
     entry_hole: CFStmtId = undefined,
@@ -485,6 +488,8 @@ const Builder = struct {
         const template = switch (worker.key) {
             .template => |key| self.view.view.checked_procedure_templates.templates.items[@backingInt(key.template)],
             .lambda => |key| return try self.lowerLambdaBody(key.expr),
+            .method_entry => |target| return try self.lowerMethodEntry(target),
+            .structural => |method| return try self.lowerStructuralMethod(method),
         };
         // Signature: explicit parameters, then hidden descriptors and
         // dictionaries.
@@ -499,7 +504,9 @@ const Builder = struct {
         for (params, worker.params) |*param, param_ty| param.* = try self.localOf(param_ty, .param);
         try args.appendSlice(self.allocator, params);
         try args.appendSlice(self.allocator, self.var_descs);
-        for (worker.dictionary_params) |_| try args.append(self.allocator, try self.closedLocal(.opaque_ptr));
+        self.dict_locals = try self.program.arena.allocator().alloc(LocalId, worker.dictionary_params.len);
+        for (self.dict_locals) |*slot| slot.* = try self.closedLocal(try self.erasedLayout());
+        try args.appendSlice(self.allocator, self.dict_locals);
         var ret_layout: layout.Idx = undefined;
         if (self.program.store.isClosed(worker.ret)) {
             ret_layout = try self.program.layouts.layoutOf(worker.ret);
@@ -535,7 +542,17 @@ const Builder = struct {
                 try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = message } } });
             },
             .intrinsic_wrapper => invariant("intrinsic wrappers are not yet lowered by Boxy"),
-            .entry_wrapper => invariant("entry wrappers are not yet lowered by Boxy"),
+            .entry_wrapper => |wrapper_id| {
+                const wrapper = self.view.view.entry_wrappers.get(wrapper_id);
+                const root = self.view.view.compile_time_roots.root(wrapper.root);
+                switch (root.kind) {
+                    .expect, .repl_expr => {},
+                    else => invariantFmt("{s} entry wrappers are not yet lowered by Boxy", .{@tagName(root.kind)}),
+                }
+                if (params.len != 0) invariant("an entry wrapper has parameters");
+                try self.tasks.append(self.allocator, .ret);
+                try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr });
+            },
         }
         try self.run();
 
@@ -592,10 +609,10 @@ const Builder = struct {
         // Captures: values, then the scope's descriptors.
         const capture_ptr = try self.closedLocal(.opaque_ptr);
         self.var_descs = try self.program.arena.allocator().alloc(LocalId, worker.scheme_vars.len);
-        const capture_count = worker.capture_types.len + worker.scheme_vars.len;
+        const capture_count = worker.capture_types.len + worker.scheme_vars.len + worker.captured_dictionaries;
         var capture_values: []LocalId = &.{};
         if (capture_count != 0) {
-            const capture_layout = try self.captureLayout(worker.capture_types, worker.scheme_vars.len);
+            const capture_layout = try self.captureLayout(worker.capture_types, worker.scheme_vars.len, worker.captured_dictionaries);
             const record = try self.closedLocal(capture_layout);
             try self.emitEntry(.{ .assign_low_level = .{
                 .target = record,
@@ -608,12 +625,15 @@ const Builder = struct {
             for (capture_values, 0..) |*slot, index| {
                 const field_layout = if (index < worker.capture_types.len)
                     try self.program.layouts.layoutOf(worker.capture_types[index])
+                else if (index < worker.capture_types.len + worker.scheme_vars.len)
+                    layout.Idx.opaque_ptr
                 else
-                    layout.Idx.opaque_ptr;
+                    try self.erasedLayout();
                 slot.* = try self.closedLocal(field_layout);
                 try self.emitEntry(.{ .assign_ref = .{ .target = slot.*, .op = LIR.RefOp.field(record, @intCast(index)), .next = undefined } });
             }
-            @memcpy(self.var_descs, capture_values[worker.capture_types.len..]);
+            @memcpy(self.var_descs, capture_values[worker.capture_types.len..][0..worker.scheme_vars.len]);
+            self.dict_locals = try self.program.arena.allocator().dupe(LocalId, capture_values[worker.capture_types.len + worker.scheme_vars.len ..]);
         }
         defer if (capture_count != 0) self.allocator.free(capture_values);
         for (worker.captures, 0..) |capture, index| {
@@ -654,16 +674,151 @@ const Builder = struct {
         proc.abi = .erased_record;
     }
 
+    fn erasedLayout(self: *Builder) Allocator.Error!layout.Idx {
+        return self.program.result.layouts.insertErasedCallable();
+    }
+
+    /// Load an erased worker's capture record (closed fields of
+    /// `field_layouts`) at the start of its entry chain, returning its fields.
+    fn loadCaptures(self: *Builder, capture_ptr: LocalId, field_layouts: []const layout.Idx) Allocator.Error![]LocalId {
+        const fields = try self.allocator.alloc(layout.StructField, field_layouts.len);
+        defer self.allocator.free(fields);
+        for (fields, field_layouts, 0..) |*field, field_layout, index| field.* = .{ .index = @intCast(index), .layout = field_layout };
+        const record = try self.closedLocal(try self.program.result.layouts.putStructFields(fields));
+        try self.emitEntry(.{ .assign_low_level = .{
+            .target = record,
+            .op = .erased_capture_load,
+            .rc_effect = try self.store.addRcEffect(LIR.LowLevel.erased_capture_load.rcEffect()),
+            .args = try self.store.addLocalSpan(&.{capture_ptr}),
+            .next = undefined,
+        } });
+        const values = try self.allocator.alloc(LocalId, field_layouts.len);
+        for (values, field_layouts, 0..) |*value, field_layout, index| {
+            value.* = try self.closedLocal(field_layout);
+            try self.emitEntry(.{ .assign_ref = .{ .target = value.*, .op = LIR.RefOp.field(record, @intCast(index)), .next = undefined } });
+        }
+        return values;
+    }
+
+    /// Begin an erased-ABI worker whose captures are `field_layouts`: entry
+    /// chain, capture pointer, argument record, and result. Returns what
+    /// `finishErasedWorker` needs.
+    const ErasedStart = struct {
+        entry: CFStmtId,
+        body_start: CFStmtId,
+        capture_ptr: LocalId,
+        captures: []LocalId,
+        args: []LocalId,
+        record: ?LocalId,
+        ret_layout: layout.Idx,
+    };
+
+    fn beginErasedWorker(self: *Builder, field_layouts: []const layout.Idx) Allocator.Error!ErasedStart {
+        self.entry_hole = try self.newHole();
+        const entry = self.entry_hole;
+        const capture_ptr = try self.closedLocal(.opaque_ptr);
+        const captures = if (field_layouts.len == 0) try self.allocator.alloc(LocalId, 0) else try self.loadCaptures(capture_ptr, field_layouts);
+        return .{
+            .entry = entry,
+            .body_start = undefined,
+            .capture_ptr = capture_ptr,
+            .captures = captures,
+            .args = &.{},
+            .record = null,
+            .ret_layout = undefined,
+        };
+    }
+
+    /// The entry of a template worker reached through a dictionary.
+    fn lowerMethodEntry(self: *Builder, target: WorkerId) Allocator.Error!void {
+        const worker = self.currentWorker();
+        const target_worker = self.program.worker(target);
+        const field_layouts = try self.allocator.alloc(layout.Idx, target_worker.scheme_vars.len + target_worker.dictionary_params.len);
+        defer self.allocator.free(field_layouts);
+        for (field_layouts, 0..) |*field_layout, index| {
+            field_layout.* = if (index < target_worker.scheme_vars.len) .opaque_ptr else try self.erasedLayout();
+        }
+        var start = try self.beginErasedWorker(field_layouts);
+        defer self.allocator.free(start.captures);
+        self.var_descs = try self.program.arena.allocator().dupe(LocalId, start.captures[0..target_worker.scheme_vars.len]);
+        try self.runErasedBody(&start, worker.params, worker.ret, .{ .call = .{ .target = target, .hidden = start.captures } });
+    }
+
+    /// A structural method over the one descriptor its dictionary captures.
+    fn lowerStructuralMethod(self: *Builder, method: lower.StructuralMethod) Allocator.Error!void {
+        const worker = self.currentWorker();
+        var start = try self.beginErasedWorker(&.{.opaque_ptr});
+        defer self.allocator.free(start.captures);
+        self.var_descs = try self.program.arena.allocator().dupe(LocalId, start.captures);
+        try self.runErasedBody(&start, worker.params, worker.ret, .{ .structural = method });
+    }
+
+    const ErasedBody = union(enum) {
+        call: struct { target: WorkerId, hidden: []const LocalId },
+        structural: lower.StructuralMethod,
+    };
+
+    fn runErasedBody(self: *Builder, start: *ErasedStart, params: []const TypeId, ret: TypeId, body: ErasedBody) Allocator.Error!void {
+        const worker = self.currentWorker();
+        var args: std.ArrayList(LocalId) = .empty;
+        defer args.deinit(self.allocator);
+        var record: ?LocalId = null;
+        if (params.len != 0) {
+            record = try self.argsRecordLocal(params, .param);
+            try args.append(self.allocator, record.?);
+        }
+        var ret_layout: layout.Idx = undefined;
+        if (self.program.store.isClosed(ret)) {
+            ret_layout = try self.program.layouts.layoutOf(ret);
+        } else {
+            ret_layout = try self.program.result.layouts.dynamicLayout();
+            self.result_local = try self.localOf(ret, .result);
+        }
+        const body_start = try self.newHole();
+        self.hole = body_start;
+        const values = try self.allocator.alloc(LocalId, params.len);
+        defer self.allocator.free(values);
+        for (values, params, 0..) |*value, param_ty, index| value.* = try self.argsRecordField(params, record.?, @intCast(index), param_ty);
+        const result = switch (body) {
+            .call => |call| blk: {
+                const all = try std.mem.concat(self.allocator, LocalId, &.{ values, call.hidden });
+                defer self.allocator.free(all);
+                const target = try self.localOf(ret, .frame);
+                try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(call.target).proc, .args = try self.store.addLocalSpan(all), .next = undefined } });
+                break :blk target;
+            },
+            .structural => |method| blk: {
+                const target = try self.localOf(ret, .frame);
+                switch (method) {
+                    .is_eq => try self.emitDyn(target, .{ .eq = .{ .lhs = values[0], .rhs = values[1], .desc = self.var_descs[0] } }),
+                    .to_hash => try self.emitDyn(target, .{ .hash = .{ .hasher = values[1], .value = values[0], .desc = self.var_descs[0] } }),
+                }
+                break :blk target;
+            },
+        };
+        try self.pushValue(result);
+        try self.step(.ret);
+        try self.finishProc(start.entry, body_start, args.items, ret_layout);
+        const proc = self.store.getProcSpecPtr(worker.proc);
+        proc.erased_capture_arg = start.capture_ptr;
+        proc.abi = .erased_record;
+    }
+
     /// The closed layout of a lambda's capture record: the captured values,
     /// then one descriptor pointer per scope variable, in that order of
     /// semantic indices.
-    fn captureLayout(self: *Builder, capture_types: []const TypeId, descriptor_count: usize) Allocator.Error!layout.Idx {
-        const fields = try self.allocator.alloc(layout.StructField, capture_types.len + descriptor_count);
+    fn captureLayout(self: *Builder, capture_types: []const TypeId, descriptor_count: usize, dictionary_count: usize) Allocator.Error!layout.Idx {
+        const fields = try self.allocator.alloc(layout.StructField, capture_types.len + descriptor_count + dictionary_count);
         defer self.allocator.free(fields);
         for (fields, 0..) |*field, index| {
             field.* = .{
                 .index = @intCast(index),
-                .layout = if (index < capture_types.len) try self.program.layouts.layoutOf(capture_types[index]) else .opaque_ptr,
+                .layout = if (index < capture_types.len)
+                    try self.program.layouts.layoutOf(capture_types[index])
+                else if (index < capture_types.len + descriptor_count)
+                    .opaque_ptr
+                else
+                    try self.erasedLayout(),
             };
         }
         return try self.program.result.layouts.putStructFields(fields);
@@ -1048,7 +1203,7 @@ const Builder = struct {
             .local_param, .local_value, .pattern_binder, .local_mutable_version => return try self.lowerValueCall(expr_id, call),
             else => |ref| invariantFmt("calls through a {s} reference are not yet lowered by Boxy", .{@tagName(ref)}),
         } else return try self.lowerValueCall(expr_id, call);
-        try self.push(.{ .finish_call = .{ .callee = callee, .hidden = try self.hiddenArgs(callee, self.siteSubstitution(call.func)), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
+        try self.push(.{ .finish_call = .{ .callee = callee, .hidden = try self.hiddenArgs(callee, self.siteSubstitution(call.func), self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{}), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
         try self.pushExprsReversed(call.args);
     }
 
@@ -1063,14 +1218,73 @@ const Builder = struct {
     /// The hidden descriptor arguments of a call whose target's scheme
     /// variables `subst` instantiates (checked types of this body's module,
     /// in the target's `scheme_vars` order), followed by its dictionaries.
-    fn hiddenArgs(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId) Allocator.Error![]LocalId {
+    fn hiddenArgs(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence) Allocator.Error![]LocalId {
         const target = self.program.worker(callee);
-        if (target.dictionary_params.len != 0) invariant("calls passing dictionaries are not yet lowered by Boxy");
         if (subst.len != target.scheme_vars.len) invariant("a call's checked substitution differs from its target's scheme");
-        const hidden = try self.allocator.alloc(LocalId, subst.len);
+        const hidden = try self.allocator.alloc(LocalId, subst.len + target.dictionary_params.len);
         errdefer self.allocator.free(hidden);
-        for (subst, hidden) |checked_ty, *desc| desc.* = try self.descOf(try self.convert(checked_ty));
+        for (subst, hidden[0..subst.len]) |checked_ty, *desc| desc.* = try self.descOf(try self.convert(checked_ty));
+        for (target.dictionary_params, hidden[subst.len..]) |param_index, *dict| {
+            if (param_index >= evidence.len) invariant("a call's checked evidence does not cover its target's dictionaries");
+            dict.* = try self.dictionaryOf(evidence[param_index]);
+        }
         return hidden;
+    }
+
+    /// The dictionary `evidence` denotes (design.md "Dictionaries"),
+    /// composed in the entry chain.
+    fn dictionaryOf(self: *Builder, evidence: static_dispatch.CheckedEvidence) Allocator.Error!LocalId {
+        const table = self.view.view.static_dispatch_plans;
+        switch (evidence.resolution) {
+            .constraint => |constraint| return self.scopeDictionary(constraint.index),
+            .direct => |node_id| {
+                const node = table.evidenceNode(node_id);
+                if (node.instantiation == .alias) invariant("dictionaries of targets reached through a procedure alias are not yet lowered by Boxy");
+                const target_module = self.program.moduleByIdx(node.target.module_idx);
+                const template = target_module.view.checked_procedure_templates.lookupByDef(node.target.def_idx) orelse
+                    invariant("a dictionary target has no procedure template");
+                const target = try self.program.templateRefWorker(template);
+                const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
+                const nested: []const static_dispatch.CheckedEvidence = switch (node.nested) {
+                    .resolved => table.nestedEvidence(node),
+                    .from_callable => if (self.program.worker(target).dictionary_params.len == 0) &.{} else invariant("callable-derived dictionary evidence is not yet lowered by Boxy"),
+                    .through_alias => invariant("alias-scope dictionary evidence is not yet lowered by Boxy"),
+                };
+                const hidden = try self.hiddenArgs(target, subst, nested);
+                defer self.allocator.free(hidden);
+                const entry = try self.program.methodEntryWorker(target);
+                return try self.composeDictionary(entry, hidden);
+            },
+            .structural => |structural| {
+                const method: lower.StructuralMethod = switch (structural.derivation) {
+                    .equality => .is_eq,
+                    .hash => .to_hash,
+                    else => invariantFmt("structural {s} dictionaries are not yet lowered by Boxy", .{@tagName(structural.derivation)}),
+                };
+                const entry = try self.program.structuralWorker(self.module, method);
+                const desc = try self.descOf(try self.convert(structural.dispatcher_ty));
+                return try self.composeDictionary(entry, &.{desc});
+            },
+            else => invariantFmt("{s} dictionary evidence is not yet lowered by Boxy", .{@tagName(evidence.resolution)}),
+        }
+    }
+
+    fn composeDictionary(self: *Builder, entry: WorkerId, captures: []const LocalId) Allocator.Error!LocalId {
+        const local = try self.closedLocal(try self.erasedLayout());
+        try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .dict_compose = .{
+            .worker = self.program.worker(entry).proc,
+            .captures = try self.store.addLocalSpan(captures),
+        } }), .next = undefined } });
+        return local;
+    }
+
+    /// The dictionary in scope for canonical evidence parameter `index`.
+    fn scopeDictionary(self: *Builder, index: static_dispatch.EvidenceChainIndex) LocalId {
+        if (index.depth != 0) invariant("evidence from enclosing generalized scopes is not yet lowered by Boxy");
+        for (self.currentWorker().scope_dictionary_indices, 0..) |param_index, position| {
+            if (param_index == index.index) return self.dict_locals[position];
+        }
+        invariant("evidence named a dictionary parameter its scope does not have");
     }
 
     fn siteSubstitution(self: *Builder, site: CheckedExprId) []const checked.CheckedTypeId {
@@ -1106,7 +1320,12 @@ const Builder = struct {
                 const callee = try self.program.templateRefWorker(template);
                 if (node.instantiation == .alias) invariant("dispatch targets reached through a procedure alias are not yet lowered by Boxy");
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
-                const hidden = try self.hiddenArgs(callee, subst);
+                const nested: []const static_dispatch.CheckedEvidence = switch (node.nested) {
+                    .resolved => table.nestedEvidence(node),
+                    .from_callable => if (self.program.worker(callee).dictionary_params.len == 0) &.{} else invariant("callable-derived call evidence is not yet lowered by Boxy"),
+                    .through_alias => invariant("alias-scope call evidence is not yet lowered by Boxy"),
+                };
+                const hidden = try self.hiddenArgs(callee, subst, nested);
                 switch (call_plan.result_mode) {
                     .value => {},
                     .equality => |equality| if (equality.negated) {
@@ -1145,6 +1364,31 @@ const Builder = struct {
                 },
                 else => invariantFmt("structural {s} dispatch is not yet lowered by Boxy", .{@tagName(derivation)}),
             },
+            .evidence_dependent => |dependent| {
+                const dict = self.scopeDictionary(dependent.index);
+                const fn_ty = try self.convert(call_plan.callable_ty);
+                switch (call_plan.result_mode) {
+                    .value => {},
+                    .equality => |equality| if (equality.negated) {
+                        try self.push(.{ .finish_low_level = .{ .op = .bool_not, .arg_count = 1, .result = result_ty } });
+                    },
+                    else => invariantFmt("dispatch result mode {s} is not yet lowered by Boxy", .{@tagName(call_plan.result_mode)}),
+                }
+                const call_result = switch (self.program.store.get(fn_ty)) {
+                    .function => |function| function.ret,
+                    else => invariant("a dispatch's callable type is not a function type"),
+                };
+                try self.push(.{ .finish_erased_call = .{ .fn_ty = fn_ty, .arg_count = @intCast(operands.len), .result = call_result } });
+                var index = operands.len;
+                while (index > 0) {
+                    index -= 1;
+                    switch (operands[index]) {
+                        .checked_expr => |operand| try self.push(.{ .expr = operand }),
+                        else => invariantFmt("dispatch operand {s} is not yet lowered by Boxy", .{@tagName(operands[index])}),
+                    }
+                }
+                try self.pushValue(dict);
+            },
             .checked_error => {
                 const literal = try self.store.insertString("runtime error");
                 try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal }, .checked_error = true } });
@@ -1167,7 +1411,9 @@ const Builder = struct {
         for (arg_types) |arg_ty| open = open or !store.isClosed(arg_ty);
         if (!open) {
             const target = try self.localOf(result_ty, .frame);
-            try self.emitLowLevel(target, op, args);
+            // Source arithmetic commits to its operand type's behavior.
+            const committed = if (args.len != 0) CheckedArithmetic.lowerOp(op, self.store.getLocal(args[0]).layout_idx) else op;
+            try self.emitLowLevel(target, committed, args);
             return try self.pushValue(target);
         }
         switch (op) {
@@ -1216,7 +1462,7 @@ const Builder = struct {
         const fn_ty = try self.exprType(expr_id);
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
-        const values = try self.allocator.alloc(LocalId, captures.len + self.var_descs.len);
+        const values = try self.allocator.alloc(LocalId, captures.len + self.var_descs.len + self.dict_locals.len);
         defer self.allocator.free(values);
         for (captures, capture_types, 0..) |capture, *capture_ty, index| {
             capture_ty.* = try self.patternType(capture.pattern);
@@ -1225,14 +1471,15 @@ const Builder = struct {
                 invariant("a closure capture named a pattern without a binder");
             values[index] = self.binders.get(binder) orelse invariant("a closure captured a binder this body never bound");
         }
-        @memcpy(values[captures.len..], self.var_descs);
+        @memcpy(values[captures.len..][0..self.var_descs.len], self.var_descs);
+        @memcpy(values[captures.len + self.var_descs.len ..], self.dict_locals);
         const callee = try self.program.lambdaWorker(self.worker_id, lambda_expr, captures, capture_types, fn_ty);
         const target = try self.localOf(fn_ty, .frame);
         var capture: ?LocalId = null;
         var capture_layout: ?layout.Idx = null;
         var on_drop: LIR.ErasedCallableOnDrop = .none;
         if (values.len != 0) {
-            const record_layout = try self.captureLayout(capture_types, self.var_descs.len);
+            const record_layout = try self.captureLayout(capture_types, self.var_descs.len, self.dict_locals.len);
             const record = try self.closedLocal(record_layout);
             try self.emitLinear(.{ .assign_struct = .{ .target = record, .fields = try self.store.addLocalSpan(values), .next = undefined } });
             capture = record;
@@ -1381,13 +1628,12 @@ const Builder = struct {
         const name = try self.program.store.internName(self.view.nameStore().tagLabelText(label));
         if (!self.program.store.isClosed(ty)) {
             const target = try self.localOf(ty, .frame);
-            try self.emitDyn(target, .{ .tag = .{ .desc = try self.descOf(ty), .name = try self.nameDesc(name), .payloads = try self.store.addLocalSpan(values) } });
+            try self.emitDyn(target, .{ .tag = .{ .desc = try self.descOf(try self.structuralType(ty)), .name = try self.nameDesc(name), .payloads = try self.store.addLocalSpan(values) } });
             return try self.pushValue(target);
         }
-        const rep = self.program.joins.representative(ty);
+        const rep = self.program.joins.representative(try self.structuralType(ty));
         const union_ty = switch (self.program.store.get(rep)) {
             .tag_union => |value| value,
-            .nominal => invariant("tag construction at a nominal type reached Boxy without its nominal wrapper"),
             .primitive => |primitive| {
                 if (primitive != .bool) invariant("a tag expression's type is a non-Bool primitive");
                 const value = try self.boolValue(std.mem.eql(u8, self.program.store.nameText(name), "True"));
@@ -1526,7 +1772,7 @@ const Builder = struct {
                         try self.testDynamicTag(ty, name, tag.args, item.value, miss, &pending);
                         continue;
                     }
-                    const rep = self.program.joins.representative(ty);
+                    const rep = self.program.joins.representative(try self.structuralType(ty));
                     switch (self.program.store.get(rep)) {
                         .primitive => |primitive| {
                             if (primitive != .bool) invariant("a tag pattern's type is a non-Bool primitive");
@@ -1610,6 +1856,15 @@ const Builder = struct {
         }
     }
 
+    /// `ty` with its nominal wrappers peeled: a nominal type shares its
+    /// backing's representation, so a tag or record of a nominal type is
+    /// built and matched at its backing.
+    fn structuralType(self: *Builder, ty: TypeId) Allocator.Error!TypeId {
+        var current = ty;
+        while (self.program.store.get(current) == .nominal) current = try self.program.converter().backing(current);
+        return current;
+    }
+
     /// Field `semantic_index` (of type `field_ty`) of the record or tuple
     /// `base` of type `ty`, as a borrowed read.
     fn readField(self: *Builder, ty: TypeId, base_local: LocalId, semantic_index: u32, field_ty: TypeId) Allocator.Error!LocalId {
@@ -1625,8 +1880,9 @@ const Builder = struct {
 
     /// Test that the dynamic tag union `value` holds tag `name`, and queue
     /// its payloads against `args`.
-    fn testDynamicTag(self: *Builder, ty: TypeId, name: types.NameId, args: []const CheckedPatternId, value: LocalId, miss: CFStmtId, pending: anytype) Allocator.Error!void {
+    fn testDynamicTag(self: *Builder, nominal_ty: TypeId, name: types.NameId, args: []const CheckedPatternId, value: LocalId, miss: CFStmtId, pending: anytype) Allocator.Error!void {
         const store = &self.program.store;
+        const ty = try self.structuralType(nominal_ty);
         const union_ty = switch (store.get(ty)) {
             .tag_union => |union_ty| union_ty,
             else => invariantFmt("tag patterns on a dynamic {s} are not yet lowered by Boxy", .{@tagName(store.get(ty))}),

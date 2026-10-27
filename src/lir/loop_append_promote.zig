@@ -4230,6 +4230,7 @@ test "promote threads slack through an append-only loop" {
             .store_struct,
             .store_tag,
             .set_local,
+            .dyn,
             .debug,
             .expect,
             .expect_err,

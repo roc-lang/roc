@@ -57,7 +57,18 @@ pub const WorkerKey = union(enum) {
     /// (its type variables and their descriptors) it shares through its
     /// captures.
     lambda: struct { module: ModuleIndex, expr: checked.CheckedExprId, outer: WorkerId },
+    /// The erased-callable entry of a template worker that a dictionary
+    /// names: it takes the method's arguments as its argument record, the
+    /// target's hidden descriptors and dictionaries as its captures, and
+    /// calls the target.
+    method_entry: WorkerId,
+    /// A compiler-derived structural method over the descriptor its
+    /// dictionary captures.
+    structural: StructuralMethod,
 };
+
+/// The structural methods a dictionary can denote.
+pub const StructuralMethod = enum { is_eq, to_hash };
 
 pub const WorkerId = enum(u32) { _ };
 
@@ -81,6 +92,12 @@ pub const Worker = struct {
     captures: []const checked.CheckedCapture = &.{},
     /// For a lambda worker: the stored type of each captured value.
     capture_types: []const TypeId = &.{},
+    /// For a lambda worker: the outer worker's dictionaries it captures.
+    captured_dictionaries: u32 = 0,
+    /// The canonical evidence-parameter index of each dictionary in scope:
+    /// a template's own runtime dictionaries, or the ones a lambda
+    /// captures from its outer worker.
+    scope_dictionary_indices: []const u32 = &.{},
 };
 
 pub const Program = struct {
@@ -169,6 +186,7 @@ pub const Program = struct {
             .dictionary_params = dictionary_params.items,
             .params = params,
             .ret = signature.ret,
+            .scope_dictionary_indices = dictionary_params.items,
         });
         try self.worker_ids.put(self.allocator, key, id);
         try self.worklist.append(self.allocator, id);
@@ -210,6 +228,57 @@ pub const Program = struct {
             .ret = signature.ret,
             .captures = try self.arena.allocator().dupe(checked.CheckedCapture, captures),
             .capture_types = try self.arena.allocator().dupe(TypeId, capture_types),
+            .captured_dictionaries = @intCast(outer_worker.scope_dictionary_indices.len),
+            .scope_dictionary_indices = outer_worker.scope_dictionary_indices,
+        });
+        try self.worker_ids.put(self.allocator, key, id);
+        try self.worklist.append(self.allocator, id);
+        return id;
+    }
+
+    /// The dictionary entry of template worker `target`.
+    pub fn methodEntryWorker(self: *Program, target: WorkerId) Allocator.Error!WorkerId {
+        const key: WorkerKey = .{ .method_entry = target };
+        if (self.worker_ids.get(key)) |existing| return existing;
+        const target_worker = self.worker(target).*;
+        return try self.addErasedWorker(key, target_worker.module, target_worker.scheme_vars, target_worker.params, target_worker.ret, "boxy.method_entry");
+    }
+
+    /// The structural method worker of `method`, generic over one type `a`
+    /// whose descriptor it captures.
+    pub fn structuralWorker(self: *Program, module_index: ModuleIndex, method: StructuralMethod) Allocator.Error!WorkerId {
+        const key: WorkerKey = .{ .structural = method };
+        if (self.worker_ids.get(key)) |existing| return existing;
+        const a = try self.store.variable(0);
+        const params: []const TypeId, const ret: TypeId = switch (method) {
+            .is_eq => .{ try self.arena.allocator().dupe(TypeId, &.{ a, a }), try self.store.primitive(.bool) },
+            .to_hash => blk: {
+                const hasher = try self.store.primitive(.u64);
+                break :blk .{ try self.arena.allocator().dupe(TypeId, &.{ a, hasher }), hasher };
+            },
+        };
+        const scheme_vars = try self.arena.allocator().alloc(checked.CheckedTypeId, 1);
+        scheme_vars[0] = @fromBackingInt(std.math.maxInt(u32));
+        return try self.addErasedWorker(key, module_index, scheme_vars, params, ret, "boxy.structural");
+    }
+
+    fn addErasedWorker(self: *Program, key: WorkerKey, module_index: ModuleIndex, scheme_vars: []const checked.CheckedTypeId, params: []const TypeId, ret: TypeId, role: []const u8) Allocator.Error!WorkerId {
+        const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
+        const proc = try self.result.store.addProcSpec(.{
+            .name = self.result.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.programLocal(role, @backingInt(id)),
+            .args = .empty(),
+            .ret_layout = .zst,
+            .abi = .erased_record,
+        }, base.SourceLoc.none);
+        try self.workers.append(self.allocator, .{
+            .key = key,
+            .proc = proc,
+            .module = module_index,
+            .scheme_vars = scheme_vars,
+            .dictionary_params = &.{},
+            .params = params,
+            .ret = ret,
         });
         try self.worker_ids.put(self.allocator, key, id);
         try self.worklist.append(self.allocator, id);
