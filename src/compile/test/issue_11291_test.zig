@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const postcheck = @import("postcheck");
 const harness = @import("lower_to_lir_harness.zig");
 
 // repro for https://github.com/roc-lang/roc/issues/11291
@@ -57,12 +56,9 @@ test "issue 11291: nested and recursive nominal plans preserve positional backin
         \\value = { left: "left", right: Next(42, End) }
         \\main! = |_args| if Chain.first(Pair.right(value)) == Ok(42) Ok({}) else Err(Exit(1))
     ;
-    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
-        try harness.expectLowersToLirWithOptions(source, .{
-            .specialization_strategy = strategy,
-            .boxy_plan_inspect = if (strategy == .boxy) expectCompleteNominalSubstitutions else null,
-        });
-    }
+    try harness.expectLowersToLirWithOptions(source, .{ .specialization_strategy = .lss });
+    // `.boxy` must carry every nominal's complete backing substitutions.
+    return error.BoxyLoweringBeingReimplemented;
 }
 
 test "issue 11291: imported nominal methods preserve backing arguments" {
@@ -103,33 +99,4 @@ test "issue 11291: imported nominal methods preserve backing arguments" {
     for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
         try harness.expectAppPathLowersToLirWithOptions(app_path, .{ .specialization_strategy = strategy });
     }
-}
-
-// Check the changed producer boundary independently of recursive aggregate ARC.
-fn expectCompleteNominalSubstitutions(plan: *const postcheck.Boxy.Plan.ProgramPlan) harness.LowerToLirHarnessError!void {
-    var nominal_uses: usize = 0;
-    // Stored constants have their own monomorphic representations and backing;
-    // declaration substitutions belong to checked-type bindings.
-    for (plan.type_reps.items) |binding| {
-        const rep_id = binding.rep orelse continue;
-        const rep = plan.representations.items[@backingInt(rep_id)];
-        if (rep.kind != .nominal) continue;
-        const span = rep.nominal_backing_arg_substitutions;
-        var argument_count: u32 = 0;
-        for (plan.childSlice(rep.children)) |child| {
-            if (child.role == .nominal_arg) argument_count += 1;
-        }
-        try std.testing.expectEqual(argument_count, span.len);
-        if (span.len == 0) continue;
-        nominal_uses += 1;
-        var substitutions = plan.nominalBackingSubstitutions(span);
-        var next_argument: u32 = 0;
-        while (substitutions.next()) |substitution| {
-            try std.testing.expectEqual(next_argument, substitution.arg_index);
-            try std.testing.expectEqual(substitution.actual_rep, plan.nominalBackingActual(span, next_argument).?);
-            try std.testing.expect(@backingInt(substitution.actual_rep) < plan.representations.items.len);
-            next_argument += 1;
-        }
-    }
-    try std.testing.expect(nominal_uses > 0);
 }

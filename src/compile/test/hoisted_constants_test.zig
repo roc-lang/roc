@@ -940,7 +940,7 @@ fn expectIntLiteralPresent(result: *const lir.Program.Result, value: i128) Hoist
         switch (stmt.assign_literal.value) {
             .i128_literal => |id| if (result.store.stmtRow(id).value == value) return,
             .i64_literal => |literal| if (literal.value == value) return,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => {},
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref => {},
         }
     }
     return error.StaticDataLiteralNotFound;
@@ -2710,8 +2710,6 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
                 .f64_literal,
                 .f32_literal,
                 .dec_literal,
-                .boxy_dynamic_num_literal,
-                .boxy_dynamic_frac_literal,
                 .str_literal,
                 .bytes_literal,
                 .proc_ref,
@@ -2722,19 +2720,6 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,

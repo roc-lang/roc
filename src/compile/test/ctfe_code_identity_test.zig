@@ -201,9 +201,6 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
         &.{},
         image,
         runtime.lir_result.store.getProcSpecs(),
-        runtime.lir_result.boxy_erased_arg_desc_offsets.items,
-        runtime.lir_result.boxy_erased_arg_desc_params.items,
-        runtime.lir_result.boxy_worker_procs.items,
         roc_target.RocTarget.detectNative(),
     );
     defer compiled.deinit();
@@ -224,9 +221,6 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
                     &.{},
                     image,
                     runtime.lir_result.store.getProcSpecs(),
-                    runtime.lir_result.boxy_erased_arg_desc_offsets.items,
-                    runtime.lir_result.boxy_erased_arg_desc_params.items,
-                    runtime.lir_result.boxy_worker_procs.items,
                     target,
                 );
                 defer result.deinit();
@@ -245,14 +239,14 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
     defer built_by_identity.deinit();
     for (built.artifacts, 0..) |artifact, index| switch (artifact.kind) {
         .proc => |identity| try built_by_identity.put(identity, index),
-        .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
+        .rc_helper, .entrypoint, .message_pool_run, .branch_island => {},
     };
     var shared: usize = 0;
     var differing: usize = 0;
     for (evaluated.artifacts) |artifact| {
         const identity = switch (artifact.kind) {
             .proc => |identity| identity,
-            .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => continue,
+            .rc_helper, .entrypoint, .message_pool_run, .branch_island => continue,
         };
         const index = built_by_identity.get(identity) orelse continue;
         shared += 1;

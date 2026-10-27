@@ -115,6 +115,9 @@ pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
     eval.BuiltinModules.InitError ||
     std.Thread.SpawnError ||
     error{
+        /// A test asserts internals of `.boxy` lowering, which is being
+        /// reimplemented (design.md "`.boxy` Runtime Lowering").
+        BoxyLoweringBeingReimplemented,
         BuiltinLowLevelAnnotationMustBeFunction,
         DownloadFailed,
         ExpectedPlatformString,
@@ -151,9 +154,8 @@ pub const LirInspectFn = *const fn (
     layouts: *const layout.Store,
 ) LowerToLirHarnessError!void;
 
-/// Callback type for tests that inspect the whole lowered program. Backend
-/// codegen needs the boxy side tables alongside the store and layout store,
-/// so those tests take the lowering result rather than the two stores.
+/// Callback type for tests that inspect the whole lowered program, which
+/// take the lowering result rather than the store and layout store.
 pub const LoweredInspectFn = *const fn (
     lowered: *const lir.CheckedPipeline.LoweredProgram,
 ) LowerToLirHarnessError!void;
@@ -213,9 +215,6 @@ pub const LirLoweringOptions = struct {
     /// Stop after Monotype lowering. Focused postcheck regressions use this
     /// boundary when later LIR passes are outside the behavior under test.
     monotype_only: bool = false,
-    /// Verify checked evidence consumption and worker ABIs at the Boxy planning
-    /// boundary, independently of codec body generation in Boxy lowering.
-    boxy_plan_inspect: ?*const fn (*const postcheck.Boxy.Plan.ProgramPlan) LowerToLirHarnessError!void = null,
     /// Receives deterministic Monotype work counters. This is independent of
     /// elapsed-time measurement and is available at the `monotype_only` boundary.
     monotype_diagnostics_out: ?*postcheck.Monotype.Lower.Diagnostics = null,
@@ -1254,17 +1253,6 @@ fn lowerAppPathToLir(
         );
         mono.deinit();
         if (opts.monotype_diagnostics_out) |out| out.* = diagnostics;
-        return;
-    }
-
-    if (opts.boxy_plan_inspect) |inspect_plan| {
-        var plan = try postcheck.Boxy.Plan.analyzeProgram(gpa, .{
-            .root_module = check.CheckedArtifact.loweringViewWithRelations(root, relations),
-            .imports = imports,
-            .roots = lir_roots,
-        }, .{});
-        defer plan.deinit();
-        try inspect_plan(&plan);
         return;
     }
 

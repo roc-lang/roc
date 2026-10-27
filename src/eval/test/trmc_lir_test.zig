@@ -505,11 +505,7 @@ fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirPro
                 try work.append(allocator, s.on_miss);
             },
             .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {},
-            .boxy_tag_match => |s| {
-                try work.append(allocator, s.on_match);
-                try work.append(allocator, s.on_miss);
-            },
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict => |s| {
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
                 try work.append(allocator, s.next);
             },
         }
@@ -1390,60 +1386,7 @@ test "tail-call proof rejects an intervening effect and a forwarding cycle" {
 }
 
 test "tail-call proof consumes the explicit boxy adapter operation" {
-    const allocator = std.testing.allocator;
-    for ([_]lir.Program.BoxyAdapterOperation{ .relabel, .materialize }) |operation| {
-        var store = LirStore.init(allocator);
-        store.runtime_contract = .boxy;
-        defer store.deinit();
-        var b = ProcBuilder.init(&store);
-        defer b.deinit(allocator);
-        const arg = try b.addLocal(allocator, .u64);
-        const result = try b.addLocal(allocator, .u64);
-        const forwarded = try b.addLocal(allocator, .u64);
-        const proc = try store.addProcSpec(.{
-            .name = store.freshSyntheticSymbol(),
-            .identity = LIR.ProcIdentity.forTest(4),
-            .args = try store.addLocalSpan(&.{arg}),
-            .ret_layout = .u64,
-        }, .none);
-        var builder = lir.TailCallBuilder.init(allocator, proc);
-        defer builder.deinit();
-        store.tail_call_builder = &builder;
-        defer store.tail_call_builder = null;
-        var adapters: std.ArrayList(lir.Program.BoxyAdapter) = .empty;
-        defer adapters.deinit(allocator);
-        const adapter_id: LIR.BoxyAdapterId = @fromBackingInt(@intCast(adapters.items.len));
-        try adapters.append(allocator, .{
-            .kind = .boxy_to_boxy,
-            .operation = operation,
-            .source_layout = .u64,
-            .target_layout = .u64,
-            .consumes_source = true,
-            .produces_owned_result = true,
-        });
-        builder.adapters = adapters.items;
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = forwarded } }, .test_fixture);
-        const adapt = try store.addCFStmt(.{ .assign_boxy_adapt = .{
-            .target = forwarded,
-            .data = try store.addStmtRow(LIR.BoxyAdaptData, .{
-                .source = result,
-                .source_desc = null,
-                .target_desc = null,
-                .source_mode = .move,
-                .adapter = adapter_id,
-            }),
-            .next = ret,
-        } }, .test_fixture);
-        const call = try store.addCFStmt(.{ .assign_call = .{
-            .target = result,
-            .proc = proc,
-            .args = try store.addLocalSpan(&.{arg}),
-            .next = adapt,
-        } }, .test_fixture);
-        store.setProcSpecBody(proc, call);
-        const sites = try builder.finish(&store);
-        try std.testing.expectEqual(operation == .relabel, sites != null);
-    }
+    return error.BoxyLoweringBeingReimplemented;
 }
 
 test "tce parallel transfers preserve every small source graph" {

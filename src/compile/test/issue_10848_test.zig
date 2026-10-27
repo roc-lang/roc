@@ -96,10 +96,6 @@ fn expectCallBuiltRecordListSetHasNoRetain(
                     }
                     try stack.append(allocator, .{ .stmt = str_match_set.on_miss });
                 },
-                .boxy_tag_match => |tag_match| {
-                    try stack.append(allocator, .{ .stmt = tag_match.on_match });
-                    try stack.append(allocator, .{ .stmt = tag_match.on_miss });
-                },
                 .join => |join_stmt| {
                     try stack.append(allocator, .{ .stmt = join_stmt.body });
                     try stack.append(allocator, .{ .stmt = join_stmt.remainder });
@@ -109,18 +105,6 @@ fn expectCallBuiltRecordListSetHasNoRetain(
                 .init_uninitialized,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .assign_call_dict,
                 .assign_list,
                 .assign_struct,
                 .assign_tag,

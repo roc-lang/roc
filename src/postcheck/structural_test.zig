@@ -1521,9 +1521,6 @@ test "each primitive mapping has exactly one definition" {
         @embedFile("monotype/type.zig"),
         @embedFile("monotype/lower.zig"),
         @embedFile("solved_lir_lower.zig"),
-        @embedFile("boxy/lower.zig"),
-        @embedFile("boxy/plan.zig"),
-        @embedFile("boxy/layouts.zig"),
     };
     const single_definition = [_][]const u8{
         "fn primitiveLayout(",
@@ -1549,6 +1546,8 @@ test "each primitive mapping has exactly one definition" {
     try std.testing.expect(owner_fn.param_types.len == 1);
     try std.testing.expect(owner_fn.param_types[0].? == check.CheckedModule.CheckedPrimitive);
     try std.testing.expect(owner_fn.return_type.? == check.StaticDispatchRegistry.BuiltinOwner);
+    // `.boxy` lowering's sources must also hold no copy of these tables.
+    return error.BoxyLoweringBeingReimplemented;
 }
 
 test "direct LIR lowering records erased-owner provenance for every assign_ref" {
@@ -1559,7 +1558,7 @@ test "direct LIR lowering records erased-owner provenance for every assign_ref" 
     // records its target's erased-owner state from that edge. The declaration
     // text is assembled at comptime so this test's own source never matches it.
     const direct_lower = @embedFile("solved_lir_lower.zig");
-    const lowerers = [_][]const u8{ direct_lower, @embedFile("boxy/lower.zig") };
+    const lowerers = [_][]const u8{direct_lower};
     const forbidden = [_][]const u8{
         "fn " ++ "transparentSource(",
         "fn " ++ "transparentErasedOwnershipSource(",
@@ -1572,81 +1571,16 @@ test "direct LIR lowering records erased-owner provenance for every assign_ref" 
     try std.testing.expectEqual(@as(usize, 1), countDefinitions(direct_lower, "lir_core.ErasedOwnerEdge.transparentSource("));
     try std.testing.expectEqual(@as(usize, 1), countDefinitions(direct_lower, ".{ ." ++ "assign_ref = .{"));
 
-    // Erased-owner provenance exists only to choose an owned erased call's
-    // reuse source. Boxy lowering emits no owned erased calls, so it has no
-    // provenance to record; LIR certification still checks every Boxy erased
-    // call's reuse fields.
-    const boxy_lower = @embedFile("boxy/lower.zig");
-    try std.testing.expectEqual(@as(usize, 0), countDefinitions(boxy_lower, ".reuse_closure = " ++ "true"));
-    const erased_calls = countDefinitions(boxy_lower, ".assign_call_erased" ++ " = .{");
-    try std.testing.expectEqual(erased_calls, countDefinitions(boxy_lower, ".reuse_closure = " ++ "false"));
-    try std.testing.expectEqual(erased_calls, countDefinitions(boxy_lower, ".reuse_source = " ++ "null"));
+    // `.boxy` lowering's erased calls must also be checked here.
+    return error.BoxyLoweringBeingReimplemented;
 }
 
 test "boxy representation queries have one definition on the plan" {
-    // Boxy planning decides an unwrap, a descriptor argument, or a dictionary
-    // argument by asking these; Boxy lowering emits that decision by asking the
-    // same ones. A second copy lets the two disagree about the program they are
-    // both describing, which is how the planner's
-    // `repSubtreeHasDescriptorInOtherChildren` carve-out came to be absent from
-    // both lowering copies. Every consumer goes through `Plan.RepQuery` /
-    // `Plan.NamedRepQuery`; none re-derives.
-    const consumers = [_][]const u8{
-        @embedFile("boxy/lower.zig"),
-        @embedFile("boxy/layouts.zig"),
-    };
-    const shared = [_][]const u8{
-        "repSubtreeHasDescriptor",
-        "repSubtreeHasDescriptorInOtherChildren",
-        "repSubtreeHasDictionary",
-        "repSubtreeHasDictionaryInOtherChildren",
-        "repSubtreeContainsRep",
-        "repSubtreeAny",
-        "structuralWrapperBackingRep",
-        "structureBackingRep",
-        "bindCallWrappedStructure",
-        "structureChildCallRep",
-        "descriptorArgumentIdentityRep",
-        "dictionaryArgumentIdentityRep",
-        "workerChildCanMatchUnwrappedCallRep",
-        "workerChildCanMatchUnwrappedCallRepForDictionaries",
-        "functionChildren",
-        "functionIdentityRep",
-        "requiredSingleChild",
-        "sameChildRoleKind",
-        "childRolesMatch",
-        "findMatchingChildByRole",
-        "recordFieldNameMatches",
-        "tagLabelNameMatches",
-    };
-    const plan_source = @embedFile("boxy/plan.zig");
-    inline for (shared) |name| {
-        const decl = "fn " ++ name ++ "(";
-        for (consumers) |source| {
-            try std.testing.expectEqual(@as(usize, 0), countDefinitions(source, decl));
-        }
-        try std.testing.expectEqual(@as(usize, 1), countDefinitions(plan_source, decl));
-    }
-
-    // The exact-role and same-kind role comparisons are different predicates
-    // and must not collapse into each other: `sameChildRoleKind` answers false
-    // for every role carrying a payload.
-    try expectContains(plan_source, "pub fn sameChildRoleKind(");
-    try expectNotContains(plan_source, "fn sameChildRole(");
+    return error.BoxyLoweringBeingReimplemented;
 }
 
 test "boxy stage tests share one set of checked-type fixtures" {
-    const sources = [_][]const u8{
-        @embedFile("boxy/lower.zig"),
-        @embedFile("boxy/plan.zig"),
-        @embedFile("boxy/layouts.zig"),
-    };
-    for (sources) |source| {
-        try expectNotContains(source, "fn builtinNominal(");
-        try expectNotContains(source, "fn fixtureTableIndex(");
-    }
-    try expectContains(@embedFile("boxy/test_fixtures.zig"), "pub fn builtinNominal(");
-    try expectContains(@embedFile("boxy/test_fixtures.zig"), "pub fn tableIndex(");
+    return error.BoxyLoweringBeingReimplemented;
 }
 
 test "one pattern walk collects bound locals" {
@@ -1669,23 +1603,9 @@ test "one pattern walk collects bound locals" {
 }
 
 test "the match compiler's stated consumers are its actual consumers" {
-    // `match_tree.zig` and `mod.zig` both claimed this compiler was "shared by
-    // both LIR lowerers". It is not: `.boxy` folds match branches into a
-    // sequential chain of its own. A doc comment asserting a sharing invariant
-    // that does not hold is worse than none, because the next reader budgets
-    // for one match semantics and there are two. This pins the claim to the
-    // imports, so whichever way the gap closes, the comment has to move with it.
-    const boxy_uses_it = std.mem.find(u8, @embedFile("boxy/lower.zig"), "match_tree") != null;
-    const header = @embedFile("match_tree.zig");
-    const mod_source = @embedFile("mod.zig");
-    if (boxy_uses_it) {
-        try expectNotContains(header, "does not consume this yet");
-        try expectNotContains(mod_source, "does not use it yet");
-    } else {
-        try expectContains(header, "does not consume this yet");
-        try expectContains(mod_source, "does not use it yet");
-        try expectContains(@embedFile("solved_lir_lower.zig"), "match_tree.Compiler(");
-    }
+    // This pins the match compiler's stated consumers to the imports of both
+    // lowering strategies.
+    return error.BoxyLoweringBeingReimplemented;
 }
 
 test "post-check IR stores append spans through one implementation" {
@@ -1766,8 +1686,6 @@ test "value rules have one definition site" {
     const lowerers = [_][]const u8{
         @embedFile("monotype/lower.zig"),
         @embedFile("solved_lir_lower.zig"),
-        @embedFile("boxy/lower.zig"),
-        @embedFile("boxy/plan.zig"),
     };
     const literals = [_][]const u8{ "\"<missing>\"", "\"<function>\"", "\"<opaque>\"", "\"Box(\"", "\"{ \"", "\" }\"" };
     for (lowerers) |source| {
@@ -1782,6 +1700,8 @@ test "value rules have one definition site" {
     const structural = @embedFile("value_rules/structural.zig");
     try expectContains(structural, "fn beginEq(");
     try expectContains(structural, "fn beginHash(");
+    // `.boxy` lowering's sources must also hold no copy of the value rules.
+    return error.BoxyLoweringBeingReimplemented;
 }
 
 /// One function definition found in a source file: its name and the token
@@ -2087,7 +2007,6 @@ test "post-check lowerers define no helper twice with near-identical bodies" {
     const allocator = std.testing.allocator;
     const sources = [_]struct { path: []const u8, text: []const u8 }{
         .{ .path = "monotype/lower.zig", .text = @embedFile("monotype/lower.zig") },
-        .{ .path = "boxy/lower.zig", .text = @embedFile("boxy/lower.zig") },
     };
     var unexpected: usize = 0;
     var still_used: [intended_per_scope.len + pending_extraction.len]bool = @splat(false);
@@ -2105,13 +2024,13 @@ test "post-check lowerers define no helper twice with near-identical bodies" {
             unexpected += 1;
         }
     }
-    for (intended_per_scope ++ pending_extraction, still_used) |allowed, used| {
-        if (!used) {
-            std.debug.print("allowlisted `{s}` is no longer a near-duplicate; remove it\n", .{allowed});
-            unexpected += 1;
-        }
-    }
     try std.testing.expectEqual(@as(usize, 0), unexpected);
+    // The allowlist names helpers of `.boxy` lowering's sources too, so it can
+    // be checked for stale entries only once those sources are linted again.
+    for (intended_per_scope ++ pending_extraction, still_used) |allowed, used| {
+        if (!used) std.debug.print("allowlisted `{s}` is not a near-duplicate in the linted sources\n", .{allowed});
+    }
+    return error.BoxyLoweringBeingReimplemented;
 }
 
 test "the near-duplicate lint finds doubled helpers across scopes" {
@@ -2223,11 +2142,5 @@ test "Monotype type-shape queries switch exhaustively over every type content va
 }
 
 test "boxy procedure-body accessors are defined once on the procedure builder" {
-    const source = @embedFile("boxy/lower.zig");
-    const accessors = [_][]const u8{ "repQuery", "namedQuery", "moduleNames", "tagVariantNameText", "descriptorStorageRep" };
-    inline for (accessors) |name| {
-        try std.testing.expectEqual(@as(usize, 1), countDefinitions(source, "fn " ++ name ++ "("));
-    }
-    try expectContains(source, "self.parent.repQuery()");
-    try expectContains(source, "self.parent.descriptorStorageRep(");
+    return error.BoxyLoweringBeingReimplemented;
 }

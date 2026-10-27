@@ -14,9 +14,6 @@ const harness = @import("lower_to_lir_harness.zig");
 fn expectNoBoxyDictThunks(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
 ) harness.LowerToLirHarnessError!void {
-    try std.testing.expect(lowered.lir_result.boxy_dicts.items.len == 0);
-    try std.testing.expectEqual(@as(usize, 0), lowered.lir_result.boxy_worker_procs.items.len);
-
     var erased_callable_procs: usize = 0;
     for (lowered.lir_result.store.getProcSpecs()) |proc| {
         if (proc.abi == .erased_callable) erased_callable_procs += 1;
@@ -26,9 +23,6 @@ fn expectNoBoxyDictThunks(
     var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
         std.testing.allocator,
         &lowered.lir_result.store,
-        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-        lowered.lir_result.boxy_erased_arg_desc_params.items,
-        lowered.lir_result.boxy_worker_procs.items,
         builtin.target,
     );
     defer codegen.deinit();
@@ -40,7 +34,8 @@ fn expectNoBoxyDictThunks(
     };
     defer generated.deinit();
 
-    try std.testing.expectEqual(@as(usize, 0), codegen.boxy_dict_thunks.count());
+    // The emitted module must also hold no dictionary-dispatch thunks.
+    return error.BoxyLoweringBeingReimplemented;
 }
 
 test "issue 10980: handing a closure to the host emits no boxy dictionary thunks" {

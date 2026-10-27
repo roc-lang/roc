@@ -15,11 +15,10 @@ fn runConsumer(lowered: *const lir.CheckedPipeline.LoweredProgram, expected_cras
     const program = &lowered.lir_result;
     var static_strings = try eval.LirInterpreter.buildStaticStrings(std.testing.allocator, &program.store);
     defer static_strings.deinit();
-    var interpreter = try eval.LirInterpreter.initWithBoxyTables(
+    var interpreter = try eval.LirInterpreter.init(
         std.testing.allocator,
         &program.store,
         &program.layouts,
-        eval.LirInterpreter.BoxyTables.fromResult(program),
         static_strings.view(),
         host.get_ops(),
     );

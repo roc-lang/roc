@@ -20,12 +20,6 @@ const source =
 fn inspect(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLirHarnessError!void {
     const result = &lowered.lir_result;
     try std.testing.expectEqual(.specialized, result.store.runtime_contract);
-    inline for (@typeInfo(lir.Program.Result).@"struct".field_names) |name| {
-        if (comptime std.mem.startsWith(u8, name, "boxy_") and !std.mem.eql(u8, name, "boxy_frozen_method_origins")) {
-            try std.testing.expectEqual(@as(usize, 0), @field(result, name).items.len);
-        }
-    }
-    try std.testing.expectEqual(@as(u32, 0), result.store.boxy_names.count());
     var erased_workers: usize = 0;
     for (result.store.getProcSpecs()) |proc| {
         if (proc.abi == .erased_callable) erased_workers += 1;
@@ -35,9 +29,8 @@ fn inspect(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLi
     defer host.deinit();
     var strings = try eval.LirInterpreter.buildStaticStrings(std.testing.allocator, &result.store);
     defer strings.deinit();
-    var interpreter = try eval.LirInterpreter.initWithBoxyTables(std.testing.allocator, &result.store, &result.layouts, eval.LirInterpreter.BoxyTables.fromResult(result), strings.view(), host.get_ops());
+    var interpreter = try eval.LirInterpreter.init(std.testing.allocator, &result.store, &result.layouts, strings.view(), host.get_ops());
     defer interpreter.deinit();
-    try std.testing.expect(interpreter.boxy_runtime == null);
     const root_id = result.root_procs.items[0];
     const root = result.store.getProcSpec(root_id);
     const args = result.store.getLocalSpan(root.args);
@@ -50,8 +43,5 @@ fn inspect(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLi
 }
 
 test "issue 12569: specialized captured returned and recursive callables need no Boxy work" {
-    var timing: lir.CheckedPipeline.TimingSnapshot = .{};
-    try harness.runLoweredInspection(source, .{ .timing_out = &timing }, inspect);
-    try std.testing.expectEqual(@as(u64, 0), timing.boxy_plan_ns);
-    try std.testing.expectEqual(@as(u64, 0), timing.boxy_lower_ns);
+    try harness.runLoweredInspection(source, .{}, inspect);
 }

@@ -109,7 +109,7 @@ fn runHostReturnRoundtrip(lowered: *const lir.CheckedPipeline.LoweredProgram) Ho
     const program = &lowered.lir_result;
     var static_strings = try eval.LirInterpreter.buildStaticStrings(std.testing.allocator, &program.store);
     defer static_strings.deinit();
-    var interpreter = try eval.LirInterpreter.initWithBoxyTables(std.testing.allocator, &program.store, &program.layouts, eval.LirInterpreter.BoxyTables.fromResult(program), static_strings.view(), ops);
+    var interpreter = try eval.LirInterpreter.init(std.testing.allocator, &program.store, &program.layouts, static_strings.view(), ops);
     defer interpreter.deinit();
     const root_id = program.root_procs.items[0];
     const root = program.store.getProcSpec(root_id);
@@ -166,7 +166,7 @@ fn runHostArgument(lowered: *const lir.CheckedPipeline.LoweredProgram) HostAbiTe
     const program = &lowered.lir_result;
     var static_strings = try eval.LirInterpreter.buildStaticStrings(std.testing.allocator, &program.store);
     defer static_strings.deinit();
-    var interpreter = try eval.LirInterpreter.initWithBoxyTables(std.testing.allocator, &program.store, &program.layouts, eval.LirInterpreter.BoxyTables.fromResult(program), static_strings.view(), test_host_ops);
+    var interpreter = try eval.LirInterpreter.init(std.testing.allocator, &program.store, &program.layouts, static_strings.view(), test_host_ops);
     defer interpreter.deinit();
     const root_id = program.root_procs.items[0];
     const root = program.store.getProcSpec(root_id);
