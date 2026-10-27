@@ -752,8 +752,12 @@ const Binding = struct {
 const FactOrigin = union(enum) {
     /// Asserted by taking one arm of this switch statement.
     branch: CFStmtId,
-    /// Survived a merge meet whose incoming copies had differing origins.
-    /// Its truth rests on the meet, not on a single dominating edge.
+    /// Established by running this statement, so it holds only where the
+    /// statement dominates.
+    definition: CFStmtId,
+    /// Rests on no single statement: met over a merge's incoming edges
+    /// (whose copies may differ in origin) or derived from other facts and
+    /// value ranges already in the fact base.
     meet,
 };
 
@@ -1313,11 +1317,6 @@ const Pass = struct {
     /// Per merge head: last round's env meet in stable form, seeded with
     /// merge_facts under the same induction.
     merge_env: collections.DenseMap(CFStmtId, MergeEnvBounds),
-    /// Facts about the values of single-assignment locals, valid wherever
-    /// the value is in scope, like the global env bindings they describe.
-    /// Replayed into every region's fact base rather than rewound with the
-    /// path.
-    global_facts: std.ArrayList(Fact),
     /// Field reads unified by (struct value root, field index): reading the
     /// same field of the same struct value yields the same value, so every
     /// read site shares one node and facts proved through one site's read
@@ -1496,7 +1495,6 @@ const Pass = struct {
             .loop_facts = collections.DenseMap(JoinPointId, LoopFacts).init(allocator),
             .merge_facts = collections.DenseMap(CFStmtId, LoopFacts).init(allocator),
             .merge_env = collections.DenseMap(CFStmtId, MergeEnvBounds).init(allocator),
-            .global_facts = .empty,
             .field_values = PairMap(NodeId, FieldValue).init(allocator),
             .struct_roots = collections.DenseMap(NodeId, void).init(allocator),
             .seeded_param_roots = PairMap(JoinPointId, NodeId).init(allocator),
@@ -1652,7 +1650,6 @@ const Pass = struct {
         self.loop_facts.deinit();
         self.merge_facts.deinit();
         self.merge_env.deinit();
-        self.global_facts.deinit(self.allocator);
         self.field_values.deinit();
         self.struct_roots.deinit();
         self.seeded_param_roots.deinit();
@@ -1707,7 +1704,6 @@ const Pass = struct {
         self.nonzero_bounds.clearRetainingCapacity();
         self.truncateFacts(0);
         self.no_overflow_facts.clearRetainingCapacity();
-        self.global_facts.clearRetainingCapacity();
         self.field_values.clearRetainingCapacity();
         self.struct_roots.clearRetainingCapacity();
         self.seeded_param_roots.clearRetainingCapacity();
@@ -2081,9 +2077,9 @@ const Pass = struct {
     }
 
     /// Begin seeding a region's facts: the same fact arrives from several
-    /// seeds (global facts, the raw meet, the stable meet, persisted loop
-    /// facts), and a repeat would spend the fact cap and slow the merge
-    /// meets, so seeds are deduplicated as they arrive.
+    /// seeds (the raw meet, the stable meet, persisted loop facts), and a
+    /// repeat would spend the fact cap and slow the merge meets, so seeds
+    /// are deduplicated as they arrive.
     fn beginSeeding(self: *Pass) void {
         self.fact_seen.clearRetainingCapacity();
         self.seeding = true;
@@ -4972,10 +4968,11 @@ const Pass = struct {
 
     /// Debug-only certification of every rewrite the round applied, using
     /// machinery independent of the prover's walk: an iterative dominator
-    /// computation over the statement graph checks that each branch-origin
-    /// fact's switch dominates the rewritten statement, and a transitive
-    /// closure over the snapshot facts re-derives the claim. A failure is a
-    /// compiler bug in the pass, never a property of the compiled program.
+    /// computation over the statement graph checks that the switch or
+    /// statement each branch or definition fact comes from dominates the
+    /// rewritten statement, and a transitive closure over the snapshot facts
+    /// re-derives the claim. A failure is a compiler bug in the pass, never a
+    /// property of the compiled program.
     fn certifyRound(self: *Pass, body: CFStmtId) ResourceError!void {
         if (builtin.mode != .debug) return;
         if (self.proof_records.items.len == 0) return;
@@ -4987,7 +4984,7 @@ const Pass = struct {
             const facts = self.proof_facts.items[record.facts_start..][0..record.facts_len];
             for (facts) |fact| {
                 switch (fact.origin) {
-                    .branch => |origin_stmt| {
+                    .branch, .definition => |origin_stmt| {
                         if (!doms.dominates(origin_stmt, record.stmt)) {
                             invariant(
                                 "range_prove certification failed: fact from s{d} does not dominate rewritten s{d}",
@@ -5085,7 +5082,6 @@ const Pass = struct {
             self.no_overflow_facts.clearRetainingCapacity();
             self.frames.clearRetainingCapacity();
             self.beginSeeding();
-            for (self.global_facts.items) |fact| try self.addFact(fact);
             try self.seedFromMerge(head);
             self.endSeeding();
             try self.frames.append(self.allocator, .{
@@ -5147,7 +5143,7 @@ const Pass = struct {
                     },
                     .assign_literal => |s| {
                         try self.visited.put(current, {});
-                        try self.modelLiteral(s.target, s.value, self.store.literalExtra(s.value).list_len);
+                        try self.modelLiteral(current, s.target, s.value, self.store.literalExtra(s.value).list_len);
                         current = s.next;
                     },
                     .assign_tag => |s| {
@@ -5429,7 +5425,7 @@ const Pass = struct {
 
     // Statement value modeling and check rewrites
 
-    fn modelLiteral(self: *Pass, target: LocalId, value: LIR.LiteralValue, list_len: ?u64) ResourceError!void {
+    fn modelLiteral(self: *Pass, stmt: CFStmtId, target: LocalId, value: LIR.LiteralValue, list_len: ?u64) ResourceError!void {
         // A list literal's item count is known where it is read: a bytes
         // literal carries it, and lowering states it for a static list of
         // copies. The value is a fresh list whose length term equals that
@@ -5444,8 +5440,8 @@ const Pass = struct {
             if (try self.unknownFor(self.localLayout(target))) |list_node| {
                 if (try self.freshRoot(0, std.math.maxInt(i64))) |len_node| {
                     if (try self.constNode(len)) |count| {
-                        try self.addFact(.{ .a = count, .b = len_node, .c = 0, .origin = .meet });
-                        try self.addFact(.{ .a = len_node, .b = count, .c = 0, .origin = .meet });
+                        try self.addFact(.{ .a = count, .b = len_node, .c = 0, .origin = .{ .definition = stmt } });
+                        try self.addFact(.{ .a = len_node, .b = count, .c = 0, .origin = .{ .definition = stmt } });
                         try self.len_terms.put(list_node, len_node);
                         if (self.isSingleAssign(target)) {
                             try self.len_roots.put(len_node, self.stableLocalOf(target));
@@ -5777,20 +5773,12 @@ const Pass = struct {
                             // the result.
                             if (trackedIntMax(self.localLayout(GuardedList.at(args, i))) == null) continue;
                             if (try self.valueOf(GuardedList.at(args, i))) |operand| {
-                                const fact = Fact{
+                                try self.addFact(.{
                                     .a = node,
                                     .b = self.rootOf(operand),
                                     .c = self.offHiOf(operand),
-                                    .origin = .meet,
-                                };
-                                try self.addFact(fact);
-                                // The result value outlives this path when
-                                // its local is single-assignment; regions
-                                // reading it through the global env replay
-                                // the fact with it.
-                                if (self.isSingleAssign(s.target)) {
-                                    try self.global_facts.append(self.allocator, fact);
-                                }
+                                    .origin = .{ .definition = stmt },
+                                });
                             }
                         }
                     }
@@ -6489,23 +6477,24 @@ const Pass = struct {
         const b = (try self.valueOf(GuardedList.at(args, 1))) orelse return self.bindFresh(s.target);
         const lo_b = self.absLoOf(b);
         const hi_b = @min(self.absHiOf(b), max);
+        const origin: FactOrigin = .{ .definition = stmt };
         switch (op) {
             .division => {
                 try self.dischargeDivisor(stmt, s.op, b);
-                try self.assertNonzeroDivisor(b);
+                try self.assertNonzeroDivisor(stmt, b);
                 const divisor_lo = @max(lo_b, 1);
                 const divisor_hi = @max(hi_b, 1);
                 // Rounded up, so the bound covers a division that rounds up.
                 const node = (try self.rangeRoot(@divFloor(lo_a, divisor_hi), @divFloor(hi_a + divisor_lo - 1, divisor_lo))) orelse return self.bindFresh(s.target);
-                try self.addResultFact(s.target, self.orderingFact(node, a, 0, .meet));
+                try self.addFact(self.orderingFact(node, a, 0, origin));
                 return self.bind(s.target, .{ .node = node });
             },
             .remainder => {
                 try self.dischargeDivisor(stmt, s.op, b);
-                try self.assertNonzeroDivisor(b);
+                try self.assertNonzeroDivisor(stmt, b);
                 const node = (try self.rangeRoot(0, @max(0, @min(hi_a, hi_b - 1)))) orelse return self.bindFresh(s.target);
-                try self.addResultFact(s.target, self.orderingFact(node, a, 0, .meet));
-                try self.addResultFact(s.target, self.orderingFact(node, b, -1, .meet));
+                try self.addFact(self.orderingFact(node, a, 0, origin));
+                try self.addFact(self.orderingFact(node, b, -1, origin));
                 return self.bind(s.target, .{ .node = node });
             },
             .shift_right => {
@@ -6515,7 +6504,7 @@ const Pass = struct {
                     break :blk try self.rangeRoot(lo_a >> shift, hi_a >> shift);
                 } else try self.rangeRoot(0, hi_a);
                 const result = node orelse return self.bindFresh(s.target);
-                try self.addResultFact(s.target, self.orderingFact(result, a, 0, .meet));
+                try self.addFact(self.orderingFact(result, a, 0, origin));
                 return self.bind(s.target, .{ .node = result });
             },
             .shift_left => {
@@ -6530,8 +6519,8 @@ const Pass = struct {
             },
             .bitwise_or => {
                 const node = (try self.rangeRoot(@max(lo_a, lo_b), lowBitsMask(@max(hi_a, hi_b)))) orelse return self.bindFresh(s.target);
-                try self.addResultFact(s.target, self.orderingFact(a, node, 0, .meet));
-                try self.addResultFact(s.target, self.orderingFact(b, node, 0, .meet));
+                try self.addFact(self.orderingFact(a, node, 0, origin));
+                try self.addFact(self.orderingFact(b, node, 0, origin));
                 return self.bind(s.target, .{ .node = node });
             },
             .bitwise_xor => {
@@ -6576,17 +6565,10 @@ const Pass = struct {
         return (@as(i128, 1) << bits) - 1;
     }
 
-    /// Record a result's ordering with an operand, and replay it in regions
-    /// that read a single-assignment result through the global env.
-    fn addResultFact(self: *Pass, target: LocalId, fact: Fact) ResourceError!void {
-        try self.addFact(fact);
-        if (self.isSingleAssign(target)) try self.global_facts.append(self.allocator, fact);
-    }
-
     /// Past a division or remainder the divisor is at least one.
-    fn assertNonzeroDivisor(self: *Pass, divisor: NodeId) ResourceError!void {
+    fn assertNonzeroDivisor(self: *Pass, stmt: CFStmtId, divisor: NodeId) ResourceError!void {
         const zero = (try self.constantRoot()) orelse return;
-        try self.addFact(self.orderingFact(zero, divisor, -1, .meet));
+        try self.addFact(self.orderingFact(zero, divisor, -1, .{ .definition = stmt }));
     }
 
     /// Rewrite a checked division or remainder whose divisor is proven at

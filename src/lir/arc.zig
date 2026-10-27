@@ -2665,7 +2665,7 @@ const Inserter = struct {
                 const summary = maybe_summary orelse continue;
                 if (summary.body_reachable) continue;
                 var params_only = OwnedSet.init(self.domain());
-                try self.placeSolveJoinParamsInto(summary, &params_only);
+                try self.placeSolveJoinParamsInto(summary, null, &params_only);
                 if (!summary.body_keep_is_seed and params_only.eql(&summary.body_keep)) continue;
                 summary.body_keep_is_seed = false;
                 assignOwnedSet(&summary.body_keep, &params_only);
@@ -4175,7 +4175,7 @@ const Inserter = struct {
     /// stays represented by its membership predicate.
     fn seedSolveBodyKeep(self: *Inserter, summary: *JoinSummary) ResourceError!void {
         try self.placeJoinRetainedInto(summary, null, &summary.seed_placed);
-        try self.placeSolveJoinParamsInto(summary, &summary.seed_placed);
+        try self.placeSolveJoinParamsInto(summary, null, &summary.seed_placed);
     }
 
     /// Whether `local` belongs to the join's body keep. While the keep is
@@ -4279,7 +4279,8 @@ const Inserter = struct {
     }
 
     /// Places a join's params owned, skipping any the back edges leave
-    /// loop-invariant.
+    /// loop-invariant and, given the body's reads, any ordinary param the
+    /// body never reads.
     ///
     /// A join param is only freshly owned in the body when every arrival
     /// hands it a new unit. An entry edge always does, but a back edge that
@@ -4290,19 +4291,51 @@ const Inserter = struct {
     /// param set and narrowed by the lattice's exact resource intersection,
     /// so filtering by it keeps this placement monotone and carries residual
     /// field masks through.
-    fn placeSolveJoinParamsInto(self: *Inserter, summary: *const JoinSummary, keep: *OwnedSet) ResourceError!void {
+    ///
+    /// An ordinary param the body never reads before rebinding it is dead
+    /// where the body begins, exactly like any other unit of the jump meet
+    /// the body does not read. Leaving it out of the keep makes every arrival
+    /// release it at the jump, right after the value was produced; placing it
+    /// would hold the value until the body's exits. A maybe-initialized param
+    /// is always placed: its producer makes the overwrite of the cell the
+    /// lifetime end of the previous payload, even on a solved-borrowed
+    /// binding that no arrival owns.
+    fn placeSolveJoinParamsInto(
+        self: *Inserter,
+        summary: *const JoinSummary,
+        body_reads: ?*const Row,
+        keep: *OwnedSet,
+    ) ResourceError!void {
         if (!summary.back_edge_seen) {
-            try self.placeAllSolveJoinParamsInto(summary, keep);
+            const params = self.store.getLocalSpan(summary.params);
+            for (0..GuardedList.borrowLen(params)) |index| {
+                const param = GuardedList.at(params, index);
+                if (!self.bodyMayReadParam(body_reads, param)) continue;
+                try self.placeUnit(keep, param);
+            }
+            const maybe_params = self.store.getLocalSpan(summary.maybe_uninitialized_params);
+            for (0..GuardedList.borrowLen(maybe_params)) |index| {
+                try self.placeConditionalUnit(keep, GuardedList.at(maybe_params, index));
+            }
             return;
         }
         const params = self.store.getLocalSpan(summary.params);
         for (0..GuardedList.borrowLen(params)) |index| {
-            try placeSurvivingParam(keep, &summary.back_edge_params, GuardedList.at(params, index));
+            const param = GuardedList.at(params, index);
+            if (!self.bodyMayReadParam(body_reads, param)) continue;
+            try placeSurvivingParam(keep, &summary.back_edge_params, param);
         }
         const maybe_params = self.store.getLocalSpan(summary.maybe_uninitialized_params);
         for (0..GuardedList.borrowLen(maybe_params)) |index| {
             try placeSurvivingParam(keep, &summary.back_edge_params, GuardedList.at(maybe_params, index));
         }
+    }
+
+    /// Whether the body reads a param's liveness group; every param counts
+    /// as read when no body reads are given.
+    fn bodyMayReadParam(self: *Inserter, body_reads: ?*const Row, param: LIR.LocalId) bool {
+        const reads = body_reads orelse return true;
+        return self.groupUsedFromTable(reads, param);
     }
 
     /// Copies exactly what the back-edge meet still proves for one param:
@@ -4347,8 +4380,8 @@ const Inserter = struct {
     }
 
     /// Recomputes a join's body keep from its jump-site states: intersect,
-    /// filter to units read in the body, then place params. The stored keep
-    /// can only shrink.
+    /// filter to units read in the body, then place the params the body
+    /// reads. The stored keep can only shrink.
     fn recomputeSolveBodyKeep(self: *Inserter, summary: *JoinSummary) ResourceError!bool {
         if (!summary.body_reachable) return false;
         const reads = try self.computeReadsBeforeRebind(summary.body);
@@ -4367,7 +4400,7 @@ const Inserter = struct {
             if (summary.retained_resources.isSet(resource)) continue;
             try merged.putEntry(@intCast(resource), .{});
         }
-        try self.placeSolveJoinParamsInto(summary, &merged);
+        try self.placeSolveJoinParamsInto(summary, reads, &merged);
         if (!summary.body_keep_is_seed and merged.eql(&summary.body_keep)) return false;
         summary.body_keep_is_seed = false;
         assignOwnedSet(&summary.body_keep, &merged);
@@ -11316,6 +11349,93 @@ test "RC join param move excludes old source from loop body ownership" {
     try f.run();
     try f.expectRc(source, 0, 0, 0);
     try f.expectRc(state, 0, 1, 0);
+}
+
+/// Asserts `start` is the call that writes `param`, followed immediately by
+/// the param's release and then the jump into its join.
+fn expectReleasedRightAfterCall(f: *const ArcTest, start: LIR.CFStmtId, param: LIR.LocalId) ArcTest.ExpectError!void {
+    const call = f.store.getCFStmt(start);
+    if (call != .assign_call) return error.TestUnexpectedResult;
+    try testing.expectEqual(param, call.assign_call.target);
+    const release = f.store.getCFStmt(call.assign_call.next);
+    if (release != .decref) return error.TestUnexpectedResult;
+    try testing.expectEqual(param, release.decref.value);
+    if (f.store.getCFStmt(release.decref.next) != .jump) return error.TestUnexpectedResult;
+}
+
+test "RC join param the body never reads is released at the jump, not at the body's exit" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const param = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    // join j(param) { result = hosted(); ret result }
+    // remainder: param = call(); jump j
+    // The call writes the param directly, as a call inlined into a join
+    // does, so no statement death after the call can release the value;
+    // only the body keep decides where it dies.
+    const ret = try f.ret(result);
+    const body = try f.assignHostedCall(result, &.{}, ret);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const remainder = try f.assignCall(param, &.{}, jump);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{param}),
+        .body = body,
+        .remainder = remainder,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{}, join, .i64);
+    try f.run();
+
+    try f.expectRc(param, 0, 1, 0);
+    const joined = f.store.getCFStmt(f.procBody());
+    if (joined != .join) return error.TestUnexpectedResult;
+    try expectReleasedRightAfterCall(&f, joined.join.remainder, param);
+}
+
+test "RC loop join param the body never reads is released at every arrival" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const param = try f.local(f.list_i64);
+    const flag = try f.local(.bool);
+    const next_flag = try f.local(.bool);
+    const first_flag = try f.local(.bool);
+    const result = try f.local(.i64);
+    const join_id = f.freshJoinPointId();
+
+    // join j(param, flag) {
+    //   switch flag { 1 => param = call(); flag := 0; jump j
+    //                 _ => result = hosted(); ret result } }
+    // remainder: param = call(); flag := 1; jump j
+    const ret = try f.ret(result);
+    const exit_branch = try f.assignHostedCall(result, &.{}, ret);
+    const back_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const rebind_flag = try f.setLocal(flag, next_flag, .initialize_join_param, back_jump);
+    const next_flag_assign = try f.assignI64(next_flag, 0, rebind_flag);
+    const loop_call = try f.assignCall(param, &.{}, next_flag_assign);
+    const dispatch = try f.switchStmt(flag, loop_call, exit_branch, null);
+    const entry_jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const initialize_flag = try f.setLocal(flag, first_flag, .initialize_join_param, entry_jump);
+    const first_flag_assign = try f.assignI64(first_flag, 1, initialize_flag);
+    const entry_call = try f.assignCall(param, &.{}, first_flag_assign);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{ param, flag }),
+        .body = dispatch,
+        .remainder = entry_call,
+    } }, .test_fixture);
+    _ = try f.addProc(&.{}, join, .i64);
+    try f.run();
+
+    // One release per write, at the jump that carries it; the exit branch
+    // owns nothing of the param.
+    try f.expectRc(param, 0, 2, 0);
+    const dispatched = f.walkToSwitch(f.joinBody(join_id));
+    try testing.expectError(
+        error.ExpectedRcBeforeStop,
+        f.expectReachableRcBefore(dispatched.default_branch, .decref, param, .ret),
+    );
 }
 
 test "RC switch continuation analysis stops at join ownership boundary" {
