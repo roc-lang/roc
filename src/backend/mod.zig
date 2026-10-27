@@ -42,6 +42,18 @@ pub const ObjectFileCompiler = dev.ObjectFileCompiler;
 pub const CompilationError = dev.CompilationError;
 pub const writeFileWindowsAvSafe = dev.writeFileWindowsAvSafe;
 
+/// The Boxy runtime entry points generated code calls (`roc_desc_*`), by
+/// symbol name.
+pub const boxy_runtime_symbols: []const []const u8 = blk: {
+    const exports = @import("boxy_runtime").exports;
+    const prefix = "roc_desc_";
+    var names: []const []const u8 = &.{};
+    for (@typeInfo(exports).@"struct".decl_names) |name| {
+        if (name.len > prefix.len and @import("std").mem.eql(u8, name[0..prefix.len], prefix)) names = names ++ .{name};
+    }
+    break :blk names;
+};
+
 test "backend tests" {
     const std = @import("std");
     std.testing.refAllDecls(StructuralTest);

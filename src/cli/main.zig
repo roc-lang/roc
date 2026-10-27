@@ -672,6 +672,11 @@ const EmbeddedTargetObjects = struct {
     /// `roc build --opt=dev` to link the app object with builtins.
     builtins_extern: []const u8,
     builtins_extern_digest: [32]u8,
+    /// The Boxy runtime (`roc_desc_*`), which a `--specialize=no` program
+    /// the dev backend compiled links next to the builtins. Null for targets
+    /// whose backend emits no calls to it.
+    boxy_runtime: ?[]const u8 = null,
+    boxy_runtime_digest: ?[32]u8 = null,
     /// The default platform's runtime library object.
     default_runtime: ?[]const u8 = null,
     /// The default platform's executable object.
@@ -696,6 +701,8 @@ const EmbeddedTargetObjects = struct {
     const native: EmbeddedTargetObjects = .{
         .builtins_extern_digest = embeddedBlake3("builtins_extern_native"),
         .builtins_extern = embedded(if (builtin.os.tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o"),
+        .boxy_runtime = embedded(if (builtin.os.tag == .windows) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o"),
+        .boxy_runtime_digest = embeddedBlake3("boxy_runtime_native"),
     };
 
     fn cross(comptime target: RocTarget, comptime default_platform: DefaultPlatform) EmbeddedTargetObjects {
@@ -706,6 +713,10 @@ const EmbeddedTargetObjects = struct {
             .builtins_extern = embedded(dir ++ "roc_builtins_extern" ++ ext),
             .builtins_extern_digest = embeddedBlake3("builtins_extern_" ++ name),
         };
+        if (target.toCpuArch() != .wasm32) {
+            objects.boxy_runtime = embedded(dir ++ "roc_boxy_runtime" ++ ext);
+            objects.boxy_runtime_digest = embeddedBlake3("boxy_runtime_" ++ name);
+        }
         switch (default_platform) {
             .none => {},
             .runtime, .runtime_and_compiler_rt => {
@@ -732,6 +743,8 @@ const EmbeddedTargetObjects = struct {
         var objects = glibc;
         objects.builtins_extern = native.builtins_extern;
         objects.builtins_extern_digest = native.builtins_extern_digest;
+        objects.boxy_runtime = native.boxy_runtime;
+        objects.boxy_runtime_digest = native.boxy_runtime_digest;
         return objects;
     }
 
@@ -2943,6 +2956,10 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                         }
                         std.debug.print("pack hits: {d} external procs: {d} linked procs: {d} linked objects: {d}\n", .{ cache.packs.hits, external_procs, linked_procs, run_package_objects.objects.len });
                     }
+                }
+                if (result.lowered.lir_result.store.runtime_contract == .boxy) {
+                    const object = EmbeddedTargetObjects.forTarget(selected.target).boxy_runtime orelse return error.UnsupportedTarget;
+                    run_package_objects = try run_package_objects.withBoxyRuntime(ctx.arena, object);
                 }
                 entrypoint_names = result.entrypoint_names;
                 hosted_symbols = result.hosted_symbols;
@@ -6855,6 +6872,16 @@ const RunPackageObjects = struct {
         return .{ .objects = objects, .symbols = try symbols.toOwnedSlice(arena) };
     }
 
+    /// These objects and the Boxy runtime, for a program whose LIR carries
+    /// the `.boxy` runtime contract: the host executable links it and the
+    /// machine-code shim resolves its entry points by name.
+    fn withBoxyRuntime(self: RunPackageObjects, arena: Allocator, object: []const u8) Allocator.Error!RunPackageObjects {
+        return .{
+            .objects = try std.mem.concat(arena, []const u8, &.{ self.objects, &.{object} }),
+            .symbols = try std.mem.concat(arena, []const u8, &.{ self.symbols, backend.boxy_runtime_symbols }),
+        };
+    }
+
     /// What the host executable's identity adds for these objects, so a
     /// cached host links the same ones and a hot reload rebuild serves only
     /// entries the running host links.
@@ -6975,11 +7002,17 @@ fn lowerDiscoveredLir(
         lowered.target_usize,
         hosted_table,
     );
-    // The host executable links the object packs the image may call into.
-    const checked_host_identity = if (object_cache) |cache| identity: {
+    // The host executable links the object packs the image may call into,
+    // and for a `.boxy` program the Boxy runtime.
+    const boxy_runtime = lowered.lir_result.store.runtime_contract == .boxy;
+    const checked_host_identity = if (object_cache != null or boxy_runtime) identity: {
         var hasher = base.Sha256.init(.{});
         hasher.update(&interface_identity);
-        hasher.update(&(try RunPackageObjects.collect(ctx.arena, cache)).digest());
+        if (object_cache) |cache| hasher.update(&(try RunPackageObjects.collect(ctx.arena, cache)).digest());
+        if (boxy_runtime) {
+            updateHashBytes(&hasher, "roc-run-boxy-runtime-v1");
+            if (EmbeddedTargetObjects.native.boxy_runtime_digest) |digest| hasher.update(&digest);
+        }
         break :identity hasher.finalResult();
     } else interface_identity;
 
@@ -11888,6 +11921,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         .hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
         .link_root_symbols = try devObjectLinkRootSymbols(ctx.arena, static_data_exports),
         .app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
+        .boxy_runtime = lowered.lir_result.store.runtime_contract == .boxy,
     };
     // The optimized object packs that served this program's specializations.
     const linked_objects: []const []const u8 = if (loaded_packs) |packs| try packs.linkedObjects(ctx.arena) else &.{};
@@ -11944,6 +11978,10 @@ fn linkNativeBuild(
     var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
+    if (facts.boxy_runtime) {
+        const boxy_runtime = embedded.boxy_runtime orelse return error.UnsupportedTarget;
+        try object_files.append(objects.materializeKnown(boxy_runtime, .{ .digest = embedded.boxy_runtime_digest.?, .size = boxy_runtime.len }) catch return error.BuiltinsExtractionFailed);
+    }
     if (args.synthetic_default_platform) {
         const startup = embedded.default_platform orelse return error.UnsupportedTarget;
         try object_files.append(objects.materializeKnown(startup, .{ .digest = embedded.default_platform_link_digest.?, .size = startup.len }) catch return error.NativeCompilationFailed);
@@ -12057,9 +12095,12 @@ const ProgramOutput = struct {
         hosted_symbols: []const []const u8,
         link_root_symbols: []const []const u8,
         app_export_symbols: []const []const u8,
+        /// The program's LIR carries the `.boxy` runtime contract, so its
+        /// object calls the Boxy runtime's `roc_desc_*` entry points.
+        boxy_runtime: bool = false,
     };
 
-    const magic = "ROCPRGO2";
+    const magic = "ROCPRGO3";
 
     fn encode(allocator: Allocator, output: ProgramOutput) Allocator.Error![]u8 {
         var bytes = std.ArrayList(u8).empty;
@@ -12071,6 +12112,7 @@ const ProgramOutput = struct {
             try appendWord(allocator, &bytes, names.len);
             for (names) |name| try appendBytes(allocator, &bytes, name);
         }
+        try bytes.append(allocator, @intFromBool(output.facts.boxy_runtime));
         var checksum: [32]u8 = undefined;
         std.crypto.hash.Blake3.hash(bytes.items, &checksum, .{});
         try bytes.appendSlice(allocator, &checksum);
@@ -12110,11 +12152,14 @@ const ProgramOutput = struct {
             for (names) |*name| name.* = reader.slice() orelse return null;
             list.* = names;
         }
+        const boxy_runtime = (reader.take(1) orelse return null)[0];
+        if (boxy_runtime > 1) return null;
         if (reader.offset != payload.len) return null;
         return .{ .object = object, .facts = .{
             .hosted_symbols = lists[0],
             .link_root_symbols = lists[1],
             .app_export_symbols = lists[2],
+            .boxy_runtime = boxy_runtime == 1,
         } };
     }
 

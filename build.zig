@@ -5499,6 +5499,10 @@ fn addBoxyRuntimeObject(
     obj.root_module.addImport("builtins", builtins_module);
     obj.root_module.addImport("boxy_runtime", runtime_module);
     obj.root_module.addImport("shim_io", b.createModule(.{ .root_source_file = b.path("src/shim_io.zig") }));
+    // It links into -nostdlib executables next to the extern builtins
+    // object, which supplies compiler-rt; nothing there defines the stack
+    // protector's symbols.
+    obj.root_module.stack_protector = false;
     configureBackend(obj, target);
     return obj;
 }
@@ -5911,6 +5915,14 @@ fn addMainExe(
     embedded_digests.addArg("builtins_extern_native");
     embedded_digests.addFileArg(builtins_extern_obj.getEmittedBin());
 
+    // The Boxy runtime object a `--specialize=no` program compiled by the
+    // dev backend links next to the builtins.
+    const boxy_runtime_native_obj = addBoxyRuntimeObject(b, roc_modules, "roc_boxy_runtime_native", builtins_target, optimize);
+    const host_boxy_runtime_filename = if (target.result.os.tag == .windows) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
+    _ = embedded_assets.addCopyFile(boxy_runtime_native_obj.getEmittedBin(), b.pathJoin(&.{ "", host_boxy_runtime_filename }));
+    embedded_digests.addArg("boxy_runtime_native");
+    embedded_digests.addFileArg(boxy_runtime_native_obj.getEmittedBin());
+
     // Add tracy support (required by parse/can/check modules)
     add_tracy(b, roc_modules.build_options, interpreter_shim_lib, b.graph.host, false, flag_enable_tracy);
 
@@ -6013,6 +6025,16 @@ fn addMainExe(
         cross_builtins_extern_obj.root_module.stack_protector = false;
 
         const builtins_extern_ext = if (cross_target.query.os_tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
+        if (!cross_is_wasm) {
+            const cross_boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}), cross_resolved_target, optimize);
+            const boxy_runtime_ext = if (cross_target.query.os_tag == .windows) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
+            embedded_digests.addArg(b.fmt("boxy_runtime_{s}", .{cross_target.name}));
+            embedded_digests.addFileArg(cross_boxy_runtime_obj.getEmittedBin());
+            _ = embedded_assets.addCopyFile(
+                cross_boxy_runtime_obj.getEmittedBin(),
+                b.pathJoin(&.{ "targets", cross_target.name, boxy_runtime_ext }),
+            );
+        }
         const copy_cross_builtins_extern = embedded_assets;
         embedded_digests.addArg(b.fmt("builtins_extern_{s}", .{cross_target.name}));
         embedded_digests.addFileArg(cross_builtins_extern_obj.getEmittedBin());
