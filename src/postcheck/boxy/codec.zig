@@ -187,8 +187,8 @@ pub fn familyFor(program: *Program, module: ModuleIndex, id: DerivationId) Alloc
     if (state.family_ids.get(key)) |existing| return existing;
 
     const constructor_fn = try convertIn(program, module, derivation.constructor_ty);
-    const ctor_args = fnArgs(program, constructor_fn);
-    if (ctor_args.len != 1) invariant("a generated codec constructor does not take one encoding");
+    if (fnArgs(program, constructor_fn).len != 1) invariant("a generated codec constructor does not take one encoding");
+    const encoding_ty = fnArgs(program, constructor_fn)[0];
     const runtime_fn = fnRet(program, constructor_fn);
     const runtime_args = fnArgs(program, runtime_fn);
     const state_ty = switch (kind) {
@@ -202,8 +202,9 @@ pub fn familyFor(program: *Program, module: ModuleIndex, id: DerivationId) Alloc
     {
         invariant("generated codecs over open types are not yet lowered by Boxy");
     }
-    for (runtime_args) |arg| {
-        if (!try conv.representationClosed(arg)) invariant("generated codecs over open types are not yet lowered by Boxy");
+    var arg_index: usize = 0;
+    while (arg_index < fnArgs(program, runtime_fn).len) : (arg_index += 1) {
+        if (!try conv.representationClosed(fnArgs(program, runtime_fn)[arg_index])) invariant("generated codecs over open types are not yet lowered by Boxy");
     }
 
     const index: u32 = @intCast(state.families.items.len);
@@ -212,7 +213,7 @@ pub fn familyFor(program: *Program, module: ModuleIndex, id: DerivationId) Alloc
         .kind = kind,
         .root = id,
         .shape = shape,
-        .encoding = ctor_args[0],
+        .encoding = encoding_ty,
         .state = state_ty,
         .constructor_fn = constructor_fn,
         .runtime_fn = runtime_fn,
@@ -2169,7 +2170,9 @@ const Gen = struct {
 
     /// `Encoding.FieldName` of field `index` named `name_value`.
     fn fieldHandle(self: *Gen, handle_ty: TypeId, index: u32, name_value: LocalId) Allocator.Error!LocalId {
-        const fields = recordFields(self.program(), handle_ty);
+        var fields_buf: [3]types.Field = undefined;
+        const fields = fields_buf[0..recordFields(self.program(), handle_ty).len];
+        @memcpy(fields, recordFields(self.program(), handle_ty));
         var values: [3]LocalId = undefined;
         for (fields, &values) |field_info, *value| {
             const text = self.store().nameText(field_info.name);
@@ -2190,11 +2193,10 @@ const Gen = struct {
     /// and error row, to the parse result.
     fn specType(self: *Gen, union_ty: TypeId, method_fn: TypeId) Allocator.Error!TypeId {
         const program_ = self.program();
-        const args = fnArgs(program_, method_fn);
+        const encoding_ty = fnArgs(program_, method_fn)[0];
+        const state_ty = fnArgs(program_, method_fn)[2];
         const result_ty = fnRet(program_, method_fn);
         const parts = try requireTry(program_, result_ty);
-        const encoding_ty = args[0];
-        const state_ty = args[2];
         const u64_ty = try self.u64Ty();
         const step_result = try self.tryType(result_ty, state_ty, parts.err);
         const start_fn = try self.store().intern(.{ .function = .{ .args = &.{ state_ty, u64_ty }, .ret = step_result, .effectful = false } });
@@ -2237,7 +2239,9 @@ const Gen = struct {
         const finish_fn = try self.field(options, options_ty, "finish_payloads");
         const missing = (try self.field(options, options_ty, "missing")).value;
         const on_err: OnErr = .{ .ret = ret_ty };
-        const value_ty = (try self.field(try self.local((try requireTry(program_, ret_ty)).ok), (try requireTry(program_, ret_ty)).ok, "value")).ty;
+        const value_ty = for (recordFields(program_, try self.b.structuralType((try requireTry(program_, ret_ty)).ok))) |field_info| {
+            if (std.mem.eql(u8, self.store().nameText(field_info.name), "value")) break field_info.ty;
+        } else invariant("a tag-union spec's result has no value");
         const tags = try self.b.allocator.dupe(types.Tag, unionTags(program_, union_ty));
         defer self.b.allocator.free(tags);
         for (tags) |tag_info| {
@@ -2319,7 +2323,9 @@ const Gen = struct {
 
     /// `Encoding.FieldName` at a runtime position.
     fn fieldHandleAt(self: *Gen, handle_ty: TypeId, index: LocalId, name_value: LocalId) Allocator.Error!LocalId {
-        const fields = recordFields(self.program(), handle_ty);
+        var fields_buf: [3]types.Field = undefined;
+        const fields = fields_buf[0..recordFields(self.program(), handle_ty).len];
+        @memcpy(fields, recordFields(self.program(), handle_ty));
         var values: [3]LocalId = undefined;
         for (fields, &values) |field_info, *value| {
             const text = self.store().nameText(field_info.name);
@@ -2380,7 +2386,8 @@ const Gen = struct {
     fn iterFrom(self: *Gen, fields: LocalId, position: LocalId, size: LocalId, filtered: bool, iter_ty: TypeId) Allocator.Error!LocalId {
         const program_ = self.program();
         const backing = try program_.converter().backing(iter_ty);
-        const iter_fields = recordFields(program_, backing);
+        const iter_fields = try self.b.allocator.dupe(types.Field, recordFields(program_, backing));
+        defer self.b.allocator.free(iter_fields);
         var step_fn: TypeId = undefined;
         var len_ty: TypeId = undefined;
         for (iter_fields) |field_info| {
