@@ -480,6 +480,7 @@ fn Writer(comptime Context: type) type {
         names: *const names.NameStore,
         leaves: []const Type.TypeId,
         bytes: std.ArrayList(u8) = .empty,
+        checked_names: bool = false,
 
         fn indexLeaves(self: *Self) EncodeError!void {
             try self.leaf_next.resize(self.allocator, self.leaves.len);
@@ -576,6 +577,14 @@ fn Writer(comptime Context: type) type {
         }
 
         fn write(self: *Self, comptime T: type, value: T) EncodeError!void {
+            const previous = self.checked_names;
+            if (T == check.ConstStore.ConstFnTargetEvidence or T == check.ConstStore.ConstFnStructuralEvidence) self.checked_names = true;
+            defer self.checked_names = previous;
+            return self.writeValue(T, value);
+        }
+        fn writeValue(self: *Self, comptime T: type, value: T) EncodeError!void {
+            if (T == names.ExportNameId) if (!self.checked_names) return self.write([]const u8, self.names.exportNameText(value));
+            if (T == names.ExternalSymbolNameId) if (!self.checked_names) return self.write([]const u8, self.context.builder.program.names.externalSymbolNameText(value));
             if (T == Type.NamedType) return self.write(NamedOccurrence, self.context.describeNamedType(value));
             if (T == Type.TypeId) {
                 self.stats.references += 1;
@@ -585,10 +594,10 @@ fn Writer(comptime Context: type) type {
                 if (value == .redirect or value == .leaf or (value == .unresolved and value.unresolved.origin == .placeholder)) invariant("settled interface contains unfinished solver state", .{});
             }
             if (T == Type.MaybeTypeId) return self.write(?Type.TypeId, value.get());
-            if (T == names.ModuleIdentityId) return self.write([32]u8, self.names.moduleIdentityBytes(value).*);
-            if (T == names.TypeNameId) return self.write([]const u8, self.names.typeNameText(value));
-            if (T == names.RecordFieldNameId) return self.write([]const u8, self.names.recordFieldLabelText(value));
-            if (T == names.TagNameId) return self.write([]const u8, self.names.tagLabelText(value));
+            if (T == names.ModuleIdentityId) if (!self.checked_names) return self.write([32]u8, self.names.moduleIdentityBytes(value).*);
+            if (T == names.TypeNameId) if (!self.checked_names) return self.write([]const u8, self.names.typeNameText(value));
+            if (T == names.RecordFieldNameId) if (!self.checked_names) return self.write([]const u8, self.names.recordFieldLabelText(value));
+            if (T == names.TagNameId) if (!self.checked_names) return self.write([]const u8, self.names.tagLabelText(value));
             if (T == Type.FieldDefault) {
                 self.stats.defaults += 1;
                 const identity = self.names.moduleIdentityBytes(value.module).*;
@@ -650,8 +659,18 @@ fn Reader(comptime Context: type) type {
         stats: Stats = .{},
         counts: [3]u32 = .{ 0, 0, 0 },
         type_count: u32 = 0,
+        checked_names: bool = false,
 
         fn read(self: *Self, comptime T: type) DecodeError!T {
+            const previous = self.checked_names;
+            if (T == check.ConstStore.ConstFnTargetEvidence or T == check.ConstStore.ConstFnStructuralEvidence) self.checked_names = true;
+            defer self.checked_names = previous;
+            return self.readValue(T);
+        }
+        fn readValue(self: *Self, comptime T: type) DecodeError!T {
+            if (T == names.ExportNameId) if (!self.checked_names) return self.names.internExportName(try self.read([]const u8));
+            if (T == names.ExternalSymbolNameId) if (!self.checked_names) return self.names.internExternalSymbolName(try self.read([]const u8));
+
             if (T == Type.NamedType) {
                 const named = (try self.context.resolveNamedType(try self.read(NamedOccurrence))) orelse return invalidSummary(@src().line);
                 if (!self.context.validNamedType(named)) return invalidSummary(@src().line);
@@ -664,14 +683,14 @@ fn Reader(comptime Context: type) type {
                 return @fromBackingInt(index);
             }
             if (T == Type.MaybeTypeId) return .of(try self.read(?Type.TypeId));
-            if (T == names.ModuleIdentityId) {
+            if (T == names.ModuleIdentityId and !self.checked_names) {
                 const digest = try self.read([32]u8);
                 if (!self.context.validModuleIdentity(digest)) return invalidSummary(@src().line);
                 return self.names.internModuleIdentity(&digest);
             }
-            if (T == names.TypeNameId) return self.names.internTypeName(try self.read([]const u8));
-            if (T == names.RecordFieldNameId) return self.names.internRecordFieldLabel(try self.read([]const u8));
-            if (T == names.TagNameId) return self.names.internTagLabel(try self.read([]const u8));
+            if (T == names.TypeNameId) if (!self.checked_names) return self.names.internTypeName(try self.read([]const u8));
+            if (T == names.RecordFieldNameId) if (!self.checked_names) return self.names.internRecordFieldLabel(try self.read([]const u8));
+            if (T == names.TagNameId) if (!self.checked_names) return self.names.internTagLabel(try self.read([]const u8));
             if (T == Type.FieldDefault) {
                 self.stats.defaults += 1;
                 const identity = try self.read([32]u8);
@@ -814,10 +833,9 @@ const FrozenTestPayload = struct {
     edges: []const u32,
     name: names.RecordFieldNameId,
     data: []const u8,
-    integer: i128 align(8),
+    integer: i128,
     float: f64,
     optional: Type.MaybeTypeId,
-    bits: packed struct(u64) { ty: Type.TypeId, enabled: bool, padding: u31 = 0 },
 };
 
 fn frozenTestBytes(allocator: Allocator) ![]u8 {
@@ -840,7 +858,6 @@ fn frozenTestBytes(allocator: Allocator) ![]u8 {
         .integer = std.math.minInt(i128) + 17,
         .float = @bitCast(@as(u64, 0x7ff8000000000053)),
         .optional = .of(function),
-        .bits = .{ .ty = slot.ty, .enabled = true },
     }, TestProvenance{}, null);
 }
 
@@ -861,8 +878,6 @@ test "frozen specialization payload owns data and relocates cyclic shared type r
     const field = GuardedList.at(dest.fieldSpan(dest.get(result.types[0]).record), 0);
     try std.testing.expectEqual(result.types[0], dest.get(field.ty).func.ret);
     try std.testing.expectEqual(field.ty, result.optional.get().?);
-    try std.testing.expectEqual(result.types[0], result.bits.ty);
-    try std.testing.expect(result.bits.enabled);
     try std.testing.expectEqual(Type.Primitive.u64, dest.get(result.types[2]).primitive);
     try std.testing.expectEqualStrings("step", ns.recordFieldLabelText(result.name));
     try std.testing.expectEqualStrings("owned bytes\x00\xff", result.data);

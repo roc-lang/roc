@@ -1466,7 +1466,8 @@ pub const ConstStore = struct {
     /// The end of a vector of `count` evidence trees starting at `start`, or
     /// null when a nested vector's declared subtree length disagrees with its
     /// entries. Open nested vectors are kept on an explicit stack.
-    fn evidenceVectorEnd(allocator: Allocator, evidence: ConstFnEvidenceVector, start: usize, count: u32) Allocator.Error!?usize {
+    /// Callers validate node target/structural indices before this topology walk.
+    pub fn evidenceVectorEnd(allocator: Allocator, evidence: ConstFnEvidenceVector, start: usize, count: u32) Allocator.Error!?usize {
         const nodes = evidence.nodes;
         const Open = struct {
             remaining: u32,

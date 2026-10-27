@@ -4453,6 +4453,8 @@ const SharedSummaries = WorkerInputs.AppendIndex(InterfaceReplayAddress, Interfa
 /// sealed, and the reservation already owns its global ids, so the job
 /// outlives the requesting graph and draft.
 const PendingSpecJob = struct {
+    completed_body_address: ?CompletedBodyAddress = null,
+    profile_key: [32]u8 = @splat(0),
     /// Logical enqueue order across the whole build. The inline executor
     /// accepts queue entries strictly in this order. Representation-sensitive
     /// immediate claims are completed as inline work of the executing body;
@@ -4872,6 +4874,8 @@ const SpecJobLaneState = struct {
 /// One immutable graph-free result handed from ordinary body lowering to
 /// ordered coordinator commit.
 const CompletedSpecJobShard = struct {
+    decoded_body_arena: ?*std.heap.ArenaAllocator = null,
+    frozen_probe_record: ?FrozenProbeRecord = null,
     worker_id: SpecJobWorkerId,
     commit_domain: *SpecJobCommitDomain,
     dispatch_index: u64,
@@ -4887,7 +4891,12 @@ const CompletedSpecJobShard = struct {
 
     fn deinit(self: *CompletedSpecJobShard) void {
         const allocator = self.body_draft.allocator;
+        if (self.frozen_probe_record) |record| allocator.free(record.bytes);
         self.body_draft.deinit();
+        if (self.decoded_body_arena) |arena| {
+            arena.deinit();
+            allocator.destroy(arena);
+        }
         allocator.free(self.interface_summaries);
         if (self.diagnostics) |diagnostics| {
             allocator.destroy(diagnostics);
@@ -9008,6 +9017,8 @@ const Builder = struct {
                     Common.invariant("queued Monotype specialization request cannot carry a retained lexical topology");
                 }
                 const job: PendingSpecJob = .{
+                    .completed_body_address = if (dev_diagnostics.isSet(.completed_body_cache)) try self.completedBodyAddress(spec_identity, view, method_scope, source_fn_key, subst, signature_relation, demand) else null,
+                    .profile_key = if (dev_diagnostics.isSet(.sealed_body_profile)) Ast.specIdentityKey(spec_identity).bytes else @splat(0),
                     .dispatch_index = undefined,
                     .spec = reserved.spec,
                     .reservation = reservation,
@@ -10294,6 +10305,331 @@ const Builder = struct {
     /// Deferred preparation executes against the worker's private Builder and
     /// workspace. Representation-sensitive iterator callees lower eagerly into
     /// this same draft, so callbacks never mutate coordinator state.
+    fn completedBodyAddress(
+        self: *Builder,
+        identity: Ast.SpecIdentity,
+        view: ModuleView,
+        scope: ModuleView,
+        source_fn_key: names.TypeDigest,
+        subst: ?SealedSubstitution,
+        relation: Ast.SignatureRelation,
+        demand: Demand,
+    ) Allocator.Error!?CompletedBodyAddress {
+        if (self.interface_cache == null) return null;
+        const scope_context = scope.compile_time_root_identities.valueContext() orelse return null;
+        const program_context = (try self.programValueContext(false)) orelse return null;
+        const callee_context = (try self.interfaceCalleeContext(view)) orelse return null;
+        const top = (try self.literalTopModules()).?;
+        var family = TypeDigestHasher.init();
+        family.update("roc.completed-body-family.v2");
+        family.update(&view.key.bytes);
+        family.update(&(view.code_generation_key orelse view.key).bytes);
+        family.update(&scope_context);
+        family.update(&program_context);
+        family.update(&callee_context);
+        hashU32(&family, @intCast(scope.method_lookup_scope.len));
+        for (scope.method_lookup_scope) |module| {
+            if (top.get(module.bytes)) |context| {
+                family.update(&.{1});
+                family.update(&context);
+            } else {
+                family.update(&.{0});
+                family.update(&module.bytes);
+            }
+        }
+        family.update(@tagName(self.inline_expects));
+        family.update(@tagName(demand));
+        family.update(&.{ @intFromBool(self.static_data_literals), @intFromBool(self.comptime_value_reads), @intFromBool(self.literal_roots), @intFromBool(self.proc_debug_names) });
+        var request = TypeDigestHasher.init();
+        request.update("roc.completed-body-request.v1");
+        request.update(&Ast.specIdentityKey(identity).bytes);
+        request.update(&source_fn_key.bytes);
+        request.update(@tagName(relation));
+        if (subst) |slots| {
+            request.update(&.{1});
+            hashU32(&request, @intCast(slots.len));
+            for (slots) |slot| switch (slot) {
+                .checked_error => request.update(&.{0}),
+                .ty => |ty| {
+                    request.update(&.{1});
+                    request.update(&self.specializationTypeDigest(ty).bytes);
+                },
+            };
+        } else request.update(&.{0});
+        return .{ .family = family.finalResult(), .key = request.finalResult() };
+    }
+
+    fn completedBodySourceKeys(self: *Builder, allocator: Allocator) Allocator.Error![]const [32]u8 {
+        var max: usize = 0;
+        var it = self.sourceFileIds().iterator();
+        while (it.next()) |entry| max = @max(max, @as(usize, entry.value_ptr.*) + 1);
+        const keys = try allocator.alloc([32]u8, max);
+        @memset(keys, @splat(0));
+        it = self.sourceFileIds().iterator();
+        while (it.next()) |entry| keys[entry.value_ptr.*] = entry.key_ptr.*;
+        return keys;
+    }
+
+    fn completedBodyModuleKeys(self: *Builder, allocator: Allocator) Allocator.Error![]const [32]u8 {
+        var max: usize = 0;
+        var it = self.loweringModuleIds().iterator();
+        while (it.next()) |entry| max = @max(max, @as(usize, @backingInt(entry.value_ptr.*)) + 1);
+        const keys = try allocator.alloc([32]u8, max);
+        @memset(keys, @splat(0));
+        it = self.loweringModuleIds().iterator();
+        while (it.next()) |entry| keys[@backingInt(entry.value_ptr.*)] = entry.key_ptr.*;
+        return keys;
+    }
+
+    fn completedBodyStaticDependencies(self: *Builder, allocator: Allocator, requests: []const DraftStaticDataRequest) Allocator.Error!?[]const CompletedBodyStaticDependency {
+        const dependencies = try allocator.alloc(CompletedBodyStaticDependency, requests.len);
+        const Owner = struct { module: [32]u8, root: checked.ConstNodeId };
+        var paths: std.AutoHashMapUnmanaged(Owner, CompletedConstPaths) = .empty;
+        for (requests, dependencies) |request, *dependency| {
+            const view = self.moduleForId(request.module);
+            const template = view.const_templates.get(request.const_locator);
+            if (template.state != .stored_const) return null;
+            const stored = template.state.stored_const;
+            if (@backingInt(stored.root) >= view.compile_time_root_identities.rows.len) return null;
+            const entry = try paths.getOrPut(allocator, .{ .module = view.key.bytes, .root = stored.node });
+            if (!entry.found_existing) entry.value_ptr.* = try CompletedConstPaths.init(allocator, view.const_store, stored.node);
+            dependency.* = .{
+                .root = stored.root,
+                .identity = view.compile_time_root_identities.rows[@backingInt(stored.root)],
+                .checked_type_key = self.moduleForId(request.checked_type_module).types.rootKey(request.checked_type),
+                .path = (try entry.value_ptr.path(request.const_node)) orelse return null,
+            };
+        }
+        return dependencies;
+    }
+
+    fn completedBodyRootDependencies(self: *Builder, allocator: Allocator, reads: []const DraftRootValueRead) Allocator.Error!?[]const CompletedBodyRootDependency {
+        const dependencies = try allocator.alloc(CompletedBodyRootDependency, reads.len);
+        for (reads, dependencies) |read, *dependency| {
+            const view = self.moduleForId(read.root.module);
+            const raw = @backingInt(read.root.root);
+            if (raw >= view.compile_time_root_identities.rows.len) return null;
+            dependency.* = .{
+                .root = read.root,
+                .identity = view.compile_time_root_identities.rows[raw],
+                .payload = std.meta.activeTag(view.compile_time_roots.root(read.root.root).payload),
+                .declared_read = self.comptimeValueReadDeclared(view, read.root.root),
+            };
+        }
+        return dependencies;
+    }
+
+    fn loadCompletedBody(
+        self: *Builder,
+        workspace: *SpecJobWorkspace,
+        job: PendingSpecJob,
+    ) Allocator.Error!?RestoredCompletedBody {
+        const address = job.completed_body_address orelse return null;
+        const provider = self.interface_cache.?;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const start = timingNowNs(io);
+        const bytes = (try provider.load(provider.context, self.allocator, address.family, address.key)) orelse return null;
+        defer self.allocator.free(bytes);
+        const arena = try self.allocator.create(std.heap.ArenaAllocator);
+        arena.* = .init(self.allocator);
+        var owned = true;
+        defer if (owned) {
+            arena.deinit();
+            self.allocator.destroy(arena);
+        };
+        const validation = CompletedBodyValidation{ .builder = self, .job = job, .names = &workspace.name_store };
+        var payload = PersistentInterface.decodeFrozen(FrozenBodyProbe, "BODY0002".*, arena.allocator(), &workspace.types, &workspace.name_store, bytes, BodyContext.PersistentProvenance{ .builder = self, .completed_body_validation = &validation }, null) catch |err| switch (err) {
+            error.InvalidSummary => return null,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        validation.rebind(&payload) catch |err| switch (err) {
+            error.InvalidSummary => return null,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        var draft = BodyDraftStore.init(self.allocator);
+        errdefer draft.deinit();
+        inline for (completed_body_columns) |column| {
+            const values = @field(payload, column);
+            @field(draft, column) = .fromOwnedSlice(try self.allocator.dupe(@typeInfo(@TypeOf(values)).pointer.child, values));
+        }
+        // Substitutions are individually owned by BodyDraftStore. All other
+        // immutable nested data stays in the shard's retained decoding arena.
+        for (payload.templates) |stored| {
+            var spec: SealedTemplateSpec = undefined;
+            inline for (@typeInfo(SealedTemplateSpec).@"struct".field_names) |field| {
+                if (comptime std.mem.eql(u8, field, "evidence")) {
+                    spec.evidence = try FrozenEvidenceContext.restore(self, stored.evidence);
+                } else if (comptime std.mem.eql(u8, field, "subst")) {
+                    spec.subst = try self.allocator.dupe(SealedSubstSlot, stored.subst);
+                } else if (comptime std.mem.eql(u8, field, "codec_contract")) {
+                    spec.codec_contract = self.completedBodyCodec(stored.codec_contract);
+                } else @field(spec, field) = @field(stored, field);
+            }
+            errdefer self.allocator.free(spec.subst);
+            try draft.sealed_template_specs.append(self.allocator, spec);
+        }
+        for (payload.nested) |stored| {
+            var spec: SealedNestedSpec = undefined;
+            inline for (@typeInfo(SealedNestedSpec).@"struct".field_names) |field| {
+                if (comptime std.mem.eql(u8, field, "codec_contract")) {
+                    spec.codec_contract = self.completedBodyCodec(stored.codec_contract);
+                } else @field(spec, field) = @field(stored, field);
+            }
+            try draft.sealed_nested_specs.append(self.allocator, spec);
+        }
+        draft.spec_job_workspace = workspace;
+        draft.mutable_graph_names = &workspace.name_store;
+        draft.demand = payload.demand;
+        draft.demand_owner = job.reservation.fn_id;
+        draft.upgrade_all = payload.upgrade_all;
+        draft.upgrade_owner = payload.upgrade_owner;
+        draft.sealWorkerLocalSymbols(payload.worker_local_symbol_count);
+        owned = false;
+        if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("completed-body hit key={x} bytes={d} restore_ns={d}\n", .{ address.key, bytes.len, timingNowNs(io) - start });
+        return .{
+            .arena = arena,
+            .draft = draft,
+            .pending = .{ .reservation = job.reservation, .fn_template = job.fn_template, .signature_relation = job.signature_relation, .root_ty = payload.root_ty, .lowered = payload.lowered },
+        };
+    }
+
+    fn completedBodyCodec(self: *Builder, stored: ?FrozenCodecProbe) ?SealedCodecContractContext {
+        const value = stored orelse return null;
+        return .{ .anchor = .{ .view = self.moduleForId(value.module), .derivation = value.derivation, .call_index = value.call_index, .kind = value.kind }, .constructor_ty = value.constructor_ty, .shape_ty = value.shape_ty };
+    }
+
+    fn profileFrozenBody(self: *Builder, workspace: *SpecJobWorkspace, draft: *const BodyDraftStore, pending: SealedPendingTemplateBody, job: PendingSpecJob, lower_ns: i64) Allocator.Error!?FrozenProbeRecord {
+        var scratch = std.heap.ArenaAllocator.init(self.allocator);
+        defer scratch.deinit();
+        const profile_io = std.Io.Threaded.global_single_threaded.io();
+        const start = timingNowNs(profile_io);
+        const templates = try scratch.allocator().alloc(FrozenTemplateProbe, draft.sealed_template_specs.items.len);
+        for (draft.sealed_template_specs.items, templates) |source, *out| {
+            inline for (@typeInfo(FrozenTemplateProbe).@"struct".field_names) |field| {
+                if (comptime std.mem.eql(u8, field, "evidence")) {
+                    out.evidence = try self.constFnEvidence(rootEvidence(source.template_ref, source.evidence));
+                } else if (comptime std.mem.eql(u8, field, "codec_contract")) {
+                    out.codec_contract = FrozenCodecProbe.of(source.codec_contract);
+                } else @field(out, field) = @field(source, field);
+            }
+        }
+        const nested = try scratch.allocator().alloc(FrozenNestedProbe, draft.sealed_nested_specs.items.len);
+        for (draft.sealed_nested_specs.items, nested) |source, *out| {
+            inline for (@typeInfo(FrozenNestedProbe).@"struct".field_names) |field| {
+                if (comptime std.mem.eql(u8, field, "codec_contract")) {
+                    out.codec_contract = FrozenCodecProbe.of(source.codec_contract);
+                } else @field(out, field) = @field(source, field);
+            }
+        }
+        const address = job.completed_body_address orelse CompletedBodyAddress{ .family = @splat(0), .key = @splat(0) };
+        const dependencies = (try self.completedBodyRootDependencies(scratch.allocator(), draft.root_value_reads.items)) orelse return null;
+        const payload: FrozenBodyProbe = .{
+            .address = address,
+            .source_file_keys = try self.completedBodySourceKeys(scratch.allocator()),
+            .lowering_module_keys = try self.completedBodyModuleKeys(scratch.allocator()),
+            .root_dependencies = dependencies,
+            .static_dependencies = (try self.completedBodyStaticDependencies(scratch.allocator(), draft.static_data_requests.items)) orelse return null,
+            .root_ty = pending.root_ty,
+            .lowered = pending.lowered,
+            .self_reservation = pending.reservation,
+            .worker_local_symbol_count = draft.worker_local_symbol_count,
+            .demand = draft.demand,
+            .upgrade_all = draft.upgrade_all,
+            .upgrade_owner = draft.upgrade_owner,
+            .templates = templates,
+            .nested = nested,
+            .fns = draft.fns.items,
+            .const_fn_evidence = draft.const_fn_evidence.items,
+            .const_fn_evidence_targets = draft.const_fn_evidence_targets.items,
+            .const_fn_evidence_structurals = draft.const_fn_evidence_structurals.items,
+            .const_fn_evidence_frames = draft.const_fn_evidence_frames.items,
+            .defs = draft.defs.items,
+            .def_owners = draft.def_owners.items,
+            .nested_defs = draft.nested_defs.items,
+            .exprs = draft.exprs.items,
+            .pats = draft.pats.items,
+            .stmts = draft.stmts.items,
+            .locals = draft.locals.items,
+            .expr_ids = draft.expr_ids.items,
+            .pat_ids = draft.pat_ids.items,
+            .typed_locals = draft.typed_locals.items,
+            .stmt_ids = draft.stmt_ids.items,
+            .field_exprs = draft.field_exprs.items,
+            .field_access_segments = draft.field_access_segments.items,
+            .fn_def_captures = draft.fn_def_captures.items,
+            .record_destructs = draft.record_destructs.items,
+            .str_pattern_steps = draft.str_pattern_steps.items,
+            .declared_fields = draft.declared_fields.items,
+            .branches = draft.branches.items,
+            .if_branches = draft.if_branches.items,
+            .string_literals = draft.string_literals.items,
+            .string_bytes = draft.string_bytes.items,
+            .proc_debug_names = draft.proc_debug_names.items,
+            .roots = draft.roots.items,
+            .layout_requests = draft.layout_requests.items,
+            .runtime_schema_requests = draft.runtime_schema_requests.items,
+            .comptime_sites = draft.comptime_sites.items,
+            .local_names = draft.local_names.items,
+            .source_text_bytes = draft.source_text_bytes.items,
+            .expr_locs = draft.expr_locs.items,
+            .expr_regions = draft.expr_regions.items,
+            .stmt_locs = draft.stmt_locs.items,
+            .stmt_regions = draft.stmt_regions.items,
+            .owner_runs = draft.owner_runs.items,
+            .static_data_requests = draft.static_data_requests.items,
+            .comptime_value_roots = draft.comptime_value_roots.items,
+            .root_value_reads = draft.root_value_reads.items,
+            .literal_roots = draft.literal_roots.items,
+        };
+        var stats: PersistentInterface.Stats = .{};
+        const replay = dev_diagnostics.isSet(.completed_body_cache);
+        if (replay and !CompletedBodyValidation.coverage(payload)) {
+            if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("completed-body unsupported static={d} comptime={d} literals={d} layouts={d} roots={d} templates={d} nested={d} lower_ns={d}\n", .{ payload.static_data_requests.len, payload.comptime_value_roots.len, payload.literal_roots.len, payload.layout_requests.len, payload.roots.len, payload.templates.len, payload.nested.len, lower_ns });
+            return null;
+        }
+        if (replay and job.completed_body_address == null) return null;
+        const bytes = PersistentInterface.encodeFrozen(FrozenBodyProbe, if (replay) "BODY0002".* else "BODYPR02".*, self.allocator, &workspace.types, &workspace.name_store, payload, BodyContext.PersistentProvenance{ .builder = self }, &stats) catch |err| switch (err) {
+            error.NotRepresentable => return null,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        errdefer self.allocator.free(bytes);
+        if (replay) {
+            if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("completed-body write key={x} bytes={d} encode_ns={d} lower_ns={d}\n", .{ address.key, bytes.len, timingNowNs(profile_io) - start, lower_ns });
+            return .{ .family = address.family, .key = address.key, .bytes = bytes };
+        }
+        const elapsed = timingNowNs(profile_io) - start;
+        var hash = base.Sha256.init(.{});
+        hash.update("diagnostic-completed-body-record.v2");
+        hash.update(@tagName(self.inline_expects));
+        hash.update(@tagName(job.demand));
+        hash.update(&.{ @intFromBool(self.static_data_literals), @intFromBool(self.comptime_value_reads), @intFromBool(self.literal_roots) });
+        const family = hash.finalResult();
+        const prior = if (self.interface_cache) |provider| try provider.load(provider.context, self.allocator, family, job.profile_key) else null;
+        defer if (prior) |old| self.allocator.free(old);
+        const decoded_fresh = try self.probeFrozenRead(bytes);
+        const decoded_prior = if (prior) |old| try self.probeFrozenRead(old) else null;
+        var refs: FrozenReferenceProbe = .{ .self_fn = job.reservation.fn_id, .self_def = job.reservation.def, .builder = self };
+        refs.scan(FrozenBodyProbe, payload);
+        std.debug.print("body-record key={x} prior={} fresh_decoded={} prior_decoded={} external_fn={d} external_def={d} lifted_fn={d} missing_checked_module={d}\n", .{ job.profile_key, prior != null, decoded_fresh, decoded_prior orelse false, refs.external_fn, refs.external_def, refs.lifted_fn, refs.missing_checked_module });
+        std.debug.print("body-key key={x} source={x} demand={s} native={} lower_ns={d} comptime_roots={d} root_reads={d} literals={d}\n", .{ job.profile_key, job.source_fn_key.bytes, @tagName(job.demand), job.fn_template.spec_key != null, lower_ns, draft.comptime_value_roots.items.len, draft.root_value_reads.items.len, draft.literal_roots.items.len });
+        std.debug.print("frozen-body bytes={d} types={d} refs={d} exprs={d} templates={d} nested={d} encode_ns={d}\n", .{ bytes.len, stats.types, stats.references, draft.exprs.items.len, templates.len, nested.len, elapsed });
+        return .{ .family = family, .key = job.profile_key, .bytes = bytes };
+    }
+
+    // This probe validates the portable type closure only. Its result is never
+    // supplied to compilation: IR references have not yet been rebound.
+    fn probeFrozenRead(self: *Builder, bytes: []const u8) Allocator.Error!bool {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+        var ns = names.NameStore.init(arena.allocator());
+        var types_ = Type.Store.init(arena.allocator());
+        _ = PersistentInterface.decodeFrozen(FrozenBodyProbe, "BODYPR02".*, arena.allocator(), &types_, &ns, bytes, BodyContext.PersistentProvenance{ .builder = self }, null) catch |err| switch (err) {
+            error.InvalidSummary => return false,
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+        return true;
+    }
+
     fn lowerPendingSpecJobToShard(
         self: *Builder,
         worker: *SpecJobWorkerState,
@@ -10303,6 +10639,7 @@ const Builder = struct {
         method_scope: ModuleView,
         template: checked.CheckedProcedureTemplate,
     ) Allocator.Error!CompletedSpecJobShard {
+        const profile_start = if (dev_diagnostics.isSet(.sealed_body_profile) or dev_diagnostics.isSet(.completed_body_cache)) timingNowNs(std.Io.Threaded.global_single_threaded.io()) else 0;
         switch (template.target) {
             .roc,
             .intrinsic,
@@ -10328,6 +10665,27 @@ const Builder = struct {
         }
         const epoch = workspace.beginEpoch(self.program);
         errdefer workspace.finishEpoch(epoch);
+        if (try self.loadCompletedBody(workspace, job)) |restored_| {
+            var restored = restored_;
+            errdefer {
+                restored.draft.deinit();
+                restored.arena.deinit();
+                self.allocator.destroy(restored.arena);
+            }
+            const store_epoch = try workspace.captureStoreEpoch(epoch);
+            workspace.finishEpoch(epoch);
+            return .{
+                .decoded_body_arena = restored.arena,
+                .worker_id = worker.worker_id,
+                .commit_domain = commit_domain,
+                .dispatch_index = job.dispatch_index,
+                .worker_local_symbol_count = restored.draft.worker_local_symbol_count,
+                .store_epoch = store_epoch,
+                .body_draft = restored.draft,
+                .pending = restored.pending,
+                .diagnostics = null,
+            };
+        }
         const program_types_before = self.program.types.epochBoundary();
         const program_names_before = self.program.names.epochBoundary();
         const program_loc_before = self.program.current_loc;
@@ -10378,6 +10736,8 @@ const Builder = struct {
         try self.finalizeBodyDraftGraph(graph, &body_draft, final_guard, final_end);
         const sealed_pending = try self.sealOrdinarySpecJobDraft(graph, &body_draft, pending);
         body_draft.sealWorkerLocalSymbols(self.symbols.worker_local.next);
+        const frozen_probe_record = if (dev_diagnostics.isSet(.sealed_body_profile) or dev_diagnostics.isSet(.completed_body_cache)) try self.profileFrozenBody(workspace, &body_draft, sealed_pending, job, timingNowNs(std.Io.Threaded.global_single_threaded.io()) - profile_start) else null;
+        errdefer if (frozen_probe_record) |record| self.allocator.free(record.bytes);
         if (self.spec_job_parallel_callback) {
             const program_types_after = self.program.types.epochBoundary();
             if (!std.meta.eql(program_types_before, program_types_after)) {
@@ -10398,6 +10758,7 @@ const Builder = struct {
         self.countBodyDiagnostic("spec_job_shards_lowered");
         workspace.finishEpoch(epoch);
         return .{
+            .frozen_probe_record = frozen_probe_record,
             .worker_id = worker.worker_id,
             .commit_domain = commit_domain,
             .dispatch_index = job.dispatch_index,
@@ -10469,6 +10830,9 @@ const Builder = struct {
                 Common.compilerBug("Monotype specialization shard lost its coordinator counter sink");
             addFlatCounters(SpecializationCounters, destination, delta);
         }
+        if (shard.frozen_probe_record) |record| if (self.interface_cache) |provider| {
+            try provider.record(provider.context, record.family, record.key, record.bytes);
+        };
         shard.diagnostics_committed = true;
         self.countCoordinatorBodyDiagnostic("spec_job_shards_committed");
         self.acceptSpecDispatch(shard.dispatch_index);
@@ -16874,8 +17238,9 @@ const DraftLiteralRoot = struct {
     read: DraftComptimeValueRootId,
 };
 
-fn DraftSpan(comptime _: type) type {
+fn DraftSpan(comptime ElementType: type) type {
     return extern struct {
+        pub const Element = ElementType;
         start: u32,
         len: u32,
 
@@ -19169,6 +19534,7 @@ const StaticDataPartRoot = struct {
     node: checked.ConstNodeId,
     const_locator: checked.ConstLocator,
     checked_type: checked.CheckedTypeId,
+    checked_type_module: checked.ModuleId,
 };
 
 /// Draft-local static-data identity. Graph types remain qualified by the body
@@ -19177,6 +19543,7 @@ const DraftStaticDataRequestAddress = struct {
     module: checked.ModuleId,
     node: checked.ConstNodeId,
     checked_type: checked.CheckedTypeId,
+    checked_type_module: checked.ModuleId,
     ty: DraftTypeCell,
 };
 
@@ -19186,6 +19553,7 @@ const DraftStaticDataRequest = struct {
     module: checked.ModuleId,
     const_node: checked.ConstNodeId,
     checked_type: checked.CheckedTypeId,
+    checked_type_module: checked.ModuleId,
     ty: DraftTypeCell,
 };
 
@@ -22876,10 +23244,12 @@ const BodyContext = struct {
         const_locator: checked.ConstLocator,
         node: ?checked.ConstNodeId,
         checked_type: checked.CheckedTypeId,
+        checked_type_module: checked.ModuleId,
         ty: DraftTypeCell,
     ) Allocator.Error!DraftStaticDataId {
         const const_node = self.builder.constNode(const_locator, node);
         const address: DraftStaticDataRequestAddress = .{
+            .checked_type_module = checked_type_module,
             .module = const_node.module.key,
             .node = const_node.id,
             .checked_type = checked_type,
@@ -22894,6 +23264,7 @@ const BodyContext = struct {
         const id: DraftStaticDataId =
             @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.static_data_requests.items.len))));
         self.draft.static_data_requests.appendAssumeCapacity(.{
+            .checked_type_module = checked_type_module,
             .const_locator = const_locator,
             .node = node,
             .module = const_node.module.key,
@@ -28054,6 +28425,13 @@ const BodyContext = struct {
 
     const PersistentProvenance = struct {
         builder: *Builder,
+        completed_body_validation: ?*const CompletedBodyValidation = null,
+        pub fn validateFrozenPayload(self: PersistentProvenance, payload: FrozenBodyProbe) PersistentInterface.DecodeError!void {
+            // The optional context is present for actual replay; the separate
+            // diagnostic round-trip deliberately discards the decoded payload.
+            if (self.completed_body_validation) |validation| try validation.validate(payload);
+        }
+
         pub fn defaultArtifact(self: PersistentProvenance, identity: [32]u8, expr: u32) ?[32]u8 {
             const declaring = self.builder.moduleForIdentityHash(&identity) orelse return null;
             _ = declaring.bodies.defaultExpr(expr) orelse return null;
@@ -47262,6 +47640,7 @@ const BodyContext = struct {
                 const_locator,
                 node,
                 checked_type,
+                type_view.key,
                 DraftTypeCell.fromSealed(ty),
             );
             const address: StaticDataCandidateAddress = .{
@@ -47274,7 +47653,7 @@ const BodyContext = struct {
                 .{ .stored = try self.storedStaticList(store_view, type_view, shape, .{ .sealed = listElemType(self.typeStore(), ty) }, const_locator) }
             else runtime: {
                 const previous_part_root = self.static_data_part_root;
-                self.static_data_part_root = staticDataPartRootFor(store_view, node, const_locator, checked_type);
+                self.static_data_part_root = staticDataPartRootFor(store_view, node, const_locator, checked_type, type_view.key);
                 defer self.static_data_part_root = previous_part_root;
                 break :runtime .{ .runtime = try runConstRestore(self, store_view, type_view, node, ty, const_locator) };
             };
@@ -47311,7 +47690,7 @@ const BodyContext = struct {
             .{ .stored = try self.storedStaticList(store_view, type_view, shape, .{ .graph = try self.graph.listElementNode(request_node) }, const_locator) }
         else runtime: {
             const previous_part_root = self.static_data_part_root;
-            self.static_data_part_root = if (candidate) staticDataPartRootFor(store_view, node, const_locator, checked_type) else null;
+            self.static_data_part_root = if (candidate) staticDataPartRootFor(store_view, node, const_locator, checked_type, type_view.key) else null;
             defer self.static_data_part_root = previous_part_root;
             break :runtime .{ .runtime = try self.restoreConstNodeAtNodeWithStaticRoot(
                 store_view,
@@ -47326,6 +47705,7 @@ const BodyContext = struct {
                 const_locator,
                 node,
                 checked_type,
+                type_view.key,
                 DraftTypeCell.fromGraphNode(request_node),
             );
             return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(request_node), .{ .static_data_candidate = .{
@@ -47345,6 +47725,7 @@ const BodyContext = struct {
         node: checked.ConstNodeId,
         const_locator: checked.ConstLocator,
         checked_type: checked.CheckedTypeId,
+        checked_type_module: checked.ModuleId,
     ) ?StaticDataPartRoot {
         return switch (store_view.const_store.get(node)) {
             .tuple, .record, .tag, .nominal => .{
@@ -47352,6 +47733,7 @@ const BodyContext = struct {
                 .node = node,
                 .const_locator = const_locator,
                 .checked_type = checked_type,
+                .checked_type_module = checked_type_module,
             },
             .pending, .zst, .scalar, .str, .list, .box, .crash, .checked_error, .fn_value => null,
         };
@@ -47390,7 +47772,7 @@ const BodyContext = struct {
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const root = self.static_data_part_root.?;
-        const id = try self.draftStaticDataRequest(root.const_locator, node, root.checked_type, DraftTypeCell.fromSealed(ty));
+        const id = try self.draftStaticDataRequest(root.const_locator, node, root.checked_type, root.checked_type_module, DraftTypeCell.fromSealed(ty));
         const address: StaticDataCandidateAddress = .{
             .static_data = id,
             .owner = self.draft.current_owner,
@@ -47429,7 +47811,7 @@ const BodyContext = struct {
             break :value .{ .runtime = try self.restoreConstNodeAtNodeWithStaticRoot(store_view, store_view, node, request_node, root.const_locator) };
         };
         const cell = DraftTypeCell.fromGraphNode(request_node);
-        const id = try self.draftStaticDataRequest(root.const_locator, node, root.checked_type, cell);
+        const id = try self.draftStaticDataRequest(root.const_locator, node, root.checked_type, root.checked_type_module, cell);
         return try self.addExprWithTypeCell(cell, .{ .static_data_candidate = .{
             .static_data = id,
             .storage = constStaticDataStorage(store_view, node),
@@ -52178,7 +52560,7 @@ const BodyContext = struct {
     /// evidence, then its callable contracts. Nested evidence follows type
     /// nesting, so each nested vector is a frame rather than a native call.
     fn materializeConstFnEvidenceVector(
-        self: *BodyContext,
+        self: anytype,
         evidence: check.ConstStore.ConstFnEvidenceVector,
         cursor: *usize,
         count: u32,
@@ -72955,4 +73337,612 @@ test "fresh closed named occurrences agree with persistent replay and preserve o
     const open = try builder.canonicalNamedOccurrence(&views[0], open_ty, owner);
     try std.testing.expectEqual(open_ty, open.ty);
     try std.testing.expectEqualSlices(u8, &views[0].key.bytes, &open.ty_module.bytes);
+}
+
+// Experimental complete-result encoding, enabled only by a diagnostic variable.
+// The separate completed_body_cache diagnostic enables validated replay.
+const FrozenBodyProbe = struct {
+    address: CompletedBodyAddress,
+    source_file_keys: []const [32]u8,
+    lowering_module_keys: []const [32]u8,
+    root_dependencies: []const CompletedBodyRootDependency,
+    static_dependencies: []const CompletedBodyStaticDependency,
+    root_ty: Type.TypeId,
+    lowered: SealedLoweredTemplateBody,
+    self_reservation: TemplateReservation,
+    worker_local_symbol_count: u32,
+    demand: Demand,
+    upgrade_all: bool,
+    upgrade_owner: bool,
+    templates: []const FrozenTemplateProbe,
+    nested: []const FrozenNestedProbe,
+    fns: []const DraftFn,
+    const_fn_evidence: []const check.ConstStore.ConstFnEvidence,
+    const_fn_evidence_targets: []const check.ConstStore.ConstFnTargetEvidence,
+    const_fn_evidence_structurals: []const check.ConstStore.ConstFnStructuralEvidence,
+    const_fn_evidence_frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    defs: []const DraftDef,
+    def_owners: []const DraftOwner,
+    nested_defs: []const DraftNestedDef,
+    exprs: []const DraftExpr,
+    pats: []const DraftPat,
+    stmts: []const DraftStmt,
+    locals: []const DraftLocal,
+    expr_ids: []const DraftExprId,
+    pat_ids: []const DraftPatId,
+    typed_locals: []const DraftTypedLocal,
+    stmt_ids: []const DraftStmtId,
+    field_exprs: []const DraftFieldExpr,
+    field_access_segments: []const DraftFieldAccessSegment,
+    fn_def_captures: []const DraftFnDefCapture,
+    record_destructs: []const DraftRecordDestruct,
+    str_pattern_steps: []const DraftStrPatternStep,
+    declared_fields: []const DraftDeclaredField,
+    branches: []const DraftBranch,
+    if_branches: []const DraftIfBranch,
+    string_literals: []const DraftStringLiteral,
+    string_bytes: []const u8,
+    proc_debug_names: []const Ast.ProcDebugName,
+    roots: []const DraftRoot,
+    layout_requests: []const DraftLayoutRequest,
+    runtime_schema_requests: []const DraftRuntimeSchemaRequest,
+    comptime_sites: []const DraftComptimeSite,
+    local_names: []const DraftSpan(u8),
+    source_text_bytes: []const u8,
+    expr_locs: []const base.SourceLoc,
+    expr_regions: []const base.Region,
+    stmt_locs: []const base.SourceLoc,
+    stmt_regions: []const base.Region,
+    owner_runs: []const DraftOwnerRun,
+    static_data_requests: []const DraftStaticDataRequest,
+    comptime_value_roots: []const Common.ComptimeValueRoot,
+    root_value_reads: []const DraftRootValueRead,
+    literal_roots: []const DraftLiteralRoot,
+};
+const FrozenCodecProbe = struct {
+    module: checked.ModuleId,
+    derivation: static_dispatch.GeneratedCodecDerivationId,
+    call_index: u32,
+    kind: CodecKind,
+    constructor_ty: Type.TypeId,
+    shape_ty: Type.TypeId,
+    fn of(value: ?SealedCodecContractContext) ?FrozenCodecProbe {
+        const v = value orelse return null;
+        return .{ .module = v.anchor.view.key, .derivation = v.anchor.derivation, .call_index = v.anchor.call_index, .kind = v.anchor.kind, .constructor_ty = v.constructor_ty, .shape_ty = v.shape_ty };
+    }
+};
+const FrozenTemplateProbe = struct {
+    state: DraftSpecState,
+    template_ref: names.ProcTemplate,
+    method_scope: checked.ModuleId,
+    source_fn_ty: checked.CheckedTypeId,
+    source_fn_key: names.TypeDigest,
+    request_fn_ty: Type.TypeId,
+    evidence: StoredConstFnEvidence,
+    /// The request's substitution sealed in the shard's store epoch.
+    subst: SealedSubstitution,
+    codec_contract: ?FrozenCodecProbe,
+    requires_local: bool,
+    local_context_dependent: bool,
+    lexical_owner: ?DraftOwner,
+    fn_id: DraftFnId,
+    def_id: ?DraftDefId,
+    resolved_slot: ?Ast.FnSlot,
+    committed_request_fn_ty: ?Type.TypeId = null,
+    committed_codec_contract: ?Ast.CodecContractIdentity = null,
+    demand: Demand = .evaluation,
+    /// Whether the resolved specialization is this request shaped by its
+    /// template's demand, so every call to it is demand-shaped.
+    demand_shaped: bool = false,
+    /// Whether the draft body uses this request's function as a value rather
+    /// than only calling it. A value's type is the program's, so such a
+    /// request is never shaped.
+    value_used: bool = false,
+};
+const FrozenNestedProbe = struct {
+    state: DraftSpecState,
+    nested: Ast.NestedFn,
+    method_scope: checked.ModuleId,
+    source_fn_key: names.TypeDigest,
+    request_fn_ty: Type.TypeId,
+    capture_abi_digest: names.TypeDigest,
+    codec_contract: ?FrozenCodecProbe,
+    sealed_codec_contract: ?Ast.CodecContractIdentity = null,
+    lexical_owner: DraftOwner,
+    requires_local: bool,
+    local_context_dependent: bool,
+    fn_id: DraftFnId,
+};
+
+const FrozenProbeRecord = struct { family: [32]u8, key: [32]u8, bytes: []u8 };
+const FrozenReferenceProbe = struct {
+    self_fn: Ast.FnId,
+    self_def: Ast.DefId,
+    builder: *Builder,
+    external_fn: u32 = 0,
+    external_def: u32 = 0,
+    lifted_fn: u32 = 0,
+    missing_checked_module: u32 = 0,
+    fn scan(self: *FrozenReferenceProbe, comptime T: type, value: T) void {
+        if (T == Ast.FnId) {
+            if (value != self.self_fn) self.external_fn += 1;
+            return;
+        }
+        if (T == Ast.DefId) {
+            if (value != self.self_def) self.external_def += 1;
+            return;
+        }
+        if (T == Ast.LiftedFnId) {
+            self.lifted_fn += 1;
+            return;
+        }
+        if (T == checked.ModuleId) {
+            if (self.builder.moduleForKeyBytes(value.bytes) == null) self.missing_checked_module += 1;
+            return;
+        }
+        switch (@typeInfo(T)) {
+            .@"struct" => |info| inline for (info.field_names, info.field_types) |field, F| self.scan(F, @field(value, field)),
+            .@"union" => |info| inline for (info.field_names, info.field_types) |field, F| {
+                if (std.meta.activeTag(value) == @field(info.tag_type.?, field)) {
+                    self.scan(F, @field(value, field));
+                    return;
+                }
+            },
+            .optional => |info| {
+                if (value) |v| self.scan(info.child, v);
+            },
+            .pointer => |info| {
+                if (info.size == .slice) {
+                    for (value) |v| self.scan(info.child, v);
+                } else @compileError("probe pointer is not a slice");
+            },
+            .array => |info| for (value) |v| self.scan(info.child, v),
+            else => {},
+        }
+    }
+};
+
+const completed_body_columns = .{ "fns", "const_fn_evidence", "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames", "defs", "def_owners", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "record_destructs", "str_pattern_steps", "declared_fields", "branches", "if_branches", "string_literals", "string_bytes", "proc_debug_names", "roots", "layout_requests", "runtime_schema_requests", "comptime_sites", "local_names", "source_text_bytes", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions", "owner_runs", "static_data_requests", "comptime_value_roots", "root_value_reads", "literal_roots" };
+const CompletedBodyAddress = struct { family: [32]u8, key: [32]u8 };
+const CompletedBodyRootDependency = struct {
+    root: EntryRoot,
+    identity: checked.CompileTimeRootIdentity,
+    payload: std.meta.Tag(checked.CompileTimeRootPayload),
+    declared_read: bool,
+};
+const RestoredCompletedBody = struct {
+    arena: *std.heap.ArenaAllocator,
+    draft: BodyDraftStore,
+    pending: SealedPendingTemplateBody,
+};
+
+const CompletedBodyValidation = struct {
+    builder: *Builder,
+    job: PendingSpecJob,
+    names: *const names.NameStore,
+    const Error = PersistentInterface.DecodeError;
+
+    fn rejected(comptime line: u32) error{InvalidSummary} {
+        if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("completed-body rejected line={d}\n", .{line});
+        return error.InvalidSummary;
+    }
+    fn coverage(payload: FrozenBodyProbe) bool {
+        if (payload.comptime_value_roots.len != 0 or payload.literal_roots.len != 0 or payload.layout_requests.len != 0 or payload.roots.len != 0) return false;
+        for (payload.templates) |spec| if (spec.requires_local or spec.local_context_dependent or spec.state == .lowering) return false;
+        for (payload.nested) |spec| if (spec.requires_local or spec.local_context_dependent or spec.state == .lowering) return false;
+        return true;
+    }
+    fn staticNode(self: *const CompletedBodyValidation, request: DraftStaticDataRequest, dependency: CompletedBodyStaticDependency) Error!checked.ConstNodeId {
+        if (!std.mem.eql(u8, &request.module.bytes, &request.const_locator.artifact.bytes)) return rejected(@src().line);
+        const view = self.builder.moduleForKeyBytes(request.module.bytes) orelse return rejected(@src().line);
+        const raw = @backingInt(request.const_locator.template);
+        if (raw >= view.const_templates.templates.items.len) return rejected(@src().line);
+        const template = view.const_templates.templates.items[raw];
+        if (!std.meta.eql(template.owner, request.const_locator.owner) or !std.meta.eql(template.source_scheme, request.const_locator.source_scheme) or template.state != .stored_const) return rejected(@src().line);
+        const stored = template.state.stored_const;
+        if (dependency.root != stored.root or @backingInt(stored.root) >= view.compile_time_root_identities.rows.len) return rejected(@src().line);
+        if (!std.meta.eql(dependency.identity, view.compile_time_root_identities.rows[@backingInt(stored.root)])) return rejected(@src().line);
+        const type_view = self.builder.moduleForKeyBytes(request.checked_type_module.bytes) orelse return rejected(@src().line);
+        if (@backingInt(request.checked_type) >= type_view.types.payloadCount() or !std.meta.eql(dependency.checked_type_key, type_view.types.rootKey(request.checked_type))) return rejected(@src().line);
+        if (request.node == null and dependency.path.len != 0) return rejected(@src().line);
+        return CompletedConstPaths.follow(view.const_store, stored.node, dependency.path) orelse rejected(@src().line);
+    }
+
+    fn validate(self: *const CompletedBodyValidation, payload: FrozenBodyProbe) Error!void {
+        if (!std.meta.eql(payload.address, self.job.completed_body_address.?)) return rejected(@src().line);
+        if (payload.demand != self.job.demand) return rejected(@src().line);
+        // These columns need additional checked-value or declaration binding
+        // contracts. This format never admits them without those contracts.
+        if (payload.comptime_value_roots.len != 0 or payload.literal_roots.len != 0 or payload.layout_requests.len != 0 or payload.roots.len != 0) return rejected(@src().line);
+        if (payload.static_dependencies.len != payload.static_data_requests.len) return rejected(@src().line);
+        for (payload.static_data_requests, payload.static_dependencies) |request, dependency| _ = try self.staticNode(request, dependency);
+        if (payload.root_dependencies.len != payload.root_value_reads.len) return rejected(@src().line);
+        for (payload.root_dependencies, payload.root_value_reads) |dependency, read| {
+            if (!std.meta.eql(dependency.root, read.root)) return rejected(@src().line);
+            const view = self.builder.moduleForKeyBytes(read.root.module.bytes) orelse return rejected(@src().line);
+            const raw = @backingInt(read.root.root);
+            if (raw >= view.compile_time_roots.roots.len or raw >= view.compile_time_root_identities.rows.len) return rejected(@src().line);
+            if (!std.meta.eql(dependency.identity, view.compile_time_root_identities.rows[raw])) return rejected(@src().line);
+            if (dependency.payload != std.meta.activeTag(view.compile_time_roots.root(read.root.root).payload)) return rejected(@src().line);
+            if (dependency.declared_read != self.builder.comptimeValueReadDeclared(view, read.root.root)) return rejected(@src().line);
+        }
+        for (payload.local_names) |span| try bounds(span.start, span.len, payload.source_text_bytes.len);
+        for (payload.string_literals) |literal| {
+            const len = if (literal.const_blob) |blob| blk: {
+                const view = self.builder.moduleForKeyBytes(blob.module_bytes) orelse return rejected(@src().line);
+                if (@backingInt(blob.data) >= view.const_store.blob_views.items.len) return rejected(@src().line);
+                if (!std.mem.eql(u8, blob.bytes, view.const_store.blobData(blob.data))) return rejected(@src().line);
+                break :blk blob.bytes.len;
+            } else blk: {
+                try bounds(literal.backing.start, literal.backing.len, payload.string_bytes.len);
+                break :blk literal.backing.len;
+            };
+            try bounds(literal.offset, literal.len, len);
+        }
+        for (payload.locals) |local| if (@backingInt(local.symbol) >= payload.worker_local_symbol_count) return rejected(@src().line);
+        for (payload.defs) |def| if (@backingInt(def.symbol) >= payload.worker_local_symbol_count) return rejected(@src().line);
+        for (payload.nested_defs) |def| if (@backingInt(def.symbol) >= payload.worker_local_symbol_count) return rejected(@src().line);
+        for (payload.proc_debug_names) |name| if (@backingInt(name.symbol) >= payload.worker_local_symbol_count) return rejected(@src().line);
+        for (payload.owner_runs) |owner_run| inline for (@typeInfo(DraftCoreKind).@"enum".field_names, 0..) |column, index| {
+            if (owner_run.starts[index] > owner_run.ends[index] or owner_run.ends[index] > @field(payload, column).len) return rejected(@src().line);
+        };
+        for (payload.templates) |spec| {
+            if (spec.requires_local or spec.local_context_dependent or spec.state == .lowering) return rejected(@src().line);
+            try self.evidence(spec.evidence);
+        }
+        for (payload.nested) |spec| if (spec.requires_local or spec.local_context_dependent or spec.state == .lowering) return rejected(@src().line);
+        var walker = Walker{ .validation = self, .payload = &payload };
+        var read_only = payload;
+        try walker.walk(FrozenBodyProbe, &read_only, false);
+    }
+
+    fn bounds(start: u32, len: u32, limit: usize) Error!void {
+        if (start > limit or len > limit - start) return rejected(@src().line);
+    }
+
+    fn procedure(self: *const CompletedBodyValidation, ref: names.ProcTemplate) Error!ModuleView {
+        const view = self.builder.moduleForKeyBytes(names.procTemplateModuleDigest(ref).bytes) orelse return rejected(@src().line);
+        if (@backingInt(ref.template) >= view.templates.templates.items.len) return rejected(@src().line);
+        const template = view.templates.get(ref.template);
+        if (template.proc_base != ref.proc_base) return rejected(@src().line);
+        return view;
+    }
+
+    fn evidence(self: *const CompletedBodyValidation, stored: StoredConstFnEvidence) Error!void {
+        if (stored.frames.len != 1 or stored.head != 0 or stored.frames[0].scope() != .root or stored.frames[0].parent != null or stored.frames[0].roots_start != 0) return rejected(@src().line);
+        for (stored.entries.nodes) |node| switch (node) {
+            .target => |index| if (index >= stored.entries.targets.len) return rejected(@src().line),
+            .structural => |index| if (index >= stored.entries.structurals.len) return rejected(@src().line),
+            else => {},
+        };
+        const end = (try checked.ConstStore.evidenceVectorEnd(self.builder.allocator, stored.entries, 0, stored.frames[0].roots_len)) orelse return rejected(@src().line);
+        if (end != stored.entries.nodes.len) return rejected(@src().line);
+        if (!std.meta.eql(stored.digest, Ast.fnEvidenceDigest(stored.entries, stored.frames, stored.head))) return rejected(@src().line);
+        for (stored.entries.targets) |target| {
+            const view = self.builder.moduleForKeyBytes(target.view.bytes) orelse return rejected(@src().line);
+            if (target.method.kind == .local_proc or @backingInt(target.method.callable_ty) >= view.types.payloadCount()) return rejected(@src().line);
+            if (!std.meta.eql(target.method_callable_key, view.types.rootKey(target.method.callable_ty))) return rejected(@src().line);
+            if (target.instantiation) |instantiation| {
+                const owner = self.builder.moduleForKeyBytes(instantiation.view.bytes) orelse return rejected(@src().line);
+                if (@backingInt(instantiation.callable_ty) >= owner.types.payloadCount()) return rejected(@src().line);
+                if (!std.meta.eql(instantiation.callable_key, owner.types.rootKey(instantiation.callable_ty))) return rejected(@src().line);
+            }
+        }
+        for (stored.entries.structurals) |structural| if (structural.checked) |checked_| {
+            const view = self.builder.moduleForKeyBytes(checked_.view.bytes) orelse return rejected(@src().line);
+            if (@backingInt(checked_.dispatcher_ty) >= view.types.payloadCount() or @backingInt(checked_.callable_ty) >= view.types.payloadCount()) return rejected(@src().line);
+            if (!std.meta.eql(checked_.dispatcher_key, view.types.rootKey(checked_.dispatcher_ty)) or !std.meta.eql(checked_.callable_key, view.types.rootKey(checked_.callable_ty))) return rejected(@src().line);
+            if (checked_.generated_codec_derivation) |id| {
+                if (@backingInt(id) >= view.static_dispatch_plans.generated_codec_derivations.len) return rejected(@src().line);
+                if (!std.meta.eql(checked_.generated_codec_content, view.static_dispatch_plans.generated_codec_derivations[@backingInt(id)].content)) return rejected(@src().line);
+            } else if (checked_.generated_codec_content != null) return rejected(@src().line);
+        };
+    }
+
+    fn rebind(self: *const CompletedBodyValidation, payload: *FrozenBodyProbe) Error!void {
+        for (@constCast(payload.static_data_requests), payload.static_dependencies) |*request, dependency| {
+            const node = try self.staticNode(request.*, dependency);
+            if (request.node != null) request.node = node;
+            request.const_node = node;
+        }
+        var walker = Walker{ .validation = self, .payload = payload };
+        try walker.walk(FrozenBodyProbe, payload, true);
+    }
+
+    const Walker = struct {
+        validation: *const CompletedBodyValidation,
+        payload: *const FrozenBodyProbe,
+        fn walk(self: *Walker, comptime T: type, value: anytype, comptime rebind_: bool) Error!void {
+            const p = self.payload;
+            const v = self.validation;
+            if (T == TemplateReservation) {
+                if (rebind_) value.* = v.job.reservation;
+                return;
+            }
+            if (T == Ast.FnId) {
+                if (rebind_) value.* = v.job.reservation.fn_id else if (value.* != p.self_reservation.fn_id) return rejected(@src().line);
+                return;
+            }
+            if (T == Ast.DefId) {
+                if (rebind_) value.* = v.job.reservation.def else if (value.* != p.self_reservation.def) return rejected(@src().line);
+                return;
+            }
+            if (T == Ast.LiftedFnId) return rejected(@src().line);
+            if (T == base.SourceLoc) {
+                if (value.file == base.SourceLoc.no_file) return;
+                if (value.file >= p.source_file_keys.len) return rejected(@src().line);
+                const current = v.builder.sourceFileIds().get(p.source_file_keys[value.file]) orelse return rejected(@src().line);
+                if (rebind_) value.file = current;
+                return;
+            }
+            if (T == Common.LoweringModuleId) {
+                if (@backingInt(value.*) >= p.lowering_module_keys.len) return rejected(@src().line);
+                const current = v.builder.loweringModuleIds().get(p.lowering_module_keys[@backingInt(value.*)]) orelse return rejected(@src().line);
+                if (rebind_) value.* = current;
+                return;
+            }
+            if (T == checked.ModuleId) {
+                if (v.builder.moduleForKeyBytes(value.bytes) == null) return rejected(@src().line);
+                return;
+            }
+            if (T == names.ProcTemplate) {
+                _ = try v.procedure(value.*);
+                return;
+            }
+            if (T == Ast.HostedFn) {
+                _ = try v.procedure(value.template);
+                const entry = for (v.builder.hosted_catalog) |entry| {
+                    if (names.procedureTemplateRefEql(entry.template, value.template)) break entry;
+                } else return rejected(@src().line);
+                if (entry.binding != .mapped) return rejected(@src().line);
+                if (!std.mem.eql(u8, v.names.externalSymbolNameText(value.external_symbol_name), v.builder.program.names.externalSymbolNameText(entry.external_symbol_name))) return rejected(@src().line);
+                if (rebind_) value.* = v.builder.hostedFn(value.template);
+                return;
+            }
+            if (T == Ast.NestedFn) {
+                const owner = try v.procedure(value.owner);
+                if (value.default_root != null) return rejected(@src().line);
+                if (@backingInt(value.site) >= owner.nested_proc_sites.sites.len) return rejected(@src().line);
+                return;
+            }
+            if (T == DraftTypeCell) {
+                if (value.* != .sealed) return rejected(@src().line);
+                return;
+            }
+            if (T == DraftProcCallee) if (value.* != .func) return rejected(@src().line);
+            if (T == FrozenCodecProbe) {
+                const owner = v.builder.moduleForKeyBytes(value.module.bytes) orelse return rejected(@src().line);
+                if (@backingInt(value.derivation) >= owner.static_dispatch_plans.generated_codec_derivations.len) return rejected(@src().line);
+            }
+            inline for (.{ .{ DraftExprId, "exprs" }, .{ DraftPatId, "pats" }, .{ DraftStmtId, "stmts" }, .{ DraftLocalId, "locals" }, .{ DraftFnId, "fns" }, .{ DraftDefId, "defs" }, .{ DraftNestedDefId, "nested_defs" }, .{ DraftStringLiteralId, "string_literals" }, .{ DraftComptimeSiteId, "comptime_sites" }, .{ DraftStaticDataId, "static_data_requests" }, .{ DraftComptimeValueRootId, "comptime_value_roots" } }) |column| {
+                if (T == column[0]) {
+                    if (@backingInt(value.*) >= @field(p.*, column[1]).len) return rejected(@src().line);
+                    return;
+                }
+            }
+            // u8 spans have two distinct owners and were checked by their
+            // owning fields above; no generic choice of backing is permitted.
+            if (T == DraftSpan(u8)) return;
+            inline for (.{ "expr_ids", "pat_ids", "stmt_ids", "typed_locals", "field_exprs", "field_access_segments", "fn_def_captures", "record_destructs", "str_pattern_steps", "declared_fields", "branches", "if_branches", "const_fn_evidence", "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames" }) |column| {
+                const Child = @typeInfo(@TypeOf(@field(p.*, column))).pointer.child;
+                if (T == DraftSpan(Child)) {
+                    try CompletedBodyValidation.bounds(value.start, value.len, @field(p.*, column).len);
+                    return;
+                }
+            }
+            switch (@typeInfo(T)) {
+                .@"struct" => |info| inline for (info.field_names, info.field_types) |field, F| try self.walk(F, &@field(value, field), rebind_),
+                .@"union" => |info| inline for (info.field_names, info.field_types) |field, F| {
+                    if (std.meta.activeTag(value.*) == @field(info.tag_type.?, field)) return self.walk(F, &@field(value, field), rebind_);
+                },
+                .optional => |info| if (value.*) |*present| try self.walk(info.child, present, rebind_),
+                .pointer => |info| {
+                    if (info.size != .slice) @compileError("completed bodies contain bounded owned slices");
+                    for (@constCast(value.*)) |*item| try self.walk(info.child, item, rebind_);
+                },
+                .array => |info| for (value) |*item| try self.walk(info.child, item, rebind_),
+                else => {},
+            }
+        }
+    };
+};
+
+const FrozenEvidenceContext = struct {
+    allocator: Allocator,
+    builder: *Builder,
+    fn restore(builder: *Builder, evidence: StoredConstFnEvidence) Allocator.Error![]const SpecEvidence {
+        var self = FrozenEvidenceContext{ .allocator = builder.allocator, .builder = builder };
+        var cursor: usize = 0;
+        return BodyContext.materializeConstFnEvidenceVector(&self, evidence.entries, &cursor, evidence.frames[0].roots_len);
+    }
+    fn finishStoredEvidenceTarget(self: *FrozenEvidenceContext, target: *SpecEvidenceTarget, stored: check.ConstStore.ConstFnTargetEvidence, nested: NestedSpecEvidence) Allocator.Error!void {
+        if (stored.method.kind == .local_proc) Common.invariant("validated completed body retained a local procedure context");
+        target.* = .{
+            .view = self.builder.moduleForDigest(stored.view),
+            .target = stored.method,
+            .instantiation = if (stored.instantiation) |instance| .{ .view = self.builder.moduleForDigest(instance.view), .callable_ty = instance.callable_ty } else null,
+            .local_proc_context = null,
+            .nested = nested,
+        };
+    }
+};
+
+test "completed body rejects foreign reservations and rebinds its own references" {
+    const a = std.testing.allocator;
+    var ns = names.NameStore.init(a);
+    defer ns.deinit();
+    var builder: Builder = undefined;
+    var job: PendingSpecJob = undefined;
+    job.completed_body_address = .{ .family = @splat(2), .key = @splat(3) };
+    job.demand = .evaluation;
+    job.reservation = .{ .def = @fromBackingInt(17), .fn_id = @fromBackingInt(18), .symbol = @fromBackingInt(19) };
+    var payload = std.mem.zeroes(FrozenBodyProbe);
+    payload.address = job.completed_body_address.?;
+    payload.demand = .evaluation;
+    var exprs = [_]DraftExpr{.{ .ty = .{ .sealed = @fromBackingInt(0) }, .data = .{ .def_ref = .{ .final = @fromBackingInt(0) } } }};
+    payload.exprs = &exprs;
+    const validation = CompletedBodyValidation{ .builder = &builder, .job = job, .names = &ns };
+    try validation.validate(payload);
+    exprs[0].data.def_ref.final = @fromBackingInt(1);
+    try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
+    exprs[0].data.def_ref.final = @fromBackingInt(0);
+    try validation.rebind(&payload);
+    try std.testing.expectEqual(job.reservation.def, exprs[0].data.def_ref.final);
+    try std.testing.expectEqualDeep(job.reservation, payload.self_reservation);
+}
+
+test "completed body rejects incompatible demand missing columns and invalid draft references" {
+    const a = std.testing.allocator;
+    var ns = names.NameStore.init(a);
+    defer ns.deinit();
+    var builder: Builder = undefined;
+    var job: PendingSpecJob = undefined;
+    job.completed_body_address = .{ .family = @splat(2), .key = @splat(3) };
+    job.demand = .evaluation;
+    var payload = std.mem.zeroes(FrozenBodyProbe);
+    payload.address = job.completed_body_address.?;
+    payload.demand = .evaluation;
+    const exprs = [_]DraftExpr{.{ .ty = .{ .sealed = @fromBackingInt(0) }, .data = .unit }};
+    payload.exprs = &exprs;
+    const validation = CompletedBodyValidation{ .builder = &builder, .job = job, .names = &ns };
+    try validation.validate(payload);
+    payload.demand = .discovery;
+    try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
+    payload.demand = .evaluation;
+    payload.lowered.body = @fromBackingInt(1);
+    try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
+    payload.lowered.body = @fromBackingInt(0);
+    payload.lowered.args = .{ .start = 0, .len = 1 };
+    try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
+    payload.lowered.args = .empty();
+    const layouts = [_]DraftLayoutRequest{undefined};
+    payload.layout_requests = &layouts;
+    try std.testing.expect(!CompletedBodyValidation.coverage(payload));
+    try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
+}
+
+/// A selector in the producer's stored value, independent of allocation ids.
+const CompletedConstStep = struct {
+    kind: enum(u8) { box, nominal, list, tuple, record, tag, capture },
+    index: u32 = 0,
+    capture: ?checked.CaptureId = null,
+};
+const CompletedBodyStaticDependency = struct {
+    root: checked.ComptimeRootId,
+    identity: checked.CompileTimeRootIdentity,
+    checked_type_key: names.TypeDigest,
+    path: []const CompletedConstStep,
+};
+
+/// Explicit paths in one immutable stored value. Sharing and cycles terminate
+/// at the first visited node; each retained edge is an actual constructor or
+/// capture edge. No old node number is interpreted by the reader.
+const CompletedConstPaths = struct {
+    const Entry = struct { node: checked.ConstNodeId, parent: ?u32, step: CompletedConstStep };
+    entries: std.ArrayList(Entry) = .empty,
+    by_node: std.AutoHashMapUnmanaged(checked.ConstNodeId, u32) = .empty,
+    allocator: Allocator,
+    fn add(self: *CompletedConstPaths, node: checked.ConstNodeId, parent: ?u32, step: CompletedConstStep) Allocator.Error!void {
+        const entry = try self.by_node.getOrPut(self.allocator, node);
+        if (entry.found_existing) return;
+        entry.value_ptr.* = @intCast(self.entries.items.len);
+        try self.entries.append(self.allocator, .{ .node = node, .parent = parent, .step = step });
+    }
+    fn init(allocator: Allocator, store: *const checked.ConstStore, root: checked.ConstNodeId) Allocator.Error!CompletedConstPaths {
+        var self = CompletedConstPaths{ .allocator = allocator };
+        try self.add(root, null, .{ .kind = .box });
+        var index: u32 = 0;
+        while (index < self.entries.items.len) : (index += 1) {
+            const value = store.get(self.entries.items[index].node);
+            switch (value) {
+                .box => |child| try self.add(child, index, .{ .kind = .box }),
+                .nominal => |nominal| try self.add(nominal.backing, index, .{ .kind = .nominal }),
+                .tuple => |children| for (children, 0..) |child, i| try self.add(child, index, .{ .kind = .tuple, .index = @intCast(i) }),
+                .record => |children| for (children, 0..) |child, i| try self.add(child, index, .{ .kind = .record, .index = @intCast(i) }),
+                .list => |list| switch (list) {
+                    .nodes => |children| for (children, 0..) |child, i| try self.add(child, index, .{ .kind = .list, .index = @intCast(i) }),
+                    .packed_bytes, .empty => {},
+                },
+                .tag => |tag| for (tag.payloads, 0..) |child, i| try self.add(child, index, .{ .kind = .tag, .index = @intCast(i) }),
+                .fn_value => |fn_id| for (store.getFn(fn_id).captures, 0..) |capture, i| try self.add(capture.value, index, .{ .kind = .capture, .index = @intCast(i), .capture = capture.id }),
+                .pending, .zst, .scalar, .str, .crash, .checked_error => {},
+            }
+        }
+        return self;
+    }
+    fn path(self: *const CompletedConstPaths, node: checked.ConstNodeId) Allocator.Error!?[]const CompletedConstStep {
+        var index = self.by_node.get(node) orelse return null;
+        var reversed = std.ArrayList(CompletedConstStep).empty;
+        while (self.entries.items[index].parent) |parent| {
+            try reversed.append(self.allocator, self.entries.items[index].step);
+            index = parent;
+        }
+        std.mem.reverse(CompletedConstStep, reversed.items);
+        return reversed.items;
+    }
+    fn follow(store: *const checked.ConstStore, root: checked.ConstNodeId, steps: []const CompletedConstStep) ?checked.ConstNodeId {
+        var node = root;
+        for (steps) |step| {
+            const value = store.get(node);
+            node = switch (step.kind) {
+                .box => if (value == .box and step.index == 0) value.box else return null,
+                .nominal => if (value == .nominal and step.index == 0) value.nominal.backing else return null,
+                .list => if (value == .list and value.list == .nodes and step.index < value.list.nodes.len) value.list.nodes[step.index] else return null,
+                .tuple => if (value == .tuple and step.index < value.tuple.len) value.tuple[step.index] else return null,
+                .record => if (value == .record and step.index < value.record.len) value.record[step.index] else return null,
+                .tag => if (value == .tag and step.index < value.tag.payloads.len) value.tag.payloads[step.index] else return null,
+                .capture => blk: {
+                    if (value != .fn_value) return null;
+                    const captures = store.getFn(value.fn_value).captures;
+                    if (step.index >= captures.len or step.capture == null or !std.meta.eql(captures[step.index].id, step.capture.?)) return null;
+                    break :blk captures[step.index].value;
+                },
+            };
+        }
+        return node;
+    }
+};
+
+test "completed body constant paths survive node renumbering and sharing changes" {
+    const a = std.testing.allocator;
+    var scratch = std.heap.ArenaAllocator.init(a);
+    defer scratch.deinit();
+    var first = checked.ConstStore.init(a);
+    defer first.deinit();
+    var second = checked.ConstStore.init(a);
+    defer second.deinit();
+    const old_leaf = try first.append(.{ .scalar = .{ .u64 = 42 } });
+    const old_box = try first.append(.{ .box = old_leaf });
+    const old_root = try first.append(.{ .record = &.{ old_box, old_box } });
+    _ = try second.append(.zst);
+    const new_root = try second.reserve();
+    const new_box = try second.reserve();
+    const new_leaf = try second.append(.{ .scalar = .{ .u64 = 42 } });
+    const second_leaf = try second.append(.{ .scalar = .{ .u64 = 42 } });
+    const second_box = try second.append(.{ .box = second_leaf });
+    second.fill(new_box, .{ .box = new_leaf });
+    second.fill(new_root, .{ .record = &.{ new_box, second_box } });
+    const paths = try CompletedConstPaths.init(scratch.allocator(), &first, old_root);
+    const path = (try paths.path(old_leaf)).?;
+    try std.testing.expectEqual(@as(usize, 2), path.len);
+    try std.testing.expectEqual(new_leaf, CompletedConstPaths.follow(&second, new_root, path).?);
+    try std.testing.expectEqual(@as(?checked.ConstNodeId, null), CompletedConstPaths.follow(&second, new_box, path));
+    const invalid = [_]CompletedConstStep{.{ .kind = .record, .index = 2 }};
+    try std.testing.expectEqual(@as(?checked.ConstNodeId, null), CompletedConstPaths.follow(&second, new_root, &invalid));
+}
+
+test "completed body constant path publication terminates on shared cyclic values" {
+    const a = std.testing.allocator;
+    var scratch = std.heap.ArenaAllocator.init(a);
+    defer scratch.deinit();
+    var store = checked.ConstStore.init(a);
+    defer store.deinit();
+    const root = try store.reserve();
+    const child = try store.append(.{ .box = root });
+    store.fill(root, .{ .tuple = &.{ child, child } });
+    const paths = try CompletedConstPaths.init(scratch.allocator(), &store, root);
+    try std.testing.expectEqual(@as(usize, 2), paths.entries.items.len);
+    const path = (try paths.path(child)).?;
+    try std.testing.expectEqual(child, CompletedConstPaths.follow(&store, root, path).?);
+    try std.testing.expectEqual(@as(usize, 0), (try paths.path(root)).?.len);
 }

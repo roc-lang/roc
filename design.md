@@ -27378,3 +27378,30 @@ output annotations. Serialization resolves redirects and assigns compact local
 ids while preserving cycles and sharing. Discarded unification rows, unreachable
 lazy Monotype leaves, and solver-private clone-context ids are not output and
 must never be persisted. The current executable IR remains unchanged.
+
+
+Experimental completed-body replay consumes the exact queued request contract
+and a completed immutable worker shard. Its record retains explicit frontier
+requests, compile-time reads, type/name ownership, and source/module ownership.
+The existing coordinator still accepts the result and resolves the frontier.
+A hit does not bypass demand discovery or the observations of a consumed root.
+Input identity covers source, incoming type/evidence/substitution, ordered
+method context, lowering policy, and compile-time dependencies. Each recorded
+root read must retain its current value identity and representation state.
+All persisted references must be validated and rebound to current owners
+before a shard reaches compiler invariants. Unsupported optional record
+coverage is a miss; no compiler stage guesses absent producer information.
+
+Completed-body static-data references use explicit constructor/capture paths
+from the checked constant template's stored root. The record includes that
+root's producer value identity and the checked type's actual owning module.
+The reader validates those owners and follows selectors through the current
+stored value; it never dereferences a persisted ConstNodeId. Sharing and
+cycles in the producer traversal are visited once. The path remains meaningful
+when value nodes have been allocated in a different order.
+
+This completed-body cache remains an opt-in developer experiment under
+`completed_body_cache`. Initial restricted coverage reused ordinary bodies but
+missed costly bodies containing static-data requests. Static-value paths extend
+that coverage; overall performance and complete production coverage still need
+validation. Ordinary builds do not load or publish these body records.
