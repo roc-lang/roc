@@ -398,6 +398,41 @@ requires structural identity, name it `...Key` only after establishing why a
 dense ID cannot represent it; changing the name solely to silence the lint
 violates this invariant.
 
+### Recursive Type Digests
+
+Every type identity derived from a graph of type nodes is settled by one
+reduction, `base.recursive_digest`: Monotype type digests, Lambda Mono type
+digests, procedure identities (`postcheck/proc_identity.zig`), and recursive
+layout keys. Each consumer only discovers its graph and encodes each node as
+its content (its encoding with every child as a bare slot) and its ordered
+children; how a recursive type is digested lives in one place.
+
+A digest is a function of the infinite type alone, never of the graph a
+program happened to draw for it. Programs draw one recursive type as a single
+knot, as a knot rolled out several levels, or as a copy whose own knot also
+references a second, separately tied copy, depending on which parts of the
+type each program's solving touched. All of them digest alike, in one
+reduction or across reductions that share a `Settled` store. The reduction
+resolves strongly connected components in reverse topological order:
+
+- An acyclic node digests its one-step unfolding (content and child digests).
+  When that unfolding is a settled recursive position's, the node is a
+  rolled-out copy of that position and takes its digest.
+- A cyclic component that refers into a settled recursive group is paired
+  coinductively against the group's recorded member shapes. Every member of a
+  component reaches every other, so either every member is equivalent to a
+  position of the group or none is; on success the members take the group's
+  digests.
+- Any other cyclic component is refined to its coarsest bisimulation
+  partition and rendered once with its positions in label order. No child
+  outside it is equivalent to one of its members, so the refinement sees
+  exactly the reduced group whatever graph spelled it.
+
+Completeness is required, not an optimization. A cache entry found under a
+specialization key is spliced only when its procedure identity is the one the
+consuming program lowers for that key, so two programs that agree on a
+specialization key must agree on every identity derived from the same types.
+
 ### Native relocation identity
 
 Every linked function relocation carries the exact call encoding selected by
@@ -474,15 +509,12 @@ Exhaustion therefore retains the ordinary exact IR; it is never cached as
 representation.
 
 Lambda Mono type digests consume the explicit capture-type graph, including
-erased callable members. Iterative discovery encodes each reachable node once;
-acyclic nodes combine their scalar data with completed child digests. Cyclic
-components are reduced by bisimulation and encode their positions in label order,
-never store-local type ids. Sharing, duplication, and recursive unrolling do
-not change type identity. The store owns reusable discovery, component, and
-partition buffers. Every request discards its graph and results on success or
-allocation failure while retaining capacity: no identity survives mutation of
-the source store. Allocation failure propagates to the caller. The versioned
-Lambda Mono digest domain separates this encoding from the former flat walk.
+erased callable members. Iterative discovery encodes each reachable node once
+and the shared recursive-type reduction ("Recursive Type Digests") settles the graph, never
+store-local type ids. The store owns reusable discovery and reduction buffers.
+Every request discards its graph and results on success or allocation failure
+while retaining capacity: no identity survives mutation of the source store.
+Allocation failure propagates to the caller.
 
 Representation finiteness is different from proof-query termination. Monotype
 bounds minted iterator identities at the single graph-owned construction choke
@@ -17914,9 +17946,9 @@ committed recursive node different slot boxing. Instead, every layout commit
 returns the recursive-graph digest each node settled to, the builder records it
 per type, and a cached child re-enters a later graph as a `committed` leaf that
 carries its layout and that digest. The analysis digests the leaf exactly as it
-would digest a re-expansion of the same subgraph, and the store persists the
-one-step unfolding of every committed recursive member, so an unrolled copy
-committed later resolves to the recursive layout it unrolls. A type committed
+would digest a re-expansion of the same subgraph, and the store persists every
+settled recursive group, so an unrolled copy committed later resolves to the
+recursive layout it unrolls. A type committed
 without a digest resolved to a store-interned layout ref (a primitive or builtin
 layout through nominals) and is expanded again directly. The shared layout store
 owns recursive graph reduction and interning.
@@ -19736,14 +19768,12 @@ lifetime and is not the shared-memory IPC transport.
 ### Layout Selection
 
 Recursive layout commitment interns unrolled copies of recursive nodes
-before selecting boxed slots. Once a recursive component has exact structural
-keys, its nodes also record their one-step encodings with settled child digests,
-and the store keeps the one-step shape of every member of the settled group.
-An acyclic node with that same encoding inherits the recursive node's key and
-representation. A cyclic component that refers into a settled group (a copy of
-a recursive type unrolled through one of its own recursive references) is
-paired coinductively against the group's member shapes and inherits the
-group's keys when every member pairs. Thus an unrolled record and its recursive
+before selecting boxed slots. Recursive layout keys are settled by the shared
+recursive-type reduction ("Recursive Type Digests") against groups the store
+keeps across commits: an acyclic copy of a recursive position inherits that
+position's key and representation, and a cyclic component that refers into a
+settled group (a copy of a recursive type unrolled through one of its own
+recursive references) inherits the group's keys. Thus an unrolled record and its recursive
 counterpart commit the same field storage, and two spellings of one recursive
 type commit the same layout whether they meet in one graph or in separate
 commits; graph sharing cannot make one inline and the other boxed. Procedure reuse by solved type identity consumes this consistent layout

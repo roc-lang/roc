@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const TypeDigestHasher = @import("base").TypeDigestHasher;
+const recursive_digest = @import("base").recursive_digest;
 const Allocator = std.mem.Allocator;
 const tracy = @import("tracy");
 const base = @import("base");
@@ -147,15 +148,10 @@ pub const Store = struct {
     recursive_layout_keys: collections.SafeList(RecursiveLayoutKey),
     /// Position in `recursive_layout_keys` of each key, looked up by key.
     interned_recursive_graphs: RecursiveGraphIndex,
-    // One-step unfolding of every committed recursive node, mapped to that
-    // node's recursive key. Persisting these across commits lets an acyclic
-    // unrolled copy committed later (possibly against `committed` leaves)
-    // resolve to the recursive layout it unrolls.
-    recursive_unfoldings: RecursiveGraphUnfoldings,
-    // One-step shape of every member of every settled recursive group, so a
-    // cyclic component committed later that spells one of those groups with
-    // references back into it resolves to that group's identities.
-    recursive_groups: RecursiveGroupShapes,
+    // Every recursive group settled by a commit, so a graph committed later
+    // that unrolls one (possibly against `committed` leaves) or ties a copy
+    // whose references lead back into one resolves to that group's keys.
+    recursive_digests: recursive_digest.Settled,
 
     // The target's usize type (32-bit or 64-bit) - used for layout calculations
     // This is critical for cross-compilation (e.g., compiling for wasm32 on a 64-bit host)
@@ -203,8 +199,7 @@ pub const Store = struct {
             .scratch_intern_key = .empty,
             .recursive_layout_keys = .{},
             .interned_recursive_graphs = .empty,
-            .recursive_unfoldings = .empty,
-            .recursive_groups = .{},
+            .recursive_digests = recursive_digest.Settled.init(allocator, recursive_digest_domain),
             .target_usize = target_usize,
             .digest_cache = try digest_mod.DigestCache.create(allocator),
         };
@@ -386,8 +381,7 @@ pub const Store = struct {
         self.scratch_field_offsets.deinit(self.allocator);
         self.recursive_layout_keys.deinit(self.allocator);
         self.interned_recursive_graphs.deinit(self.allocator);
-        self.recursive_unfoldings.deinit(self.allocator);
-        self.recursive_groups.deinit(self.allocator);
+        self.recursive_digests.deinit();
         self.digest_cache.destroy(self.allocator);
         self.commit_scratch.promote(self.allocator).deinit();
     }
@@ -1000,29 +994,20 @@ pub const Store = struct {
     pub fn recursiveLayoutKeys(self: *const Self) []const RecursiveLayoutKey {
         return self.recursive_layout_keys.items.items;
     }
-    /// Recursive key per one-step unfolding of a committed recursive node.
-    pub const RecursiveGraphUnfoldings = std.AutoHashMapUnmanaged(RecursiveGraphAnalysis.RecursiveKey, RecursiveGraphAnalysis.RecursiveKey);
-    /// One-step shapes of the members of settled recursive groups.
-    pub const RecursiveGroupShapes = RecursiveGraphAnalysis.GroupShapes;
+    /// Digest domain of recursive layout keys.
+    pub const recursive_digest_domain = "roc.layout.recursive-graph.v3";
 
-    /// Canonical identity of every cyclic node of a temporary layout graph.
+    /// Canonical identity of every recursive node of a temporary layout
+    /// graph.
     ///
-    /// The graph's condensation is discovered by Tarjan's algorithm, which
-    /// pops components children-first, so every reference leaving a popped
-    /// component already has a settled digest. An acyclic node digests its
-    /// encoding with those child digests. A cyclic component is reduced by
-    /// bisimulation refinement over content labels, its reduced positions are
-    /// ordered by their final labels, the whole group is rendered once with
-    /// group-relative back-references, and every member is identified by its
-    /// position against that rendering's digest. Nominal nodes are transparent:
-    /// references resolve through them and they carry no identity of their
-    /// own. A `committed` leaf carries the digest its node settled to when it
-    /// was committed, so it digests exactly like a re-expansion of that
-    /// subgraph; one-step unfoldings of recursive members persist in the store
-    /// across commits for the same reason. A cyclic component that refers into
-    /// a settled recursive group is first paired coinductively against that
-    /// group's stored member shapes, and takes the group's identities when it
-    /// spells the same unfolding.
+    /// Every non-nominal node of the graph is reduced by the shared
+    /// recursive-type reduction (`base.recursive_digest`) against the store's
+    /// settled recursive groups. Nominal nodes are transparent: references
+    /// resolve through them and they carry no identity of their own. A
+    /// `committed` leaf carries the digest its node settled to when it was
+    /// committed, so it digests exactly like a re-expansion of that
+    /// subgraph, and a reference to a canonical layout is that layout's
+    /// index.
     const RecursiveGraphAnalysis = struct {
         /// Identity per recursive node or its unrolled copy; null otherwise.
         keys: []?RecursiveKey,
@@ -1032,46 +1017,58 @@ pub const Store = struct {
 
         pub const RecursiveKey = graph_mod.Digest;
 
-        const no_component = std.math.maxInt(u32);
-        /// Component marker for `committed` leaves, whose digest is given.
-        const committed_component = std.math.maxInt(u32) - 1;
-        const unvisited = std.math.maxInt(u32);
-        const domain = "roc.layout.recursive-graph.v2";
+        const no_node = std.math.maxInt(u32);
 
         /// Analyze `graph` with temporaries and results in `scratch`; the
-        /// store's `unfoldings` grow in `unfoldings_allocator`.
+        /// store's `settled` groups grow in their own allocator.
         fn init(
             scratch: Allocator,
-            unfoldings_allocator: Allocator,
             graph: *const LayoutGraph,
-            unfoldings: *RecursiveGraphUnfoldings,
-            groups: *GroupShapes,
+            settled: *recursive_digest.Settled,
         ) Allocator.Error!RecursiveGraphAnalysis {
             const node_count = graph.nodes.items.len;
             const keys = try scratch.alloc(?RecursiveKey, node_count);
             @memset(keys, null);
             const node_digests = try scratch.alloc(?RecursiveKey, node_count);
 
-            var engine = try Engine.init(scratch, unfoldings_allocator, graph, keys, unfoldings, groups);
-            for (graph.nodes.items, 0..) |node, i| {
-                switch (node) {
-                    .committed => |committed| {
-                        engine.visit_index[i] = 0;
-                        engine.component[i] = committed_component;
-                        engine.digests[i] = graph.committedDigest(committed);
-                    },
-                    .pending, .nominal, .box, .list, .closure, .erased_callable, .struct_, .tag_union => {},
-                }
+            // The reduction node of every node that is neither nominal nor
+            // committed.
+            const reduction_node = try scratch.alloc(u32, node_count);
+            var reduction = recursive_digest.Graph.init(scratch);
+            for (graph.nodes.items, reduction_node) |node, *index| {
+                index.* = switch (node) {
+                    .nominal, .committed => no_node,
+                    .pending, .box, .list, .closure, .erased_callable, .struct_, .tag_union => try reduction.addNode(),
+                };
             }
-            for (graph.nodes.items, 0..) |node, i| {
-                if (node == .nominal) continue;
-                if (engine.visit_index[i] != unvisited) continue;
-                try engine.strongConnect(@intCast(i));
+            for (reduction_node, 0..) |index, i| {
+                if (index == no_node) continue;
+                reduction.beginNode(index);
+                var hasher = TypeDigestHasher.init();
+                try encodeNode(graph, @intCast(i), ContentSink{
+                    .graph = graph,
+                    .reduction = &reduction,
+                    .reduction_node = reduction_node,
+                    .hasher = &hasher,
+                });
+                reduction.endNode(index, hasher.finalResult());
+            }
+            try reduction.resolve(settled, null);
+
+            for (reduction_node, keys) |index, *key| {
+                if (index == no_node) continue;
+                switch (reduction.resolution(index)) {
+                    .acyclic => {},
+                    .folded, .cyclic => key.* = reduction.digest(index),
+                }
             }
             for (node_digests, 0..) |*digest, i| {
                 digest.* = switch (resolveNominalRef(graph, .{ .local = @fromBackingInt(@intCast(i)) })) {
                     .canonical => null,
-                    .local => |node_id| engine.digests[@backingInt(node_id)],
+                    .local => |node_id| switch (graph.getNode(node_id)) {
+                        .committed => |committed| graph.committedDigest(committed),
+                        .pending, .nominal, .box, .list, .closure, .erased_callable, .struct_, .tag_union => reduction.digest(reduction_node[@backingInt(node_id)]),
+                    },
                 };
             }
 
@@ -1096,65 +1093,12 @@ pub const Store = struct {
             base.invariant("layout.Store invariant violated: logical layout graph contained a nominal-only cycle", .{});
         }
 
-        /// A child reference in a node's one-step shape.
-        const ShapeChild = union(enum) {
-            canonical: Idx,
-            settled: RecursiveKey,
-            /// Rank of a member of the same recursive group.
-            member: u32,
-            /// Node index of a member of the component being resolved.
-            component_node: u32,
-        };
-
-        /// One-step shapes of every member of every settled recursive group,
-        /// owned by the store so they outlive the commit that settled them.
-        pub const GroupShapes = struct {
-            /// Group and rank of every settled recursive member digest.
-            member_of: std.AutoHashMapUnmanaged(RecursiveKey, MemberRef) = .empty,
-            groups: std.ArrayList(Group) = .empty,
-            ranks: std.ArrayList(Rank) = .empty,
-            content: std.ArrayList(u8) = .empty,
-            children: std.ArrayList(ShapeChild) = .empty,
-
-            const MemberRef = struct {
-                group: u32,
-                rank: u32,
-            };
-
-            const Group = struct {
-                rank_start: u32,
-                rank_count: u32,
-            };
-
-            const Rank = struct {
-                digest: RecursiveKey,
-                content_start: u32,
-                content_len: u32,
-                child_start: u32,
-                child_len: u32,
-            };
-
-            pub fn deinit(self_shapes: *GroupShapes, allocator: Allocator) void {
-                self_shapes.children.deinit(allocator);
-                self_shapes.content.deinit(allocator);
-                self_shapes.ranks.deinit(allocator);
-                self_shapes.groups.deinit(allocator);
-                self_shapes.member_of.deinit(allocator);
-            }
-
-            fn rank(self_shapes: *const GroupShapes, group: u32, member_rank: u32) Rank {
-                const entry = self_shapes.groups.items[group];
-                std.debug.assert(member_rank < entry.rank_count);
-                return self_shapes.ranks.items[entry.rank_start + member_rank];
-            }
-        };
-
         /// The single encoding of one non-nominal node: a content-kind
         /// discriminator, every non-reference value, and its ordered child
         /// references resolved through nominals via `sink.child`.
         fn encodeNode(graph: *const LayoutGraph, node_index: u32, sink: anytype) Allocator.Error!void {
             switch (graph.getNode(@fromBackingInt(@intCast(node_index)))) {
-                .nominal, .committed => unreachable, // the walk resolves children through nominals and pre-settles committed leaves
+                .nominal, .committed => unreachable, // the analysis resolves children through nominals and settles committed leaves without encoding them
                 .pending => base.invariant("layout.Store invariant violated: commitGraph received a reserved node that was never filled", .{}),
                 .box => |child| {
                     try sink.writeByte(0);
@@ -1191,632 +1135,44 @@ pub const Store = struct {
             }
         }
 
-        fn littleEndianBytes(value: u32) [4]u8 {
-            return .{ @truncate(value), @truncate(value >> 8), @truncate(value >> 16), @truncate(value >> 24) };
-        }
-
-        fn hashU32(hasher: *TypeDigestHasher, value: u32) void {
-            const bytes = littleEndianBytes(value);
-            hasher.update(&bytes);
-        }
-
-        fn digestLessThan(_: void, lhs: RecursiveKey, rhs: RecursiveKey) bool {
-            for (lhs, rhs) |lhs_byte, rhs_byte| {
-                if (lhs_byte != rhs_byte) return lhs_byte < rhs_byte;
-            }
-            return false;
-        }
-
-        const Engine = struct {
-            /// Allocator of this analysis's temporaries.
-            allocator: Allocator,
-            unfoldings_allocator: Allocator,
+        /// Hashes a node's encoding with every child as a bare slot and
+        /// hands its ordered children to the reduction.
+        const ContentSink = struct {
             graph: *const LayoutGraph,
-            keys: []?RecursiveKey,
-            /// Settled digest per node, valid once `component[node]` is set.
-            digests: []RecursiveKey,
-            /// Popped component per node, `no_component` until popped.
-            component: []u32,
-            /// Member position within its popped component.
-            position: []u32,
-            component_count: u32 = 0,
-            visit_index: []u32,
-            low_link: []u32,
-            on_stack: []bool,
-            next_visit: u32 = 0,
-            stack: std.ArrayList(u32) = .empty,
-            members: std.ArrayList(u32) = .empty,
-            /// In-component child node indices of the component being
-            /// resolved, contiguous per member.
-            edges: std.ArrayList(u32) = .empty,
-            edge_start: std.ArrayList(u32) = .empty,
-            edge_len: std.ArrayList(u32) = .empty,
-            render_buf: std.ArrayList(u8) = .empty,
-            /// Exact one-step encodings of settled recursive nodes, owned by
-            /// the store so they outlive this commit.
-            unfoldings: *RecursiveGraphUnfoldings,
-            /// Settled recursive group shapes, owned by the store.
-            groups: *GroupShapes,
-            /// Scratch one-step shape of the node being paired.
-            shape_content: std.ArrayList(u8) = .empty,
-            shape_children: std.ArrayList(ShapeChild) = .empty,
+            reduction: *recursive_digest.Graph,
+            reduction_node: []const u32,
+            hasher: *TypeDigestHasher,
 
-            fn init(
-                allocator: Allocator,
-                unfoldings_allocator: Allocator,
-                graph: *const LayoutGraph,
-                keys: []?RecursiveKey,
-                unfoldings: *RecursiveGraphUnfoldings,
-                groups: *GroupShapes,
-            ) Allocator.Error!Engine {
-                const node_count = graph.nodes.items.len;
-                const digests = try allocator.alloc(RecursiveKey, node_count);
-                const component = try allocator.alloc(u32, node_count);
-                @memset(component, no_component);
-                const position = try allocator.alloc(u32, node_count);
-                const visit_index = try allocator.alloc(u32, node_count);
-                @memset(visit_index, unvisited);
-                const low_link = try allocator.alloc(u32, node_count);
-                const on_stack = try allocator.alloc(bool, node_count);
-                @memset(on_stack, false);
-                return .{
-                    .allocator = allocator,
-                    .unfoldings_allocator = unfoldings_allocator,
-                    .graph = graph,
-                    .keys = keys,
-                    .digests = digests,
-                    .component = component,
-                    .position = position,
-                    .visit_index = visit_index,
-                    .low_link = low_link,
-                    .on_stack = on_stack,
-                    .unfoldings = unfoldings,
-                    .groups = groups,
-                };
+            fn writeByte(self_sink: ContentSink, value: u8) Allocator.Error!void {
+                self_sink.hasher.update(&.{value});
             }
 
-            /// Discovery sink: lists every local child for Tarjan's walk, in
-            /// encoding order.
-            const VisitSink = struct {
-                children: *std.ArrayList(u32),
-                allocator: Allocator,
-
-                fn writeByte(_: VisitSink, _: u8) Allocator.Error!void {}
-
-                fn writeU32(_: VisitSink, _: u32) Allocator.Error!void {}
-
-                fn child(self_sink: VisitSink, ref: GraphRef) Allocator.Error!void {
-                    switch (ref) {
-                        .canonical => {},
-                        .local => |node_id| try self_sink.children.append(self_sink.allocator, @backingInt(node_id)),
-                    }
-                }
-            };
-
-            /// Edge sink: collects the ordered children that lie inside the
-            /// component being resolved.
-            const EdgeSink = struct {
-                engine: *Engine,
-                component_id: u32,
-
-                fn writeByte(_: EdgeSink, _: u8) Allocator.Error!void {}
-
-                fn writeU32(_: EdgeSink, _: u32) Allocator.Error!void {}
-
-                fn child(self_sink: EdgeSink, ref: GraphRef) Allocator.Error!void {
-                    const child_index: u32 = switch (ref) {
-                        .canonical => return,
-                        .local => |node_id| @backingInt(node_id),
-                    };
-                    const engine = self_sink.engine;
-                    if (engine.component[child_index] != self_sink.component_id) return;
-                    try engine.edges.append(engine.allocator, child_index);
-                }
-            };
-
-            /// Label sink: hashes a node's encoding with every child outside
-            /// the component rendered as its settled digest and every child
-            /// inside it as a bare positional marker.
-            const LabelSink = struct {
-                engine: *Engine,
-                hasher: *TypeDigestHasher,
-                component_id: u32,
-
-                fn writeByte(self_sink: LabelSink, value: u8) Allocator.Error!void {
-                    self_sink.hasher.update(&.{value});
-                }
-
-                fn writeU32(self_sink: LabelSink, value: u32) Allocator.Error!void {
-                    hashU32(self_sink.hasher, value);
-                }
-
-                fn child(self_sink: LabelSink, ref: GraphRef) Allocator.Error!void {
-                    switch (ref) {
-                        .canonical => |layout_idx| {
-                            try self_sink.writeByte(0);
-                            try self_sink.writeU32(@backingInt(layout_idx));
-                        },
-                        .local => |node_id| {
-                            const child_index = @backingInt(node_id);
-                            const engine = self_sink.engine;
-                            if (engine.component[child_index] == self_sink.component_id) {
-                                try self_sink.writeByte(2);
-                                return;
-                            }
-                            std.debug.assert(engine.component[child_index] != no_component);
-                            try self_sink.writeByte(1);
-                            self_sink.hasher.update(&engine.digests[child_index]);
-                        },
-                    }
-                }
-            };
-
-            /// Group rendering sink: writes a node's encoding with every
-            /// child outside the component rendered as its settled digest and
-            /// every child inside it as its canonical position.
-            const RenderSink = struct {
-                engine: *Engine,
-                component_id: u32,
-                rank_of_member: []const u32,
-
-                fn writeByte(self_sink: RenderSink, value: u8) Allocator.Error!void {
-                    try self_sink.engine.render_buf.append(self_sink.engine.allocator, value);
-                }
-
-                fn writeU32(self_sink: RenderSink, value: u32) Allocator.Error!void {
-                    const bytes = littleEndianBytes(value);
-                    try self_sink.engine.render_buf.appendSlice(self_sink.engine.allocator, &bytes);
-                }
-
-                fn child(self_sink: RenderSink, ref: GraphRef) Allocator.Error!void {
-                    switch (ref) {
-                        .canonical => |layout_idx| {
-                            try self_sink.writeByte(0);
-                            try self_sink.writeU32(@backingInt(layout_idx));
-                        },
-                        .local => |node_id| {
-                            const child_index = @backingInt(node_id);
-                            const engine = self_sink.engine;
-                            if (engine.component[child_index] == self_sink.component_id) {
-                                try self_sink.writeByte(2);
-                                try self_sink.writeU32(self_sink.rank_of_member[engine.position[child_index]]);
-                                return;
-                            }
-                            std.debug.assert(engine.component[child_index] != no_component);
-                            try self_sink.writeByte(1);
-                            try engine.render_buf.appendSlice(engine.allocator, &engine.digests[child_index]);
-                        },
-                    }
-                }
-            };
-
-            /// Shape sink: writes a node's non-reference encoding to `content`
-            /// and classifies each child, naming in-component children by
-            /// their rank when `rank_of_member` is given and by their node
-            /// index otherwise.
-            const ShapeSink = struct {
-                engine: *Engine,
-                /// Grows `content` and `children`.
-                allocator: Allocator,
-                component_id: u32,
-                rank_of_member: ?[]const u32,
-                content: *std.ArrayList(u8),
-                children: *std.ArrayList(ShapeChild),
-
-                fn writeByte(self_sink: ShapeSink, value: u8) Allocator.Error!void {
-                    try self_sink.content.append(self_sink.allocator, value);
-                }
-
-                fn writeU32(self_sink: ShapeSink, value: u32) Allocator.Error!void {
-                    const bytes = littleEndianBytes(value);
-                    try self_sink.content.appendSlice(self_sink.allocator, &bytes);
-                }
-
-                fn child(self_sink: ShapeSink, ref: GraphRef) Allocator.Error!void {
-                    const engine = self_sink.engine;
-                    const shape_child: ShapeChild = switch (ref) {
-                        .canonical => |layout_idx| .{ .canonical = layout_idx },
-                        .local => |node_id| blk: {
-                            const child_index = @backingInt(node_id);
-                            if (engine.component[child_index] == self_sink.component_id) {
-                                if (self_sink.rank_of_member) |ranks| break :blk .{ .member = ranks[engine.position[child_index]] };
-                                break :blk .{ .component_node = child_index };
-                            }
-                            std.debug.assert(engine.component[child_index] != no_component);
-                            break :blk .{ .settled = engine.digests[child_index] };
-                        },
-                    };
-                    try self_sink.children.append(self_sink.allocator, shape_child);
-                }
-            };
-
-            /// A node of Tarjan's walk whose local children are
-            /// `walk_children[children_start..children_end]`, in encoding
-            /// order.
-            const WalkFrame = struct {
-                node: u32,
-                children_start: usize,
-                children_end: usize,
-                next: usize,
-            };
-
-            /// Tarjan's walk from `root` on explicit frames, so the depth of
-            /// the layout graph never becomes call depth.
-            fn strongConnect(self_engine: *Engine, root: u32) Allocator.Error!void {
-                const allocator = self_engine.allocator;
-                var frames = std.ArrayList(WalkFrame).empty;
-                defer frames.deinit(allocator);
-                var walk_children = std.ArrayList(u32).empty;
-                defer walk_children.deinit(allocator);
-                try self_engine.enterWalkNode(root, &frames, &walk_children);
-                while (frames.items.len > 0) {
-                    const frame = &frames.items[frames.items.len - 1];
-                    if (frame.next < frame.children_end) {
-                        const child_index = walk_children.items[frame.next];
-                        frame.next += 1;
-                        if (self_engine.visit_index[child_index] == unvisited) {
-                            try self_engine.enterWalkNode(child_index, &frames, &walk_children);
-                        } else if (self_engine.on_stack[child_index]) {
-                            self_engine.low_link[frame.node] = @min(self_engine.low_link[frame.node], self_engine.visit_index[child_index]);
-                        }
-                        continue;
-                    }
-                    const finished = frames.pop().?;
-                    walk_children.shrinkRetainingCapacity(finished.children_start);
-                    const node_index = finished.node;
-                    if (self_engine.low_link[node_index] == self_engine.visit_index[node_index]) {
-                        self_engine.members.clearRetainingCapacity();
-                        while (true) {
-                            const member = self_engine.stack.pop() orelse unreachable; // node_index is still on Tarjan's stack because its low link equals its visit index
-                            self_engine.on_stack[member] = false;
-                            try self_engine.members.append(self_engine.allocator, member);
-                            if (member == node_index) break;
-                        }
-                        try self_engine.resolveComponent();
-                    }
-                    if (frames.items.len > 0) {
-                        const parent = frames.items[frames.items.len - 1].node;
-                        self_engine.low_link[parent] = @min(self_engine.low_link[parent], self_engine.low_link[node_index]);
-                    }
-                }
+            fn writeU32(self_sink: ContentSink, value: u32) Allocator.Error!void {
+                recursive_digest.writeU32(self_sink.hasher, value);
             }
 
-            fn enterWalkNode(
-                self_engine: *Engine,
-                node_index: u32,
-                frames: *std.ArrayList(WalkFrame),
-                walk_children: *std.ArrayList(u32),
-            ) Allocator.Error!void {
-                self_engine.visit_index[node_index] = self_engine.next_visit;
-                self_engine.low_link[node_index] = self_engine.next_visit;
-                self_engine.next_visit += 1;
-                try self_engine.stack.append(self_engine.allocator, node_index);
-                self_engine.on_stack[node_index] = true;
-
-                const children_start = walk_children.items.len;
-                try encodeNode(self_engine.graph, node_index, VisitSink{ .children = walk_children, .allocator = self_engine.allocator });
-                try frames.append(self_engine.allocator, .{
-                    .node = node_index,
-                    .children_start = children_start,
-                    .children_end = walk_children.items.len,
-                    .next = children_start,
-                });
-            }
-
-            /// Settle the digests of the component in `members`, whose every
-            /// outgoing reference already carries a settled digest.
-            fn resolveComponent(self_engine: *Engine) Allocator.Error!void {
-                const members = self_engine.members.items;
-                const component_id = self_engine.component_count;
-                self_engine.component_count += 1;
-                for (members, 0..) |member, pos| {
-                    self_engine.component[member] = component_id;
-                    self_engine.position[member] = @intCast(pos);
-                }
-
-                self_engine.edges.clearRetainingCapacity();
-                self_engine.edge_start.clearRetainingCapacity();
-                self_engine.edge_len.clearRetainingCapacity();
-                for (members) |member| {
-                    const start: u32 = @intCast(self_engine.edges.items.len);
-                    try encodeNode(self_engine.graph, member, EdgeSink{ .engine = self_engine, .component_id = component_id });
-                    try self_engine.edge_start.append(self_engine.allocator, start);
-                    try self_engine.edge_len.append(self_engine.allocator, @intCast(self_engine.edges.items.len - start));
-                }
-
-                if (members.len == 1 and self_engine.edges.items.len == 0) {
-                    const member = members[0];
-                    const unfolding = try self_engine.unfoldingKey(member);
-                    if (self_engine.unfoldings.get(unfolding)) |key| {
-                        self_engine.digests[member] = key;
-                        self_engine.keys[member] = key;
-                    } else {
-                        self_engine.digests[member] = unfolding;
-                    }
-                    return;
-                }
-
-                try self_engine.resolveCyclicComponent(component_id);
-            }
-
-            /// Encode one node using the settled digests of all its children,
-            /// including children in its own already-resolved component.
-            fn unfoldingKey(self_engine: *Engine, member: u32) Allocator.Error!RecursiveKey {
-                var hasher = TypeDigestHasher.init();
-                hasher.update(domain);
-                hasher.update("acyclic");
-                try encodeNode(self_engine.graph, member, LabelSink{
-                    .engine = self_engine,
-                    .hasher = &hasher,
-                    .component_id = no_component,
-                });
-                return hasher.finalResult();
-            }
-
-            fn resolveCyclicComponent(self_engine: *Engine, component_id: u32) Allocator.Error!void {
-                const allocator = self_engine.allocator;
-                // Temporaries of this component, freed together when it resolves.
-                var scratch_arena = collections.SingleThreadArena.init(allocator);
-                defer scratch_arena.deinit();
-                const scratch = scratch_arena.allocator();
-                const members = self_engine.members.items;
-                const member_count = members.len;
-
-                if (try self_engine.foldOntoSettledGroup(component_id)) return;
-
-                // Refine to the stable bisimulation partition: every member
-                // starts from its content label, and each round relabels it
-                // by its own label followed by the labels reached by every
-                // ordered in-component reference, until a round stops
-                // separating members. Labels are pure functions of a
-                // member's unfolding, so bisimilar members carry equal labels
-                // and the labels are the same for bisimilar positions of any
-                // two graphs whatever their node counts or allocation order.
-                var labels = try scratch.alloc(RecursiveKey, member_count);
-                var next_labels = try scratch.alloc(RecursiveKey, member_count);
-                var distinct_labels = std.AutoHashMap(RecursiveKey, u32).init(scratch);
-                for (members, 0..) |member, pos| {
-                    var hasher = TypeDigestHasher.init();
-                    try encodeNode(self_engine.graph, member, LabelSink{
-                        .engine = self_engine,
-                        .hasher = &hasher,
-                        .component_id = component_id,
-                    });
-                    labels[pos] = hasher.finalResult();
-                    try distinct_labels.put(labels[pos], no_component);
-                }
-                var label_count: u32 = distinct_labels.count();
-                while (true) {
-                    distinct_labels.clearRetainingCapacity();
-                    for (members, 0..) |_, pos| {
-                        var hasher = TypeDigestHasher.init();
-                        hasher.update(&labels[pos]);
-                        const edges = self_engine.edges.items[self_engine.edge_start.items[pos]..][0..self_engine.edge_len.items[pos]];
-                        for (edges) |child_index| {
-                            hasher.update(&labels[self_engine.position[child_index]]);
-                        }
-                        next_labels[pos] = hasher.finalResult();
-                        try distinct_labels.put(next_labels[pos], no_component);
-                    }
-                    const next_count: u32 = distinct_labels.count();
-                    const stable = next_count == label_count;
-                    const finished_labels = labels;
-                    labels = next_labels;
-                    next_labels = finished_labels;
-                    label_count = next_count;
-                    if (stable) break;
-                }
-
-                // Canonical order: the reduced positions sorted by label.
-                const block_count = label_count;
-                const sorted_labels = try scratch.alloc(RecursiveKey, block_count);
-                {
-                    var it = distinct_labels.keyIterator();
-                    var next: usize = 0;
-                    while (it.next()) |label| : (next += 1) {
-                        sorted_labels[next] = label.*;
-                    }
-                    std.debug.assert(next == block_count);
-                }
-                std.mem.sort(RecursiveKey, sorted_labels, {}, digestLessThan);
-                for (sorted_labels, 0..) |label, rank| {
-                    const slot = distinct_labels.getPtr(label) orelse unreachable; // sorted_labels holds exactly distinct_labels' keys
-                    slot.* = @intCast(rank);
-                }
-                const rank_of_member = try scratch.alloc(u32, member_count);
-                const block_rep = try scratch.alloc(u32, block_count);
-                @memset(block_rep, no_component);
-                for (members, 0..) |member, pos| {
-                    const rank = distinct_labels.get(labels[pos]) orelse unreachable; // the final refinement round put every member's label
-                    rank_of_member[pos] = rank;
-                    if (block_rep[rank] == no_component) block_rep[rank] = member;
-                }
-
-                // One group rendering in canonical order; every reduced
-                // position digests as its rank against the rendering's digest.
-                self_engine.render_buf.clearRetainingCapacity();
-                try self_engine.render_buf.appendSlice(allocator, domain);
-                try self_engine.render_buf.appendSlice(allocator, "group");
-                for (block_rep) |rep| {
-                    try encodeNode(self_engine.graph, rep, RenderSink{
-                        .engine = self_engine,
-                        .component_id = component_id,
-                        .rank_of_member = rank_of_member,
-                    });
-                }
-                var group_hasher = TypeDigestHasher.init();
-                group_hasher.update(self_engine.render_buf.items);
-                const group_digest = group_hasher.finalResult();
-                const block_digest = try scratch.alloc(RecursiveKey, block_count);
-                for (0..block_count) |rank| {
-                    var hasher = TypeDigestHasher.init();
-                    hasher.update("recursive-member");
-                    hashU32(&hasher, @intCast(rank));
-                    hasher.update(&group_digest);
-                    block_digest[rank] = hasher.finalResult();
-                }
-                for (members, 0..) |member, pos| {
-                    const digest = block_digest[rank_of_member[pos]];
-                    self_engine.digests[member] = digest;
-                    self_engine.keys[member] = digest;
-                }
-                for (members) |member| {
-                    try self_engine.unfoldings.put(self_engine.unfoldings_allocator, try self_engine.unfoldingKey(member), self_engine.digests[member]);
-                }
-
-                // The store owns the groups past this commit.
-                const groups = self_engine.groups;
-                const groups_allocator = self_engine.unfoldings_allocator;
-                if (groups.member_of.contains(block_digest[0])) return;
-                const group: u32 = @intCast(groups.groups.items.len);
-                try groups.groups.append(groups_allocator, .{
-                    .rank_start = @intCast(groups.ranks.items.len),
-                    .rank_count = block_count,
-                });
-                for (block_rep, 0..) |rep_member, rank| {
-                    const content_start: u32 = @intCast(groups.content.items.len);
-                    const child_start: u32 = @intCast(groups.children.items.len);
-                    try encodeNode(self_engine.graph, rep_member, ShapeSink{
-                        .engine = self_engine,
-                        .allocator = groups_allocator,
-                        .component_id = component_id,
-                        .rank_of_member = rank_of_member,
-                        .content = &groups.content,
-                        .children = &groups.children,
-                    });
-                    try groups.ranks.append(groups_allocator, .{
-                        .digest = block_digest[rank],
-                        .content_start = content_start,
-                        .content_len = @intCast(groups.content.items.len - content_start),
-                        .child_start = child_start,
-                        .child_len = @intCast(groups.children.items.len - child_start),
-                    });
-                    try groups.member_of.put(groups_allocator, block_digest[rank], .{ .group = group, .rank = @intCast(rank) });
-                }
-            }
-
-            /// Pair the component being resolved coinductively against each
-            /// settled recursive group it refers into. When every member pairs
-            /// with a group member whose one-step shape matches it, with
-            /// in-component children pairing with the shape's in-group
-            /// children, the component spells that group's unfolding and its
-            /// members take the paired members' identities.
-            fn foldOntoSettledGroup(self_engine: *Engine, component_id: u32) Allocator.Error!bool {
-                const allocator = self_engine.allocator;
-                const members = self_engine.members.items;
-                const groups = self_engine.groups;
-
-                var candidate_groups = std.ArrayList(u32).empty;
-                defer candidate_groups.deinit(allocator);
-                for (members) |member| {
-                    try self_engine.encodeComponentShape(member, component_id);
-                    for (self_engine.shape_children.items) |shape_child| {
-                        const digest = switch (shape_child) {
-                            .settled => |digest| digest,
-                            .canonical, .member, .component_node => continue,
-                        };
-                        const member_ref = groups.member_of.get(digest) orelse continue;
-                        const known = for (candidate_groups.items) |group| {
-                            if (group == member_ref.group) break true;
-                        } else false;
-                        if (!known) try candidate_groups.append(allocator, member_ref.group);
-                    }
-                }
-                if (candidate_groups.items.len == 0) return false;
-
-                const paired = try allocator.alloc(u32, members.len);
-                defer allocator.free(paired);
-                var pending = std.ArrayList(PairedMember).empty;
-                defer pending.deinit(allocator);
-                for (candidate_groups.items) |group| {
-                    const rank_count = groups.groups.items[group].rank_count;
-                    for (0..rank_count) |start_rank| {
-                        @memset(paired, no_component);
-                        pending.clearRetainingCapacity();
-                        try pending.append(allocator, .{ .position = 0, .rank = @intCast(start_rank) });
-                        if (!try self_engine.pairWithGroup(component_id, group, paired, &pending)) continue;
-                        for (members, paired) |member, rank| {
-                            std.debug.assert(rank != no_component);
-                            const digest = groups.rank(group, rank).digest;
-                            self_engine.digests[member] = digest;
-                            self_engine.keys[member] = digest;
-                        }
-                        return true;
-                    }
-                }
-                return false;
-            }
-
-            const PairedMember = struct {
-                position: u32,
-                rank: u32,
-            };
-
-            fn pairWithGroup(
-                self_engine: *Engine,
-                component_id: u32,
-                group: u32,
-                paired: []u32,
-                pending: *std.ArrayList(PairedMember),
-            ) Allocator.Error!bool {
-                const groups = self_engine.groups;
-                const members = self_engine.members.items;
-                while (pending.pop()) |pair| {
-                    if (paired[pair.position] != no_component) {
-                        if (paired[pair.position] != pair.rank) return false;
-                        continue;
-                    }
-                    paired[pair.position] = pair.rank;
-                    const shape = groups.rank(group, pair.rank);
-                    try self_engine.encodeComponentShape(members[pair.position], component_id);
-                    const content = groups.content.items[shape.content_start..][0..shape.content_len];
-                    if (!keyBytesEqual(content, self_engine.shape_content.items)) return false;
-                    const shape_children = groups.children.items[shape.child_start..][0..shape.child_len];
-                    if (shape_children.len != self_engine.shape_children.items.len) return false;
-                    for (self_engine.shape_children.items, shape_children) |actual, expected| {
-                        switch (actual) {
-                            .canonical => |layout_idx| switch (expected) {
-                                .canonical => |expected_idx| if (expected_idx != layout_idx) return false,
-                                .settled, .member => return false,
-                                .component_node => unreachable, // settled group shapes are encoded with member ranks, so no child of one is a component node
-                            },
-                            .settled => |digest| switch (expected) {
-                                .settled => |expected_digest| if (!std.meta.eql(expected_digest, digest)) return false,
-                                .member => |expected_rank| if (!std.meta.eql(groups.rank(group, expected_rank).digest, digest)) return false,
-                                .canonical => return false,
-                                .component_node => unreachable, // settled group shapes are encoded with member ranks, so no child of one is a component node
-                            },
-                            .component_node => |child_index| switch (expected) {
-                                .member => |expected_rank| try pending.append(self_engine.allocator, .{
-                                    .position = self_engine.position[child_index],
-                                    .rank = expected_rank,
-                                }),
-                                .canonical, .settled => return false,
-                                .component_node => unreachable, // settled group shapes are encoded with member ranks, so no child of one is a component node
-                            },
-                            .member => unreachable, // encodeComponentShape passes no member ranks, so no child it encodes is a member
-                        }
-                    }
-                }
-                for (paired) |rank| {
-                    if (rank == no_component) return false;
-                }
-                return true;
-            }
-
-            fn encodeComponentShape(self_engine: *Engine, member: u32, component_id: u32) Allocator.Error!void {
-                self_engine.shape_content.clearRetainingCapacity();
-                self_engine.shape_children.clearRetainingCapacity();
-                try encodeNode(self_engine.graph, member, ShapeSink{
-                    .engine = self_engine,
-                    .allocator = self_engine.allocator,
-                    .component_id = component_id,
-                    .rank_of_member = null,
-                    .content = &self_engine.shape_content,
-                    .children = &self_engine.shape_children,
+            fn child(self_sink: ContentSink, ref: GraphRef) Allocator.Error!void {
+                self_sink.hasher.update(&.{0xff});
+                try self_sink.reduction.putChild(switch (ref) {
+                    .canonical => |layout_idx| .{ .settled = canonicalIdentity(layout_idx) },
+                    .local => |node_id| switch (self_sink.graph.getNode(node_id)) {
+                        .committed => |committed| .{ .settled = self_sink.graph.committedDigest(committed) },
+                        .nominal => unreachable, // children resolve through nominals before reaching the sink
+                        .pending, .box, .list, .closure, .erased_callable, .struct_, .tag_union => .{ .node = self_sink.reduction_node[@backingInt(node_id)] },
+                    },
                 });
             }
         };
+
+        /// The identity a reference to an already canonical layout
+        /// contributes: the layout itself.
+        fn canonicalIdentity(layout_idx: Idx) RecursiveKey {
+            var hasher = TypeDigestHasher.init();
+            recursive_digest.writeBytes(&hasher, recursive_digest_domain);
+            recursive_digest.writeBytes(&hasher, "canonical");
+            recursive_digest.writeU32(&hasher, @backingInt(layout_idx));
+            return hasher.finalResult();
+        }
     };
 
     fn translateGraphRef(mapping: []const GraphRef, ref: GraphRef) GraphRef {
@@ -1845,7 +1201,7 @@ pub const Store = struct {
         }
         const scratch = scratch_arena.allocator();
 
-        const analysis = try RecursiveGraphAnalysis.init(scratch, self.allocator, graph, &self.recursive_unfoldings, &self.recursive_groups);
+        const analysis = try RecursiveGraphAnalysis.init(scratch, graph, &self.recursive_digests);
 
         const node_count = graph.nodes.items.len;
         const mapping = try scratch.alloc(GraphRef, node_count);
@@ -4318,7 +3674,7 @@ test "commitGraph keeps distinct-field recursive struct payloads apart" {
 
     var analysis_arena = collections.SingleThreadArena.init(testing.allocator);
     defer analysis_arena.deinit();
-    const analysis = try Store.RecursiveGraphAnalysis.init(analysis_arena.allocator(), store.allocator, &graph, &store.recursive_unfoldings, &store.recursive_groups);
+    const analysis = try Store.RecursiveGraphAnalysis.init(analysis_arena.allocator(), &graph, &store.recursive_digests);
     var seen_keys = std.AutoHashMap(Store.RecursiveGraphAnalysis.RecursiveKey, void).init(testing.allocator);
     defer seen_keys.deinit();
     for (variants) |variant| {
@@ -4451,7 +3807,7 @@ test "commitGraph gives an unrolled spelling the layout of the committed union i
     defer first_commit.deinit(testing.allocator);
     var first_analysis_arena = collections.SingleThreadArena.init(testing.allocator);
     defer first_analysis_arena.deinit();
-    const first_analysis = try Store.RecursiveGraphAnalysis.init(first_analysis_arena.allocator(), store.allocator, &first, &store.recursive_unfoldings, &store.recursive_groups);
+    const first_analysis = try Store.RecursiveGraphAnalysis.init(first_analysis_arena.allocator(), &first, &store.recursive_digests);
 
     // `A`, the same type spelled with `f0` pointing back to `A` while `f1`
     // reaches the committed `B`.
