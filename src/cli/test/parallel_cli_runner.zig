@@ -481,6 +481,7 @@ const CustomCase = enum {
     issue_11673_callable_cache,
     issue_11678_recursive_callback_cache,
     issue_11678_dev_cache_boxy_tables,
+    boxy_caches_nothing_after_checking,
     issue_11710_shared_object_cache,
     issue_12220_shared_object_cache_literals,
     issue_11826_cache_ownership_variants,
@@ -3250,6 +3251,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11673: imported callable identity survives cold warm and sibling builds", .timeout_ms = 600_000, .body = .{ .custom = .issue_11673_callable_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: cached recursive callbacks retain method result rows", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_recursive_callback_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: dev builds whose code reaches the Boxy runtime are identical whatever the dev cache holds, including another app's packs", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_dev_cache_boxy_tables } },
+    .{ .id = 0, .suite = .subcommands, .name = "--specialize=no caches nothing after checking", .timeout_ms = 600_000, .body = .{ .custom = .boxy_caches_nothing_after_checking } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12220: shared object cache keeps each module's list literals in a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_12220_shared_object_cache_literals } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: every program compiles an offered procedure to the same LIR", .timeout_ms = 600_000, .body = .{ .custom = .cache_fingerprints_agree } },
@@ -5243,6 +5245,7 @@ fn runCustomCase(
         .issue_11673_callable_cache => customIssue11673CallableCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11678_recursive_callback_cache => customIssue11678RecursiveCallbackCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11678_dev_cache_boxy_tables => customIssue11678DevCacheBoxyTables(io, allocator, &env, &timer, timeout_ms),
+        .boxy_caches_nothing_after_checking => customBoxyCachesNothingAfterChecking(io, allocator, &env, &timer, timeout_ms),
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12220_shared_object_cache_literals => customIssue12220SharedObjectCacheLiterals(io, allocator, &env, &timer, timeout_ms),
         .issue_11826_cache_ownership_variants => customIssue11826CacheOwnershipVariants(io, allocator, &env, &timer, timeout_ms),
@@ -10152,6 +10155,111 @@ fn customIssue11678DevCacheBoxyTables(
         } else compared = bytes;
     }
     return null;
+}
+
+/// design.md "Caching Under `.boxy`": with `--specialize=no`, a command
+/// writes nothing to the cache once its checking is done. `roc test` checks
+/// its module with explicit roots, so its checked entries are its own; what
+/// it may not add is anything outside the sections `roc check` writes, and
+/// running its tests again under another execution mode, whose results a
+/// specializing build records separately, must change nothing.
+fn customBoxyCachesNothingAfterChecking(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const roc_file = "test/cli/BoxyChainedTagRow.roc";
+    var cache_envs: [2]CaseEnv = undefined;
+    var cache_roots: [2][]const u8 = undefined;
+    var initialized: usize = 0;
+    defer for (cache_envs[0..initialized]) |*cache_env| cache_env.env_map.deinit();
+    for (&cache_envs, &cache_roots, 0..) |*cache_env, *cache_root, index| {
+        cache_root.* = std.fmt.allocPrint(allocator, "{s}/boxy_caches_nothing_{d}", .{ env.dirs.work_dir, index }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
+        cache_env.* = .{
+            .dirs = env.dirs,
+            .env_map = env.env_map.clone(allocator) catch |err|
+                return customInfraFailure(allocator, timer, "failed to clone the environment: {}", .{err}),
+        };
+        initialized += 1;
+        for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+            cache_env.env_map.put(key, cache_root.*) catch |err|
+                return customInfraFailure(allocator, timer, "failed to set cache root: {}", .{err});
+        }
+    }
+
+    const commands = [_]struct { env_index: usize, args: []const []const u8, stdout: []const u8 }{
+        .{ .env_index = 0, .args = &.{ "check", "--specialize=no", "--opt=dev" }, .stdout = "" },
+        .{ .env_index = 1, .args = &.{ "test", "--specialize=no", "--opt=interpreter" }, .stdout = "All (1) tests passed" },
+        .{ .env_index = 1, .args = &.{ "test", "--specialize=no", "--opt=dev" }, .stdout = "All (1) tests passed" },
+    };
+    var test_listing: ?[]const []const u8 = null;
+    for (commands) |command| {
+        const command_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a command");
+        const ran = runRocInEnv(io, allocator, &cache_envs[command.env_index], command.args, roc_file, .relative, &.{}, null, command_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "command spawn error: {}", .{err});
+        if (!processSucceeded(ran.term) or std.mem.find(u8, ran.stdout, command.stdout) == null) {
+            return failureFromRun(allocator, timer, ran, "command did not succeed");
+        }
+        if (command.env_index != 1) continue;
+        const listing = cacheListing(io, allocator, cache_roots[1]) catch |err|
+            return customInfraFailure(allocator, timer, "failed to list the cache: {}", .{err});
+        if (test_listing) |previous| {
+            if (!listingsEqual(previous, listing)) {
+                return customFailure(allocator, timer, "running the tests again with {s} changed the cache", .{command.args[2]});
+            }
+        } else test_listing = listing;
+    }
+
+    const check_listing = cacheListing(io, allocator, cache_roots[0]) catch |err|
+        return customInfraFailure(allocator, timer, "failed to list the cache: {}", .{err});
+    for (test_listing.?) |path| {
+        const section = cacheSectionPrefix(path);
+        const written_by_check = for (check_listing) |checked| {
+            if (std.mem.eql(u8, cacheSectionPrefix(checked), section)) break true;
+        } else false;
+        if (!written_by_check) {
+            return customFailure(allocator, timer, "`roc test --specialize=no` wrote {s}, outside every section `roc check` writes", .{path});
+        }
+    }
+    return null;
+}
+
+/// Every path under `cache_root`, relative to it, sorted.
+fn cacheListing(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError![]const []const u8 {
+    var root = try std.Io.Dir.cwd().openDir(io, cache_root, .{ .iterate = true });
+    defer root.close(io);
+    var walker = try root.walk(allocator);
+    defer walker.deinit();
+    var paths = std.ArrayList([]const u8).empty;
+    while (try walker.next(io)) |entry| {
+        try paths.append(allocator, try allocator.dupe(u8, entry.path));
+    }
+    std.mem.sort([]const u8, paths.items, {}, stringLessThan);
+    return paths.toOwnedSlice(allocator);
+}
+
+fn listingsEqual(left: []const []const u8, right: []const []const u8) bool {
+    if (left.len != right.len) return false;
+    for (left, right) |a, b| {
+        if (!std.mem.eql(u8, a, b)) return false;
+    }
+    return true;
+}
+
+/// A cache-root-relative path's `<version>/<section>` prefix, or the whole
+/// path when it names the version directory itself.
+fn cacheSectionPrefix(path: []const u8) []const u8 {
+    var separators: usize = 0;
+    for (path, 0..) |byte, index| {
+        if (byte != '/' and byte != '\\') continue;
+        separators += 1;
+        if (separators == 2) return path[0..index];
+    }
+    return path;
 }
 
 fn customIssue11673CallableCache(

@@ -599,7 +599,7 @@ fn runGlueSpecPlugin(
 
     var lib = blk: {
         const first = plugin.?;
-        break :blk loadVerifiedGluePlugin(gpa, stderr, first, &stamp, args.no_cache) catch |err| {
+        break :blk loadVerifiedGluePlugin(gpa, stderr, first, &stamp, !cachesGluePlugin(args)) catch |err| {
             switch (err) {
                 error.GluePluginUnavailable, error.GluePluginStampMismatch => {},
                 error.BuildEnvInit,
@@ -618,7 +618,7 @@ fn runGlueSpecPlugin(
             }
             // An installed plugin is a managed artifact: never rebuild past a
             // failure to load it; the remedy is reinstalling the shorthand.
-            if (args.no_cache or args.installed_plugin_path != null or first.cache_path == null) return err;
+            if (!cachesGluePlugin(args) or args.installed_plugin_path != null or first.cache_path == null) return err;
 
             deleteGluePluginCacheEntry(first, std_io);
             first.deinit(gpa);
@@ -657,6 +657,17 @@ fn runGlueSpecPlugin(
     }
 }
 
+/// Whether the compiled plugin is read from and filed in the cache. The
+/// plugin is post-check work, so a `.boxy` glue run neither reads nor files
+/// it (design.md "Caching Under `.boxy`").
+fn cachesGluePlugin(args: GlueArgs) bool {
+    if (args.no_cache) return false;
+    return switch (args.specialization_strategy) {
+        .lss => true,
+        .boxy => false,
+    };
+}
+
 fn getOrBuildGluePlugin(
     gpa: Allocator,
     lowered: *lir.CheckedPipeline.LoweredProgram,
@@ -673,7 +684,7 @@ fn getOrBuildGluePlugin(
         return .{ .bytes = bytes, .cache_path = null };
     }
 
-    if (args.no_cache) {
+    if (!cachesGluePlugin(args)) {
         return .{ .bytes = try buildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io), .cache_path = null };
     }
 

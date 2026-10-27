@@ -2855,12 +2855,16 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
     };
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
 
+    // The linked executable is post-check work, so the executable cache is
+    // read and written only under a strategy that caches it.
+    const caches_executable = cachesPostCheckWork(currentRuntimeSpecializationStrategy(args.specialization_strategy));
+
     // Create cache directory for linked interpreter executables
     const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
 
-    ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| {
+    if (caches_executable) ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| {
         return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
     };
 
@@ -3043,7 +3047,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
     };
 
     // Check if the interpreter executable already exists in cache
-    const cache_exists = if (args.no_cache) false else blk: {
+    const cache_exists = if (args.no_cache or !caches_executable) false else blk: {
         std.Io.Dir.cwd().access(ctx.io.std_io, exe_cache_path, .{}) catch {
             break :blk false;
         };
@@ -3255,16 +3259,18 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
         // After building, hardlink to cache for future runs
         // Force-hardlink (delete existing first) since hash collision means identical content
-        std.log.debug("Caching executable to: {s}", .{exe_cache_path});
-        deleteExistingCacheFile(ctx, exe_cache_path);
-        createHardlink(ctx, exe_path, exe_cache_path) catch |err| {
-            // If hardlinking fails, fall back to copying
-            std.log.debug("Hardlink to cache failed, copying: {}", .{err});
-            std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, ctx.io.std_io, .{}) catch |copy_err| {
-                // Non-fatal - just means future runs won't be cached
-                std.log.debug("Failed to copy to cache: {}", .{copy_err});
+        if (caches_executable) {
+            std.log.debug("Caching executable to: {s}", .{exe_cache_path});
+            deleteExistingCacheFile(ctx, exe_cache_path);
+            createHardlink(ctx, exe_path, exe_cache_path) catch |err| {
+                // If hardlinking fails, fall back to copying
+                std.log.debug("Hardlink to cache failed, copying: {}", .{err});
+                std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, ctx.io.std_io, .{}) catch |copy_err| {
+                    // Non-fatal - just means future runs won't be cached
+                    std.log.debug("Failed to copy to cache: {}", .{copy_err});
+                };
             };
-        };
+        }
     }
 
     if (args.opt == .dev) {
@@ -3326,6 +3332,7 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, _: []const u8) CliMa
     const build_result = try rocBuildOnce(ctx, .{
         .path = args.path,
         .opt = args.opt,
+        .specialization_strategy = args.specialization_strategy,
         .target = args.target,
         .output = exe_path,
         .debug = false,
@@ -3723,10 +3730,13 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
         .roc_ctx = ctx.coreCtx(),
     };
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
+    // The linked executable is post-check work, so the executable cache is
+    // read and written only under a strategy that caches it.
+    const caches_executable = cachesPostCheckWork(currentRuntimeSpecializationStrategy(args.specialization_strategy));
     const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
-    ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| {
+    if (caches_executable) ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| {
         return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
     };
 
@@ -3804,7 +3814,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
         try ctx.arena.dupe(u8, exe_display_name);
     const exe_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, exe_display_name_with_ext });
 
-    const cache_exists = if (args.no_cache) false else blk: {
+    const cache_exists = if (args.no_cache or !caches_executable) false else blk: {
         std.Io.Dir.cwd().access(ctx.io.std_io, exe_cache_path, .{}) catch break :blk false;
         break :blk true;
     };
@@ -3867,12 +3877,14 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
             return failLink(ctx, err, @tagName(selected_target));
         };
 
-        deleteExistingCacheFile(ctx, exe_cache_path);
-        createHardlink(ctx, exe_path, exe_cache_path) catch {
-            std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, ctx.io.std_io, .{}) catch |copy_err| {
-                std.log.debug("Failed to copy default run executable to cache: {}", .{copy_err});
+        if (caches_executable) {
+            deleteExistingCacheFile(ctx, exe_cache_path);
+            createHardlink(ctx, exe_path, exe_cache_path) catch {
+                std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, ctx.io.std_io, .{}) catch |copy_err| {
+                    std.log.debug("Failed to copy default run executable to cache: {}", .{copy_err});
+                };
             };
-        };
+        }
     }
 
     // Default apps never hot reload—they compile through throwaway synthetic
@@ -6800,8 +6812,10 @@ const RunObjectCache = struct {
     linked_stores: ?pack_store.LinkedStores,
     packs: pack_store.LoadedPacks,
 
-    /// Null without a cache root.
+    /// Null without a cache root, and for a program under a strategy that
+    /// caches no post-check work: no pack holds or serves its procedures.
     fn create(ctx: *CliCtx, verbose: bool, strategy: base.SpecializationStrategy) Allocator.Error!?*RunObjectCache {
+        if (!cachesPostCheckWork(strategy)) return null;
         const config = CacheConfig{ .enabled = true, .verbose = verbose, .roc_ctx = ctx.coreCtx() };
         const native = RocTarget.detectNative();
         var store = pack_store.Store.initForStrategy(ctx.gpa, config, native, @tagName(cli_args.OptLevel.dev), strategy) catch |err| switch (err) {
@@ -8742,6 +8756,7 @@ fn writeOptimizedPacks(
 ) CliMainError!void {
     if (comptime !llvm_available) return;
     if (args.no_cache or args.fuzz) return;
+    if (!cachesPostCheckWork(currentRuntimeSpecializationStrategy(args.specialization_strategy))) return;
     const placement = pack_store.optimizedPackPlacement(build_env, root_artifact) orelse return;
     var store = pack_store.Store.init(ctx.gpa, .{ .enabled = true, .verbose = args.verbose, .roc_ctx = ctx.coreCtx() }, target, @tagName(args.opt)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -11650,7 +11665,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
-    try ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir);
+    if (cachesPostCheckWork(currentRuntimeSpecializationStrategy(args.specialization_strategy))) {
+        try ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir);
+    }
 
     var build_env = try initBuildCommandEnv(ctx, args);
     defer build_env.deinit();
@@ -11714,10 +11731,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // lowers no Monotype specializations and no pack may serve or hold its
     // procedures.
     const runtime_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
-    const object_cache_enabled = !args.no_cache and loaded_packs == null and switch (runtime_strategy) {
-        .lss => true,
-        .boxy => false,
-    };
+    const object_cache_enabled = !args.no_cache and loaded_packs == null and cachesPostCheckWork(runtime_strategy);
     var own_store: ?pack_store.Store = null;
     defer if (own_store) |*store| store.deinit();
     var object_store: ?*pack_store.Store = null;
@@ -12333,7 +12347,10 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
-    try ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir);
+    // The shim library this build links is post-check work, so it is
+    // published to the build cache only under a strategy that caches it.
+    const caches_shim_library = cachesPostCheckWork(currentRuntimeSpecializationStrategy(args.specialization_strategy));
+    if (caches_shim_library) try ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir);
 
     var build_env = try initBuildCommandEnv(ctx, args);
     defer build_env.deinit();
@@ -12437,14 +12454,20 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     defer if (!args.keep_temp) compile.CacheCleanup.deleteTempDir(ctx.io.std_io, build_scratch_dir);
 
     const shim_filename = try shimLibraryCacheFilename(ctx, .lir, target);
-    const shim_path = publishedShimLibraryPath(
+    const staged_shim_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, shim_filename });
+    const shim_path = if (caches_shim_library) publishedShimLibraryPath(
         ctx,
         .lir,
         target,
         try std.fs.path.join(ctx.arena, &.{ build_cache_dir, shim_filename }),
-        try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, shim_filename }),
+        staged_shim_path,
     ) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
+    } else staged: {
+        extractShimLibrary(ctx, .lir, staged_shim_path, target) catch |err| {
+            return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
+        };
+        break :staged staged_shim_path;
     };
 
     const enable_debug = args.debug or (builtin.mode == .debug);
@@ -13579,6 +13602,18 @@ fn currentRuntimeSpecializationStrategy(
     return explicit orelse .lss;
 }
 
+/// Whether a command under `strategy` reads and writes the caches of work
+/// done after checking: lowered output, dev and object packs, linked
+/// executables and shim libraries, recorded program outputs, and test
+/// results. Under `.boxy` a command leaves the cache exactly as `roc check`
+/// leaves it (design.md "Caching Under `.boxy`").
+fn cachesPostCheckWork(strategy: base.SpecializationStrategy) bool {
+    return switch (strategy) {
+        .lss => true,
+        .boxy => false,
+    };
+}
+
 fn loweringProgressLabel(strategy: base.SpecializationStrategy) []const u8 {
     return switch (strategy) {
         .lss => "Specializing",
@@ -13592,6 +13627,8 @@ test "runtime specialization strategy helpers" {
     try std.testing.expectEqual(base.SpecializationStrategy.boxy, currentRuntimeSpecializationStrategy(.boxy));
     try std.testing.expectEqualStrings("Specializing", loweringProgressLabel(.lss));
     try std.testing.expectEqualStrings("Lowering", loweringProgressLabel(.boxy));
+    try std.testing.expect(cachesPostCheckWork(.lss));
+    try std.testing.expect(!cachesPostCheckWork(.boxy));
 }
 
 test "post-check optimization scope per opt level" {
@@ -16184,10 +16221,13 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     defer test_plan.deinit(ctx.gpa);
 
     const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    // Test results are post-check work, so they are read from and recorded
+    // in the cache only under a strategy that caches it.
+    const test_result_cache: ?*CacheManager = if (cachesPostCheckWork(specialization_strategy)) build_env.cache_manager else null;
     for (test_plan.modules) |*planned| {
         if (try loadCachedCliTestResults(
             ctx,
-            build_env.cache_manager,
+            test_result_cache,
             planned.artifact,
             specialization_strategy,
             args.opt,
@@ -16370,7 +16410,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             specialization_strategy,
             &dev_timing,
             args.max_threads,
-            build_env.cache_manager,
+            test_result_cache,
             &module_results,
             &total,
             if (live_output) |*output| output else null,
@@ -16389,7 +16429,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
                     test_plan.entries,
                     args.opt,
                     specialization_strategy,
-                    build_env.cache_manager,
+                    test_result_cache,
                     &module_results,
                     &dev_timing,
                     args.max_threads,
