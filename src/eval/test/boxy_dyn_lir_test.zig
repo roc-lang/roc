@@ -78,6 +78,7 @@ const Builder = struct {
         join_points: []const LIR.JoinPoint = &.{},
         abi: LIR.ProcAbi = .roc,
         erased_capture_arg: ?LocalId = null,
+        tail_group: ?LIR.TailGroupId = null,
     }) !LirProcSpecId {
         defer self.proc_locals.clearRetainingCapacity();
         self.next_identity += 1;
@@ -92,6 +93,7 @@ const Builder = struct {
             .dyn_result = options.dyn_result,
             .abi = options.abi,
             .erased_capture_arg = options.erased_capture_arg,
+            .tail_group = options.tail_group,
         }, .none);
     }
 
@@ -128,6 +130,17 @@ const Builder = struct {
 
     fn call(self: *Builder, target: LocalId, proc_id: LirProcSpecId, args: []const LocalId, next: CFStmtId) !CFStmtId {
         return self.store.addCFStmt(.{ .assign_call = .{ .target = target, .proc = proc_id, .args = try self.store.addLocalSpan(args), .next = next } }, .test_fixture);
+    }
+
+    /// A call that replaces this procedure's frame with the callee's.
+    fn tailCall(self: *Builder, target: LocalId, proc_id: LirProcSpecId, args: []const LocalId, next: CFStmtId) !CFStmtId {
+        return self.store.addCFStmt(.{ .assign_call = .{
+            .target = target,
+            .proc = proc_id,
+            .args = try self.store.addLocalSpan(args),
+            .extra = try self.store.addStmtRow(LIR.CallExtra, .{ .replaces_frame = true }),
+            .next = next,
+        } }, .test_fixture);
     }
 
     fn lowLevel(self: *Builder, target: LocalId, op: base.LowLevel, args: []const LocalId, dyn_elem_desc: bool, next: CFStmtId) !CFStmtId {
@@ -525,5 +538,50 @@ test "boxy interpreter: a composed dictionary called through the erased record A
     defer run.deinit();
     try std.testing.expectEqual(@as(i64, 31337), (try run.eval(caller, .i64)).value.read(i64));
     try std.testing.expectEqual(@as(i64, 31337), (try run.eval(caller, .i64)).value.read(i64));
+    try run.env.checkForLeaks();
+}
+
+test "boxy interpreter: a frame-replacing call moves a dynamic argument out of the replaced frame" {
+    var b = try Builder.init();
+    defer b.deinit();
+    const group: LIR.TailGroupId = @fromBackingInt(@intCast(0));
+
+    // `leaf(x) = x`, entered by a frame-replacing call.
+    const leaf_desc = try b.local(.opaque_ptr);
+    const leaf_x = try b.dynLocal(leaf_desc, .param);
+    const leaf_result = try b.dynLocal(leaf_desc, .result);
+    const leaf = try b.proc(&.{ leaf_x, leaf_desc }, try b.ret(leaf_x), b.dynamic, .{ .dyn_result = leaf_result, .tail_group = group });
+
+    // `hop(x) = leaf(copy of x)`: the copy lives in `hop`'s own frame, which
+    // the call to `leaf` replaces.
+    const desc = try b.local(.opaque_ptr);
+    const x = try b.dynLocal(desc, .param);
+    const result = try b.dynLocal(desc, .result);
+    const copy = try b.dynLocal(desc, .frame);
+    const out = try b.dynLocal(desc, .frame);
+    const hop_body = try b.dyn(null, .frame_alloc, try b.dyn(copy, .{ .copy = .{ .src = x, .desc = desc } }, try b.tailCall(out, leaf, &.{ copy, desc }, try b.ret(out))));
+    const hop = try b.proc(&.{ x, desc }, hop_body, b.dynamic, .{ .dyn_result = result, .tail_group = group });
+
+    const str_desc = try b.local(.opaque_ptr);
+    const left = try b.local(.str);
+    const right = try b.local(.str);
+    const joined = try b.local(.str);
+    const str_out = try b.local(.str);
+    const str_body = try b.static(str_desc, boxy.compose.strDesc(), try b.str(left, "a string long enough to live on the heap, ", try b.str(right, "moved by a tail call", try b.lowLevel(joined, .str_concat, &.{ left, right }, false, try b.call(str_out, hop, &.{ joined, str_desc }, try b.ret(str_out))))));
+    const str_proc = try b.proc(&.{}, str_body, .str, .{});
+
+    const int_desc = try b.local(.opaque_ptr);
+    const int_arg = try b.local(.i64);
+    const int_out = try b.local(.i64);
+    const int_body = try b.static(int_desc, boxy.compose.scalarDesc(.i64), try b.int(int_arg, 77, try b.call(int_out, hop, &.{ int_arg, int_desc }, try b.ret(int_out))));
+    const int_proc = try b.proc(&.{}, int_body, .i64, .{});
+
+    var run: Run = undefined;
+    try run.init(&b);
+    defer run.deinit();
+    try std.testing.expectEqual(@as(i64, 77), (try run.eval(int_proc, .i64)).value.read(i64));
+    const str_result = try run.eval(str_proc, .str);
+    try std.testing.expectEqualStrings("a string long enough to live on the heap, moved by a tail call", readStr(str_result.value));
+    run.interpreter.dropValue(str_result.value, .str);
     try run.env.checkForLeaks();
 }

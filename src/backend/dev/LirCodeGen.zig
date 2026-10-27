@@ -631,6 +631,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// below its fixed frame, which its teardown releases.
         proc_has_dyn_region: bool = false,
 
+        /// Where the proc being compiled keeps its tail carry, when it has
+        /// one (see `procCarriesTailArgs`).
+        carry_slot: ?i32 = null,
+
         /// Stack slot where early return value is stored during deferred-prologue proc compilation.
         early_return_result_slot: ?i32 = null,
 
@@ -13667,7 +13671,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 "Dev/codegen invariant violated: call to proc {d} passed {d} args but callee expects {d}",
                 .{ @backingInt(proc_id), arg_refs.len, param_refs.len },
             );
-            const count = arg_refs.len + @intFromBool(callee.dyn_result != null);
+            const carries = procCarriesTailArgs(self.store, callee);
+            const count = arg_refs.len + @intFromBool(callee.dyn_result != null) + @intFromBool(carries);
             const arg_locs = try self.allocator.alloc(ValueLocation, count);
             defer self.allocator.free(arg_locs);
             const arg_layouts = try self.allocator.alloc(layout.Idx, count);
@@ -13711,6 +13716,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 arg_layouts[arg_refs.len] = self.localLayout(callee_result);
                 arg_locs[arg_refs.len] = self.stackLocationForLayout(arg_layouts[arg_refs.len], slot);
             }
+            if (carries) {
+                // An ordinary call's arguments stay in this frame: no carry.
+                arg_layouts[count - 1] = .opaque_ptr;
+                arg_locs[count - 1] = .{ .immediate_i64 = 0 };
+            }
 
             const proc = try self.compiledProcForId(proc_id);
             const value_loc = try self.generateCallToCompiledProc(proc, arg_locs, arg_layouts, callee.ret_layout);
@@ -13749,6 +13759,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 );
             }
 
+            // Dynamic arguments move into a carry the callee owns, because
+            // their bytes may live in the frame being replaced; then this
+            // procedure's own carry, which they may have lived in, is released.
+            const moved = try self.allocator.alloc(i32, arg_refs.len);
+            defer self.allocator.free(moved);
+            const carry_arg: ?i32 = if (procCarriesTailArgs(self.store, proc_spec))
+                try self.emitTailCarry(arg_refs, param_refs, moved)
+            else
+                null;
+            try self.emitFreeCarry();
+
             const arg_infos_start = self.scratch_arg_infos.top();
             defer self.scratch_arg_infos.clearFrom(arg_infos_start);
             for (0..arg_refs.len) |i| {
@@ -13756,16 +13777,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const param_ref = GuardedList.at(param_refs, i);
                 const expected_layout = self.localLayout(param_ref);
                 if (self.localDyn(param_ref) != null) {
-                    // The callee borrows the argument's bytes where they are,
-                    // so they must outlive this frame: they are the storage
-                    // this procedure's own caller passed.
-                    const storage = if (self.localDyn(arg_ref)) |dyn| dyn.storage else null;
-                    if (storage != .param and storage != .result) base.invariant(
-                        "LIR/codegen invariant violated: frame-replacing call to proc {d} passes argument {d} whose bytes live in the replaced frame",
-                        .{ @backingInt(call.proc), i },
-                    );
-                    const arg_loc = self.local_locations.get(localKey(arg_ref)).?;
-                    try self.scratch_arg_infos.append(.{ .loc = arg_loc, .layout_idx = expected_layout, .num_regs = 1 });
+                    try self.scratch_arg_infos.append(.{ .loc = self.stackLocationForLayout(expected_layout, moved[i]), .layout_idx = expected_layout, .num_regs = 1 });
                     continue;
                 }
                 const raw_arg_loc = try self.emitValueLocal(arg_ref);
@@ -13786,6 +13798,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .layout_idx = self.localLayout(callee_result),
                     .num_regs = 1,
                 });
+            }
+            if (carry_arg) |slot| {
+                try self.scratch_arg_infos.append(.{ .loc = self.stackLocationForLayout(.opaque_ptr, slot), .layout_idx = .opaque_ptr, .num_regs = 1 });
             }
             const arg_infos = self.scratch_arg_infos.sliceFromStart(arg_infos_start);
 
@@ -13944,6 +13959,62 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 try self.codegen.emit.jmpReg(tail_call_target_reg);
             }
+        }
+
+        /// Copy the bytes of every argument a frame-replacing call passes to
+        /// a dynamic parameter into one fresh carry, each at a 16-byte
+        /// aligned offset, and record each copy's address in a frame slot
+        /// (`moved[i]` for argument `i`). Returns the slot holding the carry.
+        fn emitTailCarry(self: *Self, arg_refs: anytype, param_refs: anytype, moved: []i32) Allocator.Error!i32 {
+            const cursor, const desc_reg, const size = try self.allocTempGenerals(3);
+            try self.codegen.emitLoadImm(cursor, 0);
+            for (0..arg_refs.len) |i| {
+                if (self.localDyn(GuardedList.at(param_refs, i)) == null) continue;
+                const arg_ref = GuardedList.at(arg_refs, i);
+                if (self.localDyn(arg_ref)) |dyn| {
+                    try self.emitLoad(.w64, desc_reg, frame_ptr, self.localSlot(dyn.desc));
+                    try self.emitLoad(.w32, size, desc_reg, desc_size_offset);
+                } else {
+                    try self.codegen.emitLoadImm(size, self.getLayoutSize(self.localLayout(arg_ref)));
+                }
+                moved[i] = self.codegen.allocStackSlot(8);
+                try self.emitStore(.w64, frame_ptr, moved[i], cursor);
+                try self.emitAddImm(size, size, 15);
+                try self.codegen.emitLoadImm(desc_reg, -16);
+                try self.codegen.emitAnd(.w64, size, size, desc_reg);
+                try self.codegen.emitAdd(.w64, cursor, cursor, size);
+            }
+            const total = self.codegen.allocStackSlot(8);
+            try self.emitStore(.w64, frame_ptr, total, cursor);
+            self.freeGenerals(.{ size, desc_reg, cursor });
+
+            const carry = self.codegen.allocStackSlot(8);
+            {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
+                try builder.addMemArg(frame_ptr, total);
+                try self.callBoxyRuntime(&builder, "roc_desc_carry_alloc");
+                try self.emitStore(.w64, frame_ptr, carry, ret_reg_0);
+            }
+
+            for (0..arg_refs.len) |i| {
+                if (self.localDyn(GuardedList.at(param_refs, i)) == null) continue;
+                const arg_ref = GuardedList.at(arg_refs, i);
+                const address, const offset = try self.allocTempGenerals(2);
+                try self.emitLoad(.w64, address, frame_ptr, carry);
+                try self.emitLoad(.w64, offset, frame_ptr, moved[i]);
+                try self.codegen.emitAdd(.w64, address, address, offset);
+                try self.emitStore(.w64, frame_ptr, moved[i], address);
+                if (self.localDyn(arg_ref)) |dyn| {
+                    self.freeGenerals(.{ offset, address });
+                    try self.emitDescCopy(dyn.desc, .{ .dynamic = moved[i] }, arg_ref);
+                } else {
+                    const arg_size = self.getLayoutSize(self.localLayout(arg_ref));
+                    if (arg_size != 0) try self.copyChunked(offset, frame_ptr, self.localSlot(arg_ref), address, 0, arg_size);
+                    self.freeGenerals(.{ offset, address });
+                }
+            }
+            return carry;
         }
 
         /// Address of byte `offset` in the block this procedure's own argument
@@ -17868,6 +17939,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_caller_drives_slot = self.caller_drives_slot;
             const saved_current_dyn_result = self.current_dyn_result;
             const saved_proc_has_dyn_region = self.proc_has_dyn_region;
+            const saved_carry_slot = self.carry_slot;
             const saved_tail_exit_patches_len = self.tail_exit_patches.items.len;
             const saved_current_proc_name = self.current_proc_name;
             const saved_current_proc_identity = self.current_proc_identity;
@@ -17892,6 +17964,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.caller_drives_slot = null;
             self.current_dyn_result = proc.dyn_result;
             self.proc_has_dyn_region = false;
+            self.carry_slot = null;
             self.current_proc_name = proc.name;
             self.current_proc_identity = proc.identity;
             self.current_proc_frame_locals = proc.frame_locals;
@@ -17963,6 +18036,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.caller_drives_slot = saved_caller_drives_slot;
                 self.current_dyn_result = saved_current_dyn_result;
                 self.proc_has_dyn_region = saved_proc_has_dyn_region;
+                self.carry_slot = saved_carry_slot;
                 self.tail_exit_patches.shrinkRetainingCapacity(saved_tail_exit_patches_len);
                 self.current_proc_name = saved_current_proc_name;
                 self.current_proc_identity = saved_current_proc_identity;
@@ -18024,7 +18098,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Bind parameters to argument registers. Large returns use a hidden
                 // first argument register for the return buffer.
                 const initial_param_reg_idx: u8 = if (needs_ret_ptr) 1 else 0;
-                try self.bindProcParams(proc.args, initial_param_reg_idx, proc.dyn_result);
+                try self.bindProcParams(proc.args, initial_param_reg_idx, proc.dyn_result, procCarriesTailArgs(self.store, proc));
             }
 
             if (proc.hosted) |hosted| {
@@ -18193,6 +18267,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.caller_drives_slot = saved_caller_drives_slot;
             self.current_dyn_result = saved_current_dyn_result;
             self.proc_has_dyn_region = saved_proc_has_dyn_region;
+            self.carry_slot = saved_carry_slot;
             self.ret_ptr_slot = saved_ret_ptr_slot;
             self.current_proc_name = saved_current_proc_name;
             self.current_proc_identity = saved_current_proc_identity;
@@ -18205,6 +18280,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             try self.registerAssembledProc(proc.identity, self.proc_registry.get(key).?.code_start);
             try self.maybeDrainRcHelpers();
+        }
+
+        /// Whether `proc` takes a tail carry: a last hidden parameter holding
+        /// the storage a frame-replacing call moved its dynamic arguments
+        /// into, because their bytes lived in the frame it replaced. Such a
+        /// procedure has a dynamic parameter and can receive frame-replacing
+        /// calls; it releases its carry when it returns or replaces its own
+        /// frame. Every other caller passes none.
+        fn procCarriesTailArgs(store: *const LirStore, proc: LirProcSpec) bool {
+            if (proc.abi != .roc or proc.tail_group == null) return false;
+            const params = store.getLocalSpan(proc.args);
+            for (0..params.len) |i| {
+                if (store.getLocal(GuardedList.at(params, i)).dyn != null) return true;
+            }
+            return false;
+        }
+
+        /// Release this procedure's tail carry, if it has one.
+        fn emitFreeCarry(self: *Self) Allocator.Error!void {
+            const slot = self.carry_slot orelse return;
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
+            try builder.addMemArg(frame_ptr, slot);
+            try self.callBoxyRuntime(&builder, "roc_desc_carry_free");
         }
 
         /// Release the dynamic frame region before the frame teardown. The
@@ -18995,6 +19094,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             /// A parameter after `params`: the result storage address of a
             /// procedure whose result is dynamic.
             trailing: ?LocalId,
+            /// Whether a last hidden parameter follows: the tail carry of a
+            /// procedure that receives frame-replacing calls with dynamic
+            /// arguments (see `procCarriesTailArgs`).
+            carry: bool,
         ) Allocator.Error!void {
             // Incoming arguments remain live until every parameter has been
             // captured. Copy-loop temporaries must not overwrite later args.
@@ -19003,12 +19106,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (0..max_arg_regs) |index| self.codegen.markRegisterInUse(self.getArgumentRegister(@intCast(index)));
 
             const locals = self.store.getLocalSpan(params);
-            const param_count = locals.len + @intFromBool(trailing != null);
+            const param_count = locals.len + @intFromBool(trailing != null) + @intFromBool(carry);
+            // Null names the tail carry, which no local holds.
             const ParamAt = struct {
                 locals: @TypeOf(locals),
                 trailing: ?LocalId,
-                fn at(self_: @This(), index: usize) LocalId {
-                    return if (index < self_.locals.len) GuardedList.at(self_.locals, index) else self_.trailing.?;
+                fn at(self_: @This(), index: usize) ?LocalId {
+                    if (index < self_.locals.len) return GuardedList.at(self_.locals, index);
+                    if (index == self_.locals.len) if (self_.trailing) |local| return local;
+                    return null;
                 }
             };
             const param_at: ParamAt = .{ .locals = locals, .trailing = trailing };
@@ -19021,7 +19127,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const pnr_start = self.scratch_param_num_regs.top();
             defer self.scratch_param_num_regs.clearFrom(pnr_start);
             for (0..param_count) |param_index| {
-                const num_regs: u8 = self.calcParamRegCount(self.localLayout(param_at.at(param_index)));
+                const num_regs: u8 = self.calcParamRegCount(self.paramLayout(param_at.at(param_index)));
                 try self.scratch_param_num_regs.append(num_regs);
             }
             const param_num_regs = self.scratch_param_num_regs.sliceFromStart(pnr_start);
@@ -19033,7 +19139,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 const is_i128_param = blk: {
                     const local = param_at.at(pi);
-                    const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(self.localLayout(local));
+                    const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(self.paramLayout(local));
                     break :blk runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec;
                 };
                 if (comptime target.toCpuArch() == .aarch64) {
@@ -19078,7 +19184,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const pbp = param_pass_by_ptr[pi];
                     const is_i128_param = blk: {
                         const local = param_at.at(pi);
-                        const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(self.localLayout(local));
+                        const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(self.paramLayout(local));
                         break :blk runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec;
                     };
                     if (comptime target.toCpuArch() == .aarch64) {
@@ -19110,12 +19216,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const local = param_at.at(param_idx);
 
                 if (num_regs == 0) {
-                    try self.setLocalLocation(localKey(local), .{ .immediate_i64 = 0 });
+                    try self.bindParamLocation(local, .{ .immediate_i64 = 0 });
                     continue;
                 }
 
                 if (param_pass_by_ptr[param_idx]) {
-                    pointee_bytes += self.pointeeBlockBytes(self.localLayout(local));
+                    pointee_bytes += self.pointeeBlockBytes(self.paramLayout(local));
                     var ptr_reg: GeneralReg = undefined;
                     if (reg_idx < max_arg_regs) {
                         ptr_reg = self.getArgumentRegister(reg_idx);
@@ -19130,16 +19236,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const temp_reg = try self.allocTempGeneral();
                     defer self.codegen.freeGeneral(temp_reg);
-                    const size = self.getLayoutSize(self.localLayout(local));
+                    const size = self.getLayoutSize(self.paramLayout(local));
                     const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                     try self.copyChunked(temp_reg, ptr_reg, 0, frame_ptr, stack_offset, size);
-                    const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
-                    try self.setLocalLocation(localKey(local), stable_loc);
+                    const stable_loc = self.stackLocationForLayout(self.paramLayout(local), stack_offset);
+                    try self.bindParamLocation(local, stable_loc);
                     continue;
                 }
 
                 if (comptime target.toCpuArch() == .aarch64) {
-                    const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(self.localLayout(local));
+                    const runtime_layout_idx = self.runtimeRepresentationLayoutIdx(self.paramLayout(local));
                     if (num_regs == 2 and (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) and reg_idx % 2 != 0) {
                         reg_idx += 1;
                     }
@@ -19153,20 +19259,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const arg_reg = self.getArgumentRegister(reg_idx + ri);
                         try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_reg);
                     }
-                    const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
-                    try self.setLocalLocation(localKey(local), stable_loc);
+                    const stable_loc = self.stackLocationForLayout(self.paramLayout(local), stack_offset);
+                    try self.bindParamLocation(local, stable_loc);
                     reg_idx += num_regs;
                 } else {
                     const caller_base = self.callerStackArgBaseReg();
                     const size: u32 = @as(u32, num_regs) * 8;
                     const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                     try self.copyFromCallerStack(caller_base, stack_arg_offset, stack_offset, num_regs);
-                    const stable_loc = self.stackLocationForLayout(self.localLayout(local), stack_offset);
-                    try self.setLocalLocation(localKey(local), stable_loc);
+                    const stable_loc = self.stackLocationForLayout(self.paramLayout(local), stack_offset);
+                    try self.bindParamLocation(local, stable_loc);
                     stack_arg_offset += @as(i32, num_regs) * 8;
                     reg_idx = max_arg_regs;
                 }
             }
+        }
+
+        fn paramLayout(self: *Self, local: ?LocalId) layout.Idx {
+            return if (local) |l| self.localLayout(l) else .opaque_ptr;
+        }
+
+        fn bindParamLocation(self: *Self, local: ?LocalId, loc: ValueLocation) Allocator.Error!void {
+            if (local) |l| return self.setLocalLocation(localKey(l), loc);
+            self.carry_slot = stableLocationStackOffset(loc);
         }
 
         /// Move a value to the return register(s), using layout information for proper sizing.
@@ -20044,6 +20159,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             if (self.current_dyn_result) |result| {
                                 try self.spillAllVectorLocals();
                                 try self.generateDynResultReturn(result, r.value);
+                                try self.emitFreeCarry();
                                 const patch = try self.codegen.emitJump();
                                 try self.early_return_patches.append(self.allocator, patch);
                                 continue;
@@ -20066,7 +20182,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                             if (self.ret_ptr_slot) |ret_slot| {
                                 try self.copyResultToReturnPointer(preserved_return_loc, ret_layout, ret_slot);
+                                try self.emitFreeCarry();
                             } else {
+                                // The returned value is in the frame, so the
+                                // carry is released before the return registers
+                                // are loaded.
+                                try self.emitFreeCarry();
                                 try self.moveToReturnRegisterWithLayout(preserved_return_loc, ret_layout);
                             }
                             const patch = try self.codegen.emitJump();
@@ -23517,7 +23638,7 @@ test "proc params and mutable list cells use distinct stack slots" {
         codegen.codegen.stack_offset = -HostCodeGen.CALLEE_SAVED_AREA_SIZE;
     }
 
-    try codegen.bindProcParams(args, 0, null);
+    try codegen.bindProcParams(args, 0, null, false);
     try codegen.ensureStableLocationsForStmtLocals(answer_stmt);
 
     const end_slot = try stackOffsetOfTestLocation(codegen.local_locations.get(@backingInt(end)).?);
@@ -23629,7 +23750,7 @@ test "Windows internal proc ABI reads stack arguments after shadow space" {
     const InnerCodeGen = @TypeOf(codegen.codegen);
     codegen.codegen.stack_offset = -InnerCodeGen.CALLEE_SAVED_AREA_SIZE;
 
-    try codegen.bindProcParams(args, 0, null);
+    try codegen.bindProcParams(args, 0, null, false);
 
     _ = codegen.local_locations.get(@backingInt(list)) orelse return error.TestUnexpectedResult;
     try std.testing.expect(codegen.codegen.getCode().len > 0);
@@ -23697,7 +23818,7 @@ test "AArch64 internal proc ABI uses caller stack arg base for stack arguments" 
     const InnerCodeGen = @TypeOf(codegen.codegen);
     codegen.codegen.stack_offset = 16 + InnerCodeGen.CALLEE_SAVED_AREA_SIZE;
 
-    try codegen.bindProcParams(args, 0, null);
+    try codegen.bindProcParams(args, 0, null, false);
 
     const x28_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X28);
     try std.testing.expect(codegen.uses_caller_stack_arg_base);

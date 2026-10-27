@@ -184,3 +184,15 @@ pub fn roc_desc_dict_record(count: u32, methods: ?[*]const usize) callconv(.c) [
 pub fn roc_desc_list_op(request: *const compiled.ListOpRequest) callconv(.c) void {
     compiled.listOp(request, ops());
 }
+
+/// Storage for the dynamic arguments a frame-replacing call moves out of the
+/// frame it replaces. The callee releases it with `roc_desc_carry_free`.
+pub fn roc_desc_carry_alloc(size: usize) callconv(.c) [*]u8 {
+    return @ptrCast(ops().allocRaw(@max(size, 1), carry_alignment));
+}
+
+pub fn roc_desc_carry_free(carry: ?[*]u8) callconv(.c) void {
+    ops().dealloc(@ptrCast(carry orelse return), carry_alignment);
+}
+
+const carry_alignment = 16;
