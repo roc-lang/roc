@@ -27366,6 +27366,13 @@ All type structure, named definitions, backing authority, dispatch metadata,
 and ABI boundaries remain in the identity. This whole-analysis boundary is independent of finer-grained
 specialization body caching.
 
+The complete-analysis cache is currently an experiment enabled only by the
+`lambda_analysis_cache` developer diagnostic. Native object reuse changes the
+assembled lifted program between builds, so this coarse boundary has not
+demonstrated useful reuse on the measured applications. Ordinary builds do not
+pay for its input fingerprinting, encoding, or publication. Its immutable codec
+and explicit validation remain available for finer-grained experiments.
+
 Completed Lambda Solved records contain only the type graph reachable from
 output annotations. Serialization resolves redirects and assigns compact local
 ids while preserving cycles and sharing. Discarded unification rows, unreachable
