@@ -8630,6 +8630,7 @@ const CheckedTypePublisher = struct {
                 },
                 .nominal_type => |nominal| switch (cursor) {
                     0 => {
+                        debugAssertNominalOpacityMatchesDeclaration(type_store, nominal);
                         const scratch = &self.active.scratch.?;
                         const builtin_nominal = try scratch.imported_origins.builtinNominal(module.moduleEnvConst(), self.imports, nominal);
                         const name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx);
@@ -10613,6 +10614,17 @@ test "imported origin resolution visits each import view and owner declaration o
 fn moduleEnvIdentityMatches(module_env: *const ModuleEnv, origin_hash: *const [32]u8) bool {
     const env_hash = module_env.contentIdentityHash() orelse return false;
     return base.ModuleIdentity.eql(env_hash, origin_hash);
+}
+
+/// A nominal application's opacity is its declaration's: checked type keys
+/// identify a nominal by its declaration alone, so applications that disagree
+/// would share one key while lowering to different types.
+fn debugAssertNominalOpacityMatchesDeclaration(type_store: *const types.Store, nominal: types.NominalType) void {
+    if (builtin.mode != .debug) return;
+    const decl_idx = type_store.lookupNominalDecl(nominal) orelse return;
+    if (type_store.getNominalDecl(decl_idx).source.isOpaque() != nominal.isOpaque()) {
+        checkedArtifactInvariant("nominal application opacity disagrees with its declaration", .{});
+    }
 }
 
 fn checkedNominalRepresentationForSourceNominal(
