@@ -1,6 +1,8 @@
-//! Hand-built `.boxy` LIR programs run on the interpreter: dynamic locals,
-//! descriptor composition, dynamic values, dictionaries, and list operations
-//! that take an element descriptor (design.md "`.boxy` Runtime Lowering").
+//! Hand-built `.boxy` LIR programs: dynamic locals, descriptor composition,
+//! dynamic values, dictionaries, and list operations that take an element
+//! descriptor (design.md "`.boxy` Runtime Lowering"). Each runs on the
+//! interpreter and, where this host has a native code generator, on the dev
+//! backend in this process, which must produce the same result bytes.
 
 const std = @import("std");
 const base = @import("base");
@@ -8,6 +10,8 @@ const builtins = @import("builtins");
 const boxy = @import("boxy_runtime");
 const layout_mod = @import("layout");
 const lir = @import("lir");
+const backend = @import("backend");
+const roc_target = @import("roc_target");
 const Interpreter = @import("../interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("../runtime_host.zig");
 
@@ -156,10 +160,12 @@ const Builder = struct {
 
 const Run = struct {
     env: RuntimeHostEnv,
-    static_strings: @import("backend").StaticStringData.Table,
+    static_strings: backend.StaticStringData.Table,
     interpreter: Interpreter,
+    builder: *Builder,
 
     fn init(self: *Run, b: *Builder) !void {
+        self.builder = b;
         self.env = RuntimeHostEnv.init(allocator);
         self.static_strings = try Interpreter.buildStaticStrings(allocator, &b.store);
         self.interpreter = try Interpreter.init(allocator, &b.store, &b.layouts, self.static_strings.view(), self.env.get_ops());
@@ -172,8 +178,46 @@ const Run = struct {
         self.env.deinit();
     }
 
+    /// The interpreter's result, after checking the dev backend's matches it.
     fn eval(self: *Run, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx) !Interpreter.EvalResult {
-        return self.interpreter.eval(.{ .proc_id = proc_id, .ret_layout = ret_layout });
+        const result = try self.interpreter.eval(.{ .proc_id = proc_id, .ret_layout = ret_layout });
+        if (comptime !backend.host_lir_codegen_available) return result;
+        const size = self.builder.layouts.layoutSize(self.builder.layouts.getLayout(ret_layout));
+        const dev_bytes = try allocator.alignedAlloc(u8, .@"16", @max(size, 1));
+        defer allocator.free(dev_bytes);
+        @memset(dev_bytes, 0);
+        try self.runDev(proc_id, ret_layout, dev_bytes);
+        if (ret_layout == .str) {
+            const dev_str: *const RocStr = @ptrCast(dev_bytes.ptr);
+            defer dev_str.decref(self.env.get_ops());
+            try std.testing.expectEqualStrings(readStr(result.value), dev_str.asSlice());
+        } else {
+            try std.testing.expectEqualSlices(u8, result.value.ptr[0..size], dev_bytes[0..size]);
+        }
+        return result;
+    }
+
+    /// Compile every procedure with the dev backend and run `proc_id` in this
+    /// process, writing its result to `out`.
+    fn runDev(self: *Run, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx, out: []u8) !void {
+        const b = self.builder;
+        var static_strings = try backend.StaticStringData.build(allocator, &b.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
+        defer static_strings.deinit();
+        var codegen = try backend.HostLirCodeGen.initWithCapturePrefix(allocator, &b.store, &b.layouts, static_strings.view(), 0, roc_target.host_cpu.level());
+        defer codegen.deinit();
+        codegen.setNativeStaticData(b.statics.items);
+        try codegen.compileAllProcSpecs(b.store.getProcSpecs());
+        const entrypoint = try codegen.generateEntrypointWrapper("roc_eval_main", proc_id, &.{}, ret_layout);
+        try codegen.finishImage();
+        var executable = try backend.ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
+            codegen.getGeneratedCode(),
+            entrypoint.offset,
+            codegen.getUnwindFunctions(),
+        );
+        defer executable.deinit();
+        const entered = builtins.in_process_host.enter(self.env.get_ops(), null);
+        defer builtins.in_process_host.leave(entered);
+        executable.callRocABI(@ptrCast(out.ptr), null);
     }
 };
 

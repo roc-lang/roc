@@ -129,5 +129,5 @@ test "eval tests" {
     std.testing.refAllDecls(@import("inspected.zig"));
     std.testing.refAllDecls(@import("test/host_trampoline_assembly_test.zig"));
     std.testing.refAllDecls(@import("runtime_host.zig"));
-    std.testing.refAllDecls(@import("test/boxy_dyn_interp_test.zig"));
+    std.testing.refAllDecls(@import("test/boxy_dyn_lir_test.zig"));
 }

@@ -361,7 +361,7 @@ pub const ModuleType = enum {
             },
             .backend => .{
                 .root = "src/backend/mod.zig",
-                .deps = &.{ .collections, .base, .layout, .builtins, .can, .lir, .static_data, .roc_target, .ctx, .build_options },
+                .deps = &.{ .collections, .base, .layout, .builtins, .can, .lir, .static_data, .roc_target, .ctx, .build_options, .boxy_runtime },
                 .tests = .{ .unit = .{} },
             },
             .lir_core => .{
