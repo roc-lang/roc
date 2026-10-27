@@ -1787,7 +1787,7 @@ pub const Builder = struct {
         const store = &self.program.store;
         const backing = try self.structuralType(ty);
         const name = try store.internName("Literal");
-        const variant = self.closedVariant(backing, name);
+        const variant = try self.closedVariant(backing, name);
         if (variant.payloads.len != 1) invariant("the Numeral Literal tag does not carry one record");
         const record_ty = try self.structuralType(variant.payloads[0]);
         const fields = switch (store.get(record_ty)) {
@@ -3172,15 +3172,14 @@ pub const Builder = struct {
             },
             else => invariant("a tag expression's type is not a tag union"),
         };
-        const tags = self.program.store.tagSpan(union_ty.tags);
-        const variant = for (tags, 0..) |tag, index| {
-            if (tag.name == name and tag.payloads.len == values.len) break index;
-        } else invariant("a tag expression's tag is absent from its type");
+        _ = union_ty;
+        const selected = try self.selectVariant(try self.structuralType(ty), self.ownTag(try self.structuralType(ty), name, values.len));
+        const variant = selected.index;
         const target = try self.localOf(ty, .frame);
         const payload: ?LocalId = switch (values.len) {
             0 => null,
             1 => values[0],
-            else => try self.buildStruct((try self.program.layouts.tagPayload(self.program.store.span(tags[variant].payloads))).?, values),
+            else => try self.buildStruct((try self.program.layouts.tagPayload(selected.payloads)).?, values),
         };
         const committed = self.program.result.layouts.getLayout(try self.program.layouts.layoutOf(ty));
         if (committed.tag != .tag_union) {
@@ -3399,9 +3398,8 @@ pub const Builder = struct {
                         },
                         .tag_union => |union_ty| {
                             const tags = self.program.store.tagSpan(union_ty.tags);
-                            const variant = for (tags, 0..) |candidate, index| {
-                                if (candidate.name == name and candidate.payloads.len == tag.args.len) break index;
-                            } else invariant("a tag pattern's tag is absent from its type");
+                            const structural = try self.structuralType(ty);
+                            const variant = (try self.selectVariant(structural, self.ownTag(structural, name, tag.args.len))).index;
                             const committed = self.program.result.layouts.getLayout(try self.program.layouts.layoutOf(ty));
                             if (committed.tag == .tag_union and tags.len > 1) {
                                 const discriminant = try self.closedLocal(.u32);
@@ -3817,7 +3815,7 @@ pub const Builder = struct {
         const actual = try self.closedLocal(.u32);
         const expected = try self.closedLocal(.u32);
         if (try self.closed(ty)) {
-            const variant = self.closedVariant(ty, name);
+            const variant = try self.closedVariant(ty, name);
             const committed = self.program.result.layouts.getLayout(try self.program.layouts.layoutOf(ty));
             if (committed.tag == .tag_union) {
                 try self.emitLinear(.{ .assign_ref = .{ .target = actual, .op = LIR.RefOp.discriminant(value), .next = undefined } });
@@ -3837,16 +3835,44 @@ pub const Builder = struct {
 
     pub const ClosedVariant = struct { index: usize, payloads: []const TypeId };
 
-    pub fn closedVariant(self: *Builder, ty: TypeId, name: types.NameId) ClosedVariant {
+    pub fn closedVariant(self: *Builder, ty: TypeId, name: types.NameId) Allocator.Error!ClosedVariant {
+        const own = switch (self.program.store.get(ty)) {
+            .tag_union => |union_ty| for (self.program.store.tagSpan(union_ty.tags)) |tag| {
+                if (tag.name == name) break tag;
+            } else invariant("a tag test's tag is absent from its type"),
+            else => invariant("a tag test's value is not a tag union"),
+        };
+        return try self.selectVariant(ty, own);
+    }
+
+    /// The variant of `ty`'s joined row that the tag `own` of `ty` itself
+    /// is: its label's variant whose payloads are compatible with `own`'s,
+    /// since a joined row lists a label once per incompatible payload
+    /// (design.md "One label, two payload types").
+    pub fn selectVariant(self: *Builder, ty: TypeId, own: types.Tag) Allocator.Error!ClosedVariant {
         const rep = self.program.joins.representative(ty);
         const tags = switch (self.program.store.get(rep)) {
             .tag_union => |union_ty| self.program.store.tagSpan(union_ty.tags),
-            else => invariant("a tag test's value is not a tag union"),
+            else => invariant("a tag's type is not a tag union"),
         };
         for (tags, 0..) |tag, index| {
-            if (tag.name == name) return .{ .index = index, .payloads = self.program.store.span(tag.payloads) };
+            if (tag.name != own.name) continue;
+            if (!try self.program.joins.payloadsCompatible(&self.program.store, tag, own)) continue;
+            return .{ .index = index, .payloads = self.program.store.span(tag.payloads) };
         }
-        invariant("a tag test's tag is absent from its type");
+        invariant("a tag is absent from its joined row");
+    }
+
+    /// The tag of `ty` with label `name` and `arity` payloads.
+    pub fn ownTag(self: *Builder, ty: TypeId, name: types.NameId, arity: usize) types.Tag {
+        const union_ty = switch (self.program.store.get(ty)) {
+            .tag_union => |union_ty| union_ty,
+            else => invariant("a tag's type is not a tag union"),
+        };
+        for (self.program.store.tagSpan(union_ty.tags)) |tag| {
+            if (tag.name == name and tag.payloads.len == arity) return tag;
+        }
+        invariant("a tag is absent from its type");
     }
 
     pub const TypedValue = struct { value: LocalId, ty: TypeId };
@@ -3863,7 +3889,7 @@ pub const Builder = struct {
             try self.emitDyn(local, .{ .tag_payload_addr = .{ .base = value, .desc = try self.descOf(ty), .name = try self.nameDesc(name), .payload_index = index } });
             return .{ .value = local, .ty = payload_ty };
         }
-        const variant = self.closedVariant(ty, name);
+        const variant = try self.closedVariant(ty, name);
         const payload_ty = variant.payloads[index];
         const local = try self.localOf(payload_ty, .frame);
         if (variant.payloads.len == 1) {

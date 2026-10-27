@@ -81,11 +81,11 @@ pub const Joins = struct {
             .tag_union => |tag_union| {
                 for (store.tagSpan(tag_union.tags)) |tag| {
                     for (store.tagSpan(right.tag_union.tags)) |other| {
+                        // Same-label tags are one variant, whose payloads
+                        // join, only when their payloads are compatible.
                         if (other.name != tag.name) continue;
-                        const mine = store.span(tag.payloads);
-                        const theirs = store.span(other.payloads);
-                        if (mine.len != theirs.len) continue;
-                        for (mine, theirs) |x, y| try pending.append(self.allocator, .{ x, y });
+                        if (!try self.payloadsCompatible(store, tag, other)) continue;
+                        for (store.span(tag.payloads), store.span(other.payloads)) |x, y| try pending.append(self.allocator, .{ x, y });
                     }
                 }
             },
@@ -102,6 +102,18 @@ pub const Joins = struct {
             },
             .primitive, .empty_record, .variable => {},
         }
+    }
+
+    /// Whether two same-label tags are one variant: equally many payloads,
+    /// pairwise compatible.
+    pub fn payloadsCompatible(self: *Joins, store: *const types.Store, a: types.Tag, b: types.Tag) Allocator.Error!bool {
+        const mine = store.span(a.payloads);
+        const theirs = store.span(b.payloads);
+        if (mine.len != theirs.len) return false;
+        for (mine, theirs) |x, y| {
+            if (!try compatible(self.allocator, store, x, y)) return false;
+        }
+        return true;
     }
 
     /// Elect every set's representative. A set whose ground members are tag
@@ -150,14 +162,30 @@ pub const Joins = struct {
                 const payloads = store.span(tag.payloads);
                 var present = false;
                 for (tags.items) |existing| {
-                    if (existing.name == tag.name and existing.payloads.len == payloads.len) present = true;
+                    if (existing.name != tag.name or existing.payloads.len != payloads.len) continue;
+                    var same = true;
+                    for (existing.payloads, payloads) |x, y| {
+                        if (!try compatible(self.allocator, store, x, y)) same = false;
+                    }
+                    if (same) present = true;
                 }
                 if (!present) try tags.append(self.allocator, .{ .name = tag.name, .payloads = payloads });
             }
         }
+        // Labels in text order; a label's incompatible variants by their
+        // payloads' identities.
         std.mem.sort(types.TagInput, tags.items, store, struct {
             fn lessThan(s: *types.Store, x: types.TagInput, y: types.TagInput) bool {
-                return std.mem.order(u8, s.nameText(x.name), s.nameText(y.name)) == .lt;
+                switch (std.mem.order(u8, s.nameText(x.name), s.nameText(y.name))) {
+                    .lt => return true,
+                    .gt => return false,
+                    .eq => {},
+                }
+                if (x.payloads.len != y.payloads.len) return x.payloads.len < y.payloads.len;
+                for (x.payloads, y.payloads) |a, b| {
+                    if (a != b) return @backingInt(a) < @backingInt(b);
+                }
+                return false;
             }
         }.lessThan);
         return try store.intern(.{ .tag_union = .{ .tags = tags.items, .ext = null } });
@@ -168,3 +196,67 @@ pub const Joins = struct {
         return self.representatives.get(ty) orelse ty;
     }
 };
+
+/// Whether two types could unify without a structural conflict: the same
+/// kind of type, the same primitive, records with the same fields, tuples
+/// and functions of the same arity, the same nominal; a variable is
+/// compatible with anything.
+pub fn compatible(allocator: Allocator, store: *const types.Store, a: TypeId, b: TypeId) Allocator.Error!bool {
+    var pending: std.ArrayList([2]TypeId) = .empty;
+    defer pending.deinit(allocator);
+    var seen: std.AutoHashMapUnmanaged([2]TypeId, void) = .empty;
+    defer seen.deinit(allocator);
+    try pending.append(allocator, .{ a, b });
+    while (pending.pop()) |pair| {
+        if (pair[0] == pair[1]) continue;
+        if ((try seen.getOrPut(allocator, pair)).found_existing) continue;
+        const left = store.get(pair[0]);
+        const right = store.get(pair[1]);
+        if (left == .variable or right == .variable) continue;
+        if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+        switch (left) {
+            .primitive => |primitive| if (primitive != right.primitive) return false,
+            .empty_record => {},
+            .list => |elem| try pending.append(allocator, .{ elem, right.list }),
+            .box => |payload| try pending.append(allocator, .{ payload, right.box }),
+            .tuple => |items| {
+                const mine = store.span(items);
+                const theirs = store.span(right.tuple);
+                if (mine.len != theirs.len) return false;
+                for (mine, theirs) |x, y| try pending.append(allocator, .{ x, y });
+            },
+            .record => |record| {
+                const mine = store.fieldSpan(record.fields);
+                const theirs = store.fieldSpan(right.record.fields);
+                if (mine.len != theirs.len) return false;
+                for (mine, theirs) |x, y| {
+                    if (x.name != y.name) return false;
+                    try pending.append(allocator, .{ x.ty, y.ty });
+                }
+            },
+            .tag_union => |tag_union| {
+                // Rows merge their tags; only shared labels at one arity
+                // must agree.
+                for (store.tagSpan(tag_union.tags)) |tag| {
+                    for (store.tagSpan(right.tag_union.tags)) |other| {
+                        if (tag.name != other.name or tag.payloads.len != other.payloads.len) continue;
+                        for (store.span(tag.payloads), store.span(other.payloads)) |x, y| try pending.append(allocator, .{ x, y });
+                    }
+                }
+            },
+            .nominal => |nominal| {
+                if (nominal.decl.module != right.nominal.decl.module or nominal.decl.decl != right.nominal.decl.decl) return false;
+                for (store.nominalArgs(nominal), store.nominalArgs(right.nominal)) |x, y| try pending.append(allocator, .{ x, y });
+            },
+            .function => |function| {
+                const mine = store.span(function.args);
+                const theirs = store.span(right.function.args);
+                if (mine.len != theirs.len) return false;
+                for (mine, theirs) |x, y| try pending.append(allocator, .{ x, y });
+                try pending.append(allocator, .{ function.ret, right.function.ret });
+            },
+            .variable => unreachable, // answered above
+        }
+    }
+    return true;
+}
