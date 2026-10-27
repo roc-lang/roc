@@ -1302,9 +1302,11 @@ const ResolutionProfile = struct {
     entries: [count]u64 = @splat(0),
     active: ?Phase = null,
     started: i64 = 0,
+    /// The clock of the lowering's timing; without one, phases record no time.
+    std_io: ?std.Io = null,
 
     fn transition(self: *ResolutionProfile, next: ?Phase) void {
-        const now = timingNowNs(std.Io.Threaded.global_single_threaded.io());
+        const now = if (self.std_io) |std_io| timingNowNs(std_io) else 0;
         if (self.active) |phase| self.ns[@backingInt(phase)] +%= @intCast(@max(0, now - self.started));
         self.started = now;
         self.active = next;
@@ -5884,6 +5886,7 @@ const Builder = struct {
             .spec_key_aliases_out = options.spec_key_aliases_out,
             .post_check_executor = options.post_check_executor,
             .timing = options.timing,
+            .resolution_profile = .{ .std_io = if (options.timing) |timing| timing.std_io else null },
             .interface_summaries = InterfaceSummaryCache.init(allocator),
             .spec_store = spec_store,
             .lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator),
@@ -10646,8 +10649,8 @@ const Builder = struct {
     ) Allocator.Error!?RestoredCompletedBody {
         const address = job.completed_body_address orelse return null;
         const provider = self.interface_cache.?;
-        const io = std.Io.Threaded.global_single_threaded.io();
-        const start = timingNowNs(io);
+        const timing_io = if (self.timing) |timing| timing.std_io else null;
+        const start = if (timing_io) |std_io| timingNowNs(std_io) else 0;
         const bytes = (try provider.load(provider.context, self.allocator, address.family, address.key)) orelse return null;
         defer self.allocator.free(bytes);
         const arena = try self.allocator.create(std.heap.ArenaAllocator);
@@ -10705,7 +10708,7 @@ const Builder = struct {
         draft.upgrade_owner = payload.upgrade_owner;
         draft.sealWorkerLocalSymbols(payload.worker_local_symbol_count);
         owned = false;
-        if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("completed-body hit key={x} bytes={d} restore_ns={d}\n", .{ address.key, bytes.len, timingNowNs(io) - start });
+        if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("completed-body hit key={x} bytes={d} restore_ns={d}\n", .{ address.key, bytes.len, if (timing_io) |std_io| timingNowNs(std_io) - start else 0 });
         return .{
             .arena = arena,
             .draft = draft,
@@ -10721,8 +10724,8 @@ const Builder = struct {
     fn profileFrozenBody(self: *Builder, workspace: *SpecJobWorkspace, draft: *const BodyDraftStore, pending: SealedPendingTemplateBody, job: PendingSpecJob, lower_ns: i64) Allocator.Error!?FrozenProbeRecord {
         var scratch = std.heap.ArenaAllocator.init(self.allocator);
         defer scratch.deinit();
-        const profile_io = std.Io.Threaded.global_single_threaded.io();
-        const start = timingNowNs(profile_io);
+        const timing_io = if (self.timing) |timing| timing.std_io else null;
+        const start = if (timing_io) |std_io| timingNowNs(std_io) else 0;
         const templates = try scratch.allocator().alloc(FrozenTemplateProbe, draft.sealed_template_specs.items.len);
         for (draft.sealed_template_specs.items, templates) |source, *out| {
             inline for (@typeInfo(FrozenTemplateProbe).@"struct".field_names) |field| {
@@ -10814,10 +10817,10 @@ const Builder = struct {
         };
         errdefer self.allocator.free(bytes);
         if (replay) {
-            if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("completed-body write key={x} bytes={d} encode_ns={d} lower_ns={d}\n", .{ address.key, bytes.len, timingNowNs(profile_io) - start, lower_ns });
+            if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("completed-body write key={x} bytes={d} encode_ns={d} lower_ns={d}\n", .{ address.key, bytes.len, if (timing_io) |std_io| timingNowNs(std_io) - start else 0, lower_ns });
             return .{ .family = address.family, .key = address.key, .bytes = bytes };
         }
-        const elapsed = timingNowNs(profile_io) - start;
+        const elapsed = if (timing_io) |std_io| timingNowNs(std_io) - start else 0;
         var hash = base.Sha256.init(.{});
         hash.update("diagnostic-completed-body-record.v2");
         hash.update(@tagName(self.inline_expects));
@@ -10859,7 +10862,7 @@ const Builder = struct {
         method_scope: ModuleView,
         template: checked.CheckedProcedureTemplate,
     ) Allocator.Error!CompletedSpecJobShard {
-        const profile_start = if (dev_diagnostics.isSet(.sealed_body_profile) or dev_diagnostics.isSet(.completed_body_cache)) timingNowNs(std.Io.Threaded.global_single_threaded.io()) else 0;
+        const profile_start = if (dev_diagnostics.isSet(.sealed_body_profile) or dev_diagnostics.isSet(.completed_body_cache)) if (self.timing) |timing| timingNowNs(timing.std_io) else 0 else 0;
         switch (template.target) {
             .roc,
             .intrinsic,
@@ -10956,7 +10959,7 @@ const Builder = struct {
         try self.finalizeBodyDraftGraph(graph, &body_draft, final_guard, final_end);
         const sealed_pending = try self.sealOrdinarySpecJobDraft(graph, &body_draft, pending);
         body_draft.sealWorkerLocalSymbols(self.symbols.worker_local.next);
-        const frozen_probe_record = if (dev_diagnostics.isSet(.sealed_body_profile) or dev_diagnostics.isSet(.completed_body_cache)) try self.profileFrozenBody(workspace, &body_draft, sealed_pending, job, timingNowNs(std.Io.Threaded.global_single_threaded.io()) - profile_start) else null;
+        const frozen_probe_record = if (dev_diagnostics.isSet(.sealed_body_profile) or dev_diagnostics.isSet(.completed_body_cache)) try self.profileFrozenBody(workspace, &body_draft, sealed_pending, job, if (self.timing) |timing| timingNowNs(timing.std_io) - profile_start else 0) else null;
         errdefer if (frozen_probe_record) |record| self.allocator.free(record.bytes);
         if (self.spec_job_parallel_callback) {
             const program_types_after = self.program.types.epochBoundary();

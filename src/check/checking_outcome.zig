@@ -85,11 +85,11 @@ pub fn capture(allocator: Allocator, checker: anytype, scope: *const dependencie
         try tags.append(allocator, .{ .name = tag.name, .args = tag.args, .text = try appendText(allocator, &text, tag.formatted) });
     }
     var formatted = std.ArrayList(Formatted).empty;
-    for (0..snapshots.contents.len()) |i| {
+    for (0..@as(usize, @intCast(snapshots.contents.len()))) |i| {
         const id: snapshot.SnapshotContentIdx = @fromBackingInt(@as(u32, @intCast(i)));
         if (snapshots.getFormattedString(id)) |bytes| try formatted.append(allocator, .{ .snapshot = id, .text = try appendText(allocator, &text, bytes) });
     }
-    const fields = try allocator.alloc(snapshot.SnapshotRecordField, snapshots.record_fields.len());
+    const fields = try allocator.alloc(snapshot.SnapshotRecordField, @intCast(snapshots.record_fields.len()));
     for (fields, 0..) |*field, i| field.* = snapshots.record_fields.get(@fromBackingInt(@as(u32, @intCast(i))));
     var sources = std.ArrayList(Source).empty;
     // Platform diagnostics can retain a platform-side source region. Pin that
