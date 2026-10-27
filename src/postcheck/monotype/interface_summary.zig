@@ -199,6 +199,13 @@ pub fn decodeFrozen(comptime Payload: type, schema: [8]u8, arena: Allocator, typ
     if (reader.bytes.len != 0) return invalidSummary(@src().line);
     try context.validateFrozenPayload(payload);
     try validateTypeGraph(scratch.allocator(), 0, payload, nodes);
+    // An annotation-only record has no Monotype closure to import. Its input
+    // store may already be frozen; do not open a mutation transaction merely
+    // to allocate the independent returned payload.
+    if (nodes.len == 0) {
+        if (stats) |out| out.* = reader.stats;
+        return copyFrozen(Payload, arena, payload);
+    }
     const relocated = try scratch.allocator().alloc(Type.TypeId, nodes.len);
     const transaction = types.beginTransaction();
     errdefer transaction.abort(types);
@@ -206,16 +213,12 @@ pub fn decodeFrozen(comptime Payload: type, schema: [8]u8, arena: Allocator, typ
     const mapper = Relocation{ .types = types, .ids = relocated, .allocator = scratch.allocator() };
     for (nodes, relocated) |node, slot| transaction.fill(types, slot, try mapper.content(node));
     var result = try copyFrozen(Payload, arena, payload);
-    if (nodes.len == 0) {
-        transaction.abort(types);
-    } else {
-        var committed = try types.commitTransaction(ns, transaction, relocated[0]);
-        defer committed.deinit();
-        // commitTransaction maps every reserved node, including roots not
-        // reachable from the first root. This walk allocates nothing.
-        for (relocated) |*slot| slot.* = committed.remapType(slot.*);
-        relocateFrozen(Payload, &result, relocated);
-    }
+    var committed = try types.commitTransaction(ns, transaction, relocated[0]);
+    defer committed.deinit();
+    // commitTransaction maps every reserved node, including roots not
+    // reachable from the first root. This walk allocates nothing.
+    for (relocated) |*slot| slot.* = committed.remapType(slot.*);
+    relocateFrozen(Payload, &result, relocated);
     reader.stats.types = nodes.len;
     if (stats) |out| out.* = reader.stats;
     return result;

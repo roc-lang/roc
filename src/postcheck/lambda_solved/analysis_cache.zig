@@ -413,6 +413,7 @@ test "lambda analysis reuse keeps the current literal and reporting metadata" {
     var current_owned = true;
     defer if (current_owned) current.deinit();
     current.current_loc = .{ .file = 0, .line = 88, .column = 3 };
+    current.types.freeze();
     try std.testing.expectEqual(key, identity(current.view()));
     var restored = (try restore(gpa, &current, key, bytes)).?;
     current_owned = false;
