@@ -267,14 +267,16 @@ pub fn runWithCache(allocator: Allocator, lifted: Lifted.Program, cache: ?Common
     var program = Ast.Program.init(allocator, lifted);
     errdefer program.deinit();
 
-    const key = if (cache != null) AnalysisCache.identity(program.lifted.view()) else null;
+    const analysis_id = if (cache != null) try AnalysisCache.identity(allocator, program.lifted.view()) else null;
+    defer if (analysis_id) |id| id.deinit(allocator);
+    const key = if (analysis_id) |id| id.key else null;
     if (diagnostics.isSet(.pack_trace)) AnalysisCache.traceIdentity(program.lifted.view());
     var family: [32]u8 = undefined;
     baseHash("roc.lambda-analysis-cache.v1", &family);
     if (cache) |provider| {
         if (try provider.load(provider.context, allocator, family, key.?)) |bytes| {
             defer allocator.free(bytes);
-            if (try AnalysisCache.restore(allocator, &program.lifted, key.?, bytes)) |restored| {
+            if (try AnalysisCache.restore(allocator, &program.lifted, &analysis_id.?, bytes)) |restored| {
                 if (diagnostics.isSet(.lambda_solve_stats)) std.debug.print("lambda-analysis hit key={x} bytes={d}\n", .{ key.?, bytes.len });
                 // The empty annotation stores allocated by init own no storage;
                 // restore consumed its lifted input and owns the returned arena.
@@ -289,7 +291,7 @@ pub fn runWithCache(allocator: Allocator, lifted: Lifted.Program, cache: ?Common
     var counters: WorkCounters = .{};
     if (diagnostics.isSet(.lambda_solve_stats)) solver.counters = &counters;
     try solver.solve();
-    if (cache) |provider| if (try AnalysisCache.encode(allocator, &program, key.?)) |bytes| {
+    if (cache) |provider| if (try AnalysisCache.encode(allocator, &program, &analysis_id.?)) |bytes| {
         defer allocator.free(bytes);
         try provider.record(provider.context, family, key.?, bytes);
         if (diagnostics.isSet(.lambda_solve_stats)) std.debug.print("lambda-analysis record key={x} bytes={d}\n", .{ key.?, bytes.len });

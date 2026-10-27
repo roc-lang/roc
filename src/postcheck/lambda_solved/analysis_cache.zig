@@ -21,16 +21,37 @@ const columns = .{
 };
 const type_columns = .{ "types", "named_nodes", "erased_digests", "spans", "fields", "tags", "declared_fields" };
 
-/// Versioned identity of the complete solver input, including table order.
-/// No source-position identity or inference from a prior result is involved.
-pub fn identity(input: Lifted.ProgramView) [32]u8 {
-    var out = Fingerprint{ .names = input.names };
-    out.bytes("roc.lambda-analysis-input.v1");
+/// Exact consumed input modulo renaming of Monotype table ids. Expression,
+/// function and binding tables keep their current identities. Named occurrence
+/// references are rebound through the matching current input, never an old
+/// checked artifact. Their equality partition remains part of the key.
+pub const Identity = struct {
+    key: [32]u8,
+    occurrences: []Mono.NamedType,
+    pub fn deinit(self: Identity, allocator: Allocator) void {
+        allocator.free(self.occurrences);
+    }
+};
+
+pub fn identity(allocator: Allocator, input: Lifted.ProgramView) Allocator.Error!Identity {
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+    const gpa = scratch.allocator();
+    const ids = try gpa.alloc(u32, input.types.types.len);
+    @memset(ids, std.math.maxInt(u32));
+    var occurrences: std.AutoHashMapUnmanaged(Mono.NamedType, u32) = .empty;
+    try occurrences.ensureTotalCapacity(gpa, @intCast(input.types.named_nodes.len));
+    var out = Fingerprint{
+        .names = input.names,
+        .types = input.types,
+        .type_ids = ids,
+        .pending_types = try gpa.alloc(Mono.TypeId, ids.len),
+        .occurrence_ids = &occurrences,
+        .pending_occurrences = try gpa.alloc(Mono.NamedType, input.types.named_nodes.len),
+    };
+    out.bytes("roc.lambda-analysis-input.v2");
     inline for (columns) |field| {
         out.value(@TypeOf(@field(input, field)), @field(input, field));
-    }
-    inline for (type_columns) |field| {
-        out.value(@TypeOf(@field(input.types, field)), @field(input.types, field));
     }
     out.value(usize, input.fns.len);
     for (input.fns) |f| {
@@ -46,7 +67,11 @@ pub fn identity(input: Lifted.ProgramView) [32]u8 {
         out.value(@TypeOf(root.fn_id), root.fn_id);
         out.value(@TypeOf(root.request.abi), root.request.abi);
     }
-    return out.finish();
+    out.bytes("type-graph");
+    var index: usize = 0;
+    while (index < out.type_count) : (index += 1) out.typeContent(input.types.get(out.pending_types[index]));
+    out.value(usize, out.type_count);
+    return .{ .key = out.finish(), .occurrences = try allocator.dupe(Mono.NamedType, out.pending_occurrences[0..out.occurrence_count]) };
 }
 
 /// Developer trace of the exact input columns, for explaining invalidation.
@@ -75,6 +100,13 @@ pub fn traceIdentity(input: Lifted.ProgramView) void {
 
 const Fingerprint = struct {
     names: *const names.NameStore,
+    types: ?Mono.Store.View = null,
+    type_ids: []u32 = &.{},
+    pending_types: []Mono.TypeId = &.{},
+    type_count: u32 = 0,
+    occurrence_ids: ?*std.AutoHashMapUnmanaged(Mono.NamedType, u32) = null,
+    pending_occurrences: []Mono.NamedType = &.{},
+    occurrence_count: u32 = 0,
     hash: base.Sha256 = .init(.{}),
     buffer: [4096]u8 = undefined,
     used: usize = 0,
@@ -94,15 +126,72 @@ const Fingerprint = struct {
         self.hash.update(self.buffer[0..self.used]);
         return self.hash.finalResult();
     }
+    fn typeSpan(self: *Fingerprint, comptime field: []const u8, span: Mono.Span) void {
+        const values = @field(self.types.?, field)[span.start..][0..span.len];
+        self.value(@TypeOf(values), values);
+    }
+    fn typeContent(self: *Fingerprint, content: Mono.Content) void {
+        self.value(std.meta.Tag(Mono.Content), std.meta.activeTag(content));
+        switch (content) {
+            .primitive => |v| self.value(@TypeOf(v), v),
+            .erased => |v| self.value(@TypeOf(v), v),
+            .zst, .hole => {},
+            .list, .box => |v| self.value(Mono.TypeId, v),
+            .tuple => |v| self.typeSpan("spans", v),
+            .record => |v| self.typeSpan("fields", v),
+            .func => |v| {
+                self.typeSpan("spans", v.args);
+                self.value(Mono.TypeId, v.ret);
+            },
+            .tag_union => |v| {
+                self.value(u32, v.len);
+                for (self.types.?.tags[v.start..][0..v.len]) |tag| {
+                    self.value(names.TagNameId, tag.name);
+                    self.value(names.TagNameId, tag.checked_name);
+                    self.typeSpan("spans", tag.payloads);
+                }
+            },
+            .named => |v| {
+                self.value(Mono.NamedType, v.named_type);
+                self.value(@TypeOf(v.def), v.def);
+                self.value(@TypeOf(v.kind), v.kind);
+                self.value(@TypeOf(v.builtin_owner), v.builtin_owner);
+                self.typeSpan("spans", v.args);
+                self.value(@TypeOf(v.backing), v.backing);
+                self.typeSpan("declared_fields", v.declared_order);
+            },
+        }
+    }
     fn value(self: *Fingerprint, comptime T: type, v: T) void {
-        // Keep both the table id and its meaning: output annotations retain
-        // numeric references to this input, and name equality reads the text.
+        if (T == Mono.TypeId) if (self.types != null) {
+            const slot = &self.type_ids[@backingInt(v)];
+            if (slot.* == std.math.maxInt(u32)) {
+                slot.* = self.type_count;
+                self.pending_types[self.type_count] = v;
+                self.type_count += 1;
+            }
+            return self.value(u32, slot.*);
+        };
+        if (T == Mono.MaybeTypeId) if (self.types != null) return self.value(?Mono.TypeId, v.get());
+        if (T == Mono.NamedType) if (self.occurrence_ids) |ids| {
+            const entry = ids.getOrPutAssumeCapacity(v);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = self.occurrence_count;
+                self.pending_occurrences[self.occurrence_count] = v;
+                self.occurrence_count += 1;
+            }
+            // Nominal owner is semantic. The checked occurrence's raw address
+            // is only used for equality by this solver; preserve that relation
+            // and bind the annotation to its current occurrence on restore.
+            self.bytes(&v.module.bytes);
+            return self.value(u32, entry.value_ptr.*);
+        };
         if (T == names.ModuleIdentityId) {
-            self.value(u32, @backingInt(v));
+            if (self.types == null) self.value(u32, @backingInt(v));
             return self.bytes(self.names.moduleIdentityBytes(v));
         }
         if (T == names.RecordFieldNameId or T == names.TagNameId or T == names.TypeNameId or T == names.ExportNameId or T == names.ExternalSymbolNameId) {
-            self.value(u32, @backingInt(v));
+            if (self.types == null) self.value(u32, @backingInt(v));
             const text = if (T == names.RecordFieldNameId) self.names.recordFieldLabelText(v) else if (T == names.TagNameId) self.names.tagLabelText(v) else if (T == names.TypeNameId) self.names.typeNameText(v) else if (T == names.ExportNameId) self.names.exportNameText(v) else self.names.externalSymbolNameText(v);
             return self.value([]const u8, text);
         }
@@ -289,15 +378,16 @@ const Context = struct {
     allocator: Allocator,
     input: Lifted.ProgramView,
     key: [32]u8,
-    named: std.AutoHashMapUnmanaged(Mono.NamedType, void) = .empty,
+    named: std.AutoHashMapUnmanaged(Mono.NamedType, u32) = .empty,
+    occurrences: []const Mono.NamedType,
     modules: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
     defaults: std.AutoHashMapUnmanaged([36]u8, void) = .empty,
 
-    fn init(allocator: Allocator, input: Lifted.ProgramView, key: [32]u8) Allocator.Error!Context {
-        var self = Context{ .allocator = allocator, .input = input, .key = key };
+    fn init(allocator: Allocator, input: Lifted.ProgramView, id: *const Identity) Allocator.Error!Context {
+        var self = Context{ .allocator = allocator, .input = input, .key = id.key, .occurrences = id.occurrences };
         errdefer self.deinit();
+        for (id.occurrences, 0..) |named, index| try self.named.put(allocator, named, @intCast(index));
         for (input.types.named_nodes) |named| {
-            try self.named.put(allocator, named.named_type, {});
             try self.modules.put(allocator, input.names.moduleIdentityBytes(named.def.module).*, {});
         }
         for (input.types.fields) |field| if (field.default) |default| {
@@ -328,13 +418,12 @@ const Context = struct {
     pub fn validModuleIdentity(self: *const Context, module: [32]u8) bool {
         return self.modules.contains(module);
     }
-    pub fn describeNamedType(_: *const Context, named: Mono.NamedType) Codec.NamedOccurrence {
-        return .{ .exact = .{ .owner = named.module.bytes, .occurrence = named.ty_module.bytes, .ty = @backingInt(named.ty) } };
+    pub fn describeNamedType(self: *const Context, named: Mono.NamedType) Codec.NamedOccurrence {
+        return .{ .input = self.named.get(named) orelse @import("../common.zig").invariant("completed annotation named an occurrence outside its input") };
     }
     pub fn resolveNamedType(self: *const Context, stored: Codec.NamedOccurrence) Allocator.Error!?Mono.NamedType {
-        if (stored != .exact) return null;
-        const named = Mono.NamedType{ .module = .{ .bytes = stored.exact.owner }, .ty_module = .{ .bytes = stored.exact.occurrence }, .ty = @fromBackingInt(stored.exact.ty) };
-        return if (self.named.contains(named)) named else null;
+        if (stored != .input or stored.input >= self.occurrences.len) return null;
+        return self.occurrences[stored.input];
     }
     pub fn validNamedType(self: *const Context, named: Mono.NamedType) bool {
         return self.named.contains(named);
@@ -443,13 +532,13 @@ fn validate(allocator: Allocator, input: Lifted.ProgramView, p: Payload) Codec.D
 }
 
 /// Encode only annotations; no source or executable payload is persisted.
-pub fn encode(allocator: Allocator, program: *Ast.Program, key: [32]u8) Allocator.Error!?[]u8 {
-    var context = try Context.init(allocator, program.lifted.view(), key);
+pub fn encode(allocator: Allocator, program: *Ast.Program, id: *const Identity) Allocator.Error!?[]u8 {
+    var context = try Context.init(allocator, program.lifted.view(), id);
     defer context.deinit();
     var scratch = std.heap.ArenaAllocator.init(allocator);
     defer scratch.deinit();
-    const payload = try CompletedClosure.copy(scratch.allocator(), payloadOf(program, key));
-    return Codec.encodeFrozen(Payload, "LSAN0001".*, allocator, &program.lifted.types, &program.lifted.names, payload, &context, null) catch |err| switch (err) {
+    const payload = try CompletedClosure.copy(scratch.allocator(), payloadOf(program, id.key));
+    return Codec.encodeFrozen(Payload, "LSAN0002".*, allocator, &program.lifted.types, &program.lifted.names, payload, &context, null) catch |err| switch (err) {
         error.NotRepresentable => return null,
         error.OutOfMemory => return error.OutOfMemory,
     };
@@ -457,7 +546,7 @@ pub fn encode(allocator: Allocator, program: *Ast.Program, key: [32]u8) Allocato
 
 /// On success transfers the current lifted program into the restored result.
 /// Invalid optional data leaves the current program available for fresh solving.
-pub fn restore(allocator: Allocator, lifted: *Lifted.Program, key: [32]u8, bytes: []const u8) Allocator.Error!?Ast.Program {
+pub fn restore(allocator: Allocator, lifted: *Lifted.Program, id: *const Identity, bytes: []const u8) Allocator.Error!?Ast.Program {
     const arena = try allocator.create(std.heap.ArenaAllocator);
     arena.* = .init(allocator);
     var owned = true;
@@ -465,9 +554,9 @@ pub fn restore(allocator: Allocator, lifted: *Lifted.Program, key: [32]u8, bytes
         arena.deinit();
         allocator.destroy(arena);
     };
-    var context = try Context.init(allocator, lifted.view(), key);
+    var context = try Context.init(allocator, lifted.view(), id);
     defer context.deinit();
-    const payload = Codec.decodeFrozen(Payload, "LSAN0001".*, arena.allocator(), &lifted.types, &lifted.names, bytes, &context, null) catch |err| switch (err) {
+    const payload = Codec.decodeFrozen(Payload, "LSAN0002".*, arena.allocator(), &lifted.types, &lifted.names, bytes, &context, null) catch |err| switch (err) {
         error.InvalidSummary => return null,
         error.OutOfMemory => return error.OutOfMemory,
     };
@@ -545,16 +634,20 @@ test "lambda analysis reuse keeps the current literal and reporting metadata" {
     const gpa = std.testing.allocator;
     var first = try @import("solve.zig").run(gpa, try literalInput(gpa, "before"));
     defer first.deinit();
-    const key = identity(first.lifted.view());
-    const bytes = (try encode(gpa, &first, key)).?;
+    const id = try identity(gpa, first.lifted.view());
+    defer id.deinit(gpa);
+    const key = id.key;
+    const bytes = (try encode(gpa, &first, &id)).?;
     defer gpa.free(bytes);
     var current = try literalInput(gpa, "after with different length");
     var current_owned = true;
     defer if (current_owned) current.deinit();
     current.current_loc = .{ .file = 0, .line = 88, .column = 3 };
     current.types.freeze();
-    try std.testing.expectEqual(key, identity(current.view()));
-    var restored = (try restore(gpa, &current, key, bytes)).?;
+    const current_id = try identity(gpa, current.view());
+    defer current_id.deinit(gpa);
+    try std.testing.expectEqual(key, current_id.key);
+    var restored = (try restore(gpa, &current, &id, bytes)).?;
     current_owned = false;
     defer restored.deinit();
     try std.testing.expectEqualStrings("after with different length", restored.lifted.view().string_literals[0].text());
@@ -568,28 +661,34 @@ test "lambda analysis identity includes callable topology and rejects mismatched
     const gpa = std.testing.allocator;
     var first = try @import("solve.zig").run(gpa, try literalInput(gpa, "before"));
     defer first.deinit();
-    const key = identity(first.lifted.view());
-    const bytes = (try encode(gpa, &first, key)).?;
+    const id = try identity(gpa, first.lifted.view());
+    defer id.deinit(gpa);
+    const key = id.key;
+    const bytes = (try encode(gpa, &first, &id)).?;
     defer gpa.free(bytes);
     var current = try literalInput(gpa, "after");
     defer current.deinit();
-    _ = try current.types.internPrimitive(&current.names, .u64);
-    const changed = identity(current.view());
-    try std.testing.expect(!std.mem.eql(u8, &key, &changed));
-    try std.testing.expectEqual(null, try restore(gpa, &current, changed, bytes));
-    for (0..bytes.len) |end| try std.testing.expectEqual(null, try restore(gpa, &current, key, bytes[0..end]));
+    var changed_fn = current.getFnAt(0);
+    changed_fn.ret = try current.types.internPrimitive(&current.names, .u64);
+    current.setFnAt(0, changed_fn);
+    const changed = try identity(gpa, current.view());
+    defer changed.deinit(gpa);
+    try std.testing.expect(!std.mem.eql(u8, &key, &changed.key));
+    try std.testing.expectEqual(null, try restore(gpa, &current, &changed, bytes));
+    for (0..bytes.len) |end| try std.testing.expectEqual(null, try restore(gpa, &current, &id, bytes[0..end]));
 }
 
 fn analysisAllocationRoundTrip(gpa: Allocator) !void {
     var first = try @import("solve.zig").run(gpa, try literalInput(gpa, "before"));
     defer first.deinit();
-    const key = identity(first.lifted.view());
-    const bytes = (try encode(gpa, &first, key)).?;
+    const id = try identity(gpa, first.lifted.view());
+    defer id.deinit(gpa);
+    const bytes = (try encode(gpa, &first, &id)).?;
     defer gpa.free(bytes);
     var current = try literalInput(gpa, "after");
     var owned = true;
     defer if (owned) current.deinit();
-    var restored = (try restore(gpa, &current, key, bytes)).?;
+    var restored = (try restore(gpa, &current, &id, bytes)).?;
     owned = false;
     defer restored.deinit();
 }
@@ -599,8 +698,12 @@ test "lambda analysis allocation failures preserve input ownership" {
 }
 
 fn recursiveInput(allocator: Allocator) !Lifted.Program {
+    return recursiveInputWithPadding(allocator, false);
+}
+fn recursiveInputWithPadding(allocator: Allocator, padding: bool) !Lifted.Program {
     var input = emptyInput(allocator);
     errdefer input.deinit();
+    if (padding) _ = try input.types.internPrimitive(&input.names, .bool);
     const root = try input.types.beginRecursive();
     const callback = try input.types.add(.{ .func = .{ .args = .empty(), .ret = root.ty } });
     input.types.finishRecursive(root, .{ .record = try input.types.addFields(&.{.{ .name = try input.names.internRecordFieldLabel("next"), .ty = callback, .default = null }}) });
@@ -615,13 +718,15 @@ test "lambda analysis preserves recursive callable relations and rejects redirec
     const gpa = std.testing.allocator;
     var first = try @import("solve.zig").run(gpa, try recursiveInput(gpa));
     defer first.deinit();
-    const key = identity(first.lifted.view());
-    const bytes = (try encode(gpa, &first, key)).?;
+    const id = try identity(gpa, first.lifted.view());
+    defer id.deinit(gpa);
+    const key = id.key;
+    const bytes = (try encode(gpa, &first, &id)).?;
     defer gpa.free(bytes);
     var current = try recursiveInput(gpa);
     var owned = true;
     defer if (owned) current.deinit();
-    var restored = (try restore(gpa, &current, key, bytes)).?;
+    var restored = (try restore(gpa, &current, &id, bytes)).?;
     owned = false;
     defer restored.deinit();
     const func = restored.types.rootContentCompressed(restored.fn_tys.items[0]).func;
@@ -636,13 +741,13 @@ test "lambda analysis preserves recursive callable relations and rejects redirec
     defer gpa.free(vars);
     vars[0] = .{ .link = @fromBackingInt(0) };
     bad.types.vars = vars;
-    var context = try Context.init(gpa, first.lifted.view(), key);
+    var context = try Context.init(gpa, first.lifted.view(), &id);
     defer context.deinit();
-    const corrupt = try Codec.encodeFrozen(Payload, "LSAN0001".*, gpa, &first.lifted.types, &first.lifted.names, bad, &context, null);
+    const corrupt = try Codec.encodeFrozen(Payload, "LSAN0002".*, gpa, &first.lifted.types, &first.lifted.names, bad, &context, null);
     defer gpa.free(corrupt);
     var rejected_input = try recursiveInput(gpa);
     defer rejected_input.deinit();
-    try std.testing.expectEqual(null, try restore(gpa, &rejected_input, key, corrupt));
+    try std.testing.expectEqual(null, try restore(gpa, &rejected_input, &id, corrupt));
 }
 
 test "lambda analysis identity distinguishes callbacks with the same signature" {
@@ -656,28 +761,113 @@ test "lambda analysis identity distinguishes callbacks with the same signature" 
     const signature = try input.types.add(.{ .func = .{ .args = .empty(), .ret = first.ret } });
     const closure = try input.addExpr(.{ .ty = signature, .data = .{ .fn_ref = .{ .fn_id = @fromBackingInt(0), .captures = .empty() } } });
     _ = try input.addFn(.{ .symbol = @fromBackingInt(2), .args = .empty(), .captures = .empty(), .body = .{ .roc = closure }, .ret = signature });
-    const before = identity(input.view());
+    const before = try identity(gpa, input.view());
+    defer before.deinit(gpa);
     input.setExprData(closure, .{ .fn_ref = .{ .fn_id = second, .captures = .empty() } });
-    try std.testing.expect(!std.mem.eql(u8, &before, &identity(input.view())));
+    const after = try identity(gpa, input.view());
+    defer after.deinit(gpa);
+    try std.testing.expect(!std.mem.eql(u8, &before.key, &after.key));
 }
 
 test "lambda analysis persistence excludes abandoned lazy solver rows" {
     const gpa = std.testing.allocator;
     var first = try @import("solve.zig").run(gpa, try literalInput(gpa, "before"));
     defer first.deinit();
-    const key = identity(first.lifted.view());
-    const clean = (try encode(gpa, &first, key)).?;
+    const id = try identity(gpa, first.lifted.view());
+    defer id.deinit(gpa);
+    const clean = (try encode(gpa, &first, &id)).?;
     defer gpa.free(clean);
     _ = try first.types.add(.{ .mono = .{ .id = first.lifted.view().fns[0].ret, .ctx = 1234 } });
-    const with_scratch = (try encode(gpa, &first, key)).?;
+    const with_scratch = (try encode(gpa, &first, &id)).?;
     defer gpa.free(with_scratch);
     try std.testing.expectEqualSlices(u8, clean, with_scratch);
     var current = try literalInput(gpa, "after");
     current.types.freeze();
     var owned = true;
     defer if (owned) current.deinit();
-    var restored = (try restore(gpa, &current, key, with_scratch)).?;
+    var restored = (try restore(gpa, &current, &id, with_scratch)).?;
     owned = false;
     defer restored.deinit();
     for (restored.types.vars.items) |node| try std.testing.expect(node != .mono and node != .link);
+}
+
+test "lambda analysis identity ignores type numbering and unreachable types" {
+    const gpa = std.testing.allocator;
+    var first = try recursiveInputWithPadding(gpa, false);
+    defer first.deinit();
+    var second = try recursiveInputWithPadding(gpa, true);
+    defer second.deinit();
+    const a = try identity(gpa, first.view());
+    defer a.deinit(gpa);
+    const b = try identity(gpa, second.view());
+    defer b.deinit(gpa);
+    try std.testing.expectEqual(a.key, b.key);
+    try std.testing.expect(first.getFnAt(0).ret != second.getFnAt(0).ret);
+}
+
+fn occurrenceInput(allocator: Allocator, version: u8, shared: bool, owner: u8) !Lifted.Program {
+    var input = emptyInput(allocator);
+    errdefer input.deinit();
+    if (version != 0) _ = try input.types.internPrimitive(&input.names, .bool);
+    const number = try input.types.internPrimitive(&input.names, .u64);
+    const module = try input.names.internModuleIdentity(&@as([32]u8, @splat(1)));
+    const label = try input.names.internTypeName("Value");
+    var named: @FieldType(Mono.Content, "named") = .{
+        .named_type = .{ .module = .{ .bytes = @splat(owner) }, .ty_module = .{ .bytes = @splat(version) }, .ty = @fromBackingInt(@as(u32, version) + 7) },
+        .def = .{ .module = module, .type_name = label },
+        .kind = .nominal,
+        .args = .empty(),
+        .backing = .{ .ty = number, .use = .inspectable },
+    };
+    const first = try input.types.add(.{ .named = named });
+    if (!shared) named.named_type.ty = @fromBackingInt(@backingInt(named.named_type.ty) + 1);
+    const second = try input.types.add(.{ .named = named });
+    const a = try input.addLocal(@fromBackingInt(0), first);
+    const b = try input.addLocal(@fromBackingInt(1), second);
+    const args = try input.addTypedLocalSpan(&.{ .{ .local = a, .ty = first }, .{ .local = b, .ty = second } });
+    const body = try input.addExpr(.{ .ty = second, .data = .{ .local = b } });
+    _ = try input.addFn(.{ .symbol = @fromBackingInt(2), .args = args, .captures = .empty(), .body = .{ .roc = body }, .ret = second });
+    return input;
+}
+
+test "lambda analysis rebinds checked occurrences to the current matching input" {
+    const gpa = std.testing.allocator;
+    var first = try @import("solve.zig").run(gpa, try occurrenceInput(gpa, 0, true, 9));
+    defer first.deinit();
+    const a = try identity(gpa, first.lifted.view());
+    defer a.deinit(gpa);
+    const bytes = (try encode(gpa, &first, &a)).?;
+    defer gpa.free(bytes);
+    var current = try occurrenceInput(gpa, 2, true, 9);
+    var owned = true;
+    defer if (owned) current.deinit();
+    const b = try identity(gpa, current.view());
+    defer b.deinit(gpa);
+    try std.testing.expectEqual(a.key, b.key);
+    const expected = current.types.get(current.getFnAt(0).ret).named.named_type;
+    current.types.freeze();
+    var restored = (try restore(gpa, &current, &b, bytes)).?;
+    owned = false;
+    defer restored.deinit();
+    const func = restored.types.rootContentCompressed(restored.fn_tys.items[0]).func;
+    const actual = restored.types.rootContentCompressed(func.ret).named.named_type;
+    try std.testing.expectEqualDeep(expected, actual);
+}
+
+test "lambda analysis preserves checked occurrence equality and nominal ownership" {
+    const gpa = std.testing.allocator;
+    var a_input = try occurrenceInput(gpa, 0, true, 9);
+    defer a_input.deinit();
+    const a = try identity(gpa, a_input.view());
+    defer a.deinit(gpa);
+    var b_input = try occurrenceInput(gpa, 0, false, 9);
+    defer b_input.deinit();
+    const b = try identity(gpa, b_input.view());
+    defer b.deinit(gpa);
+    var c_input = try occurrenceInput(gpa, 0, true, 10);
+    defer c_input.deinit();
+    const c = try identity(gpa, c_input.view());
+    defer c.deinit(gpa);
+    try std.testing.expect(!std.mem.eql(u8, &a.key, &b.key));
+    try std.testing.expect(!std.mem.eql(u8, &a.key, &c.key));
 }

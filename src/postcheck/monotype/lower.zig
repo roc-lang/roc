@@ -28091,6 +28091,7 @@ const BodyContext = struct {
         }
         pub fn resolveNamedType(self: PersistentProvenance, stored: PersistentInterface.NamedOccurrence) Allocator.Error!?Type.NamedType {
             return switch (stored) {
+                .input => null,
                 .exact => |exact| .{ .module = .{ .bytes = exact.owner }, .ty_module = .{ .bytes = exact.occurrence }, .ty = @fromBackingInt(exact.ty) },
                 .closed => |closed| blk: {
                     const entry = try self.builder.persistent_closed_occurrences.getOrPut(self.builder.allocator, closed.key);

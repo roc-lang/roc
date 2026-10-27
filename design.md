@@ -27353,10 +27353,17 @@ name meanings, function signatures and bodies, expression and binding topology,
 capture identities, and ABI, layout, and runtime-schema boundaries. Literal byte
 backings and reporting locations are not solver inputs. The current lifted
 program always supplies executable expressions, literal contents, and reporting
-metadata; an analysis cache never replaces it with an earlier program. Numeric
-ids in an analysis record belong to the precisely identified input tables, not
-to an assumed stable source position. A changed input-table identity invalidates
-the record. This whole-analysis boundary is independent of finer-grained
+metadata; an analysis cache never replaces it with an earlier program. Expression, local, and function ids in an analysis record belong to the
+precisely identified current IR tables, not to an assumed stable source position.
+Monotype type ids are canonically numbered by first reach from these tables;
+only their reachable graph contributes to the identity. This preserves exact
+sharing and cycles while excluding unused store rows. Checked occurrence
+addresses are used for equality by the solver: the key records their equality
+partition and exact nominal owners, and the record stores an explicit ordinal
+into the matching input's occurrence table. Restore binds that ordinal to the
+current checked occurrence. It never reuses the previous artifact's address.
+All type structure, named definitions, backing authority, dispatch metadata,
+and ABI boundaries remain in the identity. This whole-analysis boundary is independent of finer-grained
 specialization body caching.
 
 Completed Lambda Solved records contain only the type graph reachable from

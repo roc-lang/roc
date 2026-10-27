@@ -20,6 +20,8 @@ const frozen_magic = "RIFRZ001";
 pub const NamedOccurrence = union(enum) {
     exact: struct { owner: [32]u8, occurrence: [32]u8, ty: u32 },
     closed: struct { owner: [32]u8, key: [32]u8 },
+    /// Context-defined ordinal in an exactly identified current input.
+    input: u32,
 };
 
 /// Work performed by the compact codec, independent of wall-clock timing.
@@ -785,6 +787,7 @@ const TestProvenance = struct {
     }
     pub fn resolveNamedType(self: @This(), occurrence: NamedOccurrence) Allocator.Error!?Type.NamedType {
         return switch (occurrence) {
+            .input => null,
             .exact => |exact| .{ .module = .{ .bytes = exact.owner }, .ty_module = .{ .bytes = exact.occurrence }, .ty = @fromBackingInt(exact.ty) },
             .closed => |closed| blk: {
                 const key = self.closed_key orelse break :blk null;
