@@ -165,6 +165,29 @@ pub fn compute(allocator: Allocator, inputs: Inputs) Allocator.Error!ModuleIdent
             try seen.put(def, {});
             try definitions.append(allocator, .{ .def = def, .value = try state.methodIdentity(def) });
         }
+        // An importer names a value by its definition's node or, for a name
+        // a destructure binds, by its binder's node, which shares the
+        // definitions' node numbering. Each binder carries the identity of
+        // the definition that destructures, rejected ones included.
+        var binders = std.ArrayList(CIR.Pattern.Idx).empty;
+        defer binders.deinit(allocator);
+        var pending = std.ArrayList(CIR.Pattern.Idx).empty;
+        defer pending.deinit(allocator);
+        for (inputs.env.store.sliceDefs(inputs.env.global_value_defs)) |def| {
+            const value = try state.methodIdentity(def);
+            if (!seen.contains(def)) {
+                try seen.put(def, {});
+                try definitions.append(allocator, .{ .def = def, .value = value });
+            }
+            binders.clearRetainingCapacity();
+            try DependencyGraph.appendPatternBinders(inputs.env, inputs.env.store.getDef(def).pattern, &binders, &pending, allocator);
+            for (binders.items) |binder| {
+                const node: CIR.Def.Idx = @fromBackingInt(@backingInt(binder));
+                if (seen.contains(node)) continue;
+                try seen.put(node, {});
+                try definitions.append(allocator, .{ .def = node, .value = value });
+            }
+        }
     }
     std.mem.sort(DefinitionIdentity, definitions.items, {}, struct {
         fn lessThan(_: void, a: DefinitionIdentity, b: DefinitionIdentity) bool {
