@@ -4279,7 +4279,8 @@ const Inserter = struct {
     }
 
     /// Places a join's params owned, skipping any the back edges leave
-    /// loop-invariant and, given the body's reads, any the body never reads.
+    /// loop-invariant and, given the body's reads, any ordinary param the
+    /// body never reads.
     ///
     /// A join param is only freshly owned in the body when every arrival
     /// hands it a new unit. An entry edge always does, but a back edge that
@@ -4291,41 +4292,47 @@ const Inserter = struct {
     /// so filtering by it keeps this placement monotone and carries residual
     /// field masks through.
     ///
-    /// A param the body never reads before rebinding it is dead where the
-    /// body begins, exactly like any other unit of the jump meet the body
-    /// does not read. Leaving it out of the keep makes every arrival release
-    /// it at the jump, right after the value was produced; placing it would
-    /// hold the value until the body's exits.
+    /// An ordinary param the body never reads before rebinding it is dead
+    /// where the body begins, exactly like any other unit of the jump meet
+    /// the body does not read. Leaving it out of the keep makes every arrival
+    /// release it at the jump, right after the value was produced; placing it
+    /// would hold the value until the body's exits. A maybe-initialized param
+    /// is always placed: its producer makes the overwrite of the cell the
+    /// lifetime end of the previous payload, even on a solved-borrowed
+    /// binding that no arrival owns.
     fn placeSolveJoinParamsInto(
         self: *Inserter,
         summary: *const JoinSummary,
         body_reads: ?*const Row,
         keep: *OwnedSet,
     ) ResourceError!void {
+        if (!summary.back_edge_seen) {
+            const params = self.store.getLocalSpan(summary.params);
+            for (0..GuardedList.borrowLen(params)) |index| {
+                const param = GuardedList.at(params, index);
+                if (!self.bodyMayReadParam(body_reads, param)) continue;
+                try self.placeUnit(keep, param);
+            }
+            const maybe_params = self.store.getLocalSpan(summary.maybe_uninitialized_params);
+            for (0..GuardedList.borrowLen(maybe_params)) |index| {
+                try self.placeConditionalUnit(keep, GuardedList.at(maybe_params, index));
+            }
+            return;
+        }
         const params = self.store.getLocalSpan(summary.params);
         for (0..GuardedList.borrowLen(params)) |index| {
             const param = GuardedList.at(params, index);
             if (!self.bodyMayReadParam(body_reads, param)) continue;
-            if (summary.back_edge_seen) {
-                try placeSurvivingParam(keep, &summary.back_edge_params, param);
-            } else {
-                try self.placeUnit(keep, param);
-            }
+            try placeSurvivingParam(keep, &summary.back_edge_params, param);
         }
         const maybe_params = self.store.getLocalSpan(summary.maybe_uninitialized_params);
         for (0..GuardedList.borrowLen(maybe_params)) |index| {
-            const param = GuardedList.at(maybe_params, index);
-            if (!self.bodyMayReadParam(body_reads, param)) continue;
-            if (summary.back_edge_seen) {
-                try placeSurvivingParam(keep, &summary.back_edge_params, param);
-            } else {
-                try self.placeConditionalUnit(keep, param);
-            }
+            try placeSurvivingParam(keep, &summary.back_edge_params, GuardedList.at(maybe_params, index));
         }
     }
 
-    /// Whether a param's liveness group is read in the body; every param
-    /// counts as read when no body reads are given.
+    /// Whether the body reads a param's liveness group; every param counts
+    /// as read when no body reads are given.
     fn bodyMayReadParam(self: *Inserter, body_reads: ?*const Row, param: LIR.LocalId) bool {
         const reads = body_reads orelse return true;
         return self.groupUsedFromTable(reads, param);

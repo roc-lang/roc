@@ -21315,12 +21315,15 @@ change schedules no liveness work.
 Join ownership is a must-property. Each reachable jump site contributes a
 state that can only shrink; a join summary maintains their running
 intersection incrementally, and recomputes the body keep-set from that exact
-meet plus the join parameters the back edges rebind and the body reads. A
-parameter the body never reads before rebinding it is dead where the body
-begins, like every other unit of the meet the body does not read, so it stays
-out of the keep-set and each arrival releases it at its jump, right after the
-value was produced; keeping it would hold the value until the body exits,
-across everything the body does first. A parameter counts as
+meet plus the join parameters the back edges rebind and the body reads. An
+ordinary parameter the body never reads before rebinding it is dead where the
+body begins, like every other unit of the meet the body does not read, so it
+stays out of the keep-set and each arrival releases it at its jump, right after
+the value was produced; keeping it would hold the value until the body exits,
+across everything the body does first. A maybe-initialized parameter is always
+placed, conditionally: its producer makes the overwrite of the cell the
+lifetime end of the previous payload, even on a solved-borrowed binding that
+no arrival owns. A parameter counts as
 freshly owned in the body only when every arrival hands it a new unit: back
 edges are excluded from the general meet because they conform at emission by
 releasing down to the keep, but a parameter a back edge leaves alone re-enters
