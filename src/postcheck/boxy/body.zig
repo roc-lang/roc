@@ -154,10 +154,10 @@ pub const JoinInfo = struct {
     merge: ?MergeId,
 };
 
-pub const Builder = struct {
 /// A value a pattern tests, with the value's type.
 pub const PatternItem = struct { pattern: CheckedPatternId, value: LocalId, ty: TypeId };
 
+pub const Builder = struct {
     program: *Program,
     allocator: Allocator,
     worker_id: WorkerId,
