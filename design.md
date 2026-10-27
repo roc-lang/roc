@@ -27375,6 +27375,17 @@ All type structure, named definitions, backing authority, dispatch metadata,
 and ABI boundaries remain in the identity. This whole-analysis boundary is independent of finer-grained
 specialization body caching.
 
+Local checked binder and capture provenance is carried through Lambda Solved,
+but is not a constraint or digest input to that solver. Analysis identity keeps
+the local table positions, symbols, and types; restoration rebinds each
+validated capture's binder, post-check capture id, checked capture id, and
+capture kind from that exact local in the current lifted program. In particular,
+a recursive-binding capture retains its current checked module and root, not
+the module identity from an earlier source version. Persisted
+provenance never replaces the current producer's identities. This exclusion
+does not apply to callable symbols or to the checked occurrence relationships
+used by type solving.
+
 Completed Lambda Solved records contain only the type graph reachable from
 output annotations. Serialization resolves redirects and assigns compact local
 ids while preserving cycles and sharing. Discarded unification rows, unreachable

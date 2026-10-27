@@ -49,7 +49,7 @@ pub fn identity(allocator: Allocator, input: Lifted.ProgramView) Allocator.Error
         .occurrence_ids = &occurrences,
         .pending_occurrences = try gpa.alloc(Mono.NamedType, input.types.named_nodes.len),
     };
-    out.bytes("roc.lambda-analysis-input.v2");
+    out.bytes("roc.lambda-analysis-input.v3");
     inline for (columns) |field| {
         out.value(@TypeOf(@field(input, field)), @field(input, field));
     }
@@ -85,6 +85,11 @@ pub fn traceIdentity(input: Lifted.ProgramView) void {
         var out = Fingerprint{ .names = input.names };
         out.value(@TypeOf(@field(input.types, field)), @field(input.types, field));
         std.debug.print("lambda-input types.{s}={x}\n", .{ field, out.finish() });
+    }
+    inline for (@typeInfo(Lifted.Local).@"struct".field_names) |field| {
+        var out = Fingerprint{ .names = input.names };
+        for (input.locals) |local| out.value(@TypeOf(@field(local, field)), @field(local, field));
+        std.debug.print("lambda-input locals.{s}={x}\n", .{ field, out.finish() });
     }
     var fns = Fingerprint{ .names = input.names };
     for (input.fns) |f| {
@@ -163,6 +168,14 @@ const Fingerprint = struct {
         }
     }
     fn value(self: *Fingerprint, comptime T: type, v: T) void {
+        if (T == Lifted.Local) {
+            // Checked capture provenance is copied to output, not consumed by
+            // solving. Restore obtains it from the matching current local.
+            self.value(@TypeOf(v.id), v.id);
+            self.value(@TypeOf(v.symbol), v.symbol);
+            self.value(@TypeOf(v.ty), v.ty);
+            return;
+        }
         if (T == Mono.TypeId) if (self.types != null) {
             const slot = &self.type_ids[@backingInt(v)];
             if (slot.* == std.math.maxInt(u32)) {
@@ -560,6 +573,15 @@ pub fn restore(allocator: Allocator, lifted: *Lifted.Program, id: *const Identit
         error.InvalidSummary => return null,
         error.OutOfMemory => return error.OutOfMemory,
     };
+    // The validated input binds every capture to the same current local. Its
+    // checked provenance belongs to this build, even when solving is reused.
+    for (@constCast(payload.types.captures)) |*capture| {
+        const local = lifted.getLocal(capture.local);
+        capture.binder = local.identity.binder();
+        capture.capture_id = local.identity.captureId();
+        capture.checked_capture_id = local.identity.checkedCaptureId();
+        capture.capture_kind = local.capture_kind;
+    }
     // This producer's completed graph has no private solver state. Ownership
     // flags are meaningful only while solving and start empty on immutable reuse.
     const flags = try arena.allocator().alloc(bool, payload.types.vars.len);
@@ -870,4 +892,48 @@ test "lambda analysis preserves checked occurrence equality and nominal ownershi
     defer c.deinit(gpa);
     try std.testing.expect(!std.mem.eql(u8, &a.key, &b.key));
     try std.testing.expect(!std.mem.eql(u8, &a.key, &c.key));
+}
+
+fn capturedInput(allocator: Allocator, binder: ?u32) !Lifted.Program {
+    var input = emptyInput(allocator);
+    errdefer input.deinit();
+    const ty = try input.types.internPrimitive(&input.names, .str);
+    const local = try input.addLocalWithBinder(@fromBackingInt(1), ty, if (binder) |id| @fromBackingInt(id) else null);
+    var local_data = input.getLocal(local);
+    local_data.capture_kind = if (binder) |id| .{ .recursive_binding = .{ .module = .{ .bytes = @splat(@intCast(id)) }, .root = @fromBackingInt(id) } } else .lexical;
+    input.locals.set(@backingInt(local), local_data);
+    const captures = try input.addTypedLocalSpan(&.{.{ .local = local, .ty = ty }});
+    const body = try input.addExpr(.{ .ty = ty, .data = .{ .local = local } });
+    _ = try input.addFn(.{ .symbol = @fromBackingInt(0), .args = .empty(), .captures = captures, .body = .{ .roc = body }, .ret = ty });
+    return input;
+}
+
+test "lambda analysis restores current checked capture provenance" {
+    const gpa = std.testing.allocator;
+    var first = try @import("solve.zig").run(gpa, try capturedInput(gpa, 3));
+    defer first.deinit();
+    const old_id = try identity(gpa, first.lifted.view());
+    defer old_id.deinit(gpa);
+    const bytes = (try encode(gpa, &first, &old_id)).?;
+    defer gpa.free(bytes);
+    for ([_]?u32{ 9, null }) |binder| {
+        var current = try capturedInput(gpa, binder);
+        var owned = true;
+        defer if (owned) current.deinit();
+        const current_id = try identity(gpa, current.view());
+        defer current_id.deinit(gpa);
+        try std.testing.expectEqual(old_id.key, current_id.key);
+        current.types.freeze();
+        var result = (try restore(gpa, &current, &current_id, bytes)).?;
+        owned = false;
+        defer result.deinit();
+        try std.testing.expect(result.types.captures.items.len != 0);
+        for (result.types.captures.items) |capture| {
+            const local = result.lifted.getLocal(capture.local);
+            try std.testing.expectEqual(local.identity.binder(), capture.binder);
+            try std.testing.expectEqual(local.identity.captureId(), capture.capture_id);
+            try std.testing.expectEqual(local.identity.checkedCaptureId(), capture.checked_capture_id);
+            try std.testing.expectEqual(local.capture_kind, capture.capture_kind);
+        }
+    }
 }
