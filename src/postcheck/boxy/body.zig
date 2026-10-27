@@ -123,6 +123,8 @@ pub const Task = union(enum) {
     finish_interpolation_call: struct { assembler: LocalId, assembler_ty: TypeId, values_ty: TypeId, count: u32, result: TypeId },
     /// Pop a value and a hasher and hash the value structurally.
     finish_hash: struct { value: TypeId, result: TypeId },
+    /// Pop an `expect`'s failing `?` value and fail the expect with it.
+    finish_expect_err: struct { expr: CheckedExprId, value: TypeId },
     /// Push a string literal of the checked bodies as a `Str` value.
     push_value_str: checked.CheckedStringLiteralId,
     /// Push `local` as a value.
@@ -1334,6 +1336,22 @@ pub const Builder = struct {
                 };
                 try self.pushValue(try self.readField(tuple_ty, tuple, access.elem_index, elems[access.elem_index]));
             },
+            .finish_expect_err => |fail| {
+                // A `?` inside an `expect` that evaluated an `Err`: the
+                // expect fails with the rendered value.
+                const value = self.popValue();
+                const expr = self.bodies().expr(fail.expr);
+                const rendered = try self.closedLocal(.str);
+                try self.emitDyn(rendered, .{ .inspect = .{ .value = value, .desc = try self.descOf(fail.value) } });
+                const prefix_text = try std.fmt.allocPrint(self.allocator, "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(", .{self.bodies().stringLiteral(expr.data.expect_err.snippet)});
+                defer self.allocator.free(prefix_text);
+                const with_value = try self.closedLocal(.str);
+                try self.emitLowLevel(with_value, .str_concat, &.{ try self.strLiteral(prefix_text), rendered });
+                const message = try self.closedLocal(.str);
+                try self.emitLowLevel(message, .str_concat, &.{ with_value, try self.strLiteral(")") });
+                try self.emitTerminal(.{ .expect_err = .{ .message = message, .region = expr.source_region } });
+                try self.pushValue(try self.localOf(try self.exprType(fail.expr), .frame));
+            },
             .finish_dbg => |ty| {
                 const value = self.popValue();
                 const message = try self.closedLocal(.str);
@@ -1546,6 +1564,10 @@ pub const Builder = struct {
                 try self.push(.{ .expr = inner });
             },
             .interpolation => |interpolation| try self.lowerInterpolation(expr_id, interpolation),
+            .expect_err => |expect_err| {
+                try self.push(.{ .finish_expect_err = .{ .expr = expr_id, .value = try self.exprType(expect_err.expr) } });
+                try self.push(.{ .expr = expect_err.expr });
+            },
             .str_from_quote => |quote| {
                 if (quote.conversion_root) |root| return try self.restoreConversionRoot(root, try self.exprType(expr_id));
                 if (quote.plan) |plan| return try self.lowerLiteralConversion(expr_id, plan, .quote);
