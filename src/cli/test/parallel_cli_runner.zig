@@ -12971,6 +12971,9 @@ const LlvmRuntimeTarget = struct {
     called: []const []const u8,
     /// Routines the object must define although no relocation refers to them.
     defined: []const []const u8 = &.{},
+    /// A glibc target links dynamically against libc, so roc builds for it
+    /// only on a Linux host.
+    glibc: bool = false,
 };
 
 const llvm_runtime_base = [_][]const u8{ "memcpy", "memmove", "memset", "fmod", "fmodf" };
@@ -12980,8 +12983,8 @@ const llvm_runtime_base_chkstk = llvm_runtime_base ++ [_][]const u8{"__chkstk"};
 const llvm_runtime_targets = [_]LlvmRuntimeTarget{
     .{ .name = "x64musl", .called = &llvm_runtime_base },
     .{ .name = "x64v1musl", .called = &llvm_runtime_base_v1 },
-    .{ .name = "x64glibc", .called = &llvm_runtime_base },
-    .{ .name = "x64v1glibc", .called = &llvm_runtime_base_v1 },
+    .{ .name = "x64glibc", .called = &llvm_runtime_base, .glibc = true },
+    .{ .name = "x64v1glibc", .called = &llvm_runtime_base_v1, .glibc = true },
     .{ .name = "x64freebsd", .called = &llvm_runtime_base },
     .{ .name = "x64v1freebsd", .called = &llvm_runtime_base_v1 },
     .{ .name = "x64netbsd", .called = &llvm_runtime_base },
@@ -12994,8 +12997,8 @@ const llvm_runtime_targets = [_]LlvmRuntimeTarget{
     .{ .name = "x64v1mingw", .called = &(llvm_runtime_base_v1 ++ [_][]const u8{"___chkstk_ms"}) },
     .{ .name = "arm64musl", .called = &llvm_runtime_base },
     .{ .name = "arm64v1musl", .called = &llvm_runtime_base },
-    .{ .name = "arm64glibc", .called = &llvm_runtime_base },
-    .{ .name = "arm64v1glibc", .called = &llvm_runtime_base },
+    .{ .name = "arm64glibc", .called = &llvm_runtime_base, .glibc = true },
+    .{ .name = "arm64v1glibc", .called = &llvm_runtime_base, .glibc = true },
     .{ .name = "arm64mac", .called = &(llvm_runtime_base ++ [_][]const u8{"bzero"}) },
     .{ .name = "arm64win", .called = &llvm_runtime_base_chkstk },
     .{ .name = "arm64v1win", .called = &llvm_runtime_base_chkstk },
@@ -13065,6 +13068,7 @@ fn customLlvmObjectsLeaveOnlyRocSymbols(
 ) ?TestResult {
     const roc_file = "test/cli/LlvmPrivateRuntimeRoutines.roc";
     for (llvm_runtime_targets) |target| {
+        if (target.glibc and builtin.os.tag != .linux) continue;
         const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, target.name }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
         const out_arg = outputArg(allocator, output_path) catch |err|
