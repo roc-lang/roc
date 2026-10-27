@@ -484,7 +484,7 @@ const State = struct {
             if (entry.found_existing) continue;
             var hash = Sha256.init(.{});
             hashTag(&hash, "roc.test-declaration.v1");
-            hashBytes(&hash, env.qualifiedModuleName());
+            hashBytes(&hash, env.module_name);
             const region = env.store.getStatementRegion(statement);
             hashBytes(&hash, self.regionText(region));
             if (owners.get(statement)) |owner| {
