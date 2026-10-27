@@ -561,8 +561,9 @@ pub const Converter = struct {
             results.shrinkRetainingCapacity(frame.results_start);
             pending.shrinkRetainingCapacity(frame.pending_start);
             // A type with no identity variables converts the same under
-            // every environment.
-            if (!self.seal_undetermined_kinds and !rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
+            // every environment; a seeding conversion, which keeps scheme
+            // variables apart, is not a lowering conversion.
+            if (!self.seal_undetermined_kinds and self.seed_scheme_vars == null and !rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
                 try self.store.closed_memo.put(allocator, .{ .module = frame.module, .ty = frame.ty }, built);
             }
             if (frames.items.len == 0) return built;
