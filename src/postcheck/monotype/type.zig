@@ -2545,7 +2545,7 @@ pub const Store = struct {
         return self.computeDigest(name_store, ty, .representation, stats) catch digestOutOfMemory();
     }
 
-    /// Fallible representation hashing for optional persistent data publication.
+    /// Fallible representation hashing for optional persistent data commits.
     pub fn representationDigestFallible(self: *Store, name_store: *const names.NameStore, ty: TypeId) std.mem.Allocator.Error!names.TypeDigest {
         return self.computeDigest(name_store, ty, .representation, null);
     }

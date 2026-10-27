@@ -1008,6 +1008,7 @@ const NativeLookupProfile = struct {
     }
 };
 
+/// The native packs a build has acquired, with the offers they link.
 pub const LoadedPacks = struct {
     const LinkedOffer = struct {
         hit: Common.SpecCacheHit,
@@ -2800,7 +2801,7 @@ const IndexFixture = struct {
         try self.store.writeIndexed(.local, identity, &.{ .arena = undefined, .excerpts = artifacts, .source_files = files }, specs);
     }
 
-    fn payloadPath(self: *@This(), value: backend.dev.CodeExcerpt.Excerpt) ![]u8 {
+    fn payloadPath(self: *@This(), value: backend.dev.CodeExcerpt.Excerpt) error{ Busy, CapacityExceeded, Changed, CorruptCatalog, InvalidArtifact, IoFailure, Missing, OutOfMemory, PathTooLong, TestUnexpectedResult }![]u8 {
         const bytes = try Index.payload(allocator, value);
         defer allocator.free(bytes);
         var record = (try self.store.native.acquire(self.store.indexedIdentity(.local, @splat(0), Index.digest(bytes), .payload), self.store.native.now())) orelse return error.TestUnexpectedResult;
@@ -3404,7 +3405,7 @@ test "native publication allocation failures release temporary records and retai
     try fixture.init();
     defer fixture.deinit();
     const Check = struct {
-        fn publish(failing: Allocator) !void {
+        fn publish(failing: Allocator) error{ AccessDenied, AntivirusInterference, BadPathName, Canceled, DeviceBusy, FileBusy, FileNotFound, FileSystem, FileTooBig, InputOutput, IsDir, NameTooLong, NetworkNotFound, NoDevice, NoHomeDirectory, NoSpaceLeft, NotDir, OperationUnsupported, OutOfMemory, PackWriteFailed, PathAlreadyExists, PermissionDenied, PipeBusy, ProcessFdQuotaExceeded, SymLinkLoop, SystemFdQuotaExceeded, SystemResources, Unexpected, UnrecognizedVolume }!void {
             var fresh: F = undefined;
             try fresh.init();
             defer fresh.deinit();
@@ -3412,14 +3413,14 @@ test "native publication allocation failures release temporary records and retai
             writer.allocator = failing;
             try writer.writeIndexed(.local, F.identity, &.{ .arena = undefined, .excerpts = &.{F.excerpt(1, "code")} }, &.{F.spec(1, 0)});
         }
-        fn load(failing: Allocator, store: *const Store) !void {
+        fn load(failing: Allocator, store: *const Store) error{ MalformedPack, OutOfMemory, PackDirectoryUnreadable, TestExpectedEqual, UnsupportedPackVersion }!void {
             var packs = LoadedPacks.init(failing);
             defer packs.deinit();
             try store.loadIdentity(std.testing.io, &packs, .local, F.identity);
             try packs.indexPacks();
             try std.testing.expectEqual(LoadedPacks.IndexedResult.hit, try packs.findIndexed(@splat(1), .dev_code, &.{}));
         }
-        fn copy(failing: Allocator, set: *const backend.dev.CodeExcerpt.Set) !void {
+        fn copy(failing: Allocator, set: *const backend.dev.CodeExcerpt.Set) error{ OutOfMemory, TestExpectedEqual }!void {
             var owned = try backend.dev.CodeExcerpt.combine(failing, &.{set});
             defer owned.deinit();
             try std.testing.expectEqual(set.excerpts[0].payload_record, owned.excerpts[0].payload_record);
@@ -3643,7 +3644,7 @@ test "pack readers record retention once per invocation without overwriting newe
     const id = store.packIdentity(.local, @splat(1), @splat(2));
     try store.native.write(id, "retained", 1);
     const Inspect = struct {
-        fn read(s: *Store, identity: compile.artifacts.Identity) !struct { sequence: u64, used: i64 } {
+        fn read(s: *Store, identity: compile.artifacts.Identity) error{ Busy, CapacityExceeded, Changed, CorruptCatalog, InvalidArtifact, IoFailure, Missing, OutOfMemory, PathTooLong }!struct { sequence: u64, used: i64 } {
             var counters = compile.artifacts.catalog.Counters{};
             var shard = try compile.artifacts.Shard.openRequired(&s.native, compile.artifacts.Store.shardFor(identity.indexedKey()), false, &counters);
             defer shard.close();
@@ -3741,7 +3742,7 @@ test "interface requests share same-key reads while independent workers publish 
                 self.failed = true;
             };
         }
-        fn work(self: *@This()) !void {
+        fn work(self: *@This()) error{ OutOfMemory, TestExpectedEqual, TestUnexpectedResult }!void {
             const family: [32]u8 = @splat(61);
             const shared: [32]u8 = @splat(254);
             for (0..32) |i| {

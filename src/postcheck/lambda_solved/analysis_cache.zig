@@ -24,7 +24,7 @@ const type_columns = .{ "types", "named_nodes", "erased_digests", "spans", "fiel
 /// Exact consumed input modulo renaming of Monotype table ids. Expression,
 /// function and binding tables keep their current identities. Named occurrence
 /// references are rebound through the matching current input, never an old
-/// checked artifact. Their equality partition remains part of the key.
+/// checked module. Their equality partition remains part of the key.
 pub const Identity = struct {
     key: [32]u8,
     occurrences: []Mono.NamedType,
@@ -33,6 +33,8 @@ pub const Identity = struct {
     }
 };
 
+/// The identity of a lifted program as lambda analysis reads it: its types,
+/// named type occurrences, and functions.
 pub fn identity(allocator: Allocator, input: Lifted.ProgramView) Allocator.Error!Identity {
     var scratch = std.heap.ArenaAllocator.init(allocator);
     defer scratch.deinit();
@@ -193,7 +195,7 @@ const Fingerprint = struct {
                 self.pending_occurrences[self.occurrence_count] = v;
                 self.occurrence_count += 1;
             }
-            // Nominal owner is semantic. The checked occurrence's raw address
+            // Nominal owner is part of the meaning. The checked occurrence's raw address
             // is only used for equality by this solver; preserve that relation
             // and bind the annotation to its current occurrence on restore.
             self.bytes(&v.module.bytes);
@@ -213,7 +215,7 @@ const Fingerprint = struct {
             .@"union" => |info| {
                 self.value(info.tag_type.?, std.meta.activeTag(v));
                 inline for (info.field_names, info.field_types) |field, F| if (std.meta.activeTag(v) == @field(info.tag_type.?, field)) return self.value(F, @field(v, field));
-                unreachable;
+                unreachable; // the loop above matches the active tag, which is one of the union's fields
             },
             .optional => |info| {
                 self.value(bool, v != null);
@@ -243,12 +245,27 @@ const Fingerprint = struct {
                 self.bytes(&bytes_);
             },
             .void => {},
-            else => @compileError("unsupported analysis identity field: " ++ @typeName(T)),
+            .type,
+            .noreturn,
+            .comptime_float,
+            .comptime_int,
+            .undefined,
+            .null,
+            .error_union,
+            .error_set,
+            .@"fn",
+            .@"opaque",
+            .frame,
+            .@"anyframe",
+            .vector,
+            .enum_literal,
+            .spirv,
+            => @compileError("unsupported analysis identity field: " ++ @typeName(T)),
         }
     }
 };
 
-/// Solver annotations only. The executable IR always comes from this build.
+/// Solver annotations only. The lowered IR always comes from this build.
 const Payload = struct {
     input_identity: [32]u8,
     types: Type.Store.View,
@@ -326,7 +343,7 @@ const CompletedClosure = struct {
             },
             .@"union" => |info| blk: {
                 inline for (info.field_names, info.field_types) |field, F| if (std.meta.activeTag(v) == @field(info.tag_type.?, field)) break :blk @unionInit(T, field, try self.value(F, @field(v, field)));
-                unreachable;
+                unreachable; // the loop above matches the active tag, which is one of the union's fields
             },
             .optional => |info| if (v) |present| try self.value(info.child, present) else null,
             .pointer => |info| blk: {
@@ -335,7 +352,28 @@ const CompletedClosure = struct {
                 for (v, out) |source, *dest| dest.* = try self.value(info.child, source);
                 break :blk out;
             },
-            else => v,
+            .type,
+            .void,
+            .bool,
+            .noreturn,
+            .int,
+            .float,
+            .array,
+            .comptime_float,
+            .comptime_int,
+            .undefined,
+            .null,
+            .error_union,
+            .error_set,
+            .@"enum",
+            .@"fn",
+            .@"opaque",
+            .frame,
+            .@"anyframe",
+            .vector,
+            .enum_literal,
+            .spirv,
+            => v,
         };
     }
 
@@ -422,10 +460,10 @@ const Context = struct {
         std.mem.writeInt(u32, key[32..36], expr, .little);
         return key;
     }
-    pub fn defaultArtifact(self: *const Context, module: [32]u8, expr: u32) ?[32]u8 {
+    pub fn defaultDeclaringModule(self: *const Context, module: [32]u8, expr: u32) ?[32]u8 {
         // Analysis only carries a current input default reference; it never
-        // persists its executable body. Its validation token is the complete
-        // input identity, rather than a newly reconstructed checked artifact.
+        // persists its lowered body. Its validation token is the complete
+        // input identity, rather than a newly reconstructed checked module.
         return if (self.defaults.contains(defaultKey(module, expr))) self.key else null;
     }
     pub fn validModuleIdentity(self: *const Context, module: [32]u8) bool {
@@ -544,7 +582,7 @@ fn validate(allocator: Allocator, input: Lifted.ProgramView, p: Payload) Codec.D
     for (p.fn_tys) |ty| if (t.rootContent(ty) != .func) return error.InvalidSummary;
 }
 
-/// Encode only annotations; no source or executable payload is persisted.
+/// Encode only annotations; no source or lowered payload is persisted.
 pub fn encode(allocator: Allocator, program: *Ast.Program, id: *const Identity) Allocator.Error!?[]u8 {
     var context = try Context.init(allocator, program.lifted.view(), id);
     defer context.deinit();
@@ -642,13 +680,13 @@ fn emptyInput(allocator: Allocator) Lifted.Program {
     );
 }
 
-fn literalInput(allocator: Allocator, text: []const u8) !Lifted.Program {
+fn literalInput(allocator: Allocator, text: []const u8) Allocator.Error!Lifted.Program {
     var input = emptyInput(allocator);
     errdefer input.deinit();
     const ty = try input.types.internPrimitive(&input.names, .str);
     const literal = try input.addStringLiteral(text);
     const body = try input.addExpr(.{ .ty = ty, .data = .{ .str_lit = literal } });
-    _ = try input.addFn(.{ .symbol = @fromBackingInt(0), .args = .empty(), .captures = .empty(), .body = .{ .roc = body }, .ret = ty });
+    _ = try input.addFn(.{ .symbol = @fromBackingInt(3), .args = .empty(), .captures = .empty(), .body = .{ .roc = body }, .ret = ty });
     return input;
 }
 
@@ -700,7 +738,7 @@ test "lambda analysis identity includes callable topology and rejects mismatched
     for (0..bytes.len) |end| try std.testing.expectEqual(null, try restore(gpa, &current, &id, bytes[0..end]));
 }
 
-fn analysisAllocationRoundTrip(gpa: Allocator) !void {
+fn analysisAllocationRoundTrip(gpa: Allocator) Allocator.Error!void {
     var first = try @import("solve.zig").run(gpa, try literalInput(gpa, "before"));
     defer first.deinit();
     const id = try identity(gpa, first.lifted.view());
@@ -719,17 +757,17 @@ test "lambda analysis allocation failures preserve input ownership" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, analysisAllocationRoundTrip, .{});
 }
 
-fn recursiveInput(allocator: Allocator) !Lifted.Program {
+fn recursiveInput(allocator: Allocator) Allocator.Error!Lifted.Program {
     return recursiveInputWithPadding(allocator, false);
 }
-fn recursiveInputWithPadding(allocator: Allocator, padding: bool) !Lifted.Program {
+fn recursiveInputWithPadding(allocator: Allocator, padding: bool) Allocator.Error!Lifted.Program {
     var input = emptyInput(allocator);
     errdefer input.deinit();
     if (padding) _ = try input.types.internPrimitive(&input.names, .bool);
     const root = try input.types.beginRecursive();
     const callback = try input.types.add(.{ .func = .{ .args = .empty(), .ret = root.ty } });
     input.types.finishRecursive(root, .{ .record = try input.types.addFields(&.{.{ .name = try input.names.internRecordFieldLabel("next"), .ty = callback, .default = null }}) });
-    const local = try input.addLocal(@fromBackingInt(0), root.ty);
+    const local = try input.addLocal(@fromBackingInt(2), root.ty);
     const args = try input.addTypedLocalSpan(&.{.{ .local = local, .ty = root.ty }});
     const body = try input.addExpr(.{ .ty = root.ty, .data = .{ .local = local } });
     _ = try input.addFn(.{ .symbol = @fromBackingInt(1), .args = args, .captures = .empty(), .body = .{ .roc = body }, .ret = root.ty });
@@ -761,7 +799,9 @@ test "lambda analysis preserves recursive callable relations and rejects redirec
     var bad = payloadOf(&first, key);
     const vars = try gpa.dupe(Type.StoredNode, bad.types.vars);
     defer gpa.free(vars);
-    vars[0] = .{ .link = @fromBackingInt(0) };
+    // A variable linked to itself is a cycle no encoder produces.
+    const self_linked = 0;
+    vars[self_linked] = .{ .link = @fromBackingInt(self_linked) };
     bad.types.vars = vars;
     var context = try Context.init(gpa, first.lifted.view(), &id);
     defer context.deinit();
@@ -776,12 +816,13 @@ test "lambda analysis identity distinguishes callbacks with the same signature" 
     const gpa = std.testing.allocator;
     var input = try literalInput(gpa, "first callback");
     defer input.deinit();
-    const first = input.view().fns[0];
+    const first_index = 0;
+    const first = input.view().fns[first_index];
     const literal = try input.addStringLiteral("second callback");
     const body = try input.addExpr(.{ .ty = first.ret, .data = .{ .str_lit = literal } });
     const second = try input.addFn(.{ .symbol = @fromBackingInt(1), .args = .empty(), .captures = .empty(), .body = .{ .roc = body }, .ret = first.ret });
     const signature = try input.types.add(.{ .func = .{ .args = .empty(), .ret = first.ret } });
-    const closure = try input.addExpr(.{ .ty = signature, .data = .{ .fn_ref = .{ .fn_id = @fromBackingInt(0), .captures = .empty() } } });
+    const closure = try input.addExpr(.{ .ty = signature, .data = .{ .fn_ref = .{ .fn_id = @fromBackingInt(first_index), .captures = .empty() } } });
     _ = try input.addFn(.{ .symbol = @fromBackingInt(2), .args = .empty(), .captures = .empty(), .body = .{ .roc = closure }, .ret = signature });
     const before = try identity(gpa, input.view());
     defer before.deinit(gpa);
@@ -827,7 +868,7 @@ test "lambda analysis identity ignores type numbering and unreachable types" {
     try std.testing.expect(first.getFnAt(0).ret != second.getFnAt(0).ret);
 }
 
-fn occurrenceInput(allocator: Allocator, version: u8, shared: bool, owner: u8) !Lifted.Program {
+fn occurrenceInput(allocator: Allocator, version: u8, shared: bool, owner: u8) Allocator.Error!Lifted.Program {
     var input = emptyInput(allocator);
     errdefer input.deinit();
     if (version != 0) _ = try input.types.internPrimitive(&input.names, .bool);
@@ -844,7 +885,7 @@ fn occurrenceInput(allocator: Allocator, version: u8, shared: bool, owner: u8) !
     const first = try input.types.add(.{ .named = named });
     if (!shared) named.named_type.ty = @fromBackingInt(@backingInt(named.named_type.ty) + 1);
     const second = try input.types.add(.{ .named = named });
-    const a = try input.addLocal(@fromBackingInt(0), first);
+    const a = try input.addLocal(@fromBackingInt(3), first);
     const b = try input.addLocal(@fromBackingInt(1), second);
     const args = try input.addTypedLocalSpan(&.{ .{ .local = a, .ty = first }, .{ .local = b, .ty = second } });
     const body = try input.addExpr(.{ .ty = second, .data = .{ .local = b } });
@@ -894,7 +935,7 @@ test "lambda analysis preserves checked occurrence equality and nominal ownershi
     try std.testing.expect(!std.mem.eql(u8, &a.key, &c.key));
 }
 
-fn capturedInput(allocator: Allocator, binder: ?u32) !Lifted.Program {
+fn capturedInput(allocator: Allocator, binder: ?u32) Allocator.Error!Lifted.Program {
     var input = emptyInput(allocator);
     errdefer input.deinit();
     const ty = try input.types.internPrimitive(&input.names, .str);
@@ -904,7 +945,7 @@ fn capturedInput(allocator: Allocator, binder: ?u32) !Lifted.Program {
     input.locals.set(@backingInt(local), local_data);
     const captures = try input.addTypedLocalSpan(&.{.{ .local = local, .ty = ty }});
     const body = try input.addExpr(.{ .ty = ty, .data = .{ .local = local } });
-    _ = try input.addFn(.{ .symbol = @fromBackingInt(0), .args = .empty(), .captures = captures, .body = .{ .roc = body }, .ret = ty });
+    _ = try input.addFn(.{ .symbol = @fromBackingInt(2), .args = .empty(), .captures = captures, .body = .{ .roc = body }, .ret = ty });
     return input;
 }
 

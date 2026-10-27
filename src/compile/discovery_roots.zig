@@ -12,6 +12,8 @@ const Key = [32]u8;
 const magic = "ROC_DISCOVERY_ROOTS_1";
 const scope = "semantic-test-root-discovery-v1";
 
+/// The cache key for one test root's discovery result, covering its checked
+/// identity, the native target, and the checking context.
 pub fn rootKey(artifact: *const checked.CheckedModuleArtifact, request: checked.RootRequest) Key {
     const root = request.compile_time_root orelse base.invariant("semantic validation root lacks checked identity", .{});
     var hash = base.Sha256.init(.{});

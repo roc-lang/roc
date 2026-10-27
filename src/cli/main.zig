@@ -9484,7 +9484,7 @@ fn carriesData(excerpt: backend.dev.CodeExcerpt.Excerpt, name: []const u8) bool 
 }
 
 /// Test helper: whether the entry at `root` is withheld for program-local symbols.
-fn testNamesProgramLocalSymbols(set: *const backend.dev.CodeExcerpt.Set, root: u32) !bool {
+fn testNamesProgramLocalSymbols(set: *const backend.dev.CodeExcerpt.Set, root: u32) error{ OutOfMemory, TestExpectedEqual }!bool {
     var closure = try SpliceClosure.init(std.testing.allocator, set);
     defer closure.deinit();
     const marks = try std.testing.allocator.alloc(bool, set.excerpts.len);
@@ -19048,7 +19048,7 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [42]
         .{ .name = "Inhabitation memo hits", .count = graph.inhabitation_memo_hits },
         .{ .name = "Analysis changed nodes", .count = graph.analysis_changed_nodes },
         .{ .name = "Analysis invalidation edges", .count = graph.analysis_invalidation_edges },
-        .{ .name = "Analysis peak facts", .count = graph.analysis_peak_facts },
+        .{ .name = "Analysis peak entries", .count = graph.analysis_peak_entries },
         .{ .name = "Analysis peak payload bytes", .count = graph.analysis_peak_payload_bytes },
         .{ .name = "Analysis invalidated groups", .count = graph.analysis_invalidated_groups },
     };

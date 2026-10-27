@@ -3248,9 +3248,9 @@ test "lift restores cached iterator normalization scope before source identity i
                     .kind = .checked_source,
                     .ordinal = 0,
                 }),
-                .template = @fromBackingInt(0),
+                .template = @fromBackingInt(1),
             } },
-            .source_fn_ty = @fromBackingInt(0),
+            .source_fn_ty = @fromBackingInt(1),
             .source_fn_key = .{},
             .mono_fn_ty = function,
             .cached = .{
@@ -3266,11 +3266,14 @@ test "lift restores cached iterator normalization scope before source identity i
             },
         };
         const fn_id = try mono.addFn(template);
-        _ = try mono.addDef(.{ .symbol = @fromBackingInt(0), .fn_id = fn_id, .fn_def = template, .args = .empty(), .body = .hosted, .ret = result });
+        _ = try mono.addDef(.{ .symbol = @fromBackingInt(1), .fn_id = fn_id, .fn_def = template, .args = .empty(), .body = .hosted, .ret = result });
         mono.freeze();
         owned = false;
         var lifted = try run(a, mono);
         defer lifted.deinit();
-        try std.testing.expectEqual(normalized, lifted.getFn(@fromBackingInt(0)).iterator_fusion_scope);
+        try std.testing.expectEqual(@as(usize, 1), lifted.fnCount());
+        for (0..lifted.fnCount()) |index| {
+            try std.testing.expectEqual(normalized, lifted.getFn(@fromBackingInt(@intCast(index))).iterator_fusion_scope);
+        }
     }
 }

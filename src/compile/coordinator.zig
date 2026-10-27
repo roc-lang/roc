@@ -10734,7 +10734,7 @@ test "Coordinator corrupt checked module cache entries compile from source" {
     // well leaves source as the only admissible input.
     const inference_cache_dir = try config.getInferenceCacheDir(allocator);
     defer allocator.free(inference_cache_dir);
-    const overwritten_inference = try overwriteFilesUnderDir(allocator, cache_dir, inference_cache_dir, .inference, "not an inference cache entry");
+    const overwritten_inference = try overwriteFilesUnderDir(allocator, cache_dir, inference_cache_dir, .checked, "not an inference cache entry");
     try std.testing.expect(overwritten_inference > 0);
 
     const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
@@ -10764,7 +10764,7 @@ test "Coordinator corrupt checked module cache env relocations compile from sour
     // well leaves source as the only admissible input.
     const inference_cache_dir = try config.getInferenceCacheDir(allocator);
     defer allocator.free(inference_cache_dir);
-    const overwritten_inference = try overwriteFilesUnderDir(allocator, cache_dir, inference_cache_dir, .inference, "not an inference cache entry");
+    const overwritten_inference = try overwriteFilesUnderDir(allocator, cache_dir, inference_cache_dir, .checked, "not an inference cache entry");
     try std.testing.expect(overwritten_inference > 0);
 
     const second = try compileAppWithCheckedModuleCache(allocator, cache_dir, "test/str/app_message.roc");
@@ -13369,7 +13369,7 @@ test "semantic test discovery survives edits and never hides invalid literals or
     ;
     const Run = struct {
         const Result = struct { hits: u32, errors: bool, observed: bool };
-        fn run(gpa: Allocator, directory: []const u8, path: []const u8) !Result {
+        fn run(gpa: Allocator, directory: []const u8, path: []const u8) error{ AbsolutePlatformPath, AccessDenied, BuiltinArtifactVersionMismatch, BuiltinLowLevelAnnotationMustBeFunction, Canceled, CorruptArtifact, CorruptBuiltinArtifact, CorruptEmbeddedBuiltins, EmptyCode, FileNotFound, HeaderParseFailed, Internal, InvalidPackageHeader, InvalidPlatformPath, IoError, LockedMemoryLimitExceeded, LowLevelOperationsNotFound, MmapFailed, MprotectFailed, NotAnAppHeader, OutOfMemory, RuntimeError, SourceTokenizationFailed, StaleEmbeddedBuiltins, StreamTooLong, SystemResources, ThreadQuotaExceeded, Unexpected, UnsupportedBuiltinAnnotationOnly, UnsupportedPackageSpec, UnsupportedPlatform, UnsupportedPlatformSpec, UnwindRegistrationFailed, VirtualAllocFailed, VirtualProtectFailed }!Result {
             var capture = StderrCapture{ .allocator = gpa };
             defer capture.bytes.deinit(gpa);
             var context = CoreCtx.os(gpa, gpa, std.testing.io);
@@ -13448,7 +13448,7 @@ test "initializer validation certificates defer values without losing errors obs
     ;
     const Run = struct {
         const Result = struct { hits: u32, evaluated: u64, errors: bool, observed: bool };
-        fn run(gpa: Allocator, directory: []const u8, app_path: []const u8) !Result {
+        fn run(gpa: Allocator, directory: []const u8, app_path: []const u8) error{ AbsolutePlatformPath, AccessDenied, BuiltinArtifactVersionMismatch, BuiltinLowLevelAnnotationMustBeFunction, Canceled, CorruptArtifact, CorruptBuiltinArtifact, CorruptEmbeddedBuiltins, EmptyCode, FileNotFound, HeaderParseFailed, Internal, InvalidPackageHeader, InvalidPlatformPath, IoError, LockedMemoryLimitExceeded, LowLevelOperationsNotFound, MmapFailed, MprotectFailed, NotAnAppHeader, OutOfMemory, RuntimeError, SourceTokenizationFailed, StaleEmbeddedBuiltins, StreamTooLong, SystemResources, TestExpectedEqual, TestUnexpectedResult, ThreadQuotaExceeded, Unexpected, UnsupportedBuiltinAnnotationOnly, UnsupportedPackageSpec, UnsupportedPlatform, UnsupportedPlatformSpec, UnwindRegistrationFailed, VirtualAllocFailed, VirtualProtectFailed }!Result {
             var capture = StderrCapture{ .allocator = gpa };
             defer capture.bytes.deinit(gpa);
             var context = CoreCtx.os(gpa, gpa, std.testing.io);

@@ -417,7 +417,7 @@ fn equal(comptime T: type, a: T, b: T) bool {
             inline for (info.field_names) |name| {
                 if (tag == @field(std.meta.Tag(T), name)) break :blk equal(@FieldType(T, name), @field(a, name), @field(b, name));
             }
-            unreachable;
+            unreachable; // the loop above matches the active tag, which is one of the union's fields
         },
         .optional => |opt| if (a) |value| if (b) |other| equal(opt.child, value, other) else false else b == null,
         .void => true,

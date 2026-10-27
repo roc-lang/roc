@@ -532,8 +532,7 @@ const State = struct {
         try sites.append(self.allocator, .{ .identity = hash.finalResult(), .start = region.start.offset, .end = region.end.offset });
     }
 
-    fn importedDefinition(self: *const State, view: checked_artifact.ImportedModuleView, def: CIR.Def.Idx) [32]u8 {
-        _ = self;
+    fn importedDefinition(view: checked_artifact.ImportedModuleView, def: CIR.Def.Idx) [32]u8 {
         const summary = view.compile_time_root_identities;
         var lo: usize = 0;
         var hi = summary.test_definitions.len;
@@ -591,12 +590,12 @@ const State = struct {
                 .e_lookup_external => |lookup| {
                     const view = self.importedByIndex(lookup.module_idx);
                     const target: CIR.Def.Idx = @fromBackingInt(lookup.target_node_idx);
-                    try values.append(self.allocator, self.importedDefinition(view, target));
+                    try values.append(self.allocator, importedDefinition(view, target));
                 },
                 .e_lookup_associated_resolved => |lookup| {
                     const identity = self.inputs.env.moduleIdentityHash(lookup.module_identity);
                     if (!std.meta.eql(identity.*, self.inputs.own_identity)) {
-                        try values.append(self.allocator, self.importedDefinition(self.importedByIdentity(identity.*), lookup.target_def_idx));
+                        try values.append(self.allocator, importedDefinition(self.importedByIdentity(identity.*), lookup.target_def_idx));
                     }
                 },
                 .e_num,
@@ -899,7 +898,64 @@ const State = struct {
                     const capture = self.inputs.env.store.getCapture(capture_id);
                     if (!self.pattern_to_def.contains(capture.pattern_idx)) lexical = true;
                 },
-                else => {},
+                .e_num,
+                .e_frac_f32,
+                .e_frac_f64,
+                .e_dec,
+                .e_dec_small,
+                .e_num_from_numeral,
+                .e_typed_int,
+                .e_typed_frac,
+                .e_typed_num_from_numeral,
+                .e_str_segment,
+                .e_str,
+                .e_bytes_literal,
+                .e_lookup_external,
+                .e_deferred_import_ref,
+                .e_lookup_associated_local,
+                .e_lookup_associated,
+                .e_lookup_associated_resolved,
+                .e_lookup_required,
+                .e_list,
+                .e_empty_list,
+                .e_tuple,
+                .e_match,
+                .e_if,
+                .e_call,
+                .e_record,
+                .e_empty_record,
+                .e_block,
+                .e_tag,
+                .e_nominal,
+                .e_nominal_external,
+                .e_zero_argument_tag,
+                .e_lambda,
+                .e_binop,
+                .e_unary_minus,
+                .e_field_access,
+                .e_method_call,
+                .e_dispatch_call,
+                .e_interpolation,
+                .e_structural_eq,
+                .e_structural_hash,
+                .e_method_eq,
+                .e_type_method_call,
+                .e_type_dispatch_call,
+                .e_tuple_access,
+                .e_runtime_error,
+                .e_crash,
+                .e_dbg,
+                .e_expect_err,
+                .e_expect,
+                .e_ellipsis,
+                .e_anno_only,
+                .e_derived_method,
+                .e_return,
+                .e_break,
+                .e_for,
+                .e_hosted_lambda,
+                .e_run_low_level,
+                => {},
             }
             try appendExprChildren(self.inputs.env, expr, &pending, self.allocator);
         }

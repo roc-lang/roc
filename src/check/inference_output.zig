@@ -217,7 +217,7 @@ test "inference reference indexes release partial allocation state" {
     try testInferenceReferenceBinding(true);
 }
 
-fn testInferenceReferenceBinding(allocation_failures: bool) !void {
+fn testInferenceReferenceBinding(allocation_failures: bool) error{ IncompatibleReferences, MemoryLeakDetected, NondeterministicMemoryUsage, OutOfMemory, SwallowedOutOfMemoryError, TestExpectedEqual, TestExpectedError, TestUnexpectedError }!void {
     const allocator = std.testing.allocator;
     var env = try can.ModuleEnv.init(allocator, "");
     defer env.deinit();
@@ -260,7 +260,7 @@ fn testInferenceReferenceBinding(allocation_failures: bool) !void {
     try std.testing.expectError(error.IncompatibleReferences, duplicates.makeBinding(&env, &scope));
 }
 
-fn testBindingAllocation(allocator: Allocator, env: *const can.ModuleEnv, scope: *const dependencies.Scope, output: Self) !void {
+fn testBindingAllocation(allocator: Allocator, env: *const can.ModuleEnv, scope: *const dependencies.Scope, output: Self) error{ IncompatibleReferences, OutOfMemory }!void {
     var borrowed = env.*;
     borrowed.gpa = allocator;
     var binding = try output.makeBinding(&borrowed, scope);

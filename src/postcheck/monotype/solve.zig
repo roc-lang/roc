@@ -1934,7 +1934,7 @@ pub const GraphDiagnostics = struct {
     inhabitation_memo_hits: u64 = 0,
     analysis_changed_nodes: u64 = 0,
     analysis_invalidation_edges: u64 = 0,
-    analysis_peak_facts: u64 = 0,
+    analysis_peak_entries: u64 = 0,
     analysis_peak_payload_bytes: u64 = 0,
     analysis_invalidated_groups: u64 = 0,
 
@@ -9018,8 +9018,8 @@ const TypeUninhabitedScan = struct {
         return &self.graph.proven_uninhabited_types[@backingInt(self.policy)];
     }
 
-    /// Immutable finished types already carry their canonical identity.
-    pub fn canonical(_: *TypeUninhabitedScan, ty: Type.TypeId) Type.TypeId {
+    /// Immutable finished types already carry their representative identity.
+    pub fn representative(_: *TypeUninhabitedScan, ty: Type.TypeId) Type.TypeId {
         return ty;
     }
 
@@ -15394,7 +15394,7 @@ test "interface request identity ignores the tag sorting memo" {
 
 test "nominal joins after lifting another instance backing preserve structure in either order" {
     const Case = struct {
-        fn run(a: Allocator) !void {
+        fn run(a: Allocator) error{ OutOfMemory, TestUnexpectedResult }!void {
             for (0..4) |variant| {
                 const reverse = variant & 1 != 0;
                 const phantom = variant & 2 != 0;

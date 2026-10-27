@@ -417,7 +417,7 @@ pub const ComptimeDemand = struct {
 ///
 /// The state persists across lowering drains. A discovery request may expose
 /// a parked declaration before an evaluation request completes its body.
-/// Explicit body-publication events invalidate that declaration's summary and
+/// Explicit body-commit events invalidate that declaration's summary and
 /// revisit it if it was already reachable.
 const ComptimeDemandState = struct {
     const Range = struct { start: u32, len: u32 };
@@ -433,7 +433,7 @@ const ComptimeDemandState = struct {
     /// two disjoint ranges of one id space.
     const nested_bit: u32 = 1 << 31;
 
-    /// Previously reached declarations whose final bodies were published
+    /// Previously reached declarations whose final bodies were committed
     /// after an earlier demand round inspected their parked declarations.
     changed_reached: std.ArrayList(u32) = .empty,
     def_summaries: std.ArrayList(?Summary) = .empty,
@@ -608,10 +608,10 @@ const ComptimeDemandState = struct {
         if (list.items.len < len) try list.appendNTimes(allocator, value, len - list.items.len);
     }
 
-    /// Body publication is the producer event invalidating an earlier
+    /// A body commit is the producer event invalidating an earlier
     /// summary of a parked declaration. Unreached bodies need no traversal;
     /// reached ones join the next round at the changed definition itself.
-    fn bodyPublished(self: *ComptimeDemandState, allocator: Allocator, fn_id: Ast.FnId) Allocator.Error!void {
+    fn bodyCommitted(self: *ComptimeDemandState, allocator: Allocator, fn_id: Ast.FnId) Allocator.Error!void {
         const raw = @backingInt(fn_id);
         if (raw >= self.fn_items.items.len) return;
         const item = self.fn_items.items[raw] orelse return;
@@ -5435,7 +5435,7 @@ fn appendRuntimeSchemaRequestToProgram(
     try program.addRuntimeSchemaRequest(request);
 }
 
-// Immutable request ordinals, published before workers start. Function ids
+// Immutable request ordinals, fixed before workers start. Function ids
 // are assigned separately by the coordinator only when a declaration is used.
 const DeclaredComptimeRoots = std.AutoHashMap(EntryRoot, u32);
 
@@ -5551,7 +5551,7 @@ const Builder = struct {
     /// Top-level statements of each top module whose types a literal value
     /// identity named, by module key.
     literal_top_statements: std.AutoHashMapUnmanaged([32]u8, collections.DenseMap(can.CIR.Statement.Idx, void)) = .empty,
-    /// Current published representatives of canonical closed checked types.
+    /// Current committed representatives of normalized closed checked types.
     /// Views are immutable for this lowering; a missing key stays missing.
     persistent_closed_occurrences: std.AutoHashMapUnmanaged([32]u8, ?CheckedOccurrence) = .empty,
 
@@ -11899,7 +11899,7 @@ const Builder = struct {
         const entry = self.lowered_templates.get(fn_id) orelse
             Common.invariant("lowered procedure template definition disappeared before completion");
         try self.spec_store.markReady(entry.spec, fn_ty, self.specializationTypeDigest(fn_ty));
-        try self.comptime_demand.bodyPublished(self.allocator, fn_id);
+        try self.comptime_demand.bodyCommitted(self.allocator, fn_id);
     }
 
     fn typedLocalsForArgs(self: *Builder, arg_tys: anytype) Allocator.Error!Ast.Span(Ast.TypedLocal) {
@@ -12825,7 +12825,7 @@ const Builder = struct {
         if (root.contains_identity_variables) return .{ .module = owner, .ty = ty, .ty_module = moduleDigestFromId(view.key) };
         const provenance = BodyContext.PersistentProvenance{ .builder = self };
         return (try provenance.resolveNamedType(.{ .closed = .{ .owner = owner.bytes, .key = root.key.bytes } })) orelse
-            Common.invariant("a lowered closed named type has no current canonical occurrence");
+            Common.invariant("a lowered closed named type has no current representative occurrence");
     }
 
     fn moduleForDigest(self: *Builder, module_digest: names.CheckedModuleDigest) ModuleView {
@@ -16550,7 +16550,7 @@ const Builder = struct {
             try self.lowered_templates.put(fn_id, .{
                 .def = ids.def(draft_def),
                 .spec = spec_id,
-                .evidence = spec.evidence orelse Common.invariant("global template publication lost dispatch evidence"),
+                .evidence = spec.evidence orelse Common.invariant("global template commit lost dispatch evidence"),
                 .topology = try self.retainFnEvidence(evidence),
             });
             try self.markTemplateReady(fn_id, solved_fn_ty);
@@ -18584,7 +18584,7 @@ const SealedTemplateSpec = struct {
     source_fn_key: names.TypeDigest,
     request_fn_ty: Type.TypeId,
     /// A fully lowered lexical body carries its resolved calls in the draft.
-    /// Only deferred or globally publishable requests retain dispatch evidence.
+    /// Only deferred or globally committable requests retain dispatch evidence.
     evidence: ?[]const SpecEvidence,
     /// The request's substitution sealed in the shard's store epoch.
     subst: SealedSubstitution,
@@ -28661,7 +28661,7 @@ const BodyContext = struct {
             if (self.completed_body_validation) |validation| try validation.validate(payload);
         }
 
-        pub fn defaultArtifact(self: PersistentProvenance, identity: [32]u8, expr: u32) ?[32]u8 {
+        pub fn defaultDeclaringModule(self: PersistentProvenance, identity: [32]u8, expr: u32) ?[32]u8 {
             const declaring = self.builder.moduleForIdentityHash(&identity) orelse return null;
             _ = declaring.bodies.defaultExpr(expr) orelse return null;
             return declaring.key.bytes;
@@ -28719,7 +28719,17 @@ const BodyContext = struct {
                     const owner = switch (view.types.payload(occurrence.ty)) {
                         .nominal => |nominal| nominal.owner_module,
                         .alias => |alias| alias.owner_module,
-                        else => break :blk null,
+                        .pending,
+                        .err,
+                        .flex,
+                        .rigid,
+                        .record,
+                        .tuple,
+                        .function,
+                        .empty_record,
+                        .tag_union,
+                        .empty_tag_union,
+                        => break :blk null,
                     };
                     if (!std.mem.eql(u8, &owner.bytes, &closed.owner)) break :blk null;
                     break :blk .{ .module = .{ .bytes = closed.owner }, .ty_module = occurrence.module, .ty = occurrence.ty };
@@ -29611,7 +29621,7 @@ const BodyContext = struct {
 
         fn recordStats(self: *AnalysisMemo, ctx: *BodyContext) void {
             if (ctx.graph.diagnostics) |stats| {
-                stats.analysis_peak_facts = @max(stats.analysis_peak_facts, self.proofs.facts.count());
+                stats.analysis_peak_entries = @max(stats.analysis_peak_entries, self.proofs.proven.count());
                 stats.analysis_peak_payload_bytes = @max(stats.analysis_peak_payload_bytes, self.proofs.retainedPayloadBytes());
             }
         }
@@ -30316,9 +30326,9 @@ const BodyContext = struct {
             m.entries.clearRetainingCapacity();
             for (scratch.pairs.items, 0..) |pair, i| {
                 const key: AnalysisKey = .{ .completion = pair };
-                if (!m.proofs.facts.contains(key)) try m.entries.append(self.allocator, .{ .key = key, .value = scratch.equations.value(i) });
+                if (!m.proofs.proven.contains(key)) try m.entries.append(self.allocator, .{ .key = key, .value = scratch.equations.value(i) });
             }
-            try m.proofs.publish(self.allocator, m.entries.items, m.dependencies.items[recording..]);
+            try m.proofs.commit(self.allocator, m.entries.items, m.dependencies.items[recording..]);
             m.recordStats(self);
         };
         return @fromBackingInt(@intCast(scratch.equations.value(0)));
@@ -38090,7 +38100,7 @@ const BodyContext = struct {
         var scan = NodeUninhabitedScan{ .body = self, .backing_access = backing_access };
         const answer = try NodeUninhabitedScan.Evaluation.runWith(self.allocator, &self.node_uninhabited_scratch, &scan, node);
         if (epoch == self.graph.analysis_changes.epoch and memo.proofs.epoch == epoch) {
-            try memo.proofs.publish(self.allocator, memo.entries.items, memo.dependencies.items[recording..]);
+            try memo.proofs.commit(self.allocator, memo.entries.items, memo.dependencies.items[recording..]);
             memo.recordStats(self);
             const fact = memo.proofs.get(key).?;
             memo.end(recording);
@@ -48363,10 +48373,11 @@ const BodyContext = struct {
     }
 
     fn constCaptureTypeCache(self: *BodyContext) *ConstTypeMemo {
-        if (self.typeStore() == &self.builder.program.types) return &self.builder.const_type_cache;
+        // Durable types are the program's own; the others belong to the
+        // specialization workspace that owns this body.
+        if (self.interfaceSummaryCache().types_are_durable) return &self.builder.const_type_cache;
         const workspace = self.draft.spec_job_workspace orelse
             Common.invariant("stored-type restoration has no owning destination workspace");
-        std.debug.assert(self.typeStore() == &workspace.types);
         return &workspace.const_type_cache;
     }
 
@@ -67609,7 +67620,7 @@ test "completion analysis shared subgraph work" {
     }
     try std.testing.expectEqual(@as(u64, 17), diagnostics.completion_pair_expansions);
     try std.testing.expectEqual(@as(u64, 18), diagnostics.inhabitation_node_expansions);
-    try std.testing.expectEqual(@as(usize, 36), ctx.analysis_memo.proofs.facts.count());
+    try std.testing.expectEqual(@as(usize, 36), ctx.analysis_memo.proofs.proven.count());
 
     try std.testing.expectEqual(@as(u64, 127), diagnostics.completion_memo_hits);
     try std.testing.expect(counting.allocations > allocations_before);
@@ -67659,8 +67670,8 @@ test "completion relation preserves recursive and shared DAG outcomes" {
         const produced = try graph.newNode(.{ .tuple = produced_siblings });
         try fixture.expectRelation(expected, request, produced);
         // Every recursive equation is settled together, including enclosing pairs.
-        try std.testing.expect(fixture.ctx.analysis_memo.proofs.facts.contains(.{ .completion = .{ .request = request, .produced = produced } }));
-        try std.testing.expect(fixture.ctx.analysis_memo.proofs.facts.contains(.{ .completion = .{ .request = request_tuple, .produced = produced_tuple } }));
+        try std.testing.expect(fixture.ctx.analysis_memo.proofs.proven.contains(.{ .completion = .{ .request = request, .produced = produced } }));
+        try std.testing.expect(fixture.ctx.analysis_memo.proofs.proven.contains(.{ .completion = .{ .request = request_tuple, .produced = produced_tuple } }));
         try std.testing.expect(fixture.diagnostics.completion_repeated_pairs > 0);
     }
 }
@@ -67708,9 +67719,9 @@ test "completion analysis retires facts across lazy expansion and tag reordering
     try std.testing.expect(graph.structure_epoch != epoch);
     // This traversal expanded leaves. Its outer answer cannot be published
     // as though the whole walk had observed the final epoch.
-    try std.testing.expect(!fixture.ctx.analysis_memo.proofs.facts.contains(.{ .completion = .{ .request = request, .produced = produced } }));
+    try std.testing.expect(!fixture.ctx.analysis_memo.proofs.proven.contains(.{ .completion = .{ .request = request, .produced = produced } }));
     try fixture.expectRelation(.unchanged, request, produced);
-    try std.testing.expect(fixture.ctx.analysis_memo.proofs.facts.contains(.{ .completion = .{ .request = request, .produced = produced } }));
+    try std.testing.expect(fixture.ctx.analysis_memo.proofs.proven.contains(.{ .completion = .{ .request = request, .produced = produced } }));
 
     const first = try fixture.name_store.internTagLabel("A");
     const last = try fixture.name_store.internTagLabel("Z");
@@ -70252,7 +70263,7 @@ const NodeUninhabitedScan = struct {
     const Evaluation = @import("../inhabitation.zig").Evaluation(NodeId, NodeUninhabitedScan);
 
     /// Graph aliases name one equation and one eventual proof entry.
-    pub fn canonical(self: *NodeUninhabitedScan, node: NodeId) NodeId {
+    pub fn representative(self: *NodeUninhabitedScan, node: NodeId) NodeId {
         return self.body.graph.rootNode(node);
     }
 
@@ -70329,7 +70340,7 @@ const NodeUninhabitedScan = struct {
         const body = self.body;
         const root = body.graph.rootNode(node);
         const key: BodyContext.AnalysisKey = .{ .inhabitation = .{ .node = root, .access = self.backing_access } };
-        if (result) |answer| if (!body.analysis_memo.proofs.facts.contains(key)) {
+        if (result) |answer| if (!body.analysis_memo.proofs.proven.contains(key)) {
             try body.analysis_memo.entries.append(body.allocator, .{ .key = key, .value = @intFromBool(answer) });
         };
     }
@@ -73408,7 +73419,7 @@ test "issue 12616 recursive completion and inhabitation survive interleaving and
     const bytes = fixture.ctx.analysis_memo.proofs.retainedPayloadBytes();
     const allocated = allocations.allocations;
     const total_allocated_bytes = allocations.allocated_bytes;
-    std.debug.print("12616 monotype: pairs={d} inhabitation_nodes={d} facts={d} payload_bytes={d} query_owned_bytes={d} query_allocations={d}; 512 A/B repetitions allocate and expand nothing\n", .{ initial.completion_pair_expansions, initial.inhabitation_node_expansions, fixture.ctx.analysis_memo.proofs.facts.count(), bytes, allocations.allocated_bytes - allocations.freed_bytes - live_before, allocated - allocations_before });
+    std.debug.print("12616 monotype: pairs={d} inhabitation_nodes={d} facts={d} payload_bytes={d} query_owned_bytes={d} query_allocations={d}; 512 A/B repetitions allocate and expand nothing\n", .{ initial.completion_pair_expansions, initial.inhabitation_node_expansions, fixture.ctx.analysis_memo.proofs.proven.count(), bytes, allocations.allocated_bytes - allocations.freed_bytes - live_before, allocated - allocations_before });
     for (0..512) |_| {
         try std.testing.expect(!try fixture.ctx.resultCompletesRequest(request, produced));
         try std.testing.expect(!try fixture.ctx.resultCompletesRequest(other_a, other_b));
@@ -73456,7 +73467,7 @@ test "issue 12616 aliased inhabitation children publish one canonical fact" {
     try graph.unify(alias, empty);
     const tuple = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{ empty, alias }) });
     try std.testing.expect(try fixture.ctx.nodeIsProvenUninhabited(tuple));
-    try std.testing.expectEqual(@as(usize, 2), fixture.ctx.analysis_memo.proofs.facts.count());
+    try std.testing.expectEqual(@as(usize, 2), fixture.ctx.analysis_memo.proofs.proven.count());
     try std.testing.expect(try fixture.ctx.nodeIsProvenUninhabited(alias));
 }
 
@@ -73524,7 +73535,7 @@ test "fresh closed named occurrences agree with persistent replay and preserve o
     const owner: names.CheckedModuleDigest = .{ .bytes = @splat(42) };
     const key: [32]u8 = @splat(73);
     const Fixture = struct {
-        fn add(store: *checked.CheckedTypeStore, identity: [32]u8, open: bool) !checked.CheckedTypeId {
+        fn add(store: *checked.CheckedTypeStore, identity: [32]u8, open: bool) Allocator.Error!checked.CheckedTypeId {
             const backing = try store.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = @splat(3) }, false);
             try store.fillSyntheticTypeRoot(std.testing.allocator, backing, .empty_record);
             const id = try store.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = identity }, open);
@@ -73726,7 +73737,27 @@ const FrozenReferenceProbe = struct {
                 } else @compileError("probe pointer is not a slice");
             },
             .array => |info| for (value) |v| self.scan(info.child, v),
-            else => {},
+            .type,
+            .void,
+            .bool,
+            .noreturn,
+            .int,
+            .float,
+            .comptime_float,
+            .comptime_int,
+            .undefined,
+            .null,
+            .error_union,
+            .error_set,
+            .@"enum",
+            .@"fn",
+            .@"opaque",
+            .frame,
+            .@"anyframe",
+            .vector,
+            .enum_literal,
+            .spirv,
+            => {},
         }
     }
 };
@@ -73852,7 +73883,11 @@ const CompletedBodyValidation = struct {
         for (stored.entries.nodes) |node| switch (node) {
             .target => |index| if (index >= stored.entries.targets.len) return rejected(@src().line),
             .structural => |index| if (index >= stored.entries.structurals.len) return rejected(@src().line),
-            else => {},
+            .from_callable,
+            .from_scheme,
+            .unreachable_value,
+            .checked_error,
+            => {},
         };
         const end = (try checked.ConstStore.evidenceVectorEnd(self.builder.allocator, stored.entries, 0, stored.frames[0].roots_len)) orelse return rejected(@src().line);
         if (end != stored.entries.nodes.len) return rejected(@src().line);
@@ -73987,7 +74022,27 @@ const CompletedBodyValidation = struct {
                     for (@constCast(value.*)) |*item| try self.walk(info.child, item, rebind_);
                 },
                 .array => |info| for (value) |*item| try self.walk(info.child, item, rebind_),
-                else => {},
+                .type,
+                .void,
+                .bool,
+                .noreturn,
+                .int,
+                .float,
+                .comptime_float,
+                .comptime_int,
+                .undefined,
+                .null,
+                .error_union,
+                .error_set,
+                .@"enum",
+                .@"fn",
+                .@"opaque",
+                .frame,
+                .@"anyframe",
+                .vector,
+                .enum_literal,
+                .spirv,
+                => {},
             }
         }
     };
@@ -74027,7 +74082,12 @@ const FrozenDispatchEvidence = struct {
                 } else null;
                 try substitutions.append(allocator, stored);
             },
-            else => {},
+            .structural,
+            .from_callable,
+            .from_scheme,
+            .unreachable_value,
+            .checked_error,
+            => {},
         };
         return .{ .stored = try builder.constFnEvidence(rootEvidence(owner, vector)), .substitutions = substitutions.items };
     }
@@ -74078,7 +74138,12 @@ const FrozenDispatchEvidence = struct {
                 } else null;
                 index += 1;
             },
-            else => {},
+            .structural,
+            .from_callable,
+            .from_scheme,
+            .unreachable_value,
+            .checked_error,
+            => {},
         };
         if (index != self.substitutions.len) Common.invariant("validated body evidence changed target count");
     }
@@ -74171,13 +74236,13 @@ test "completed body rejects foreign reservations and rebinds its own references
     var payload = std.mem.zeroes(FrozenBodyProbe);
     payload.address = job.completed_body_address.?;
     payload.demand = .evaluation;
-    var exprs = [_]DraftExpr{.{ .ty = .{ .sealed = @fromBackingInt(0) }, .data = .{ .def_ref = .{ .final = @fromBackingInt(0) } } }};
+    var exprs = [_]DraftExpr{.{ .ty = .{ .sealed = @fromBackingInt(1) }, .data = .{ .def_ref = .{ .final = payload.self_reservation.def } } }};
     payload.exprs = &exprs;
     const validation = CompletedBodyValidation{ .builder = &builder, .job = job, .names = &ns };
     try validation.validate(payload);
     exprs[0].data.def_ref.final = @fromBackingInt(1);
     try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
-    exprs[0].data.def_ref.final = @fromBackingInt(0);
+    exprs[0].data.def_ref.final = payload.self_reservation.def;
     try validation.rebind(&payload);
     try std.testing.expectEqual(job.reservation.def, exprs[0].data.def_ref.final);
     try std.testing.expectEqualDeep(job.reservation, payload.self_reservation);
@@ -74194,16 +74259,17 @@ test "completed body rejects incompatible demand missing columns and invalid dra
     var payload = std.mem.zeroes(FrozenBodyProbe);
     payload.address = job.completed_body_address.?;
     payload.demand = .evaluation;
-    const exprs = [_]DraftExpr{.{ .ty = .{ .sealed = @fromBackingInt(0) }, .data = .unit }};
+    const exprs = [_]DraftExpr{.{ .ty = .{ .sealed = @fromBackingInt(1) }, .data = .unit }};
     payload.exprs = &exprs;
     const validation = CompletedBodyValidation{ .builder = &builder, .job = job, .names = &ns };
     try validation.validate(payload);
     payload.demand = .discovery;
     try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
     payload.demand = .evaluation;
+    const valid_body = payload.lowered.body;
     payload.lowered.body = @fromBackingInt(1);
     try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
-    payload.lowered.body = @fromBackingInt(0);
+    payload.lowered.body = valid_body;
     payload.lowered.args = .{ .start = 0, .len = 1 };
     try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
     payload.lowered.args = .empty();
@@ -74249,7 +74315,7 @@ const CompletedBodyStaticDependency = struct {
 const CompletedConstPaths = struct {
     const Entry = struct { node: checked.ConstNodeId, parent: ?u32, step: CompletedConstStep };
     entries: std.ArrayList(Entry) = .empty,
-    by_node: std.AutoHashMapUnmanaged(checked.ConstNodeId, u32) = .empty,
+    by_node: collections.DenseMapUnmanaged(checked.ConstNodeId, u32) = .empty,
     allocator: Allocator,
     fn add(self: *CompletedConstPaths, node: checked.ConstNodeId, parent: ?u32, step: CompletedConstStep) Allocator.Error!void {
         const entry = try self.by_node.getOrPut(self.allocator, node);
@@ -74369,19 +74435,21 @@ test "completed body static paths require current producer identity and checked 
     const ty = try types.reserveSyntheticTypeRoot(a, .{ .bytes = @splat(7) }, false);
     try types.fillSyntheticTypeRoot(a, ty, .empty_record);
     const owner: checked.ModuleId = .{ .bytes = @splat(11) };
-    const locator: checked.ConstLocator = .{
-        .artifact = owner,
-        .owner = .{ .top_level_binding = .{ .module_idx = 0, .pattern = @fromBackingInt(0) } },
-        .template = @fromBackingInt(0),
-        .source_scheme = .{ .bytes = @splat(12) },
-    };
     var templates: checked.ConstTemplateTable = .{};
     defer templates.templates.deinit(a);
+    const locator: checked.ConstLocator = .{
+        .artifact = owner,
+        .owner = .{ .top_level_binding = .{ .module_idx = 0, .pattern = @fromBackingInt(1) } },
+        .template = @fromBackingInt(@intCast(templates.templates.items.len)),
+        .source_scheme = .{ .bytes = @splat(12) },
+    };
+    // The template's root is the identity table's only row.
+    const identity_row = 0;
     try templates.templates.append(a, .{
         .id = locator.template,
         .owner = locator.owner,
         .source_scheme = locator.source_scheme,
-        .state = .{ .stored_const = .{ .node = root, .root = @fromBackingInt(0), .root_type = @fromBackingInt(0) } },
+        .state = .{ .stored_const = .{ .node = root, .root = @fromBackingInt(identity_row), .root_type = @fromBackingInt(1) } },
     });
     var rows = [_]checked.CompileTimeRootIdentity{.{ .value = @splat(13), .site = @splat(14) }};
     const identities: checked.CompileTimeRootIdentityTable = .{ .rows = &rows };
@@ -74406,12 +74474,12 @@ test "completed body static paths require current producer identity and checked 
         .const_node = @fromBackingInt(111),
         .checked_type = ty,
         .checked_type_module = owner,
-        .ty = .{ .sealed = @fromBackingInt(0) },
+        .ty = .{ .sealed = @fromBackingInt(1) },
     };
     const path = [_]CompletedConstStep{.{ .kind = .box }};
     const dependency: CompletedBodyStaticDependency = .{
-        .root = @fromBackingInt(0),
-        .identity = rows[0],
+        .root = @fromBackingInt(identity_row),
+        .identity = rows[identity_row],
         .checked_type_key = views[0].types.rootKey(ty),
         .path = &path,
     };

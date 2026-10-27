@@ -4,7 +4,7 @@ const AnyAll = @import("collections").AnyAll;
 const FixedPoint = @import("fixed_point.zig");
 const Allocator = std.mem.Allocator;
 
-/// Evaluate producer-authored emptiness equations and publish converged leaves.
+/// Evaluate producer-authored emptiness equations and commit converged leaves.
 pub fn Evaluation(comptime Leaf: type, comptime Context: type) type {
     return struct {
         const Tree = AnyAll.Evaluation(Leaf, Context);
@@ -42,7 +42,7 @@ pub fn Evaluation(comptime Leaf: type, comptime Context: type) type {
                 scratch.equations.clear();
                 scratch.items.clearRetainingCapacity();
             }
-            const root_index = try scratch.intern(gpa, context.canonical(root));
+            const root_index = try scratch.intern(gpa, context.representative(root));
             var cursor: usize = 0;
             while (cursor < scratch.leaves.items.len) : (cursor += 1) {
                 const leaf = scratch.leaves.items[cursor];
@@ -57,7 +57,7 @@ pub fn Evaluation(comptime Leaf: type, comptime Context: type) type {
                         while (item_index < scratch.items.items.len) : (item_index += 1) {
                             switch (scratch.items.items[item_index]) {
                                 .leaf => |child| {
-                                    const child_index = try scratch.intern(gpa, context.canonical(child));
+                                    const child_index = try scratch.intern(gpa, context.representative(child));
                                     try scratch.equations.edge(gpa, index, child_index, .identity);
                                 },
                                 .group => |group| {
@@ -65,7 +65,7 @@ pub fn Evaluation(comptime Leaf: type, comptime Context: type) type {
                                     if (group.op == .all) scratch.equations.all(nested);
                                     try scratch.equations.edge(gpa, index, nested, .identity);
                                     for (scratch.items.items[item_index + 1 ..][0..group.count]) |item| {
-                                        const child_index = try scratch.intern(gpa, context.canonical(item.leaf));
+                                        const child_index = try scratch.intern(gpa, context.representative(item.leaf));
                                         try scratch.equations.edge(gpa, nested, child_index, .identity);
                                     }
                                     item_index += group.count;

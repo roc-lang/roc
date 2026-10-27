@@ -909,7 +909,7 @@ test "native offers record evaluation-owned slots even without Monotype read sum
         .layout_idx = .u64,
         .compile_time_root = .{
             .module = .{},
-            .root = .{ .literal = @fromBackingInt(0) },
+            .root = .{ .literal = @fromBackingInt(1) },
             .const_locator = null,
             .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 0, .failed_offset = 0, .message_offset = 0 } },
         },

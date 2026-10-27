@@ -238,7 +238,7 @@ pub const WorkCounters = struct {
     compatibility_cycles: u64 = 0,
     compatibility_hits: u64 = 0,
     compatibility_invalidations: u64 = 0,
-    compatibility_peak_facts: u64 = 0,
+    compatibility_peak_entries: u64 = 0,
     compatibility_peak_payload_bytes: u64 = 0,
     compatibility_walks: u64 = 0,
     compatibility_changed_nodes: u64 = 0,
@@ -260,7 +260,7 @@ pub fn run(
 }
 
 /// The optional cache records only completed analysis, under the exact lifted
-/// input consumed by this solver. The current program remains the executable IR.
+/// input consumed by this solver. The current program remains the lowered IR.
 pub fn runWithCache(allocator: Allocator, lifted: Lifted.Program, cache: ?Common.InterfaceSummaryCache) Common.LowerError!Ast.Program {
     // `Ast.Program.init` cannot fail and takes ownership of `lifted`, so
     // `program.deinit()` is the only cleanup a later error needs.
@@ -2378,15 +2378,15 @@ const Solver = struct {
         const root_b = self.program.types.rootCompressed(b);
         if (root_a == root_b) return true;
         self.invalidateCompatibilityProofs();
-        if (self.compatibility_proofs.get(UnifyPair.init(root_a, root_b))) |fact| {
+        if (self.compatibility_proofs.get(UnifyPair.init(root_a, root_b))) |proven| {
             self.countWork(.compatibility_hits, 1);
-            return fact.value != 0;
+            return proven.value != 0;
         }
         const epoch = self.program.types.analysis_changes.epoch;
         const dependencies = &self.compatibility_dependencies;
         dependencies.clearRetainingCapacity();
         self.countWork(.compatibility_walks, 1);
-        var publishable = true;
+        var committable = true;
         const work = &self.compatibility_work;
         work.clearRetainingCapacity();
         const visited = &self.compatibility_visited;
@@ -2406,12 +2406,12 @@ const Solver = struct {
             if (raw_left == .mono and raw_right == .mono and raw_left.mono.id == raw_right.mono.id) continue;
             if (try self.canLinkUntouchedLeafToInstance(left, raw_left, pair.second, right)) {
                 // This answer also observes clone-context ownership. Keep its
-                // direct lazy proof, but do not publish a structural certificate.
-                publishable = false;
+                // direct lazy proof, but do not commit a structural certificate.
+                committable = false;
                 continue;
             }
             if (try self.canLinkUntouchedLeafToInstance(right, raw_right, pair.first, left)) {
-                publishable = false;
+                committable = false;
                 continue;
             }
             const key = UnifyPair.init(left, right);
@@ -2419,10 +2419,10 @@ const Solver = struct {
                 self.countWork(.compatibility_cycles, 1);
                 continue;
             }
-            if (epoch == self.program.types.analysis_changes.epoch) if (self.compatibility_proofs.get(key)) |fact| {
-                try dependencies.append(self.allocator, .{ .proof = fact.proof });
+            if (epoch == self.program.types.analysis_changes.epoch) if (self.compatibility_proofs.get(key)) |proven| {
+                try dependencies.append(self.allocator, .{ .proof = proven.proof });
                 self.countWork(.compatibility_hits, 1);
-                if (fact.value == 0) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, publishable);
+                if (proven.value == 0) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable);
                 continue;
             };
             self.countWork(.compatibility_pairs, 1);
@@ -2441,35 +2441,35 @@ const Solver = struct {
                 if (right_content.named.backing) |backing| try work.append(self.allocator, .{ .first = left, .second = backing.ty });
                 continue;
             }
-            if (left_tag != right_tag) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, publishable);
+            if (left_tag != right_tag) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable);
             switch (left_content) {
                 .link, .mono, .unbound, .forall => unreachable, // resolvedContentAt follows links and monos, and unbound/forall pairs continued above
-                .primitive => |prim| if (prim != right_content.primitive) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, publishable),
+                .primitive => |prim| if (prim != right_content.primitive) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable),
                 .zst, .hole, .lambda_set, .erased, .tag_union => {},
                 .list => |elem| try work.append(self.allocator, .{ .first = elem, .second = right_content.list }),
                 .box => |elem| try work.append(self.allocator, .{ .first = elem, .second = right_content.box }),
                 .tuple => |items| {
                     const right_items = right_content.tuple;
-                    if (items.count() != right_items.count()) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, publishable);
+                    if (items.count() != right_items.count()) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable);
                     for (0..items.count()) |index| {
                         try work.append(self.allocator, .{ .first = self.program.types.spanItem(items, index), .second = self.program.types.spanItem(right_items, index) });
                     }
                 },
                 .record => |fields| {
                     const right_fields = right_content.record;
-                    if (fields.count() != right_fields.count()) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, publishable);
+                    if (fields.count() != right_fields.count()) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable);
                     for (0..fields.count()) |index| {
                         const field = self.program.types.fieldItem(fields, index);
                         const right_field = self.program.types.fieldItem(right_fields, index);
-                        if (field.name != right_field.name) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, publishable);
-                        if ((field.value_ty == null) != (right_field.value_ty == null)) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, publishable);
+                        if (field.name != right_field.name) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable);
+                        if ((field.value_ty == null) != (right_field.value_ty == null)) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable);
                         try work.append(self.allocator, .{ .first = field.ty, .second = right_field.ty });
                         if (field.value_ty) |value_ty| try work.append(self.allocator, .{ .first = value_ty, .second = right_field.value_ty.? });
                     }
                 },
                 .func => |func| {
                     const right_func = right_content.func;
-                    if (func.args.count() != right_func.args.count()) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, publishable);
+                    if (func.args.count() != right_func.args.count()) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable);
                     for (0..func.args.count()) |index| {
                         try work.append(self.allocator, .{ .first = self.program.types.spanItem(func.args, index), .second = self.program.types.spanItem(right_func.args, index) });
                     }
@@ -2481,7 +2481,7 @@ const Solver = struct {
                     // of their own (iterator views, opaque views); only a pair
                     // of one declaration is examined further.
                     if (!std.meta.eql(named.def, right_named.def) or named.kind != right_named.kind or named.builtin_owner != right_named.builtin_owner) continue;
-                    if (named.args.count() != right_named.args.count()) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, publishable);
+                    if (named.args.count() != right_named.args.count()) return self.rejectCompatibility(UnifyPair.init(root_a, root_b), epoch, committable);
                     for (0..named.args.count()) |index| {
                         try work.append(self.allocator, .{ .first = self.program.types.spanItem(named.args, index), .second = self.program.types.spanItem(right_named.args, index) });
                     }
@@ -2490,13 +2490,13 @@ const Solver = struct {
         }
         // All visited pairs now hold, including mutually recursive ones.
         // A failed or graph-mutating walk never retains its assumptions.
-        if (publishable and epoch == self.program.types.analysis_changes.epoch) {
+        if (committable and epoch == self.program.types.analysis_changes.epoch) {
             self.compatibility_entries.clearRetainingCapacity();
             var entries = visited.keyIterator();
             while (entries.next()) |key| {
-                if (!self.compatibility_proofs.facts.contains(key.*)) try self.compatibility_entries.append(self.allocator, .{ .key = key.*, .value = 1 });
+                if (!self.compatibility_proofs.proven.contains(key.*)) try self.compatibility_entries.append(self.allocator, .{ .key = key.*, .value = 1 });
             }
-            try self.compatibility_proofs.publish(self.allocator, self.compatibility_entries.items, dependencies.items);
+            try self.compatibility_proofs.commit(self.allocator, self.compatibility_entries.items, dependencies.items);
             self.recordCompatibilityStats();
         }
         return true;
@@ -2505,17 +2505,17 @@ const Solver = struct {
     fn recordCompatibilityStats(self: *Solver) void {
         if (comptime @import("builtin").is_test or diagnostics.available) {
             if (self.counters) |counters| {
-                counters.compatibility_peak_facts = @max(counters.compatibility_peak_facts, self.compatibility_proofs.facts.count());
+                counters.compatibility_peak_entries = @max(counters.compatibility_peak_entries, self.compatibility_proofs.proven.count());
                 counters.compatibility_peak_payload_bytes = @max(counters.compatibility_peak_payload_bytes, self.compatibility_proofs.retainedPayloadBytes());
             }
         }
     }
 
     /// A failed walk proves only the requested failure, never the provisional
-    /// successes on its visited set. Retain that counterexample as one fact.
-    fn rejectCompatibility(self: *Solver, key: UnifyPair, epoch: u64, publishable: bool) Allocator.Error!bool {
-        if (publishable and epoch == self.program.types.analysis_changes.epoch) {
-            try self.compatibility_proofs.publish(self.allocator, &.{.{ .key = key, .value = 0 }}, self.compatibility_dependencies.items);
+    /// successes on its visited set. Retain that counterexample as one proven.
+    fn rejectCompatibility(self: *Solver, key: UnifyPair, epoch: u64, committable: bool) Allocator.Error!bool {
+        if (committable and epoch == self.program.types.analysis_changes.epoch) {
+            try self.compatibility_proofs.commit(self.allocator, &.{.{ .key = key, .value = 0 }}, self.compatibility_dependencies.items);
             self.recordCompatibilityStats();
         }
         return false;
@@ -2945,7 +2945,7 @@ const Solver = struct {
         self.exact_clone_dependencies.clearRetainingCapacity();
         try self.exact_clone_work.append(self.allocator, key);
         const matches = try self.walkExactMonoClone();
-        try self.exact_clone_proofs.publish(self.allocator, &.{.{ .key = key, .value = @intFromBool(matches) }}, self.exact_clone_dependencies.items);
+        try self.exact_clone_proofs.commit(self.allocator, &.{.{ .key = key, .value = @intFromBool(matches) }}, self.exact_clone_dependencies.items);
         return matches;
     }
 
@@ -6135,7 +6135,7 @@ test "issue 12595 shared recursive row payload compatibility work" {
             try std.testing.expectEqual(depth + 1, counts.compatibility_pairs);
             try std.testing.expectEqual(width - 1, counts.compatibility_hits);
             try std.testing.expectEqual(@as(u64, 1), counts.compatibility_cycles);
-            try std.testing.expectEqual(depth + 1, counts.compatibility_peak_facts);
+            try std.testing.expectEqual(depth + 1, counts.compatibility_peak_entries);
         }
     }
 }
@@ -6201,9 +6201,9 @@ test "issue 12595 failed cyclic compatibility retains no assumptions" {
     // The LIFO walk cuts the cycle before finding the conflicting sibling.
     try std.testing.expect(!try solver.typesCompatible(a, b));
     try std.testing.expectEqual(@as(u64, 1), counts.compatibility_cycles);
-    try std.testing.expectEqual(@as(usize, 1), solver.compatibility_proofs.facts.count());
+    try std.testing.expectEqual(@as(usize, 1), solver.compatibility_proofs.proven.count());
     try std.testing.expectEqual(@as(u2, 0), solver.compatibility_proofs.get(UnifyPair.init(a, b)).?.value);
-    try std.testing.expect(!solver.compatibility_proofs.facts.contains(UnifyPair.init(a_list, b_list)));
+    try std.testing.expect(!solver.compatibility_proofs.proven.contains(UnifyPair.init(a_list, b_list)));
     try std.testing.expect(!try solver.typesCompatible(a_list, b_list));
     try std.testing.expectEqual(@as(u64, 1), counts.compatibility_hits);
 }
@@ -6224,9 +6224,9 @@ test "issue 12595 compatibility that expands lazy types retains no proofs" {
     const lazy = try solver.lowerTypeFresh(mono_list);
     try std.testing.expect(try solver.typesCompatible(lazy, materialized));
     try std.testing.expect(counts.expansions > 0);
-    try std.testing.expectEqual(@as(usize, 0), solver.compatibility_proofs.facts.count());
+    try std.testing.expectEqual(@as(usize, 0), solver.compatibility_proofs.proven.count());
     try std.testing.expect(try solver.typesCompatible(lazy, materialized));
-    try std.testing.expect(solver.compatibility_proofs.facts.count() > 0);
+    try std.testing.expect(solver.compatibility_proofs.proven.count() > 0);
 }
 
 test "issue 12616 completed compatibility retains disjoint proofs and still propagates erasure" {
@@ -6242,7 +6242,7 @@ test "issue 12616 completed compatibility retains disjoint proofs and still prop
         const a = try types.add(.{ .list = number });
         const b = try types.add(.{ .list = number });
         try std.testing.expect(try solver.typesCompatible(a, b));
-        try std.testing.expectEqual(index + 1, solver.compatibility_proofs.facts.count());
+        try std.testing.expectEqual(index + 1, solver.compatibility_proofs.proven.count());
     }
     // Erasure digests the capture symbol, so it is distinct from the lambda symbol.
     const captured_local: Lifted.LocalId = @fromBackingInt(1);
@@ -6622,7 +6622,7 @@ test "issue 12616 compatibility retains interleaved recursive proofs across unre
     const bytes = solver.compatibility_proofs.retainedPayloadBytes();
     const allocated = allocations.allocations;
     const total_allocated_bytes = allocations.allocated_bytes;
-    std.debug.print("12616 lambda solved: pairs={d} facts={d} payload_bytes={d} query_owned_bytes={d} query_allocations={d}; 512 A/B repetitions allocate and expand nothing\n", .{ initial, solver.compatibility_proofs.facts.count(), bytes, allocations.allocated_bytes - allocations.freed_bytes - live_before, allocated - allocations_before });
+    std.debug.print("12616 lambda solved: pairs={d} facts={d} payload_bytes={d} query_owned_bytes={d} query_allocations={d}; 512 A/B repetitions allocate and expand nothing\n", .{ initial, solver.compatibility_proofs.proven.count(), bytes, allocations.allocated_bytes - allocations.freed_bytes - live_before, allocated - allocations_before });
     for (0..512) |_| {
         try std.testing.expect(try solver.typesCompatible(a, b));
         try std.testing.expect(try solver.typesCompatible(c, d));
@@ -6664,11 +6664,11 @@ test "issue 12616 compatibility publication is atomic on allocation failure" {
         const b = try types.add(.unbound);
         try types.set(a, .{ .tuple = try types.addSpan(&.{ scalar, a }) });
         try types.set(b, .{ .tuple = try types.addSpan(&.{ scalar, b }) });
-        const retained = solver.compatibility_proofs.facts.count();
+        const retained = solver.compatibility_proofs.proven.count();
         failing.fail_index = failing.alloc_index + offset;
         _ = solver.typesCompatible(a, b) catch |err| {
             try std.testing.expectEqual(error.OutOfMemory, err);
-            try std.testing.expectEqual(retained, solver.compatibility_proofs.facts.count());
+            try std.testing.expectEqual(retained, solver.compatibility_proofs.proven.count());
             failing.fail_index = std.math.maxInt(usize);
             try std.testing.expect(try solver.typesCompatible(old_a, old_b));
             try std.testing.expect(try solver.typesCompatible(a, b));

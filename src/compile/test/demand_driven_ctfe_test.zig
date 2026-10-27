@@ -346,7 +346,12 @@ test "a build never reserves the initializer of an unread compile-time root" {
                     const source = function.source orelse continue;
                     switch (source.fn_def) {
                         .local_template, .imported_template, .checked_generated => |actual| try std.testing.expect(!std.meta.eql(template, actual)),
-                        else => {},
+                        .nested,
+                        .local_hosted,
+                        .imported_hosted,
+                        .parser_runtime,
+                        .encoder_for_runtime,
+                        => {},
                     }
                 }
             }

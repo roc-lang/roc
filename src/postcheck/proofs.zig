@@ -3,12 +3,12 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-/// Graph-owned subscriptions to semantic writes. A disconnected node has no
+/// Graph-owned subscriptions to checked writes. A disconnected node has no
 /// subscribers. Writes visit only proofs which actually read the changed node.
 pub fn Changes(comptime Node: type) type {
     return struct {
         const Self = @This();
-        /// Intrusive subscription owned by a published proof's dependency array.
+        /// Intrusive subscription owned by a committed proof's dependency array.
         pub const Watch = struct {
             subscribed: bool = false,
             previous: ?*Watch = null,
@@ -19,7 +19,7 @@ pub fn Changes(comptime Node: type) type {
         records: std.ArrayList(?*Watch) = .empty,
         epoch: u64 = 0,
 
-        /// Reserve node slots before the producer publishes their identities.
+        /// Reserve node slots before the producer commits their identities.
         pub fn ensureTotalCapacityPrecise(self: *Self, gpa: Allocator, count: usize) Allocator.Error!void {
             try self.records.ensureTotalCapacityPrecise(gpa, count);
         }
@@ -77,7 +77,7 @@ pub fn Changes(comptime Node: type) type {
 pub fn Cache(comptime Key: type, comptime Node: type) type {
     return struct {
         const Self = @This();
-        /// A directly read canonical node or an earlier completed certificate.
+        /// A directly read normalized node or an earlier completed certificate.
         pub const Dependency = union(enum) { node: Node, proof: *Proof };
         const MutationIndex = Changes(Node);
         const Link = struct { dependency: Dependency, owner: *Proof, slot: usize, watch: MutationIndex.Watch = undefined };
@@ -89,7 +89,7 @@ pub fn Cache(comptime Key: type, comptime Node: type) type {
             changed_nodes: usize = 0,
             edges: usize = 0,
         };
-        /// A group settled together, with its facts and reverse dependencies.
+        /// A group settled together, with its proven and reverse dependencies.
         pub const Proof = struct {
             valid: bool = true,
             pending_next: ?*Proof = null,
@@ -124,10 +124,10 @@ pub fn Cache(comptime Key: type, comptime Node: type) type {
             }
         };
         /// One settled outcome and its justification.
-        pub const Fact = struct { value: u2, proof: *Proof };
-        /// An outcome prepared for atomic publication.
+        pub const Proven = struct { value: u2, proof: *Proof };
+        /// An outcome prepared for an atomic commit.
         pub const Entry = struct { key: Key, value: u2 };
-        facts: std.AutoHashMapUnmanaged(Key, Fact) = .empty,
+        proven: std.AutoHashMapUnmanaged(Key, Proven) = .empty,
         changes: ?*MutationIndex = null,
         notifications: ?*Notifications = null,
         groups: std.ArrayList(*Proof) = .empty,
@@ -142,19 +142,19 @@ pub fn Cache(comptime Key: type, comptime Node: type) type {
         /// Release certificates, tables and retained capacity.
         pub fn deinit(self: *Self, gpa: Allocator) void {
             self.clear(gpa);
-            self.facts.deinit(gpa);
+            self.proven.deinit(gpa);
             if (self.notifications) |state| gpa.destroy(state);
             self.groups.deinit(gpa);
             self.pending.deinit(gpa);
         }
         /// End the producer scope and release every certificate and reverse list.
         pub fn clear(self: *Self, gpa: Allocator) void {
-            for (self.groups.items) |proof| for (proof.dependencies) |*link| self.unlink(gpa, link);
+            for (self.groups.items) |proof| for (proof.dependencies) |*link| self.unlink(link);
             for (self.groups.items) |proof| self.freeProof(gpa, proof);
             if (self.notifications) |state| state.head = null;
             self.groups.clearRetainingCapacity();
             self.pending.clearRetainingCapacity();
-            self.facts.clearRetainingCapacity();
+            self.proven.clearRetainingCapacity();
             self.dependency_bytes = 0;
             self.dependent_capacity_bytes = 0;
         }
@@ -184,10 +184,10 @@ pub fn Cache(comptime Key: type, comptime Node: type) type {
             self.changed_nodes = state.changed_nodes;
             self.invalidation_edges = state.edges;
             // Unlink everything before freeing any referenced proof.
-            for (self.pending.items) |proof| for (proof.dependencies) |*link| self.unlink(gpa, link);
+            for (self.pending.items) |proof| for (proof.dependencies) |*link| self.unlink(link);
             for (self.pending.items) |proof| {
                 for (proof.keys) |key| {
-                    const removed = self.facts.remove(key);
+                    const removed = self.proven.remove(key);
                     std.debug.assert(removed);
                 }
                 _ = self.groups.swapRemove(proof.slot);
@@ -198,7 +198,7 @@ pub fn Cache(comptime Key: type, comptime Node: type) type {
             }
             self.pending.clearRetainingCapacity();
         }
-        fn unlink(self: *Self, gpa: Allocator, link: *Link) void {
+        fn unlink(self: *Self, link: *Link) void {
             switch (link.dependency) {
                 .node => |node| self.changes.?.unsubscribe(node, &link.watch),
                 .proof => |proof| {
@@ -207,17 +207,16 @@ pub fn Cache(comptime Key: type, comptime Node: type) type {
                     if (link.slot < list.items.len) list.items[link.slot].slot = link.slot;
                 },
             }
-            _ = gpa;
         }
-        /// Find a fact after the caller has refreshed dependencies.
-        pub fn get(self: *Self, key: Key) ?Fact {
-            return self.facts.get(key);
+        /// Find a proven value after the caller has refreshed dependencies.
+        pub fn get(self: *Self, key: Key) ?Proven {
+            return self.proven.get(key);
         }
-        /// Publish only after convergence. Allocation failure rolls back every
-        /// reverse link and exposes none of the new facts.
-        pub fn publish(self: *Self, gpa: Allocator, entries: []const Entry, dependencies: []const Dependency) Allocator.Error!void {
+        /// Commit only after convergence. Allocation failure rolls back every
+        /// reverse link and exposes none of the new proven.
+        pub fn commit(self: *Self, gpa: Allocator, entries: []const Entry, dependencies: []const Dependency) Allocator.Error!void {
             if (entries.len == 0) return;
-            try self.facts.ensureUnusedCapacity(gpa, @intCast(entries.len));
+            try self.proven.ensureUnusedCapacity(gpa, @intCast(entries.len));
             try self.groups.ensureUnusedCapacity(gpa, 1);
             try self.pending.ensureTotalCapacity(gpa, self.groups.items.len + 1);
             if (self.notifications == null) {
@@ -233,7 +232,7 @@ pub fn Cache(comptime Key: type, comptime Node: type) type {
             errdefer gpa.free(keys);
             proof.* = .{ .notifications = self.notifications.?, .changes = self.changes.?, .slot = self.groups.items.len, .dependencies = links, .keys = keys };
             var linked: usize = 0;
-            errdefer for (links[0..linked]) |*link| self.unlink(gpa, link);
+            errdefer for (links[0..linked]) |*link| self.unlink(link);
             for (dependencies, links) |dependency, *link| {
                 link.* = .{ .dependency = dependency, .owner = proof, .slot = 0 };
                 switch (dependency) {
@@ -251,9 +250,9 @@ pub fn Cache(comptime Key: type, comptime Node: type) type {
                 linked += 1;
             }
             for (entries, keys) |entry, *key| {
-                std.debug.assert(!self.facts.contains(entry.key));
+                std.debug.assert(!self.proven.contains(entry.key));
                 key.* = entry.key;
-                self.facts.putAssumeCapacity(entry.key, .{ .value = entry.value, .proof = proof });
+                self.proven.putAssumeCapacity(entry.key, .{ .value = entry.value, .proof = proof });
             }
             self.groups.appendAssumeCapacity(proof);
             self.dependency_bytes += links.len * @sizeOf(Link) + keys.len * @sizeOf(Key);
@@ -261,7 +260,7 @@ pub fn Cache(comptime Key: type, comptime Node: type) type {
         /// Table payload and certificate bytes, excluding allocator metadata,
         /// alignment padding and hash-table control bytes.
         pub fn retainedPayloadBytes(self: *const Self) usize {
-            return self.facts.capacity() * (@sizeOf(Key) + @sizeOf(Fact)) +
+            return self.proven.capacity() * (@sizeOf(Key) + @sizeOf(Proven)) +
                 (if (self.notifications != null) @as(usize, @sizeOf(Notifications)) else 0) +
                 (self.groups.capacity + self.pending.capacity) * @sizeOf(*Proof) +
                 self.groups.items.len * @sizeOf(Proof) + self.dependency_bytes +
@@ -270,7 +269,7 @@ pub fn Cache(comptime Key: type, comptime Node: type) type {
     };
 }
 
-test "issue 12616 proof dependencies invalidate transitively without dropping disjoint facts" {
+test "issue 12616 proof dependencies invalidate transitively without dropping disjoint proven" {
     const Node = enum(u32) { a, b, c };
     const Store = struct {
         changes: Changes(Node) = .{},
@@ -288,12 +287,12 @@ test "issue 12616 proof dependencies invalidate transitively without dropping di
     var proofs: Proofs = .{};
     defer proofs.deinit(gpa);
     proofs.refresh(gpa, graph.changes.epoch, &graph);
-    try proofs.publish(gpa, &.{.{ .key = 0, .value = 1 }}, &.{.{ .node = .a }});
-    try proofs.publish(gpa, &.{.{ .key = 1, .value = 1 }}, &.{.{ .proof = proofs.get(0).?.proof }});
-    try proofs.publish(gpa, &.{.{ .key = 2, .value = 0 }}, &.{.{ .node = .c }});
+    try proofs.commit(gpa, &.{.{ .key = 0, .value = 1 }}, &.{.{ .node = .a }});
+    try proofs.commit(gpa, &.{.{ .key = 1, .value = 1 }}, &.{.{ .proof = proofs.get(0).?.proof }});
+    try proofs.commit(gpa, &.{.{ .key = 2, .value = 0 }}, &.{.{ .node = .c }});
     for (0..100) |_| graph.changes.mark(.b);
     proofs.refresh(gpa, graph.changes.epoch, &graph);
-    try std.testing.expectEqual(@as(usize, 3), proofs.facts.count());
+    try std.testing.expectEqual(@as(usize, 3), proofs.proven.count());
     try std.testing.expectEqual(@as(usize, 0), proofs.changed_nodes);
     try std.testing.expectEqual(@as(usize, 0), proofs.invalidation_edges);
     graph.changes.mark(.a);
@@ -303,7 +302,7 @@ test "issue 12616 proof dependencies invalidate transitively without dropping di
     try std.testing.expectEqual(@as(usize, 1), proofs.groups.items.len);
     try std.testing.expectEqual(@as(usize, 1), proofs.changed_nodes);
     proofs.clear(gpa);
-    try std.testing.expectEqual(@as(usize, 0), proofs.facts.count());
+    try std.testing.expectEqual(@as(usize, 0), proofs.proven.count());
     try std.testing.expectEqual(@as(usize, 0), proofs.groups.items.len);
 }
 
@@ -319,10 +318,11 @@ test "proof observers ignore disjoint graph writes and survive cache movement an
     var graph: Graph = .{};
     defer graph.changes.deinit(gpa);
     try graph.changes.ensureUnusedCapacity(gpa, 1);
+    const first_node: Node = @fromBackingInt(@intCast(graph.changes.records.items.len));
     graph.changes.appendAssumeCapacity();
     var cache: Cache(u32, Node) = .{};
     cache.refresh(gpa, 0, &graph);
-    try cache.publish(gpa, &.{.{ .key = 1, .value = 1 }}, &.{.{ .node = @fromBackingInt(@intCast(0)) }});
+    try cache.commit(gpa, &.{.{ .key = 1, .value = 1 }}, &.{.{ .node = first_node }});
     var moved = cache;
     cache = .{};
     defer moved.deinit(gpa);
@@ -335,14 +335,14 @@ test "proof observers ignore disjoint graph writes and survive cache movement an
     }
     try std.testing.expectEqual(@as(usize, 0), moved.changed_nodes);
     try std.testing.expectEqual(@as(usize, 0), moved.invalidation_edges);
-    graph.changes.mark(@fromBackingInt(@intCast(0)));
+    graph.changes.mark(first_node);
     moved.refresh(gpa, graph.changes.epoch, &graph);
     try std.testing.expect(moved.get(1) == null);
     try std.testing.expectEqual(@as(usize, 1), moved.changed_nodes);
     try std.testing.expectEqual(@as(usize, 1), moved.invalidation_edges);
 }
 
-fn allocationFailureFixture(gpa: Allocator) !void {
+fn allocationFailureFixture(gpa: Allocator) error{ OutOfMemory, TestExpectedEqual }!void {
     const Node = enum(u32) { a, b };
     const Graph = struct {
         changes: Changes(Node) = .{},
@@ -358,11 +358,11 @@ fn allocationFailureFixture(gpa: Allocator) !void {
     var cache: Cache(u32, Node) = .{};
     defer cache.deinit(gpa);
     cache.refresh(gpa, 0, &graph);
-    try cache.publish(gpa, &.{.{ .key = 1, .value = 1 }}, &.{.{ .node = .a }});
-    try cache.publish(gpa, &.{.{ .key = 2, .value = 1 }}, &.{ .{ .node = .b }, .{ .proof = cache.get(1).?.proof } });
+    try cache.commit(gpa, &.{.{ .key = 1, .value = 1 }}, &.{.{ .node = .a }});
+    try cache.commit(gpa, &.{.{ .key = 2, .value = 1 }}, &.{ .{ .node = .b }, .{ .proof = cache.get(1).?.proof } });
     graph.changes.mark(.a);
     cache.refresh(gpa, graph.changes.epoch, &graph);
-    try std.testing.expectEqual(@as(usize, 0), cache.facts.count());
+    try std.testing.expectEqual(@as(usize, 0), cache.proven.count());
 }
 
 test "proof publication allocation failures detach every graph subscription" {
@@ -385,9 +385,9 @@ test "a dirty proof unsubscribes before later writes in the same batch" {
     var cache = Cache(u32, Node){};
     defer cache.deinit(a);
     cache.refresh(a, 0, &graph);
-    try cache.publish(a, &.{.{ .key = 1, .value = 1 }}, &.{ .{ .node = .a }, .{ .node = .b } });
-    try cache.publish(a, &.{.{ .key = 2, .value = 2 }}, &.{ .{ .node = .a }, .{ .node = .a } });
-    try cache.publish(a, &.{.{ .key = 3, .value = 3 }}, &.{.{ .node = .c }});
+    try cache.commit(a, &.{.{ .key = 1, .value = 1 }}, &.{ .{ .node = .a }, .{ .node = .b } });
+    try cache.commit(a, &.{.{ .key = 2, .value = 2 }}, &.{ .{ .node = .a }, .{ .node = .a } });
+    try cache.commit(a, &.{.{ .key = 3, .value = 3 }}, &.{.{ .node = .c }});
     graph.changes.mark(.a);
     for (0..4096) |_| {
         graph.changes.mark(.a);

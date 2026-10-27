@@ -2414,7 +2414,7 @@ test "module-independent portability excludes nested version-bearing values and 
     const scalar = try store.append(.{ .scalar = .{ .i64 = 17 } });
     const list = try store.append(.{ .list = .{ .nodes = &.{scalar} } });
     try std.testing.expect(try store.valuePortable(list, null));
-    const foreign: NamedType = .{ .module = .{ .bytes = @splat(1) }, .ty = @fromBackingInt(0), .ty_module = .{ .bytes = @splat(2) } };
+    const foreign: NamedType = .{ .module = .{ .bytes = @splat(1) }, .ty = @fromBackingInt(1), .ty_module = .{ .bytes = @splat(2) } };
     const nominal = try store.append(.{ .nominal = .{ .named_type = foreign, .backing = scalar } });
     const boxed = try store.append(.{ .box = nominal });
     try std.testing.expect(try store.valuePortable(boxed, .{ .bytes = @splat(3) }));
@@ -2425,7 +2425,7 @@ test "module-independent portability excludes nested version-bearing values and 
     try std.testing.expect(try store.type_store.typePortable(&type_names, integer_list, null, null));
     const named = try store.type_store.append(.{ .named = .{
         .named_type = foreign,
-        .def = .{ .module = @fromBackingInt(0), .type_name = @fromBackingInt(0) },
+        .def = .{ .module = try type_names.internModuleIdentity(&@as([32]u8, @splat(2))), .type_name = try type_names.internTypeName("Foreign") },
         .kind = .@"opaque",
         .args = .{},
     } });

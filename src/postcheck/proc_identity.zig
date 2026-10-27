@@ -65,7 +65,7 @@ const domain = "roc.proc.identity.v4";
 pub const Memo = struct {
     const Description = struct { label: Identity, children: []const Identity };
     allocator: Allocator,
-    /// Canonical one-step descriptions of completed types. A later recursive
+    /// Normalized one-step descriptions of completed types. A later recursive
     /// component may be a partial copy of one already reduced, with edges
     /// both into itself and into that earlier component.
     descriptions: std.AutoHashMapUnmanaged(Identity, Description) = .empty,
@@ -599,7 +599,7 @@ const Engine = struct {
         try candidates.value_ptr.append(self.gpa, digest);
     }
 
-    /// An SCC boundary is a storage fact, not part of an infinite type.
+    /// An SCC boundary is a storage property, not part of an infinite type.
     /// Before assigning a new group identity, prove whether this component
     /// unfolds to an already completed type. All matching head labels are
     /// considered, and the proof follows every ordered edge to a fixed point.
@@ -637,7 +637,7 @@ const Engine = struct {
             }
             match.value_ptr.* = pair.digest;
             const description = self.renderer.memo.descriptions.get(pair.digest) orelse
-                Common.invariant("a completed procedure type lacks its canonical description");
+                Common.invariant("a completed procedure type lacks its normalized description");
             if (!std.mem.eql(u8, &description.label, &self.nodeLabel(pair.node))) return false;
             const children = self.childrenOf(pair.node);
             if (children.len != description.children.len) return false;

@@ -1,6 +1,7 @@
 //! Persistent, request-relative interface constraints. No solver or producer
 //! type-store identity crosses this boundary.
 const std = @import("std");
+const collections = @import("collections");
 const check = @import("check");
 const base = @import("base");
 const Type = @import("type.zig");
@@ -13,9 +14,9 @@ const invariant = base.invariant;
 const magic = "RIFSUM04";
 const frozen_magic = "RIFRZ001";
 
-/// A checked occurrence either names its immutable artifact directly, or
-/// names a closed checked type by canonical content. The latter has no
-/// instantiation identity and can be bound to any current published root
+/// A checked occurrence either names its immutable checked module directly, or
+/// names a closed checked type by normalized content. The latter has no
+/// instantiation identity and can be bound to any current committed root
 /// with that exact key; its nominal owner remains content-addressed.
 pub const NamedOccurrence = union(enum) {
     exact: struct { owner: [32]u8, occurrence: [32]u8, ty: u32 },
@@ -40,7 +41,7 @@ fn invalidSummary(comptime line: u32) error{InvalidSummary} {
 }
 
 /// Encode only the immutable graph reachable from the settled relation. The
-/// context supplies exact checked artifact addresses for executable defaults.
+/// context supplies exact checked module addresses for runtime defaults.
 pub fn encode(allocator: Allocator, types: *Type.Store, ns: *const names.NameStore, leaves: []const Type.TypeId, summary: Summary, context: anytype) EncodeError![]u8 {
     return encodeWithStats(allocator, types, ns, leaves, summary, context, null);
 }
@@ -81,7 +82,7 @@ pub fn encodeWithStats(allocator: Allocator, types: *Type.Store, ns: *const name
 
 /// References in temporary decoded data name a request leaf or a table node,
 /// never a live Type.Store slot. The complete record is validated before the
-/// destination transaction starts. Its result is published only after commit.
+/// destination transaction starts. Its result becomes visible only after commit.
 pub fn decode(arena: Allocator, types: *Type.Store, ns: *names.NameStore, leaves: []const Type.TypeId, bytes: []const u8, context: anytype) DecodeError!Summary {
     return decodeForRequest(arena, types, ns, leaves, bytes, context, null, true, null);
 }
@@ -237,7 +238,7 @@ fn copyFrozen(comptime T: type, arena: Allocator, value: T) Allocator.Error!T {
         },
         .@"union" => |info| blk: {
             inline for (info.field_names, info.field_types) |field, F| if (std.meta.activeTag(value) == @field(info.tag_type.?, field)) break :blk @unionInit(T, field, try copyFrozen(F, arena, @field(value, field)));
-            unreachable;
+            unreachable; // the loop above matches the active tag, which is one of the union's fields
         },
         .optional => |info| if (value) |v| try copyFrozen(info.child, arena, v) else null,
         .pointer => |info| blk: {
@@ -254,7 +255,22 @@ fn copyFrozen(comptime T: type, arena: Allocator, value: T) Allocator.Error!T {
             break :blk out;
         },
         .@"enum", .int, .float, .bool, .void => value,
-        else => @compileError("unsupported frozen payload field: " ++ @typeName(T)),
+        .type,
+        .noreturn,
+        .comptime_float,
+        .comptime_int,
+        .undefined,
+        .null,
+        .error_union,
+        .error_set,
+        .@"fn",
+        .@"opaque",
+        .frame,
+        .@"anyframe",
+        .vector,
+        .enum_literal,
+        .spirv,
+        => @compileError("unsupported frozen payload field: " ++ @typeName(T)),
     };
 }
 
@@ -279,7 +295,22 @@ fn relocateFrozen(comptime T: type, value: anytype, ids: []const Type.TypeId) vo
         },
         .array => |info| for (value) |*v| relocateFrozen(info.child, v, ids),
         .@"enum", .int, .float, .bool, .void => {},
-        else => @compileError("unsupported frozen payload field: " ++ @typeName(T)),
+        .type,
+        .noreturn,
+        .comptime_float,
+        .comptime_int,
+        .undefined,
+        .null,
+        .error_union,
+        .error_set,
+        .@"fn",
+        .@"opaque",
+        .frame,
+        .@"anyframe",
+        .vector,
+        .enum_literal,
+        .spirv,
+        => @compileError("unsupported frozen payload field: " ++ @typeName(T)),
     }
 }
 
@@ -335,7 +366,22 @@ const TypeEdges = struct {
             },
             .array => |info| for (value) |v| try self.collect(info.child, v),
             .@"enum", .int, .float, .bool, .void => {},
-            else => @compileError("unsupported summary graph field"),
+            .type,
+            .noreturn,
+            .comptime_float,
+            .comptime_int,
+            .undefined,
+            .null,
+            .error_union,
+            .error_set,
+            .@"fn",
+            .@"opaque",
+            .frame,
+            .@"anyframe",
+            .vector,
+            .enum_literal,
+            .spirv,
+            => @compileError("unsupported summary graph field"),
         }
     }
 };
@@ -471,7 +517,7 @@ fn Writer(comptime Context: type) type {
         const Self = @This();
         context: Context,
         stats: Stats = .{},
-        references: std.AutoHashMapUnmanaged(Type.TypeId, u32) = .empty,
+        references: collections.DenseMapUnmanaged(Type.TypeId, u32) = .empty,
         pending: std.ArrayList(Type.TypeId) = .empty,
         leaf_buckets: std.AutoHashMapUnmanaged([32]u8, u32) = .empty,
         leaf_next: std.ArrayList(?u32) = .empty,
@@ -601,10 +647,10 @@ fn Writer(comptime Context: type) type {
             if (T == Type.FieldDefault) {
                 self.stats.defaults += 1;
                 const identity = self.names.moduleIdentityBytes(value.module).*;
-                const artifact = self.context.defaultArtifact(identity, value.expr_node) orelse
-                    invariant("published field default has no declaring checked artifact or archived expression", .{});
+                const declaring_module = self.context.defaultDeclaringModule(identity, value.expr_node) orelse
+                    invariant("committed field default has no declaring checked module or archived expression", .{});
                 try self.write([32]u8, identity);
-                try self.write([32]u8, artifact);
+                try self.write([32]u8, declaring_module);
                 return self.write(u32, value.expr_node);
             }
             switch (@typeInfo(T)) {
@@ -694,10 +740,10 @@ fn Reader(comptime Context: type) type {
             if (T == Type.FieldDefault) {
                 self.stats.defaults += 1;
                 const identity = try self.read([32]u8);
-                const artifact = try self.read([32]u8);
+                const declaring_module = try self.read([32]u8);
                 const expr = try self.read(u32);
-                const current = self.context.defaultArtifact(identity, expr) orelse return invalidSummary(@src().line);
-                if (!std.mem.eql(u8, &artifact, &current)) return invalidSummary(@src().line);
+                const current = self.context.defaultDeclaringModule(identity, expr) orelse return invalidSummary(@src().line);
+                if (!std.mem.eql(u8, &declaring_module, &current)) return invalidSummary(@src().line);
                 return .{ .module = try self.names.internModuleIdentity(&identity), .expr_node = expr };
             }
             if (T == Solve.NodeId or T == Solve.MaybeNodeId or T == Solve.FieldKindId) {
@@ -789,13 +835,13 @@ fn Reader(comptime Context: type) type {
 }
 
 const TestProvenance = struct {
-    artifact: [32]u8 = @splat(7),
+    declaring_module: [32]u8 = @splat(7),
     available: bool = true,
     closed_key: ?[32]u8 = null,
     occurrence_version: u8 = 0,
-    pub fn defaultArtifact(self: @This(), identity: [32]u8, expr: u32) ?[32]u8 {
+    pub fn defaultDeclaringModule(self: @This(), identity: [32]u8, expr: u32) ?[32]u8 {
         if (!self.available or identity[0] != 1 or expr > 2) return null;
-        return self.artifact;
+        return self.declaring_module;
     }
     pub fn validModuleIdentity(self: @This(), identity: [32]u8) bool {
         return self.available and identity[0] == 1;
@@ -838,7 +884,7 @@ const FrozenTestPayload = struct {
     optional: Type.MaybeTypeId,
 };
 
-fn frozenTestBytes(allocator: Allocator) ![]u8 {
+fn frozenTestBytes(allocator: Allocator) error{ NotRepresentable, OutOfMemory }![]u8 {
     var ns = names.NameStore.init(allocator);
     defer ns.deinit();
     var source = Type.Store.init(allocator);
@@ -916,7 +962,7 @@ test "frozen specialization payload rejects corrupt schema references and trunca
     }
 }
 
-fn frozenAllocationRoundTrip(gpa: Allocator) !void {
+fn frozenAllocationRoundTrip(gpa: Allocator) error{ InvalidSummary, NotRepresentable, OutOfMemory, TestExpectedEqual, TestUnexpectedResult }!void {
     const bytes = try frozenTestBytes(gpa);
     defer gpa.free(bytes);
     var ns = names.NameStore.init(gpa);
@@ -1072,9 +1118,14 @@ test "persistent interface evidence contexts preserve types and exact procedure 
     try std.testing.expect(!std.meta.eql(procedure, Ast.fnEvidenceContextDigest(evidence, &.{}, null, &contexts)));
 }
 
+/// The root naming the node at `index` of a test summary's `nodes`.
+fn testNodeRoot(index: u32) Solve.NodeId {
+    return @fromBackingInt(index);
+}
+
 fn typeSummary(ty: Type.TypeId, nodes: *[1]Constraints.Node) Summary {
     nodes.* = .{.{ .mono = ty }};
-    return .{ .constraints = .{ .roots = &.{@fromBackingInt(0)}, .nodes = nodes, .open_nodes = &.{}, .kinds = &.{} } };
+    return .{ .constraints = .{ .roots = &.{testNodeRoot(0)}, .nodes = nodes, .open_nodes = &.{}, .kinds = &.{} } };
 }
 
 test "persistent interface composite graph preserves sharing defaults and representation metadata" {
@@ -1153,7 +1204,7 @@ test "persistent interface composite graph preserves sharing defaults and repres
         try std.testing.expectEqual(restored, replay.constraints.nodes[0].mono);
         try std.testing.expectEqual(size, dest.types.len());
     }
-    try std.testing.expectError(error.InvalidSummary, decode(arena.allocator(), &dest, &dest_names, &.{input}, bytes, TestProvenance{ .artifact = @splat(8) }));
+    try std.testing.expectError(error.InvalidSummary, decode(arena.allocator(), &dest, &dest_names, &.{input}, bytes, TestProvenance{ .declaring_module = @splat(8) }));
     try std.testing.expectError(error.InvalidSummary, decode(arena.allocator(), &dest, &dest_names, &.{input}, bytes, TestProvenance{ .available = false }));
     try std.testing.expectEqual(size, dest.types.len());
     var other_field = field;
@@ -1230,7 +1281,7 @@ test "persistent interface open variables and defaulted field kinds remain relat
     defer store.deinit();
     const module = try ns.internModuleIdentity(&@as([32]u8, @splat(1)));
     const summary: Summary = .{ .constraints = .{
-        .roots = &.{ @fromBackingInt(0), @fromBackingInt(0) },
+        .roots = &.{ testNodeRoot(0), testNodeRoot(0) },
         .nodes = &.{.{ .open = 0 }},
         .open_nodes = &.{.{ .content = .{ .unresolved = Solve.InstVariable.checkedVariable(null, null) } }},
         .kinds = &.{.{ .resolved = .{ .defaulted = .{ .module = module, .expr_node = 1 } }, .cells = null }},
@@ -1245,7 +1296,7 @@ test "persistent interface open variables and defaulted field kinds remain relat
     try std.testing.expectEqual(@as(u32, 1), result.kinds[0].resolved.?.defaulted.expr_node);
 }
 
-fn allocationFailureRoundTrip(gpa: Allocator) !void {
+fn allocationFailureRoundTrip(gpa: Allocator) error{ InvalidSummary, NotRepresentable, OutOfMemory, TestExpectedEqual, TestUnexpectedResult }!void {
     var ns = names.NameStore.init(gpa);
     defer ns.deinit();
     var source = Type.Store.init(gpa);
@@ -1409,7 +1460,7 @@ test "persistent parametric interfaces retain explicit holes and reject unfinish
         try std.testing.expectEqual(Type.Primitive.str, (try graph.content((try graph.content(instance[0])).list)).primitive);
     }
     const parameter: Summary = .{ .constraints = .{
-        .roots = &.{@fromBackingInt(0)},
+        .roots = &.{testNodeRoot(0)},
         .nodes = &.{.{ .open = 0 }},
         .open_nodes = &.{.{ .content = .{ .unresolved = Solve.InstVariable.interfaceParameter() } }},
         .kinds = &.{},
