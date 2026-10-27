@@ -119,6 +119,8 @@ pub const Task = union(enum) {
     /// values.
     finish_interpolation: CheckedExprId,
     finish_interpolation_call: struct { assembler: LocalId, assembler_ty: TypeId, values_ty: TypeId, count: u32, result: TypeId },
+    /// Pop a value and a hasher and hash the value structurally.
+    finish_hash: struct { value: TypeId, result: TypeId },
     /// Push a string literal of the checked bodies as a `Str` value.
     push_value_str: checked.CheckedStringLiteralId,
     /// Push `local` as a value.
@@ -1236,6 +1238,13 @@ pub const Builder = struct {
                 try self.pushValue(try self.emitErasedCall(call.assembler, call.assembler_ty, &.{list}, call.result));
             },
             .finish_local_call => |call| try self.finishLocalCall(call.closure, call.words, call.params, call.result),
+            .finish_hash => |hash| {
+                const hasher = self.popValue();
+                const value = self.popValue();
+                const target = try self.localOf(hash.result, .frame);
+                try self.emitDyn(target, .{ .hash = .{ .hasher = hasher, .value = value, .desc = try self.descOf(hash.value) } });
+                try self.pushValue(target);
+            },
             .push_value_str => |literal| try self.pushValue(try self.strLiteral(self.bodies().stringLiteral(literal))),
 
             .resume_at => |hole| self.hole = hole,
@@ -2660,6 +2669,12 @@ pub const Builder = struct {
                 }
             },
             .structural => |derivation| switch (derivation) {
+                .hash => {
+                    if (operands.len != 2) invariant("structural hashing has a value and a hasher");
+                    try self.push(.{ .finish_hash = .{ .value = operand_types[0], .result = result_ty } });
+                    try self.pushOperand(operands[1], operand_types[1]);
+                    try self.pushOperand(operands[0], operand_types[0]);
+                },
                 .equality => {
                     const negated = switch (call_plan.result_mode) {
                         .equality => |equality| equality.negated,
@@ -2723,6 +2738,12 @@ pub const Builder = struct {
         var open = !store.isClosed(result_ty);
         for (arg_types) |arg_ty| open = open or !store.isClosed(arg_ty);
         if (op == .list_map_can_reuse) return try self.pushValue(try self.listMapCanReuse(args, arg_types, result_ty));
+        if (op == .crash) {
+            // A crash ends its block; the result stands for the value no
+            // execution reaches.
+            try self.emitTerminal(.{ .crash = .{ .msg = .{ .local = args[0] } } });
+            return try self.pushValue(try self.localOf(result_ty, .frame));
+        }
         if (!open) {
             const target = try self.localOf(result_ty, .frame);
             // Source arithmetic commits to its operand type's behavior.
@@ -3318,22 +3339,38 @@ pub const Builder = struct {
                 },
                 .record_destructure => |destructs| {
                     const ty = try self.structuralType(item.ty);
-                    const fields = switch (self.program.store.get(ty)) {
-                        .record => |record| self.program.store.fieldSpan(record.fields),
+                    const record = switch (self.program.store.get(ty)) {
+                        .record => |record| record,
+                        .empty_record => if (destructs.len == 0) continue else invariant("a record pattern names a field of the empty record"),
                         else => invariant("a record pattern's type is not a record"),
                     };
+                    const fields = self.program.store.fieldSpan(record.fields);
                     for (destructs) |destruct| {
                         const name = try self.program.store.internName(self.view.nameStore().recordFieldLabelText(destruct.label));
-                        const semantic = for (fields, 0..) |field, index| {
-                            if (field.name == name) break index;
-                        } else invariant("a record pattern's field is absent from its type");
-                        if (fields[semantic].kind != .inline_slot) invariant("destructuring optional record fields is not yet lowered by Boxy");
-                        const local = try self.readField(ty, item.value, @intCast(semantic), fields[semantic].ty);
                         const sub = switch (destruct.kind) {
                             .required, .sub_pattern => |p| p,
-                            .rest => invariant("record rest patterns are not yet lowered by Boxy"),
+                            .rest => |rest| {
+                                // `..` with nothing to bind reads nothing.
+                                if (self.bodies().pattern(rest).data == .underscore) continue;
+                                invariant("record rest patterns that bind the rest are not yet lowered by Boxy");
+                            },
                         };
-                        try pending.append(self.allocator, .{ .pattern = sub, .value = local, .ty = fields[semantic].ty });
+                        const semantic = for (fields, 0..) |field, index| {
+                            if (field.name == name) break index;
+                        } else null;
+                        if (semantic) |index| {
+                            if (fields[index].kind != .inline_slot) invariant("destructuring optional record fields is not yet lowered by Boxy");
+                            const local = try self.readField(ty, item.value, @intCast(index), fields[index].ty);
+                            try pending.append(self.allocator, .{ .pattern = sub, .value = local, .ty = fields[index].ty });
+                        } else {
+                            // A field of an open row's remainder: only the
+                            // record's descriptor knows where it is.
+                            if (record.ext == null) invariant("a record pattern's field is absent from its type");
+                            const field_ty = try self.patternType(sub);
+                            const local = try self.localOf(field_ty, .view);
+                            try self.emitDyn(local, .{ .field_addr_named = .{ .base = item.value, .desc = try self.descOf(ty), .name = try self.nameDesc(name) } });
+                            try pending.append(self.allocator, .{ .pattern = sub, .value = local, .ty = field_ty });
+                        }
                     }
                 },
                 .numeral_literal => |numeral| {
