@@ -610,7 +610,7 @@ pub const Graph = struct {
             for (self.childrenOf(node)) |child| {
                 if (self.memberChild(child) != null) continue;
                 const member_ref = settled.member_of.get(self.childDigest(child)) orelse continue;
-                if (std.mem.indexOfScalar(u32, self.candidate_groups.items, member_ref.group) == null) {
+                if (std.mem.findScalar(u32, self.candidate_groups.items, member_ref.group) == null) {
                     try self.candidate_groups.append(self.gpa, member_ref.group);
                 }
             }
@@ -660,7 +660,7 @@ pub const Graph = struct {
                 }
             }
         }
-        return std.mem.indexOfScalar(u32, paired, no_position) == null;
+        return std.mem.findScalar(u32, paired, no_position) == null;
     }
 };
 
