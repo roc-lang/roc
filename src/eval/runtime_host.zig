@@ -16,38 +16,54 @@ const longjmp = crash_boundary_mod.longjmp;
 
 const RuntimeHostEnv = @This();
 
-/// Bookkeeping stored immediately before every allocation handed to Roc
-/// code: a free or reallocation reads the block's size back from the block
+/// Bookkeeping stored at the start of every block handed to Roc code: a free
+/// or reallocation reads the block's size and alignment back from the block
 /// itself, and the live blocks form a list that `deinit` can release.
+///
+/// The payload sits `alignment` bytes past `header_region`, so its address is
+/// a multiple of the requested alignment and never of twice it. Code that
+/// leans on more alignment than it asked for then misbehaves in every eval
+/// test instead of only on a host whose allocator happens to differ, and a
+/// free or reallocation at a different alignment than the allocation fails
+/// loudly: production hosts locate a block from the alignment they are given.
 const Header = extern struct {
     prev: ?*Header,
     next: ?*Header,
     size: usize,
     alignment: usize,
 
-    /// The payload follows the header at this offset, which keeps every
-    /// supported payload alignment because the block itself is aligned to
-    /// `block_alignment`.
-    const payload_offset = @sizeOf(Header);
-    const block_alignment: std.mem.Alignment = .@"16";
+    const header_region = 32;
+    const block_alignment: std.mem.Alignment = .@"32";
+    const max_payload_alignment = 16;
 
     comptime {
-        std.debug.assert(payload_offset % 16 == 0);
+        std.debug.assert(@sizeOf(Header) <= header_region);
+        std.debug.assert(header_region % block_alignment.toByteUnits() == 0);
+        std.debug.assert(max_payload_alignment < block_alignment.toByteUnits());
     }
 
     fn fromPayload(ptr: *anyopaque) *Header {
-        const bytes: [*]u8 = @ptrCast(ptr);
-        return @ptrCast(@alignCast(bytes - payload_offset));
+        // payload = block start + header_region + alignment, and alignment is
+        // less than block_alignment, so rounding down recovers the start.
+        const start = (@intFromPtr(ptr) - header_region) & ~(block_alignment.toByteUnits() - 1);
+        return @ptrFromInt(start);
     }
 
     fn payload(self: *Header) [*]u8 {
         const bytes: [*]u8 = @ptrCast(self);
-        return bytes + payload_offset;
+        return bytes + header_region + self.alignment;
     }
 
-    fn block(self: *Header) []align(16) u8 {
-        const bytes: [*]align(16) u8 = @ptrCast(@alignCast(self));
-        return bytes[0 .. payload_offset + self.size];
+    fn block(self: *Header) []align(32) u8 {
+        const bytes: [*]align(32) u8 = @ptrCast(@alignCast(self));
+        return bytes[0 .. header_region + self.alignment + self.size];
+    }
+
+    /// Fail loudly when `alignment` is not the one the block was allocated at.
+    fn expectAlignment(self: *Header, alignment: usize, comptime operation: []const u8) void {
+        if (self.alignment != alignment) {
+            std.debug.panic("RuntimeHostEnv: " ++ operation ++ " at alignment {d} of a block allocated at alignment {d} (ptr=0x{x})", .{ alignment, self.alignment, @intFromPtr(self.payload()) });
+        }
     }
 };
 
@@ -394,11 +410,12 @@ fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyop
     return @ptrCast(self.allocateBlock(length, alignment).payload());
 }
 
-fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, _: usize) callconv(.c) void {
+fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
     const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
     const header = self.liveHeader(ptr, "double-free or untracked free");
+    header.expectAlignment(alignment, "dealloc");
     if (header.size >= @sizeOf(isize)) {
-        const refcount_ptr: *isize = @ptrCast(@alignCast(ptr));
+        const refcount_ptr: *align(1) isize = @ptrCast(ptr);
         refcount_ptr.* = POISON_VALUE;
     }
     self.freeBlock(header);
@@ -408,6 +425,7 @@ fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usi
     const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
     self.allocation_call_count += 1;
     const old_header = self.liveHeader(ptr, "realloc of untracked memory");
+    old_header.expectAlignment(alignment, "realloc");
     const new_header = self.allocateBlock(new_length, alignment);
     const copy_size = @min(old_header.size, new_length);
     @memcpy(new_header.payload()[0..copy_size], old_header.payload()[0..copy_size]);
@@ -429,14 +447,14 @@ fn allocateBlock(self: *RuntimeHostEnv, size: usize, alignment: usize) *Header {
         1, 2, 4, 8, 16 => {},
         else => std.debug.panic("RuntimeHostEnv: unsupported alignment {d}", .{alignment}),
     }
-    const block = runtime_bytes_allocator.alignedAlloc(u8, Header.block_alignment, Header.payload_offset + size) catch oom("roc_alloc");
+    const block = runtime_bytes_allocator.alignedAlloc(u8, Header.block_alignment, Header.header_region + alignment + size) catch oom("roc_alloc");
     const header: *Header = @ptrCast(@alignCast(block.ptr));
+    header.* = .{ .prev = null, .next = self.live_blocks, .size = size, .alignment = alignment };
     if (std.debug.runtime_safety) {
         self.live_set.put(runtime_bytes_allocator, @intFromPtr(header.payload()), {}) catch {
             std.debug.panic("RuntimeHostEnv: failed to track allocation", .{});
         };
     }
-    header.* = .{ .prev = null, .next = self.live_blocks, .size = size, .alignment = alignment };
     if (self.live_blocks) |next| next.prev = header;
     self.live_blocks = header;
     self.live_count += 1;
