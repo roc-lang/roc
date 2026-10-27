@@ -118,7 +118,6 @@ pub fn decodeForRequest(arena: Allocator, types: *Type.Store, ns: *names.NameSto
             for (c.nodes) |node| if (node == .open and node.open >= c.open_nodes.len) return invalidSummary(@src().line);
             for (c.open_nodes) |node| {
                 if (node.content == .redirect or node.content == .leaf) return invalidSummary(@src().line);
-                if (node.content == .unresolved and node.content.unresolved.origin == .placeholder) return invalidSummary(@src().line);
                 if (node.content == .unresolved and node.content.unresolved.origin == .interface_parameter and
                     (node.content.unresolved.numeric_default_phase != null or node.content.unresolved.row_default != null)) return invalidSummary(@src().line);
                 if (node.related_group != .none and @backingInt(node.related_group) >= c.open_nodes.len) return invalidSummary(@src().line);
@@ -637,7 +636,10 @@ fn Writer(comptime Context: type) type {
                 return self.write(u32, try self.reference(value));
             }
             if (T == Solve.InstNode) {
-                if (value == .redirect or value == .leaf or (value == .unresolved and value.unresolved.origin == .placeholder)) invariant("settled interface contains unfinished solver state", .{});
+                // An undetermined field kind's slot is a placeholder until its
+                // relation is frozen; replay instantiates it as one, exactly as
+                // an in-memory summary does.
+                if (value == .redirect or value == .leaf) invariant("settled interface contains unfinished solver state", .{});
             }
             if (T == Type.MaybeTypeId) return self.write(?Type.TypeId, value.get());
             if (T == names.ModuleIdentityId) if (!self.checked_names) return self.write([32]u8, self.names.moduleIdentityBytes(value).*);
