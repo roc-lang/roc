@@ -4,7 +4,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 /// The persisted format boundary validated by the owning native loader.
-pub const Kind = enum { native_payload_v1, native_component_v1, native_offer_v3 };
+pub const Kind = enum { native_payload_v1, native_component_v1, native_offer_v3, native_offer_domain_v1 };
 
 /// Validation work and retained storage, separate from publication work.
 pub const Metrics = struct {

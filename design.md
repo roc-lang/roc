@@ -1052,7 +1052,17 @@ record carries the explicit provider identity followed by a `ROFFER03` selection
 record naming an immutable component digest and root ordinal, exact procedure
 identity, specialization key, compile-time reads and ARC interface. Provider
 visibility and rank come from the checked program, root first. Lookup probes
-one key bucket per origin, filters by provider and sorts by rank and digest.
+one key bucket per advertised origin, filters by provider and sorts by rank
+and digest. Before publishing offers, a producer publishes and pins one
+immutable advertisement for that procedure domain and origin. A reader
+validates and retains it once per cache snapshot; an unadvertised namespace
+is an optional-cache miss without per-key catalog probes. Explicit index
+refresh invalidates missing advertisements after publication. An accepted
+advertisement remains valid through its retained generation lease, including
+when publication reuses it without rereading it. It establishes no claim
+about an individual offer: all offer, dependency, payload, source-eligibility,
+and corruption checks remain required. Missing or corrupt advertisements
+only remove optional reuse, including when maintenance has retired one.
 Concurrent writers publish independent immutable records.
 
 The exact native splice graph is partitioned into strongly connected

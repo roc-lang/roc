@@ -102,7 +102,13 @@ pub const Store = struct {
         return result;
     }
 
-    const IndexedKind = enum { payload, metadata, offer, completed, interface };
+    const IndexedKind = enum { payload, metadata, offer, offer_domain, completed, interface };
+
+    const offer_domain_bytes = "ROCNOFF1";
+
+    fn offerDomainIdentity(self: *const Store, origin: compile.BuildEnv.PackOrigin) compile.artifacts.Identity {
+        return self.indexedIdentity(origin, @splat(0), Index.digest(offer_domain_bytes), .offer_domain);
+    }
 
     fn indexedIdentity(self: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8, key: [32]u8, kind: IndexedKind) compile.artifacts.Identity {
         var id = self.packIdentity(origin, module, key);
@@ -257,6 +263,18 @@ pub const Store = struct {
         defer {
             for (pins.items) |*artifact| artifact.deinit();
             pins.deinit(allocator);
+        }
+        // Advertise before publishing any offer, and retain that advertisement
+        // throughout publication. Concurrent producers write identical bytes.
+        var advertised: [@typeInfo(compile.BuildEnv.PackOrigin).@"enum".field_names.len]bool = @splat(false);
+        for (specs, 0..) |_, i| {
+            const provider_origin = if (providers) |locations| locations[i].origin else origin;
+            const slot = @backingInt(provider_origin);
+            if (advertised[slot]) continue;
+            if (retained == null or !retained.?.retainsOfferAdvertisement(self, provider_origin)) {
+                _ = try self.publishIndexedHeld(self.offerDomainIdentity(provider_origin), offer_domain_bytes, stats, &pins);
+            }
+            advertised[slot] = true;
         }
         var published = std.AutoHashMap([32]u8, void).init(allocator);
         defer published.deinit();
@@ -1016,7 +1034,7 @@ pub const LoadedPacks = struct {
         records: std.AutoArrayHashMapUnmanaged([32]u8, *InterfaceRecord) = .empty,
     };
     const Provider = struct { store: *const Store, origin: compile.BuildEnv.PackOrigin, module: [32]u8 };
-    const IndexRoot = struct { store: *const Store, origin: compile.BuildEnv.PackOrigin };
+    const IndexRoot = struct { store: *const Store, origin: compile.BuildEnv.PackOrigin, advertised: ?bool = null, advertisement: ?*const base.retained_cache.Record = null };
     interface_mutex: std.Io.Mutex = .init,
     /// Worker reads update these atomically; reported after joining.
     interface_bytes_loaded: u64 = 0,
@@ -1190,12 +1208,35 @@ pub const LoadedPacks = struct {
         self.refreshIndex();
     }
 
+    fn loadOfferAdvertisement(self: *LoadedPacks, root: *IndexRoot) Allocator.Error!bool {
+        const store = root.store;
+        const owner = try self.recordOwner(store.roc_ctx.std_io);
+        const record = store.acquireRetained(owner, try self.retentionBatch(store), store.offerDomainIdentity(root.origin).indexedKey(), .native_offer_domain_v1) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Unavailable, error.Corrupt => return false,
+        };
+        if (!std.mem.eql(u8, record.bytes, Store.offer_domain_bytes)) return false;
+        root.advertisement = record;
+        return true;
+    }
+
+    fn retainsOfferAdvertisement(self: *const LoadedPacks, store: *const Store, origin: compile.BuildEnv.PackOrigin) bool {
+        const storage = store.retainedIdentity(store.offerDomainIdentity(origin).indexedKey());
+        for (self.index_roots.items) |root| if (root.advertisement) |record| {
+            if (std.mem.eql(u8, &record.storage_identity, &storage)) return true;
+        };
+        return false;
+    }
+
     /// Start a fresh optional-cache snapshot after publication. This also
     /// invalidates misses when an existing provider acquired new offers.
     /// Other processes' later publications become visible at the next refresh
     /// or in the next compilation; a miss never promises code availability.
     pub fn refreshIndex(self: *LoadedPacks) void {
         self.negative.clearRetainingCapacity();
+        for (self.index_roots.items) |*root| if (root.advertisement == null) {
+            root.advertised = null;
+        };
         var families = self.interface_families.valueIterator();
         while (families.next()) |family| {
             for (family.*.records.values()) |record| if (record.payload == null) {
@@ -1440,8 +1481,10 @@ pub const LoadedPacks = struct {
         var candidates = std.ArrayList(Candidate).empty;
         defer candidates.deinit(allocator);
         var cacheable = true;
-        for (self.index_roots.items) |root| {
+        for (self.index_roots.items) |*root| {
             profile.enter(.buckets);
+            if (root.advertised == null) root.advertised = try self.loadOfferAdvertisement(root);
+            if (!root.advertised.?) continue;
             self.index_stats.bucket_opens += 1;
             const group = root.store.indexedIdentity(root.origin, key, @splat(0), .offer);
             const keys = (try self.retentionBatch(root.store)).groupKeys(allocator, group) catch |err| switch (err) {
@@ -2982,7 +3025,7 @@ test "indexed object cache defers discovery until a completed-output probe misse
     try std.testing.expectEqual(@as(u64, 1), packs.index_stats.payload_opens);
 }
 
-test "indexed object cache misses probe keys once across many providers and refresh on publication" {
+test "unadvertised object namespaces skip bucket probes and refresh on publication" {
     const F = IndexFixture;
     var fixture: F = undefined;
     try fixture.init();
@@ -2991,14 +3034,14 @@ test "indexed object cache misses probe keys once across many providers and refr
     defer packs.deinit();
     for (1..128) |i| try fixture.store.loadIdentity(std.testing.io, &packs, .local, @splat(@intCast(i)));
     for (0..100) |_| try std.testing.expect(packs.specCacheLookup().lookup(@splat(250), .dev_code, &.{}) == null);
-    try std.testing.expectEqual(@as(u64, 1), packs.index_stats.bucket_opens);
+    try std.testing.expectEqual(@as(u64, 0), packs.index_stats.bucket_opens);
     try std.testing.expectEqual(@as(u64, 99), packs.index_stats.negative_hits);
     try fixture.publish(&.{F.excerpt(1, "new code")}, &.{F.spec(250, 0)}, &.{});
     // An existing provider's new offer invalidates the snapshot, even though
     // the provider set itself did not change.
     try packs.offerIndexed(&fixture.store, .local, F.identity);
     _ = packs.specCacheLookup().lookup(@splat(250), .dev_code, &.{}) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u64, 2), packs.index_stats.bucket_opens);
+    try std.testing.expectEqual(@as(u64, 1), packs.index_stats.bucket_opens);
 }
 
 test "indexed object cache shares payloads and verifies immutable records before skipping writes" {
@@ -3417,6 +3460,7 @@ test "native publication interruption at each catalog boundary exposes only comp
         fixture.store.indexedIdentity(.local, @splat(0), components[0], .metadata),
         fixture.store.indexedIdentity(.local, specs[0].key, Index.digest(offer), .offer),
     };
+    _ = try fixture.store.publishIndexed(fixture.store.offerDomainIdentity(.local), Store.offer_domain_bytes);
     for (identities, [_][]const u8{ payload, metadata, offer }, 0..) |id, bytes, index| {
         _ = try fixture.store.publishIndexed(id, bytes);
         var packs = try fixture.loader();
@@ -3614,4 +3658,54 @@ test "interface requests share same-key reads while independent workers publish 
     }
     // Every request is read from storage once, even when all lanes ask for it.
     try std.testing.expectEqual(@as(u64, (8 * 32 + 1) * (LoadedPacks.interface_header_size + 32)), reader.interface_bytes_loaded);
+}
+
+test "native offer advertisements reject corruption and preserve snapshot refresh" {
+    const F = IndexFixture;
+    var fixture: F = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    try fixture.publish(&.{F.excerpt(1, "code")}, &.{F.spec(1, 0)}, &.{});
+    {
+        var marker = (try fixture.store.native.acquire(fixture.store.offerDomainIdentity(.local), fixture.store.read_timestamp)).?;
+        defer marker.deinit();
+        try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = marker.path, .data = "invalid advertisement" });
+    }
+    var packs = try fixture.loader();
+    defer packs.deinit();
+    try std.testing.expect(packs.specCacheLookup().lookup(@splat(1), .dev_code, &.{}) == null);
+    try std.testing.expectEqual(@as(u64, 0), packs.index_stats.bucket_opens);
+    try fixture.publish(&.{F.excerpt(1, "code")}, &.{F.spec(1, 0)}, &.{});
+    try packs.offerIndexed(&fixture.store, .local, F.identity);
+    _ = packs.specCacheLookup().lookup(@splat(1), .dev_code, &.{}) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 1), packs.index_stats.bucket_opens);
+    // The accepted advertisement's lease remains valid even if the name is
+    // unlinked externally. It is retained together with the accepted offers.
+    {
+        var marker = (try fixture.store.native.acquire(fixture.store.offerDomainIdentity(.local), fixture.store.read_timestamp)).?;
+        defer marker.deinit();
+        try std.Io.Dir.cwd().deleteFile(std.testing.io, marker.path);
+    }
+    packs.refreshIndex();
+    try std.testing.expect(packs.retainsOfferAdvertisement(&fixture.store, .local));
+    _ = packs.specCacheLookup().lookup(@splat(1), .dev_code, &.{}) orelse return error.TestUnexpectedResult;
+}
+
+test "empty package namespace avoids per-key searches beside populated local offers" {
+    const F = IndexFixture;
+    var fixture: F = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+    try fixture.publish(&.{F.excerpt(1, "local")}, &.{F.spec(1, 0)}, &.{});
+    var packs = try fixture.loader();
+    defer packs.deinit();
+    const provider: compile.BuildEnv.PackPlacement = .{ .origin = .pkg, .identity = @splat(99) };
+    try fixture.store.loadIdentity(std.testing.io, &packs, provider.origin, provider.identity);
+    _ = packs.specCacheLookup().lookup(@splat(1), .dev_code, &.{}) orelse return error.TestUnexpectedResult;
+    for (2..11) |key| try std.testing.expect(packs.specCacheLookup().lookup(@splat(@intCast(key)), .dev_code, &.{}) == null);
+    try std.testing.expectEqual(@as(u64, 10), packs.index_stats.bucket_opens);
+    try fixture.store.writeIndexedForProviders(.local, F.identity, &.{ .arena = undefined, .excerpts = &.{F.excerpt(2, "package")} }, &.{F.spec(2, 0)}, &.{provider});
+    try packs.offerIndexed(&fixture.store, provider.origin, provider.identity);
+    _ = packs.specCacheLookup().lookup(@splat(2), .dev_code, &.{}) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 12), packs.index_stats.bucket_opens);
 }
