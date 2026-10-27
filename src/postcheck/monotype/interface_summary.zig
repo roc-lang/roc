@@ -258,7 +258,7 @@ fn copyFrozen(comptime T: type, arena: Allocator, value: T) Allocator.Error!T {
     };
 }
 
-fn relocateFrozen(comptime T: type, value: *T, ids: []const Type.TypeId) void {
+fn relocateFrozen(comptime T: type, value: anytype, ids: []const Type.TypeId) void {
     if (T == Type.TypeId) {
         value.* = ids[@backingInt(value.*)];
         return;
@@ -814,9 +814,10 @@ const FrozenTestPayload = struct {
     edges: []const u32,
     name: names.RecordFieldNameId,
     data: []const u8,
-    integer: i128,
+    integer: i128 align(8),
     float: f64,
     optional: Type.MaybeTypeId,
+    bits: packed struct(u64) { ty: Type.TypeId, enabled: bool, padding: u31 = 0 },
 };
 
 fn frozenTestBytes(allocator: Allocator) ![]u8 {
@@ -839,6 +840,7 @@ fn frozenTestBytes(allocator: Allocator) ![]u8 {
         .integer = std.math.minInt(i128) + 17,
         .float = @bitCast(@as(u64, 0x7ff8000000000053)),
         .optional = .of(function),
+        .bits = .{ .ty = slot.ty, .enabled = true },
     }, TestProvenance{}, null);
 }
 
@@ -859,6 +861,8 @@ test "frozen specialization payload owns data and relocates cyclic shared type r
     const field = GuardedList.at(dest.fieldSpan(dest.get(result.types[0]).record), 0);
     try std.testing.expectEqual(result.types[0], dest.get(field.ty).func.ret);
     try std.testing.expectEqual(field.ty, result.optional.get().?);
+    try std.testing.expectEqual(result.types[0], result.bits.ty);
+    try std.testing.expect(result.bits.enabled);
     try std.testing.expectEqual(Type.Primitive.u64, dest.get(result.types[2]).primitive);
     try std.testing.expectEqualStrings("step", ns.recordFieldLabelText(result.name));
     try std.testing.expectEqualStrings("owned bytes\x00\xff", result.data);
