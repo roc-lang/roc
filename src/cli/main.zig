@@ -7743,6 +7743,26 @@ fn bundleArchivePath(
     return relative_path;
 }
 
+/// The `main.roc` among `source_paths` that roots a bundle: the one whose
+/// directory contains every other `main.roc` given, such as the headers of
+/// local packages it depends on. Null when no `main.roc` qualifies.
+fn bundleRootMain(allocator: Allocator, source_paths: []const []const u8) Allocator.Error!?[]const u8 {
+    for (source_paths) |candidate| {
+        if (!std.mem.eql(u8, std.fs.path.basename(candidate), "main.roc")) continue;
+        const candidate_dir = std.fs.path.dirname(candidate) orelse continue;
+        const contains_every_main = for (source_paths) |other| {
+            if (!std.mem.eql(u8, std.fs.path.basename(other), "main.roc")) continue;
+            const relative_path = bundleArchivePath(allocator, candidate_dir, other) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidPath => break false,
+            };
+            allocator.free(relative_path);
+        } else true;
+        if (contains_every_main) return candidate;
+    }
+    return null;
+}
+
 /// Bundles a roc package and its dependencies into a compressed tar archive
 pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     const stdout = ctx.io.stdout();
@@ -7773,11 +7793,6 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     // If no paths provided, default to "main.roc"
     const paths_to_use = if (args.paths.len == 0) &[_][]const u8{"main.roc"} else args.paths;
 
-    // Find the first .roc file to use as entry point for module discovery
-    const first_roc_index: ?usize = for (paths_to_use, 0..) |path, index| {
-        if (std.mem.endsWith(u8, path, ".roc")) break index;
-    } else null;
-
     // Resolve every explicitly requested file exactly once. Discovered module
     // paths are already absolute, so all following work uses one path form.
     for (paths_to_use) |path| {
@@ -7788,7 +7803,16 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
         try source_paths.append(ctx.arena, abs_path);
     }
 
-    const entry_source_path = source_paths.items[first_roc_index orelse 0];
+    // Consumers load a fetched bundle from its root directory's `main.roc`,
+    // so that file is the package root the bundle is built and laid out
+    // from, wherever it appears among the arguments.
+    const entry_source_path = try bundleRootMain(ctx.arena, source_paths.items) orelse {
+        try stderr.print(
+            "Error: A bundle must include its package's main.roc, in a directory containing every other main.roc given. Consumers load the bundle from that main.roc.\n",
+            .{},
+        );
+        return error.InvalidPath;
+    };
     const bundle_root_path = std.fs.path.dirname(entry_source_path) orelse {
         try stderr.print("Error: Could not determine the directory containing entry point '{s}'.\n", .{entry_source_path});
         return error.InvalidPath;
@@ -7796,9 +7820,7 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
 
     // Discover transitive modules and their recorded file imports, including
     // modules exposed by a `package [...]` header, and add their source paths.
-    if (first_roc_index != null) {
-        try discoverAndAddBundleInputs(ctx, entry_source_path, &source_paths, stderr);
-    }
+    try discoverAndAddBundleInputs(ctx, entry_source_path, &source_paths, stderr);
 
     var entries = std.ArrayList(bundle.Entry).empty;
     defer entries.deinit(ctx.arena);

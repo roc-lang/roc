@@ -533,6 +533,7 @@ const CustomCase = enum {
     build_issue_9435_hosted_nominal_return,
     bundle_complex_package,
     bundle_entrypoint_subdirectory,
+    bundle_issue_12565_main_roc_root,
     bundle_file_imports,
     bundle_issue_11608_output_dir_cross_device,
     install_run_roundtrip,
@@ -4069,6 +4070,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle complex_package includes all transitively imported modules", .body = .{ .custom = .bundle_complex_package } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle issue 11907 includes file imports and rejects missing files", .body = .{ .custom = .bundle_file_imports } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle issue 10845 entry point in a subdirectory bundles relative to it", .body = .{ .custom = .bundle_entrypoint_subdirectory } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc bundle issue 12565 roots a platform at its main.roc whatever the argument order", .body = .{ .custom = .bundle_issue_12565_main_roc_root } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bundle issue 11608 succeeds when --output-dir is on a different filesystem", .body = .{ .custom = .bundle_issue_11608_output_dir_cross_device } },
     .{ .id = 0, .suite = .subcommands, .name = "a destructure whose pattern rejects its value crashes at runtime instead of panicking the compiler", .backend = .dev, .body = .{ .command = .{ .args = &.{}, .roc_file = "test/cli/destructure_pattern_mismatch.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stdout, .text = "before" }, .{ .stream = .stderr, .text = "crashed" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "failed inline expect exits with code 1 and continues program (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{}, .roc_file = "test/cli/failed_inline_expect.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stdout, .text = "Hello, World!" }, .{ .stream = .stderr, .text = "expect failed" } } } } },
@@ -5318,6 +5320,7 @@ fn runCustomCase(
         .bundle_complex_package => customBundleComplexPackage(io, allocator, &env, &timer, timeout_ms),
         .bundle_file_imports => customBundleFileImports(io, allocator, &env, &timer, timeout_ms),
         .bundle_entrypoint_subdirectory => customBundleEntrypointSubdirectory(io, allocator, &env, &timer, timeout_ms),
+        .bundle_issue_12565_main_roc_root => customBundleIssue12565MainRocRoot(io, allocator, &env, &timer, timeout_ms),
         .bundle_issue_11608_output_dir_cross_device => customBundleIssue11608OutputDirCrossDevice(io, allocator, &env, &timer, timeout_ms),
         .install_run_roundtrip => customInstallRunRoundtrip(io, allocator, &env, &timer, timeout_ms),
         .install_hash_mismatch => customInstallHashMismatch(io, allocator, &env, &timer, timeout_ms),
@@ -15119,6 +15122,107 @@ fn customBundleEntrypointSubdirectory(io: std.Io, allocator: Allocator, env: *co
     }
     if (std.mem.find(u8, outside_result.stderr, "outside the entry point directory") == null) {
         return failureFromRun(allocator, timer, outside_result, "roc bundle did not explain the outside-root file error");
+    }
+
+    return null;
+}
+
+/// Repro for https://github.com/roc-lang/roc/issues/12565
+fn customBundleIssue12565MainRocRoot(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const platform_dir = createWorkSubdir(io, allocator, env, "bundle-12565") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create platform dir: {}", .{err});
+    const target_dir = std.fs.path.join(allocator, &.{ platform_dir, "targets", "x64musl" }) catch |err|
+        return customInfraFailure(allocator, timer, "target dir path: {}", .{err});
+    std.Io.Dir.cwd().createDirPath(io, target_dir) catch |err|
+        return customInfraFailure(allocator, timer, "create target dir: {}", .{err});
+
+    // `User` calls the hosted `Sink.push!`, which only has a value when the
+    // build roots at the platform header that publishes it.
+    const files = [_]struct { path: []const u8, contents: []const u8 }{
+        .{ .path = "main.roc", .contents =
+        \\platform ""
+        \\    requires {} { main! : () => {} }
+        \\    exposes [Sink, User]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\    hosted {
+        \\        "roc_sink_push": Sink.push!,
+        \\    }
+        \\    targets: {
+        \\        inputs_dir: "targets/",
+        \\        x64musl: { inputs: ["libhost.a", app] },
+        \\    }
+        \\
+        \\import Sink
+        \\import User
+        \\
+        \\main_for_host! : () => {}
+        \\main_for_host! = main!
+        \\
+        },
+        .{ .path = "Sink.roc", .contents = "Sink := [].{\n    push! : Str => {}\n}\n" },
+        .{ .path = "User.roc", .contents = "import Sink\n\nUser := [].{\n    go! : Str => {}\n    go! = |s| Sink.push!(s)\n}\n" },
+        .{ .path = "targets/x64musl/libhost.a", .contents = "" },
+    };
+    for (files) |file| {
+        const path = std.fs.path.join(allocator, &.{ platform_dir, file.path }) catch |err|
+            return customInfraFailure(allocator, timer, "fixture path: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = file.contents }) catch |err|
+            return customInfraFailure(allocator, timer, "write fixture: {}", .{err});
+    }
+
+    const out_dir = createWorkSubdir(io, allocator, env, "bundle-12565-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create bundle output dir: {}", .{err});
+
+    const roc_abs = if (std.fs.path.isAbsolute(roc_binary_path))
+        roc_binary_path
+    else
+        std.fs.path.join(allocator, &.{ project_root_path, roc_binary_path }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate roc path: {}", .{err});
+
+    const orders = [_][]const []const u8{
+        &.{ "User.roc", "Sink.roc", "main.roc" },
+        &.{ "main.roc", "User.roc", "Sink.roc" },
+    };
+    var first_bundle_filename: ?[]const u8 = null;
+    for (orders) |order| {
+        const bundle_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before bundling");
+        const argv = std.mem.concat(allocator, []const u8, &.{ &.{ roc_abs, "bundle", "--output-dir", out_dir }, order }) catch |err|
+            return customInfraFailure(allocator, timer, "bundle argv: {}", .{err});
+        const bundle_result = runRawInEnv(io, allocator, env, argv, platform_dir, null, bundle_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "bundle spawn error: {}", .{err});
+        if (exitCode(bundle_result.term) != 0) {
+            return failureFromRun(allocator, timer, bundle_result, "roc bundle failed");
+        }
+        if (std.mem.find(u8, bundle_result.stderr, "has no value") != null) {
+            return failureFromRun(allocator, timer, bundle_result, "roc bundle checked hosted declarations without their platform");
+        }
+        const created_prefix = "Created: ";
+        const created_idx = std.mem.find(u8, bundle_result.stdout, created_prefix) orelse
+            return failureFromRun(allocator, timer, bundle_result, "roc bundle did not report a created file");
+        const created_rest = bundle_result.stdout[created_idx + created_prefix.len ..];
+        const created_eol = std.mem.find(u8, created_rest, "\n") orelse created_rest.len;
+        const bundle_filename = std.fs.path.basename(std.mem.trim(u8, created_rest[0..created_eol], " \r"));
+        if (first_bundle_filename) |first| {
+            if (!std.mem.eql(u8, first, bundle_filename)) {
+                return customFailure(allocator, timer, "argument order changed the bundle: {s} vs {s}", .{ first, bundle_filename });
+            }
+        } else {
+            first_bundle_filename = bundle_filename;
+        }
+    }
+
+    // Without a main.roc the bundle has no package root consumers could load.
+    const rootless_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before rootless bundle check");
+    const rootless_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "bundle", "--output-dir", out_dir, "User.roc", "Sink.roc" }, platform_dir, null, rootless_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "rootless bundle spawn error: {}", .{err});
+    if (exitCode(rootless_result.term) == 0) {
+        return failureFromRun(allocator, timer, rootless_result, "roc bundle accepted files without their package's main.roc");
+    }
+    if (std.mem.find(u8, rootless_result.stderr, "must include its package's main.roc") == null) {
+        return failureFromRun(allocator, timer, rootless_result, "roc bundle did not explain the missing main.roc");
     }
 
     return null;
