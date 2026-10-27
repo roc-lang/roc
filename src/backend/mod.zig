@@ -11,8 +11,6 @@ const roc_target = @import("roc_target");
 
 pub const dev = @import("dev/mod.zig");
 pub const wasm = @import("wasm/mod.zig");
-/// Backend-neutral operand plans for Boxy runtime wrapper calls.
-pub const boxy_call_plan = @import("boxy_call_plan.zig");
 
 comptime {
     if (@import("builtin").is_test) {
@@ -187,7 +185,7 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
     const u32x3_body = try helpers.addStructBody(&store, u32x3_layout, .u32, &.{ 0x01020304, 0x05060708, 0x090A0B0C });
     const u32x3_proc = try helpers.addErasedProc(&store, &layout_store, u32x3_body, u32x3_layout);
 
-    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, roc_target.host_cpu.level());
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
 
@@ -269,7 +267,7 @@ test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
     }, .none);
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, .default);
     defer codegen.deinit();
     codegen.generation_mode = .object_file;
 
@@ -318,7 +316,7 @@ test "x86_64 Windows U128 entrypoint return loads all 16 bytes into XMM0" {
     }, .none);
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, .default);
     defer codegen.deinit();
     codegen.generation_mode = .object_file;
 

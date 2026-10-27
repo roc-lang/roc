@@ -12395,9 +12395,8 @@ const Builder = struct {
     }
 
     /// The declared fields of a nominal/opaque record backing, from explicit
-    /// checked metadata, or null when it has none. Boxy uses the lowered span
-    /// for aggregate descriptor planning; LSS consumes it as layout order only
-    /// when it contains padding. The lowered backing row remains lexicographic.
+    /// checked metadata, or null when it has none. LSS consumes it as layout
+    /// order only when it contains padding. The lowered backing row remains lexicographic.
     fn declaredOrderOps(self: *Builder, view: ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!?[]DeclaredOrderOp {
         if (nominal.declared_fields.len != 0) {
             return try self.checkedDeclaredOrderOps(view, nominal.declared_fields, view, nominal.padding_field_types);
@@ -49164,7 +49163,7 @@ const BodyContext = struct {
             self.in_default_expr = true;
             // The default is a closed expression: it binds nothing from the
             // consuming body, so it gets fresh binder state even in its own
-            // module (the same rule boxy's `stepModuleExpr` applies).
+            // module.
             // Without this, a second materialization of the same default in
             // one body would capture the first's (or the consuming body's)
             // lexical binder entries into its local-procedure declaration
@@ -49928,8 +49927,7 @@ const BodyContext = struct {
         // below—but every unset label must still name an OPTIONAL field in
         // the row, the same validation the update arm above applies. Without
         // it, an unset of a defaulted field would silently take the
-        // defaulted arm and materialize the default, diverging from boxy
-        // lowering (which panics on the same input).
+        // defaulted arm and materialize the default.
         for (record.unsets) |label| {
             const name = try recordFieldName(self.nameStoreMut(), self.view, label);
             if (self.monotypeFieldKindTag(self.recordField(ty, name)) != .optional) {

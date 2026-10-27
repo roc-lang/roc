@@ -6,8 +6,6 @@ const std = @import("std");
 pub const LIR = @import("LIR.zig");
 /// Flat storage for statement-only LIR nodes and spans.
 pub const LirStore = @import("LirStore.zig");
-/// Name storage shared by Boxy LIR producers and consumers.
-pub const BoxyNames = @import("BoxyNames.zig");
 /// LIR-owned root metadata.
 pub const RootMetadata = @import("root_metadata.zig");
 /// Hosted ABI metadata carried by LIR proc specs.
@@ -25,7 +23,6 @@ test "lir core declarations are referenced" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(LIR);
     std.testing.refAllDecls(LirStore);
-    std.testing.refAllDecls(BoxyNames);
     std.testing.refAllDecls(RootMetadata);
     std.testing.refAllDecls(Hosted);
     std.testing.refAllDecls(Program);

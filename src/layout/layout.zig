@@ -30,7 +30,6 @@ pub const LayoutTag = enum(u4) {
     // Introduced by the TRMC pass (see src/lir/trmc.zig); never a struct field,
     // tag payload, or list element. The pass author must uphold those invariants.
     ptr, // Compiler-internal pointer to a value of the element layout; never refcounted.
-    erased_box, // Descriptor-backed refcounted box whose payload layout is known only at runtime.
     // A demand-shaped procedure's stand-in for a list or box element type its
     // body never reads, moves, or refcounts (design.md "Specialization By
     // Demand"). Zero-sized and never refcounted; only ever a list or box
@@ -693,8 +692,6 @@ pub const ScalarInfo = struct {
 /// (Exception: List({}) and Box({}) get special layouts `.list_of_zst` and
 /// `.box_of_zst` because the stack-allocated container can be used at runtime
 /// even if individual elements cannot be accessed.)
-/// Boxy dynamic storage uses the separate pointer-sized `.erased_box` layout;
-/// unlike `.box_of_zst`, it denotes descriptor-governed refcounted ownership.
 ///
 /// Once a type has been converted to a Layout, there is no longer any
 /// distinction between nominal and structural types, there's just memory.
@@ -745,7 +742,7 @@ pub const Layout = packed struct {
                 .str, .opaque_ptr => target_usize.alignment(),
                 .vector => .@"16",
             },
-            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .closure, .ptr => target_usize.alignment(),
+            .box, .box_of_zst, .list, .list_of_zst, .erased_callable, .closure, .ptr => target_usize.alignment(),
             .struct_ => self.getStruct().sort_key.alignment(target_usize),
             .tag_union => self.getTagUnion().sort_key.alignment(target_usize),
             .zst, .hole => std.mem.Alignment.@"1",
@@ -764,7 +761,7 @@ pub const Layout = packed struct {
                 .str, .opaque_ptr => .pointer,
                 .vector => .align_16,
             },
-            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .ptr, .closure => .pointer,
+            .box, .box_of_zst, .list, .list_of_zst, .erased_callable, .ptr, .closure => .pointer,
             .zst, .hole => .align_1,
             .struct_ => self.getStruct().sort_key,
             .tag_union => self.getTagUnion().sort_key,
@@ -819,11 +816,6 @@ pub const Layout = packed struct {
     /// box of zero-sized type layout (e.g. Box({}))
     pub fn boxOfZst() Layout {
         return .{ .data = 0, .tag = .box_of_zst };
-    }
-
-    /// Descriptor-backed box whose allocation stores a runtime-known payload.
-    pub fn erasedBox() Layout {
-        return .{ .data = 0, .tag = .erased_box };
     }
 
     /// compiler-internal pointer layout with the given element layout
@@ -892,7 +884,7 @@ pub const Layout = packed struct {
                 .vector => self.getScalar().getVector() == other.getScalar().getVector(),
             },
             .box, .list, .ptr => self.getIdx() == other.getIdx(),
-            .box_of_zst, .erased_box => true, // No additional data
+            .box_of_zst => true, // No additional data
             .list_of_zst => true, // No additional data
             .struct_ => self.getStruct().sort_key == other.getStruct().sort_key and
                 self.getStruct().idx.int_idx == other.getStruct().idx.int_idx,

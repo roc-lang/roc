@@ -2,7 +2,6 @@
 //! interpreter consumers.
 
 const std = @import("std");
-const collections = @import("collections");
 const base = @import("base");
 const check = @import("check");
 const layout = @import("layout");
@@ -15,7 +14,6 @@ const Allocator = std.mem.Allocator;
 const names = check.CheckedNames;
 const checked = check.CheckedModule;
 const const_store = check.ConstStore;
-const dispatch = check.StaticDispatchRegistry;
 
 /// Dense index in the export slice returned by one static-data materialization.
 pub const StaticDataSymbolId = enum(u32) { _ };
@@ -77,8 +75,6 @@ pub const StaticDataRelocation = struct {
     /// In-process consumers use this identity directly; object backends use
     /// `target_symbol_name` as its linker representation.
     procedure: ?LIR.LirProcSpecId = null,
-    /// Producer recipe within the erased-function set, retained for transcoding.
-    boxy_recipe: ?u32 = null,
     /// Exact generated RC helper required by this function-pointer relocation.
     ///
     /// Static erased-callable `on_drop` slots are always atomic: their
@@ -200,37 +196,6 @@ pub const ErasedFn = struct {
     capture_layout: layout.Idx = .zst,
     template: ?FnTemplate = null,
     captures: []const CaptureSlot = &.{},
-    /// Boxy-owned producer identity and typed runtime environment. These
-    /// captures do not claim ConstStore provenance.
-    boxy: ?BoxyFrozenCallable = null,
-};
-
-/// Typed field of a Boxy callable frozen during literal evaluation.
-pub const BoxyFrozenCapture = struct {
-    slot: u32,
-    value: union(enum) {
-        value: ConstPlanId,
-        descriptor: BoxyTypeDescId,
-        contents_descriptor: BoxyTypeDescId,
-        dictionary: BoxyDictId,
-    },
-};
-
-/// Closed producer recipe shared by host and target literal lowering.
-pub const BoxyFrozenCallable = struct {
-    key: [32]u8,
-    result_desc: ?BoxyTypeDescId = null,
-    captures: []const BoxyFrozenCapture,
-};
-
-/// Checked contract and selected implementation of a dictionary boundary.
-/// The implementation identity survives inlining and procedure pruning.
-pub const BoxyFrozenMethodOrigin = struct {
-    worker: LIR.ProcIdentity,
-    requirement_module: checked.ModuleId,
-    requirement_type: checked.CheckedTypeId,
-    callable_module: checked.ModuleId,
-    callable_type: checked.CheckedTypeId,
 };
 
 /// Runtime encoding for an erased callable value type.
@@ -260,232 +225,6 @@ const ExpectSiteKey = struct {
     }
 };
 
-/// Stable index of a Boxy type descriptor in the program side tables.
-pub const BoxyTypeDescId = LIR.BoxyTypeDescId;
-/// Stable index of a Boxy method dictionary in the program side tables.
-pub const BoxyDictId = LIR.BoxyDictId;
-/// Stable index of an explicit Boxy representation adapter.
-pub const BoxyAdapterId = LIR.BoxyAdapterId;
-/// Stable index of a method slot within a Boxy dictionary.
-pub const BoxyMethodSlotId = enum(u32) { _ };
-/// Explicit source for resolving a Boxy type descriptor.
-pub const BoxyDescRef = LIR.BoxyDescRef;
-/// Explicit source for resolving a Boxy dictionary.
-pub const BoxyDictRef = LIR.BoxyDictRef;
-/// Compact start and length pair into a Boxy side table.
-pub const BoxySpan = LIR.BoxySpan;
-/// Ownership transfer applied by one Boxy adaptation step.
-pub const BoxyTransferMode = LIR.BoxyTransferMode;
-
-/// Runtime metadata for one tag in a boxy tag-union descriptor.
-pub const BoxyTagVariant = struct {
-    name: LIR.BoxyNameId,
-    discriminant: u32,
-    /// Number of source-language payloads carried by this tag. A single
-    /// aggregate payload is distinct from a multi-payload tag whose runtime
-    /// payload is also a struct.
-    payload_count: u32 = 0,
-    payload_layout: layout.Idx,
-    payload_descs: BoxySpan = .{},
-};
-
-/// Descriptor metadata for one dynamic payload in a boxy tag variant.
-pub const BoxyTagPayloadDesc = struct {
-    payload_index: u32,
-    desc: BoxyDescRef,
-};
-
-/// Purpose of one explicit boxy representation adapter.
-pub const BoxyAdapterKind = enum {
-    host_to_boxy,
-    boxy_to_host,
-    boxy_to_boxy,
-    hosted_arg,
-    hosted_ret,
-    container_element,
-    method_arg,
-    method_ret,
-};
-
-/// Runtime operation selected when an adapter is built after layout planning.
-pub const BoxyAdapterOperation = enum {
-    relabel,
-    materialize,
-};
-
-/// Explicit representation adaptation plan used by boxy LIR statements.
-pub const BoxyAdapter = struct {
-    kind: BoxyAdapterKind,
-    operation: BoxyAdapterOperation = .materialize,
-    source_layout: layout.Idx,
-    target_layout: layout.Idx,
-    consumes_source: bool,
-    produces_owned_result: bool,
-};
-
-/// Source-language shape of the value a boxy descriptor describes. Inspection
-/// dispatches on this instead of on the payload layout, which erases
-/// structure: a zero-sized record, tuple, and single-tag union all share the
-/// `zst` layout.
-pub const BoxyDescShape = enum {
-    /// Built-in scalar or `Str`, whose payload layout decodes the value.
-    primitive,
-    /// Record; `field_names` and `nested_descs` have one entry per field.
-    record,
-    /// Tuple; `nested_descs` has one entry per element.
-    tuple,
-    /// Tag union; `tag_variants` describes every variant.
-    tag_union,
-    /// List; `nested_descs` holds exactly the item descriptor.
-    list,
-    /// Box; `nested_descs` holds exactly the payload descriptor.
-    box,
-    /// Erased storage whose value is described by its boxed allocation.
-    erased,
-    /// Callable value.
-    function,
-    /// Compiler-internal storage with no source-language shape, such as an
-    /// erased callable's capture struct.
-    internal,
-
-    /// Shape of a descriptor that describes only a value's storage: a scalar
-    /// is a primitive, and any other storage is internal, which inspection
-    /// never renders.
-    pub fn forStorage(storage: layout.Layout) BoxyDescShape {
-        return if (storage.tag == .scalar) .primitive else .internal;
-    }
-};
-
-/// Which runtime context a static boxy descriptor's reachable references read.
-/// Ordered from least to most context-dependent.
-pub const BoxyDescClosure = enum(u8) {
-    /// Every reachable reference is static, so the runtime uses the
-    /// descriptor in place without instantiating it.
-    closed,
-    /// Reachable references read only the materialization's captured
-    /// descriptor locals, so one instantiation serves every materialization
-    /// with the same captured descriptors.
-    captures,
-    /// Some reachable reference reads other runtime context.
-    context,
-};
-
-/// Runtime data for representation and structural operations on a boxy value.
-pub const BoxyTypeDesc = struct {
-    payload_layout: layout.Idx,
-    contains_refcounted: bool,
-    shape: BoxyDescShape,
-    /// One descriptor per child position, including zero-sized and scalar
-    /// children: struct field `i` (by original field index) is entry `i`, and
-    /// a list's item or a box's payload is entry 0. Consumers index this
-    /// directly by position.
-    nested_descs: BoxySpan = .{},
-    tag_variants: BoxySpan = .{},
-    tag_ext_desc: ?BoxyDescRef = null,
-    /// Record field names in payload field order, one per field. Empty for
-    /// non-record payloads (including tuples, which print positionally).
-    field_names: BoxySpan = .{},
-    /// Present-variant discriminant when these bytes use the canonical
-    /// optional-field slot convention. This is compiler-produced semantic
-    /// data, not a runtime inference from tags or layouts.
-    presence_slot_present_discriminant: ?u32 = null,
-    /// The described value is an opaque nominal type: inspect must not
-    /// reveal its backing structure.
-    inspect_opaque: bool = false,
-    inspect_method: ?BoxyMethodSlotId = null,
-    /// The hidden descriptors `inspect_method`'s worker receives, in worker
-    /// parameter order. They describe this descriptor's own type arguments,
-    /// so a runtime-instantiated descriptor carries its own copies.
-    inspect_hidden_descs: BoxySpan = .{},
-    /// One descriptor: this value in the storage of `inspect_method`'s
-    /// worker parameter, instantiated at this descriptor's type arguments.
-    inspect_arg_descs: BoxySpan = .{},
-    /// The type's own `is_eq`, which descriptor-guided equality calls in
-    /// place of comparing the value's structure.
-    eq_method: ?BoxyMethodSlotId = null,
-    /// The hidden descriptors `eq_method`'s worker receives, in worker
-    /// parameter order, like `inspect_hidden_descs`.
-    eq_hidden_descs: BoxySpan = .{},
-    /// Two descriptors: this value in the storage of each of `eq_method`'s
-    /// worker parameters.
-    eq_arg_descs: BoxySpan = .{},
-    /// The static dictionaries `eq_method`'s worker receives at this
-    /// descriptor's type, in worker parameter order.
-    eq_nested_dicts: BoxySpan = .{},
-    /// The type declares `is_eq`, but checking rejected that declaration:
-    /// descriptor-guided equality reaching this type crashes as code checking
-    /// rejected, exactly as a specialized comparison of it does.
-    eq_rejected: bool = false,
-    /// The type's own `to_hash`, which descriptor-guided hashing calls in
-    /// place of hashing the value's structure.
-    hash_method: ?BoxyMethodSlotId = null,
-    /// The hidden descriptors `hash_method`'s worker receives, in worker
-    /// parameter order, like `inspect_hidden_descs`.
-    hash_hidden_descs: BoxySpan = .{},
-    /// Two descriptors: this value in the storage of `hash_method`'s worker
-    /// value parameter, and the Hasher.
-    hash_arg_descs: BoxySpan = .{},
-    /// The static dictionaries `hash_method`'s worker receives at this
-    /// descriptor's type, in worker parameter order.
-    hash_nested_dicts: BoxySpan = .{},
-    /// The type declares `to_hash`, but checking rejected that declaration,
-    /// like `eq_rejected`.
-    hash_rejected: bool = false,
-    /// The described value is builtin Bool, which derived hashing writes as a
-    /// Bool rather than as a tag.
-    is_bool: bool = false,
-    debug_checked_type: ?checked.CheckedTypeId = null,
-    /// Set for static descriptors once lowering has produced every descriptor;
-    /// a descriptor built at runtime reads runtime context.
-    closure: BoxyDescClosure = .context,
-};
-
-/// Adapter metadata for one dictionary method slot.
-pub const BoxyMethodAdapter = struct {
-    arg_layouts: BoxySpan = .{},
-    ret_layout: ?layout.Idx = null,
-    arg_descs: BoxySpan = .{},
-    /// Compact static descriptor references used by `call_desc_sources`.
-    call_descs: BoxySpan = .{},
-    /// Exact source for every descriptor-bearing position in the checked
-    /// method requirement, in requirement traversal order. Empty means the
-    /// legacy one-to-one static `call_descs` representation.
-    call_desc_sources: BoxySpan = .{},
-    ret_desc: ?BoxyDescRef = null,
-    nested_dicts: BoxySpan = .{},
-    hidden_desc_sources: BoxySpan = .{},
-};
-
-/// Origin of a hidden descriptor argument passed to a dictionary method.
-pub const BoxyMethodHiddenDescSource = union(enum) {
-    /// Index into the slot's `hidden_descs`; for a descriptor-carried inspect
-    /// method, into the inspected descriptor's `inspect_hidden_descs`.
-    slot: u32,
-    call: u32,
-    argument: u32,
-};
-
-/// One callable slot in a boxy dictionary.
-pub const BoxyMethodSlot = struct {
-    /// False for an unimplemented program-wide method slot in a dictionary
-    /// that requires only a subset of the program's semantic methods.
-    present: bool = true,
-    method: names.MethodNameId,
-    proc: LIR.LirProcSpecId,
-    hidden_descs: BoxySpan = .{},
-    nested_dicts: BoxySpan = .{},
-    adapter: BoxyMethodAdapter = .{},
-};
-
-/// Runtime data for polymorphic behavior and static dispatch in boxy LIR.
-pub const BoxyDict = struct {
-    debug_dispatch_plan: ?dispatch.StaticDispatchPlanId = null,
-    method_slots: BoxySpan = .{},
-    /// The method slots name frame locals (`.local` descriptor and dictionary
-    /// references); an `assign_boxy_dict_ref` with captures materializes it.
-    template: bool = false,
-};
-
 /// Tag variant in a constant storage plan.
 pub const ConstTagVariant = struct {
     name: []const u8,
@@ -505,8 +244,6 @@ pub const ConstPlan = union(enum) {
     str,
     list: ConstPlanId,
     box: ConstPlanId,
-    /// Boxy worker box with a producer-resolved payload layout.
-    boxy_box: struct { payload: ConstPlanId, layout_idx: layout.Idx },
     tuple: []const ConstPlanId,
     record: []const ConstPlanId,
     tag_union: []const ConstTagVariant,
@@ -696,28 +433,6 @@ pub const Result = struct {
     /// program runs under hot reload, and none otherwise. Workers read their
     /// captures after it, so a value frozen into static data reserves it too.
     erased_capture_prefix: u32 = 0,
-    boxy_type_descs: std.ArrayList(BoxyTypeDesc) = .empty,
-    boxy_dicts: std.ArrayList(BoxyDict) = .empty,
-    /// Selected implementation behind each Boxy dictionary boundary adapter.
-    /// Compiler-only evidence used when freezing captured dictionaries.
-    boxy_frozen_method_origins: collections.DenseMapUnmanaged(LIR.LirProcSpecId, BoxyFrozenMethodOrigin) = .empty,
-    boxy_adapters: std.ArrayList(BoxyAdapter) = .empty,
-    boxy_desc_refs: std.ArrayList(BoxyDescRef) = .empty,
-    boxy_dict_refs: std.ArrayList(BoxyDictRef) = .empty,
-    boxy_tag_variants: std.ArrayList(BoxyTagVariant) = .empty,
-    boxy_tag_payload_descs: std.ArrayList(BoxyTagPayloadDesc) = .empty,
-    boxy_field_names: std.ArrayList(LIR.BoxyNameId) = .empty,
-    boxy_method_slots: std.ArrayList(BoxyMethodSlot) = .empty,
-    /// Dense, deduplicated proc ids named by live non-structural Boxy method
-    /// slots. Machine backends consume this exact list when emitting the
-    /// uniform worker thunks used by the Boxy runtime.
-    boxy_worker_procs: std.ArrayList(LIR.LirProcSpecId) = .empty,
-    boxy_method_arg_layouts: std.ArrayList(layout.Idx) = .empty,
-    boxy_method_hidden_desc_sources: std.ArrayList(BoxyMethodHiddenDescSource) = .empty,
-    boxy_erased_arg_layouts: std.ArrayList(layout.Idx) = .empty,
-    boxy_erased_arg_desc_keys: std.ArrayList(LIR.ErasedArgDescKey) = .empty,
-    boxy_erased_arg_desc_offsets: std.ArrayList(LIR.ErasedArgDescOffset) = .empty,
-    boxy_erased_arg_desc_params: std.ArrayList(LIR.ErasedArgDescParam) = .empty,
     const_plans: std.ArrayList(ConstPlan) = .empty,
     const_roots: std.ArrayList(ConstRootPlan) = .empty,
     literal_roots: std.ArrayList(LiteralRootPlan) = .empty,
@@ -755,23 +470,6 @@ pub const Result = struct {
         self.const_plans.deinit(allocator);
         deinitFnSets(allocator, self.fn_sets.items);
         deinitErasedFns(allocator, self.erased_fns.items);
-        self.boxy_erased_arg_desc_params.deinit(allocator);
-        self.boxy_erased_arg_desc_offsets.deinit(allocator);
-        self.boxy_erased_arg_desc_keys.deinit(allocator);
-        self.boxy_erased_arg_layouts.deinit(allocator);
-        self.boxy_method_hidden_desc_sources.deinit(allocator);
-        self.boxy_method_arg_layouts.deinit(allocator);
-        self.boxy_worker_procs.deinit(allocator);
-        self.boxy_method_slots.deinit(allocator);
-        self.boxy_field_names.deinit(allocator);
-        self.boxy_tag_payload_descs.deinit(allocator);
-        self.boxy_tag_variants.deinit(allocator);
-        self.boxy_dict_refs.deinit(allocator);
-        self.boxy_desc_refs.deinit(allocator);
-        self.boxy_adapters.deinit(allocator);
-        self.boxy_dicts.deinit(allocator);
-        self.boxy_frozen_method_origins.deinit(allocator);
-        self.boxy_type_descs.deinit(allocator);
         self.erased_fns.deinit(allocator);
         self.fn_sets.deinit(allocator);
         self.const_type_names.deinit();
@@ -846,108 +544,6 @@ pub const Result = struct {
         return self.expect_site_ids.get(ExpectSiteKey.init(loc, region));
     }
 
-    /// Classify every static Boxy descriptor by the runtime context its
-    /// reachable references read. Runs once, after lowering has produced
-    /// every descriptor.
-    pub fn classifyBoxyDescClosures(self: *Result, allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
-        const descs = self.boxy_type_descs.items;
-        if (descs.len == 0) return;
-
-        // Reverse edges (child -> parents) in compressed rows, so a class
-        // propagates from each descriptor to everything that reaches it.
-        const edge_starts = try allocator.alloc(u32, descs.len + 1);
-        defer allocator.free(edge_starts);
-        @memset(edge_starts, 0);
-        for (descs) |desc| {
-            var refs = self.boxyDescRefIterator(desc);
-            while (refs.next()) |ref| switch (ref) {
-                .static => |child| edge_starts[@backingInt(child) + 1] += 1,
-                .local, .runtime, .dict_method_hidden => {},
-            };
-        }
-        for (1..edge_starts.len) |index| edge_starts[index] += edge_starts[index - 1];
-        const parents = try allocator.alloc(u32, edge_starts[descs.len]);
-        defer allocator.free(parents);
-        const fill = try allocator.dupe(u32, edge_starts[0..descs.len]);
-        defer allocator.free(fill);
-
-        var worklist = std.ArrayList(u32).empty;
-        defer worklist.deinit(allocator);
-        for (descs, 0..) |*desc, desc_index| {
-            var class: BoxyDescClosure = .closed;
-            var refs = self.boxyDescRefIterator(desc.*);
-            while (refs.next()) |ref| switch (ref) {
-                .static => |child| {
-                    parents[fill[@backingInt(child)]] = @intCast(desc_index);
-                    fill[@backingInt(child)] += 1;
-                },
-                .local => class = @fromBackingInt(@intCast(@max(@backingInt(class), @backingInt(BoxyDescClosure.captures)))),
-                .runtime, .dict_method_hidden => class = .context,
-            };
-            desc.closure = class;
-            if (class != .closed) try worklist.append(allocator, @intCast(desc_index));
-        }
-
-        while (worklist.pop()) |child| {
-            const class = descs[child].closure;
-            for (parents[edge_starts[child]..edge_starts[child + 1]]) |parent| {
-                if (@backingInt(descs[parent].closure) >= @backingInt(class)) continue;
-                descs[parent].closure = class;
-                try worklist.append(allocator, parent);
-            }
-        }
-    }
-
-    /// Every descriptor reference `desc` holds directly.
-    fn boxyDescRefIterator(self: *const Result, desc: BoxyTypeDesc) BoxyDescRefIterator {
-        return .{ .result = self, .desc = desc };
-    }
-
-    const BoxyDescRefIterator = struct {
-        result: *const Result,
-        desc: BoxyTypeDesc,
-        section: u8 = 0,
-        index: u32 = 0,
-        variant: u32 = 0,
-
-        fn next(self: *BoxyDescRefIterator) ?BoxyDescRef {
-            const r = self.result;
-            while (true) {
-                switch (self.section) {
-                    0 => if (spanRef(r.boxy_desc_refs.items, self.desc.nested_descs, &self.index)) |ref| return ref,
-                    1 => if (spanRef(r.boxy_desc_refs.items, self.desc.inspect_hidden_descs, &self.index)) |ref| return ref,
-                    2 => if (spanRef(r.boxy_desc_refs.items, self.desc.inspect_arg_descs, &self.index)) |ref| return ref,
-                    3 => if (self.index == 0) {
-                        self.index = 1;
-                        if (self.desc.tag_ext_desc) |ref| return ref;
-                    },
-                    4 => while (self.variant < self.desc.tag_variants.len) {
-                        const variant = r.boxy_tag_variants.items[self.desc.tag_variants.start + self.variant];
-                        if (self.index < variant.payload_descs.len) {
-                            self.index += 1;
-                            return r.boxy_tag_payload_descs.items[variant.payload_descs.start + self.index - 1].desc;
-                        }
-                        self.variant += 1;
-                        self.index = 0;
-                    },
-                    5 => if (spanRef(r.boxy_desc_refs.items, self.desc.eq_hidden_descs, &self.index)) |ref| return ref,
-                    6 => if (spanRef(r.boxy_desc_refs.items, self.desc.eq_arg_descs, &self.index)) |ref| return ref,
-                    7 => if (spanRef(r.boxy_desc_refs.items, self.desc.hash_hidden_descs, &self.index)) |ref| return ref,
-                    8 => if (spanRef(r.boxy_desc_refs.items, self.desc.hash_arg_descs, &self.index)) |ref| return ref,
-                    else => return null,
-                }
-                self.section += 1;
-                self.index = 0;
-            }
-        }
-
-        fn spanRef(refs: []const BoxyDescRef, span: BoxySpan, index: *u32) ?BoxyDescRef {
-            if (index.* >= span.len) return null;
-            index.* += 1;
-            return refs[span.start + index.* - 1];
-        }
-    };
-
     /// Discard the lowering-only source lookup once every statement has its
     /// dense id. Runtime consumers need only `expect_sites`.
     pub fn finishExpectSites(self: *Result) void {
@@ -970,7 +566,6 @@ pub fn deinitConstPlans(allocator: Allocator, plans: []const ConstPlan) void {
                 allocator.free(variants);
             },
             .zst,
-            .boxy_box,
             .layout_only,
             .pending,
             .scalar,
@@ -1007,15 +602,9 @@ pub fn deinitErasedFns(allocator: Allocator, erased_fns: []const ErasedFns) void
                 const_store.freeVector(allocator, template.evidence);
                 if (template.evidence_frames.len > 0) allocator.free(template.evidence_frames);
             }
-            if (entry.boxy) |boxy| allocator.free(boxy.captures);
         }
         if (set.entries.len > 0) allocator.free(set.entries);
     }
-}
-
-/// Convert an intentional fixture-table position while preserving enum inference.
-fn fixtureTableIndex(comptime index: u32) u32 {
-    return index;
 }
 
 test "lowering module table resolves checked module provenance both ways" {
@@ -1046,84 +635,6 @@ test "lowering module table resolves checked module provenance both ways" {
     try std.testing.expectEqual(owner, stored.owner);
     try std.testing.expectEqual(@as(?LIR.CheckedExhaustivenessSiteId, @fromBackingInt(@intCast(41))), stored.checked_site);
     try std.testing.expectEqualSlices(u8, &keys[2].bytes, &result.lowering_modules.items[@backingInt(stored.owner)].bytes);
-}
-
-test "boxy side tables initialize empty and use flat pools" {
-    const allocator = std.testing.allocator;
-    var result = try Result.init(allocator, .u64);
-    defer result.deinit();
-
-    try std.testing.expectEqual(@as(usize, 0), result.boxy_type_descs.items.len);
-    try std.testing.expectEqual(@as(usize, 0), result.boxy_dicts.items.len);
-    try std.testing.expectEqual(@as(usize, 0), result.boxy_adapters.items.len);
-    try std.testing.expectEqual(@as(usize, 0), result.boxy_desc_refs.items.len);
-    try std.testing.expectEqual(@as(usize, 0), result.boxy_dict_refs.items.len);
-    try std.testing.expectEqual(@as(usize, 0), result.boxy_method_slots.items.len);
-    try std.testing.expectEqual(@as(usize, 0), result.boxy_method_arg_layouts.items.len);
-    try std.testing.expectEqual(@as(usize, 0), result.boxy_method_hidden_desc_sources.items.len);
-
-    const desc_refs_start = result.boxy_desc_refs.items.len;
-    try result.boxy_desc_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
-    const desc_refs = BoxySpan{ .start = @intCast(desc_refs_start), .len = 1 };
-
-    try result.boxy_type_descs.append(allocator, .{
-        .payload_layout = .zst,
-        .contains_refcounted = true,
-        .shape = .internal,
-        .nested_descs = desc_refs,
-    });
-
-    const arg_layouts_start = result.boxy_method_arg_layouts.items.len;
-    try result.boxy_method_arg_layouts.append(allocator, .zst);
-    const arg_layouts = BoxySpan{ .start = @intCast(arg_layouts_start), .len = 1 };
-
-    const arg_descs_start = result.boxy_desc_refs.items.len;
-    try result.boxy_desc_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
-    const arg_descs = BoxySpan{ .start = @intCast(arg_descs_start), .len = 1 };
-
-    const nested_dicts_start = result.boxy_dict_refs.items.len;
-    try result.boxy_dict_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
-    const nested_dicts = BoxySpan{ .start = @intCast(nested_dicts_start), .len = 1 };
-
-    const hidden_desc_sources_start = result.boxy_method_hidden_desc_sources.items.len;
-    try result.boxy_method_hidden_desc_sources.append(allocator, .{ .slot = 0 });
-    const hidden_desc_sources = BoxySpan{ .start = @intCast(hidden_desc_sources_start), .len = 1 };
-
-    const method_slots_start = result.boxy_method_slots.items.len;
-    try result.boxy_method_slots.append(allocator, .{
-        .method = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .proc = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .adapter = .{
-            .arg_layouts = arg_layouts,
-            .arg_descs = arg_descs,
-            .nested_dicts = nested_dicts,
-            .hidden_desc_sources = hidden_desc_sources,
-        },
-    });
-    const method_slots = BoxySpan{ .start = @intCast(method_slots_start), .len = 1 };
-
-    try result.boxy_desc_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
-
-    try result.boxy_dicts.append(allocator, .{
-        .method_slots = method_slots,
-    });
-
-    try result.boxy_adapters.append(allocator, .{
-        .kind = .boxy_to_host,
-        .source_layout = .str,
-        .target_layout = .str,
-        .consumes_source = false,
-        .produces_owned_result = true,
-    });
-
-    try std.testing.expectEqual(@as(usize, 1), result.boxy_type_descs.items.len);
-    try std.testing.expectEqual(@as(usize, 1), result.boxy_dicts.items.len);
-    try std.testing.expectEqual(@as(usize, 1), result.boxy_adapters.items.len);
-    try std.testing.expectEqual(@as(usize, 3), result.boxy_desc_refs.items.len);
-    try std.testing.expectEqual(@as(usize, 1), result.boxy_dict_refs.items.len);
-    try std.testing.expectEqual(@as(usize, 1), result.boxy_method_slots.items.len);
-    try std.testing.expectEqual(@as(usize, 1), result.boxy_method_arg_layouts.items.len);
-    try std.testing.expectEqual(@as(usize, 1), result.boxy_method_hidden_desc_sources.items.len);
 }
 
 test "program declarations are referenced" {

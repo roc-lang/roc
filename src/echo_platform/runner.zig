@@ -313,11 +313,10 @@ fn runEchoView(
     var static_strings = try eval.LirInterpreter.buildStaticStrings(allocator, &view.store);
     defer static_strings.deinit();
 
-    var interpreter = eval.LirInterpreter.initWithBoxyTables(
+    var interpreter = eval.LirInterpreter.init(
         allocator,
         &view.store,
         &view.layouts,
-        eval.LirInterpreter.BoxyTables.fromImageView(view),
         static_strings.view(),
         &roc_ops,
     ) catch |err| {

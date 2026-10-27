@@ -1,9 +1,7 @@
 //! What `Str.inspect` renders, defined once for every consumer.
 //!
-//! Three consumers render values: Monotype lowering (the `.lss` strategy)
-//! builds rendering expressions, Boxy lowering emits rendering LIR, and the
-//! Boxy runtime renders descriptor-described values to bytes. Each reads its
-//! own type representation into an `InspectShape`, and `InspectSpec` decides
+//! Monotype lowering (the `.lss` strategy) builds rendering expressions. A
+//! consumer reads its own type representation into an `InspectShape`, and `InspectSpec` decides
 //! from that shape what the rendering is: a whole literal, an ordered list of
 //! parts (literal text and component renderings), or a rendering the
 //! consumer realizes from the action's text (a list loop, a tag switch).

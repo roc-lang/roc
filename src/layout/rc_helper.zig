@@ -224,10 +224,6 @@ pub const Resolver = struct {
                 .decref => .{ .box_decref = self.boxPlan(key.layout_idx) },
                 .free => .{ .box_free = self.boxPlan(key.layout_idx) },
             },
-            .erased_box => base.invariant(
-                "layout/ARC invariant violated: erased_box RC requires its explicit Boxy descriptor",
-                .{},
-            ),
             .erased_callable => switch (op) {
                 .incref => .erased_callable_incref,
                 .decref => .erased_callable_decref,

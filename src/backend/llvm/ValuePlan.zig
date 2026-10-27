@@ -1077,12 +1077,10 @@ fn noteAddressedOperands(self: *Self, store: *const LirStore, stmt: lir.LIR.CFSt
         },
         .assign_literal => |assign| switch (assign.value) {
             .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal => {},
-            .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => self.markAddressed(assign.target),
+            .str_literal, .static_data, .bytes_literal, .proc_ref => self.markAddressed(assign.target),
         },
         .assign_call => |call| {
             const extra = store.stmtRowOrDefault(call.extra);
-            if (extra.out_desc) |out_desc| self.markAddressed(out_desc);
-            if (extra.result_desc) |desc| if (desc.localOrNull()) |local| self.markAddressed(local);
             // A pending drive writes the result through its address.
             if (extra.drive.canDriveHere()) self.markAddressed(call.target);
             if (!extra.replaces_frame) self.noteAccess(call.target, ops.callAccess(call, .result));
@@ -1097,10 +1095,7 @@ fn noteAddressedOperands(self: *Self, store: *const LirStore, stmt: lir.LIR.CFSt
         },
         // The aggregate is built in memory from field values.
         inline .assign_list, .assign_struct => |assign| self.markAddressed(assign.target),
-        .assign_tag => |assign| {
-            self.markAddressed(assign.target);
-            if (store.optionalStmtRow(assign.target_desc)) |desc| if (desc.localOrNull()) |local| self.markAddressed(local);
-        },
+        .assign_tag => |assign| self.markAddressed(assign.target),
         .store_struct => |assign| self.markAddressed(assign.dest),
         .store_tag => |assign| self.markAddressed(assign.dest),
         // A copy reads and writes values in either representation.
@@ -1113,19 +1108,6 @@ fn noteAddressedOperands(self: *Self, store: *const LirStore, stmt: lir.LIR.CFSt
         .join, .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
         .assign_call_erased,
         .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_record_update,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_hash,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .boxy_tag_match,
-        .assign_call_dict,
         .debug,
         .expect_err,
         .crash,

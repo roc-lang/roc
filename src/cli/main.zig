@@ -686,13 +686,6 @@ const EmbeddedTargetObjects = struct {
     default_compiler_rt: ?[]const u8 = null,
     default_compiler_rt_digest: ?[32]u8 = null,
     default_compiler_rt_link_digest: ?[32]u8 = null,
-    /// Prebuilt boxy runtime object (the `roc_boxy_*` C-ABI wrappers plus
-    /// `roc_boxy_init_embedded`), linked by `roc build --opt=dev` into
-    /// programs that emit boxy statements. Shipped for every target that
-    /// carries its own builtins, so a standalone dev build of a generic
-    /// program works wherever a standalone dev build works at all.
-    boxy_runtime: ?[]const u8 = null,
-    boxy_runtime_digest: ?[32]u8 = null,
 
     const DefaultPlatform = enum { none, runtime, runtime_and_compiler_rt };
 
@@ -712,8 +705,6 @@ const EmbeddedTargetObjects = struct {
         var objects: EmbeddedTargetObjects = .{
             .builtins_extern = embedded(dir ++ "roc_builtins_extern" ++ ext),
             .builtins_extern_digest = embeddedBlake3("builtins_extern_" ++ name),
-            .boxy_runtime_digest = embeddedBlake3("boxy_runtime_" ++ name),
-            .boxy_runtime = embedded(dir ++ "roc_boxy_runtime" ++ ext),
         };
         switch (default_platform) {
             .none => {},
@@ -736,7 +727,7 @@ const EmbeddedTargetObjects = struct {
     }
 
     /// A generic Linux target uses the native builtins and its glibc twin's
-    /// default platform and boxy runtime.
+    /// default platform.
     fn linuxAlias(comptime glibc: EmbeddedTargetObjects) EmbeddedTargetObjects {
         var objects = glibc;
         objects.builtins_extern = native.builtins_extern;
@@ -1553,9 +1544,6 @@ fn generatePlatformHostShimFromLirData(
     var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
         ctx.gpa,
         store,
-        &.{},
-        &.{},
-        &.{},
         std_target,
     );
     codegen.layout_store = layouts;
@@ -2088,7 +2076,7 @@ const LayoutHashContext = struct {
                 }
             },
             .box, .list, .ptr => try self.hashIdx(hasher, layout_val.getIdx()),
-            .box_of_zst, .erased_box, .list_of_zst, .erased_callable, .zst, .hole => {},
+            .box_of_zst, .list_of_zst, .erased_callable, .zst, .hole => {},
             .closure => try self.hashIdx(hasher, layout_val.getClosure().captures_layout_idx),
             .struct_ => {
                 const info = self.layouts.getStructInfo(layout_val);
@@ -6259,14 +6247,11 @@ fn writeDevRunImageToSharedMemory(
 
         // This image executes in this process, so its instructions are held to
         // what this machine's CPU runs rather than to the target's level.
-        var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(
+        var codegen = try backend.HostLirCodeGen.initWithCapturePrefix(
             ctx.gpa,
             store,
             layouts,
             static_strings.view(),
-            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-            lowered.lir_result.boxy_erased_arg_desc_params.items,
-            lowered.lir_result.boxy_worker_procs.items,
             lowered.lir_result.erased_capture_prefix,
             roc_target.host_cpu.level(),
         );
@@ -6413,16 +6398,6 @@ fn writeDevRunImageToSharedMemory(
         const generated_code = codegen.getGeneratedCode();
         const relocations = codegen.getRelocations();
 
-        // Only a Boxy program has descriptor tables for the shim's runtime;
-        // a specialized image carries an empty sidecar region.
-        var sidecar_blob: ?lir.LirImage.SidecarBlob = switch (lowered.lir_result.store.runtime_contract) {
-            .boxy => try lir.LirImage.buildSidecarBlob(ctx.gpa, &lowered.lir_result),
-            .specialized => null,
-        };
-        defer if (sidecar_blob) |*blob| blob.deinit(ctx.gpa);
-        const sidecar_bytes: []const u8 = if (sidecar_blob) |blob| blob.bytes else &.{};
-        const sidecar_desc: lir.LirImage.BoxySidecar = if (sidecar_blob) |blob| blob.sidecar else std.mem.zeroes(lir.LirImage.BoxySidecar);
-
         var empty_region_buffer: [0]u8 = .{};
         var fixed_region_buffer = std.heap.FixedBufferAllocator.init(&empty_region_buffer);
         var image_allocator = shm.allocator();
@@ -6449,7 +6424,6 @@ fn writeDevRunImageToSharedMemory(
                 codegen.getSymbolNames(),
                 relocations,
                 readonly_data.items,
-                sidecar_bytes,
             );
             const required_capacity = required_bound - allocation.region_start;
 
@@ -6481,8 +6455,6 @@ fn writeDevRunImageToSharedMemory(
             codegen.getSymbolNames(),
             relocations,
             readonly_data.items,
-            sidecar_bytes,
-            sidecar_desc,
         );
         const image_offset = @intFromPtr(header) - @intFromPtr(shm.base_ptr);
         const image_bound: usize = @intCast(header.image_size);
@@ -6606,11 +6578,10 @@ fn evaluateLirImageEntrypoint(
     var static_strings = try eval.LirInterpreter.buildStaticStrings(allocator, &view.store);
     defer static_strings.deinit();
 
-    var interpreter = try eval.LirInterpreter.initWithBoxyTables(
+    var interpreter = try eval.LirInterpreter.init(
         allocator,
         &view.store,
         &view.layouts,
-        eval.LirInterpreter.BoxyTables.fromImageView(view),
         static_strings.view(),
         ops,
     );
@@ -8491,9 +8462,6 @@ fn compileModulePack(
         &.{},
         static_data_exports,
         lowered.lir_result.store.getProcSpecs(),
-        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-        lowered.lir_result.boxy_erased_arg_desc_params.items,
-        lowered.lir_result.boxy_worker_procs.items,
         target,
     ) catch |err| {
         std.log.err("Pack compilation for {s} failed: {}", .{ module_name, err });
@@ -9079,9 +9047,6 @@ fn objectPackBytes(
         var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
             ctx.gpa,
             store,
-            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-            lowered.lir_result.boxy_erased_arg_desc_params.items,
-            lowered.lir_result.boxy_worker_procs.items,
             std_target,
         );
         defer codegen.deinit();
@@ -9093,12 +9058,6 @@ fn objectPackBytes(
             error.OutOfMemory => return error.OutOfMemory,
             else => return null,
         };
-        // The erased-call runtime is initialized with this program's sidecar.
-        if (codegen.boxy_runtime_used) {
-            var unused = generated;
-            unused.deinit();
-            return null;
-        }
         break :generate generated;
     };
     defer bitcode.deinit();
@@ -9159,7 +9118,7 @@ test "a Windows object pack defines its shared entries and constants in any-COMD
     }, .none);
     const target: RocTarget = .x64win;
     const std_target = try std.zig.system.resolveTargetQuery(std.testing.io, target.llvmTargetQuery());
-    var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, std_target);
+    var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(allocator, &store, std_target);
     defer codegen.deinit();
     codegen.layout_store = &layouts;
     codegen.object_cache_pack = true;
@@ -9487,10 +9446,10 @@ const PackOffers = struct {
                     withheld += 1;
                     continue;
                 }
-                // Boxy statements index the program's own descriptor sidecar,
-                // and a constant holding a code pointer names code the pack
-                // may not carry; an entry that reaches either cannot be
-                // linked elsewhere, so it is not offered.
+                // A program-scope symbol the pack does not carry, or a
+                // constant holding a code pointer, names code the pack may
+                // not carry; an entry that reaches either cannot be linked
+                // elsewhere, so it is not offered.
                 const placed = try closure.of(artifact);
                 if (closureNamesProgramLocalSymbols(set, placed) or closureConvertsLiteral(&converting_artifacts, placed)) {
                     withheld += 1;
@@ -9536,7 +9495,6 @@ const SpliceClosure = struct {
     allocator: Allocator,
     set: *const backend.dev.ProcArtifact.Set,
     procs: std.AutoHashMap(lir.ProcIdentity, ProcArtifacts),
-    thunks: std.AutoHashMap(lir.ProcIdentity, u32),
     helpers: std.StringHashMap(u32),
     /// Artifacts the current query reached; exactly the indices in `order`.
     seen: std.DynamicBitSetUnmanaged,
@@ -9551,7 +9509,6 @@ const SpliceClosure = struct {
             .allocator = allocator,
             .set = set,
             .procs = std.AutoHashMap(lir.ProcIdentity, ProcArtifacts).init(allocator),
-            .thunks = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator),
             .helpers = std.StringHashMap(u32).init(allocator),
             .seen = .{},
         };
@@ -9564,7 +9521,6 @@ const SpliceClosure = struct {
                     if (!entry.found_existing) entry.value_ptr.first = @intCast(index);
                     entry.value_ptr.last = @intCast(index);
                 },
-                .boxy_thunk => |identity| _ = try self.thunks.getOrPutValue(identity, @intCast(index)),
                 .rc_helper => |name| _ = try self.helpers.getOrPutValue(name, @intCast(index)),
                 .entrypoint, .message_pool_run, .branch_island => {},
             }
@@ -9582,7 +9538,6 @@ const SpliceClosure = struct {
         self.order.deinit(self.allocator);
         self.seen.deinit(self.allocator);
         self.helpers.deinit();
-        self.thunks.deinit();
         self.procs.deinit();
     }
 
@@ -9599,7 +9554,6 @@ const SpliceClosure = struct {
             for (artifact.symbolic_refs) |ref| {
                 const target = switch (ref.target) {
                     .proc => |identity| if (self.procs.get(identity)) |artifacts| artifacts.first else null,
-                    .boxy_thunk => |identity| self.thunks.get(identity),
                     .rc_helper => |name| self.helpers.get(name),
                 };
                 if (target) |index| try self.visit(index);
@@ -9626,7 +9580,7 @@ fn literalConvertingArtifacts(
     if (literal_converters.count() == 0) return converting;
     for (set.artifacts, 0..) |artifact, index| switch (artifact.kind) {
         .proc => |identity| if (literal_converters.contains(identity)) converting.set(index),
-        .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
+        .rc_helper, .entrypoint, .message_pool_run, .branch_island => {},
     };
     return converting;
 }
@@ -9641,14 +9595,11 @@ fn closureConvertsLiteral(converting_artifacts: *const std.DynamicBitSetUnmanage
 }
 
 /// Whether any artifact a splice places refers to something only its own
-/// program defines: a program-scope symbol it does not carry, such as the Boxy
-/// runtime, whose calls index this program's descriptor sidecar, or a constant
+/// program defines: a program-scope symbol it does not carry, or a constant
 /// holding a code pointer.
 fn closureNamesProgramLocalSymbols(set: *const backend.dev.ProcArtifact.Set, placed: []const u32) bool {
     for (placed) |index| {
         const artifact = set.artifacts[index];
-        // The Boxy runtime's table numbers are the writing program's own.
-        if (artifact.runtime_refs.len != 0) return true;
         for (artifact.relocations) |relocation| {
             if (relocation.scope == .program and !carriesData(artifact, relocation.name)) return true;
         }
@@ -9736,7 +9687,7 @@ test "pack withholds an entry whose stable references reach a literal-converting
     try std.testing.expect(closureConvertsLiteral(&converting_artifacts, try closure.of(0)));
 }
 
-test "pack offers an entry that carries its program data and withholds one that calls the Boxy runtime" {
+test "pack offers an entry that carries its program data and withholds one that calls a program-local function" {
     const ProcArtifact = backend.dev.ProcArtifact;
     const artifacts = [_]ProcArtifact.Artifact{
         .{
@@ -9763,7 +9714,7 @@ test "pack offers an entry that carries its program data and withholds one that 
             .entry = 0,
             .frame = null,
             .refs = &.{},
-            .relocations = &.{.{ .offset = 0, .name = "roc_boxy_drop", .scope = .program, .kind = .{ .function = .x86_call_rel32 } }},
+            .relocations = &.{.{ .offset = 0, .name = "roc_program_local_fn", .scope = .program, .kind = .{ .function = .x86_call_rel32 } }},
             .data = &.{},
         },
     };
@@ -10073,101 +10024,12 @@ fn writeDefaultPlatformCompilerRtObject(ctx: *CliCtx, artifact_dir: []const u8, 
     return object_path;
 }
 
-fn lirResultNeedsBoxyRuntime(result: *const lir.Program.Result) bool {
-    return eval.boxy_runtime.resultNeedsRuntime(result);
-}
-
-/// Add the boxy runtime object and its embedded sidecar to a standalone
-/// link. The runtime object provides the `roc_boxy_*` wrappers and
-/// `roc_boxy_init_embedded`; a companion data object carries the sidecar those
-/// symbols read (the descriptor tables, layout store, and string store the
-/// program's boxy statements index). A canonical dev image's code numbers
-/// those tables as `canonical_order` does, so its sidecar holds exactly what
-/// that order names; an LLVM image's indexes the program's own tables.
-fn appendBoxyRuntimeLinkInputs(
-    ctx: *CliCtx,
-    object_files: *std.array_list.Managed([]const u8),
-    scratch_dir: []const u8,
-    target: RocTarget,
-    lir_result: *const lir.Program.Result,
-    canonical_order: ?*const lir.RuntimeTables.Order,
-    objects: ?*link_artifacts.Objects,
-) CliMainError!void {
-    lir_result.store.requireBoxy();
-    base.dev_diagnostics.traceBoxyWork("link-inputs");
-    const runtime_bytes = EmbeddedTargetObjects.forTarget(target).boxy_runtime orelse {
-        try ctx.io.stderr().print(
-            "Error: standalone dev builds of generic (boxy) programs are not supported for the '{s}' target.\n",
-            .{@tagName(target)},
-        );
-        return error.UnsupportedTarget;
-    };
-
-    const runtime_path = if (objects) |store|
-        store.materializeKnown(runtime_bytes, .{ .digest = EmbeddedTargetObjects.forTarget(target).boxy_runtime_digest.?, .size = runtime_bytes.len }) catch return error.NativeCompilationFailed
-    else blk: {
-        const path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, EmbeddedTargetObjects.filename("roc_boxy_runtime", target) });
-        backend.writeFileWindowsAvSafe(ctx.io.std_io, path, runtime_bytes) catch return error.NativeCompilationFailed;
-        break :blk path;
-    };
-
-    var sidecar_blob = (if (canonical_order) |order|
-        lir.LirImage.buildCanonicalSidecarBlob(ctx.gpa, lir_result, order)
-    else
-        lir.LirImage.buildSidecarBlob(ctx.gpa, lir_result)) catch {
-        return error.NativeCompilationFailed;
-    };
-    defer sidecar_blob.deinit(ctx.gpa);
-
-    const blob_len_val: u64 = @intCast(sidecar_blob.bytes.len);
-    const blob_len_bytes = try ctx.arena.dupe(u8, std.mem.asBytes(&blob_len_val));
-    const desc_bytes = try ctx.arena.dupe(u8, std.mem.asBytes(&sidecar_blob.sidecar));
-
-    const sidecar_exports = [_]backend.StaticDataExport{
-        .{ .symbol_name = "roc_boxy_sidecar_blob", .bytes = sidecar_blob.bytes, .alignment = 16, .is_global = true },
-        .{ .symbol_name = "roc_boxy_sidecar_blob_len", .bytes = blob_len_bytes, .alignment = 8, .is_global = true },
-        .{ .symbol_name = "roc_boxy_sidecar_desc", .bytes = desc_bytes, .alignment = 8, .is_global = true },
-    };
-
-    const sidecar_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, "roc_boxy_sidecar.o" });
-    var sidecar_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
-    sidecar_compiler.compileStaticDataObjectAndWrite(&sidecar_exports, target, sidecar_path, ctx.coreCtx()) catch {
-        return error.NativeCompilationFailed;
-    };
-
-    try object_files.append(sidecar_path);
-    try object_files.append(runtime_path);
-}
-
-fn mergeBoxySidecarWasm(
-    ctx: *CliCtx,
-    module: *backend.wasm.WasmModule,
-    lir_result: *const lir.Program.Result,
-    mode: backend.wasm.WasmModule.MergeMode,
-) CliMainError!void {
-    if (!lirResultNeedsBoxyRuntime(lir_result)) return;
-
-    var sidecar_blob = lir.LirImage.buildSidecarBlob(ctx.gpa, lir_result) catch return error.NativeCompilationFailed;
-    defer sidecar_blob.deinit(ctx.gpa);
-    backend.wasm.BoxyRuntimeLink.mergeSidecar(
-        ctx.gpa,
-        module,
-        sidecar_blob.bytes,
-        sidecar_blob.sidecar,
-        mode,
-    ) catch |err| {
-        std.log.err("Failed to merge wasm Boxy sidecar: {}", .{err});
-        return err;
-    };
-}
-
 fn writeSealedWasmObject(
     ctx: *CliCtx,
     target: RocTarget,
     artifact_dir: []const u8,
     output_filename: []const u8,
     module: *backend.wasm.WasmModule,
-    lir_result: *const lir.Program.Result,
     public_definitions: []const []const u8,
     allowed_undefined_functions: []const []const u8,
 ) CliMainError![]const u8 {
@@ -10179,15 +10041,9 @@ fn writeSealedWasmObject(
     const compiler_rt_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_compiler_rt_support.o" });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, compiler_rt_path, WasmCompilerRtObject.forTarget(target)) catch return error.WasmOutputWriteFailed;
 
-    var compiler_inputs = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 3);
+    var compiler_inputs = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 2);
     try compiler_inputs.append(unsealed_path);
     try compiler_inputs.append(compiler_rt_path);
-    if (lirResultNeedsBoxyRuntime(lir_result)) {
-        const runtime_bytes = EmbeddedTargetObjects.forTarget(target).boxy_runtime orelse return error.UnsupportedTarget;
-        const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_boxy_runtime_support.o" });
-        backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, runtime_bytes) catch return error.WasmOutputWriteFailed;
-        try compiler_inputs.append(runtime_path);
-    }
     const composed_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_app_composed_wasm32.o" });
     linker.linkWasmObjectsRelocatable(ctx, composed_path, compiler_inputs.items) catch |err| {
         return failLink(ctx, err, "wasm32");
@@ -10507,9 +10363,6 @@ fn writeDevWasmObject(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
-        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-        lowered.lir_result.boxy_erased_arg_desc_params.items,
-        lowered.lir_result.boxy_worker_procs.items,
         &wasm_module,
         target.cpuLevel(),
     );
@@ -10520,11 +10373,10 @@ fn writeDevWasmObject(
     codegen.configureTableReloc(table_symbol);
     codegen.configureRelocatableObject();
 
-    // Register the runtime and hosted symbol imports while the module has no
+    // Register the hosted symbol imports while the module has no
     // defined functions yet; a function import added later would shift every
     // defined function index.
     try codegen.registerHostedSymbolTargets(lowered.lir_result.store.getProcSpecs());
-    if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) try codegen.registerBoxySymbolTargets();
 
     const builtins_bytes = EmbeddedTargetObjects.forTarget(target).builtins_extern;
     if (builtins_bytes.len > 0) {
@@ -10583,7 +10435,6 @@ fn writeDevWasmObject(
         _ = try codegen.module.findDefinedFunctionSymbolExact(entry.symbol_name);
     }
     try mergeStaticDataWasmModule(ctx, &codegen.module, static_data_exports, .relocatable_object);
-    try mergeBoxySidecarWasm(ctx, &codegen.module, &lowered.lir_result, .relocatable_object);
     try pack_imports.appendSlice(ctx.arena, try wasmRocHostRequirements(ctx.arena, &lowered.lir_result.store));
     return writeSealedWasmObject(
         ctx,
@@ -10591,7 +10442,6 @@ fn writeDevWasmObject(
         artifact_dir,
         "roc_app_wasm32.o",
         &codegen.module,
-        &lowered.lir_result,
         try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
         pack_imports.items,
     );
@@ -10786,7 +10636,7 @@ test "a dev object defines every static datum its link keeps" {
         };
         const entrypoints = [_]backend.Entrypoint{.{ .symbol_name = "roc__main", .proc = proc, .arg_layouts = &.{}, .ret_layout = .str }};
         var compiler = backend.ObjectFileCompiler.init(allocator);
-        var result = try compiler.compileToObjectFile(&store, &layouts, &entrypoints, &exports, store.getProcSpecs(), &.{}, &.{}, &.{}, target);
+        var result = try compiler.compileToObjectFile(&store, &layouts, &entrypoints, &exports, store.getProcSpecs(), target);
         defer result.deinit();
 
         var tmp = std.testing.tmpDir(.{});
@@ -11033,9 +10883,6 @@ fn compileLlvmAppObject(
         var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
             ctx.gpa,
             &lowered.lir_result.store,
-            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-            lowered.lir_result.boxy_erased_arg_desc_params.items,
-            lowered.lir_result.boxy_worker_procs.items,
             std_target,
         );
         codegen.layout_store = &lowered.lir_result.layouts;
@@ -11191,7 +11038,6 @@ fn writeCombinedLlvmWasmObject(
     var app_merge = try wasm_module.mergeModuleForObject(&app_module);
     app_merge.deinit();
 
-    try mergeBoxySidecarWasm(ctx, &wasm_module, lir_result, .relocatable_object);
     try mergeStaticDataWasmModule(ctx, &wasm_module, static_data_exports, .relocatable_object);
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_wasm32_{s}.o", .{@tagName(opt)});
     return writeSealedWasmObject(
@@ -11200,7 +11046,6 @@ fn writeCombinedLlvmWasmObject(
         artifact_dir,
         obj_filename,
         &wasm_module,
-        lir_result,
         try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
         try wasmRocHostRequirements(ctx.arena, &lir_result.store),
     );
@@ -11679,9 +11524,6 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         if (enable_default_platform_runtime) {
             try appendDefaultPlatformLinkInputs(ctx, &object_files, app_object.artifact_dir, target);
         }
-        if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) {
-            try appendBoxyRuntimeLinkInputs(ctx, &object_files, app_object.artifact_dir, target, &lowered.lir_result, null, null);
-        }
         reporter.end();
 
         reporter.begin("Linking");
@@ -12015,9 +11857,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         entrypoints,
         static_data_exports,
         lowered.lir_result.store.getProcSpecs(),
-        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-        lowered.lir_result.boxy_erased_arg_desc_params.items,
-        lowered.lir_result.boxy_worker_procs.items,
         target,
     ) catch |err| {
         reporter.fail();
@@ -12029,7 +11868,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         object_compiler.captured_artifacts = written.artifacts;
         written.artifacts = null;
     }
-    const uses_boxy = written.uses_boxy;
     reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
     reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
     try writePackObjects(ctx, &build_env, root_artifact, imported_artifacts, relation_artifacts, &lowered, args, target, final_output_path);
@@ -12053,10 +11891,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     };
     // The optimized object packs that served this program's specializations.
     const linked_objects: []const []const u8 = if (loaded_packs) |packs| try packs.linkedObjects(ctx.arena) else &.{};
-    // Boxy runtime inputs are read from the lowered program at link time, and
-    // linked pack objects from the object cache, so only a program without
-    // either records its output.
-    if (program_probe) |*probe| if (probe.key) |key| if (diag.errors == 0 and !uses_boxy and linked_objects.len == 0) {
+    // Linked pack objects are read from the object cache at link time, so
+    // only a program without any records its output.
+    if (program_probe) |*probe| if (probe.key) |key| if (diag.errors == 0 and linked_objects.len == 0) {
         try probe.record(key, object_identity, link_facts);
     };
 
@@ -12066,12 +11903,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var extra_objects = std.array_list.Managed([]const u8).init(ctx.arena);
     for (linked_objects) |object| {
         try extra_objects.append(link_objects.materialize(object) catch return error.NativeCompilationFailed);
-    }
-    // Boxy programs reference the `roc_boxy_*` runtime and, in their
-    // entrypoints, call `roc_boxy_init_embedded`. Link the boxy runtime object
-    // and a data object carrying the sidecar those symbols read.
-    if (uses_boxy) {
-        try appendBoxyRuntimeLinkInputs(ctx, &extra_objects, build_scratch_dir, target, &lowered.lir_result, &written.runtime_tables, &link_objects);
     }
     try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, &link_objects, obj_path, extra_objects.items, link_facts);
 
@@ -14349,11 +14180,10 @@ fn runInterpreterTestRoots(
     defer static_values.deinit();
     var static_strings = try eval.LirInterpreter.buildStaticStrings(ctx.gpa, &lowered.lir_result.store);
     defer static_strings.deinit();
-    var interpreter = try eval.LirInterpreter.initWithBoxyTables(
+    var interpreter = try eval.LirInterpreter.init(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
-        eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
         static_strings.view(),
         &roc_ops,
     );
@@ -14686,7 +14516,6 @@ fn runCompiledTestRoots(
             .{
                 .store = &lowered.lir_result.store,
                 .layouts = &lowered.lir_result.layouts,
-                .tables = eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
                 .erased_capture_prefix = lowered.lir_result.erased_capture_prefix,
                 .roots = bool_roots,
                 .expect_site_count = lowered.lir_result.expect_sites.items.len,
@@ -14702,7 +14531,6 @@ fn runCompiledTestRoots(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
-            eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
             lowered.lir_result.erased_capture_prefix,
             bool_roots,
             lowered.lir_result.expect_sites.items.len,
@@ -14712,7 +14540,6 @@ fn runCompiledTestRoots(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
-            eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
             lowered.lir_result.erased_capture_prefix,
             bool_roots,
             lowered.lir_result.expect_sites.items.len,
@@ -14845,7 +14672,6 @@ fn runCompiledLoweredTestModulesOnce(
         try bool_modules.append(ctx.gpa, .{
             .store = &lowered_module.lowered.lir_result.store,
             .layouts = &lowered_module.lowered.lir_result.layouts,
-            .tables = eval.boxy_runtime.BoxyTables.fromResult(&lowered_module.lowered.lir_result),
             .erased_capture_prefix = lowered_module.lowered.lir_result.erased_capture_prefix,
             .roots = bool_roots,
             .expect_site_count = lowered_module.lowered.lir_result.expect_sites.items.len,
@@ -17937,15 +17763,6 @@ fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [25]pr
     };
 }
 
-fn boxyPostCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [4]progress.SubTiming {
-    return .{
-        .{ .name = "Boxy Planning", .ns = timing.boxy_plan_ns },
-        .{ .name = "Boxy Lowering", .ns = timing.boxy_lower_ns },
-        .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
-        .{ .name = "ARC", .ns = timing.arc_ns },
-    };
-}
-
 fn finishPostCheckLowering(
     reporter: *progress.Reporter,
     timing: *const lir.CheckedPipeline.Timing,
@@ -17957,10 +17774,7 @@ fn finishPostCheckLowering(
         return;
     }
     var subs_buf: [25]progress.SubTiming = undefined;
-    switch (strategy) {
-        .lss => reporter.endWithParentBreakdown(measuredSubTimings(&subs_buf, &postCheckLoweringBreakdown(snapshot))),
-        .boxy => reporter.endWithParentBreakdown(measuredSubTimings(&subs_buf, &boxyPostCheckLoweringBreakdown(snapshot))),
-    }
+    reporter.endWithParentBreakdown(measuredSubTimings(&subs_buf, &postCheckLoweringBreakdown(snapshot)));
     recordLoweringCounters(reporter, snapshot, strategy, "");
 }
 
@@ -17987,8 +17801,6 @@ fn recordLoweringCounters(
 
 fn postCheckLoweringTotalNs(timing: lir.CheckedPipeline.TimingSnapshot) u64 {
     return timing.monotype_ns +|
-        timing.boxy_plan_ns +|
-        timing.boxy_lower_ns +|
         timing.lift_ns +|
         timing.spec_constr_ns +|
         timing.lambda_solve_ns +|
@@ -18005,20 +17817,12 @@ fn recordPostCheckLowering(
 ) void {
     const snapshot = timing.snapshot();
     if (std.meta.eql(snapshot, lir.CheckedPipeline.TimingSnapshot{})) return;
-    switch (strategy) {
-        .lss => reporter.recordCompletedWithBreakdown(
-            aggregate_post_check_lowering_phase_name,
-            postCheckLoweringTotalNs(snapshot),
-            .{},
-            &postCheckLoweringBreakdown(snapshot),
-        ),
-        .boxy => reporter.recordCompletedWithBreakdown(
-            aggregate_post_check_lowering_phase_name,
-            postCheckLoweringTotalNs(snapshot),
-            .{},
-            &boxyPostCheckLoweringBreakdown(snapshot),
-        ),
-    }
+    reporter.recordCompletedWithBreakdown(
+        aggregate_post_check_lowering_phase_name,
+        postCheckLoweringTotalNs(snapshot),
+        .{},
+        &postCheckLoweringBreakdown(snapshot),
+    );
     recordLoweringCounters(reporter, snapshot, strategy, "");
 }
 
@@ -18433,29 +18237,6 @@ test "post-check timing names distinct work and keep inlining separate from Spec
     for (rows) |row| {
         try std.testing.expect(!std.mem.eql(u8, aggregate_post_check_lowering_phase_name, row.name));
     }
-}
-
-test "post-check Boxy timing uses a strategy-specific breakdown" {
-    const rows = boxyPostCheckLoweringBreakdown(.{
-        .boxy_plan_ns = 7,
-        .boxy_lower_ns = 11,
-        .lir_passes_ns = 13,
-        .arc_ns = 17,
-    });
-    try std.testing.expectEqualStrings("Boxy Planning", rows[0].name);
-    try std.testing.expectEqual(@as(u64, 7), rows[0].ns);
-    try std.testing.expectEqualStrings("Boxy Lowering", rows[1].name);
-    try std.testing.expectEqual(@as(u64, 11), rows[1].ns);
-    try std.testing.expectEqualStrings("LIR Passes", rows[2].name);
-    try std.testing.expectEqual(@as(u64, 13), rows[2].ns);
-    try std.testing.expectEqualStrings("ARC", rows[3].name);
-    try std.testing.expectEqual(@as(u64, 17), rows[3].ns);
-    try std.testing.expectEqual(@as(u64, 48), postCheckLoweringTotalNs(.{
-        .boxy_plan_ns = 7,
-        .boxy_lower_ns = 11,
-        .lir_passes_ns = 13,
-        .arc_ns = 17,
-    }));
 }
 
 test "post-check diagnostics preserve labeled Solved-LIR counts" {

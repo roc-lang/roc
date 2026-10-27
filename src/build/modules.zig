@@ -360,8 +360,8 @@ pub const ModuleType = enum {
                 .deps = &.{ .base, .collections, .layout, .types, .can, .check },
                 .tests = .{ .unit = .{ .aggregators = &.{"lir core declarations are referenced"} } },
             },
-            // Shared by the post-check lowerers and the standalone Boxy
-            // runtime object, so it imports nothing from the compiler.
+            // Shared by the post-check lowerers; it imports nothing from the
+            // compiler.
             .value_rules => .{
                 .root = "src/postcheck/value_rules/mod.zig",
                 .tests = .{ .unit = .{ .aggregators = &.{"value rules declarations are referenced"} } },
@@ -591,10 +591,9 @@ pub const RocModules = struct {
     shim_symbols: *Module,
 
     // Anonymous page mapping (`src/raw_pages.zig`) for the objects linked into
-    // standalone Roc programs: the default-platform runtimes and the boxy
-    // runtime. Shared rather than restated per consumer because a NetBSD
-    // program links two of them and the assembly thunk its `mmap` ABI needs may
-    // only be defined once.
+    // standalone Roc programs: the default-platform runtimes. Shared rather
+    // than restated per consumer because the assembly thunk a NetBSD `mmap`
+    // ABI needs may only be defined once.
     raw_pages: *Module,
 
     // Memory-fault classification (`src/base/memory_fault.zig`) as a standalone

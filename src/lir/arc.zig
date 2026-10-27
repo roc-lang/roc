@@ -502,19 +502,9 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         .layouts = layouts,
         .options = options,
     };
-    const boxy_rc_descs = try store.snapshotLocalDescs(store.allocator);
-    defer boxy_rc_descs.deinit(store.allocator);
-    var boxy_desc_users = try BoxyDescUsers.init(store.allocator, boxy_rc_descs);
-    defer boxy_desc_users.deinit(store.allocator);
-
-    const borrow_anchor_refcounted = try arc_solve.computeLocalContainsRefcounted(store.allocator, store, layouts);
-    defer store.allocator.free(borrow_anchor_refcounted);
-    const emission_refcounted = try computeEmissionContainsRefcounted(store.allocator, store, layouts, borrow_anchor_refcounted);
-    defer emission_refcounted.deinit(store.allocator);
-    const local_contains_refcounted = emission_refcounted.slice();
+    const local_contains_refcounted = try arc_solve.computeLocalContainsRefcounted(store.allocator, store, layouts);
+    defer store.allocator.free(local_contains_refcounted);
     inserter.local_contains_refcounted = local_contains_refcounted;
-    inserter.boxy_rc_descs = boxy_rc_descs;
-    inserter.boxy_desc_users = boxy_desc_users;
 
     const uniqueness_options: arc_solve.UniquenessOptions = .{
         .executor = options.post_check_executor,
@@ -524,8 +514,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         store.allocator,
         store,
         layouts,
-        borrow_anchor_refcounted,
-        boxy_rc_descs,
+        local_contains_refcounted,
         options.roots,
         options.consume_dead_boxes,
         options.thread_confined_rc,
@@ -561,7 +550,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         any_take = true;
     }
     if (any_take) {
-        try arc_solve.settleUniquenessWithOptions(store.allocator, store, layouts, borrow_anchor_refcounted, &solution, .{ .set = &take_stmts }, options.consume_dead_boxes, uniqueness_options);
+        try arc_solve.settleUniquenessWithOptions(store.allocator, store, layouts, local_contains_refcounted, &solution, .{ .set = &take_stmts }, options.consume_dead_boxes, uniqueness_options);
     }
 
     const base_proc_count = store.procSpecCount();
@@ -1144,126 +1133,6 @@ const EmissionOwner = struct {
     }
 };
 
-/// The locals whose Boxy descriptor is each descriptor local, in ascending
-/// local order, so a descriptor update visits only the values it invalidates.
-const BoxyDescUsers = struct {
-    /// `locals[starts[d]..starts[d + 1]]` are the users of descriptor local `d`.
-    starts: []u32 = &.{},
-    locals: []LIR.LocalId = &.{},
-
-    fn init(allocator: Allocator, descs: LirStore.LocalDescSnapshot) Allocator.Error!BoxyDescUsers {
-        if (descs.isEmpty()) return .{};
-        const local_count = descs.localCount();
-        const starts = try allocator.alloc(u32, local_count + 1);
-        errdefer allocator.free(starts);
-        @memset(starts, 0);
-        var user_count: usize = 0;
-        for (0..local_count) |index| {
-            const desc = descs.get(@fromBackingInt(@intCast(index))) orelse continue;
-            const desc_local = desc.localOrNull() orelse continue;
-            starts[@backingInt(desc_local) + 1] += 1;
-            user_count += 1;
-        }
-        for (1..starts.len) |index| starts[index] += starts[index - 1];
-        const locals = try allocator.alloc(LIR.LocalId, user_count);
-        errdefer allocator.free(locals);
-        const cursors = try allocator.dupe(u32, starts[0..local_count]);
-        defer allocator.free(cursors);
-        for (0..local_count) |index| {
-            const desc = descs.get(@fromBackingInt(@intCast(index))) orelse continue;
-            const desc_local = desc.localOrNull() orelse continue;
-            const cursor = &cursors[@backingInt(desc_local)];
-            locals[cursor.*] = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-            cursor.* += 1;
-        }
-        return .{ .starts = starts, .locals = locals };
-    }
-
-    fn deinit(self: *BoxyDescUsers, allocator: Allocator) void {
-        allocator.free(self.starts);
-        allocator.free(self.locals);
-    }
-
-    fn usersOf(self: BoxyDescUsers, desc_local: LIR.LocalId) []const LIR.LocalId {
-        const index: usize = @backingInt(desc_local);
-        if (index + 1 >= self.starts.len) return &.{};
-        return self.locals[self.starts[index]..self.starts[index + 1]];
-    }
-};
-
-fn boxyDescForLocal(descs: LirStore.LocalDescSnapshot, local: LIR.LocalId) ?LIR.BoxyDescRef {
-    return descs.get(local);
-}
-
-/// Emission shares the immutable solver table unless a capture view must be
-/// excluded. Only the owned variant needs to be freed by the emission consumer.
-const EmissionRefcounted = union(enum) {
-    shared: []const bool,
-    owned: []bool,
-
-    fn slice(self: EmissionRefcounted) []const bool {
-        return switch (self) {
-            inline .shared, .owned => |values| values,
-        };
-    }
-
-    fn deinit(self: EmissionRefcounted, allocator: Allocator) void {
-        switch (self) {
-            .shared => {},
-            .owned => |values| allocator.free(values),
-        }
-    }
-
-    fn exclude(self: *EmissionRefcounted, allocator: Allocator, local: LIR.LocalId) Allocator.Error!void {
-        const index = @backingInt(local);
-        if (!self.slice()[index]) return;
-        const values = switch (self.*) {
-            .shared => |shared| values: {
-                const owned = try allocator.dupe(bool, shared);
-                self.* = .{ .owned = owned };
-                break :values owned;
-            },
-            .owned => |owned| owned,
-        };
-        values[index] = false;
-    }
-};
-
-/// Derive RC emission eligibility from the solver's representation table.
-/// A capture view anchors borrows but owns no aggregate RC unit.
-fn computeEmissionContainsRefcounted(
-    allocator: Allocator,
-    store: *const LirStore,
-    layouts: *const layout_mod.Store,
-    borrow_anchor_refcounted: []const bool,
-) ResourceError!EmissionRefcounted {
-    if (borrow_anchor_refcounted.len != store.localCount()) arcInvariant("ARC resource table did not cover every local");
-    var contains = EmissionRefcounted{ .shared = borrow_anchor_refcounted };
-    errdefer contains.deinit(allocator);
-    // An `erased_capture_load` whose aggregate contains descriptor-driven
-    // fields is an explicit borrowed view into the executing callable's capture
-    // allocation. The view has no aggregate descriptor of its own, so it cannot
-    // use a layout-driven concrete helper. Keep it out of emission;
-    // the solver table retains it so projected fields remain tied to the callable.
-    var visited = collections.DenseMap(layout_mod.Idx, void).init(allocator);
-    defer visited.deinit();
-    var stack = std.ArrayList(layout_mod.Idx).empty;
-    defer stack.deinit(allocator);
-    for (0..store.cfStmtCount()) |stmt_index| {
-        const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
-        const stmt = store.getCFStmtImmediate(stmt_id);
-        if (stmt.* == .assign_low_level and stmt.assign_low_level.op == .erased_capture_load) {
-            const target = stmt.assign_low_level.target;
-            const target_layout = store.getLocal(target).layout_idx;
-            if (try arc_dismantle.layoutMayContainBoxyDynamic(allocator, layouts, target_layout, &visited, &stack)) {
-                try contains.exclude(allocator, target);
-            }
-        }
-    }
-
-    return contains;
-}
-
 const VariantSelector = struct {
     source: LIR.LirProcSpecId,
     borrowed_params: arc_sig.ParamMask,
@@ -1353,14 +1222,8 @@ const VariantTable = struct {
             .frame_locals = self.sources[@backingInt(callee)].frame,
             .body = self.sources[@backingInt(callee)].body,
             .ret_layout = source_spec.ret_layout,
-            .ret_desc = source_spec.ret_desc,
-            .runtime_ret_desc = source_spec.runtime_ret_desc,
-            .erased_arg_desc_offsets = source_spec.erased_arg_desc_offsets,
-            .erased_arg_layouts = source_spec.erased_arg_layouts,
-            .erased_arg_desc_params = source_spec.erased_arg_desc_params,
             .erased_capture_arg = source_spec.erased_capture_arg,
             .abi = source_spec.abi,
-            .boxy_runtime_entry = source_spec.boxy_runtime_entry,
             .is_static_initializer = source_spec.is_static_initializer,
             .hosted = source_spec.hosted,
             .tail_transform = source_spec.tail_transform,
@@ -1668,8 +1531,7 @@ const ArcPlanStep = struct {
     pre_release: ?ReleaseDecision = null,
     pre_release_extra: PlanSpan = .{},
     /// Why `pre_release_extra` was filled: the tail-call frame release of an
-    /// `assign_call`, or the descriptor-invalidated deaths of an
-    /// `assign_boxy_desc_ref`. Set by the planner that fills the list.
+    /// `assign_call`. Set by the planner that fills the list.
     pre_release_extra_reason: ?LIR.RcReason = null,
     pre_retain: PlanSpan = .{},
     retain_assign_ref_target: bool = true,
@@ -1806,11 +1668,6 @@ const ArcPlanTerminal = union(enum) {
         miss_plan: u32,
         capture_retain_count: u32,
     },
-    boxy_tag_match: struct {
-        stmt: LIR.CFStmtId,
-        match_plan: u32,
-        miss_plan: u32,
-    },
     str_match_set: struct {
         stmt: LIR.CFStmtId,
         match_plans: []u32,
@@ -1875,8 +1732,6 @@ const Inserter = struct {
     layouts: *const layout_mod.Store,
     options: InsertOptions,
     local_contains_refcounted: []const bool = &.{},
-    boxy_rc_descs: LirStore.LocalDescSnapshot = .{},
-    boxy_desc_users: BoxyDescUsers = .{},
     solution: *const arc_solve.Solution = undefined,
     /// Field takes solved against the ownership-neutral bodies; consulted by
     /// statement id, so base and variant emissions share one solve.
@@ -2123,17 +1978,6 @@ const Inserter = struct {
                 try self.pushMaterializePath(tasks, str_plan.miss_plan, &state.child_results[1]);
                 try self.pushMaterializePath(tasks, str_plan.match_plan, &state.child_results[0]);
             },
-            .boxy_tag_match => |tag_plan| {
-                const state = try self.task_scratch.create(MaterializeControlTask);
-                state.* = .{
-                    .plan_index = path.plan_index,
-                    .child_results = try self.task_scratch.alloc(LIR.CFStmtId, 2),
-                    .result = path.result,
-                };
-                try tasks.append(self.task_scratch, .{ .control = state });
-                try self.pushMaterializePath(tasks, tag_plan.miss_plan, &state.child_results[1]);
-                try self.pushMaterializePath(tasks, tag_plan.match_plan, &state.child_results[0]);
-            },
             .str_match_set => |str_plan| {
                 const state = try self.task_scratch.create(MaterializeControlTask);
                 state.* = .{
@@ -2222,16 +2066,6 @@ const Inserter = struct {
                     .source = source.source,
                     .data = source.data,
                     .on_match = on_match,
-                    .on_miss = state.child_results[1],
-                } });
-            },
-            .boxy_tag_match => |tag_plan| {
-                const source = self.store.getCFStmtImmediate(tag_plan.stmt).boxy_tag_match;
-                tail = try self.addCFStmtAtSource(tag_plan.stmt, .{ .boxy_tag_match = .{
-                    .source = source.source,
-                    .source_desc = source.source_desc,
-                    .tag_name = source.tag_name,
-                    .on_match = state.child_results[0],
                     .on_miss = state.child_results[1],
                 } });
             },
@@ -2465,11 +2299,6 @@ const Inserter = struct {
                         .data = try self.store.addStmtRow(LIR.ErasedCallData, .{
                             .closure = assign.closure,
                             .args = assign.args,
-                            .arg_layouts = assign.arg_layouts,
-                            .arg_descs = assign.arg_descs,
-                            .arg_desc_keys = assign.arg_desc_keys,
-                            .result_desc = assign.result_desc,
-                            .out_desc = assign.out_desc,
                             .arg_plan = assign.arg_plan,
                             .reuse_closure = assign.reuse_closure,
                             .reuse_source = assign.reuse_source,
@@ -2492,19 +2321,11 @@ const Inserter = struct {
                             .capture = assign.capture,
                             .capture_layout = assign.capture_layout,
                             .on_drop = assign.on_drop,
-                            .result_desc = assign.result_desc,
                             .reuse = assign.reuse,
                             .reuse_unique = step.reuse_unique,
                         }),
                         .next = next,
                     } }, origin);
-                };
-            },
-            .assign_call_dict => |assign_stmt| blk_assign: {
-                const assign = self.store.stmtRow(assign_stmt.data);
-                break :blk_assign blk: {
-                    next = try self.retainSpanExcept(assign.args, step.transfer_mask, .{ .stmt = at, .reason = .dict_call_arg }, next);
-                    break :blk try self.addWithNext(stmt, next, origin);
                 };
             },
             .assign_low_level => |assign| blk: {
@@ -2562,20 +2383,7 @@ const Inserter = struct {
                 if (assign.target != assign.value and step.retain_set_target) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .alias_bind }, next);
                 break :blk try self.addWithNext(stmt, next, origin);
             },
-            inline .assign_boxy_unbox, .assign_boxy_tag_payload => |assign| blk: {
-                if (step.retain_assign_ref_target) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .alias_bind }, next);
-                break :blk try self.addWithNext(stmt, next, origin);
-            },
             .init_uninitialized,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
             .debug,
             .expect,
             => try self.addWithNext(stmt, next, origin),
@@ -2602,7 +2410,6 @@ const Inserter = struct {
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .boxy_tag_match,
             .join,
             .jump,
             .ret,
@@ -2711,7 +2518,7 @@ const Inserter = struct {
                     }
                 },
                 .none => unreachable, // the check at the top of this loop rejects scheduled plans without a terminal
-                .switch_stmt, .initialized_payload_switch, .str_match, .boxy_tag_match, .str_match_set => {},
+                .switch_stmt, .initialized_payload_switch, .str_match, .str_match_set => {},
             }
             for (plan.steps.items[0..plan.step_count]) |*step| {
                 if (step.call_callee) |callee| {
@@ -2921,153 +2728,6 @@ const Inserter = struct {
                     if (transfer.preserve_reuse) try self.appendStepRetain(step, .{ .local = assign.reuse.?, .reason = .reuse_source_preserved });
                     const singles = [_]LIR.LocalId{ assign.capture orelse assign_stmt.target, assign.reuse orelse assign_stmt.target, assign_stmt.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign_stmt.next);
-                },
-                .assign_boxy_desc_ref => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    self.death_scratch.clearRetainingCapacity();
-                    try self.planValuesInvalidatedByDescriptorUpdate(
-                        assign_stmt.target,
-                        &segment.owned,
-                        assign_stmt.next,
-                        self.death_scratch,
-                    );
-                    try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
-                    step.pre_release_extra_reason = .descriptor_invalidated;
-                    step.pre_release = if (try self.transferForFreshBind(&segment.owned, assign_stmt.target)) self.releaseDecision(assign_stmt.target) else null;
-                    self.death_scratch.clearRetainingCapacity();
-                    const desc_local = assign.desc.localOrNull() orelse assign_stmt.target;
-                    const residual_local = if (assign.tag_residual_for) |desc| desc.localOrNull() orelse assign_stmt.target else assign_stmt.target;
-                    const singles = [_]LIR.LocalId{ desc_local, residual_local, assign_stmt.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, assign.captures, assign_stmt.next, self.death_scratch);
-                    try self.copyDeathScratchToStep(step);
-                },
-                .assign_boxy_dict_ref => |assign| {
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    step.pre_release = if (try self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
-                    const dict_local = assign.dict.localOrNull() orelse assign.target;
-                    const singles = [_]LIR.LocalId{ dict_local, assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.captures, assign.next);
-                },
-                .assign_boxy_box => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = if (assign.payload_mode == .move)
-                        try self.transferForSingle(&segment.owned, assign.payload, assign_stmt.target, assign_stmt.next)
-                    else
-                        SingleTransfer{
-                            .transfer_single = false,
-                            .release_old_target = try self.transferForFreshBind(&segment.owned, assign_stmt.target),
-                        };
-                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign_stmt.target) else null;
-                    step.transfer_single = transfer.transfer_single;
-                    if (assign.payload_mode == .move and !transfer.transfer_single) {
-                        try self.appendStepRetain(step, .{ .local = assign.payload, .reason = .stored_payload });
-                    }
-                    const singles = [_]LIR.LocalId{ assign.payload, assign_stmt.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign_stmt.next);
-                },
-                .assign_boxy_record_update => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = try self.transferForSingle(&segment.owned, assign.fields, assign_stmt.target, assign_stmt.next);
-                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign_stmt.target) else null;
-                    step.transfer_single = transfer.transfer_single;
-                    if (!transfer.transfer_single) {
-                        try self.appendStepRetain(step, .{ .local = assign.fields, .reason = .stored_payload });
-                    }
-                    const singles = [_]LIR.LocalId{ assign.fields, assign.base, assign_stmt.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign_stmt.next);
-                },
-                inline .assign_boxy_unbox, .assign_boxy_tag_payload => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = if (assign.source_mode == .move)
-                        try self.transferForSingle(&segment.owned, assign.source, assign_stmt.target, assign_stmt.next)
-                    else
-                        SingleTransfer{
-                            .transfer_single = false,
-                            .release_old_target = try self.transferForFreshBind(&segment.owned, assign_stmt.target),
-                        };
-                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign_stmt.target) else null;
-                    step.transfer_single = transfer.transfer_single;
-                    if (assign.source_mode == .move and !transfer.transfer_single) {
-                        try self.appendStepRetain(step, .{ .local = assign.source, .reason = .stored_payload });
-                    }
-                    step.retain_assign_ref_target = assign.source_mode == .borrow and !self.isBindingBorrowed(assign_stmt.target);
-                    const singles = [_]LIR.LocalId{ assign.source, assign_stmt.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign_stmt.next);
-                },
-                inline .assign_boxy_adapt, .assign_boxy_inspect => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = if (assign.source_mode == .move)
-                        try self.transferForSingle(&segment.owned, assign.source, assign_stmt.target, assign_stmt.next)
-                    else
-                        SingleTransfer{
-                            .transfer_single = false,
-                            .release_old_target = try self.transferForFreshBind(&segment.owned, assign_stmt.target),
-                        };
-                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign_stmt.target) else null;
-                    step.transfer_single = transfer.transfer_single;
-                    if (assign.source_mode == .move and !transfer.transfer_single) {
-                        try self.appendStepRetain(step, .{ .local = assign.source, .reason = .stored_payload });
-                    }
-                    const singles = [_]LIR.LocalId{ assign.source, assign_stmt.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign_stmt.next);
-                },
-                .assign_boxy_eq => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const release_old_target = try self.transferForFreshBind(&segment.owned, assign_stmt.target);
-                    step.pre_release = if (release_old_target) self.releaseDecision(assign_stmt.target) else null;
-                    const singles = [_]LIR.LocalId{ assign.lhs, assign.rhs, assign_stmt.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign_stmt.next);
-                },
-                .assign_boxy_hash => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const release_old_target = try self.transferForFreshBind(&segment.owned, assign_stmt.target);
-                    step.pre_release = if (release_old_target) self.releaseDecision(assign_stmt.target) else null;
-                    const singles = [_]LIR.LocalId{ assign.value, assign.hasher, assign_stmt.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign_stmt.next);
-                },
-                .assign_boxy_tag => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = if (assign.payload_mode == .move)
-                        try self.transferForSingle(&segment.owned, assign.payload, assign_stmt.target, assign_stmt.next)
-                    else
-                        SingleTransfer{
-                            .transfer_single = false,
-                            .release_old_target = try self.transferForFreshBind(&segment.owned, assign_stmt.target),
-                        };
-                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign_stmt.target) else null;
-                    step.transfer_single = transfer.transfer_single;
-                    if (assign.payload_mode == .move and !transfer.transfer_single) {
-                        if (assign.payload) |payload| try self.appendStepRetain(step, .{ .local = payload, .reason = .stored_payload });
-                    }
-                    const singles = [_]LIR.LocalId{ assign.payload orelse assign_stmt.target, assign_stmt.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign_stmt.next);
-                },
-                .boxy_tag_match => |tag_match| {
-                    const terminal = try self.prepareBoxyTagMatchPlan(segment.plan_index, segment.cursor, tag_match.on_match, tag_match.on_miss);
-                    const child_plans = terminal.boxy_tag_match;
-                    try self.pushBranchSolveSegment(tasks, tag_match.on_match, &segment.owned, segment.ctx, child_plans.match_plan);
-                    try self.pushBranchSolveSegment(tasks, tag_match.on_miss, &segment.owned, segment.ctx, child_plans.miss_plan);
-                    return;
-                },
-                .assign_call_dict => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    step.transfer_mask = try self.spanTransferMask(assign.args, ~@as(u64, 0), assign_stmt.next, assign_stmt.target, &segment.owned, .no);
-                    step.pre_release = if (try self.transferForFreshBind(&segment.owned, assign_stmt.target)) self.releaseDecision(assign_stmt.target) else null;
-                    self.death_scratch.clearRetainingCapacity();
-                    const singles = [_]LIR.LocalId{assign_stmt.target};
-                    try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign_stmt.next, self.death_scratch);
-                    try self.postStmtDeaths(&segment.owned, &.{}, assign.arg_descs, assign_stmt.next, self.death_scratch);
-                    try self.postStmtDeaths(&segment.owned, &.{}, assign.hidden_args, assign_stmt.next, self.death_scratch);
-                    try self.copyDeathScratchToStep(step);
                 },
                 .assign_low_level => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
@@ -3509,19 +3169,13 @@ const Inserter = struct {
 
     /// Whether an erased call is left pending for whoever awaits this
     /// procedure's result: the callee does not repack the closure's
-    /// allocation, and the call's value is the procedure's whole result,
-    /// either as it is or after nothing but representation conversions.
-    /// Unconverted, it has the procedure's return layout and any descriptor
-    /// that comes back with it is the one the procedure returns. Converted,
-    /// whoever makes the call applies the last conversion in the
-    /// procedure's place.
+    /// allocation, and the call's value is the procedure's whole result with
+    /// the procedure's return layout.
     fn erasedCallIsDeferred(self: *const Inserter, call: @FieldType(LIR.CFStmt, "assign_call_erased")) bool {
         if (self.store.stmtRow(call.data).reuse_closure) return false;
         const caller = self.store.getProcSpec(self.current_proc);
         if (caller.hosted != null) return false;
         const joins = self.solution.joinBodiesOf(self.current_source_proc);
-        var returned: LIR.LocalId = call.target;
-        var converted = false;
         var current: LIR.CFStmtId = call.next;
         // A join body that jumps back to its own join never returns, so more
         // jumps than joins is such a cycle.
@@ -3529,53 +3183,26 @@ const Inserter = struct {
         while (true) {
             const stmt = self.store.getCFStmt(current);
             if (stmt == .ret) {
-                if (stmt.ret.value != returned) return false;
-                if (self.store.getLocal(returned).layout_idx != caller.ret_layout) return false;
-                // The descriptor that comes back with an unconverted value
-                // is the one this procedure returns with it, or there is
-                // none on either side.
-                return converted or self.store.stmtRow(call.data).out_desc == caller.runtime_ret_desc;
+                if (stmt.ret.value != call.target) return false;
+                return self.store.getLocal(call.target).layout_idx == caller.ret_layout;
             }
-            if (stmt == .jump) {
-                if (jumps == joins.len) return false;
-                jumps += 1;
-                current = for (joins) |join| {
-                    if (join.id == stmt.jump.target) break join.body;
-                } else return false;
-                continue;
-            }
-            if (stmt == .assign_boxy_desc_ref) {
-                // The frame is released before the call, so a descriptor
-                // reference after it reads nothing the frame owned.
-                const captures = self.store.getLocalSpan(self.store.stmtRow(stmt.assign_boxy_desc_ref.data).captures);
-                for (0..GuardedList.borrowLen(captures)) |index| {
-                    if (self.localContainsRefcounted(GuardedList.at(captures, index))) return false;
-                }
-                current = stmt.assign_boxy_desc_ref.next;
-                continue;
-            }
-            if (stmt != .assign_boxy_adapt) return false;
-            const adapt = stmt.assign_boxy_adapt;
-            const adapt_data = self.store.stmtRow(adapt.data);
-            if (adapt_data.source != returned or adapt_data.source_mode != .move) return false;
-            returned = adapt.target;
-            converted = true;
-            current = adapt.next;
+            if (stmt != .jump) return false;
+            if (jumps == joins.len) return false;
+            jumps += 1;
+            current = for (joins) |join| {
+                if (join.id == stmt.jump.target) break join.body;
+            } else return false;
         }
     }
 
     /// Whether the callee of a tail call can return on the current
-    /// procedure's behalf: both use the Roc procedure ABI, the callee's value
-    /// is the procedure's whole result, and a runtime descriptor the callee
-    /// returns alongside it is the one this procedure returns.
+    /// procedure's behalf: both use the Roc procedure ABI and the callee's
+    /// value is the procedure's whole result.
     fn sharesReturnContract(self: *const Inserter, call: anytype) bool {
         const caller = self.store.getProcSpec(self.current_proc);
         const callee = self.store.getProcSpec(call.proc);
-        const out_desc = self.store.stmtRowOrDefault(call.extra).out_desc;
         return caller.abi == .roc and callee.abi == .roc and
             callee.hosted == null and
-            out_desc == caller.runtime_ret_desc and
-            (out_desc != null) == (callee.runtime_ret_desc != null) and
             self.store.getLocal(call.target).layout_idx == caller.ret_layout and
             callee.ret_layout == caller.ret_layout;
     }
@@ -3681,7 +3308,6 @@ const Inserter = struct {
             .switch_stmt,
             .initialized_payload_switch,
             .str_match,
-            .boxy_tag_match,
             .str_match_set,
             .jump,
             .terminal,
@@ -3716,7 +3342,6 @@ const Inserter = struct {
             .switch_stmt,
             .initialized_payload_switch,
             .str_match,
-            .boxy_tag_match,
             .str_match_set,
             .terminal,
             => {},
@@ -3748,7 +3373,6 @@ const Inserter = struct {
             .switch_stmt,
             .initialized_payload_switch,
             .str_match,
-            .boxy_tag_match,
             .str_match_set,
             .jump,
             .terminal,
@@ -3813,7 +3437,6 @@ const Inserter = struct {
                 .join,
                 .initialized_payload_switch,
                 .str_match,
-                .boxy_tag_match,
                 .str_match_set,
                 .jump,
                 .terminal,
@@ -3841,7 +3464,6 @@ const Inserter = struct {
             .switch_stmt,
             .initialized_payload_switch,
             .str_match,
-            .boxy_tag_match,
             .str_match_set,
             .jump,
             => {},
@@ -3883,7 +3505,6 @@ const Inserter = struct {
             .join,
             .initialized_payload_switch,
             .str_match,
-            .boxy_tag_match,
             .str_match_set,
             .jump,
             .terminal,
@@ -3929,7 +3550,6 @@ const Inserter = struct {
             .join,
             .switch_stmt,
             .str_match,
-            .boxy_tag_match,
             .str_match_set,
             .jump,
             .terminal,
@@ -3960,7 +3580,6 @@ const Inserter = struct {
             .join,
             .switch_stmt,
             .initialized_payload_switch,
-            .boxy_tag_match,
             .str_match_set,
             .jump,
             .terminal,
@@ -3975,35 +3594,6 @@ const Inserter = struct {
             .match_plan = children[0],
             .miss_plan = children[1],
             .capture_retain_count = capture_retain_count,
-        } };
-        return &self.arcPlan(plan_index).terminal;
-    }
-
-    fn prepareBoxyTagMatchPlan(self: *Inserter, plan_index: u32, stmt: LIR.CFStmtId, match_start: LIR.CFStmtId, miss_start: LIR.CFStmtId) ResourceError!*ArcPlanTerminal {
-        const previous_terminal = self.arcPlan(plan_index).previous_terminal;
-        const children = switch (previous_terminal) {
-            .boxy_tag_match => |previous| blk: {
-                if (previous.stmt != stmt) arcInvariant("ARC Boxy tag-match plan changed structural shape");
-                break :blk .{ previous.match_plan, previous.miss_plan };
-            },
-            .none,
-            .stop,
-            .join,
-            .switch_stmt,
-            .initialized_payload_switch,
-            .str_match,
-            .str_match_set,
-            .jump,
-            .terminal,
-            => .{ try self.newArcPlan(match_start), try self.newArcPlan(miss_start) },
-        };
-        if (self.arcPlan(children[0]).start != match_start or self.arcPlan(children[1]).start != miss_start) {
-            arcInvariant("ARC Boxy tag-match child plan changed its structured start");
-        }
-        self.arcPlan(plan_index).terminal = .{ .boxy_tag_match = .{
-            .stmt = stmt,
-            .match_plan = children[0],
-            .miss_plan = children[1],
         } };
         return &self.arcPlan(plan_index).terminal;
     }
@@ -4028,7 +3618,6 @@ const Inserter = struct {
             .switch_stmt,
             .initialized_payload_switch,
             .str_match,
-            .boxy_tag_match,
             .jump,
             .terminal,
             => {
@@ -5151,7 +4740,7 @@ const Inserter = struct {
         }
         var transfer_mask: u64 = operand_take_mask & rc_effect.retain_args;
         if (rc_effect.retain_args != 0) {
-            transfer_mask |= try self.spanTransferMask(args, rc_effect.retain_args & ~operand_take_mask, next, target, owned, .yes);
+            transfer_mask |= try self.spanTransferMask(args, rc_effect.retain_args & ~operand_take_mask, next, target, owned);
         }
         try self.placeUnit(owned, target);
         return .{
@@ -5171,44 +4760,10 @@ const Inserter = struct {
         return true;
     }
 
-    /// A descriptor update releases each dead value its previous binding
-    /// described. A procedure parameter refers to its descriptor local for its
-    /// whole life, and a descriptor local is never rebound while a value
-    /// refers to it, so assigning a parameter's descriptor local defines it in
-    /// the procedure's prelude and invalidates no parameter.
-    fn planValuesInvalidatedByDescriptorUpdate(
-        self: *Inserter,
-        desc_local: LIR.LocalId,
-        owned: *OwnedSet,
-        next: LIR.CFStmtId,
-        releases: *std.ArrayList(ReleaseDecision),
-    ) ResourceError!void {
-        const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(self.current_source_proc).args);
-        for (self.boxy_desc_users.usersOf(desc_local)) |local| {
-            if (!owned.contains(local)) continue;
-            if (localSpanContains(params, local)) continue;
-            if (try self.valueUsedInPath(next, local)) continue;
-            if (!try self.takeRebindTarget(owned, local)) arcInvariant("ARC descriptor invalidation lost an owned local");
-            try releases.append(self.lane_allocator, self.releaseDecision(local));
-        }
-    }
-
-    fn localSpanContains(locals: anytype, local: LIR.LocalId) bool {
-        for (0..GuardedList.borrowLen(locals)) |index| {
-            if (GuardedList.at(locals, index) == local) return true;
-        }
-        return false;
-    }
-
     /// Computes which low-level argument positions in `span` (restricted to
     /// `position_mask`) can move their ownership unit into the value being
     /// constructed: the operand is owned and its liveness group has no use
     /// after this statement. Transferred operands leave the owned set.
-    /// Whether a transferred operand's unit lands inside the statement's
-    /// result (`.yes`, for aggregate and low-level constructions) or is handed
-    /// off to a callee that owns it (`.no`, for dict calls).
-    const TargetHoldsUnit = enum { yes, no };
-
     fn spanTransferMask(
         self: *Inserter,
         span: LIR.LocalSpan,
@@ -5216,15 +4771,12 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         target: LIR.LocalId,
         owned: *OwnedSet,
-        target_holds_unit: TargetHoldsUnit,
     ) ResourceError!u64 {
         var transfer: u64 = 0;
-        // Aggregate and low-level transfers move the operand's unit into the
-        // result, so a non-refcounted result has nothing to carry it and the
-        // operand must be retained instead. A dict call instead hands the unit
-        // to the callee, which owns it regardless of the result's layout, so
-        // that transfer stays valid even when the result is not refcounted.
-        if (target_holds_unit == .yes and !self.localContainsRefcounted(target)) return 0;
+        // Transfers move the operand's unit into the result, so a
+        // non-refcounted result has nothing to carry it and the operand must
+        // be retained instead.
+        if (!self.localContainsRefcounted(target)) return 0;
         const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |i| {
             const local = GuardedList.at(locals, i);
@@ -5756,7 +5308,7 @@ const Inserter = struct {
     /// whole-value operands and RC-bearing projections of any place member
     /// do. An owned pure alias of a member retains through the place at its
     /// bind, so that bind is a use even though the alias itself then carries
-    /// its own unit. String and Boxy tag matches use only their operands: a
+    /// its own unit. String matches use only their operands: a
     /// borrowed capture view reaches `source`'s place through its borrow
     /// link, and an owned capture retains through `source` at the match.
     fn stmtPlaceFacts(self: *const Inserter, stmt: LIR.CFStmtId, uses: *std.ArrayList(LIR.LocalId)) Allocator.Error!StmtPlaceFacts {
@@ -5781,36 +5333,7 @@ const Inserter = struct {
                 if (assign.capture) |capture| try uses.append(gpa, capture);
                 if (assign.reuse) |reuse| try uses.append(gpa, reuse);
             },
-            .assign_boxy_box => |assign_stmt| blk_assign: {
-                const assign = self.store.stmtRow(assign_stmt.data);
-                break :blk_assign try uses.append(gpa, assign.payload);
-            },
-            .assign_boxy_record_update => |assign_stmt| {
-                const assign = self.store.stmtRow(assign_stmt.data);
-                try uses.append(gpa, assign.base);
-                try uses.append(gpa, assign.fields);
-            },
-            inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag_payload => |assign_stmt| blk_assign: {
-                const assign = self.store.stmtRow(assign_stmt.data);
-                break :blk_assign try uses.append(gpa, assign.source);
-            },
-            .assign_boxy_eq => |assign_stmt| {
-                const assign = self.store.stmtRow(assign_stmt.data);
-                try uses.append(gpa, assign.lhs);
-                try uses.append(gpa, assign.rhs);
-            },
-            .assign_boxy_hash => |assign_stmt| {
-                const assign = self.store.stmtRow(assign_stmt.data);
-                try uses.append(gpa, assign.value);
-                try uses.append(gpa, assign.hasher);
-            },
-            .assign_boxy_tag => |assign| if (self.store.stmtRow(assign.data).payload) |payload| try uses.append(gpa, payload),
             .assign_tag => |assign| if (assign.payload) |payload| try uses.append(gpa, payload),
-            .assign_call_dict => |assign_stmt| {
-                const assign = self.store.stmtRow(assign_stmt.data);
-                try self.appendSpanLocals(uses, assign.args);
-                try self.appendSpanLocals(uses, assign.hidden_args);
-            },
             .assign_list => |assign| try self.appendSpanLocals(uses, assign.elems),
             .assign_struct => |assign| try self.appendSpanLocals(uses, assign.fields),
             .store_struct => |assign| {
@@ -5841,14 +5364,8 @@ const Inserter = struct {
             .expect_err => |expect_err_stmt| try uses.append(gpa, expect_err_stmt.message),
             .decref, .decref_if_initialized, .free => return .{ .uses_every_place = true },
             inline .str_match, .str_match_set => |match| try uses.append(gpa, match.source),
-            .boxy_tag_match => |tag_match| {
-                try uses.append(gpa, tag_match.source);
-                if (self.store.stmtRow(tag_match.source_desc).localOrNull()) |local| try uses.append(gpa, local);
-            },
             .assign_literal,
             .init_uninitialized,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
             .join,
             .jump,
             .runtime_error,
@@ -5869,18 +5386,6 @@ const Inserter = struct {
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -5917,10 +5422,6 @@ const Inserter = struct {
                 const arms = self.store.getStrMatchArms(str_match_set.arms);
                 for (0..GuardedList.borrowLen(arms)) |index| try out.append(gpa, GuardedList.at(arms, index).on_match);
                 try out.append(gpa, str_match_set.on_miss);
-            },
-            .boxy_tag_match => |tag_match| {
-                try out.append(gpa, tag_match.on_match);
-                try out.append(gpa, tag_match.on_miss);
             },
             .decref,
             .decref_if_initialized,
@@ -6935,19 +6436,6 @@ const Inserter = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -6976,58 +6464,6 @@ const Inserter = struct {
             try body_clone.appendSuccessors(self.store, &successors, stmt, self.source_liveness.scratch_allocator);
             for (successors.items) |successor| try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, successor);
             if (body_clone.definedTarget(current)) |target| setReadBeforeRebindDef(&graph, node_index, target);
-            switch (current) {
-                .assign_call_erased => |inline_s| blk_s: {
-                    const s = self.store.stmtRow(inline_s.data);
-                    break :blk_s if (s.out_desc) |out_desc| setReadBeforeRebindDef(&graph, node_index, out_desc);
-                },
-                .assign_boxy_tag_payload => |inline_s| blk_s: {
-                    const s = self.store.stmtRow(inline_s.data);
-                    break :blk_s if (s.target_desc) |target_desc| setReadBeforeRebindDef(&graph, node_index, target_desc);
-                },
-                .init_uninitialized,
-                .assign_ref,
-                .assign_literal,
-                .assign_call,
-                .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .boxy_tag_match,
-                .assign_call_dict,
-                .assign_low_level,
-                .assign_list,
-                .assign_struct,
-                .assign_tag,
-                .store_struct,
-                .store_tag,
-                .set_local,
-                .debug,
-                .expect,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .incref,
-                .decref,
-                .decref_if_initialized,
-                .free,
-                .switch_stmt,
-                .switch_initialized_payload,
-                .str_match,
-                .str_match_set,
-                .join,
-                .jump,
-                .ret,
-                .crash,
-                => {},
-            }
             const reads = &graph.nodes.items[node_index].reads;
             switch (current) {
                 .assign_ref => |assign| {
@@ -7037,95 +6473,17 @@ const Inserter = struct {
                 },
                 .assign_call => |assign| {
                     try self.noteLivenessUseSpan(reads, assign.args);
-                    if (self.store.stmtRowOrDefault(assign.extra).result_desc) |result_desc| {
-                        if (result_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    }
                 },
                 .assign_call_erased => |assign_stmt| {
                     const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteLivenessUseLocal(reads, assign.closure);
                     if (assign.reuse_source) |reuse_source| try self.noteLivenessUseLocal(reads, reuse_source);
                     try self.noteLivenessUseSpan(reads, assign.args);
-                    try self.noteLivenessUseSpan(reads, assign.arg_descs);
-                    if (assign.result_desc) |result_desc| {
-                        if (result_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    }
                 },
                 .assign_packed_erased_fn => |assign_stmt| {
                     const assign = self.store.stmtRow(assign_stmt.data);
                     if (assign.capture) |capture| try self.noteLivenessUseLocal(reads, capture);
                     if (assign.reuse) |reuse| try self.noteLivenessUseLocal(reads, reuse);
-                },
-                .assign_boxy_desc_ref => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    if (assign.desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    try self.noteLivenessUseSpan(reads, assign.captures);
-                },
-                .assign_boxy_dict_ref => |assign| {
-                    if (assign.dict.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    try self.noteLivenessUseSpan(reads, assign.captures);
-                },
-                .assign_boxy_box => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteLivenessUseLocal(reads, assign.payload);
-                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_boxy_record_update => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteLivenessUseLocal(reads, assign.base);
-                    try self.noteLivenessUseLocal(reads, assign.fields);
-                    if (assign.base_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    if (assign.fields_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_boxy_unbox => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteLivenessUseLocal(reads, assign.source);
-                    if (assign.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_boxy_adapt => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteLivenessUseLocal(reads, assign.source);
-                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_boxy_inspect => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteLivenessUseLocal(reads, assign.source);
-                    if (assign.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_boxy_eq => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteLivenessUseLocal(reads, assign.lhs);
-                    try self.noteLivenessUseLocal(reads, assign.rhs);
-                    if (assign.desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_boxy_hash => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteLivenessUseLocal(reads, assign.value);
-                    try self.noteLivenessUseLocal(reads, assign.hasher);
-                    if (assign.desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_boxy_tag => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    if (assign.target_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    if (assign.payload) |payload| try self.noteLivenessUseLocal(reads, payload);
-                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_boxy_tag_payload => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    try self.noteLivenessUseLocal(reads, assign.source);
-                    if (assign.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                },
-                .assign_call_dict => |assign_stmt| {
-                    const assign = self.store.stmtRow(assign_stmt.data);
-                    if (assign.dict.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    if (assign.result_desc) |desc| if (desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    try self.noteLivenessUseSpan(reads, assign.args);
-                    try self.noteLivenessUseSpan(reads, assign.arg_descs);
-                    try self.noteLivenessUseSpan(reads, assign.hidden_args);
                 },
                 .assign_low_level => |assign| {
                     const args = self.store.getLocalSpan(assign.args);
@@ -7138,9 +6496,6 @@ const Inserter = struct {
                 .assign_list => |assign| try self.noteLivenessUseSpan(reads, assign.elems),
                 .assign_struct => |assign| try self.noteLivenessUseSpan(reads, assign.fields),
                 .assign_tag => |assign| {
-                    if (self.store.optionalStmtRow(assign.target_desc)) |target_desc| {
-                        if (target_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
-                    }
                     if (assign.payload) |payload| try self.noteLivenessUseLocal(reads, payload);
                 },
                 .store_struct => |assign| {
@@ -7177,10 +6532,6 @@ const Inserter = struct {
                         const arm = GuardedList.at(arms, arm_index);
                         try self.attachStrMatchEdgeKills(&graph, node_index, arm.steps, @intCast(arm_index));
                     }
-                },
-                .boxy_tag_match => |tag_match| {
-                    try self.noteLivenessUseLocal(reads, tag_match.source);
-                    if (self.store.stmtRow(tag_match.source_desc).localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
                 },
                 .ret => |ret_stmt| try self.noteLivenessUseLocal(reads, ret_stmt.value),
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
@@ -7730,8 +7081,6 @@ const Inserter = struct {
     }
 
     fn rcHelperForLocal(self: *const Inserter, op: layout_mod.RcOp, local: LIR.LocalId) LIR.RcHelper {
-        if (self.boxy_rc_descs.get(local)) |desc| return .{ .boxy = desc };
-
         const local_layout = self.store.getLocal(local).layout_idx;
         const helper = self.rcHelperForLayout(op, local_layout);
         if (self.layouts.rcHelperPlan(helper) == .noop) {
@@ -7747,18 +7096,15 @@ const Inserter = struct {
                     break :blk if (stmt.* == .assign_ref) body_clone.refOpSource(stmt.assign_ref.op) else null;
                 } else null;
                 const ref_source_layout: ?layout_mod.Idx = if (ref_source) |source| self.store.getLocal(source).layout_idx else null;
-                const ref_source_desc: ?LIR.BoxyDescRef = if (ref_source) |source| boxyDescForLocal(self.boxy_rc_descs, source) else null;
-                invariant("ARC attempted to emit a noop RC helper for refcounted local {d} layout={d} layout_data={any} desc={?} proc={d} stmt={?d} ref_source={?d} ref_source_layout={?d} ref_source_layout_data={any} ref_source_desc={?} stmt_data={any}", .{
+                invariant("ARC attempted to emit a noop RC helper for refcounted local {d} layout={d} layout_data={any} proc={d} stmt={?d} ref_source={?d} ref_source_layout={?d} ref_source_layout_data={any} stmt_data={any}", .{
                     @backingInt(local),
                     @backingInt(local_layout),
                     self.layouts.getLayout(local_layout),
-                    boxyDescForLocal(self.boxy_rc_descs, local),
                     @backingInt(self.current_proc),
                     if (self.current_rewrite_stmt) |stmt_id| @backingInt(stmt_id) else null,
                     if (ref_source) |source| @backingInt(source) else null,
                     if (ref_source_layout) |source_layout| @backingInt(source_layout) else null,
                     if (ref_source_layout) |source_layout| self.layouts.getLayout(source_layout) else null,
-                    ref_source_desc,
                     if (self.current_rewrite_stmt) |stmt_id| self.store.getCFStmt(stmt_id) else null,
                 });
             }
@@ -7992,8 +7338,8 @@ fn addCanonicalRetain(
 
 fn rcRetainReleasePair(retain: anytype, release: anytype) bool {
     if (retain.value != release.value or retain.atomicity != release.atomicity) return false;
-    const retain_helper = retain.rc.concreteOrNull() orelse return false;
-    const release_helper = release.rc.concreteOrNull() orelse return false;
+    const retain_helper = retain.rc.concrete;
+    const release_helper = release.rc.concrete;
     return retain_helper.op == .incref and
         release_helper.op == .decref and
         retain_helper.layout_idx == release_helper.layout_idx;
@@ -8006,11 +7352,6 @@ fn argMaskBit(index: usize) u64 {
 
 fn arcInvariant(comptime message: []const u8) noreturn {
     invariant(message, .{});
-}
-
-/// Convert an intentional fixture-table position while preserving enum inference.
-fn fixtureTableIndex(comptime index: u32) u32 {
-    return index;
 }
 
 test "arc insertion boundary exists" {
@@ -8516,19 +7857,6 @@ const ArcTest = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -8587,19 +7915,6 @@ const ArcTest = struct {
                 inline .assign_ref, .assign_literal, .init_uninitialized, .incref, .decref, .decref_if_initialized, .free => |s| cursor = s.next,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -8703,19 +8018,6 @@ const ArcTest = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_list,
                 .assign_struct,
                 .assign_tag,
@@ -8770,19 +8072,6 @@ const ArcTest = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_list,
                 .assign_struct,
                 .assign_tag,
@@ -8843,19 +8132,6 @@ const ArcTest = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -8896,19 +8172,6 @@ const ArcTest = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -8961,19 +8224,6 @@ const ArcTest = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -9006,19 +8256,6 @@ const ArcTest = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -9067,19 +8304,6 @@ const ArcTest = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -9119,19 +8343,6 @@ const ArcTest = struct {
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -9156,101 +8367,9 @@ const ArcTest = struct {
     }
 };
 
-test "ARC emission shares solver resources without allocating when no capture is excluded" {
-    var f = try ArcTest.init(testing.allocator);
-    defer f.deinit();
-
-    _ = try f.local(f.list_str);
-    const result = try f.local(.i64);
-    _ = try f.ret(result);
-    const borrow_anchors = try arc_solve.computeLocalContainsRefcounted(f.allocator, &f.store, &f.layouts);
-    defer f.allocator.free(borrow_anchors);
-
-    const emission = try computeEmissionContainsRefcounted(testing.failing_allocator, &f.store, &f.layouts, borrow_anchors);
-    defer emission.deinit(testing.failing_allocator);
-    try testing.expect(emission.slice().ptr == borrow_anchors.ptr);
-    try testing.expectEqualSlices(bool, &.{ true, false }, emission.slice());
-}
-
-test "ARC emission exclusions copy once and preserve solver resources on allocation failure" {
-    var f = try ArcTest.init(testing.allocator);
-    defer f.deinit();
-
-    const first_list = try f.local(f.list_str);
-    const scalar = try f.local(.i64);
-    const second_list = try f.local(f.list_str);
-    const borrow_anchors = try arc_solve.computeLocalContainsRefcounted(f.allocator, &f.store, &f.layouts);
-    defer f.allocator.free(borrow_anchors);
-
-    var emission = EmissionRefcounted{ .shared = borrow_anchors };
-    defer emission.deinit(testing.allocator);
-
-    // Already ineligible locals need no copy, even with an allocator that fails.
-    try emission.exclude(testing.failing_allocator, scalar);
-    try testing.expectError(error.OutOfMemory, emission.exclude(testing.failing_allocator, first_list));
-    try testing.expect(emission.slice().ptr == borrow_anchors.ptr);
-    try testing.expectEqualSlices(bool, &.{ true, false, true }, emission.slice());
-
-    try emission.exclude(testing.allocator, first_list);
-    const owned = emission.slice().ptr;
-    try testing.expect(owned != borrow_anchors.ptr);
-    try emission.exclude(testing.failing_allocator, second_list);
-    try testing.expect(emission.slice().ptr == owned);
-    try testing.expectEqualSlices(bool, &.{ false, false, false }, emission.slice());
-    try testing.expectEqualSlices(bool, &.{ true, false, true }, borrow_anchors);
-}
-
-test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
-    var f = try ArcTest.init(testing.allocator);
-    f.store.runtime_contract = .boxy;
-    defer f.deinit();
-
-    const erased_box = try f.layouts.insertLayout(layout_mod.Layout.erasedBox());
-    const capture_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
-        .{ .index = 0, .layout = erased_box },
-        .{ .index = 1, .layout = .opaque_ptr },
-    });
-    const capture_ptr = try f.local(.opaque_ptr);
-    const capture_view = try f.local(capture_layout);
-    const captured_value = try f.local(erased_box);
-    try f.store.setLocalBoxyDesc(captured_value, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
-
-    const result = try f.local(.i64);
-    const ret = try f.ret(result);
-    const result_stmt = try f.assignI64(result, 0, ret);
-    const field_read = try f.assignRefField(captured_value, capture_view, 0, result_stmt);
-    _ = try f.store.addCFStmt(.{ .assign_low_level = .{
-        .target = capture_view,
-        .op = .erased_capture_load,
-        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.erased_capture_load.rcEffect()),
-        .args = try f.span(&.{capture_ptr}),
-        .next = field_read,
-    } }, .test_fixture);
-
-    const borrow_anchors = try arc_solve.computeLocalContainsRefcounted(
-        f.allocator,
-        &f.store,
-        &f.layouts,
-    );
-    defer f.allocator.free(borrow_anchors);
-    const local_contains_refcounted = try computeEmissionContainsRefcounted(
-        f.allocator,
-        &f.store,
-        &f.layouts,
-        borrow_anchors,
-    );
-    defer local_contains_refcounted.deinit(f.allocator);
-
-    try testing.expect(!local_contains_refcounted.slice()[@backingInt(capture_view)]);
-    try testing.expect(local_contains_refcounted.slice()[@backingInt(captured_value)]);
-    try testing.expect(borrow_anchors[@backingInt(capture_view)]);
-    try testing.expect(borrow_anchors[@backingInt(captured_value)]);
-}
-
 test "ARC preserves erased callable repack reuse" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
-    f.store.runtime_contract = .boxy;
 
     const erased_callable = try f.layouts.insertErasedCallable();
     const capture = try f.local(.str);
@@ -9268,7 +8387,6 @@ test "ARC preserves erased callable repack reuse" {
     }, .none);
 
     const ret = try f.ret(new_callable);
-    const result_desc: LIR.BoxyDescRef = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(2))) };
     const new_pack = try f.store.addCFStmt(.{ .assign_packed_erased_fn = .{
         .target = new_callable,
         .data = try f.store.addStmtRow(LIR.PackedErasedFnData, .{
@@ -9276,7 +8394,6 @@ test "ARC preserves erased callable repack reuse" {
             .capture = capture,
             .capture_layout = .str,
             .on_drop = .none,
-            .result_desc = result_desc,
             .reuse = old_callable,
         }),
         .next = ret,
@@ -9306,7 +8423,6 @@ test "ARC preserves erased callable repack reuse" {
                     try testing.expect(cursor != new_pack);
                     try testing.expectEqual(old_callable, assign.reuse.?);
                     try testing.expect(assign.reuse_unique);
-                    try testing.expectEqual(result_desc, assign.result_desc.?);
                     found = true;
                     break;
                 }
@@ -9319,19 +8435,6 @@ test "ARC preserves erased callable repack reuse" {
             .assign_literal,
             .assign_call,
             .assign_call_erased,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -9360,19 +8463,12 @@ test "ARC preserves erased callable repack reuse" {
 test "ARC preserves erased call ABI metadata" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
-    f.store.runtime_contract = .boxy;
 
     const erased_callable = try f.layouts.insertErasedCallable();
     const closure = try f.local(erased_callable);
     const arg = try f.local(.u64);
-    const arg_desc = try f.local(.opaque_ptr);
     const result = try f.local(.u64);
-    const out_desc = try f.local(.opaque_ptr);
     const args = try f.span(&.{arg});
-    const arg_descs = try f.span(&.{arg_desc});
-    const arg_layouts: LIR.BoxySpan = .{ .start = 4, .len = 1 };
-    const arg_desc_keys: LIR.BoxySpan = .{ .start = 7, .len = 1 };
-    const result_desc: LIR.BoxyDescRef = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(3))) };
     const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{.u64});
 
     const ret = try f.ret(result);
@@ -9381,16 +8477,11 @@ test "ARC preserves erased call ABI metadata" {
         .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
             .closure = closure,
             .args = args,
-            .arg_layouts = arg_layouts,
-            .arg_descs = arg_descs,
-            .arg_desc_keys = arg_desc_keys,
-            .result_desc = result_desc,
-            .out_desc = out_desc,
             .arg_plan = arg_plan,
         }),
         .next = ret,
     } }, .test_fixture);
-    const caller = try f.addProc(&.{ closure, arg, arg_desc }, call, .u64);
+    const caller = try f.addProc(&.{ closure, arg }, call, .u64);
 
     try f.run();
 
@@ -9401,11 +8492,6 @@ test "ARC preserves erased call ABI metadata" {
         if (stmt == .assign_call_erased) {
             const rewritten = f.store.stmtRow(stmt.assign_call_erased.data);
             try testing.expectEqual(args, rewritten.args);
-            try testing.expectEqual(arg_layouts, rewritten.arg_layouts);
-            try testing.expectEqual(arg_descs, rewritten.arg_descs);
-            try testing.expectEqual(arg_desc_keys, rewritten.arg_desc_keys);
-            try testing.expectEqual(result_desc, rewritten.result_desc.?);
-            try testing.expectEqual(out_desc, rewritten.out_desc.?);
             try testing.expectEqual(arg_plan, rewritten.arg_plan);
             return;
         } else if (stmt == .incref) {
@@ -9474,19 +8560,6 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
             .assign_literal,
             .assign_call,
             .assign_call_erased,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -9560,19 +8633,6 @@ test "ARC transfers erased call ownership from an explicit outer source" {
             .assign_literal,
             .assign_call,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -9672,19 +8732,6 @@ test "ARC retains an erased call reuse source that is read after the call" {
             .assign_literal,
             .assign_call,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -9764,19 +8811,6 @@ test "ARC retains an erased callable whose repack input is used later" {
             .assign_literal,
             .assign_call,
             .assign_call_erased,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -9895,7 +8929,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
     }, .none);
 
     const local_contains_refcounted = [_]bool{ true, false, true };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &local_contains_refcounted, .{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &local_contains_refcounted, &.{}, true);
     defer solution.deinit();
     var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
     defer global_local_index.deinit();
@@ -9970,7 +9004,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
     }, .none);
 
     const local_contains_refcounted = [_]bool{ true, true, true };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &local_contains_refcounted, .{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &local_contains_refcounted, &.{}, true);
     defer solution.deinit();
     try testing.expectEqual(leader, solution.leaderOf(local_alias));
 
@@ -10008,8 +9042,8 @@ test "ARC lender-death query sees a live solver-only borrow anchor" {
 
     // The solver knows `anchor` participates in ARC because it is a borrow
     // anchor, while emission knows only `concrete` has a concrete RC helper.
-    // This is the same split used by descriptor-driven projections: the
-    // anchor has a real liveness bit but must never receive an incref/decref.
+    // The anchor has a real liveness bit but must never receive an
+    // incref/decref.
     const anchor = try f.local(.str);
     const concrete = try f.local(.str);
     const result = try f.local(.i64);
@@ -10020,7 +9054,7 @@ test "ARC lender-death query sees a live solver-only borrow anchor" {
     const proc = try f.addProc(&.{anchor}, body, .i64);
 
     const solver_rc = [_]bool{ true, true, false };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &solver_rc, .{}, &.{proc}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &solver_rc, &.{proc}, true);
     defer solution.deinit();
     try testing.expectEqual(anchor, solution.leaderOf(concrete));
 
@@ -10070,7 +9104,7 @@ test "ARC prepared source liveness survives transient domains and frozen reuse" 
     const body = try f.ret(local);
     const proc = try f.addProc(&.{local}, body, .str);
     const rc = [_]bool{true};
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{proc}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{proc}, true);
     defer solution.deinit();
     var durable = collections.SingleThreadArena.init(testing.allocator);
     defer durable.deinit();
@@ -10127,7 +9161,7 @@ test "ARC proc domain sparse high global IDs retain only a tiny frame" {
     defer testing.allocator.free(rc);
     @memset(rc, false);
     rc[@backingInt(local)] = true;
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{proc}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{proc}, true);
     defer solution.deinit();
     var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
@@ -10167,7 +9201,7 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
     const proc = try f.addProc(&.{}, body, .i64);
     var rc = @as([(locals.len + 1)]bool, @splat(true));
     rc[locals.len] = false;
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, true);
     defer solution.deinit();
     for (locals, 0..) |local, i| try testing.expectEqual(locals[i % 3], solution.leaderOf(local));
     var indices = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
@@ -12039,7 +11073,7 @@ test "RC loop payload view preserves field units of a tag union defined outside 
 
     const rc = try arc_solve.computeLocalContainsRefcounted(testing.allocator, &f.store, &f.layouts);
     defer testing.allocator.free(rc);
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, true);
     defer solution.deinit();
     var dismantles = try arc_dismantle.compute(testing.allocator, &f.store, &f.layouts, rc, &solution, .{});
     defer dismantles.deinit();
@@ -12102,7 +11136,7 @@ test "RC loop payload view takes fresh field units of a tag union rebuilt inside
 
     const rc = try arc_solve.computeLocalContainsRefcounted(testing.allocator, &f.store, &f.layouts);
     defer testing.allocator.free(rc);
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, true);
     defer solution.deinit();
     var dismantles = try arc_dismantle.compute(testing.allocator, &f.store, &f.layouts, rc, &solution, .{});
     defer dismantles.deinit();
@@ -14579,18 +13613,6 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .assign_call => |a| cursor = a.next,
             .assign_call_erased => |a| cursor = a.next,
             .assign_packed_erased_fn => |a| cursor = a.next,
-            .assign_boxy_desc_ref => |a| cursor = a.next,
-            .assign_boxy_dict_ref => |a| cursor = a.next,
-            .assign_boxy_box => |a| cursor = a.next,
-            .assign_boxy_record_update => |a| cursor = a.next,
-            .assign_boxy_unbox => |a| cursor = a.next,
-            .assign_boxy_adapt => |a| cursor = a.next,
-            .assign_boxy_inspect => |a| cursor = a.next,
-            .assign_boxy_eq => |a| cursor = a.next,
-            .assign_boxy_hash => |a| cursor = a.next,
-            .assign_boxy_tag => |a| cursor = a.next,
-            .assign_boxy_tag_payload => |a| cursor = a.next,
-            .assign_call_dict => |a| cursor = a.next,
             .assign_low_level => |a| cursor = a.next,
             .assign_list => |a| cursor = a.next,
             .assign_struct => |a| cursor = a.next,
@@ -14607,7 +13629,6 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .boxy_tag_match,
             .join,
             .jump,
             .ret,
@@ -14921,19 +13942,6 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .assign_literal,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_struct,
             .assign_tag,
@@ -14970,19 +13978,6 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_list,
             .assign_struct,
             .assign_tag,
@@ -15513,19 +14508,6 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .store_struct,
             .store_tag,
@@ -15703,7 +14685,7 @@ test "RC outcome restitution spends retained arguments through aliases only on s
             is_rc.* = f.layouts.layoutContainsRefcounted(f.layouts.getLayout(local.layout_idx));
         }
         {
-            var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{caller}, true);
+            var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{caller}, true);
             defer solution.deinit();
             const outcomes = solution.availableOutcomeSpanOf(callee);
             try testing.expectEqual(@as(u32, 2), outcomes.len);
@@ -15898,19 +14880,6 @@ test "RC outcome restitution releases every returned argument before a nested jo
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .store_struct,
             .store_tag,
@@ -15944,19 +14913,6 @@ test "RC outcome restitution releases every returned argument before a nested jo
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .store_struct,
             .store_tag,
@@ -16013,7 +14969,6 @@ test "ARC outcome capability rejects a stale discriminant after return-local reb
         &f.store,
         &f.layouts,
         &rc_local,
-        .{},
         &.{},
         true,
     );
@@ -16086,7 +15041,6 @@ test "ARC outcome capability rejects stale witnesses across set-local and join r
         &f.store,
         &f.layouts,
         rc_local,
-        .{},
         &.{},
         true,
     );
@@ -16436,7 +15390,7 @@ fn outcomeScratchWork(proc_count: usize) (Allocator.Error || error{TestExpectedE
     defer testing.allocator.free(rc);
     for (rc, 0..) |*value, i| value.* = i % 4 != 1;
     const before = arc_solve.outcome_scratch_entries;
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, true);
     defer solution.deinit();
     for (0..proc_count) |i| {
         const span = solution.availableOutcomeSpanOf(@fromBackingInt(@intCast(@as(u32, @intCast(i)))));
@@ -16969,19 +15923,6 @@ test "RC field take restores the exact aggregate field on checked failure withou
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .store_struct,
                 .store_tag,
@@ -17092,7 +16033,6 @@ test "RC field-take demand crosses complete tag payload and wrapper calls" {
 test "RC specialization: caller body survives variant proc append" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
-    f.store.runtime_contract = .boxy;
 
     // Callee returns its string parameter at position 1, so that parameter
     // and return solve borrowed.
@@ -17100,7 +16040,6 @@ test "RC specialization: caller body survives variant proc append" {
     const callee_param = try f.local(.str);
     const callee_ret = try f.ret(callee_param);
     const callee = try f.addProc(&.{ callee_flag, callee_param }, callee_ret, .str);
-    f.store.getProcSpecPtr(callee).runtime_ret_desc = callee_flag;
 
     // Caller builds an owned string and passes it as its final use. The
     // variant turns the borrowed return into an owned return. It is appended
@@ -17128,7 +16067,6 @@ test "RC specialization: caller body survives variant proc append" {
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
-    try testing.expectEqual(callee_flag, f.store.getProcSpecImmediate(variant).runtime_ret_desc.?);
 
     var cursor = f.store.getProcSpecImmediate(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
@@ -17147,19 +16085,6 @@ test "RC specialization: caller body survives variant proc append" {
             .init_uninitialized,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .store_struct,
             .store_tag,
@@ -17804,7 +16729,7 @@ test "RC recursive tail carrier stops at an owned alias" {
     const own = try f.assignRefLocal(owned_alias, original, store);
     f.store.setProcSpecBody(proc, try f.assignStr(original, "still live", own));
     const rc = [_]bool{ true, true, true, true, true, true, false };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, true);
     defer solution.deinit();
     try testing.expect(!solution.isBorrowed(owned_alias));
     try testing.expect(solution.isBorrowed(borrowed_alias));
@@ -17841,7 +16766,7 @@ test "RC borrowed alias transfers its nearest owned carrier" {
     const body = try f.assignStr(original, "still live", own);
     _ = try f.addProc(&.{}, body, .str);
     const rc = [_]bool{ true, true, true, true, true, true, false };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, true);
     defer solution.deinit();
     try testing.expect(!solution.isBorrowed(owned_alias));
     try testing.expect(solution.isBorrowed(borrowed_alias));
@@ -17910,238 +16835,6 @@ test "RC alias into set_local moves the leader unit" {
     const alias_assign = try f.assignRefLocal(alias, value, set_result);
     const body = try f.assignStr(value, "through-set-local", alias_assign);
     _ = try f.addProc(&.{}, body, .str);
-    try f.run();
-    try testing.expectEqual(@as(usize, 0), f.countAllRc());
-}
-
-test "RC releases descriptor-backed old set_local value before immutable replacement" {
-    var f = try ArcTest.init(testing.allocator);
-    f.store.runtime_contract = .boxy;
-    defer f.deinit();
-
-    const desc = try f.local(.opaque_ptr);
-    const current = try f.local(.str);
-    const replacement = try f.local(.str);
-    try f.store.setLocalBoxyDesc(current, .{ .local = desc });
-
-    const ret = try f.ret(current);
-    const set_current = try f.setLocal(current, replacement, .replace_existing, ret);
-    const assign_replacement = try f.assignStr(replacement, "new", set_current);
-    const assign_current = try f.assignStr(current, "old", assign_replacement);
-    const init_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
-        .target = desc,
-        .data = try f.store.addStmtRow(LIR.BoxyDescRefData, .{
-            .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        }),
-        .next = assign_current,
-    } }, .test_fixture);
-    _ = try f.addProc(&.{}, init_desc, .str);
-
-    try f.run();
-    try f.expectReachableDecrefBeforeSet(f.procBody(), current, current);
-}
-
-test "RC descriptor updates scan only the current proc frame" {
-    var f = try ArcTest.init(testing.allocator);
-    f.store.runtime_contract = .boxy;
-    defer f.deinit();
-
-    const unrelated = try f.local(.str);
-    const desc = try f.local(.opaque_ptr);
-    const current = try f.local(.str);
-    const result = try f.local(.i64);
-    try f.store.setLocalBoxyDesc(current, .{ .local = desc });
-
-    const unrelated_ret = try f.ret(unrelated);
-    const unrelated_body = try f.assignStr(unrelated, "other proc", unrelated_ret);
-    _ = try f.store.addProcSpec(.{
-        .name = f.store.freshSyntheticSymbol(),
-        .identity = LIR.ProcIdentity.forTest(13),
-        .args = LIR.LocalSpan.empty(),
-        .body = unrelated_body,
-        .frame_locals = try f.span(&.{unrelated}),
-        .ret_layout = .str,
-    }, .none);
-
-    const ret = try f.ret(result);
-    const assign_result = try f.assignI64(result, 1, ret);
-    const update_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
-        .target = desc,
-        .data = try f.store.addStmtRow(LIR.BoxyDescRefData, .{
-            .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        }),
-        .next = assign_result,
-    } }, .test_fixture);
-    const assign_current = try f.assignStr(current, "old", update_desc);
-    const init_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
-        .target = desc,
-        .data = try f.store.addStmtRow(LIR.BoxyDescRefData, .{
-            .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        }),
-        .next = assign_current,
-    } }, .test_fixture);
-    _ = try f.store.addProcSpec(.{
-        .name = f.store.freshSyntheticSymbol(),
-        .identity = LIR.ProcIdentity.forTest(14),
-        .args = LIR.LocalSpan.empty(),
-        .body = init_desc,
-        .frame_locals = try f.span(&.{ desc, current, result }),
-        .ret_layout = .i64,
-    }, .none);
-
-    try f.run();
-    try f.expectRc(current, 0, 1, 0);
-}
-
-test "RC descriptor snapshot owns an alias across source descriptor reuse" {
-    var f = try ArcTest.init(testing.allocator);
-    f.store.runtime_contract = .boxy;
-    defer f.deinit();
-
-    const source_desc = try f.local(.opaque_ptr);
-    const alias_desc = try f.local(.opaque_ptr);
-    const source = try f.local(.str);
-    const alias = try f.local(.str);
-    const result = try f.local(.i64);
-    try f.store.setLocalBoxyDesc(source, .{ .local = source_desc });
-    try f.store.setLocalBoxyDesc(alias, .{ .local = alias_desc });
-
-    const ret = try f.ret(result);
-    const assign_result = try f.assignI64(result, 1, ret);
-    const use_alias = try f.expectStmt(alias, assign_result);
-    const reuse_source_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
-        .target = source_desc,
-        .data = try f.store.addStmtRow(LIR.BoxyDescRefData, .{
-            .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(1))) },
-        }),
-        .next = use_alias,
-    } }, .test_fixture);
-    const assign_alias = try f.assignRefLocal(alias, source, reuse_source_desc);
-    const snapshot_desc = try f.setLocal(alias_desc, source_desc, .replace_existing, assign_alias);
-    const assign_source = try f.assignStr(source, "old", snapshot_desc);
-    const init_source_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
-        .target = source_desc,
-        .data = try f.store.addStmtRow(LIR.BoxyDescRefData, .{
-            .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        }),
-        .next = assign_source,
-    } }, .test_fixture);
-    _ = try f.addProc(&.{}, init_source_desc, .i64);
-
-    try f.run();
-    try f.expectRc(source, 0, 0, 0);
-    try f.expectRc(alias, 0, 1, 0);
-}
-
-test "RC preserves a surviving source before a consuming boxy adapter" {
-    var f = try ArcTest.init(testing.allocator);
-    f.store.runtime_contract = .boxy;
-    defer f.deinit();
-
-    const source = try f.local(f.list_i64);
-    const adapted = try f.local(f.list_i64);
-    const result = try f.local(.i64);
-    const desc = LIR.BoxyDescRef{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) };
-    try f.store.setLocalBoxyDesc(source, desc);
-    try f.store.setLocalBoxyDesc(adapted, desc);
-
-    const ret = try f.ret(result);
-    const assign_result = try f.assignI64(result, 1, ret);
-    const use_source = try f.expectStmt(source, assign_result);
-    const adapt = try f.store.addCFStmt(.{ .assign_boxy_adapt = .{
-        .target = adapted,
-        .data = try f.store.addStmtRow(LIR.BoxyAdaptData, .{
-            .source = source,
-            .adapter = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-            .source_desc = desc,
-            .target_desc = desc,
-            .source_mode = .move,
-        }),
-        .next = use_source,
-    } }, .test_fixture);
-    const body = try f.assignList(source, &.{}, adapt);
-    _ = try f.addProc(&.{}, body, .i64);
-
-    // Certification verifies that the retain precedes the consuming move.
-    try f.run();
-    try f.expectRc(source, 1, 1, 0);
-    try f.expectRc(adapted, 0, 1, 0);
-}
-
-test "RC descriptor-bearing tag aliases and aggregates follow their committed layout" {
-    for ([_]layout_mod.Idx{ .i64, .str }) |payload_layout| {
-        var f = try ArcTest.init(testing.allocator);
-        f.store.runtime_contract = .boxy;
-        defer f.deinit();
-
-        const tag_layout = try f.layouts.putTagUnion(&.{ .zst, payload_layout });
-        const record_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = tag_layout }});
-        const payload = try f.local(payload_layout);
-        const tag = try f.local(tag_layout);
-        const alias = try f.local(tag_layout);
-        const record = try f.local(record_layout);
-        const result = try f.local(.i64);
-        const ret = try f.ret(result);
-        const result_stmt = try f.assignI64(result, 0, ret);
-        const record_stmt = try f.assignStruct(record, &.{alias}, result_stmt);
-        const alias_stmt = try f.assignRefLocal(alias, tag, record_stmt);
-        const tag_stmt = try f.store.addCFStmt(.{ .assign_tag = .{
-            .target = tag,
-            .target_desc = try f.store.addStmtRowIfPresent(LIR.BoxyDescRef, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) }),
-            .variant_index = 1,
-            .discriminant = 1,
-            .payload = payload,
-            .next = alias_stmt,
-        } }, .test_fixture);
-        _ = try f.addProc(&.{payload}, tag_stmt, .i64);
-
-        // Certification checks the owning side too: a descriptor must neither
-        // invent a scalar resource nor hide the string stored in the record.
-        try f.run();
-        if (payload_layout == .i64) {
-            try testing.expectEqual(@as(usize, 0), f.countAllRc());
-        } else {
-            try testing.expect(f.countAllRc() > 0);
-        }
-    }
-}
-
-test "RC does not treat a descriptor-bearing scalar dictionary result as refcounted" {
-    var f = try ArcTest.init(testing.allocator);
-    f.store.runtime_contract = .boxy;
-    defer f.deinit();
-
-    const desc = LIR.BoxyDescRef{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) };
-    const result = try f.local(.u32);
-    const adapted = try f.local(.u32);
-    try f.store.setLocalBoxyDesc(result, desc);
-    try f.store.setLocalBoxyDesc(adapted, desc);
-
-    const ret = try f.ret(result);
-    const adapt = try f.store.addCFStmt(.{ .assign_boxy_adapt = .{
-        .target = adapted,
-        .data = try f.store.addStmtRow(LIR.BoxyAdaptData, .{
-            .source = result,
-            .adapter = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-            .source_desc = desc,
-            .target_desc = desc,
-            .source_mode = .move,
-        }),
-        .next = ret,
-    } }, .test_fixture);
-    const body = try f.store.addCFStmt(.{ .assign_call_dict = .{
-        .target = result,
-        .data = try f.store.addStmtRow(LIR.CallDictData, .{
-            .dict = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-            .method = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-            .method_slot = 0,
-            .args = .empty(),
-            .result_desc = desc,
-        }),
-        .next = adapt,
-    } }, .test_fixture);
-    _ = try f.addProc(&.{}, body, .u32);
-
     try f.run();
     try testing.expectEqual(@as(usize, 0), f.countAllRc());
 }

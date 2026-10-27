@@ -20,9 +20,6 @@ const CompileTimeFinalization = @import("compile_time_finalization.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
 const RuntimeHostEnv = @import("runtime_host.zig");
 const object_image = @import("object_image.zig");
-const boxy_abi = @import("boxy_abi.zig");
-const boxy_runtime = @import("boxy_runtime.zig");
-const BoxyNativeFnTable = boxy_abi.BoxyNativeFnTable;
 const InspectedRun = @import("inspected_run.zig");
 
 const Allocator = std.mem.Allocator;
@@ -400,7 +397,6 @@ pub const RuntimeStaticData = struct {
 pub const BoolRootModule = struct {
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
-    tables: boxy_runtime.BoxyTables,
     /// Bytes the program's erased callables reserve before their captures
     /// (`LirProgram.Result.erased_capture_prefix`).
     erased_capture_prefix: u32,
@@ -1200,7 +1196,6 @@ pub fn devEvalTopLevelExpects(
     const batch = try devEvalBoolRootModule(allocator, .{
         .store = &lowered.lir_result.store,
         .layouts = &lowered.lir_result.layouts,
-        .tables = boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
         .erased_capture_prefix = lowered.lir_result.erased_capture_prefix,
         .roots = roots,
         .expect_site_count = lowered.lir_result.expect_sites.items.len,
@@ -2290,11 +2285,6 @@ fn copyRuntimeHostEvents(allocator: Allocator, runtime_env: *const RuntimeHostEn
     return events;
 }
 
-/// Native addresses of the Boxy runtime wrappers consumed by generated code.
-fn boxyNativeFnTable() BoxyNativeFnTable {
-    return boxy_abi.nativeFnTable();
-}
-
 /// Execute an explicit root module and its completed immutable value graph.
 pub fn devEvalBoolRootModule(allocator: Allocator, module: BoolRootModule, timing: ?*DevBoolRootTiming, max_workers: ?usize) Error!BoolRootEvalBatch {
     return devEvalSharedBoolRootModules(allocator, &.{module}, timing, max_workers);
@@ -2306,7 +2296,6 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
     const module = modules[0];
     const store = module.store;
     const layouts = module.layouts;
-    const tables = module.tables;
     var root_count: usize = 0;
     var expect_site_count: usize = 0;
     for (modules) |partition| {
@@ -2349,24 +2338,16 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
         defer allocator.free(static_addresses);
 
         const codegen_setup_started_ns = if (timing) |timings| timings.start() else 0;
-        var codegen = try HostLirCodeGen.initWithBoxyMetadata(
+        var codegen = try HostLirCodeGen.initWithCapturePrefix(
             allocator,
             store,
             layouts,
             static_strings.view(),
-            tables.erased_arg_desc_offsets,
-            tables.erased_arg_desc_params,
-            tables.worker_procs,
             module.erased_capture_prefix,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
         codegen.setNativeStaticData(static_addresses);
-        // Worker threads read this table through the codegen'd code while the
-        // parallel run below is still in flight, so it must stay alive until
-        // this function returns.
-        var native_fns: ?boxy_abi.BoxyNativeFnTable = if (store.runtime_contract == .boxy) boxyNativeFnTable() else null;
-        codegen.boxy_native_fns = if (native_fns) |*table| table else null;
         if (timing) |timings| timings.finish(codegen_setup_started_ns, .codegen_setup);
 
         const procedure_codegen_started_ns = if (timing) |timings| timings.start() else 0;
@@ -2446,7 +2427,6 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
                 calls[i] = .{
                     .store = store,
                     .layouts = layouts,
-                    .tables = tables,
                     .target = .{ .dev = .{ .executable = &executable, .entry_offset = entry_offsets[i] } },
                     .root = root,
                     .expect_site_count = partition.expect_site_count,
@@ -2474,8 +2454,6 @@ fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsiz
 fn callBoolRoot(
     allocator: Allocator,
     layouts: *const LayoutStore,
-    store: *const lir.LirStore,
-    tables: boxy_runtime.BoxyTables,
     target: BoolRootCallTarget,
     root: BoolRoot,
     call_index: usize,
@@ -2499,18 +2477,6 @@ fn callBoolRoot(
     runtime_env.resetObservation();
     runtime_env.resetAllocationTracker();
     runtime_env.setExpectCounters(expect_passed, expect_failed);
-    const boxy_runtime_instance = if (boxy_runtime.storeNeedsRuntime(store))
-        try boxy_abi.createRuntimeFromStores(allocator, store, layouts, tables, runtime_env.get_ops())
-    else
-        null;
-    defer if (boxy_runtime_instance) |instance| boxy_abi.deinitRuntime(instance);
-    const previous_boxy_runtime = if (boxy_runtime_instance) |instance|
-        boxy_abi.swapActiveRuntime(instance)
-    else
-        null;
-    defer {
-        if (boxy_runtime_instance != null) _ = boxy_abi.swapActiveRuntime(previous_boxy_runtime);
-    }
 
     const arg_buffer = try InspectedRun.zeroedEntrypointArgBuffer(allocator, layouts, root.arg_layouts);
     defer if (arg_buffer) |buf| allocator.free(buf);
@@ -2594,7 +2560,6 @@ const BoolRootCallTarget = union(enum) {
 const BoolRootCall = struct {
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
-    tables: boxy_runtime.BoxyTables,
     target: BoolRootCallTarget,
     root: BoolRoot,
     expect_site_base: usize = 0,
@@ -2637,8 +2602,6 @@ fn boolRootWorker(args: *BoolRootWorkerArgs) void {
         state.results[index] = callBoolRoot(
             state.allocator,
             call.layouts,
-            call.store,
-            call.tables,
             call.target,
             call.root,
             index,
@@ -2776,7 +2739,6 @@ pub fn llvmEvalBoolRootsWithExpectSites(
     allocator: Allocator,
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
-    tables: boxy_runtime.BoxyTables,
     erased_capture_prefix: u32,
     roots: []const BoolRoot,
     expect_site_count: usize,
@@ -2785,7 +2747,6 @@ pub fn llvmEvalBoolRootsWithExpectSites(
     const modules = [_]BoolRootModule{.{
         .store = store,
         .layouts = layouts,
-        .tables = tables,
         .erased_capture_prefix = erased_capture_prefix,
         .roots = roots,
         .expect_site_count = expect_site_count,
@@ -2816,7 +2777,7 @@ fn validateSharedBoolRootModules(modules: []const BoolRootModule) Error!void {
     const program = modules[0];
     for (modules[1..]) |module| {
         if (module.store != program.store or module.layouts != program.layouts or
-            !std.meta.eql(module.tables, program.tables) or module.erased_capture_prefix != program.erased_capture_prefix or
+            module.erased_capture_prefix != program.erased_capture_prefix or
             !std.meta.eql(module.static_data, program.static_data))
             return error.Internal;
     }
@@ -2892,13 +2853,7 @@ pub fn llvmEvalBoolRootModules(
     }
 
     for (programs, 0..) |module, module_index| {
-        var codegen = llvm_compile.MonoLlvmCodeGen.init(
-            allocator,
-            module.store,
-            module.tables.erased_arg_desc_offsets,
-            module.tables.erased_arg_desc_params,
-            module.tables.worker_procs,
-        );
+        var codegen = llvm_compile.MonoLlvmCodeGen.init(allocator, module.store);
         codegen.layout_store = module.layouts;
         codegen.static_data_addresses = addresses[module_index];
         codegen.proc_symbol_mode = .lir_symbol;
@@ -2945,7 +2900,7 @@ pub fn llvmEvalBoolRootModules(
     );
     defer allocator.free(object_bytes);
 
-    var lib = object_image.load(allocator, object_bytes, modules[0].store.runtime_contract) catch |err| switch (err) {
+    var lib = object_image.load(allocator, object_bytes) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedObject,
         error.MalformedObject,
@@ -2990,7 +2945,6 @@ pub fn llvmEvalBoolRootModules(
             calls[call_index] = .{
                 .store = module.store,
                 .layouts = module.layouts,
-                .tables = module.tables,
                 .target = .{ .llvm = lib.lookup(LlvmBoolRootEntryFn, root.symbol_name) orelse return error.LlvmBackendUnavailable },
                 .root = root,
                 .expect_site_base = expect_site_base,
@@ -3025,12 +2979,9 @@ pub fn inspectedRunResult(allocator: Allocator, comptime backend_kind: Inspected
     return try InspectedRun.run(allocator, backend_kind, .{
         .store = &lowered.view.store,
         .layouts = &lowered.view.layouts,
-        .boxy_tables = boxy_runtime.BoxyTables.fromImageView(&lowered.view),
         // An image's program reserves no capture prefix; writing the image
         // checks that.
         .erased_capture_prefix = 0,
-        .boxy_sidecar_blob = lowered.shm.base_ptr[0..lowered.shm.getUsedSize()],
-        .boxy_sidecar_desc = LirImage.BoxySidecar.fromHeader(lowered.image_header),
         .main_proc = lowered.mainProc(),
         .static_data = lowered.view.static_data,
         .static_data_value_count = lowered.view.static_data_value_count,
@@ -3097,11 +3048,10 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
     var static_strings = try Interpreter.buildStaticStrings(allocator, &lowered.view.store);
     defer static_strings.deinit();
 
-    var interp = try Interpreter.initWithBoxyTables(
+    var interp = try Interpreter.init(
         allocator,
         &lowered.view.store,
         &lowered.view.layouts,
-        boxy_runtime.BoxyTables.fromImageView(&lowered.view),
         static_strings.view(),
         runtime_env.get_ops(),
     );
@@ -3217,12 +3167,9 @@ fn wasmProgram(lowered: *const LoweredProgram) InspectedRun.Program {
     return .{
         .store = &lowered.view.store,
         .layouts = &lowered.view.layouts,
-        .boxy_tables = boxy_runtime.BoxyTables.fromImageView(&lowered.view),
         // An image's program reserves no capture prefix; writing the image
         // checks that.
         .erased_capture_prefix = 0,
-        .boxy_sidecar_blob = lowered.shm.base_ptr[0..lowered.shm.getUsedSize()],
-        .boxy_sidecar_desc = LirImage.BoxySidecar.fromHeader(lowered.image_header),
         .main_proc = lowered.mainProc(),
         .static_data = lowered.view.static_data,
         .static_data_value_count = lowered.view.static_data_value_count,

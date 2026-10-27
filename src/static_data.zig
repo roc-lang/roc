@@ -391,7 +391,7 @@ const StaticInitializerMachine = struct {
                         {
                             if (try self.readyStatic(dependency.id) == null) return dependency.id;
                         },
-                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bytes_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .proc_ref => {},
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bytes_literal, .proc_ref => {},
                     }
                     break :blk assign.next;
                 },
@@ -407,19 +407,6 @@ const StaticInitializerMachine = struct {
                 .init_uninitialized,
                 .assign_call,
                 .assign_call_erased,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .store_struct,
                 .store_tag,
                 .debug,
@@ -521,7 +508,7 @@ const StaticInitializerMachine = struct {
             .list => |list| {
                 const elem_plan = switch (plans[@backingInt(request.plan)]) {
                     .list => |elem| elem,
-                    .pending, .layout_only, .zst, .scalar, .str, .box, .boxy_box, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn => staticDataInvariant("stored list had a non-list const plan"),
+                    .pending, .layout_only, .zst, .scalar, .str, .box, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn => staticDataInvariant("stored list had a non-list const plan"),
                 };
                 switch (list) {
                     .empty => return try self.rememberStored(key, try self.storedListValue(request.layout_idx, 0, null)),
@@ -538,7 +525,7 @@ const StaticInitializerMachine = struct {
             .box => |payload| {
                 const payload_plan = switch (plans[@backingInt(request.plan)]) {
                     .box => |boxed| boxed,
-                    .pending, .layout_only, .zst, .scalar, .str, .list, .boxy_box, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn => staticDataInvariant("stored box had a non-box const plan"),
+                    .pending, .layout_only, .zst, .scalar, .str, .list, .tuple, .record, .tag_union, .named, .fn_value, .erased_fn => staticDataInvariant("stored box had a non-box const plan"),
                 };
                 if (self.layoutValue(request.layout_idx).tag == .box_of_zst) return try self.rememberStored(key, try self.newValue(request.layout_idx));
                 const abi = self.layouts().builtinBoxAbi(request.layout_idx);
@@ -550,7 +537,7 @@ const StaticInitializerMachine = struct {
             .tuple, .record => |items| {
                 const item_plans = switch (plans[@backingInt(request.plan)]) {
                     .tuple, .record => |item_plans| item_plans,
-                    .pending, .layout_only, .zst, .scalar, .str, .list, .box, .boxy_box, .tag_union, .named, .fn_value, .erased_fn => staticDataInvariant("stored product had a non-product const plan"),
+                    .pending, .layout_only, .zst, .scalar, .str, .list, .box, .tag_union, .named, .fn_value, .erased_fn => staticDataInvariant("stored product had a non-product const plan"),
                 };
                 if (item_plans.len != items.len) staticDataInvariant("stored product arity differed from its const plan");
                 const base_layout = self.aggregateBaseLayout(request.layout_idx);
@@ -565,7 +552,7 @@ const StaticInitializerMachine = struct {
             .tag => |tag| {
                 const variants = switch (plans[@backingInt(request.plan)]) {
                     .tag_union => |variants| variants,
-                    .pending, .layout_only, .zst, .scalar, .str, .list, .box, .boxy_box, .tuple, .record, .named, .fn_value, .erased_fn => staticDataInvariant("stored tag had a non-tag-union const plan"),
+                    .pending, .layout_only, .zst, .scalar, .str, .list, .box, .tuple, .record, .named, .fn_value, .erased_fn => staticDataInvariant("stored tag had a non-tag-union const plan"),
                 };
                 const variant = for (variants) |candidate| {
                     if (std.mem.eql(u8, candidate.name, tag.tag_name)) break candidate;
@@ -609,7 +596,7 @@ const StaticInitializerMachine = struct {
                     request.plan = named.backing;
                     changed = true;
                 },
-                .pending, .layout_only, .zst, .scalar, .str, .list, .box, .boxy_box, .tuple, .record, .tag_union, .fn_value, .erased_fn => {},
+                .pending, .layout_only, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag_union, .fn_value, .erased_fn => {},
             }
             if (!changed) return request;
         }
@@ -695,7 +682,7 @@ const StaticInitializerMachine = struct {
         const value = self.layoutValue(layout_idx);
         return switch (value.tag) {
             .box => self.layoutValue(self.layouts().builtinBoxAbi(layout_idx).elem_layout_idx orelse .zst),
-            .zst, .box_of_zst, .struct_, .scalar, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .ptr, .tag_union => value,
+            .zst, .box_of_zst, .struct_, .scalar, .list, .list_of_zst, .closure, .erased_callable, .ptr, .tag_union => value,
             .hole => staticDataInvariant("a demand hole reached static data"),
         };
     }
@@ -704,7 +691,7 @@ const StaticInitializerMachine = struct {
         return switch (base_layout.tag) {
             .struct_ => self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, @intCast(index)),
             .zst, .box_of_zst => .zst,
-            .box, .scalar, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .ptr, .tag_union => staticDataInvariant("stored product had a non-struct layout"),
+            .box, .scalar, .list, .list_of_zst, .closure, .erased_callable, .ptr, .tag_union => staticDataInvariant("stored product had a non-struct layout"),
             .hole => staticDataInvariant("a demand hole reached static data"),
         };
     }
@@ -902,19 +889,6 @@ const StaticInitializerMachine = struct {
                 .init_uninitialized,
                 .assign_call,
                 .assign_call_erased,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .store_struct,
                 .store_tag,
                 .debug,
@@ -972,9 +946,6 @@ const StaticInitializerMachine = struct {
             .str_literal => |str| return try self.evalStr(str, target_layout),
             .static_data => |read| return try self.cloneValueAs(try self.evaluateStatic(read.id), target_layout),
             .bytes_literal => |list| return try self.evalBytes(list, target_layout),
-            .boxy_dynamic_num_literal,
-            .boxy_dynamic_frac_literal,
-            => staticDataInvariant("descriptor-dependent Boxy literal reached target static initializer"),
             .proc_ref => |proc| try value.relocations.append(self.allocator(), .{
                 .offset = 0,
                 .target = .{ .procedure = proc },
@@ -1258,7 +1229,6 @@ const StaticInitializerMachine = struct {
                 break :blk .{ .outer = value, .base = value, .base_layout = target_layout };
             },
             .scalar,
-            .erased_box,
             .list,
             .list_of_zst,
             .closure,
@@ -1311,7 +1281,6 @@ const StaticInitializerMachine = struct {
             .box => self.layoutValue(self.layouts().builtinBoxAbi(union_layout).elem_layout_idx orelse .zst),
             .scalar,
             .box_of_zst,
-            .erased_box,
             .list,
             .list_of_zst,
             .struct_,
@@ -1427,7 +1396,6 @@ const StaticInitializerMachine = struct {
                     .kind = .function_pointer,
                 });
             },
-            .boxy_capture => staticDataInvariant("descriptor-dependent Boxy capture drop reached target static initializer"),
         }
         if (assign.capture) |capture_local| {
             const capture_layout = assign.capture_layout orelse

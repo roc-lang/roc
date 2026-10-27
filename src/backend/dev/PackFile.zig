@@ -23,7 +23,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 13;
+pub const format_version: u32 = 14;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -107,13 +107,9 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
                 try writer.byte(1);
                 try writer.str(name);
             },
-            .boxy_thunk => |identity| {
-                try writer.byte(2);
-                try writer.raw(&identity.bytes);
-            },
-            .entrypoint => try writer.byte(3),
-            .message_pool_run => try writer.byte(4),
-            .branch_island => try writer.byte(5),
+            .entrypoint => try writer.byte(2),
+            .message_pool_run => try writer.byte(3),
+            .branch_island => try writer.byte(4),
         }
         try writer.word(artifact.entry);
         if (artifact.frame) |frame| {
@@ -157,10 +153,6 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
                 .rc_helper => |name| {
                     try writer.byte(1);
                     try writer.str(name);
-                },
-                .boxy_thunk => |identity| {
-                    try writer.byte(2);
-                    try writer.raw(&identity.bytes);
                 },
             }
         }
@@ -232,21 +224,6 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
             const scope: ProcArtifact.SymbolScope = if (names.renames(relocation.name)) .shared else relocation.scope;
             try writer.byte(@backingInt(scope));
         }
-        try writer.word(@intCast(artifact.runtime_refs.len));
-        for (artifact.runtime_refs) |runtime_ref| {
-            try writer.word(runtime_ref.site);
-            switch (runtime_ref.ref) {
-                .layout => |idx| {
-                    try writer.byte(0);
-                    try writer.word(idx);
-                },
-                .erased_arg_layouts => |span| {
-                    try writer.byte(1);
-                    try writer.word(span.start);
-                    try writer.word(span.len);
-                },
-            }
-        }
         try writer.word(@intCast(artifact.data.len));
         for (artifact.data) |item| {
             try writer.str(names.of(item.name));
@@ -304,10 +281,9 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
         const kind: ProcArtifact.Kind = switch (try reader.byte()) {
             0 => .{ .proc = .{ .bytes = (try reader.raw(32))[0..32].* } },
             1 => .{ .rc_helper = try reader.str() },
-            2 => .{ .boxy_thunk = .{ .bytes = (try reader.raw(32))[0..32].* } },
-            3 => .entrypoint,
-            4 => .message_pool_run,
-            5 => .branch_island,
+            2 => .entrypoint,
+            3 => .message_pool_run,
+            4 => .branch_island,
             else => return error.MalformedPack,
         };
         const entry = try reader.word();
@@ -363,7 +339,6 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
                 .target = switch (try reader.byte()) {
                     0 => .{ .proc = .{ .bytes = (try reader.raw(32))[0..32].* } },
                     1 => .{ .rc_helper = try reader.str() },
-                    2 => .{ .boxy_thunk = .{ .bytes = (try reader.raw(32))[0..32].* } },
                     else => return error.MalformedPack,
                 },
             };
@@ -427,15 +402,6 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
                 },
             };
         }
-        const runtime_refs = try arena_allocator.alloc(ProcArtifact.RuntimeReference, try reader.word());
-        for (runtime_refs) |*runtime_ref| {
-            const site = try reader.word();
-            runtime_ref.* = .{ .site = site, .ref = switch (try reader.byte()) {
-                0 => .{ .layout = try reader.word() },
-                1 => .{ .erased_arg_layouts = .{ .start = try reader.word(), .len = try reader.word() } },
-                else => return error.MalformedPack,
-            } };
-        }
         const data = try arena_allocator.alloc(ProcArtifact.DataItem, try reader.word());
         for (data) |*item| {
             const name = try reader.str();
@@ -482,7 +448,6 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
             .lines = lines,
             .failure_sites = failure_sites,
             .relocations = relocations,
-            .runtime_refs = runtime_refs,
             .data = data,
             .loc = loc,
         };
@@ -817,7 +782,6 @@ test "pack bytes round-trip every artifact field and spec entry" {
             .symbolic_refs = &.{
                 .{ .site = 0, .form = .call, .target = .{ .proc = lir.ProcIdentity.forTest(8) } },
                 .{ .site = 1, .form = .call, .veneer = 4, .target = .{ .rc_helper = "roc__rc_later" } },
-                .{ .site = 2, .form = .addr, .target = .{ .boxy_thunk = lir.ProcIdentity.forTest(9) } },
             },
             .lines = &.{
                 .{ .offset = 0, .loc = .{ .file = 3, .line = 42, .column = 7 }, .region = base.Region.zero() },
@@ -896,7 +860,7 @@ test "pack bytes round-trip every artifact field and spec entry" {
     try testing.expectEqualSlices(u8, &lir.ProcIdentity.forTest(7).bytes, &proc.kind.proc.bytes);
     try testing.expectEqualSlices(u8, artifacts[0].code, proc.code);
     try testing.expectEqual(@as(usize, 2), proc.refs.len);
-    try testing.expectEqual(@as(usize, 3), proc.symbolic_refs.len);
+    try testing.expectEqual(@as(usize, 2), proc.symbolic_refs.len);
     try testing.expectEqualDeep(artifacts[0].symbolic_refs, proc.symbolic_refs);
     try testing.expectEqual(artifacts[0].lines.len, proc.lines.len);
     for (artifacts[0].lines, proc.lines) |written, read_back| {

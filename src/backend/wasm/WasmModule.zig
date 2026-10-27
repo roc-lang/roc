@@ -2378,24 +2378,6 @@ pub fn verifyNoBuiltinImports(self: *const Self) error{UnresolvedBuiltinImport}!
     }
 }
 
-/// Verify that a relocatable object's undefined function symbols contain no
-/// references in an explicitly owned ABI namespace. Resolved symbols can leave
-/// dead import entries until the final linker compacts function indices, so
-/// symbol state—not the raw import list—is the correctness boundary for an
-/// object.
-pub fn verifyNoUndefinedFunctionSymbolsInNamespace(
-    self: *const Self,
-    namespace: []const u8,
-) error{UnresolvedBuiltinImport}!void {
-    for (self.linking.symbol_table.items) |sym| {
-        if (sym.kind != .function or !sym.isUndefined()) continue;
-        const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
-        if (std.mem.startsWith(u8, name, namespace)) {
-            return error.UnresolvedBuiltinImport;
-        }
-    }
-}
-
 fn isAllowedBuiltinImport(name: []const u8) bool {
     const allowed = shim_symbols.runtime_set ++ [_][:0]const u8{"roc_panic"};
     for (allowed) |allowed_name| {
@@ -6460,23 +6442,6 @@ test "verifyNoBuiltinImports—allows roc_panic platform import" {
     _ = try module.addImport("env", "roc_panic", 0);
 
     try module.verifyNoBuiltinImports();
-}
-
-test "verifyNoUndefinedFunctionSymbolsInNamespace—uses relocatable symbol resolution state" {
-    const allocator = std.testing.allocator;
-    var module = Self.init(allocator);
-    defer module.deinit();
-
-    const type_idx = try module.addFuncType(&.{}, &.{});
-    const imported = try module.addFunctionImportWithSymbol("env", "roc_boxy_register_proc", type_idx);
-    try std.testing.expectError(
-        error.UnresolvedBuiltinImport,
-        module.verifyNoUndefinedFunctionSymbolsInNamespace("roc_boxy_"),
-    );
-
-    const symbol = &module.linking.symbol_table.items[imported.symbol.raw()];
-    symbol.flags &= ~WasmLinking.SymFlag.UNDEFINED;
-    try module.verifyNoUndefinedFunctionSymbolsInNamespace("roc_boxy_");
 }
 
 test "sealRocObject keeps only provides global and localizes compiler support" {

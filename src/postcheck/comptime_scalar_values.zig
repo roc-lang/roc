@@ -568,7 +568,7 @@ pub const Decoder = struct {
                 },
                 .tuple, .record => |child_plans| try self.decodeRecord(current.bytes, current.offset, child_plans, value_layout),
                 .tag_union => |variants| try self.decodeTag(current.bytes, current.offset, variants, current.layout_idx),
-                .pending, .layout_only, .box, .boxy_box, .fn_value, .erased_fn => .{ .done = null },
+                .pending, .layout_only, .box, .fn_value, .erased_fn => .{ .done = null },
             };
         }
     }
@@ -585,7 +585,7 @@ pub const Decoder = struct {
         while (plan == .named) plan = self.program.const_plans.items[@backingInt(plan.named.backing)];
         switch (plan) {
             .str => {},
-            .zst, .scalar, .list, .named, .tuple, .record, .tag_union, .pending, .layout_only, .box, .boxy_box, .fn_value, .erased_fn => return null,
+            .zst, .scalar, .list, .named, .tuple, .record, .tag_union, .pending, .layout_only, .box, .fn_value, .erased_fn => return null,
         }
         if (layout_idx != .str) return null;
         const size = self.word();
@@ -668,7 +668,7 @@ pub const Decoder = struct {
         while (plan == .named) plan = self.program.const_plans.items[@backingInt(plan.named.backing)];
         const element_plan = switch (plan) {
             .list => |element_plan| element_plan,
-            .zst, .scalar, .str, .named, .tuple, .record, .tag_union, .pending, .layout_only, .box, .boxy_box, .fn_value, .erased_fn => return null,
+            .zst, .scalar, .str, .named, .tuple, .record, .tag_union, .pending, .layout_only, .box, .fn_value, .erased_fn => return null,
         };
         const value_layout = self.program.layouts.getLayout(layout_idx);
         if (value_layout.tag != .list) return null;

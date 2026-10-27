@@ -31,8 +31,8 @@ const CheckedStringLiteralId = checked_ids.CheckedStringLiteralId;
 const PatternBinderId = checked_ids.PatternBinderId;
 const DispatchScopeId = checked_ids.DispatchScopeId;
 
-/// Shared policy for checked evidence publication and Boxy's dictionary
-/// inventory. Quote and interpolation conversion evidence carries its method
+/// Shared policy for checked evidence publication and runtime dictionary
+/// requirements. Quote and interpolation conversion evidence carries its method
 /// implementation even when the constraint originated at a literal.
 pub fn requiresRuntimeDictionary(origin: types.StaticDispatchConstraint.Origin) bool {
     return if (origin.literalKind()) |kind| switch (kind) {
@@ -1619,7 +1619,7 @@ pub const CheckedEvidence = struct {
     resolution: Resolution,
     /// Whether this obligation is represented by a runtime dictionary slot.
     /// Literal-defaulting constraints remain in canonical evidence vectors for
-    /// specialization, but do not become Boxy dictionary requirements.
+    /// specialization, but do not become runtime dictionary requirements.
     runtime_dictionary: bool,
     /// Independent callable contracts in `evidence_refs`, sharing one target slot.
     callable_contracts: artifact_serialize.Span = .{},

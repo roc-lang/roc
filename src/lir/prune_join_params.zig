@@ -23,8 +23,7 @@
 //! the next round, so the pass repeats until no parameter qualifies.
 //!
 //! A parameter is never removed when anything reads it outside an operand
-//! position: a join's retained or maybe-uninitialized lists, or another local's
-//! descriptor. A procedure argument that is also a join parameter is defined by
+//! position: a join's retained or maybe-uninitialized lists. A procedure argument that is also a join parameter is defined by
 //! the call as well as by its writes, so it is never removed either.
 
 const std = @import("std");
@@ -130,33 +129,19 @@ const Pass = struct {
                     for (0..params.len) |index| {
                         const param = GuardedList.at(params, index);
                         try self.params.put(param, {});
-                        try self.pinDescriptor(param);
                     }
                     const extra = store.stmtRowOrDefault(join.extra);
                     try self.pinSpan(extra.retained);
                     try self.pinSpan(extra.maybe_uninitialized_params);
                     try self.pinSpan(extra.maybe_uninitialized_conditions);
                 },
-                .set_local => |set| try self.pinDescriptor(set.target),
+                .set_local => {},
                 .init_uninitialized,
                 .assign_ref,
                 .assign_literal,
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -266,17 +251,6 @@ const Pass = struct {
 
     fn pinDefinition(self: *Pass, local: LocalId) Allocator.Error!void {
         try self.pinned.put(local, {});
-        try self.pinDescriptor(local);
-    }
-
-    /// A local's descriptor reads the descriptor local wherever the local is
-    /// used, so a parameter serving as a descriptor is never unread.
-    fn pinDescriptor(self: *Pass, local: LocalId) Allocator.Error!void {
-        const desc = self.store.getLocal(local).boxy_desc orelse return;
-        if (desc.localOrNull()) |desc_local| {
-            try self.pinned.put(desc_local, {});
-            try self.observed.put(desc_local, {});
-        }
     }
 };
 
@@ -302,27 +276,14 @@ fn pureNext(stmt: LIR.CFStmt) ?CFStmtId {
         .assign_ref => |assign| assign.next,
         .assign_literal => |assign| assign.next,
         .assign_list => |assign| assign.next,
-        .assign_struct => |assign| if (assign.contents_desc == .none) assign.next else null,
-        .assign_tag => |assign| if (assign.target_desc == .none) assign.next else null,
+        .assign_struct => |assign| assign.next,
+        .assign_tag => |assign| assign.next,
         .init_uninitialized,
         .set_local,
         .join,
         .assign_call,
         .assign_call_erased,
         .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_record_update,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_hash,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .boxy_tag_match,
-        .assign_call_dict,
         .assign_low_level,
         .store_struct,
         .store_tag,

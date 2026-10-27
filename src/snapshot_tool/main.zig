@@ -3963,9 +3963,6 @@ fn processDevObjectSnapshot(
                 entrypoints,
                 static_data_exports,
                 lowered.lir_result.store.getProcSpecs(),
-                lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-                lowered.lir_result.boxy_erased_arg_desc_params.items,
-                lowered.lir_result.boxy_worker_procs.items,
                 target,
             )) |result| {
                 var hasher = Blake3.init(.{});

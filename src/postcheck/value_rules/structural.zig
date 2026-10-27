@@ -20,9 +20,8 @@
 //!   zero-sized union) equals every value of its type and hashes nothing.
 //!
 //! `EqLower` and `HashLower` realize those rules as LIR, built from each
-//! comparison's continuation backward, for the direct solved-to-LIR lowering
-//! and Boxy lowering. `EqEval` and `HashEval` realize them over runtime values
-//! for the Boxy runtime's descriptor-driven equality and hashing.
+//! comparison's continuation backward, for the direct solved-to-LIR lowering.
+//! `EqEval` and `HashEval` realize them over runtime values.
 
 const std = @import("std");
 

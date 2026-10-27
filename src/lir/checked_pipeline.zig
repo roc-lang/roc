@@ -46,33 +46,45 @@ const checked = check.CheckedModule;
 /// Committed ordinary-data layouts for checked source ABI requests.
 pub const CheckedAbiLayouts = struct {
     allocator: Allocator,
-    layouts: @import("layout").Store,
+    lowered: LoweredProgram,
     roots: []const @import("layout").Idx,
+
+    /// The layout store every root layout belongs to.
+    pub fn layouts(self: *CheckedAbiLayouts) *@import("layout").Store {
+        return &self.lowered.lir_result.layouts;
+    }
 
     pub fn deinit(self: *CheckedAbiLayouts) void {
         self.allocator.free(self.roots);
-        self.layouts.deinit();
+        self.lowered.deinit();
     }
 };
 
-/// Resolve public data layouts without running procedure specialization or LIR
-/// lowering. Requests and results have the same order and share one layout store.
+/// Resolve public data layouts for checked source ABI requests. Requests and
+/// results have the same order and share one layout store. Every ABI fact a
+/// caller reads is an explicit width query, so `target_usize` only sizes the
+/// store.
 pub fn resolveCheckedAbiLayouts(
     allocator: Allocator,
     modules: CheckedModuleSet,
     requests: []const checked.CheckedTypeId,
     target_usize: base.target.TargetUsize,
-) Allocator.Error!CheckedAbiLayouts {
-    var plan = try postcheck.Boxy.Plan.analyzeHostAbi(allocator, .{
-        .root_module = modules.root,
-        .imports = modules.imports,
-        .layout_requests = requests,
-    });
-    defer plan.deinit();
-    var layouts = try @import("layout").Store.init(allocator, target_usize);
-    errdefer layouts.deinit();
-    const roots = try postcheck.Boxy.Layouts.commitHostAbi(allocator, &plan, &layouts);
-    return .{ .allocator = allocator, .layouts = layouts, .roots = roots };
+) LowerResourceError!CheckedAbiLayouts {
+    var lowered = try lowerCheckedModulesToLir(
+        allocator,
+        modules,
+        .{ .layout_requests = requests },
+        .{ .target_usize = target_usize, .specialization_strategy = .lss, .layout_request_const_plans = false },
+    );
+    errdefer lowered.deinit();
+    const roots = try allocator.alloc(@import("layout").Idx, requests.len);
+    errdefer allocator.free(roots);
+    for (requests, roots) |request, *root| {
+        root.* = for (lowered.lir_result.requested_layouts.items) |served| {
+            if (served.checked_type == request) break served.layout_idx;
+        } else checkedPipelineInvariant("lowering served no layout for a requested checked ABI type");
+    }
+    return .{ .allocator = allocator, .lowered = lowered, .roots = roots };
 }
 
 /// Resource failure while lowering checked modules to LIR, plus the one
@@ -359,8 +371,6 @@ pub const Timing = struct {
     monotype_parallel_within_lowering_lane_reuse_tasks: TimingCounter = .{},
     monotype_parallel_peak_specialization_jobs_pending: TimingCounter = .{},
     monotype_parallel_peak_specialization_shards_retained: TimingCounter = .{},
-    boxy_plan_ns: TimingCounter = .{},
-    boxy_lower_ns: TimingCounter = .{},
     lift_ns: TimingCounter = .{},
     spec_constr_ns: TimingCounter = .{},
     lambda_solve_ns: TimingCounter = .{},
@@ -417,8 +427,6 @@ pub const Timing = struct {
                 .peak_specialization_jobs_pending = self.monotype_parallel_peak_specialization_jobs_pending.load(),
                 .peak_specialization_shards_retained = self.monotype_parallel_peak_specialization_shards_retained.load(),
             },
-            .boxy_plan_ns = self.boxy_plan_ns.load(),
-            .boxy_lower_ns = self.boxy_lower_ns.load(),
             .lift_ns = self.lift_ns.load(),
             .spec_constr_ns = self.spec_constr_ns.load(),
             .lambda_solve_ns = self.lambda_solve_ns.load(),
@@ -475,8 +483,6 @@ pub const Timing = struct {
         self.addLirPassParallel(snapshot_value.lir_pass_parallel);
         self.addArcParallel(snapshot_value.arc_parallel);
         self.addDemand(snapshot_value.demand);
-        self.boxy_plan_ns.add(snapshot_value.boxy_plan_ns);
-        self.boxy_lower_ns.add(snapshot_value.boxy_lower_ns);
         self.lift_ns.add(snapshot_value.lift_ns);
         self.spec_constr_ns.add(snapshot_value.spec_constr_ns);
         self.lambda_solve_ns.add(snapshot_value.lambda_solve_ns);
@@ -503,8 +509,6 @@ pub const Timing = struct {
             .lir_gen => self.lir_gen_ns.add(elapsed_ns),
             .lir_passes => self.lir_passes_ns.add(elapsed_ns),
             .arc => self.arc_ns.add(elapsed_ns),
-            .boxy_plan => self.boxy_plan_ns.add(elapsed_ns),
-            .boxy_lower => self.boxy_lower_ns.add(elapsed_ns),
         }
     }
 
@@ -645,8 +649,6 @@ pub const TimingSnapshot = struct {
     spec_constr_parallel: SpecConstrParallelMetrics = .{},
     lir_pass_parallel: LirPassParallelMetrics = .{},
     arc_parallel: ArcParallelMetrics = .{},
-    boxy_plan_ns: u64 = 0,
-    boxy_lower_ns: u64 = 0,
     lift_ns: u64 = 0,
     spec_constr_ns: u64 = 0,
     lambda_solve_ns: u64 = 0,
@@ -667,8 +669,6 @@ const TimingPhase = enum {
     lir_gen,
     lir_passes,
     arc,
-    boxy_plan,
-    boxy_lower,
 };
 
 /// One post-check stage in progress: records the stage for crash reports and,
@@ -947,7 +947,6 @@ test "pipeline timing keeps aggregate Monotype worker work separate from wall ti
         .peak_specialization_jobs_pending = 42,
         .peak_specialization_shards_retained = 43,
     });
-    timing.addSnapshot(.{ .boxy_plan_ns = 43, .boxy_lower_ns = 47 });
 
     const snapshot_value = timing.snapshot();
     const parallel = snapshot_value.monotype_parallel;
@@ -965,8 +964,6 @@ test "pipeline timing keeps aggregate Monotype worker work separate from wall ti
     try std.testing.expectEqual(@as(u64, 62), parallel.within_lowering_lane_reuse_tasks);
     try std.testing.expectEqual(@as(u64, 42), parallel.peak_specialization_jobs_pending);
     try std.testing.expectEqual(@as(u64, 43), parallel.peak_specialization_shards_retained);
-    try std.testing.expectEqual(@as(u64, 43), snapshot_value.boxy_plan_ns);
-    try std.testing.expectEqual(@as(u64, 47), snapshot_value.boxy_lower_ns);
 }
 
 /// Whether the root checked module is complete or inside checking finalization.
@@ -2049,7 +2046,7 @@ fn finishLoweredOutput(
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     arc_timing_scope.end();
 
-    try TailDrive.run(allocator, &lowered.lir_result.store, &.{ arc_roots.items, lowered.lir_result.boxy_worker_procs.items });
+    try TailDrive.run(allocator, &lowered.lir_result.store, &.{arc_roots.items});
 
     // ARC settled every read that named a fresh form, so a fresh-form
     // procedure no read chose is now unreferenced.
@@ -2098,53 +2095,30 @@ fn finishLoweredOutput(
     };
 }
 
-/// Boxy's target-independent plan is shared by host literal evaluation and
-/// target lowering. This ownership boundary is used only by Boxy consumers.
+/// The checked inputs of one `.boxy` lowering, validated once before any
+/// lowering begins (design.md "`.boxy` Runtime Lowering").
 pub const PreparedBoxy = struct {
     allocator: Allocator,
     modules: CheckedModuleSet,
     roots: RootRequestSet,
     layout_requests: []const checked.CheckedTypeId,
     static_data_requests: []const postcheck.Common.StaticDataRequest,
-    plan: postcheck.Boxy.Plan.ProgramPlan,
 
     pub fn deinit(self: *PreparedBoxy) void {
-        self.plan.deinit();
         self.allocator.free(self.layout_requests);
         self.allocator.free(self.static_data_requests);
         self.* = undefined;
     }
 
-    pub fn hasLiteralRoots(self: *const PreparedBoxy) bool {
-        return if (self.plan.literal_evidence) |*evidence| evidence.initializers.items.len != 0 else false;
-    }
-
     pub fn lower(self: *const PreparedBoxy, target: TargetConfig) LowerResourceError!LoweredProgram {
         std.debug.assert(target.specialization_strategy == .boxy);
-        var scope = PipelineStageScope.begin(target.timing, .boxy_lower);
-        defer scope.end();
-        var lowered = try postcheck.Boxy.Lower.run(
-            self.allocator,
-            checkedModules(self.modules),
-            rootRequests(self.roots, self.layout_requests, self.static_data_requests),
-            &self.plan,
-            .{
-                .target_usize = target.target_usize,
-                .list_in_place_map = target.list_in_place_map,
-                .proc_debug_names = target.proc_debug_names,
-                .observe_expects = self.roots.test_plan_metadata.len != 0,
-            },
-        );
-        errdefer lowered.deinit();
-        lowered.lir_result.erased_capture_prefix = target.erased_capture_prefix;
-        scope.end();
-        var frozen: ?LirProgram.FrozenStaticData = null;
-        return finishLoweredOutput(self.allocator, self.roots.requests.len, target, &lowered, &frozen);
+        _ = self;
+        @panic("boxy lowering is being reimplemented; see design.md");
     }
 };
 
-/// Validate the checked boundary for a Boxy build and plan the Boxy program
-/// for these roots, before any lowering.
+/// Validate the checked boundary for a `.boxy` build and collect its requests,
+/// before any lowering.
 pub fn prepareBoxyCheckedModules(
     allocator: Allocator,
     modules: CheckedModuleSet,
@@ -2158,23 +2132,12 @@ pub fn prepareBoxyCheckedModules(
     errdefer allocator.free(layout_requests);
     const static_data_requests = try collectStaticDataRequests(allocator, modules.root.module, roots.static_data_requests, roots.include_provided_data_exports);
     errdefer allocator.free(static_data_requests);
-    var scope = PipelineStageScope.begin(target.timing, .boxy_plan);
-    defer scope.end();
-    const plan = try postcheck.Boxy.Plan.analyzeProgram(allocator, .{
-        .root_module = modules.root,
-        .imports = modules.imports,
-        .roots = roots.requests,
-        .source_modules = roots.source_modules,
-        .layout_requests = layout_requests,
-        .static_data_requests = static_data_requests,
-    }, .{});
     return .{
         .allocator = allocator,
         .modules = modules,
         .roots = roots,
         .layout_requests = layout_requests,
         .static_data_requests = static_data_requests,
-        .plan = plan,
     };
 }
 

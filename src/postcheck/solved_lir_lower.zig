@@ -304,14 +304,6 @@ pub fn runBorrowed(
     lowerer.keepLoweredSpecProcs();
     try lowerer.writeRuntimeSchemas();
     lowerer.result.finishExpectSites();
-
-    // This boundary checks producer-owned columns, never scans the program.
-    inline for (@typeInfo(LirProgram.Result).@"struct".field_names) |field_name| {
-        if (comptime std.mem.startsWith(u8, field_name, "boxy_") and !std.mem.eql(u8, field_name, "boxy_frozen_method_origins")) {
-            if (@field(lowerer.result, field_name).items.len != 0) Common.invariant("LSS constructed a Boxy side table");
-        }
-    }
-    if (lowerer.result.boxy_frozen_method_origins.count() != 0) Common.invariant("LSS constructed Boxy frozen callable metadata");
     return lowerer.finish();
 }
 
@@ -10564,7 +10556,6 @@ const Lowerer = struct {
             .hole,
             .tag_union,
             .ptr,
-            .erased_box,
             => Common.invariant("recursive Monotype let statement must bind a boxed runtime layout"),
         };
         return .{
@@ -14286,7 +14277,6 @@ const Lowerer = struct {
                 .zst,
                 .hole,
                 .box_of_zst,
-                .erased_box,
                 .list_of_zst,
                 => return .{ .value = true },
                 .box,
@@ -15764,7 +15754,7 @@ const Lowerer = struct {
             },
             .box => unreachable, // the loop above unwraps every box layout
             .box_of_zst, .zst, .scalar => .zst,
-            .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr, .hole => Common.invariant("tag payload operation expected tag-union layout"),
+            .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr, .hole => Common.invariant("tag payload operation expected tag-union layout"),
         };
     }
 
@@ -15785,7 +15775,7 @@ const Lowerer = struct {
         return switch (list_layout.tag) {
             .list => list_layout.getIdx(),
             .list_of_zst => .zst,
-            .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr => Common.invariant("list expression target was not a list layout"),
+            .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr => Common.invariant("list expression target was not a list layout"),
         };
     }
 

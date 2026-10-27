@@ -2385,16 +2385,12 @@ pub fn build(b: *std.Build) void {
     // merge real compiled builtins into WASM modules (instead of using host imports).
     const wasm32_resolved_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
     const wasm32_eval_runtime = addEvalWasmRuntimeModules(b, roc_modules, wasm32_resolved_target, "wasm32", optimize);
-    const wasm32_boxy_runtime_module = wasm32_eval_runtime.boxy_runtime;
     const wasm32_builtins_module = wasm32_eval_runtime.builtins;
-    roc_modules.eval.addImport("wasm32_boxy_runtime", wasm32_boxy_runtime_module);
     roc_modules.eval.addImport("wasm32_builtins", wasm32_builtins_module);
     // The same objects for WebAssembly 1.0, which the evaluator's wasm32v1
     // runs link.
     const wasm32v1_eval_runtime = addEvalWasmRuntimeModules(b, roc_modules, b.resolveTargetQuery(roc_target.RocTarget.wasm32v1.llvmTargetQuery()), "wasm32v1", optimize);
-    const wasm32v1_boxy_runtime_module = wasm32v1_eval_runtime.boxy_runtime;
     const wasm32v1_builtins_module = wasm32v1_eval_runtime.builtins;
-    roc_modules.eval.addImport("wasm32v1_boxy_runtime", wasm32v1_boxy_runtime_module);
     roc_modules.eval.addImport("wasm32v1_builtins", wasm32v1_builtins_module);
 
     // Setup test platform host libraries
@@ -3997,9 +3993,7 @@ pub fn build(b: *std.Build) void {
         // Add bytebox and wasm32 builtins to eval tests for wasm backend testing
         if (std.mem.eql(u8, module_test.test_step.name, "eval")) {
             module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
-            module_test.test_step.root_module.addImport("wasm32_boxy_runtime", wasm32_boxy_runtime_module);
             module_test.test_step.root_module.addImport("wasm32_builtins", wasm32_builtins_module);
-            module_test.test_step.root_module.addImport("wasm32v1_boxy_runtime", wasm32v1_boxy_runtime_module);
             module_test.test_step.root_module.addImport("wasm32v1_builtins", wasm32v1_builtins_module);
             const compile_build_module = b.createModule(.{
                 .root_source_file = b.path("src/compile/compile_build.zig"),
@@ -4255,13 +4249,6 @@ pub fn build(b: *std.Build) void {
         .step_suffix = "lir-inline",
         .description = "Run LIR inline Zig tests",
         .compile = lir_inline_test,
-    });
-
-    const boxy_abi_test = roc_test_binaries.add(.{ .name = "boxy_abi_test", .root = "src/eval/test/boxy_abi_test.zig", .links_llvm = false });
-    test_suites.register(.{
-        .step_suffix = "boxy-abi",
-        .description = "Run boxy C-ABI wrapper Zig tests",
-        .compile = boxy_abi_test,
     });
 
     const rc_conformance_test = roc_test_binaries.add(.{ .name = "rc_conformance_test", .root = "src/eval/test/rc_conformance_tests.zig", .links_llvm = true });
@@ -5203,7 +5190,7 @@ fn addMacosAflFuzzExe(
 }
 
 /// Debug-info settings for every object `roc` embeds and links into the
-/// programs it builds (builtins, compiler-rt carriers, shims, Boxy runtimes,
+/// programs it builds (builtins, compiler-rt carriers, shims,
 /// default-platform runtimes). They are fixed rather than taken from
 /// `-Dstrip` or `-Dtracy-callstack`, because emitting debug info changes
 /// LLVM's instruction selection: following the compiler's own debug
@@ -5212,97 +5199,15 @@ fn addMacosAflFuzzExe(
 const program_object_strip = true;
 const program_object_omit_frame_pointer: ?bool = null;
 
-/// Build a Boxy runtime object for `target`: the `roc_boxy_*` C-ABI wrappers
-/// plus `roc_boxy_init_embedded`. The selected root configures standalone
-/// extern-symbol calls or evaluator-vtable calls.
-///
-/// This object is linked into user programs, so its optimize mode is pinned
-/// rather than following the compiler's own. A `Debug` compiler would otherwise
-/// emit a `Debug` runtime into every generic program it builds, which enables
-/// builtins' hosted debug diagnostics and grows this object by an order of
-/// magnitude. Its debug-info settings are pinned too; see
-/// `program_object_strip`.
-fn buildBoxyRuntimeObject(
-    b: *std.Build,
-    roc_modules: modules.RocModules,
-    target: ResolvedTarget,
-    name: []const u8,
-    root_source_file: std.Build.LazyPath,
-) *Step.Compile {
-    const optimize: OptimizeMode = .fast;
-    const obj = b.addObject(.{
-        .name = name,
-        .root_module = b.createModule(.{
-            .root_source_file = root_source_file,
-            .target = target,
-            .optimize = optimize,
-            .strip = program_object_strip,
-            .omit_frame_pointer = program_object_omit_frame_pointer,
-            // Native runtime objects can participate in shared-library links.
-            // Wasm uses direct data-symbol relocations so compiler-only
-            // relocatable composition can bind its app-specific Boxy sidecar.
-            .pic = target.result.cpu.arch != .wasm32,
-        }),
-    });
-    const boxy_eval_module = b.createModule(.{
-        .root_source_file = b.path("src/eval/boxy_runtime_module.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    boxy_eval_module.addImport("base", roc_modules.base);
-    boxy_eval_module.addImport("layout", roc_modules.layout);
-    boxy_eval_module.addImport("lir", roc_modules.lir);
-    boxy_eval_module.addImport("collections", roc_modules.collections);
-    boxy_eval_module.addImport("builtins", roc_modules.builtins);
-    boxy_eval_module.addImport("build_options", roc_modules.build_options);
-    boxy_eval_module.addImport("value_rules", roc_modules.value_rules);
-
-    obj.root_module.addImport("base", roc_modules.base);
-    obj.root_module.addImport("builtins", roc_modules.builtins);
-    obj.root_module.addImport("eval", boxy_eval_module);
-    obj.root_module.addImport("lir", roc_modules.lir);
-    obj.root_module.addImport("raw_pages", roc_modules.raw_pages);
-    obj.root_module.addImport("shim_io", b.createModule(
-        .{ .root_source_file = b.path("src/shim_io.zig") },
-    ));
-    // The builtins object linked into the same program is the compiler-rt
-    // carrier, so this object must not bundle its own copy: COFF rejects the
-    // duplicate definitions of `memcpy` and the integer libcalls outright.
-    obj.bundle_compiler_rt = false;
-    configureBackend(obj, target);
-    return obj;
-}
-
-/// Zig's wasm object build places the relocatable code in the emitted
-/// directory beside an empty nominal output.
-/// The Boxy runtime and builtins objects the evaluator merges into the wasm
-/// modules it compiles for `target`, each as a module exposing its bytes.
+/// The builtins object the evaluator merges into the wasm modules it compiles
+/// for `target`, as a module exposing its bytes.
 fn addEvalWasmRuntimeModules(
     b: *std.Build,
     roc_modules: modules.RocModules,
     target: ResolvedTarget,
     name: []const u8,
     optimize: OptimizeMode,
-) struct { boxy_runtime: *std.Build.Module, builtins: *std.Build.Module } {
-    const boxy_runtime_obj = buildBoxyRuntimeObject(
-        b,
-        roc_modules,
-        target,
-        b.fmt("roc_boxy_runtime_{s}_eval", .{name}),
-        b.path("src/boxy_runtime/eval_main.zig"),
-    );
-    const boxy_runtime_files = b.addWriteFiles();
-    _ = boxy_runtime_files.addCopyFile(
-        wasmObjectArtifact(b, boxy_runtime_obj),
-        "roc_boxy_runtime.o",
-    );
-    const boxy_runtime_module = b.createModule(.{
-        .root_source_file = boxy_runtime_files.add(
-            b.fmt("{s}_boxy_runtime.zig", .{name}),
-            "pub const bytes = @embedFile(\"roc_boxy_runtime.o\");\n",
-        ),
-    });
-
+) struct { builtins: *std.Build.Module } {
     const builtins_obj = addBuiltinsObject(b, roc_modules, b.fmt("roc_builtins_{s}_eval", .{name}), "src/builtins/static_lib.zig", target, optimize, false);
 
     const compiler_rt_obj = b.addObject(.{
@@ -5333,12 +5238,7 @@ fn addEvalWasmRuntimeModules(
             \\
         ),
     });
-    return .{ .boxy_runtime = boxy_runtime_module, .builtins = builtins_module };
-}
-
-fn wasmObjectArtifact(b: *std.Build, obj: *Step.Compile) std.Build.LazyPath {
-    const zcu_name = b.fmt("{s}_zcu.o", .{std.fs.path.stem(obj.out_filename)});
-    return obj.getEmittedBinDirectory().path(b, zcu_name);
+    return .{ .builtins = builtins_module };
 }
 
 /// The run shim uses builtin function addresses directly. It must not link the
@@ -5379,9 +5279,9 @@ fn addMachineCodeShimLib(
     machine_code_shim_lib.root_module.addImport("base", roc_modules.base);
     machine_code_shim_lib.root_module.addImport("backend", roc_modules.backend);
     machine_code_shim_lib.root_module.addImport("builtins", roc_modules.builtins);
-    // The machine-code runtime needs Boxy support, not the interpreter's
-    // assembly trampoline. Keep the same Zig dependencies without attaching
-    // that unrelated globally-exported assembly object to the archive.
+    // The machine-code runtime does not need the interpreter's assembly
+    // trampoline. Keep the same Zig dependencies without attaching that
+    // unrelated globally-exported assembly object to the archive.
     const shim_eval = b.createModule(.{ .root_source_file = b.path("src/eval/mod.zig") });
     var eval_imports = roc_modules.eval.import_table.iterator();
     while (eval_imports.next()) |entry| shim_eval.addImport(entry.key_ptr.*, entry.value_ptr.*);
@@ -6076,30 +5976,6 @@ fn addMainExe(
             cross_builtins_extern_obj.getEmittedBin(),
             b.pathJoin(&.{ "targets", cross_target.name, builtins_extern_ext }),
         );
-
-        // Boxy runtime object for this target, linked by `roc build --opt=dev`
-        // into programs that emit boxy statements.
-        {
-            const cross_boxy_runtime_obj = buildBoxyRuntimeObject(
-                b,
-                roc_modules,
-                cross_resolved_target,
-                b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}),
-                b.path("src/boxy_runtime/main.zig"),
-            );
-            const boxy_runtime_artifact = if (cross_is_wasm)
-                wasmObjectArtifact(b, cross_boxy_runtime_obj)
-            else
-                cross_boxy_runtime_obj.getEmittedBin();
-            const boxy_runtime_ext = if (cross_target.query.os_tag == .windows) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
-            const copy_cross_boxy_runtime = embedded_assets;
-            embedded_digests.addArg(b.fmt("boxy_runtime_{s}", .{cross_target.name}));
-            embedded_digests.addFileArg(boxy_runtime_artifact);
-            _ = copy_cross_boxy_runtime.addCopyFile(
-                boxy_runtime_artifact,
-                b.pathJoin(&.{ "targets", cross_target.name, boxy_runtime_ext }),
-            );
-        }
 
         if (!cross_is_wasm) {
             const default_platform_os = cross_target.query.os_tag orelse .freestanding;

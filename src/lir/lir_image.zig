@@ -15,7 +15,6 @@ const layout_mod = @import("layout");
 const LIR = core.LIR;
 const LirStore = core.LirStore;
 const Program = core.Program;
-const RuntimeTables = @import("runtime_tables.zig");
 const GuardedList = collections.GuardedList;
 
 /// Public `MAGIC` declaration.
@@ -29,26 +28,16 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v9: image is pointer-width independent; the target is supplied at view time
 ///     rather than recorded in the header.
 /// v10: LIR proc specs carry explicit native stack-probe requirements.
-/// v11: LIR images carry reachable boxy descriptor/dictionary tables.
-/// v12: LIR RC statements carry explicit concrete-or-boxy helper metadata.
-/// v13: LIR images carry boxy adapter plan tables.
 /// v14: LocalSpan lengths are u32 for large proc frame-local spans.
 /// v15: SafeMultiList layout tables use portable typed column arrays.
-/// v16: procedure specs carry explicit Boxy return descriptor sources.
-/// v17: dictionary method adapters carry exact call descriptor spans.
-/// v18: erased calls carry exact keyed argument descriptor metadata.
-/// v19: erased calls and workers carry ordered runtime argument layouts.
 /// v20: statements carry virtual inline-scope ids and the image stores the
 ///      corresponding source-procedure/call-site graph.
 /// v21: erased calls and procedures carry explicit packed-argument plans.
 /// v22: combines the independent v20 and v21 image changes.
-/// v23: Boxy type descriptors identify field-presence slots explicitly.
 /// v24: source file table entries carry package-qualified module identities
 ///      alongside display names.
 /// v25: integer arithmetic uses explicit behavior-family operations.
-/// v26: LIR images carry the exact dense Boxy runtime worker proc set.
 /// v27: `expect` statements optionally carry a test observation site.
-/// v28: Boxy names have a separate dense identity domain and byte/range columns.
 /// v29: procedures and calls carry producer-authored self-tail proofs.
 /// v30: SIMD byte alignment carries a proven constant count, alongside v29's
 ///      self-tail proofs.
@@ -63,16 +52,13 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v40: source file table entries carry their module's content identity.
 /// v41: `proc_ref` is the `LIR.LiteralValue` tag that follows `bytes_literal`.
 /// v42: wide-UTF decoding ops renumber later LowLevel ops.
-/// v43: Boxy type descriptors record rejected `is_eq` and `to_hash` declarations.
-/// v44: LowLevel ops, `CFStmt` kinds, Boxy descriptor references, and Boxy
-///      side tables carry only what lowering produces.
 /// v45: layout representation fields are sized for practice, and resolved list
 ///      layouts are plain layout indices.
 /// v51: statements keep their rows out of line, and the store records its
 ///      lowering modules' keys.
 /// v54: combines the independent v51-v53 image changes.
-/// v56: explicit runtime contract; specialized images cannot contain Boxy dependencies.
-pub const FORMAT_VERSION: u32 = 56;
+/// v57: images carry only specialized LIR tables.
+pub const FORMAT_VERSION: u32 = 57;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -136,10 +122,8 @@ pub const Header = extern struct {
     _padding: [8]u8 = @as([8]u8, @splat(0)),
     root_procs: ArrayRef,
     platform_entrypoints: ArrayRef,
-    boxy_worker_procs: ArrayRef,
     store: LirStoreImage,
     layouts: LayoutStoreImage,
-    boxy_tables: BoxyTablesImage,
     static_data: ArrayRef = .empty(),
     static_data_value_count: u32 = 0,
     static_data_pointer_bytes: u32 = 0,
@@ -152,22 +136,6 @@ pub const ProgramView = struct {
     layouts: layout_mod.Store,
     root_procs: []LIR.LirProcSpecId,
     platform_entrypoints: []PlatformEntrypoint,
-    boxy_type_descs: []Program.BoxyTypeDesc,
-    boxy_dicts: []Program.BoxyDict,
-    boxy_adapters: []Program.BoxyAdapter,
-    boxy_desc_refs: []Program.BoxyDescRef,
-    boxy_dict_refs: []Program.BoxyDictRef,
-    boxy_tag_variants: []Program.BoxyTagVariant,
-    boxy_tag_payload_descs: []Program.BoxyTagPayloadDesc,
-    boxy_field_names: []LIR.BoxyNameId,
-    boxy_method_slots: []Program.BoxyMethodSlot,
-    boxy_worker_procs: []LIR.LirProcSpecId,
-    boxy_method_arg_layouts: []layout_mod.Idx,
-    boxy_method_hidden_desc_sources: []Program.BoxyMethodHiddenDescSource,
-    boxy_erased_arg_layouts: []layout_mod.Idx,
-    boxy_erased_arg_desc_keys: []LIR.ErasedArgDescKey,
-    boxy_erased_arg_desc_offsets: []LIR.ErasedArgDescOffset,
-    boxy_erased_arg_desc_params: []LIR.ErasedArgDescParam,
     target_usize: base.target.TargetUsize,
     scratch_allocator: std.mem.Allocator,
     static_data: []Program.StaticDataExport,
@@ -189,7 +157,6 @@ pub const LirStoreImage = extern struct {
     str_match_arms: ArrayRef,
     join_points: ArrayRef,
     locals: ArrayRef,
-    local_descs: ArrayRef,
     local_ids: ArrayRef,
     u64s: ArrayRef,
     u32s: ArrayRef,
@@ -197,7 +164,6 @@ pub const LirStoreImage = extern struct {
     stmt_rows: [LirStore.stmt_row_column_count]ArrayRef,
     proc_specs: ArrayRef,
     strings: StringLiteralStoreImage,
-    boxy_names: BoxyNamesImage,
     next_synthetic_symbol: u64,
     source_file_bytes: ArrayRef,
     source_file_ends: ArrayRef,
@@ -225,7 +191,6 @@ pub const LirStoreImage = extern struct {
             .str_match_arms = try encoder.ref(store.str_match_arms.unsafeRawItemsForView()),
             .join_points = try encoder.ref(store.join_points.unsafeRawItemsForView()),
             .locals = try encoder.ref(store.locals.unsafeRawItemsForView()),
-            .local_descs = try encoder.ref(store.local_descs.unsafeRawItemsForView()),
             .local_ids = try encoder.ref(store.local_ids.unsafeRawItemsForView()),
             .u64s = try encoder.ref(store.u64s.unsafeRawItemsForView()),
             .u32s = try encoder.ref(store.u32s.unsafeRawItemsForView()),
@@ -233,7 +198,6 @@ pub const LirStoreImage = extern struct {
             .stmt_rows = try stmtRowRefs(encoder, store),
             .proc_specs = try encoder.ref(store.proc_specs.unsafeRawItemsForView()),
             .strings = try StringLiteralStoreImage.fromStore(encoder, &store.strings),
-            .boxy_names = if (store.runtime_contract == .boxy) try BoxyNamesImage.fromStore(encoder, &store.boxy_names) else std.mem.zeroes(BoxyNamesImage),
             .next_synthetic_symbol = store.next_synthetic_symbol,
             .source_file_bytes = try encoder.ref(store.source_file_bytes.unsafeRawItemsForView()),
             .source_file_ends = try encoder.ref(store.source_file_ends.unsafeRawItemsForView()),
@@ -270,8 +234,6 @@ pub const LirStoreImage = extern struct {
 
     fn view(self: LirStoreImage, base_ptr: [*]align(1) u8, image_size: usize, allocator: std.mem.Allocator) ImageError!LirStore {
         if (self.runtime_contract > 1) return error.InvalidLirImage;
-        if (self.runtime_contract == @backingInt(LIR.RuntimeContract.specialized) and
-            (self.boxy_names.bytes.len != 0 or self.boxy_names.ends.len != 0 or self.local_descs.len != 0)) return error.InvalidLirImage;
         return .{
             .runtime_contract = @fromBackingInt(@intCast(self.runtime_contract)),
             .cf_stmts = try guardedListFromRef(LIR.CFStmt, "LirStore.cf_stmts", base_ptr, image_size, self.cf_stmts),
@@ -280,7 +242,6 @@ pub const LirStoreImage = extern struct {
             .str_match_arms = try guardedListFromRef(LIR.StrMatchArm, "LirStore.str_match_arms", base_ptr, image_size, self.str_match_arms),
             .join_points = try guardedListFromRef(LIR.JoinPoint, "LirStore.join_points", base_ptr, image_size, self.join_points),
             .locals = try guardedListFromRef(LirStore.StoredLocal, "LirStore.locals", base_ptr, image_size, self.locals),
-            .local_descs = try guardedListFromRef(LIR.BoxyDescRef, "LirStore.local_descs", base_ptr, image_size, self.local_descs),
             .local_ids = try guardedListFromRef(LIR.LocalId, "LirStore.local_ids", base_ptr, image_size, self.local_ids),
             .u64s = try guardedListFromRef(u64, "LirStore.u64s", base_ptr, image_size, self.u64s),
             .u32s = try guardedListFromRef(u32, "LirStore.u32s", base_ptr, image_size, self.u32s),
@@ -288,7 +249,6 @@ pub const LirStoreImage = extern struct {
             .stmt_rows = try self.stmtRowsView(base_ptr, image_size),
             .proc_specs = try guardedListFromRef(LIR.LirProcSpec, "LirStore.proc_specs", base_ptr, image_size, self.proc_specs),
             .strings = try self.strings.view(base_ptr, image_size),
-            .boxy_names = if (self.runtime_contract == @backingInt(LIR.RuntimeContract.boxy)) try self.boxy_names.view(base_ptr, image_size) else .{},
             .string_builder = .{},
             .strings_insertable = false,
             .allocator = allocator,
@@ -327,27 +287,6 @@ pub const StringLiteralStoreImage = extern struct {
         return .{
             .buffer = try stringLiteralBufferFromRef(base_ptr, image_size, self.buffer),
         };
-    }
-};
-
-/// Portable Boxy names. The insertion index never enters an image.
-pub const BoxyNamesImage = extern struct {
-    bytes: ArrayRef,
-    ends: ArrayRef,
-
-    fn fromStore(encoder: anytype, names: *const core.BoxyNames) @TypeOf(encoder).Error!BoxyNamesImage {
-        return .{
-            .bytes = try encoder.ref(names.interner.bytes.items.items),
-            .ends = try encoder.ref(names.interner.ends.items.items),
-        };
-    }
-
-    fn view(self: BoxyNamesImage, base_ptr: [*]align(1) u8, image_size: usize) ImageError!core.BoxyNames {
-        return .{ .interner = .{
-            .bytes = try safeListFromRef(u8, base_ptr, image_size, self.bytes),
-            .ends = try safeListFromRef(u32, base_ptr, image_size, self.ends),
-            .supports_inserts = false,
-        } };
     }
 };
 
@@ -481,207 +420,8 @@ pub const TagUnionVariantsImage = extern struct {
     }
 };
 
-/// Public `BoxyTablesImage` declaration.
-pub const BoxyTablesImage = extern struct {
-    type_descs: ArrayRef,
-    dicts: ArrayRef,
-    adapters: ArrayRef,
-    desc_refs: ArrayRef,
-    dict_refs: ArrayRef,
-    tag_variants: ArrayRef,
-    tag_payload_descs: ArrayRef,
-    field_names: ArrayRef,
-    method_slots: ArrayRef,
-    method_arg_layouts: ArrayRef,
-    method_hidden_desc_sources: ArrayRef,
-    erased_arg_layouts: ArrayRef,
-    erased_arg_desc_keys: ArrayRef,
-    erased_arg_desc_offsets: ArrayRef,
-    erased_arg_desc_params: ArrayRef,
-
-    fn fromProgram(encoder: anytype, lowered: *const Program.Result) @TypeOf(encoder).Error!BoxyTablesImage {
-        // Every consumer of an image reads erased callables without a capture
-        // prefix, so only a program lowered without one is imaged.
-        std.debug.assert(lowered.erased_capture_prefix == 0);
-        if (lowered.store.runtime_contract == .specialized) return std.mem.zeroes(BoxyTablesImage);
-        base.dev_diagnostics.traceBoxyWork("image-tables");
-        return fromView(encoder, .{
-            .type_descs = lowered.boxy_type_descs.items,
-            .dicts = lowered.boxy_dicts.items,
-            .adapters = lowered.boxy_adapters.items,
-            .desc_refs = lowered.boxy_desc_refs.items,
-            .dict_refs = lowered.boxy_dict_refs.items,
-            .tag_variants = lowered.boxy_tag_variants.items,
-            .tag_payload_descs = lowered.boxy_tag_payload_descs.items,
-            .field_names = lowered.boxy_field_names.items,
-            .method_slots = lowered.boxy_method_slots.items,
-            .method_arg_layouts = lowered.boxy_method_arg_layouts.items,
-            .method_hidden_desc_sources = lowered.boxy_method_hidden_desc_sources.items,
-            .erased_arg_layouts = lowered.boxy_erased_arg_layouts.items,
-            .erased_arg_desc_keys = lowered.boxy_erased_arg_desc_keys.items,
-            .erased_arg_desc_offsets = lowered.boxy_erased_arg_desc_offsets.items,
-            .erased_arg_desc_params = lowered.boxy_erased_arg_desc_params.items,
-        });
-    }
-
-    fn fromView(encoder: anytype, tables: BoxyTablesView) @TypeOf(encoder).Error!BoxyTablesImage {
-        return .{
-            .type_descs = try encoder.ref(tables.type_descs),
-            .dicts = try encoder.ref(tables.dicts),
-            .adapters = try encoder.ref(tables.adapters),
-            .desc_refs = try encoder.ref(tables.desc_refs),
-            .dict_refs = try encoder.ref(tables.dict_refs),
-            .tag_variants = try encoder.ref(tables.tag_variants),
-            .tag_payload_descs = try encoder.ref(tables.tag_payload_descs),
-            .field_names = try encoder.ref(tables.field_names),
-            .method_slots = try encoder.ref(tables.method_slots),
-            .method_arg_layouts = try encoder.ref(tables.method_arg_layouts),
-            .method_hidden_desc_sources = try encoder.ref(tables.method_hidden_desc_sources),
-            .erased_arg_layouts = try encoder.ref(tables.erased_arg_layouts),
-            .erased_arg_desc_keys = try encoder.ref(tables.erased_arg_desc_keys),
-            .erased_arg_desc_offsets = try encoder.ref(tables.erased_arg_desc_offsets),
-            .erased_arg_desc_params = try encoder.ref(tables.erased_arg_desc_params),
-        };
-    }
-
-    fn view(self: BoxyTablesImage, base_ptr: [*]align(1) u8, image_size: usize) ImageError!BoxyTablesView {
-        return .{
-            .type_descs = try sliceFromRef(Program.BoxyTypeDesc, base_ptr, image_size, self.type_descs),
-            .dicts = try sliceFromRef(Program.BoxyDict, base_ptr, image_size, self.dicts),
-            .adapters = try sliceFromRef(Program.BoxyAdapter, base_ptr, image_size, self.adapters),
-            .desc_refs = try sliceFromRef(Program.BoxyDescRef, base_ptr, image_size, self.desc_refs),
-            .dict_refs = try sliceFromRef(Program.BoxyDictRef, base_ptr, image_size, self.dict_refs),
-            .tag_variants = try sliceFromRef(Program.BoxyTagVariant, base_ptr, image_size, self.tag_variants),
-            .tag_payload_descs = try sliceFromRef(Program.BoxyTagPayloadDesc, base_ptr, image_size, self.tag_payload_descs),
-            .field_names = try sliceFromRef(LIR.BoxyNameId, base_ptr, image_size, self.field_names),
-            .method_slots = try sliceFromRef(Program.BoxyMethodSlot, base_ptr, image_size, self.method_slots),
-            .method_arg_layouts = try sliceFromRef(layout_mod.Idx, base_ptr, image_size, self.method_arg_layouts),
-            .method_hidden_desc_sources = try sliceFromRef(Program.BoxyMethodHiddenDescSource, base_ptr, image_size, self.method_hidden_desc_sources),
-            .erased_arg_layouts = try sliceFromRef(layout_mod.Idx, base_ptr, image_size, self.erased_arg_layouts),
-            .erased_arg_desc_keys = try sliceFromRef(LIR.ErasedArgDescKey, base_ptr, image_size, self.erased_arg_desc_keys),
-            .erased_arg_desc_offsets = try sliceFromRef(LIR.ErasedArgDescOffset, base_ptr, image_size, self.erased_arg_desc_offsets),
-            .erased_arg_desc_params = try sliceFromRef(LIR.ErasedArgDescParam, base_ptr, image_size, self.erased_arg_desc_params),
-        };
-    }
-};
-
-/// Resolved slices for every descriptor-governed Boxy side table in an image.
-pub const BoxyTablesView = struct {
-    type_descs: []Program.BoxyTypeDesc,
-    dicts: []Program.BoxyDict,
-    adapters: []Program.BoxyAdapter,
-    desc_refs: []Program.BoxyDescRef,
-    dict_refs: []Program.BoxyDictRef,
-    tag_variants: []Program.BoxyTagVariant,
-    tag_payload_descs: []Program.BoxyTagPayloadDesc,
-    field_names: []LIR.BoxyNameId,
-    method_slots: []Program.BoxyMethodSlot,
-    method_arg_layouts: []layout_mod.Idx,
-    method_hidden_desc_sources: []Program.BoxyMethodHiddenDescSource,
-    erased_arg_layouts: []layout_mod.Idx,
-    erased_arg_desc_keys: []LIR.ErasedArgDescKey,
-    erased_arg_desc_offsets: []LIR.ErasedArgDescOffset,
-    erased_arg_desc_params: []LIR.ErasedArgDescParam,
-};
-
-/// The boxy runtime's table subset of a LIR image: the descriptor tables,
-/// the committed layout store, and the semantic name store the descriptors
-/// index. Machine-code embedders view this to initialize a process-global
-/// boxy runtime without decoding procs or statements.
-pub const BoxySidecar = extern struct {
-    layouts: LayoutStoreImage,
-    names: BoxyNamesImage,
-    boxy_tables: BoxyTablesImage,
-
-    /// The sidecar embedded in a full LIR image header.
-    pub fn fromHeader(header: *const Header) BoxySidecar {
-        return .{
-            .layouts = header.layouts,
-            .names = header.store.boxy_names,
-            .boxy_tables = header.boxy_tables,
-        };
-    }
-
-    /// Record sidecar offsets for a lowered program whose arrays live inside
-    /// the buffer at `base_ptr`.
-    pub fn fromProgram(
-        base_ptr: [*]align(1) const u8,
-        image_size: usize,
-        lowered: *const Program.Result,
-    ) ImageError!BoxySidecar {
-        const encoder = Referencer{ .base_ptr = base_ptr, .image_size = image_size };
-        return .{
-            .layouts = try LayoutStoreImage.fromStore(encoder, &lowered.layouts),
-            .names = try BoxyNamesImage.fromStore(encoder, &lowered.store.boxy_names),
-            .boxy_tables = try BoxyTablesImage.fromProgram(encoder, lowered),
-        };
-    }
-
-    fn fromStores(
-        base_ptr: [*]align(1) const u8,
-        image_size: usize,
-        layouts: *const layout_mod.Store,
-        names: BoxyNamesImage,
-        tables: BoxyTablesView,
-    ) ImageError!BoxySidecar {
-        const encoder = Referencer{ .base_ptr = base_ptr, .image_size = image_size };
-        return .{
-            .layouts = try LayoutStoreImage.fromStore(encoder, layouts),
-            .names = names,
-            .boxy_tables = try BoxyTablesImage.fromView(encoder, tables),
-        };
-    }
-
-    /// Stores and table slices decoded from a mapped buffer. Ordinary arrays
-    /// remain mapped in place; compact layout tables use the supplied allocator
-    /// for target-native column storage. Keep both alive for the view's lifetime.
-    pub const View = struct {
-        layouts: layout_mod.Store,
-        names: core.BoxyNames,
-        tables: BoxyTablesView,
-        scratch_allocator: std.mem.Allocator,
-
-        pub fn deinit(self: *View) void {
-            deinitViewedLayouts(&self.layouts, self.scratch_allocator);
-            self.* = undefined;
-        }
-    };
-
-    pub fn view(
-        self: BoxySidecar,
-        base_ptr: [*]align(1) u8,
-        image_size: usize,
-        target_usize: base.target.TargetUsize,
-        allocator: std.mem.Allocator,
-    ) ViewError!View {
-        var layouts = try self.layouts.view(base_ptr, image_size, target_usize, allocator);
-        errdefer deinitViewedLayouts(&layouts, allocator);
-        return .{
-            .layouts = layouts,
-            .names = try self.names.view(base_ptr, image_size),
-            .tables = try self.boxy_tables.view(base_ptr, image_size),
-            .scratch_allocator = allocator,
-        };
-    }
-};
-
-/// A self-contained boxy sidecar: a byte buffer holding cloned copies of every
-/// array a boxy runtime needs, plus a `BoxySidecar` whose offsets are relative
-/// to `bytes.ptr`. Embedders that lower with a private allocator (whose arrays
-/// are not already in the run image) build one of these, copy `bytes` verbatim
-/// into the image, and view the sidecar with the copy's base pointer.
-pub const SidecarBlob = struct {
-    bytes: []align(16) u8,
-    sidecar: BoxySidecar,
-
-    pub fn deinit(self: *SidecarBlob, gpa: std.mem.Allocator) void {
-        gpa.free(self.bytes);
-        self.* = undefined;
-    }
-};
-
 /// Make the raw bytes of persisted items a function of their values alone.
-/// A persisted image or sidecar writes `items` byte for byte, so each byte of
+/// A persisted image writes `items` byte for byte, so each byte of
 /// `T` must either belong to a declared field or be one the value itself
 /// identifies, which `zeroValuePadding` canonicalizes. Any other shape, such
 /// as an `extern struct` with implicit alignment bytes, is a compile error
@@ -690,388 +430,6 @@ pub const SidecarBlob = struct {
 fn canonicalizePersistedItems(comptime T: type, items: []T) void {
     if (comptime collections.serde_validation.byteDetermination(T) == .fully_defined) return;
     for (items) |*item| collections.CompactWriter.zeroValuePadding(T, @ptrCast(item));
-}
-
-fn cloneStdArrayList(comptime T: type, gpa: std.mem.Allocator, list: std.ArrayList(T)) std.mem.Allocator.Error!std.ArrayList(T) {
-    var out: std.ArrayList(T) = .empty;
-    try out.ensureTotalCapacity(gpa, list.items.len);
-    out.appendSliceAssumeCapacity(list.items);
-    canonicalizePersistedItems(T, out.items);
-    return out;
-}
-
-fn cloneSafeList(comptime T: type, gpa: std.mem.Allocator, list: collections.SafeList(T)) std.mem.Allocator.Error!collections.SafeList(T) {
-    return .{ .items = try cloneStdArrayList(T, gpa, list.items) };
-}
-
-fn cloneStructFields(
-    gpa: std.mem.Allocator,
-    source: *const layout_mod.StructField.SafeMultiList,
-) std.mem.Allocator.Error!layout_mod.StructField.SafeMultiList {
-    const indices = source.field(.index);
-    const layouts = source.field(.layout);
-    const padding = source.field(.is_padding);
-    var result = try layout_mod.StructField.SafeMultiList.initCapacity(gpa, indices.len);
-    for (indices, layouts, padding) |index, layout_idx, is_padding| {
-        _ = result.appendAssumeCapacity(.{
-            .index = index,
-            .layout = layout_idx,
-            .is_padding = is_padding,
-        });
-    }
-    canonicalizePersistedItems(u32, result.field(.index));
-    canonicalizePersistedItems(layout_mod.Idx, result.field(.layout));
-    canonicalizePersistedItems(bool, result.field(.is_padding));
-    return result;
-}
-
-fn cloneTagUnionVariants(
-    gpa: std.mem.Allocator,
-    source: *const layout_mod.TagUnionVariant.SafeMultiList,
-) std.mem.Allocator.Error!layout_mod.TagUnionVariant.SafeMultiList {
-    const payload_layouts = source.field(.payload_layout);
-    var result = try layout_mod.TagUnionVariant.SafeMultiList.initCapacity(gpa, payload_layouts.len);
-    for (payload_layouts) |payload_layout| {
-        _ = result.appendAssumeCapacity(.{ .payload_layout = payload_layout });
-    }
-    canonicalizePersistedItems(layout_mod.Idx, result.field(.payload_layout));
-    return result;
-}
-
-fn serializeSidecarInto(
-    gpa: std.mem.Allocator,
-    buffer: []align(16) u8,
-    lowered: *const Program.Result,
-) (ImageError || std.mem.Allocator.Error)!BoxySidecar {
-    const layouts: layout_mod.Store = .{
-        .allocator = gpa,
-        .layouts = try cloneSafeList(layout_mod.Layout, gpa, lowered.layouts.layouts),
-        .resolved_list_layouts = try cloneStdArrayList(layout_mod.Idx, gpa, lowered.layouts.resolved_list_layouts),
-        .tuple_elems = try cloneSafeList(layout_mod.Idx, gpa, lowered.layouts.tuple_elems),
-        .struct_fields = try cloneStructFields(gpa, &lowered.layouts.struct_fields),
-        .struct_field_offsets = try cloneSafeList(layout_mod.WidthValues(u32), gpa, lowered.layouts.struct_field_offsets),
-        .struct_field_original_order = try cloneSafeList(u32, gpa, lowered.layouts.struct_field_original_order),
-        .struct_data = try cloneSafeList(layout_mod.StructData, gpa, lowered.layouts.struct_data),
-        .tag_union_variants = try cloneTagUnionVariants(gpa, &lowered.layouts.tag_union_variants),
-        .tag_union_data = try cloneSafeList(layout_mod.TagUnionData, gpa, lowered.layouts.tag_union_data),
-        .interned_layouts = .empty,
-        .interned_key_bytes = .empty,
-        .scratch_intern_key = .empty,
-        .recursive_layout_keys = try cloneSafeList(layout_mod.Store.RecursiveLayoutKey, gpa, lowered.layouts.recursive_layout_keys),
-        .interned_recursive_graphs = .empty,
-        .recursive_unfoldings = .empty,
-        .recursive_groups = .{},
-        .target_usize = lowered.layouts.target_usize,
-        // `BoxySidecar.fromStores` reads only the array-backed fields.
-        .digest_cache = undefined,
-    };
-    const names = try BoxyNamesImage.fromStore(Copier{ .allocator = gpa, .base_ptr = buffer.ptr, .image_capacity = buffer.len, .contract = .persisted }, &lowered.store.boxy_names);
-
-    const type_descs = try cloneStdArrayList(Program.BoxyTypeDesc, gpa, lowered.boxy_type_descs);
-    const dicts = try cloneStdArrayList(Program.BoxyDict, gpa, lowered.boxy_dicts);
-    const adapters = try cloneStdArrayList(Program.BoxyAdapter, gpa, lowered.boxy_adapters);
-    const desc_refs = try cloneStdArrayList(Program.BoxyDescRef, gpa, lowered.boxy_desc_refs);
-    const dict_refs = try cloneStdArrayList(Program.BoxyDictRef, gpa, lowered.boxy_dict_refs);
-    const tag_variants = try cloneStdArrayList(Program.BoxyTagVariant, gpa, lowered.boxy_tag_variants);
-    const tag_payload_descs = try cloneStdArrayList(Program.BoxyTagPayloadDesc, gpa, lowered.boxy_tag_payload_descs);
-    const field_names = try cloneStdArrayList(LIR.BoxyNameId, gpa, lowered.boxy_field_names);
-    const method_slots = try cloneStdArrayList(Program.BoxyMethodSlot, gpa, lowered.boxy_method_slots);
-    const method_arg_layouts = try cloneStdArrayList(layout_mod.Idx, gpa, lowered.boxy_method_arg_layouts);
-    const method_hidden_desc_sources = try cloneStdArrayList(Program.BoxyMethodHiddenDescSource, gpa, lowered.boxy_method_hidden_desc_sources);
-    const erased_arg_layouts = try cloneStdArrayList(layout_mod.Idx, gpa, lowered.boxy_erased_arg_layouts);
-    const erased_arg_desc_keys = try cloneStdArrayList(LIR.ErasedArgDescKey, gpa, lowered.boxy_erased_arg_desc_keys);
-    const erased_arg_desc_offsets = try cloneStdArrayList(LIR.ErasedArgDescOffset, gpa, lowered.boxy_erased_arg_desc_offsets);
-    const erased_arg_desc_params = try cloneStdArrayList(LIR.ErasedArgDescParam, gpa, lowered.boxy_erased_arg_desc_params);
-
-    return BoxySidecar.fromStores(buffer.ptr, buffer.len, &layouts, names, .{
-        .type_descs = type_descs.items,
-        .dicts = dicts.items,
-        .adapters = adapters.items,
-        .desc_refs = desc_refs.items,
-        .dict_refs = dict_refs.items,
-        .tag_variants = tag_variants.items,
-        .tag_payload_descs = tag_payload_descs.items,
-        .field_names = field_names.items,
-        .method_slots = method_slots.items,
-        .method_arg_layouts = method_arg_layouts.items,
-        .method_hidden_desc_sources = method_hidden_desc_sources.items,
-        .erased_arg_layouts = erased_arg_layouts.items,
-        .erased_arg_desc_keys = erased_arg_desc_keys.items,
-        .erased_arg_desc_offsets = erased_arg_desc_offsets.items,
-        .erased_arg_desc_params = erased_arg_desc_params.items,
-    });
-}
-
-/// Serialize the boxy sidecar (layout store, name store, and boxy tables) of
-/// a lowered program into a fresh self-contained buffer allocated from `gpa`.
-/// The returned sidecar's offsets are relative to the buffer's base pointer.
-pub fn buildSidecarBlob(
-    gpa: std.mem.Allocator,
-    lowered: *const Program.Result,
-) (ImageError || std.mem.Allocator.Error)!SidecarBlob {
-    lowered.store.requireBoxy();
-    base.dev_diagnostics.traceBoxyWork("sidecar");
-    return serializeGrowing(gpa, serializeSidecarInto, .{lowered});
-}
-
-/// The sidecar of a canonical dev image (design.md "Canonical Dev Images"):
-/// its layouts are the fixed ones, then those `order` lists, numbered as the
-/// image's code loads them, then every layout those and the Boxy tables
-/// reach, in the order a walk from them first meets each; its erased
-/// argument layouts are `order`'s runs. Which procedures this program
-/// lowered therefore changes nothing in it.
-pub fn buildCanonicalSidecarBlob(
-    gpa: std.mem.Allocator,
-    lowered: *const Program.Result,
-    order: *const RuntimeTables.Order,
-) (ImageError || std.mem.Allocator.Error)!SidecarBlob {
-    lowered.store.requireBoxy();
-    base.dev_diagnostics.traceBoxyWork("sidecar");
-    var canonical = try CanonicalLayouts.init(gpa, lowered, order);
-    defer canonical.deinit(gpa);
-    return serializeGrowing(gpa, serializeCanonicalSidecarInto, .{ lowered, &canonical, order });
-}
-
-/// Serialize into a buffer that grows until the sidecar fits, then copy it
-/// into one exactly its size.
-fn serializeGrowing(gpa: std.mem.Allocator, comptime serialize: anytype, args: anytype) (ImageError || std.mem.Allocator.Error)!SidecarBlob {
-    var capacity: usize = 1 << 16;
-    while (true) {
-        const bytes = try gpa.alignedAlloc(u8, .@"16", capacity);
-        @memset(bytes, 0);
-        var fba = std.heap.FixedBufferAllocator.init(bytes);
-        if (@call(.auto, serialize, .{ fba.allocator(), bytes } ++ args)) |sidecar| {
-            const compact = gpa.alignedAlloc(u8, .@"16", fba.end_index) catch |err| {
-                gpa.free(bytes);
-                return err;
-            };
-            @memcpy(compact, bytes[0..fba.end_index]);
-            gpa.free(bytes);
-            return .{ .bytes = compact, .sidecar = sidecar };
-        } else |err| switch (err) {
-            error.OutOfMemory => {
-                gpa.free(bytes);
-                capacity = std.math.mul(usize, capacity, 2) catch return error.OutOfMemory;
-            },
-            else => |image_err| {
-                gpa.free(bytes);
-                return image_err;
-            },
-        }
-    }
-}
-
-/// The canonical index of every layout a canonical sidecar holds.
-const CanonicalLayouts = struct {
-    /// The program layout at each canonical index.
-    programs: std.ArrayList(layout_mod.Idx) = .empty,
-    /// The canonical index of each program layout, or `absent`.
-    canonical_of: []u32,
-
-    const absent = std.math.maxInt(u32);
-
-    fn init(gpa: std.mem.Allocator, lowered: *const Program.Result, order: *const RuntimeTables.Order) std.mem.Allocator.Error!CanonicalLayouts {
-        const store = &lowered.layouts;
-        var self = CanonicalLayouts{ .canonical_of = try gpa.alloc(u32, store.layoutCount()) };
-        errdefer self.deinit(gpa);
-        @memset(self.canonical_of, absent);
-        for (0..RuntimeTables.fixed_layout_count) |index| try self.add(gpa, @fromBackingInt(@intCast(index)));
-        // The code numbered these first, in this order.
-        for (order.layouts.items) |idx| try self.add(gpa, idx);
-        for (order.erased_arg_layouts.items) |span| {
-            for (lowered.boxy_erased_arg_layouts.items[span.start..][0..span.len]) |idx| try self.add(gpa, idx);
-        }
-        for (lowered.boxy_type_descs.items) |desc| try self.add(gpa, desc.payload_layout);
-        for (lowered.boxy_tag_variants.items) |variant| try self.add(gpa, variant.payload_layout);
-        for (lowered.boxy_adapters.items) |adapter| {
-            try self.add(gpa, adapter.source_layout);
-            try self.add(gpa, adapter.target_layout);
-        }
-        for (lowered.boxy_method_arg_layouts.items) |idx| try self.add(gpa, idx);
-        for (lowered.boxy_method_slots.items) |slot| if (slot.adapter.ret_layout) |idx| try self.add(gpa, idx);
-        // Every layout one of these names, so the runtime can follow it.
-        var next: usize = 0;
-        while (next < self.programs.items.len) : (next += 1) {
-            const program = self.programs.items[next];
-            const value = store.getLayout(program);
-            switch (value.tag) {
-                .box, .list, .ptr => try self.add(gpa, value.getIdx()),
-                .closure => try self.add(gpa, value.getClosure().captures_layout_idx),
-                .struct_ => {
-                    const data = store.getStructData(value.getStruct().idx);
-                    for (store.struct_fields.sliceRange(data.getFields()).items(.layout)) |field| try self.add(gpa, field);
-                },
-                .tag_union => {
-                    const data = store.getTagUnionData(value.getTagUnion().idx);
-                    for (store.getTagUnionVariants(data).items(.payload_layout)) |payload| try self.add(gpa, payload);
-                },
-                .scalar, .box_of_zst, .list_of_zst, .erased_callable, .zst, .erased_box, .hole => {},
-            }
-            const resolved = store.resolved_list_layouts.items[@backingInt(program)];
-            if (resolved != layout_mod.Idx.none) try self.add(gpa, resolved);
-        }
-        return self;
-    }
-
-    fn deinit(self: *CanonicalLayouts, gpa: std.mem.Allocator) void {
-        self.programs.deinit(gpa);
-        gpa.free(self.canonical_of);
-        self.* = undefined;
-    }
-
-    fn add(self: *CanonicalLayouts, gpa: std.mem.Allocator, program: layout_mod.Idx) std.mem.Allocator.Error!void {
-        const slot = &self.canonical_of[@backingInt(program)];
-        if (slot.* != absent) return;
-        slot.* = @intCast(self.programs.items.len);
-        try self.programs.append(gpa, program);
-    }
-
-    fn of(self: *const CanonicalLayouts, program: layout_mod.Idx) layout_mod.Idx {
-        const canonical = self.canonical_of[@backingInt(program)];
-        if (canonical == absent) base.invariant("a canonical sidecar names a layout it does not hold", .{});
-        return @fromBackingInt(@intCast(canonical));
-    }
-};
-
-fn serializeCanonicalSidecarInto(
-    gpa: std.mem.Allocator,
-    buffer: []align(16) u8,
-    lowered: *const Program.Result,
-    canonical: *const CanonicalLayouts,
-    order: *const RuntimeTables.Order,
-) (ImageError || std.mem.Allocator.Error)!BoxySidecar {
-    const source = &lowered.layouts;
-    var layouts: collections.SafeList(layout_mod.Layout) = .{};
-    var resolved_list_layouts: std.ArrayList(layout_mod.Idx) = .empty;
-    var struct_fields: layout_mod.StructField.SafeMultiList = .{};
-    var struct_field_offsets: collections.SafeList(layout_mod.WidthValues(u32)) = .{};
-    var struct_field_original_order: collections.SafeList(u32) = .{};
-    var struct_data: collections.SafeList(layout_mod.StructData) = .{};
-    var tag_union_variants: layout_mod.TagUnionVariant.SafeMultiList = .{};
-    var tag_union_data: collections.SafeList(layout_mod.TagUnionData) = .{};
-    for (canonical.programs.items) |program| {
-        const value = source.getLayout(program);
-        const copied: layout_mod.Layout = switch (value.tag) {
-            .box, .list, .ptr => .{ .data = @backingInt(canonical.of(value.getIdx())), .tag = value.tag },
-            .closure => layout_mod.Layout.closure(canonical.of(value.getClosure().captures_layout_idx)),
-            .struct_ => copied: {
-                const struct_layout = value.getStruct();
-                var data = source.getStructData(struct_layout.idx).*;
-                const fields = data.getFields();
-                const first: u32 = @intCast(struct_fields.len());
-                const field_start = @backingInt(fields.start);
-                for (field_start..field_start + fields.count) |field_index| {
-                    const field = source.struct_fields.get(@fromBackingInt(@intCast(field_index)));
-                    _ = try struct_fields.append(gpa, .{ .index = field.index, .layout = canonical.of(field.layout), .is_padding = field.is_padding });
-                    _ = try struct_field_offsets.append(gpa, source.struct_field_offsets.items.items[field_index]);
-                    _ = try struct_field_original_order.append(gpa, source.struct_field_original_order.items.items[field_index]);
-                }
-                data.fields = .{ .start = first, .count = fields.count };
-                const index = try struct_data.append(gpa, data);
-                break :copied layout_mod.Layout.struct_(struct_layout.sort_key, .{ .int_idx = @intCast(@backingInt(index)) });
-            },
-            .tag_union => copied: {
-                const tag_union_layout = value.getTagUnion();
-                var data = source.getTagUnionData(tag_union_layout.idx).*;
-                const first: u32 = @intCast(tag_union_variants.len());
-                for (source.getTagUnionVariants(&data).items(.payload_layout)) |payload| {
-                    _ = try tag_union_variants.append(gpa, .{ .payload_layout = canonical.of(payload) });
-                }
-                data.variants = .{ .start = first, .count = data.variants.count };
-                const index = try tag_union_data.append(gpa, data);
-                break :copied layout_mod.Layout.tagUnion(tag_union_layout.sort_key, .{ .int_idx = @intCast(@backingInt(index)) });
-            },
-            .scalar, .box_of_zst, .list_of_zst, .erased_callable, .zst, .erased_box, .hole => value,
-        };
-        _ = try layouts.append(gpa, copied);
-        const resolved = source.resolved_list_layouts.items[@backingInt(program)];
-        try resolved_list_layouts.append(gpa, if (resolved == layout_mod.Idx.none) resolved else canonical.of(resolved));
-    }
-    canonicalizePersistedItems(layout_mod.Layout, layouts.items.items);
-    canonicalizePersistedItems(layout_mod.Idx, resolved_list_layouts.items);
-    canonicalizePersistedItems(u32, struct_fields.field(.index));
-    canonicalizePersistedItems(layout_mod.Idx, struct_fields.field(.layout));
-    canonicalizePersistedItems(bool, struct_fields.field(.is_padding));
-    canonicalizePersistedItems(layout_mod.WidthValues(u32), struct_field_offsets.items.items);
-    canonicalizePersistedItems(u32, struct_field_original_order.items.items);
-    canonicalizePersistedItems(layout_mod.StructData, struct_data.items.items);
-    canonicalizePersistedItems(layout_mod.Idx, tag_union_variants.field(.payload_layout));
-    canonicalizePersistedItems(layout_mod.TagUnionData, tag_union_data.items.items);
-    const layout_store: layout_mod.Store = .{
-        .allocator = gpa,
-        .layouts = layouts,
-        .resolved_list_layouts = resolved_list_layouts,
-        .tuple_elems = .{},
-        .struct_fields = struct_fields,
-        .struct_field_offsets = struct_field_offsets,
-        .struct_field_original_order = struct_field_original_order,
-        .struct_data = struct_data,
-        .tag_union_variants = tag_union_variants,
-        .tag_union_data = tag_union_data,
-        .interned_layouts = .empty,
-        .interned_key_bytes = .empty,
-        .scratch_intern_key = .empty,
-        // The Boxy runtime only reads this store's layouts and never takes
-        // their content digests, so it carries no recursive-graph keys, whose
-        // presence depends on how each layout was committed rather than on
-        // what the code loads.
-        .recursive_layout_keys = .{},
-        .interned_recursive_graphs = .empty,
-        .recursive_unfoldings = .empty,
-        .recursive_groups = .{},
-        .target_usize = source.target_usize,
-        // `BoxySidecar.fromStores` reads only the array-backed fields.
-        .digest_cache = undefined,
-    };
-    const names = try BoxyNamesImage.fromStore(Copier{ .allocator = gpa, .base_ptr = buffer.ptr, .image_capacity = buffer.len, .contract = .persisted }, &lowered.store.boxy_names);
-
-    const type_descs = try cloneStdArrayList(Program.BoxyTypeDesc, gpa, lowered.boxy_type_descs);
-    for (type_descs.items) |*desc| desc.payload_layout = canonical.of(desc.payload_layout);
-    const tag_variants = try cloneStdArrayList(Program.BoxyTagVariant, gpa, lowered.boxy_tag_variants);
-    for (tag_variants.items) |*variant| variant.payload_layout = canonical.of(variant.payload_layout);
-    const adapters = try cloneStdArrayList(Program.BoxyAdapter, gpa, lowered.boxy_adapters);
-    for (adapters.items) |*adapter| {
-        adapter.source_layout = canonical.of(adapter.source_layout);
-        adapter.target_layout = canonical.of(adapter.target_layout);
-    }
-    const method_arg_layouts = try cloneStdArrayList(layout_mod.Idx, gpa, lowered.boxy_method_arg_layouts);
-    for (method_arg_layouts.items) |*idx| idx.* = canonical.of(idx.*);
-    const method_slots = try cloneStdArrayList(Program.BoxyMethodSlot, gpa, lowered.boxy_method_slots);
-    for (method_slots.items) |*slot| if (slot.adapter.ret_layout) |idx| {
-        slot.adapter.ret_layout = canonical.of(idx);
-    };
-    var erased_arg_layouts: std.ArrayList(layout_mod.Idx) = .empty;
-    for (order.erased_arg_layouts.items) |span| {
-        for (lowered.boxy_erased_arg_layouts.items[span.start..][0..span.len]) |idx| try erased_arg_layouts.append(gpa, canonical.of(idx));
-    }
-    canonicalizePersistedItems(layout_mod.Idx, erased_arg_layouts.items);
-    const dicts = try cloneStdArrayList(Program.BoxyDict, gpa, lowered.boxy_dicts);
-    const desc_refs = try cloneStdArrayList(Program.BoxyDescRef, gpa, lowered.boxy_desc_refs);
-    const dict_refs = try cloneStdArrayList(Program.BoxyDictRef, gpa, lowered.boxy_dict_refs);
-    const tag_payload_descs = try cloneStdArrayList(Program.BoxyTagPayloadDesc, gpa, lowered.boxy_tag_payload_descs);
-    const field_names = try cloneStdArrayList(LIR.BoxyNameId, gpa, lowered.boxy_field_names);
-    const method_hidden_desc_sources = try cloneStdArrayList(Program.BoxyMethodHiddenDescSource, gpa, lowered.boxy_method_hidden_desc_sources);
-    const erased_arg_desc_keys = try cloneStdArrayList(LIR.ErasedArgDescKey, gpa, lowered.boxy_erased_arg_desc_keys);
-    const erased_arg_desc_offsets = try cloneStdArrayList(LIR.ErasedArgDescOffset, gpa, lowered.boxy_erased_arg_desc_offsets);
-    const erased_arg_desc_params = try cloneStdArrayList(LIR.ErasedArgDescParam, gpa, lowered.boxy_erased_arg_desc_params);
-
-    return BoxySidecar.fromStores(buffer.ptr, buffer.len, &layout_store, names, .{
-        .type_descs = type_descs.items,
-        .dicts = dicts.items,
-        .adapters = adapters.items,
-        .desc_refs = desc_refs.items,
-        .dict_refs = dict_refs.items,
-        .tag_variants = tag_variants.items,
-        .tag_payload_descs = tag_payload_descs.items,
-        .field_names = field_names.items,
-        .method_slots = method_slots.items,
-        .method_arg_layouts = method_arg_layouts.items,
-        .method_hidden_desc_sources = method_hidden_desc_sources.items,
-        .erased_arg_layouts = erased_arg_layouts.items,
-        .erased_arg_desc_keys = erased_arg_desc_keys.items,
-        .erased_arg_desc_offsets = erased_arg_desc_offsets.items,
-        .erased_arg_desc_params = erased_arg_desc_params.items,
-    });
 }
 
 comptime {
@@ -1086,7 +444,7 @@ comptime {
     // serialized, and default to null or empty in views. The layout store's `digest_cache` is a memo
     // each view starts empty, and its `commit_scratch` and
     // `scratch_field_offsets` are scratch that views start empty.
-    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 41);
+    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 39);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 21);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
@@ -1119,10 +477,8 @@ pub fn fillHeaderInBuffer(
         .image_size = image_size,
         .root_procs = try arrayRef(base_ptr, image_size, lowered.root_procs.items),
         .platform_entrypoints = try arrayRef(base_ptr, image_size, platform_entrypoints),
-        .boxy_worker_procs = if (lowered.store.runtime_contract == .boxy) try arrayRef(base_ptr, image_size, lowered.boxy_worker_procs.items) else std.mem.zeroes(ArrayRef),
         .store = try LirStoreImage.fromStore(encoder, &lowered.store),
         .layouts = try LayoutStoreImage.fromStore(encoder, &lowered.layouts),
-        .boxy_tables = try BoxyTablesImage.fromProgram(encoder, lowered),
     };
 }
 
@@ -1131,10 +487,8 @@ pub const CopiedProgram = struct {
     image_capacity: usize,
     root_procs: ArrayRef,
     platform_entrypoints: ArrayRef,
-    boxy_worker_procs: ArrayRef,
     store: LirStoreImage,
     layouts: LayoutStoreImage,
-    boxy_tables: BoxyTablesImage,
     static_data: ArrayRef = .empty(),
     static_data_value_count: u32 = 0,
     static_data_pointer_bytes: u32 = 0,
@@ -1147,10 +501,8 @@ pub const CopiedProgram = struct {
             .image_size = image_size,
             .root_procs = self.root_procs,
             .platform_entrypoints = self.platform_entrypoints,
-            .boxy_worker_procs = self.boxy_worker_procs,
             .store = self.store,
             .layouts = self.layouts,
-            .boxy_tables = self.boxy_tables,
             .static_data = self.static_data,
             .static_data_value_count = self.static_data_value_count,
             .static_data_pointer_bytes = self.static_data_pointer_bytes,
@@ -1179,10 +531,8 @@ pub fn referenceProgramWithStaticDataInBuffer(
         .static_data_pointer_bytes = @intCast(lowered.layouts.targetUsize().size()),
         .root_procs = try arrayRef(base_ptr, image_capacity, lowered.root_procs.items),
         .platform_entrypoints = try arrayRef(base_ptr, image_capacity, platform_entrypoints),
-        .boxy_worker_procs = if (lowered.store.runtime_contract == .boxy) try arrayRef(base_ptr, image_capacity, lowered.boxy_worker_procs.items) else std.mem.zeroes(ArrayRef),
         .store = try LirStoreImage.fromStore(encoder, &lowered.store),
         .layouts = try LayoutStoreImage.fromStore(encoder, &lowered.layouts),
-        .boxy_tables = try BoxyTablesImage.fromProgram(encoder, lowered),
     };
 }
 
@@ -1207,10 +557,8 @@ pub fn copyProgramWithStaticDataIntoBuffer(
         .static_data_pointer_bytes = @intCast(lowered.layouts.targetUsize().size()),
         .root_procs = try copyArrayRef(allocator, base_ptr, image_capacity, contract, lowered.root_procs.items),
         .platform_entrypoints = try copyArrayRef(allocator, base_ptr, image_capacity, contract, platform_entrypoints),
-        .boxy_worker_procs = if (lowered.store.runtime_contract == .boxy) try copyArrayRef(allocator, base_ptr, image_capacity, contract, lowered.boxy_worker_procs.items) else std.mem.zeroes(ArrayRef),
         .store = try LirStoreImage.fromStore(encoder, &lowered.store),
         .layouts = try LayoutStoreImage.fromStore(encoder, &lowered.layouts),
-        .boxy_tables = try BoxyTablesImage.fromProgram(encoder, lowered),
     };
 }
 
@@ -1252,19 +600,6 @@ pub fn viewMappedImageWithAllocator(
     // whose slice fields are not const, even though the interpreter only
     // reads them. Cast once at the boundary so callers don't have to.
     const mutable_base: [*]align(1) u8 = @constCast(base_ptr);
-    const boxy_tables: BoxyTablesView = if (header.store.runtime_contract == @backingInt(LIR.RuntimeContract.boxy))
-        try header.boxy_tables.view(mutable_base, @intCast(header.image_size))
-    else empty: {
-        if (header.store.runtime_contract != @backingInt(LIR.RuntimeContract.specialized)) return error.InvalidLirImage;
-        inline for (@typeInfo(BoxyTablesImage).@"struct".field_names) |name| {
-            if (@field(header.boxy_tables, name).len != 0) return error.InvalidLirImage;
-        }
-        if (header.boxy_worker_procs.len != 0) return error.InvalidLirImage;
-        var tables: BoxyTablesView = undefined;
-        inline for (@typeInfo(BoxyTablesView).@"struct".field_names) |name| @field(tables, name) = &.{};
-        break :empty tables;
-    };
-
     var layouts = try header.layouts.view(mutable_base, @intCast(header.image_size), target_usize, allocator);
     errdefer deinitViewedLayouts(&layouts, allocator);
     const static_data = try StaticDataImage.view(allocator, mutable_base, @intCast(header.image_size), header.static_data, header.static_data_value_count, @intCast(header.store.proc_specs.len), layouts.layoutCount(), target_usize.size());
@@ -1276,22 +611,6 @@ pub fn viewMappedImageWithAllocator(
         .layouts = layouts,
         .root_procs = try sliceFromRef(LIR.LirProcSpecId, mutable_base, @intCast(header.image_size), header.root_procs),
         .platform_entrypoints = try sliceFromRef(PlatformEntrypoint, mutable_base, @intCast(header.image_size), header.platform_entrypoints),
-        .boxy_type_descs = boxy_tables.type_descs,
-        .boxy_dicts = boxy_tables.dicts,
-        .boxy_adapters = boxy_tables.adapters,
-        .boxy_desc_refs = boxy_tables.desc_refs,
-        .boxy_dict_refs = boxy_tables.dict_refs,
-        .boxy_tag_variants = boxy_tables.tag_variants,
-        .boxy_tag_payload_descs = boxy_tables.tag_payload_descs,
-        .boxy_field_names = boxy_tables.field_names,
-        .boxy_method_slots = boxy_tables.method_slots,
-        .boxy_worker_procs = if (header.store.runtime_contract == @backingInt(LIR.RuntimeContract.boxy)) try sliceFromRef(LIR.LirProcSpecId, mutable_base, @intCast(header.image_size), header.boxy_worker_procs) else &.{},
-        .boxy_method_arg_layouts = boxy_tables.method_arg_layouts,
-        .boxy_method_hidden_desc_sources = boxy_tables.method_hidden_desc_sources,
-        .boxy_erased_arg_layouts = boxy_tables.erased_arg_layouts,
-        .boxy_erased_arg_desc_keys = boxy_tables.erased_arg_desc_keys,
-        .boxy_erased_arg_desc_offsets = boxy_tables.erased_arg_desc_offsets,
-        .boxy_erased_arg_desc_params = boxy_tables.erased_arg_desc_params,
         .target_usize = target_usize,
         .scratch_allocator = allocator,
     };
@@ -1455,242 +774,6 @@ fn checkedOffset(ref: ArrayRef) ImageError!usize {
     return std.math.cast(usize, ref.offset) orelse error.InvalidLirImage;
 }
 
-/// Convert an intentional fixture-table position while preserving enum inference.
-fn fixtureTableIndex(comptime index: u32) u32 {
-    return index;
-}
-
-test "LIR image views empty and populated boxy tables" {
-    const buffer = try std.testing.allocator.alignedAlloc(u8, .@"16", 1 << 20);
-    defer std.testing.allocator.free(buffer);
-    @memset(buffer, 0);
-
-    var fba = std.heap.FixedBufferAllocator.init(buffer);
-    const allocator = fba.allocator();
-
-    const header = try allocator.create(Header);
-    var lowered = try Program.Result.init(allocator, .u64);
-    lowered.store.runtime_contract = .boxy;
-
-    try fillHeaderInBuffer(header, buffer[0..].ptr, buffer.len, &lowered, &.{});
-    var empty_view = try viewMappedImageWithAllocator(header, buffer[0..].ptr, buffer.len, .u64, allocator);
-    defer empty_view.deinit();
-    try std.testing.expectEqual(@as(u32, 0), empty_view.store.boxy_names.count());
-    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_type_descs.len);
-    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_dicts.len);
-    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_adapters.len);
-    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_desc_refs.len);
-    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_dict_refs.len);
-    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_tag_variants.len);
-    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_tag_payload_descs.len);
-    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_method_slots.len);
-    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_worker_procs.len);
-    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_method_arg_layouts.len);
-    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_method_hidden_desc_sources.len);
-    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_erased_arg_layouts.len);
-
-    try lowered.boxy_desc_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
-    try lowered.boxy_method_arg_layouts.append(allocator, .zst);
-    try lowered.boxy_erased_arg_layouts.append(allocator, .u64);
-    try lowered.boxy_method_hidden_desc_sources.append(allocator, .{ .slot = 0 });
-    try lowered.boxy_dict_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
-    try lowered.boxy_tag_variants.append(allocator, .{
-        .name = try lowered.store.insertBoxyName("Ok"),
-        .discriminant = 0,
-        .payload_count = 1,
-        .payload_layout = .zst,
-        .payload_descs = .{ .start = 0, .len = 1 },
-    });
-    try lowered.boxy_tag_payload_descs.append(allocator, .{
-        .payload_index = 0,
-        .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-    });
-    try lowered.boxy_method_slots.append(allocator, .{
-        .method = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .proc = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .adapter = .{
-            .arg_layouts = .{ .start = 0, .len = 1 },
-            .arg_descs = .{ .start = 0, .len = 1 },
-            .call_descs = .{ .start = 0, .len = 1 },
-            .nested_dicts = .{ .start = 0, .len = 1 },
-            .hidden_desc_sources = .{ .start = 0, .len = 1 },
-        },
-    });
-    try lowered.boxy_worker_procs.append(allocator, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try lowered.boxy_type_descs.append(allocator, .{
-        .payload_layout = .zst,
-        .contains_refcounted = true,
-        .shape = .tag_union,
-        .nested_descs = .{ .start = 0, .len = 1 },
-        .tag_variants = .{ .start = 0, .len = 1 },
-        .presence_slot_present_discriminant = 1,
-        .inspect_method = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-    });
-    try lowered.boxy_dicts.append(allocator, .{
-        .method_slots = .{ .start = 0, .len = 1 },
-    });
-    try lowered.boxy_adapters.append(allocator, .{
-        .kind = .host_to_boxy,
-        .source_layout = .str,
-        .target_layout = .str,
-        .consumes_source = false,
-        .produces_owned_result = true,
-    });
-    const struct_field_idx = try lowered.layouts.struct_fields.append(allocator, .{
-        .index = 7,
-        .layout = .str,
-        .is_padding = true,
-    });
-    const tag_variant_idx = try lowered.layouts.tag_union_variants.append(allocator, .{
-        .payload_layout = .u64,
-    });
-    const ret_desc_local = try lowered.store.addLocal(.{ .layout_idx = .opaque_ptr });
-    const ret_value = try lowered.store.addLocal(.{
-        .layout_idx = .str,
-        .boxy_desc = .{ .local = ret_desc_local },
-    });
-    const ret_stmt = try lowered.store.addCFStmt(.{ .ret = .{ .value = ret_value } }, .test_fixture);
-    const proc_id = try lowered.store.addProcSpec(.{
-        .name = lowered.store.freshSyntheticSymbol(),
-        .identity = LIR.ProcIdentity.forTest(3),
-        .native_code_revision = 7,
-        .args = try lowered.store.addLocalSpan(&.{ret_desc_local}),
-        .body = ret_stmt,
-        .ret_layout = .str,
-        .ret_desc = .{ .local = ret_desc_local },
-    }, .none);
-
-    try fillHeaderInBuffer(header, buffer[0..].ptr, buffer.len, &lowered, &.{});
-    var populated_view = try viewMappedImageWithAllocator(header, buffer[0..].ptr, buffer.len, .u64, allocator);
-    defer populated_view.deinit();
-    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_type_descs.len);
-    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_dicts.len);
-    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_adapters.len);
-    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_desc_refs.len);
-    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_dict_refs.len);
-    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_tag_variants.len);
-    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_tag_payload_descs.len);
-    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_slots.len);
-    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_worker_procs.len);
-    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_arg_layouts.len);
-    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_hidden_desc_sources.len);
-    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_erased_arg_layouts.len);
-    try std.testing.expect(populated_view.boxy_type_descs[0].contains_refcounted);
-    try std.testing.expectEqual(@as(?u32, 1), populated_view.boxy_type_descs[0].presence_slot_present_discriminant);
-    try std.testing.expectEqual(@as(u32, 0), @backingInt(populated_view.boxy_type_descs[0].inspect_method.?));
-    try std.testing.expectEqual(@as(u32, 0), populated_view.boxy_tag_variants[0].discriminant);
-    try std.testing.expectEqualStrings("Ok", populated_view.store.getBoxyName(populated_view.boxy_tag_variants[0].name));
-    try std.testing.expectEqual(@as(u32, 0), populated_view.boxy_tag_payload_descs[0].payload_index);
-    try std.testing.expectEqual(Program.BoxyAdapterKind.host_to_boxy, populated_view.boxy_adapters[0].kind);
-    try std.testing.expectEqual(layout_mod.Idx.zst, populated_view.boxy_method_arg_layouts[0]);
-    try std.testing.expectEqual(layout_mod.Idx.u64, populated_view.boxy_erased_arg_layouts[0]);
-    try std.testing.expectEqual(Program.BoxySpan{ .start = 0, .len = 1 }, populated_view.boxy_method_slots[0].adapter.call_descs);
-    try std.testing.expectEqual(@as(u32, 0), @backingInt(populated_view.boxy_worker_procs[0]));
-    try std.testing.expectEqual(@as(u32, 0), populated_view.boxy_method_hidden_desc_sources[0].slot);
-    try std.testing.expectEqual(@as(u32, 7), populated_view.layouts.struct_fields.fieldItem(.index, struct_field_idx));
-    try std.testing.expectEqual(layout_mod.Idx.str, populated_view.layouts.struct_fields.fieldItem(.layout, struct_field_idx));
-    try std.testing.expect(populated_view.layouts.struct_fields.fieldItem(.is_padding, struct_field_idx));
-    try std.testing.expectEqual(layout_mod.Idx.u64, populated_view.layouts.tag_union_variants.fieldItem(.payload_layout, tag_variant_idx));
-    try std.testing.expectEqual(LIR.BoxyDescRef{ .local = ret_desc_local }, populated_view.store.getProcSpecImmediate(proc_id).ret_desc.?);
-    try std.testing.expectEqual(@as(u64, 7), populated_view.store.getProcSpecImmediate(proc_id).native_code_revision);
-}
-
-// Regression for issue #11153: folded scalar lists share the literal store,
-// but only generated code and full interpreter images need those bytes.
-test "boxy sidecar blob carries only the names its tables reach" {
-    const gpa = std.testing.allocator;
-    var lowered = try Program.Result.init(gpa, .u64);
-    lowered.store.runtime_contract = .boxy;
-    defer lowered.deinit();
-
-    var folded_table: [4096]u8 = undefined;
-    for (&folded_table, 0..) |*byte, i| byte.* = 0x5a +% @as(u8, @truncate(i *% 31));
-    const folded = try lowered.store.insertStringViewAligned(&folded_table, 0, folded_table.len, 4);
-    try std.testing.expectEqualSlices(u8, &folded_table, lowered.store.getStringLiteral(folded));
-
-    const ok = try lowered.store.insertBoxyName("Ok");
-    const count = try lowered.store.insertBoxyName("count");
-    try lowered.boxy_tag_variants.append(gpa, .{
-        .name = ok,
-        .discriminant = 0,
-        .payload_layout = .zst,
-    });
-    try lowered.boxy_field_names.appendSlice(gpa, &.{ count, ok });
-    try std.testing.expectEqual(ok, try lowered.store.insertBoxyName("Ok"));
-    try std.testing.expectEqual(@as(u32, 0), @backingInt(ok));
-    try std.testing.expectEqual(@as(u32, 1), @backingInt(count));
-
-    var blob = try buildSidecarBlob(gpa, &lowered);
-    defer blob.deinit(gpa);
-
-    // Adding unrelated literals must not change any sidecar byte or identity.
-    _ = try lowered.store.insertString("count");
-    _ = try lowered.store.insertStringViewAligned(repeated: {
-        const pattern = "unrelated backing";
-        var result: [pattern.len * (4096)]@TypeOf(pattern[0]) = undefined;
-        for (0..(4096)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], pattern);
-        break :repeated &result;
-    }, 0, 17, 16);
-    var after = try buildSidecarBlob(gpa, &lowered);
-    defer after.deinit(gpa);
-    try std.testing.expectEqualSlices(u8, blob.bytes, after.bytes);
-    try std.testing.expectEqualDeep(blob.sidecar, after.sidecar);
-
-    // Relocation cannot change the producer's identities, including id zero.
-    const relocated = try gpa.alignedAlloc(u8, .@"16", blob.bytes.len);
-    defer gpa.free(relocated);
-    @memcpy(relocated, blob.bytes);
-    for ([_]base.target.TargetUsize{ .u32, .u64 }) |width| {
-        var view = try blob.sidecar.view(relocated.ptr, relocated.len, width, gpa);
-        defer view.deinit();
-        try std.testing.expectEqual(ok, view.tables.tag_variants[0].name);
-        try std.testing.expectEqual(count, view.tables.field_names[0]);
-        try std.testing.expectEqual(ok, view.tables.field_names[1]);
-        try std.testing.expectEqualStrings("Ok", view.names.get(view.tables.tag_variants[0].name));
-        try std.testing.expectEqualStrings("count", view.names.get(view.tables.field_names[0]));
-        try std.testing.expectEqual(@as(u32, 2), view.names.count());
-        try std.testing.expectEqual(@as(usize, 0), view.names.interner.index.len());
-    }
-    try std.testing.expectEqual(@as(?usize, null), std.mem.find(u8, blob.bytes, &folded_table));
-    try std.testing.expectEqual(@as(u64, 7), blob.sidecar.names.bytes.len);
-}
-
-test "erased argument descriptor params declare every byte they occupy" {
-    try std.testing.expect(collections.serde_validation.isFullyDefined(LIR.ErasedArgDescParam));
-}
-
-test "boxy sidecar bytes do not depend on what table storage held before" {
-    const gpa = std.testing.allocator;
-    var blobs: [2]SidecarBlob = undefined;
-    var built: usize = 0;
-    defer for (blobs[0..built]) |*blob| blob.deinit(gpa);
-
-    for ([_]u8{ 0x00, 0xff }) |stale| {
-        var lowered = try Program.Result.init(gpa, .u64);
-        lowered.store.runtime_contract = .boxy;
-        defer lowered.deinit();
-
-        // Write the same parameter over storage that held different bytes, so
-        // any byte the value does not define keeps what was there.
-        try lowered.boxy_erased_arg_desc_params.ensureTotalCapacity(gpa, 1);
-        const slot = lowered.boxy_erased_arg_desc_params.addOneAssumeCapacity();
-        @memset(std.mem.asBytes(slot), stale);
-        slot.* = .{
-            .key = .{ .arg_index = 1, .descriptor_index = 2 },
-            .local = @fromBackingInt(3),
-            .source_descriptor_index = 4,
-            .source_nested_index = 5,
-            .source_tag_name = @fromBackingInt(6),
-            .read = .tag_payload,
-        };
-
-        blobs[built] = try buildSidecarBlob(gpa, &lowered);
-        built += 1;
-    }
-
-    try std.testing.expectEqualSlices(u8, blobs[0].bytes, blobs[1].bytes);
-}
-
 test "image header and frozen graph rows declare every byte they occupy" {
     try std.testing.expect(collections.serde_validation.isFullyDefined(Header));
     try std.testing.expect(collections.serde_validation.isFullyDefined(StaticDataImage.Export));
@@ -1761,7 +844,6 @@ test "persisted image bytes do not depend on what store memory held before" {
         defer view.deinit();
         try std.testing.expectEqual(local, view.store.getCFStmtImmediate(ret).ret.value);
         try std.testing.expectEqual(layout_mod.Idx.u64, view.store.getLocal(local).layout_idx);
-        try std.testing.expectEqual(@as(?LIR.BoxyDescRef, null), view.store.getLocal(local).boxy_desc);
         try std.testing.expectEqual(@as(?LIR.CFStmtId, ret), view.store.getProcSpecImmediate(proc).body);
         try std.testing.expectEqual(name, view.store.getProcSpecImmediate(proc).name);
         try std.testing.expectEqual(proc, view.root_procs[0]);
@@ -1788,7 +870,6 @@ const serialized_guarded_fields = [_][]const u8{
     "str_match_arms",
     "join_points",
     "locals",
-    "local_descs",
     "local_ids",
     "u64s",
     "u32s",
@@ -1986,7 +1067,6 @@ test "LIR image copies and round-trips every populated store field" {
 
     // A LirStore with every serialized list populated distinctively.
     var store = LirStore.init(source_allocator);
-    store.runtime_contract = .boxy;
     inline for (serialized_guarded_fields, 0..) |fname, i| {
         @field(store, fname) = try h.guarded(@FieldType(LirStore, fname), source_allocator, 2 + i, @intCast(0x20 + i));
     }
@@ -1995,10 +1075,6 @@ test "LIR image copies and round-trips every populated store field" {
     }
     store.next_synthetic_symbol = 0x0123_4567_89ab_cdef;
     store.strings = .{ .buffer = .{ .items = .{ .items = try h.distinct(u8, source_allocator, 24, 0x90), .capacity = 24, .pointer_stability = .{} } } };
-
-    const boxy_name = try store.insertBoxyName("Only");
-    const unicode_name = try store.insertBoxyName("étiquette");
-    const empty_name = try store.insertBoxyName("");
 
     // A layout Store with every serialized list populated distinctively. Only
     // the ten array-backed fields are serialized; the interning caches are not
@@ -2059,14 +1135,6 @@ test "LIR image copies and round-trips every populated store field" {
     // Scalar and sub-image fields.
     try std.testing.expectEqual(@as(u64, 0x0123_4567_89ab_cdef), view.store.next_synthetic_symbol);
     try h.expectBytesEq(store.strings.buffer.items.items, view.store.strings.buffer.items.items);
-
-    try std.testing.expectEqualStrings("Only", view.store.getBoxyName(boxy_name));
-    try std.testing.expectEqualStrings("étiquette", view.store.getBoxyName(unicode_name));
-    try std.testing.expectEqualStrings("", view.store.getBoxyName(empty_name));
-    try h.expectBytesEq(store.boxy_names.interner.bytes.items.items, view.store.boxy_names.interner.bytes.items.items);
-    try h.expectBytesEq(std.mem.sliceAsBytes(store.boxy_names.interner.ends.items.items), std.mem.sliceAsBytes(view.store.boxy_names.interner.ends.items.items));
-    try std.testing.expectEqual(@as(usize, 0), view.store.boxy_names.interner.index.len());
-    try std.testing.expect(!view.store.boxy_names.interner.supports_inserts);
 
     try std.testing.expectEqual(@as(?*const LirStore, null), view.store.body_coordinator);
     try std.testing.expect(view.store.proc_rewrite == null);
@@ -2271,8 +1339,5 @@ test "LIR image preserves the specialized runtime contract and rejects incompati
     try std.testing.expectError(error.UnsupportedLirImageVersion, viewMappedImageWithAllocator(header, buffer.ptr, buffer.len, .u64, allocator));
     header.format_version = FORMAT_VERSION;
     header.store.runtime_contract = 2;
-    try std.testing.expectError(error.InvalidLirImage, viewMappedImageWithAllocator(header, buffer.ptr, buffer.len, .u64, allocator));
-    header.store.runtime_contract = @backingInt(LIR.RuntimeContract.specialized);
-    header.boxy_tables.erased_arg_layouts.len = 1;
     try std.testing.expectError(error.InvalidLirImage, viewMappedImageWithAllocator(header, buffer.ptr, buffer.len, .u64, allocator));
 }

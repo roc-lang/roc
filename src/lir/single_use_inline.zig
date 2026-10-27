@@ -149,16 +149,13 @@ fn eligibleCall(
     call: @FieldType(LIR.CFStmt, "assign_call"),
 ) bool {
     const extra = store.stmtRowOrDefault(call.extra);
-    if (extra.is_cold or extra.result_desc != null or extra.out_desc != null) return false;
+    if (extra.is_cold) return false;
     const callee = store.getProcSpecImmediate(call.proc);
     return callee.body != null and
         callee.hosted == null and
         callee.abi == .roc and
         callee.erased_reuse_arg == null and
         callee.erased_call_args == null and
-        callee.ret_desc == null and
-        callee.runtime_ret_desc == null and
-        !callee.boxy_runtime_entry and
         !callee.is_static_initializer and
         ownershipNeutralFrame(store, layouts, callee.frame_locals);
 }

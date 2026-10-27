@@ -1,6 +1,6 @@
 //! Loads an object the LLVM backend compiled for in-process execution and
 //! binds it to this compiler's own host: the runtime symbols of
-//! `builtins.in_process_host`, the boxy runtime's native functions, the
+//! `builtins.in_process_host`, the
 //! compiler-rt helpers native codegen emits, and the C memory and math
 //! routines this binary already carries. After loading, the object's calls into the
 //! compiler are ordinary direct calls (or stubs where the address space puts
@@ -8,19 +8,16 @@
 
 const std = @import("std");
 const builtins = @import("builtins");
-const backend = @import("backend");
 const relocatable_loader = @import("vendor_relocatable_loader");
-const boxy_abi = @import("boxy_abi.zig");
 
 const Allocator = std.mem.Allocator;
-const BoxyBuiltinFn = backend.LirCodeGenMod.BoxyBuiltinFn;
 
 pub const Image = relocatable_loader.Image;
 pub const LoadError = relocatable_loader.LoadError;
 
 /// Load `object_bytes` against this compiler's host.
-pub fn load(gpa: Allocator, object_bytes: []const u8, contract: @import("lir").LIR.RuntimeContract) LoadError!Image {
-    return Image.load(gpa, object_bytes, .{ .resolve = if (contract == .boxy) resolveBoxyHostSymbol else resolveHostSymbol });
+pub fn load(gpa: Allocator, object_bytes: []const u8) LoadError!Image {
+    return Image.load(gpa, object_bytes, .{ .resolve = resolveHostSymbol });
 }
 
 fn resolveHostSymbol(_: ?*anyopaque, name: []const u8) ?usize {
@@ -28,21 +25,13 @@ fn resolveHostSymbol(_: ?*anyopaque, name: []const u8) ?usize {
     return builtins.native_runtime_libcalls.resolve(name);
 }
 
-fn resolveBoxyHostSymbol(context: ?*anyopaque, name: []const u8) ?usize {
-    if (BoxyBuiltinFn.fromSymbolName(name)) |boxy_fn| return boxy_abi.nativeFnTable()[@backingInt(boxy_fn)];
-    return resolveHostSymbol(context, name);
-}
-
-test "the host resolver covers the runtime, boxy, and libcall symbols" {
+test "the host resolver covers the runtime and libcall symbols" {
     try std.testing.expect(resolveHostSymbol(null, "roc_alloc") != null);
     try std.testing.expect(resolveHostSymbol(null, "roc_expect_err_region") != null);
-    try std.testing.expect(resolveHostSymbol(null, BoxyBuiltinFn.call_erased.symbolName()) == null);
-    try std.testing.expect(resolveBoxyHostSymbol(null, BoxyBuiltinFn.call_erased.symbolName()) != null);
     try std.testing.expect(resolveHostSymbol(null, "__divti3") != null);
     try std.testing.expect(resolveHostSymbol(null, "memcpy") != null);
     try std.testing.expect(resolveHostSymbol(null, "fmod") != null);
     try std.testing.expect(resolveHostSymbol(null, "fmodf") != null);
-    try std.testing.expect(resolveHostSymbol(null, "roc_boxy_init_embedded") == null);
 }
 
 test {

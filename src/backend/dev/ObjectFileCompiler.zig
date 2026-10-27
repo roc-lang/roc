@@ -57,23 +57,13 @@ pub const CompilationResult = struct {
     object_bytes: []const u8,
     /// Allocator used - caller must free object_bytes with this
     allocator: Allocator,
-    /// Whether the compiled procs emit boxy runtime calls. When set, the object
-    /// references `roc_boxy_*` symbols and its entrypoints call
-    /// `roc_boxy_init_embedded`, so the link must include the boxy runtime
-    /// object and the embedded sidecar.
-    uses_boxy: bool = false,
     /// The compiled program lifted into artifacts, when the compile ran in
     /// pack mode on a target whose artifacts can be extracted.
     artifacts: ?ProcArtifact.Set = null,
-    /// The Boxy runtime table entries the object's code loads, in the
-    /// canonical order it numbers them by; the sidecar linked beside the
-    /// object holds exactly these (`LirImage.buildCanonicalSidecarBlob`).
-    runtime_tables: lir.RuntimeTables.Order = .{},
 
     pub fn deinit(self: *CompilationResult) void {
         self.allocator.free(self.object_bytes);
         if (self.artifacts) |*set| set.deinit();
-        self.runtime_tables.deinit(self.allocator);
     }
 };
 
@@ -193,24 +183,10 @@ pub const ObjectFileCompiler = struct {
         entrypoints: []const Entrypoint,
         static_data_exports: []const StaticDataExport,
         proc_specs: []const LirProcSpec,
-        erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
-        erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
-        boxy_worker_procs: []const lir.LIR.LirProcSpecId,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.erased_capture_prefix, self.timing, self.pack_mode, self.splice_source, self.capture_artifacts, self.emit_object, self.post_check_executor, self.reuse_same_program);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target, self.enable_default_platform_runtime, self.erased_capture_prefix, self.timing, self.pack_mode, self.splice_source, self.capture_artifacts, self.emit_object, self.post_check_executor, self.reuse_same_program);
     }
-
-    /// What a written object needs linked beside it.
-    pub const WrittenObject = struct {
-        /// Whether the compiled object emits boxy runtime calls; when set,
-        /// the caller must add the boxy runtime object and the embedded
-        /// sidecar to the link.
-        uses_boxy: bool,
-        /// The runtime table entries the object's code loads, which its
-        /// sidecar holds (`CompilationResult.runtime_tables`).
-        runtime_tables: lir.RuntimeTables.Order,
-    };
 
     /// Compile to an object file and write it to a path.
     pub fn compileToObjectFileAndWrite(
@@ -220,22 +196,16 @@ pub const ObjectFileCompiler = struct {
         entrypoints: []const Entrypoint,
         static_data_exports: []const StaticDataExport,
         proc_specs: []const LirProcSpec,
-        erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
-        erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
-        boxy_worker_procs: []const lir.LIR.LirProcSpecId,
         target: RocTarget,
         output_path: []const u8,
         roc_ctx: CoreCtx,
-    ) CompilationError!WrittenObject {
+    ) CompilationError!void {
         var result = try self.compileToObjectFile(
             lir_store,
             layout_store,
             entrypoints,
             static_data_exports,
             proc_specs,
-            erased_arg_desc_offsets,
-            erased_arg_desc_params,
-            boxy_worker_procs,
             target,
         );
         defer result.deinit();
@@ -254,9 +224,6 @@ pub const ObjectFileCompiler = struct {
             return CompilationError.ObjectGenerationFailed;
         };
         if (self.timing) |timing| timing.finish(file_io_started_ns, .file_io);
-        const runtime_tables = result.runtime_tables;
-        result.runtime_tables = .{};
-        return .{ .uses_boxy = result.uses_boxy, .runtime_tables = runtime_tables };
     }
 
     /// Emit a data-only object from already materialized readonly exports.
@@ -319,9 +286,6 @@ fn compileWithCodeGen(
     entrypoints: []const Entrypoint,
     static_data_exports: []const StaticDataExport,
     proc_specs: []const LirProcSpec,
-    erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
-    erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
-    boxy_worker_procs: []const lir.LIR.LirProcSpecId,
     target: RocTarget,
     enable_default_platform_runtime: bool,
     erased_capture_prefix: u32,
@@ -344,14 +308,11 @@ fn compileWithCodeGen(
     defer static_strings.deinit();
 
     // Initialize the code generator
-    var codegen = CodeGen.initWithBoxyMetadata(
+    var codegen = CodeGen.initWithCapturePrefix(
         allocator,
         lir_store,
         layout_store,
         static_strings.view(),
-        erased_arg_desc_offsets,
-        erased_arg_desc_params,
-        boxy_worker_procs,
         erased_capture_prefix,
         target.cpuLevel(),
     ) catch return CompilationError.OutOfMemory;
@@ -480,27 +441,22 @@ fn compileWithCodeGen(
             .procs = root_procs,
             .data = root_data.items,
             .helper_aliases = &helper_aliases,
-            .all_thunks = boxy_worker_procs.len != 0,
         }) catch return CompilationError.OutOfMemory;
     }
     var canonical = ProcArtifact.canonicalize(allocator, if (reachable) |*retained_set| retained_set else &staged, host_visible.items) catch return CompilationError.OutOfMemory;
     defer canonical.deinit();
 
-    var final = CodeGen.initWithBoxyMetadata(
+    var final = CodeGen.initWithCapturePrefix(
         allocator,
         lir_store,
         layout_store,
         static_strings.view(),
-        erased_arg_desc_offsets,
-        erased_arg_desc_params,
-        boxy_worker_procs,
         erased_capture_prefix,
         target.cpuLevel(),
     ) catch return CompilationError.OutOfMemory;
     defer final.deinit();
     final.generation_mode = .object_file;
     final.enable_default_platform_runtime = enable_default_platform_runtime;
-    final.boxy_runtime_used = codegen.boxy_runtime_used;
 
     var procs_by_identity = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
     defer procs_by_identity.deinit();
@@ -532,11 +488,6 @@ fn compileWithCodeGen(
     }
     const starts = ProcArtifact.assembleCanonical(CodeGen, allocator, &final, &canonical.set, &procs_by_identity, &helper_keys) catch return CompilationError.OutOfMemory;
     defer allocator.free(starts);
-    // The placed code loads the Boxy runtime's table numbers in canonical
-    // order; number them by it, so they depend on nothing but that code.
-    var runtime_numbering: lir.RuntimeTables.Numbering = .{};
-    defer runtime_numbering.deinit(allocator);
-    final.renumberRuntimeRefs(&runtime_numbering) catch return CompilationError.OutOfMemory;
 
     var symbols = std.ArrayList(SymbolDefinition).empty;
     defer symbols.deinit(allocator);
@@ -668,7 +619,7 @@ fn compileWithCodeGen(
                     .loc = .none,
                 }) catch return CompilationError.OutOfMemory;
             },
-            .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
+            .entrypoint, .message_pool_run, .branch_island => {},
         };
     }
     if (timing) |timings| timings.finish(symbol_relocations_started_ns, .symbol_relocations);
@@ -710,14 +661,11 @@ fn compileWithCodeGen(
     // `ROC_DEV_ARTIFACT_ROUNDTRIP` makes every object compile also assemble the
     // program from its own procedure artifacts and panic if the result differs.
     if (dev_diagnostics.isSet(.dev_artifact_roundtrip)) {
-        var fresh = CodeGen.initWithBoxyMetadata(
+        var fresh = CodeGen.initWithCapturePrefix(
             allocator,
             lir_store,
             layout_store,
             static_strings.view(),
-            erased_arg_desc_offsets,
-            erased_arg_desc_params,
-            boxy_worker_procs,
             erased_capture_prefix,
             target.cpuLevel(),
         ) catch return CompilationError.OutOfMemory;
@@ -764,9 +712,7 @@ fn compileWithCodeGen(
     return CompilationResult{
         .object_bytes = object_bytes,
         .allocator = allocator,
-        .uses_boxy = final.boxy_runtime_used,
         .artifacts = artifacts,
-        .runtime_tables = runtime_numbering.takeOrder(),
     };
 }
 
@@ -936,7 +882,7 @@ fn resolveObjectSymbols(
         .linked_function => |function| {
             symbols[@backingInt(function.symbol)].is_function = true;
         },
-        .linked_data, .local_data, .retired, .runtime_ref => {},
+        .linked_data, .local_data, .retired => {},
     };
     for (definitions) |definition| {
         const symbol = &symbols[@backingInt(definition.id)];
@@ -1142,9 +1088,6 @@ fn crossCompileDispatch(
     entrypoints: []const Entrypoint,
     static_data_exports: []const StaticDataExport,
     proc_specs: []const LirProcSpec,
-    erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
-    erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
-    boxy_worker_procs: []const lir.LIR.LirProcSpecId,
     target: RocTarget,
     enable_default_platform_runtime: bool,
     erased_capture_prefix: u32,
@@ -1172,9 +1115,6 @@ fn crossCompileDispatch(
                     entrypoints,
                     static_data_exports,
                     proc_specs,
-                    erased_arg_desc_offsets,
-                    erased_arg_desc_params,
-                    boxy_worker_procs,
                     target,
                     enable_default_platform_runtime,
                     erased_capture_prefix,
@@ -1244,14 +1184,10 @@ test "ObjectFileCompiler native emission skips static initializers and captures 
             &.{},
             &.{},
             store.getProcSpecs(),
-            &.{},
-            &.{},
-            &.{},
             target,
         );
         defer result.deinit();
         try std.testing.expect(std.mem.startsWith(u8, result.object_bytes, "\x7fELF"));
-        try std.testing.expect(!result.uses_boxy);
         try std.testing.expect(result.artifacts != null);
         try std.testing.expect(result.artifacts.?.artifacts.len > 0);
     }
@@ -1328,7 +1264,7 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
                 .is_exported = false,
             };
             var compiler = ObjectFileCompiler.initForPack(allocator);
-            break :producer try compiler.compileToObjectFile(&store, &layouts, &.{}, exports, store.getProcSpecs(), &.{}, &.{}, &.{}, target);
+            break :producer try compiler.compileToObjectFile(&store, &layouts, &.{}, exports, store.getProcSpecs(), target);
         };
         // No source descriptor, backing, symbol names, LIR or layout owners remain.
         const bytes = serialized: {
@@ -1368,7 +1304,7 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
         var layouts = try layout.Store.init(allocator, .u64);
         defer layouts.deinit();
         const CG = LirCodeGenMod.LirCodeGen(target);
-        var receiver = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
+        var receiver = try CG.init(allocator, &store, &layouts, .{}, .default);
         defer receiver.deinit();
         var procs = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
         defer procs.deinit();
@@ -1382,9 +1318,7 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             var splice = @import("HostSplice.zig").HostSplice.init(allocator);
             defer splice.deinit();
             try splice.addDataItems(data.items);
-            var table: LirCodeGenMod.BoxyNativeFnTable = undefined;
-            @memset(&table, 0);
-            var executable = try splice.link(&receiver, &table);
+            var executable = try splice.link(&receiver);
             defer executable.deinit();
             const builtins = @import("builtins");
             var host = builtins.utils.TestEnv.init(allocator);

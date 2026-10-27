@@ -95,10 +95,6 @@ pub fn CallBuilder(comptime EmitType: type) type {
     const is_aarch64 = roc_target.toCpuArch() == .aarch64 or roc_target.toCpuArch() == .aarch64_be;
     const is_windows = roc_target.isWindows();
     const uses_position_based_float_args = is_x86_64 and is_windows;
-    // Apple's arm64 ABI packs overflow arguments on the stack at their natural
-    // size and alignment; AAPCS64 elsewhere and both x86_64 conventions give
-    // each one a full eightbyte slot.
-    const target_packs_stack_args = is_aarch64 and roc_target.isMacOS();
 
     // RocStr/RocList field offsets for passing their words as separate arguments.
     const target_word_size: u32 = roc_target.ptrBitWidth() / 8;
@@ -141,21 +137,11 @@ pub fn CallBuilder(comptime EmitType: type) type {
     return struct {
         const Self = @This();
 
-        /// Whether this target's ABI packs overflow arguments on the stack at
-        /// their natural size, which is what makes `packStackArgsForCAbi`
-        /// meaningful. Callers read this to require declared parameter sizes
-        /// only where placement actually depends on them.
-        pub const packs_stack_args = target_packs_stack_args;
-
         emit: *EmitType,
         stack_offset: *i32,
         int_arg_index: usize = 0,
         /// Float argument index (separate from int_arg_index on System V, same on Windows)
         float_arg_index: usize = 0,
-        /// Overflow arguments added one-per-parameter through
-        /// `addImplicitStackArg`. Repacking to a packed-stack ABI is only
-        /// defined when every stack argument was placed that way.
-        implicit_stack_arg_count: usize = 0,
         stack_arg_size: u32 = 0,
         /// Independently copied outgoing stack pieces (see `stackArgs`).
         /// Aggregates are decomposed into naturally sized 1/2/4/8-byte
@@ -352,42 +338,6 @@ pub fn CallBuilder(comptime EmitType: type) type {
         fn addImplicitStackArg(self: *Self, src: ArgSource) Allocator.Error!void {
             const byte_offset = std.mem.alignForward(u32, self.stack_arg_size, 8);
             try self.addStackArg(byte_offset, 8, src);
-            self.implicit_stack_arg_count += 1;
-        }
-
-        /// Re-place the overflow arguments for a C callee whose parameter ABI
-        /// sizes are `param_abi_sizes`, one entry per declared parameter in
-        /// order. On a packed-stack ABI a sub-word parameter occupies only its
-        /// own bytes, so the eightbyte slots assigned while arguments were
-        /// added put every later argument at the wrong offset. On every other
-        /// ABI the slots are already right and this does nothing.
-        ///
-        /// Only defined when each overflow argument was added one-per-parameter
-        /// and all parameters are integer class, which is what the boxy runtime
-        /// entrypoints are.
-        pub fn packStackArgsForCAbi(self: *Self, param_abi_sizes: []const u8) void {
-            if (comptime !target_packs_stack_args) return;
-            if (self.stackArgs().len == 0) return;
-            std.debug.assert(self.stackArgs().len == self.implicit_stack_arg_count);
-            std.debug.assert(self.float_arg_index == 0);
-
-            const first_stack_param = param_abi_sizes.len - self.stackArgs().len;
-            std.debug.assert(first_stack_param == CC_EMIT.PARAM_REGS.len);
-
-            var cursor: u32 = 0;
-            for (self.stackArgs(), 0..) |*arg, i| {
-                const size = param_abi_sizes[first_stack_param + i];
-                std.debug.assert(size == 1 or size == 2 or size == 4 or size == 8);
-                // A pointer-valued argument is always a full eightbyte, so a
-                // narrower declared size would mean the table and the emitted
-                // argument disagree about what is being passed.
-                std.debug.assert(arg.src != .from_lea or size == 8);
-                cursor = std.mem.alignForward(u32, cursor, size);
-                arg.byte_offset = cursor;
-                arg.size = size;
-                cursor += size;
-            }
-            self.stack_arg_size = std.mem.alignForward(u32, cursor, 8);
         }
 
         fn addDeferredRegArg(self: *Self, register_index: usize, src: ArgSource) void {
@@ -610,7 +560,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 2 => try self.emit.strhRegMemSoff(reg, CC_EMIT.STACK_PTR, stack_offset),
                 4 => try self.emit.strRegMemSoff(.w32, reg, CC_EMIT.STACK_PTR, stack_offset),
                 8 => try self.emit.strRegMemSoff(.w64, reg, CC_EMIT.STACK_PTR, stack_offset),
-                else => unreachable, // every StackArg size is 1, 2, 4, or 8, asserted by addStackArg and packStackArgsForCAbi
+                else => unreachable, // every StackArg size is 1, 2, 4, or 8, asserted by addStackArg
             }
         }
 
@@ -679,7 +629,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                             try self.emit.ldrRegMemSoff(.w64, CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
                             try self.emit.strRegMemSoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.STACK_PTR, stack_offset);
                         },
-                        else => unreachable, // every StackArg size is 1, 2, 4, or 8, asserted by addStackArg and packStackArgsForCAbi
+                        else => unreachable, // every StackArg size is 1, 2, 4, or 8, asserted by addStackArg
                     }
                 },
             }
@@ -692,7 +642,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 2 => .w16,
                 4 => .w32,
                 8 => .w64,
-                else => unreachable, // every StackArg size is 1, 2, 4, or 8, asserted by addStackArg and packStackArgsForCAbi
+                else => unreachable, // every StackArg size is 1, 2, 4, or 8, asserted by addStackArg
             };
             switch (arg.src) {
                 .from_reg => |reg| {

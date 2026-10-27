@@ -10,11 +10,8 @@ const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const stack_probe = @import("stack_probe.zig");
 const instruction_cache = @import("instruction_cache.zig");
-const base_mod = @import("base");
 const backend = @import("backend");
 const builtins = @import("builtins");
-const eval = @import("eval");
-const lir = @import("lir");
 const ipc = @import("ipc");
 const shim_host_abi = @import("shim_host_abi");
 const shim_io = @import("shim_io");
@@ -56,17 +53,6 @@ const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 const hot_reload = ipc.hot_reload;
 const RunImage = backend.RunImage;
 
-const BoxyProgramRuntime = struct {
-    runtime: *eval.boxy_abi.GlobalBoxyRuntime,
-    view: *lir.LirImage.BoxySidecar.View,
-
-    fn deinit(self: *BoxyProgramRuntime, gpa: Allocator) void {
-        eval.boxy_abi.deinitRuntime(self.runtime);
-        self.view.deinit();
-        gpa.destroy(self.view);
-    }
-};
-
 const DevProgram = struct {
     entrypoints: []const RunImage.Entrypoint,
     code: []const u8,
@@ -76,21 +62,13 @@ const DevProgram = struct {
     descriptor: ?*hot_reload.ImageDescriptor,
     descriptor_offset: usize,
     local_refs: std.atomic.Value(usize),
-    boxy: ?BoxyProgramRuntime,
 
-    fn deinit(self: *DevProgram, gpa: Allocator) void {
-        if (self.boxy) |*boxy| boxy.deinit(gpa);
-        self.boxy = null;
+    fn deinit(self: *DevProgram) void {
         self.entrypoints = &.{};
         self.code = &.{};
         self.executable = &.{};
         self.data = &.{};
     }
-};
-
-const HotReloadCallRef = struct {
-    program: *DevProgram,
-    previous_boxy_runtime: ?*eval.boxy_abi.GlobalBoxyRuntime,
 };
 
 const RuntimeState = struct {
@@ -148,29 +126,7 @@ fn viewRuntimeImage(
     return RunImage.viewMappedImage(header, shm.base_ptr, image_bound);
 }
 
-/// Decode and own the boxy runtime paired with one run image. Generated table
-/// indices are meaningful only against this exact sidecar; retained old images
-/// therefore retain their runtime alongside their code and data.
-fn createBoxyRuntime(gpa: Allocator, ops: *RocOps, view: *const RunImage.ProgramView) RuntimeStateError!?BoxyProgramRuntime {
-    if (view.boxy_blob.len == 0) return null;
-
-    const boxy_view = try gpa.create(lir.LirImage.BoxySidecar.View);
-    errdefer gpa.destroy(boxy_view);
-    boxy_view.* = view.boxy_sidecar.view(
-        view.boxy_blob.ptr,
-        view.boxy_blob.len,
-        base_mod.target.TargetUsize.native,
-        gpa,
-    ) catch return error.InvalidDevRunImage;
-    errdefer boxy_view.deinit();
-
-    const runtime = eval.boxy_abi.createRuntimeFromSidecarView(gpa, boxy_view, ops) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    return .{ .runtime = runtime, .view = boxy_view };
-}
-
-fn openRuntimeState(gpa: Allocator, ops: *RocOps) RuntimeStateError!RuntimeState {
+fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     var shm = try SharedMemoryAllocator.fromCoordination(gpa, shimIo());
     errdefer shm.deinit(gpa);
 
@@ -190,7 +146,6 @@ fn openRuntimeState(gpa: Allocator, ops: *RocOps) RuntimeStateError!RuntimeState
     const view = try viewRuntimeImage(&shm, image_offset, image_bound);
     const program = try createDevProgram(
         gpa,
-        ops,
         &view,
         generation,
         if (retained_image) |image| image.descriptor_offset else hot_reload.invalid_descriptor_offset,
@@ -214,7 +169,7 @@ fn ensureRuntimeState(ops: *RocOps) *RuntimeState {
 
     if (runtime_state_initialized.load(.acquire)) return &runtime_state;
 
-    runtime_state = openRuntimeState(allocator(), ops) catch |err| {
+    runtime_state = openRuntimeState(allocator()) catch |err| {
         var message_buffer: [256]u8 = undefined;
         const message = switch (err) {
             error.UnresolvedSymbol => std.fmt.bufPrint(&message_buffer, "Machine-code shim could not map the compiled Roc image: unresolved symbol {s}", .{last_unresolved_symbol orelse "?"}) catch
@@ -368,7 +323,6 @@ fn loadDevProgram(
         .descriptor = descriptor,
         .descriptor_offset = descriptor_offset,
         .local_refs = std.atomic.Value(usize).init(1),
-        .boxy = null,
     };
 }
 
@@ -387,7 +341,6 @@ fn unresolvedSymbol(name: []const u8) error{UnresolvedSymbol} {
 
 fn createDevProgram(
     gpa: Allocator,
-    ops: *RocOps,
     view: *const RunImage.ProgramView,
     generation: u64,
     descriptor_offset: usize,
@@ -397,8 +350,6 @@ fn createDevProgram(
     errdefer gpa.destroy(program);
 
     program.* = try loadDevProgram(gpa, view, generation, descriptor_offset, descriptor);
-    errdefer program.deinit(gpa);
-    program.boxy = try createBoxyRuntime(gpa, ops, view);
     return program;
 }
 
@@ -433,7 +384,7 @@ fn relocatedDataAddress(base_addr: usize, addend: i64) RunImage.ImageError!usize
 }
 
 fn destroyDevProgram(gpa: Allocator, program: *DevProgram) void {
-    program.deinit(gpa);
+    program.deinit();
     gpa.destroy(program);
 }
 
@@ -573,8 +524,7 @@ fn resolveShimFunction(name: []const u8) ?usize {
     }
     if (resolveRuntimeSymbol(name)) |address| return address;
     if (resolveHostedSymbol(name)) |address| return address;
-    if (resolvePackageSymbol(name)) |address| return address;
-    return resolveBoxyShimFunction(name);
+    return resolvePackageSymbol(name);
 }
 
 /// An object-cache entry linked into this executable, by its C-ABI entry
@@ -606,18 +556,6 @@ fn resolveHostedSymbol(name: []const u8) ?usize {
     for (names, fns) |hosted_name, hosted_fn| {
         const candidate = hosted_name orelse continue;
         if (std.mem.eql(u8, std.mem.span(candidate), name)) return @intFromPtr(hosted_fn);
-    }
-    return null;
-}
-
-/// Resolve a Boxy runtime wrapper to the linked in-process implementation.
-fn resolveBoxyShimFunction(name: []const u8) ?usize {
-    inline for (@typeInfo(backend.LirCodeGenMod.BoxyBuiltinFn).@"enum".field_names) |field_name| {
-        const boxy_fn: backend.LirCodeGenMod.BoxyBuiltinFn = @fromBackingInt(@intCast(@backingInt(@field(backend.LirCodeGenMod.BoxyBuiltinFn, field_name))));
-        const symbol_name = comptime boxy_fn.symbolName();
-        if (std.mem.eql(u8, name, symbol_name)) {
-            return @intFromPtr(&@field(eval.boxy_abi, symbol_name));
-        }
     }
     return null;
 }
@@ -726,9 +664,6 @@ fn executeDevEntrypoint(
     // the host through this shim's runtime symbols.
     const func: *const fn (*anyopaque, ?*anyopaque) callconv(.c) void =
         @ptrCast(@alignCast(program.code.ptr + entry_offset));
-    const runtime = if (program.boxy) |boxy| boxy.runtime else null;
-    const previous_runtime = eval.boxy_abi.swapActiveRuntime(runtime);
-    defer _ = eval.boxy_abi.swapActiveRuntime(previous_runtime);
     func(ret, arg_ptr);
 }
 
@@ -816,10 +751,7 @@ fn devProgramRefCount(program: *const DevProgram) usize {
     return program.local_refs.load(.acquire);
 }
 
-fn refreshRuntimeProgramIfNeeded(
-    state: *RuntimeState,
-    ops: *RocOps,
-) void {
+fn refreshRuntimeProgramIfNeeded(state: *RuntimeState) void {
     const control = state.control orelse return;
 
     while (true) {
@@ -845,7 +777,6 @@ fn refreshRuntimeProgramIfNeeded(
         const gpa = allocator();
         const next_program = createDevProgram(
             gpa,
-            ops,
             &view,
             retained_image.generation,
             retained_image.descriptor_offset,
@@ -891,7 +822,7 @@ fn evaluateEntrypoint(
     const state = ensureRuntimeState(ops);
     if (state.control != null) {
         runtime_state_mutex.lockUncancelable(shimIo());
-        refreshRuntimeProgramIfNeeded(state, ops);
+        refreshRuntimeProgramIfNeeded(state);
         const program = state.program;
         acquireDevProgramRef(program);
         runtime_state_mutex.unlock(shimIo());
@@ -911,21 +842,12 @@ pub fn roc_hot_reload_enter(return_address: usize) ?*anyopaque {
     if (!runtime_state_initialized.load(.acquire)) return null;
     const program = findDevProgramByCodeAddressLocked(&runtime_state, return_address) orelse return null;
     acquireDevProgramRef(program);
-    const call_ref = allocator().create(HotReloadCallRef) catch @panic("machine-code shim could not allocate a hot-reload call reference");
-    call_ref.* = .{
-        .program = program,
-        .previous_boxy_runtime = eval.boxy_abi.swapActiveRuntime(if (program.boxy) |boxy| boxy.runtime else null),
-    };
-    return call_ref;
+    return program;
 }
 
 /// Release a loaded dev image token returned by `roc_hot_reload_enter`.
 pub fn roc_hot_reload_leave(code_ref: ?*anyopaque) void {
-    const code_ref_ptr = code_ref orelse return;
-    const call_ref: *HotReloadCallRef = @ptrCast(@alignCast(code_ref_ptr));
-    _ = eval.boxy_abi.swapActiveRuntime(call_ref.previous_boxy_runtime);
-    const program = call_ref.program;
-    allocator().destroy(call_ref);
+    const program: *DevProgram = @ptrCast(@alignCast(code_ref orelse return));
     releaseDevProgramRef(program);
 }
 
@@ -938,20 +860,6 @@ pub fn roc_hot_reload_retain_current(return_address: usize) ?*anyopaque {
     const program = findDevProgramByCodeAddressLocked(&runtime_state, return_address) orelse return null;
     acquireDevProgramRef(program);
     return program;
-}
-
-/// Select the sidecar runtime retained by an erased callable while its capture
-/// drop callback executes. Returns the previously selected runtime.
-pub fn roc_hot_reload_activate_retained(code_ref: ?*anyopaque) ?*anyopaque {
-    const program: *DevProgram = @ptrCast(@alignCast(code_ref orelse return null));
-    const runtime = if (program.boxy) |boxy| boxy.runtime else null;
-    return eval.boxy_abi.swapActiveRuntime(runtime);
-}
-
-/// Restore the sidecar runtime returned by `roc_hot_reload_activate_retained`.
-pub fn roc_hot_reload_deactivate_retained(previous: ?*anyopaque) void {
-    const runtime: ?*eval.boxy_abi.GlobalBoxyRuntime = if (previous) |ptr| @ptrCast(@alignCast(ptr)) else null;
-    _ = eval.boxy_abi.swapActiveRuntime(runtime);
 }
 
 /// Release an image retained by `roc_hot_reload_retain_current`.
@@ -1023,29 +931,16 @@ test "loaded dev program borrows direct shared image metadata" {
         &.{},
         &.{},
         &.{},
-        &.{},
-        std.mem.zeroes(RunImage.BoxySidecar),
     );
     const view = try RunImage.viewMappedImage(header, shm.base_ptr, @intCast(header.image_size));
 
     var program = try loadDevProgram(std.testing.allocator, &view, 0, hot_reload.invalid_descriptor_offset, null);
-    defer program.deinit(std.testing.allocator);
+    defer program.deinit();
 
     try std.testing.expect(program.entrypoints.ptr == view.entrypoints.ptr);
     try std.testing.expect(program.code.ptr == view.code.ptr);
     try std.testing.expectEqual(@as(u32, 0), program.entrypoints[0].ordinal);
     try std.testing.expectEqual(@as(u64, 0), program.entrypoints[0].code_offset);
-}
-
-test "shim resolves every Boxy runtime wrapper" {
-    inline for (@typeInfo(backend.LirCodeGenMod.BoxyBuiltinFn).@"enum".field_names) |field_name| {
-        const boxy_fn: backend.LirCodeGenMod.BoxyBuiltinFn = @fromBackingInt(@intCast(@backingInt(@field(backend.LirCodeGenMod.BoxyBuiltinFn, field_name))));
-        const symbol_name = comptime boxy_fn.symbolName();
-        try std.testing.expectEqual(
-            @intFromPtr(&@field(eval.boxy_abi, symbol_name)),
-            resolveShimFunction(symbol_name),
-        );
-    }
 }
 
 test "data relocations patch data pointers" {
@@ -1089,8 +984,6 @@ test "data relocations patch data pointers" {
         .data = &data,
         .data_symbols = &data_symbols,
         .page_size = 4096,
-        .boxy_blob = &.{},
-        .boxy_sidecar = std.mem.zeroes(RunImage.BoxySidecar),
     };
     const relocation_context = RelocationContext{
         .view = &view,
@@ -1134,8 +1027,6 @@ test "function-pointer data relocations patch generated Roc code pointers" {
         .data = &data,
         .data_symbols = &.{},
         .page_size = 4096,
-        .boxy_blob = &.{},
-        .boxy_sidecar = std.mem.zeroes(RunImage.BoxySidecar),
     };
     const relocation_context = RelocationContext{
         .view = &view,

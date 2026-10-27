@@ -1114,7 +1114,7 @@ pub const LoadedPacks = struct {
             const root = pack.set.artifacts[spec.artifact];
             const identity = switch (root.kind) {
                 .proc => |identity| identity,
-                .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => return error.MalformedPack,
+                .rc_helper, .entrypoint, .message_pool_run, .branch_island => return error.MalformedPack,
             };
             if (self.specs.contains(spec.key)) continue;
             try self.artifacts.ensureUnusedCapacity(1);

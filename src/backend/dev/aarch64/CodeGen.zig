@@ -459,26 +459,6 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.movRegImm64(dst, @bitCast(value));
         }
 
-        /// Load `value` with a MOVZ/MOVK pair whose immediates `patchImm32`
-        /// can rewrite in place. Returns the pair's offset.
-        pub fn emitPatchableImm32(self: *Self, dst: GeneralReg, value: u32) Allocator.Error!usize {
-            const start = self.currentOffset();
-            try self.emit.movz(.w32, dst, @truncate(value), 0);
-            try self.emit.movk(.w32, dst, @truncate(value >> 16), 16);
-            return start;
-        }
-
-        /// Rewrite the immediates of the pair `emitPatchableImm32` placed at
-        /// `site`.
-        pub fn patchImm32(code: []u8, site: usize, value: u32) void {
-            const imm16_mask: u32 = 0xffff << 5;
-            for ([_]u32{ value & 0xffff, value >> 16 }, 0..) |half, index| {
-                const insn = code[site + index * 4 ..][0..4];
-                const word = std.mem.readInt(u32, insn, .little);
-                std.mem.writeInt(u32, insn, (word & ~imm16_mask) | (half << 5), .little);
-            }
-        }
-
         pub fn emitLoadDataAddress(self: *Self, dst: GeneralReg, symbol: SymbolTable.Id) Allocator.Error!void {
             const page_offset = self.currentOffset();
             try self.emit.adrp(dst);

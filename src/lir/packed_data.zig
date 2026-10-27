@@ -82,7 +82,7 @@ pub const Plan = struct {
                     try pending.ensureUnusedCapacity(self.allocator, fields.items.len);
                     for (fields.items) |field| pending.appendAssumeCapacity(.{ .layout_idx = field.layout_idx, .offset = offset + field.offset });
                 },
-                .box, .box_of_zst, .list, .list_of_zst, .closure, .tag_union, .ptr, .erased_box, .erased_callable => base.invariant("packed data invariant violated: fixed product holds a {s} layout", .{@tagName(value.tag)}),
+                .box, .box_of_zst, .list, .list_of_zst, .closure, .tag_union, .ptr, .erased_callable => base.invariant("packed data invariant violated: fixed product holds a {s} layout", .{@tagName(value.tag)}),
             }
         }
     }

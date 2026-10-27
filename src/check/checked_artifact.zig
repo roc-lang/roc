@@ -14592,8 +14592,7 @@ pub const CheckedExprKind = std.meta.Tag(CheckedExprData);
 ///
 /// This is the one classification shared by the producer of the divergence
 /// columns (`DivergenceScan`) and every consumer that lowers an expression
-/// the columns mark divergent (Monotype's `divergentDataStep`, Boxy's
-/// `divergentStep`). Each consumer's arm for kinds that are never marked
+/// the columns mark divergent (Monotype's `divergentDataStep`). Each consumer's arm for kinds that are never marked
 /// divergent checks this classification at compile time, and the parity
 /// tests below drive the producer over every kind and compare its answer
 /// with this classification, so the producer and the consumers cannot
@@ -19849,9 +19848,9 @@ const EvidencePass = struct {
                 .constraint_callable => |constraint_callable| constraint: {
                     if (!self.constraintCallableHasSpecializationDefault(param)) break :constraint .use_site_only;
                     // A default-field root always instantiates its local
-                    // procedures with checked use-site evidence, so Boxy reads
-                    // such a literal dispatcher from that evidence descriptor
-                    // instead of a runtime dictionary.
+                    // procedures with checked use-site evidence, so such a
+                    // literal dispatcher is read from that evidence rather
+                    // than from a runtime dictionary.
                     if (constraint_callable.intro_expr) |intro_expr| {
                         if (self.plan_table.lookupByExpr(@fromBackingInt(@intCast(intro_expr)))) |plan| {
                             if (self.planIsDefaultRoot(plan)) break :constraint .use_site_only;
