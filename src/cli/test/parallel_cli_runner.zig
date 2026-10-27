@@ -14243,7 +14243,10 @@ fn customCompletedTestCommand(io: std.Io, allocator: Allocator, env: *const Case
             .result => |result| result,
             .failure => |failure| return failure,
         };
-        if (std.mem.find(u8, repaired.stderr, "test-work specialization=0\n") != null)
+        // A command record whose outcome payload is gone is incomplete and must
+        // not be admitted. A truncated record is not a command hit at all; the
+        // per-root outcomes it summarized still answer every root without work.
+        if (remove_payload and std.mem.find(u8, repaired.stderr, "test-work specialization=0\n") != null)
             return customFailure(allocator, timer, "incomplete cache admitted as a complete command", .{});
         if (expectSamePreSummaryBytes(allocator, timer, "cold", cold, "repaired cache", repaired)) |failure| return failure;
     }
@@ -14292,22 +14295,25 @@ fn customCompletedTestCommand(io: std.Io, allocator: Allocator, env: *const Case
 
 /// Damage only this case's isolated cache. Command records and referenced
 /// module payloads must both be admitted before any observation is replayed.
-const DamageCompletedTestCacheError = std.Io.Dir.OpenError || std.Io.Dir.SelectiveWalker.Error || std.Io.Dir.ReadFileAllocError || std.Io.Dir.DeleteFileError || std.Io.Dir.WriteFileError;
+const DamageCompletedTestCacheError = CliRunnerError || std.Io.Dir.DeleteFileError || std.Io.Dir.WriteFileError;
 
+/// Damage every stored test outcome or completed dev test payload: truncate it,
+/// or delete it when `remove_payload` is set. Returns whether any was found.
 fn damageCompletedTestCache(io: std.Io, allocator: Allocator, cache_path: []const u8, remove_payload: bool) DamageCompletedTestCacheError!bool {
-    var directory = try std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true });
-    defer directory.close(io);
-    var walker = try directory.walk(allocator);
-    defer walker.deinit();
-    const segment = std.fs.path.sep_str ++ "test" ++ std.fs.path.sep_str;
+    var store = try artifact_store.Store.init(allocator, io, cache_path);
+    defer store.deinit();
+    const entries = try indexedCacheEntries(io, allocator, cache_path);
+    defer allocator.free(entries);
+    const magic = if (remove_payload) "ROC_TEST_OUTCOMES_V3" else "ROC_COMPLETED_DEV_TEST_V3";
     var damaged = false;
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file or std.mem.find(u8, entry.path, segment) == null) continue;
-        const bytes = try directory.readFileAlloc(io, entry.path, allocator, .limited(16 * 1024 * 1024));
+    for (entries) |entry| {
+        if (entry.state != .published or entry.family != .test_result) continue;
+        var artifact = (try store.acquireKey(entry.key, store.now())) orelse continue;
+        defer artifact.deinit();
+        const bytes = try artifact.read(allocator);
         defer allocator.free(bytes);
-        const magic = if (remove_payload) "ROC_TEST_OUTCOMES_V3" else "ROC_COMPLETED_DEV_TEST_V3";
         if (!std.mem.startsWith(u8, bytes, magic)) continue;
-        if (remove_payload) try directory.deleteFile(io, entry.path) else try directory.writeFile(io, .{ .sub_path = entry.path, .data = bytes[0 .. bytes.len / 2] });
+        if (remove_payload) try std.Io.Dir.cwd().deleteFile(io, artifact.path) else try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = artifact.path, .data = bytes[0 .. bytes.len / 2] });
         damaged = true;
     }
     return damaged;
