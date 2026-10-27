@@ -8615,10 +8615,7 @@ fn writePackageDevPacksToStore(
         // loads the old store, then adds exactly the pack just compiled.
         for ([_]?*pack_store.LoadedPacks{ offers, runtime_packs }) |maybe_packs| {
             const packs = maybe_packs orelse continue;
-            packs.offerPack(bytes) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return error.NativeCompilationFailed,
-            };
+            try packs.offerPack(bytes);
         }
         store.write(placement.origin, placement.identity, artifact.codeGenerationKey().bytes, bytes) catch |err| {
             std.log.warn("object cache could not store a package's dev pack: {}", .{err});

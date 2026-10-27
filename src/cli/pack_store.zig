@@ -1201,7 +1201,9 @@ pub const LoadedPacks = struct {
     /// lowering. Decoded packs keep stable addresses, including artifacts
     /// already handed to the compile-time evaluator. An unavailable cache
     /// serves no lookup, so an offer to it has no reader and is dropped.
-    pub fn offerPack(self: *LoadedPacks, bytes: []const u8) LoadError!void {
+    /// The offered bytes are a pack this command just encoded, so only
+    /// allocation can fail to take them.
+    pub fn offerPack(self: *LoadedPacks, bytes: []const u8) Allocator.Error!void {
         self.ensureLoaded();
         if (self.state == .unavailable) return;
         var arena = base.SingleThreadArena.init(self.allocator);
@@ -1210,14 +1212,18 @@ pub const LoadedPacks = struct {
             self.unavailable(err);
             return err;
         };
-        self.appendPack(arena, owned) catch |err| {
-            self.unavailable(err);
-            return err;
-        };
-        if (self.state == .ready) self.indexPack(self.packs.items[self.packs.items.len - 1]) catch |err| {
-            self.unavailable(err);
-            return err;
-        };
+        self.appendPack(arena, owned) catch |err| return self.offerFailed(err);
+        if (self.state == .ready) self.indexPack(self.packs.items[self.packs.items.len - 1]) catch |err| return self.offerFailed(err);
+    }
+
+    fn offerFailed(self: *LoadedPacks, err: LoadError) Allocator.Error {
+        switch (err) {
+            error.OutOfMemory => {
+                self.unavailable(err);
+                return error.OutOfMemory;
+            },
+            error.MalformedPack, error.UnsupportedPackVersion, error.PackDirectoryUnreadable => base.invariant("a pack this command encoded could not be offered: {}", .{err}),
+        }
     }
 
     /// Index every loaded pack. Each decoded pack owns its stable storage.
