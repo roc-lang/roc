@@ -3268,7 +3268,7 @@ pub const Builder = struct {
         const join_index = @backingInt(join);
         if (self.join_infos.items[join_index].merge) |m| try self.restoreMerge(m);
         const patterns = branch.patternsSlice(self.bodies());
-        if (patterns.len != 1) invariant("match branches with alternative patterns are not yet lowered by Boxy");
+        if (patterns.len != 1) return try self.matchAlternatives(expr_id, index, scrutinee, join);
         const miss = try self.newHole();
         try self.testPattern(patterns[0].pattern, scrutinee, try self.exprType(match.cond), miss);
         if (branch.guard) |guard| {
@@ -3280,6 +3280,72 @@ pub const Builder = struct {
         try self.push(.{ .resume_at = miss });
         try self.push(.{ .jump = join });
         try self.push(.{ .expr = branch.value });
+    }
+
+    /// A branch of alternative patterns: each alternative that matches
+    /// jumps to the branch's one body with the values it bound, and the last
+    /// one's miss continues to the next branch.
+    pub fn matchAlternatives(self: *Builder, expr_id: CheckedExprId, index: u32, scrutinee: LocalId, join: LIR.JoinPointId) Allocator.Error!void {
+        const match = self.bodies().expr(expr_id).data.match_;
+        const branch = match.branches[index];
+        if (branch.guard != null) invariant("guarded match branches with alternative patterns are not yet lowered by Boxy");
+        const patterns = branch.patternsSlice(self.bodies());
+        const scrutinee_ty = try self.exprType(match.cond);
+        var bound: std.ArrayList(BoundBinder) = .empty;
+        defer bound.deinit(self.allocator);
+        try self.patternBinders(patterns[0].pattern, &bound);
+        const params = try self.allocator.alloc(LocalId, bound.items.len);
+        defer self.allocator.free(params);
+        for (bound.items, params) |binder, *param| param.* = try self.localOf(try self.patternType(binder.pattern), .frame);
+        const body_join = self.freshJoin();
+        const body_hole = try self.declareJoin(body_join, params);
+        for (patterns) |alternative| {
+            const miss = try self.newHole();
+            try self.testPattern(alternative.pattern, scrutinee, scrutinee_ty, miss);
+            for (bound.items, params) |binder, param| {
+                const value = self.binders.get(binder.binder) orelse invariant("an alternative pattern does not bind a binder its branch binds");
+                try self.emitLinear(.{ .set_local = .{ .target = param, .value = value, .mode = .initialize_join_param, .next = undefined } });
+            }
+            try self.emitTerminal(.{ .jump = .{ .target = body_join } });
+            self.hole = miss;
+        }
+        const next_branch = self.hole.?;
+        self.hole = body_hole;
+        for (bound.items, params) |binder, param| try self.binders.put(self.allocator, binder.binder, param);
+        try self.push(.{ .match_branch = .{ .expr = expr_id, .index = index + 1, .scrutinee = scrutinee, .join = join } });
+        try self.push(.{ .resume_at = next_branch });
+        try self.push(.{ .jump = join });
+        try self.push(.{ .expr = branch.value });
+    }
+
+    pub const BoundBinder = struct { binder: checked.PatternBinderId, pattern: CheckedPatternId };
+
+    /// The binders a pattern binds, with the patterns that bind them.
+    pub fn patternBinders(self: *Builder, root: CheckedPatternId, out: *std.ArrayList(BoundBinder)) Allocator.Error!void {
+        var pending: std.ArrayList(CheckedPatternId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |pattern_id| {
+            switch (self.bodies().pattern(pattern_id).data) {
+                .assign => |binder| try out.append(self.allocator, .{ .binder = binder, .pattern = pattern_id }),
+                .as => |as| {
+                    try out.append(self.allocator, .{ .binder = as.binder, .pattern = pattern_id });
+                    try pending.append(self.allocator, as.pattern);
+                },
+                .applied_tag => |tag| try pending.appendSlice(self.allocator, tag.args),
+                .nominal => |nominal| try pending.append(self.allocator, nominal.backing_pattern),
+                .record_destructure => |destructs| for (destructs) |destruct| switch (destruct.kind) {
+                    inline else => |sub| try pending.append(self.allocator, sub),
+                },
+                .list => |list| {
+                    try pending.appendSlice(self.allocator, list.patterns);
+                    if (list.rest) |rest| if (rest.pattern) |sub| try pending.append(self.allocator, sub);
+                },
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .str_interpolation => |interpolation| for (interpolation.steps) |piece| if (piece.capture) |sub| try pending.append(self.allocator, sub),
+                .numeral_literal, .str_literal, .underscore, .runtime_error, .pending => {},
+            }
+        }
     }
 
     pub fn matchGuard(self: *Builder, expr_id: CheckedExprId, index: u32, scrutinee: LocalId, join: LIR.JoinPointId, miss: CFStmtId) Allocator.Error!void {
