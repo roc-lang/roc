@@ -2917,16 +2917,18 @@ const RequestDeterminedResultRow = union(enum) {
     variable: checked.CheckedTypeId,
 };
 
-/// The variable a function type's result row ends in, when that variable
-/// seals to the empty row and nothing else in the type reaches it: the
-/// function's direct result row or the error row of its `Try` result, the
-/// positions `closedResultRowOrNull` reads. Such a variable is determined by
-/// the function's result alone, so a template that quantifies it is
-/// specialized at whatever row its request's result holds there (design.md
-/// "Closed Result Rows At Template Boundaries"). The type reaches the
-/// variable only through the chain of links from the result down to it; any
-/// other path—an argument, a payload, a link shared with another
-/// position—makes the variable an input the request does not determine.
+/// The variable a function type's result row ends in, when nothing else in
+/// the type reaches it and it carries no constraint that closing a row does
+/// not discharge: the function's direct result row or the error row of its
+/// `Try` result, the positions `closedResultRowOrNull` reads. The variable
+/// may be flex or rigid, with or without a row default, and may be the whole
+/// row. Such a variable is determined by the function's result alone, so a
+/// template that quantifies it is specialized at whatever row its request's
+/// result holds there (design.md "Closed Result Rows At Template
+/// Boundaries"). The type reaches the variable only through the chain of
+/// links from the result down to it; any other path—an argument, a payload,
+/// a link shared with another position—makes the variable an input the
+/// request does not determine.
 fn requestDeterminedResultRowVariable(
     allocator: Allocator,
     view: ModuleView,
@@ -2970,7 +2972,7 @@ fn requestDeterminedResultRowVariable(
                 current = tag_union.ext;
             },
             .flex, .rigid => |row_variable| {
-                if (!payload.variableSealsToRowDefault() or row_variable.row_default != .empty_tag_union) return null;
+                if (row_variable.constraints.len != 0 and !row_variable.row_default_discharges_constraints) return null;
                 break current;
             },
             .pending, .err, .record, .tuple, .function, .empty_record, .empty_tag_union => return null,

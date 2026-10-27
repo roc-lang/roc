@@ -2482,10 +2482,12 @@ pub const CheckedTypeVariable = struct {
     constraints: []const CheckedStaticDispatchConstraint = &.{},
     numeric_default_phase: ?NumericDefaultPhase = null,
     row_default: ?RowDefault = null,
-    /// A flex row tail whose every constraint is an `is_eq` or `to_hash`: the
+    /// A variable whose every constraint is an `is_eq` or `to_hash`: the
     /// obligations deriving those methods over an open row give its tail.
-    /// Closing the row satisfies them, so the tail still seals to its row
-    /// default (design.md "Derived Equality And Hashing Over Open Rows").
+    /// Closing the row satisfies them, so a flex tail still seals to its row
+    /// default (design.md "Derived Equality And Hashing Over Open Rows"), and
+    /// a result row ending in the variable may still be determined by its
+    /// request (design.md "Closed Result Rows At Template Boundaries").
     row_default_discharges_constraints: bool = false,
 };
 
@@ -8585,6 +8587,7 @@ const CheckedTypePublisher = struct {
                 else => {
                     build.rigid.constraints = input.?.get(.constraints);
                     build.rigid.numeric_default_phase = numericDefaultPhaseForConstraints(module, rigid.constraints);
+                    build.rigid.row_default_discharges_constraints = rowDefaultDischargesConstraints(module, rigid.constraints);
                 },
             },
             .alias => |alias| switch (cursor) {
