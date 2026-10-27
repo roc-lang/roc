@@ -9694,6 +9694,11 @@ fn persistentInterfaceTests(io: std.Io, allocator: Allocator, env: *const CaseEn
     isolated.env_map.put("ROC_CACHE_DIR", cache) catch |err|
         return customInfraFailure(allocator, timer, "interface test cache environment: {}", .{err});
     var cold_expansions: u64 = 0;
+    // Cached runs replay the composite and default-bearing interfaces the
+    // first cached run stored. Results are kept per root, so the edited run
+    // reruns only the edited root, whose callees may need neither kind.
+    var composite_hits: u64 = 0;
+    var default_hits: u64 = 0;
     for (0..3) |iteration| {
         if (iteration == 2) {
             const source = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024)) catch |err|
@@ -9718,11 +9723,13 @@ fn persistentInterfaceTests(io: std.Io, allocator: Allocator, env: *const CaseEn
             const hits = timingCounter(result.stderr, "Shared Monotype body + dispatch", "Persistent interface hits") orelse 0;
             if (hits == 0 or expansions >= cold_expansions)
                 return failureFromRun(allocator, timer, result, "edited tests did not avoid callee relation computation through persistent replay");
-            const composites = timingCounter(result.stderr, "Shared Monotype body + dispatch", "Persistent interface composite hits") orelse 0;
-            const defaults = timingCounter(result.stderr, "Shared Monotype body + dispatch", "Persistent interface default hits") orelse 0;
-            if (composites == 0 or defaults == 0)
-                return failureFromRun(allocator, timer, result, "edited tests did not replay composite and default-bearing interfaces");
         }
+        if (iteration != 0) {
+            composite_hits += timingCounter(result.stderr, "Shared Monotype body + dispatch", "Persistent interface composite hits") orelse 0;
+            default_hits += timingCounter(result.stderr, "Shared Monotype body + dispatch", "Persistent interface default hits") orelse 0;
+        }
+        if (iteration == 2 and (composite_hits == 0 or default_hits == 0))
+            return failureFromRun(allocator, timer, result, "cached tests did not replay composite and default-bearing interfaces");
     }
     return null;
 }
