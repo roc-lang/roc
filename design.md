@@ -19076,6 +19076,13 @@ caller's frame is gone.
   the frame has been read, because the two overlap when the callee's block is
   the larger. The part of the teardown that depends on the final callee-saved
   set and frame size is emitted once per procedure, after its body.
+  A `.boxy` procedure's dynamic parameters are addresses whose bytes have
+  sizes only descriptors know, so they cannot sit in the block. A procedure
+  with a dynamic parameter and a `tail_group` takes a hidden carry after its
+  other parameters: a frame-replacing call copies every argument of a
+  dynamic parameter into one fresh carry allocation and passes those
+  addresses, an ordinary call passes none, and the callee releases its carry
+  when it returns or replaces its own frame.
 - The LLVM backend emits `musttail` calls between `tailcc` functions. An
   argument passed in memory cannot point into the caller's frame, so each tail
   group whose members take such arguments shares one block of storage for
