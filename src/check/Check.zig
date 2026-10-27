@@ -11372,27 +11372,62 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
     return @backingInt(stmt_idx);
 }
 
+/// An application of the Builtin nominal declared at `source_decl`, with the
+/// declaration's opacity: an application's opacity must agree with its
+/// declaration, since checked type keys identify a nominal by its declaration
+/// alone.
+fn mkBuiltinNominalContent(
+    self: *Self,
+    ident_idx: Ident.Idx,
+    args: []const Var,
+    source_decl: u32,
+) Allocator.Error!Content {
+    const owner_env = if (self.isCheckingBuiltinModuleDirectly()) self.cir else self.builtin_ctx.builtin_module orelse
+        base.invariant("type checker invariant violated: a Builtin nominal was built without the Builtin module env", .{});
+    const is_opaque = switch (owner_env.store.getStatement(@fromBackingInt(source_decl))) {
+        .s_nominal_decl => |nominal| nominal.is_opaque,
+        .s_alias_decl,
+        .s_decl,
+        .s_var,
+        .s_var_uninitialized,
+        .s_reassign,
+        .s_crash,
+        .s_dbg,
+        .s_expr,
+        .s_expect,
+        .s_for,
+        .s_while,
+        .s_infinite_loop,
+        .s_breakable_loop,
+        .s_break,
+        .s_return,
+        .s_import,
+        .s_where_alias_decl,
+        .s_type_anno,
+        .s_type_var_alias,
+        .s_runtime_error,
+        => base.invariant("type checker invariant violated: builtin source declaration {} is not a nominal declaration", .{source_decl}),
+    };
+    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
+        .{ .ident_idx = ident_idx },
+        args,
+        self.builtinOriginModule(),
+        source_decl,
+        is_opaque,
+        true,
+    );
+}
+
 /// Create a nominal List type with the given element type
 fn mkListContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const list_ident = types_mod.TypeIdent{
-        .ident_idx = self.cir.idents.list,
-    };
-
     // The application carries only identity + the element arg; List's backing
     // ([ProvidedByCompiler]) lives in the declaration table.
     const type_args = [_]Var{elem_var};
 
-    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
-        list_ident,
-        &type_args,
-        self.builtinOriginModule(),
-        self.sourceDeclForBuiltinNominal(.list),
-        false, // List is nominal (not opaque)
-        true,
-    );
+    return try self.mkBuiltinNominalContent(self.cir.idents.list, &type_args, self.sourceDeclForBuiltinNominal(.list));
 }
 
 /// Instantiate the builtin sequence type a `for` loop of this kind pulls from
@@ -11533,22 +11568,9 @@ fn mkNumberTypeContent(self: *Self, num_kind: CIR.NumKind) Allocator.Error!Conte
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const type_ident = types_mod.TypeIdent{
-        .ident_idx = self.cir.idents.numTypeIdent(num_kind),
-    };
-
     // Number types have no type arguments; their backing lives in the
     // declaration table.
-    const no_type_args: []const Var = &.{};
-
-    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
-        type_ident,
-        no_type_args,
-        self.builtinOriginModule(),
-        self.sourceDeclForBuiltinNominal(.{ .num = num_kind }),
-        true, // Number types are opaque (defined with ::)
-        true,
-    );
+    return try self.mkBuiltinNominalContent(self.cir.idents.numTypeIdent(num_kind), &.{}, self.sourceDeclForBuiltinNominal(.{ .num = num_kind }));
 }
 
 fn builtinNominalDeclForSourceDecl(source_env: *const ModuleEnv, source_decl: ?u32) ?BuiltinNominalDecl {
@@ -12135,22 +12157,11 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const box_ident = types_mod.TypeIdent{
-        .ident_idx = self.cir.idents.box,
-    };
-
     // The application carries only identity + the element arg; Box's backing
     // (the element itself) lives in the declaration table.
     const type_args = [_]Var{elem_var};
 
-    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
-        box_ident,
-        &type_args,
-        self.builtinOriginModule(),
-        self.sourceDeclForBuiltinNominal(.box),
-        false, // Box is nominal (not opaque)
-        true,
-    );
+    return try self.mkBuiltinNominalContent(self.cir.idents.box, &type_args, self.sourceDeclForBuiltinNominal(.box));
 }
 
 /// Create a nominal Try type with the given success and error types.
@@ -12159,22 +12170,11 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    const try_ident = types_mod.TypeIdent{
-        .ident_idx = self.cir.idents.builtin_try,
-    };
-
     // The application carries only identity + the ok/err args; Try's backing
     // ([Ok(ok), Err(err)]) lives in the declaration table.
     const type_args = [_]Var{ ok_var, err_var };
 
-    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
-        try_ident,
-        &type_args,
-        self.builtinOriginModule(),
-        self.sourceDeclForBuiltinNominal(.try_type),
-        false, // Try is nominal (not opaque)
-        true,
-    );
+    return try self.mkBuiltinNominalContent(self.cir.idents.builtin_try, &type_args, self.sourceDeclForBuiltinNominal(.try_type));
 }
 
 /// The error type of an optional field access: the closed tag union
@@ -12205,14 +12205,7 @@ fn mkParseSpecVar(
             base.invariant("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
         },
     };
-    return try self.freshFromContent(try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
-        .{ .ident_idx = ident_idx },
-        &.{shape_var},
-        self.builtinOriginModule(),
-        self.sourceDeclForBuiltinParseSpec(decl),
-        true,
-        true,
-    ), env, region);
+    return try self.freshFromContent(try self.mkBuiltinNominalContent(ident_idx, &.{shape_var}, self.sourceDeclForBuiltinParseSpec(decl)), env, region);
 }
 
 fn mkFieldsVar(
@@ -12240,37 +12233,18 @@ fn mkBuiltinShapeHandleVar(
     env: *Env,
     region: Region,
 ) Allocator.Error!Var {
-    return try self.freshFromContent(try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
-        .{ .ident_idx = self.builtinNominalIdent(decl) },
-        &.{shape_var},
-        self.builtinOriginModule(),
-        self.sourceDeclForBuiltinNominal(decl),
-        true,
-        true,
-    ), env, region);
+    return try self.freshFromContent(try self.mkBuiltinNominalContent(self.builtinNominalIdent(decl), &.{shape_var}, self.sourceDeclForBuiltinNominal(decl)), env, region);
 }
 
-/// Create the transparent builtin Numeral type used by from_numeral.
+/// Create the builtin Numeral type used by from_numeral.
 fn mkNumeralContent(self: *Self) Allocator.Error!Content {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Use the pre-interned builtin ident instead of reconstructing the text.
-    const numeral_ident = types_mod.TypeIdent{
-        .ident_idx = self.cir.idents.builtin_numeral,
-    };
-
     // The application carries only identity; Numeral's backing (the Literal
-    // record) lives in the declaration table, where custom from_numeral
-    // implementations open it (Numeral is transparent).
-    return try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
-        numeral_ident,
-        &.{}, // No type args
-        self.builtinOriginModule(),
-        self.sourceDeclForBuiltinNominal(.numeral),
-        false, // Numeral is transparent so custom from_numeral methods can inspect it.
-        true,
-    );
+    // record) lives in the declaration table, and custom from_numeral
+    // implementations read it through Numeral's accessor methods.
+    return try self.mkBuiltinNominalContent(self.cir.idents.builtin_numeral, &.{}, self.sourceDeclForBuiltinNominal(.numeral));
 }
 
 // updating vars //
