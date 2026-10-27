@@ -161,6 +161,10 @@ pub const JoinInfo = struct {
 };
 
 /// A value a pattern tests, with the value's type.
+/// A loop being lowered: its exit join, and whether anything leaves through
+/// it (a failed condition, or a break).
+pub const LoopExit = struct { join: LIR.JoinPointId, reached: bool };
+
 pub const PatternItem = struct { pattern: CheckedPatternId, value: LocalId, ty: TypeId };
 
 pub const Builder = struct {
@@ -187,7 +191,7 @@ pub const Builder = struct {
     join_infos: std.ArrayList(JoinInfo) = .empty,
     merges: std.ArrayList(Merge) = .empty,
     /// The exit joins of the loops being lowered, innermost last.
-    loops: std.ArrayList(LIR.JoinPointId) = .empty,
+    loops: std.ArrayList(LoopExit) = .empty,
     next_join: u32 = 0,
     values: std.ArrayList(LocalId) = .empty,
     tasks: std.ArrayList(Task) = .empty,
@@ -1275,7 +1279,11 @@ pub const Builder = struct {
             .restore_merge => |merge| try self.restoreMerge(merge),
             .enter_merge => |merge| try self.enterMerge(merge),
             .loop_test => |loop| try self.loopTest(loop.body, loop.head, loop.exit),
-            .end_loop => _ = self.loops.pop(),
+            .end_loop => {
+                // A loop nothing leaves never reaches what follows it.
+                const loop = self.loops.pop().?;
+                if (!loop.reached) try self.emitTerminal(.runtime_error);
+            },
             .for_start => |for_| try self.forStart(for_.pattern, for_.body, for_.plan, for_.mutations),
             .unwrap_literal => |unwrap| try self.unwrapLiteral(unwrap.expr, unwrap.try_ty, unwrap.kind),
             .numeral_arg => |arg| try self.pushValue(try self.numeralArgument(arg.literal, arg.ty)),
@@ -2056,7 +2064,7 @@ pub const Builder = struct {
     pub fn procedureValue(self: *Builder, expr_id: CheckedExprId, use: checked.ProcedureUseTemplate) Allocator.Error!void {
         switch (try self.procedureUseCallee(use)) {
             .worker => |callee| {
-                const hidden = try self.hiddenArgs(callee, self.siteSubstitution(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{});
+                const hidden = try self.hiddenArgsAt(callee, self.siteSubstitution(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{}, try self.exprType(expr_id));
                 defer self.allocator.free(hidden);
                 try self.pushValue(try self.composeDictionary(try self.program.methodEntryWorker(callee), hidden));
             },
@@ -2404,7 +2412,7 @@ pub const Builder = struct {
             .local_param, .local_value, .pattern_binder, .local_mutable_version, .platform_required_const, .top_level_const, .imported_const => return try self.lowerValueCall(expr_id, call),
             else => |ref| invariantFmt("calls through a {s} reference are not yet lowered by Boxy", .{@tagName(ref)}),
         } else return try self.lowerValueCall(expr_id, call);
-        try self.push(.{ .finish_call = .{ .callee = callee, .hidden = try self.hiddenArgs(callee, self.siteSubstitution(call.func), self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{}), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
+        try self.push(.{ .finish_call = .{ .callee = callee, .hidden = try self.hiddenArgsAt(callee, self.siteSubstitution(call.func), self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{}, try self.exprType(call.func)), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
         try self.pushExprsReversed(call.args);
     }
 
@@ -2420,16 +2428,48 @@ pub const Builder = struct {
     /// variables `subst` instantiates (checked types of this body's module,
     /// in the target's `scheme_vars` order), followed by its dictionaries.
     pub fn hiddenArgs(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence) Allocator.Error![]LocalId {
+        return try self.hiddenArgsAt(callee, subst, evidence, null);
+    }
+
+    /// The hidden arguments of a call of `callee` whose function type at the
+    /// call is `call_fn`. A substitution entry the checker recorded as
+    /// erroneous is a scheme variable the call's own type does not fix: it
+    /// takes what the call's function type relates it to, or, related to
+    /// nothing, what a variable no use relates seals to.
+    pub fn hiddenArgsAt(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence, call_fn: ?TypeId) Allocator.Error![]LocalId {
         const target = self.program.worker(callee).*;
         if (subst.len != target.scheme_vars.len) invariant("a call's checked substitution differs from its target's scheme");
         const hidden = try self.allocator.alloc(LocalId, subst.len + target.dictionary_params.len);
         errdefer self.allocator.free(hidden);
-        for (subst, hidden[0..subst.len]) |checked_ty, *desc| desc.* = try self.descOf(try self.convert(checked_ty));
+        var related: ?[]?TypeId = null;
+        defer if (related) |r| self.allocator.free(r);
+        for (subst, hidden[0..subst.len], 0..) |checked_ty, *desc, index| {
+            if (self.view.types().payload(checked_ty) != .err) {
+                desc.* = try self.descOf(try self.convert(checked_ty));
+                continue;
+            }
+            if (related == null) {
+                const formal = try self.program.store.intern(.{ .function = .{ .args = target.params, .ret = target.ret, .effectful = false } });
+                related = if (call_fn) |actual| try self.relateVariablesPartial(&.{.{ formal, actual }}, target.scheme_vars.len) else try self.allocator.alloc(?TypeId, 0);
+            }
+            const ty = if (index < related.?.len) related.?[index] else null;
+            desc.* = try self.descOf(ty orelse try self.program.converter().sealedScheme(target.module, target.scheme_vars[index]));
+        }
         for (target.dictionary_params, hidden[subst.len..]) |param_index, *dict| {
             if (param_index >= evidence.len) invariant("a call's checked evidence does not cover its target's dictionaries");
             dict.* = try self.dictionaryOf(evidence[param_index]);
         }
         return hidden;
+    }
+
+    /// The worker of a method target: the procedure template the target
+    /// names.
+    pub fn methodTargetWorker(self: *Builder, target: static_dispatch.MethodTarget) Allocator.Error!WorkerId {
+        return switch (target.kind) {
+            .procedure => |procedure| try self.program.templateRefWorker(procedure.template),
+            .local_proc => invariant("dispatch to a local procedure is not yet lowered by Boxy"),
+            .structural => invariant("a structural method reached a procedure dispatch"),
+        };
     }
 
     /// The dictionary `evidence` denotes (design.md "Dictionaries"),
@@ -2441,10 +2481,7 @@ pub const Builder = struct {
             .direct => |node_id| {
                 const node = table.evidenceNode(node_id);
                 if (node.instantiation == .alias) invariant("dictionaries of targets reached through a procedure alias are not yet lowered by Boxy");
-                const target_module = self.program.moduleByIdx(node.target.module_idx);
-                const template = target_module.view.checked_procedure_templates.lookupByDef(node.target.def_idx) orelse
-                    invariant("a dictionary target has no procedure template");
-                const target = try self.program.templateRefWorker(template);
+                const target = try self.methodTargetWorker(node.target);
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
                 if (node.instantiation == .derived_from_callable) {
                     const hidden = try self.relatedHiddenArgs(target, node.instantiation.derived_from_callable);
@@ -2746,10 +2783,7 @@ pub const Builder = struct {
         switch (call_plan.resolution) {
             .direct_closed, .direct_parametric => |direct| {
                 const node = table.evidenceNode(direct.evidence);
-                const target_module = self.program.moduleByIdx(node.target.module_idx);
-                const template = target_module.view.checked_procedure_templates.lookupByDef(node.target.def_idx) orelse
-                    invariant("a dispatch target has no procedure template");
-                const callee = try self.program.templateRefWorker(template);
+                const callee = try self.methodTargetWorker(node.target);
                 if (node.instantiation == .alias) invariant("dispatch targets reached through a procedure alias are not yet lowered by Boxy");
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
                 const nested: []const static_dispatch.CheckedEvidence = switch (node.nested) {
@@ -3768,14 +3802,19 @@ pub const Builder = struct {
                 try self.emitLinear(.{ .init_uninitialized = .{ .target = local, .next = undefined } });
                 try self.bindIrrefutable(var_.pattern, local, try self.patternType(var_.pattern));
             },
-            .while_, .infinite_loop, .breakable_loop => |loop| try self.lowerLoop(loop),
+            .while_ => |loop| try self.lowerLoop(loop, true),
+            // `while True`: the body runs unconditionally, and only a break
+            // (in a breakable loop) leaves it.
+            .infinite_loop, .breakable_loop => |loop| try self.lowerLoop(loop, false),
             .for_ => |for_| {
                 try self.push(.discard);
                 try self.pushForLoop(for_.pattern, for_.expr, for_.body, for_.plan, for_.mutations);
             },
             .break_ => {
-                const exit = self.loops.getLastOrNull() orelse invariant("a break outside every loop reached Boxy lowering");
-                try self.emitJump(exit, null);
+                if (self.loops.items.len == 0) invariant("a break outside every loop reached Boxy lowering");
+                const loop = &self.loops.items[self.loops.items.len - 1];
+                loop.reached = true;
+                try self.emitJump(loop.join, null);
             },
             .expr => |expr| {
                 try self.push(.discard);
@@ -3804,7 +3843,7 @@ pub const Builder = struct {
     /// A condition-driven loop: a head join carrying the loop's mutated
     /// binders, entered first with their current values, and an exit join
     /// carrying them out.
-    pub fn lowerLoop(self: *Builder, loop: checked.CheckedConditionLoop) Allocator.Error!void {
+    pub fn lowerLoop(self: *Builder, loop: checked.CheckedConditionLoop, tests_condition: bool) Allocator.Error!void {
         const binders: []const checked.PatternBinderId = if (loop.mutations) |plan| blk: {
             const range = self.bodies().loopMutations(plan).binders;
             break :blk self.bodies().patternBinderIdPool()[range.start..][0..range.len];
@@ -3820,12 +3859,18 @@ pub const Builder = struct {
         // In the head: binders are the head's parameters.
         self.hole = head_body;
         if (head_merge) |m| try self.enterMerge(m);
-        try self.loops.append(self.allocator, exit);
+        try self.loops.append(self.allocator, .{ .join = exit, .reached = tests_condition });
         try self.push(.end_loop);
         if (exit_merge) |m| try self.push(.{ .enter_merge = m });
         try self.push(.{ .resume_at = after });
-        try self.push(.{ .loop_test = .{ .body = loop.body, .head = head, .exit = exit } });
-        try self.push(.{ .expr = loop.cond });
+        if (tests_condition) {
+            try self.push(.{ .loop_test = .{ .body = loop.body, .head = head, .exit = exit } });
+            try self.push(.{ .expr = loop.cond });
+        } else {
+            try self.push(.{ .jump_without_value = head });
+            try self.push(.discard);
+            try self.push(.{ .expr = loop.body });
+        }
     }
 
     pub fn pushForLoop(self: *Builder, pattern: CheckedPatternId, iterable: CheckedExprId, body: CheckedExprId, plan: ?static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId) Allocator.Error!void {
@@ -3891,7 +3936,7 @@ pub const Builder = struct {
         const rest = try self.recordFieldValue(payload.value, payload.ty, rest_name);
         _ = item_ty;
         try self.bindIrrefutable(pattern, item.value, item.ty);
-        try self.loops.append(self.allocator, exit);
+        try self.loops.append(self.allocator, .{ .join = exit, .reached = true });
         try self.push(.end_loop);
         if (exit_merge) |m| try self.push(.{ .enter_merge = m });
         try self.push(.{ .resume_at = after });
@@ -4071,10 +4116,7 @@ pub const Builder = struct {
             .direct_closed, .direct_parametric => |direct| {
                 const node = table.evidenceNode(direct.evidence);
                 if (node.instantiation == .alias) invariant("dispatch targets reached through a procedure alias are not yet lowered by Boxy");
-                const target_module = self.program.moduleByIdx(node.target.module_idx);
-                const template = target_module.view.checked_procedure_templates.lookupByDef(node.target.def_idx) orelse
-                    invariant("a dispatch target has no procedure template");
-                const callee = try self.program.templateRefWorker(template);
+                const callee = try self.methodTargetWorker(node.target);
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
                 const nested: []const static_dispatch.CheckedEvidence = switch (node.nested) {
                     .resolved => table.nestedEvidence(node),
