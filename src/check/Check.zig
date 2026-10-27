@@ -519,11 +519,10 @@ local_processing_ptrns: collections.DenseMapUnmanaged(CIR.Pattern.Idx, LocalDefP
 local_value_processing_ptrns: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .{},
 
 /// Every local binding root (`x = ..` / `var $x = ..` statement pattern)
-/// encountered while checking, in solve order. The settled-state occurs sweep
-/// checks these alongside the top-level defs: a local binding's cyclic type
-/// may never be reachable from the enclosing def's root type, and checking
-/// earlier would be premature because later constraints in the same statement
-/// can still determine the root's final graph.
+/// encountered while checking, in solve order. When the settled walk finds an
+/// infinite type, these are checked before the top-level defs, so a cycle a
+/// local binding's type reaches is reported at that binding
+/// (`rejectSettledInfiniteTypes`).
 local_binding_roots: std.ArrayListUnmanaged(LocalBindingRoot) = .empty,
 /// The name of the enclosing function, if known.
 /// Used to provide better error messages when type checking lambda arguments.
@@ -7731,11 +7730,17 @@ fn unifyNominalConstructorBacking(
 /// Check if a variable contains an infinite type after solving a binding.
 /// This catches cases like `f = |x| f([x])` which creates `a = List(a)`.
 ///
-/// Runs at binding roots: top-level defs (`CIR.Def.Idx`, the settled-state
-/// sweep), local bindings (`CIR.Pattern.Idx`, when their statement finishes
-/// solving), and standalone checked expressions (`CIR.Expr.Idx`, REPL roots).
-/// Returns whether the root's type was rejected (and set to `.err`).
-fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Allocator.Error!bool {
+/// Runs at binding roots: top-level defs (`CIR.Def.Idx`), local bindings
+/// (`CIR.Pattern.Idx`), and standalone checked expressions (`CIR.Expr.Idx`,
+/// REPL roots), once the settled walk has found a cycle. Returns whether the
+/// root's type was rejected (and set to `.err`); every variable a rejected
+/// root's type reaches is added to `reported`.
+fn checkForInfiniteType(
+    self: *Self,
+    comptime Idx: anytype,
+    idx: Idx,
+    reported: *collections.DenseMap(Var, void),
+) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -7743,46 +7748,31 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
 
     const var_ = ModuleEnv.varFrom(idx);
     const occurs_result = try occurs.occurs(self.types, &self.occurs_scratch, var_);
-
-    switch (occurs_result) {
-        .valid => {
-            // This is fine - no cycle, or valid recursion through a nominal type
-            return false;
-        },
-        .recursive_anonymous => {
-            // Anonymous recursion (a recursive type not routed through a
-            // nominal) is always disallowed, at every binding root—top-level
-            // defs, checked expression roots, and local bindings alike. A
-            // recursive type must go through a nominal to be valid. The
-            // `.recursive_anonymous` vs `.infinite` classification only selects
-            // a clearer error message; it never permits the type.
-            std.debug.assert(self.occurs_scratch.err_var != null);
-            const err_var = self.occurs_scratch.err_var.?;
-
-            const snapshot = try self.snapshotVarForError(err_var);
-            _ = try self.problems.appendProblem(.{ .anonymous_recursion = .{
-                .var_ = var_,
-                .snapshot = snapshot,
-                .def_name = self.bindingRootName(Idx, idx),
-            } });
-            try self.types.setVarContent(var_, .err);
-            return true;
-        },
-        .infinite => {
-            std.debug.assert(self.occurs_scratch.err_var != null);
-            const err_var = self.occurs_scratch.err_var.?;
-
-            // Infinite type (like `a = List(a)`)
-            const snapshot = try self.snapshotVarForError(err_var);
-            _ = try self.problems.appendProblem(.{ .infinite_recursion = .{
-                .var_ = var_,
-                .snapshot = snapshot,
-                .def_name = self.bindingRootName(Idx, idx),
-            } });
-            try self.types.setVarContent(var_, .err);
-            return true;
-        },
+    if (occurs_result == .valid) {
+        // This is fine - no cycle, or valid recursion through a nominal type
+        return false;
     }
+    const err_var = self.occurs_scratch.err_var.?;
+    const data: problem.VarWithSnapshot = .{
+        .var_ = var_,
+        .snapshot = try self.snapshotVarForError(err_var),
+        .def_name = self.bindingRootName(Idx, idx),
+    };
+    _ = try self.problems.appendProblem(switch (occurs_result) {
+        .valid => unreachable, // handled above
+        // Anonymous recursion (a recursive type not routed through a
+        // nominal) is always disallowed, at every binding root—top-level
+        // defs, checked expression roots, and local bindings alike. A
+        // recursive type must go through a nominal to be valid. The
+        // `.recursive_anonymous` vs `.infinite` classification only selects
+        // a clearer error message; it never permits the type.
+        .recursive_anonymous => .{ .anonymous_recursion = data },
+        // Infinite type (like `a = List(a)`)
+        .infinite => .{ .infinite_recursion = data },
+    });
+    try occurs.collectReachable(self.types, &self.occurs_scratch, var_, reported);
+    try self.types.setVarContent(var_, .err);
+    return true;
 }
 
 fn settledRowThroughAliases(self: *Self, start: Var) ?Var {
@@ -7809,9 +7799,71 @@ fn recordSettledRowRoot(
     if (!entry.found_existing) entry.value_ptr.* = origin;
 }
 
+/// One variable the settled walk is about to visit.
 const SettledTypeReach = struct {
     var_: Var,
-    starts_row: bool,
+    at: packed struct(u32) {
+        starts_row: bool,
+        /// The number of variables on the walk's path to this one.
+        depth: u31,
+    },
+};
+
+/// The settled walk's traversal state, shared across every seed. The walk
+/// reaches most of the module's types, so its sets are bitsets over every
+/// variable in the store.
+const SettledWalk = struct {
+    /// Each variable the walk reached.
+    visited: std.DynamicBitSetUnmanaged,
+    /// Each variable on the walk's current path, so an edge back to it closes
+    /// a cycle.
+    in_progress: std.DynamicBitSetUnmanaged,
+    /// The variables on the current path. A variable reached at depth `d`
+    /// finishes every variable deeper than `d - 1` on the path: the walk is
+    /// depth-first, so those have nothing left to visit.
+    path: std.ArrayListUnmanaged(Var) = .empty,
+    stack: std.ArrayListUnmanaged(SettledTypeReach) = .empty,
+    /// Types reached through an edge that is not part of a type's structure
+    /// (a function's effect dependencies, a type variable's method
+    /// requirements), each walked as a root of its own once the path is
+    /// empty, so no cycle is closed through such an edge.
+    cut_roots: std.ArrayListUnmanaged(Var) = .empty,
+    /// One entry per edge that closed a cycle through structure, which no
+    /// type may have. Empty for a program without an infinite type.
+    cycles: std.ArrayListUnmanaged(SettledCycle) = .empty,
+
+    fn init(gpa: Allocator, types: *const types_mod.Store) Allocator.Error!SettledWalk {
+        const var_count: usize = @intCast(types.len());
+        var visited = try std.DynamicBitSetUnmanaged.initEmpty(gpa, var_count);
+        errdefer visited.deinit(gpa);
+        return .{
+            .visited = visited,
+            .in_progress = try std.DynamicBitSetUnmanaged.initEmpty(gpa, var_count),
+        };
+    }
+
+    fn deinit(self: *SettledWalk, gpa: Allocator) void {
+        self.visited.deinit(gpa);
+        self.in_progress.deinit(gpa);
+        self.path.deinit(gpa);
+        self.stack.deinit(gpa);
+        self.cut_roots.deinit(gpa);
+        self.cycles.deinit(gpa);
+    }
+
+    /// Finish the variables on the path deeper than `depth`.
+    fn finishPathTo(self: *SettledWalk, depth: u31) void {
+        while (self.path.items.len > depth) {
+            self.in_progress.unset(@backingInt(self.path.pop().?));
+        }
+    }
+};
+
+/// A cycle the settled walk found: `head` is on it, and `origin` is the
+/// published root whose walk found it.
+const SettledCycle = struct {
+    head: Var,
+    origin: Var,
 };
 
 /// Collects the published roots the settled row walk starts from.
@@ -7835,65 +7887,101 @@ fn appendSettledTypeReachVars(
     stack: *std.ArrayListUnmanaged(SettledTypeReach),
     vars: []const Var,
     starts_row: bool,
+    depth: u31,
 ) std.mem.Allocator.Error!void {
-    for (vars) |var_| try stack.append(self.gpa, .{ .var_ = var_, .starts_row = starts_row });
+    try stack.ensureUnusedCapacity(self.gpa, vars.len);
+    for (vars) |var_| stack.appendAssumeCapacity(.{ .var_ = var_, .at = .{ .starts_row = starts_row, .depth = depth } });
 }
 
 /// Walk every type reachable from one published root, recording the row
-/// roots it reaches for the first time as owned by `origin`.
+/// roots it reaches for the first time as owned by `origin`, and every edge
+/// that closes a cycle through structure.
+///
+/// A cycle through structure is an infinite or anonymously recursive type: a
+/// nominal application contributes only its arguments, so no cycle here passes
+/// through a nominal's backing. A type variable has no structure, and the
+/// method requirements it carries are walked as roots of their own, so a
+/// cycle back through a requirement is never closed.
 fn walkSettledRoot(
     self: *Self,
     origin: Var,
-    walk_stack: *std.ArrayListUnmanaged(SettledTypeReach),
+    walk: *SettledWalk,
     semantic_row_roots: *collections.DenseMapUnmanaged(Var, Var),
-    visited: *collections.DenseMap(Var, void),
 ) std.mem.Allocator.Error!void {
-    try walk_stack.append(self.gpa, .{ .var_ = origin, .starts_row = true });
-    while (walk_stack.pop()) |entry| {
-        if (entry.starts_row) {
+    const walk_stack = &walk.stack;
+    try walk_stack.append(self.gpa, .{ .var_ = origin, .at = .{ .starts_row = true, .depth = 0 } });
+    while (true) {
+        const entry = walk_stack.pop() orelse {
+            walk.finishPathTo(0);
+            const cut_root = walk.cut_roots.pop() orelse break;
+            try walk_stack.append(self.gpa, .{ .var_ = cut_root, .at = .{ .starts_row = true, .depth = 0 } });
+            continue;
+        };
+        walk.finishPathTo(entry.at.depth);
+        if (entry.at.starts_row) {
             try self.recordSettledRowRoot(semantic_row_roots, entry.var_, origin);
         }
 
         const resolved = self.types.resolveVar(entry.var_);
-        if (visited.contains(resolved.var_)) continue;
-        try visited.put(resolved.var_, {});
+        const index: usize = @backingInt(resolved.var_);
+        if (walk.visited.isSet(index)) {
+            if (walk.in_progress.isSet(index)) {
+                try walk.cycles.append(self.gpa, .{ .head = resolved.var_, .origin = origin });
+            }
+            continue;
+        }
+        walk.visited.set(index);
+        walk.in_progress.set(index);
+        try walk.path.append(self.gpa, resolved.var_);
+        const depth = entry.at.depth + 1;
 
         switch (resolved.desc.content) {
             .alias => |alias| {
-                try walk_stack.append(self.gpa, .{
+                try walk_stack.ensureUnusedCapacity(self.gpa, 1);
+                walk_stack.appendAssumeCapacity(.{
                     .var_ = self.types.getAliasBackingVar(alias),
-                    .starts_row = entry.starts_row,
+                    .at = .{ .starts_row = entry.at.starts_row, .depth = depth },
                 });
-                try self.appendSettledTypeReachVars(walk_stack, self.types.sliceAliasArgs(alias), true);
+                try self.appendSettledTypeReachVars(walk_stack, self.types.sliceAliasArgs(alias), true, depth);
             },
             .structure => |flat_type| switch (flat_type) {
-                .tuple => |tuple| try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(tuple.elems), true),
-                .nominal_type => |nominal| try self.appendSettledTypeReachVars(walk_stack, self.types.sliceNominalArgs(nominal), true),
+                .tuple => |tuple| try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(tuple.elems), true, depth),
+                .nominal_type => |nominal| try self.appendSettledTypeReachVars(walk_stack, self.types.sliceNominalArgs(nominal), true, depth),
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    try walk_stack.append(self.gpa, .{ .var_ = func.ret, .starts_row = true });
-                    try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(func.args), true);
-                    try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(func.effect_deps), true);
+                    try walk_stack.ensureUnusedCapacity(self.gpa, 1);
+                    walk_stack.appendAssumeCapacity(.{ .var_ = func.ret, .at = .{ .starts_row = true, .depth = depth } });
+                    try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(func.args), true, depth);
+                    try walk.cut_roots.appendSlice(self.gpa, self.types.sliceVars(func.effect_deps));
                 },
                 .record => |record| {
-                    try walk_stack.append(self.gpa, .{ .var_ = record.ext, .starts_row = false });
                     const fields = self.types.getRecordFieldsSlice(record.fields);
+                    // A field holds its type and at most one presence variable.
+                    try walk_stack.ensureUnusedCapacity(self.gpa, 1 + 2 * fields.len);
+                    walk_stack.appendAssumeCapacity(.{ .var_ = record.ext, .at = .{ .starts_row = false, .depth = depth } });
                     for (fields.items(.presence)) |presence| {
-                        try walk_stack.append(self.gpa, .{ .var_ = presence.typeVar(), .starts_row = true });
+                        walk_stack.appendAssumeCapacity(.{ .var_ = presence.typeVar(), .at = .{ .starts_row = true, .depth = depth } });
                         if (presence.presenceVar()) |presence_var| {
-                            try walk_stack.append(self.gpa, .{ .var_ = presence_var, .starts_row = true });
+                            walk_stack.appendAssumeCapacity(.{ .var_ = presence_var, .at = .{ .starts_row = true, .depth = depth } });
                         }
                     }
                 },
                 .tag_union => |tag_union| {
-                    try walk_stack.append(self.gpa, .{ .var_ = tag_union.ext, .starts_row = false });
+                    try walk_stack.ensureUnusedCapacity(self.gpa, 1);
+                    walk_stack.appendAssumeCapacity(.{ .var_ = tag_union.ext, .at = .{ .starts_row = false, .depth = depth } });
                     const tags = self.types.getTagsSlice(tag_union.tags);
                     for (tags.items(.args)) |args| {
-                        try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(args), true);
+                        try self.appendSettledTypeReachVars(walk_stack, self.types.sliceVars(args), true, depth);
                     }
                 },
                 .empty_record, .empty_tag_union => {},
             },
-            .flex, .rigid, .field_presence, .err => {},
+            .flex, .rigid => {
+                const constraints_range = contentConstraintRange(resolved.desc.content) orelse unreachable; // contentConstraintRange returns a range for flex and rigid content
+                for (self.types.sliceStaticDispatchConstraints(constraints_range)) |constraint| {
+                    try walk.cut_roots.append(self.gpa, constraint.fn_var);
+                }
+            },
+            .field_presence, .err => {},
         }
     }
 }
@@ -7905,10 +7993,6 @@ test "settled row reachability uses caller-owned scratch across all seeds" {
     const checker = &test_env.checker;
     const store = checker.types;
     const shared_capacity = checker.var_set.capacity();
-    var visited = collections.DenseMap(Var, void).init(std.testing.allocator);
-    defer visited.deinit();
-    var stack: std.ArrayListUnmanaged(SettledTypeReach) = .empty;
-    defer stack.deinit(std.testing.allocator);
     var owners: collections.DenseMapUnmanaged(Var, Var) = .empty;
     defer owners.deinit(std.testing.allocator);
     var root = try store.fresh();
@@ -7917,12 +8001,70 @@ test "settled row reachability uses caller-owned scratch across all seeds" {
             .elems = try store.appendVars(&.{ root, root }),
         } } });
     }
-    try checker.walkSettledRoot(root, &stack, &owners, &visited);
-    try std.testing.expectEqual(@as(u32, 257), visited.count());
-    try checker.walkSettledRoot(root, &stack, &owners, &visited);
-    try std.testing.expectEqual(@as(u32, 257), visited.count());
+    var walk = try SettledWalk.init(checker.gpa, store);
+    defer walk.deinit(checker.gpa);
+    try checker.walkSettledRoot(root, &walk, &owners);
+    try std.testing.expectEqual(@as(usize, 257), walk.visited.count());
+    try checker.walkSettledRoot(root, &walk, &owners);
+    try std.testing.expectEqual(@as(usize, 257), walk.visited.count());
     try std.testing.expectEqual(shared_capacity, checker.var_set.capacity());
-    try std.testing.expectEqual(@as(usize, 0), stack.items.len);
+    try std.testing.expectEqual(@as(usize, 0), walk.stack.items.len);
+    try std.testing.expectEqual(@as(usize, 0), walk.cycles.items.len);
+}
+
+test "settled walk finds a cycle through structure and none through a method requirement" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("SettledCycles", "1.U64");
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+    const store = checker.types;
+    var owners: collections.DenseMapUnmanaged(Var, Var) = .empty;
+    defer owners.deinit(std.testing.allocator);
+
+    const method_name = try test_env.module_env.insertIdent(Ident.for_text("m"));
+
+    // `a.m : a -> a`: the cycle passes through the requirement.
+    const receiver = try store.fresh();
+    const method = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{
+        .args = try store.appendVars(&.{receiver}),
+        .ret = receiver,
+    } } });
+    const constraints = try store.appendStaticDispatchConstraints(&.{.{
+        .fn_name = method_name,
+        .fn_var = method,
+        .origin = .method_call,
+    }});
+    try store.setVarContent(receiver, .{ .flex = Flex.init().withConstraints(constraints) });
+    {
+        var walk = try SettledWalk.init(checker.gpa, store);
+        defer walk.deinit(checker.gpa);
+        try checker.walkSettledRoot(receiver, &walk, &owners);
+        try std.testing.expectEqual(@as(usize, 0), walk.cycles.items.len);
+    }
+
+    // The requirement's own type `t = (t, t)` is infinite.
+    const element = try store.fresh();
+    const infinite = try store.freshFromContent(.{ .structure = .{ .tuple = .{
+        .elems = try store.appendVars(&.{ element, element }),
+    } } });
+    try store.union_(element, infinite, store.resolveVar(infinite).desc);
+    const cyclic_method = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{
+        .args = try store.appendVars(&.{element}),
+        .ret = element,
+    } } });
+    const cyclic_receiver = try store.freshFromContent(.{ .flex = Flex.init().withConstraints(
+        try store.appendStaticDispatchConstraints(&.{.{
+            .fn_name = method_name,
+            .fn_var = cyclic_method,
+            .origin = .method_call,
+        }}),
+    ) });
+    {
+        var walk = try SettledWalk.init(checker.gpa, store);
+        defer walk.deinit(checker.gpa);
+        try checker.walkSettledRoot(cyclic_receiver, &walk, &owners);
+        try std.testing.expect(walk.cycles.items.len != 0);
+    }
 }
 
 test "a default-decided class merged into a frozen class renders its pre-default type" {
@@ -8049,23 +8191,22 @@ test "a replay shape records every flag relating can observe and no defaulting d
 /// only later; such rows are normalized (design.md "Row Union Normalization").
 /// This single linear reachability walk closes that checked-boundary invariant
 /// without adding per-variable metadata or work to ordinary unification.
-fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+///
+/// The same walk records every cycle through structure into `walk.cycles`,
+/// for `rejectSettledInfiniteTypes`.
+fn validateSettledValueRows(self: *Self, env: *Env, walk: *SettledWalk) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // This once-per-check walk can reach the entire published graph. Retaining
     // that capacity in the common walk set makes every subsequent tiny walk
-    // clear a module-sized hash table. Reuse it across seeds, then release it.
-    var settled_visited = collections.DenseMap(Var, void).init(self.gpa);
-    defer settled_visited.deinit();
-    const visited = &settled_visited;
+    // clear a module-sized hash table, so the caller owns a walk of its own,
+    // reused across seeds and then released.
 
     // Each row root maps to the first published root that reached it, which a
     // conflict report shows as the value whose type holds the row.
     var semantic_row_roots: collections.DenseMapUnmanaged(Var, Var) = .empty;
     defer semantic_row_roots.deinit(self.gpa);
-    var walk_stack: std.ArrayListUnmanaged(SettledTypeReach) = .empty;
-    defer walk_stack.deinit(self.gpa);
     var seeds: std.ArrayListUnmanaged(Var) = .empty;
     defer seeds.deinit(self.gpa);
 
@@ -8098,7 +8239,7 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
 
     // Each seed's walk finishes before the next starts, so a row belongs to
     // the earliest source node whose type reaches it.
-    for (seeds.items) |seed| try self.walkSettledRoot(seed, &walk_stack, &semantic_row_roots, visited);
+    for (seeds.items) |seed| try self.walkSettledRoot(seed, walk, &semantic_row_roots);
 
     var row_roots: std.ArrayListUnmanaged(Var) = .empty;
     defer row_roots.deinit(self.gpa);
@@ -8532,10 +8673,70 @@ fn normalizeReportedDuplicateRow(self: *Self, value: ?Var, env: *Env) Allocator.
     return true;
 }
 
-/// The settled-state occurs sweep: check every binding root—top-level defs
-/// and recorded local bindings—for infinite/anonymous-recursive types, after
-/// all deferred constraints have been solved.
-fn checkBindingRootsForInfiniteTypes(self: *Self) std.mem.Allocator.Error!void {
+/// Reject every infinite or anonymously recursive type the settled walk
+/// found, after all deferred constraints have been solved. A program without
+/// one has no cycles and does nothing here.
+///
+/// A cycle a binding root's type reaches is reported at the tightest such
+/// root, named by its binding. Any other cycle is in a type no binding's type
+/// reaches (a lambda passed to a call, say), and is reported at the published
+/// root whose walk found it; one of its types becomes `.err`, after every
+/// report has its snapshot, so no checked type holds the cycle.
+fn rejectSettledInfiniteTypes(self: *Self, cycles: []const SettledCycle, repl_root: ?CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    if (cycles.len == 0) return;
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    var reported = collections.DenseMap(Var, void).init(self.gpa);
+    defer reported.deinit();
+    if (repl_root) |expr_idx| _ = try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx, &reported);
+    try self.checkBindingRootsForInfiniteTypes(&reported);
+
+    var rejected: std.ArrayListUnmanaged(Var) = .empty;
+    defer rejected.deinit(self.gpa);
+    for (cycles) |cycle| {
+        if (reported.contains(self.types.resolveVar(cycle.head).var_)) continue;
+        // A row the settled walk rejected may have broken the cycle.
+        const occurs_result = try occurs.occurs(self.types, &self.occurs_scratch, cycle.head);
+        if (occurs_result == .valid) continue;
+        const err_var = self.occurs_scratch.err_var.?;
+        const data: problem.VarWithSnapshot = .{
+            .var_ = self.infiniteTypeSourceVar(cycle, err_var),
+            .snapshot = try self.snapshotVarForError(err_var),
+            .def_name = null,
+        };
+        _ = try self.problems.appendProblem(switch (occurs_result) {
+            .valid => unreachable, // handled above
+            .recursive_anonymous => .{ .anonymous_recursion = data },
+            .infinite => .{ .infinite_recursion = data },
+        });
+        try occurs.collectReachable(self.types, &self.occurs_scratch, cycle.head, &reported);
+        try rejected.append(self.gpa, err_var);
+    }
+    for (rejected.items) |var_| {
+        try self.types.setVarContent(var_, .err);
+    }
+}
+
+/// Where a cycle no binding root reports is shown: the first source node
+/// whose own type is on the cycle, such as a lambda parameter applied to
+/// itself, and otherwise the published root whose walk found it.
+fn infiniteTypeSourceVar(self: *Self, cycle: SettledCycle, err_var: Var) Var {
+    const head = self.types.resolveVar(cycle.head).var_;
+    const reported = self.types.resolveVar(err_var).var_;
+    for (self.cir.store.nodes.field(.tag), 0..) |tag, node_slot| {
+        if (!isExprNodeTag(tag) and !isPatternNodeTag(tag)) continue;
+        const node_var: Var = @fromBackingInt(@intCast(node_slot));
+        const resolved = self.types.resolveVar(node_var).var_;
+        if (resolved == head or resolved == reported) return node_var;
+    }
+    return cycle.origin;
+}
+
+/// Check every binding root—top-level defs and recorded local bindings—for
+/// infinite/anonymous-recursive types, adding every variable a rejected
+/// root's type reaches to `reported`.
+fn checkBindingRootsForInfiniteTypes(self: *Self, reported: *collections.DenseMap(Var, void)) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -8548,7 +8749,7 @@ fn checkBindingRootsForInfiniteTypes(self: *Self) std.mem.Allocator.Error!void {
     // root's binders carry parts of it, so the statement and every use of its
     // binders become runtime errors, as for a rejected pattern/RHS relation.
     for (self.local_binding_roots.items) |root| {
-        if (!try self.checkForInfiniteType(CIR.Pattern.Idx, root.pattern)) continue;
+        if (!try self.checkForInfiniteType(CIR.Pattern.Idx, root.pattern, reported)) continue;
         const initialized = root.initialized orelse continue;
         try self.erroneous_value_exprs.put(self.gpa, initialized.expr, {});
         try self.erroneous_statements.put(self.gpa, initialized.statement, initialized.expr);
@@ -8556,7 +8757,7 @@ fn checkBindingRootsForInfiniteTypes(self: *Self) std.mem.Allocator.Error!void {
     }
     for (0..self.cir.all_defs.span.len) |def_offset| {
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
-        _ = try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
+        _ = try self.checkForInfiniteType(CIR.Def.Idx, def_idx, reported);
     }
 }
 
@@ -12774,11 +12975,12 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // finalize, long after its owner's body was checked.
     try self.runLateImplicitOpenExtAudit(&env);
 
-    try self.validateSettledValueRows(&env);
-
-    // After solving all deferred constraints, check every binding root
-    // (top-level defs and local bindings) for infinite types
-    try self.checkBindingRootsForInfiniteTypes();
+    {
+        var settled_walk = try SettledWalk.init(self.gpa, self.types);
+        defer settled_walk.deinit(self.gpa);
+        try self.validateSettledValueRows(&env, &settled_walk);
+        try self.rejectSettledInfiniteTypes(settled_walk.cycles.items, null);
+    }
     try self.recheckNominalConstructorBackings(&env);
 
     try self.rejectEffectfulCompileTimeExecutableRoots();
@@ -18198,12 +18400,12 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     // steps at the matching points in its own sequence.
     try self.runLateImplicitOpenExtAudit(&env);
 
-    try self.validateSettledValueRows(&env);
-
-    // Check for infinite types, at the expression root and at every binding
-    // root the expression contains
-    _ = try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
-    try self.checkBindingRootsForInfiniteTypes();
+    {
+        var settled_walk = try SettledWalk.init(self.gpa, self.types);
+        defer settled_walk.deinit(self.gpa);
+        try self.validateSettledValueRows(&env, &settled_walk);
+        try self.rejectSettledInfiniteTypes(settled_walk.cycles.items, expr_idx);
+    }
     try self.recheckNominalConstructorBackings(&env);
 
     try self.closeWeakValueImplicitOpenExts(&env);
@@ -29788,10 +29990,8 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 try self.setLocalValueBindersProcessing(decl_stmt.pattern, false);
             }
 
-            // This statement is a binding root whose type may never be
-            // reachable from the enclosing def's root type. Record it for
-            // the settled-state occurs sweep after this statement's
-            // constraints have fully determined the root graph.
+            // This statement is a binding root, which reports an infinite
+            // type its own type reaches (`rejectSettledInfiniteTypes`).
             try self.local_binding_roots.append(self.gpa, .{ .pattern = decl_stmt.pattern, .initialized = .{ .statement = stmt_idx, .expr = decl_stmt.expr } });
             self.releaseDeclStatement(decl.*);
             statement.kind = .single;
@@ -30313,11 +30513,10 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
         state.return_frame_pushed = false;
 
         // NOTE: no occurs check here. Infinite/anonymous-recursive types are
-        // detected at binding roots (top-level defs, local bindings, REPL
-        // roots)—a cyclic type constructed while checking this body is
-        // reachable from the enclosing binding's root type, and running
-        // occurs per syntactic lambda re-traversed the whole body type graph
-        // once per nesting level.
+        // detected once, by the settled walk over every type the checked
+        // module outputs (`rejectSettledInfiniteTypes`); running occurs per
+        // syntactic lambda re-traversed the whole body type graph once per
+        // nesting level.
 
         // A dependency may already have become positive while checking a
         // later argument or definition. Materialize that result before
@@ -40405,6 +40604,8 @@ fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRo
 /// that is reported as a method conflict. The type is poisoned so it reports
 /// nothing further, and every definition the boundary generalizes is retired
 /// (`retireBoundaryDefinition`), since the type is part of what they share.
+/// Unification does not reject a cycle, so a relation that makes the method's
+/// type infinite, which no type can be, is that conflict too.
 fn relateSameMethodRequirements(
     self: *Self,
     retained: StaticDispatchConstraint,
@@ -40417,7 +40618,25 @@ fn relateSameMethodRequirements(
     const deferred_start = env.deferred_static_dispatch_constraints.len();
     var probe = try self.beginCommitProbe(env);
     const result = try probe.unify(retained_fn_var, duplicate.fn_var);
-    if (result.isEstablished()) {
+    const conflict = conflict: {
+        if (!result.isEstablished()) {
+            probe.rollback();
+            if (!result.isProblem()) return .erroneous;
+            break :conflict true;
+        }
+        if ((try occurs.occursOwnType(self.types, &self.occurs_scratch, retained_fn_var)) == .valid) break :conflict false;
+        // The method's type is infinite. When either requirement's type
+        // already was, the relation did not make it so: that type is the
+        // problem, and the settled walk reports it.
+        probe.rollback();
+        if ((try occurs.occursOwnType(self.types, &self.occurs_scratch, retained_fn_var)) == .valid and
+            (try occurs.occursOwnType(self.types, &self.occurs_scratch, duplicate.fn_var)) == .valid) break :conflict true;
+        probe = try self.beginCommitProbe(env);
+        const redo_result = try probe.unify(retained_fn_var, duplicate.fn_var);
+        std.debug.assert(redo_result.isEstablished());
+        break :conflict false;
+    };
+    if (!conflict) {
         if (env.deferred_static_dispatch_constraints.len() == deferred_start) {
             try probe.commit();
             return .merged;
@@ -40447,8 +40666,6 @@ fn relateSameMethodRequirements(
         }
         return .merged;
     }
-    probe.rollback();
-    if (!result.isProblem()) return .erroneous;
 
     _ = try self.problems.appendProblem(try self.methodConflictProblem(
         try self.methodConflict(retained, duplicate, receiver_var),
