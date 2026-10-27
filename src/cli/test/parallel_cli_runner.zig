@@ -15213,7 +15213,16 @@ fn customUncachedTestSubset(io: std.Io, allocator: Allocator, env: *const CaseEn
         for (0..@as(usize, if (backend == .dev) 2 else 1)) |pass| {
             for (paths[0..4], sources[0..4], 0..) |path, source, index| {
                 if (mask & (@as(u4, 1) << @intCast(index)) == 0) continue;
-                const edited = std.fmt.allocPrint(allocator, "{s}\n# revision {d} pass {d}\n", .{ source, revision, pass }) catch |err|
+                // Test results are keyed by what each root computes, so the
+                // edit pads the code inside both of the module's expects (a
+                // comment changes no root). Each revision and pass pads anew.
+                const padding = 1 + 2 * revision + pass;
+                const pad = allocator.alloc(u8, padding) catch |err|
+                    return customInfraFailure(allocator, timer, "subset edit: {}", .{err});
+                @memset(pad, ' ');
+                const replacement = std.fmt.allocPrint(allocator, "expect {{\n{s}", .{pad}) catch |err|
+                    return customInfraFailure(allocator, timer, "subset edit: {}", .{err});
+                const edited = std.mem.replaceOwned(u8, allocator, source, "expect {\n", replacement) catch |err|
                     return customInfraFailure(allocator, timer, "subset edit: {}", .{err});
                 std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = edited }) catch |err|
                     return customInfraFailure(allocator, timer, "write subset edit: {}", .{err});
@@ -15232,9 +15241,10 @@ fn customUncachedTestSubset(io: std.Io, allocator: Allocator, env: *const CaseEn
                 const misses: u64 = @popCount(mask);
                 if (timingCounter(run.stderr, "Test result cache", "Modules cached") != 4 - misses or
                     timingCounter(run.stderr, "Test result cache", "Roots uncached") != 2 * misses or
-                    timingCounter(run.stderr, "Dev test emission", "Entrypoints emitted") != 2 * misses)
+                    // A run that emits nothing reports no emission section.
+                    (timingCounter(run.stderr, "Dev test emission", "Entrypoints emitted") orelse 0) != 2 * misses)
                     return failureFromRun(allocator, timer, run, "cache hits leaked into the execution subset");
-                if (mask == 0 and timingCounter(run.stderr, "Dev test emission", "Procedures emitted") != 0)
+                if (mask == 0 and (timingCounter(run.stderr, "Dev test emission", "Procedures emitted") orelse 0) != 0)
                     return failureFromRun(allocator, timer, run, "all-hit plan emitted runtime procedures");
             }
         }
@@ -15251,6 +15261,11 @@ fn customUncachedTestSubset(io: std.Io, allocator: Allocator, env: *const CaseEn
         .{ .group = "Dev test emission", .counter = "Entrypoints emitted" },
     };
     var original_work: [work.len]u64 = undefined;
+    // Restore `A` from the subset edits and cache its roots, so each growth
+    // edit below reruns exactly the one root that reads the stored closure.
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = paths[0], .data = sources[0] }) catch |err|
+        return customInfraFailure(allocator, timer, "restore subset module: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &args, .roc_file = paths[4], .exit = .{ .code = 1 } })) |failure| return failure;
     for ([_]usize{ 0, 24 }, 0..) |extra_roots, size_index| {
         var expanded = std.Io.Writer.Allocating.init(allocator);
         defer expanded.deinit();
@@ -15277,9 +15292,11 @@ fn customUncachedTestSubset(io: std.Io, allocator: Allocator, env: *const CaseEn
             .result => |run| run,
             .failure => |failure| return failure,
         };
+        // Editing `A`'s stored closure reruns only the root that reads it; its
+        // first root's result still holds.
         if (timingCounter(run.stderr, "Test result cache", "Modules cached") != 3 or
-            timingCounter(run.stderr, "Test result cache", "Roots cached") != 6 + extra_roots)
-            return failureFromRun(allocator, timer, run, "growth fixture did not cache exactly B, C and D");
+            timingCounter(run.stderr, "Test result cache", "Roots cached") != 7 + extra_roots)
+            return failureFromRun(allocator, timer, run, "growth fixture did not cache exactly B, C and D, and A's root the edit does not reach");
         for (work, 0..) |counter, index| {
             const value = timingCounter(run.stderr, counter.group, counter.counter) orelse
                 return failureFromRun(allocator, timer, run, "missing execution-subset work counter");

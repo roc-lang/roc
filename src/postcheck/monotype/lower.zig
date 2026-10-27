@@ -9162,7 +9162,10 @@ const Builder = struct {
             // no cached code, and a program whose every request is settled
             // reads no code pack.
             const settled_discovery = demand == .discovery and body_scheduling == .queued and !self.parking_root_job and self.discoverySettled(key.bytes);
-            if (!settled_discovery) if (self.spec_cache) |cache| {
+            // Discovery lowers a body to find the literal roots it registers;
+            // cached code records the compile-time values it reads, not those
+            // obligations, so only an evaluation request takes a cached body.
+            if (!settled_discovery and demand != .discovery) if (self.spec_cache) |cache| {
                 if (cache.lookup(key.bytes, self.spec_cache_takes, try self.programModules())) |hit| {
                     fn_template.cached = hit;
                     self.count("spec_cache_hits");
