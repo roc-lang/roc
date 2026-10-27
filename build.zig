@@ -126,8 +126,9 @@ const msvc_runtime = @import("src/echo_platform/msvc_runtime.zig");
 var msvc_runtime_libs: [2]?*Step.Compile = .{ null, null };
 
 /// The MSVC-ABI startup archive for `target_name` (`x64win` or `arm64win`):
-/// process and DLL entry points, the TLS directory, and compiler-rt, each in
-/// its own archive member so a link pulls only what it references.
+/// process and DLL entry points, the TLS directory, the routines vcruntime
+/// supplies, and compiler-rt, each in its own archive member so a link pulls
+/// only what it references.
 fn msvcRuntimeLib(b: *std.Build, target_name: []const u8) *Step.Compile {
     const is_arm64 = std.mem.startsWith(u8, target_name, "arm64");
     const slot = &msvc_runtime_libs[@intFromBool(is_arm64)];
@@ -155,6 +156,11 @@ fn msvcRuntimeLib(b: *std.Build, target_name: []const u8) *Step.Compile {
     for ([_]Member{
         .{ .name = "dll_startup", .source = b.path("src/default_platform/msvc_runtime/dll_startup.zig") },
         .{ .name = "tls", .source = b.path("src/default_platform/msvc_runtime/tls.zig") },
+        .{ .name = "fltused", .source = b.path("src/default_platform/msvc_runtime/fltused.zig") },
+        .{ .name = "memcpy", .source = b.path("src/default_platform/msvc_runtime/memcpy.zig") },
+        .{ .name = "memmove", .source = b.path("src/default_platform/msvc_runtime/memmove.zig") },
+        .{ .name = "memset", .source = b.path("src/default_platform/msvc_runtime/memset.zig") },
+        .{ .name = "memcmp", .source = b.path("src/default_platform/msvc_runtime/memcmp.zig") },
     }) |member| {
         const obj = b.addObject(.{
             .name = b.fmt("msvc_runtime_{s}_{s}", .{ member.name, arch_name }),
@@ -169,7 +175,7 @@ fn msvcRuntimeLib(b: *std.Build, target_name: []const u8) *Step.Compile {
         });
         lib.root_module.addObject(obj);
     }
-    // Without libc, compiler-rt also defines `__chkstk` and `_fltused`.
+    // Without libc, compiler-rt also defines `__chkstk`.
     lib.bundle_compiler_rt = true;
 
     slot.* = lib;
