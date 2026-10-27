@@ -1946,7 +1946,11 @@ pub const Builder = struct {
     /// The own scheme of generalized-local scope `scope_id`: its quantified
     /// variables and its runtime evidence parameters.
     pub fn localScheme(self: *Builder, scope_id: checked.DispatchScopeId) Allocator.Error!lower.LocalScheme {
-        const templates = self.view.view.checked_procedure_templates;
+        return try self.localSchemeIn(self.view, scope_id);
+    }
+
+    pub fn localSchemeIn(self: *Builder, view: *const types.ModuleView, scope_id: checked.DispatchScopeId) Allocator.Error!lower.LocalScheme {
+        const templates = view.view.checked_procedure_templates;
         const scope = templates.dispatch_scopes[@backingInt(scope_id)];
         const evidence_params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, scope.evidence_params);
         var dictionaries: std.ArrayList(u32) = .empty;
@@ -1956,7 +1960,7 @@ pub const Builder = struct {
         return .{
             .scheme_vars = lower.poolSlice(checked.CheckedTypeId, templates.scheme_vars_pool, scope.scheme_vars),
             .dictionaries = dictionaries.items,
-            .per_call = self.program.local_procs.contains(.{ .module = self.module, .expr = scope.checked_expr }),
+            .per_call = self.program.local_procs.contains(.{ .module = view.index, .expr = scope.checked_expr }),
         };
     }
 
@@ -2219,12 +2223,22 @@ pub const Builder = struct {
                     .closure => |closure| .{ closure.lambda, closure.captures },
                     else => invariant("a stored closure's site is not a lambda or closure"),
                 };
-                // The closure in its owner's scope, whose variables the
-                // stored value's type instantiates.
-                const variables = try self.allocator.alloc(TypeId, owner.scheme_vars.len);
+                // The closure in its owner's scope (and, for a generalized
+                // lambda, its own scheme's), whose variables the stored
+                // value's type instantiates; the value captures them all.
+                const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = owner.module, .expr = lambda_expr })) |scope_id| blk: {
+                    var scheme = try self.localSchemeIn(owner_view, scope_id);
+                    if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) break :blk null;
+                    if (scheme.dictionaries.len != 0) invariant("restoring stored generalized lambdas that take dictionaries is not yet lowered by Boxy");
+                    scheme.per_call = false;
+                    break :blk scheme;
+                } else null;
+                const scope_vars = if (own) |scheme| try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ owner.scheme_vars, scheme.scheme_vars }) else try self.allocator.dupe(checked.CheckedTypeId, owner.scheme_vars);
+                defer self.allocator.free(scope_vars);
+                const variables = try self.allocator.alloc(TypeId, scope_vars.len);
                 defer self.allocator.free(variables);
                 for (variables, 0..) |*variable, index| variable.* = try self.program.store.variable(@intCast(index));
-                const generic: types.Env = .{ .module = owner.module, .vars = owner.scheme_vars, .bound = variables };
+                const generic: types.Env = .{ .module = owner.module, .vars = scope_vars, .bound = variables };
                 const generic_fn = try self.program.converter().convert(owner.module, expr.ty, generic);
                 const capture_types = try self.allocator.alloc(TypeId, captures.len);
                 defer self.allocator.free(capture_types);
@@ -2244,16 +2258,22 @@ pub const Builder = struct {
                     if (stored_capture.kind != .lexical) invariant("restoring a closure capturing its own recursive binding is not yet lowered by Boxy");
                     try relations.append(self.allocator, .{ capture_ty.*, try self.constType(module_index, stored_capture.ty) });
                 }
-                const bound = try self.relateVariablesAll(relations.items, owner.scheme_vars.len);
+                // A scheme variable neither the value's type nor its captures
+                // mention reaches no value of the restored closure from
+                // outside; it seals as every scope seals a variable no use
+                // relates.
+                const related = try self.relateVariablesPartial(relations.items, scope_vars.len);
+                defer self.allocator.free(related);
+                const bound = try self.allocator.alloc(TypeId, scope_vars.len);
                 defer self.allocator.free(bound);
-                const concrete: types.Env = .{ .module = owner.module, .vars = owner.scheme_vars, .bound = bound };
+                for (related, bound, scope_vars) |ty, *slot, variable| slot.* = ty orelse try self.program.converter().sealedScheme(owner.module, variable);
+                const concrete: types.Env = .{ .module = owner.module, .vars = scope_vars, .bound = bound };
                 const concrete_capture_types = try self.allocator.alloc(TypeId, captures.len);
                 defer self.allocator.free(concrete_capture_types);
                 for (captures, concrete_capture_types) |capture, *concrete_ty| {
                     concrete_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().pattern(capture.pattern).ty, concrete);
                 }
-                if (self.program.local_scopes.contains(.{ .module = owner.module, .expr = lambda_expr })) invariant("restoring stored generalized local procedures is not yet lowered by Boxy");
-                const worker = try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, null);
+                const worker = try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, own);
                 const descs = try self.program.arena.allocator().alloc(LocalId, bound.len);
                 for (bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
                 try self.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = descs, .capture_types = try self.program.arena.allocator().dupe(TypeId, concrete_capture_types) } });

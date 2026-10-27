@@ -57,7 +57,10 @@ pub const WorkerKey = union(enum) {
     /// A lambda or closure expression of the worker `outer`, whose scope
     /// (its type variables and their descriptors) it shares through its
     /// captures.
-    lambda: struct { module: ModuleIndex, expr: checked.CheckedExprId, outer: WorkerId },
+    /// `captured_scheme` is set for a local procedure's function value whose
+    /// own scheme's instantiation it captures (a value compile-time
+    /// evaluation stored) rather than taking per call.
+    lambda: struct { module: ModuleIndex, expr: checked.CheckedExprId, outer: WorkerId, captured_scheme: bool = false },
     /// The erased-callable entry of a template worker that a dictionary
     /// names: it takes the method's arguments as its argument record, the
     /// target's hidden descriptors and dictionaries as its captures, and
@@ -275,7 +278,7 @@ pub const Program = struct {
         own: ?LocalScheme,
     ) Allocator.Error!WorkerId {
         const outer_worker = self.worker(outer).*;
-        const key: WorkerKey = .{ .lambda = .{ .module = outer_worker.module, .expr = lambda_expr, .outer = outer } };
+        const key: WorkerKey = .{ .lambda = .{ .module = outer_worker.module, .expr = lambda_expr, .outer = outer, .captured_scheme = if (own) |scheme| scheme.per_call == false and self.local_procs.contains(.{ .module = outer_worker.module, .expr = lambda_expr }) else false } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const signature = switch (self.store.get(fn_ty)) {
             .function => |function| function,

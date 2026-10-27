@@ -609,6 +609,15 @@ pub const Converter = struct {
         };
     }
 
+    /// The type a scheme variable takes where nothing relates it to a use:
+    /// what it seals to when no scope binds it.
+    pub fn sealedScheme(self: Converter, module: ModuleIndex, variable: checked.CheckedTypeId) Allocator.Error!TypeId {
+        return switch (self.modules.get(module).types().payload(variable)) {
+            .flex, .rigid => |payload| try self.sealVariable(payload),
+            else => try self.convert(module, variable, .{ .module = module, .vars = &.{}, .bound = &.{} }),
+        };
+    }
+
     /// A variable the converting scope does not bind: it seals to its row
     /// default or its numeric default (`CheckedTypePayload.variableSealsToRowDefault`).
     fn sealVariable(self: Converter, variable: checked.CheckedTypeVariable) Allocator.Error!TypeId {
