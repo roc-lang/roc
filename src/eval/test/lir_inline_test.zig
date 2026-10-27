@@ -9900,6 +9900,43 @@ test "issue 11626: a shared callee's closed result row is specialized per caller
     );
 }
 
+test "issue 12625: a construction forwarding a parameter crosses its composed result's return boundary" {
+    const allocator = std.testing.allocator;
+    // The body `Err(tag)` builds its own `Try`, but its error row is the
+    // parameter's, which the `?` result widens with `Early`. The parameter
+    // read keeps its own row and the body crosses the return boundary
+    // (design.md "Closed Result Rows At Template Boundaries").
+    const source =
+        \\check = |ok| if ok Ok({}) else Err(Early)
+        \\fail = |ok, tag| {
+        \\    _x = check(ok)?
+        \\    Err(tag)
+        \\}
+        \\
+        \\main = (fail(Bool.True, Missing), fail(Bool.False, Missing), fail(Bool.True, Named("owned payload longer than an inline string")))
+        \\
+    ;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings(
+        "(Err(Missing), Err(Early), Err(Named(\"owned payload longer than an inline string\")))",
+        output,
+    );
+}
+
 test "issue 11626: a closed-row callee gets one specialization per widened caller row" {
     const allocator = std.testing.allocator;
     const source =

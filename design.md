@@ -10873,10 +10873,13 @@ request itself is formed at the widened row: a direct call whose result flows
 into a wider row, through a row coercion or a lambda body whose composed `?`
 result is wider than its own, is lowered at that row's cell, and a callee
 request whose row includes the callee's closed row widens it
-(`stepCallExprAtNode`, `coercedValueTakesRow`). A value that is not such a
-call—a read of a value, whose row every use shares, or a call through a
-function value—keeps its own row and is widened into the destination by a
-`row_widen`, which Lambda Solved joins (Row Joins). Only two positions widen,
+(`stepCallExprAtNode`, `coercedValueTakesRow`). A construction builds only
+its own row: each payload whose type is not already the destination's slot
+for it must take that slot by the same rule, so `Err(tag)` forwarding a
+parameter whose row the `?` result widens is not lowered at the result's
+cell. A value that is not such a call—a read of a value, whose row every use
+shares, or a call through a function value—keeps its own row and is widened
+into the destination by a `row_widen`, which Lambda Solved joins (Row Joins). Only two positions widen,
 the template's DIRECT result row and the ERROR row of a `Try` result; a
 `Try`'s ok row and every nested row relate exactly. The graph may present
 either side as a bare row or as the `Try` nominal, and the empty row's node

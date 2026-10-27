@@ -36876,26 +36876,38 @@ const BodyContext = struct {
     /// Whether a row coercion's value is lowered at the coercion's row rather
     /// than at its own: every value it ends in is a direct call whose callee
     /// takes the row (`directCallWidensClosedResult`), a construction, or a
-    /// divergence, reached through blocks and branches. Anything else—a read
-    /// of a value, a restored compile-time constant, a call through a
-    /// function value—keeps its own row, which every use of that value
-    /// shares, and is widened into the coercion's.
+    /// divergence, reached through blocks and branches. A construction builds
+    /// only its own row, so each payload whose type is not already the
+    /// coercion's payload slot must take that slot by the same rule. Anything
+    /// else—a read of a value, a restored compile-time constant, a call
+    /// through a function value—keeps its own row, which every use of that
+    /// value shares, and is widened into the coercion's.
     fn coercedValueTakesRow(self: *BodyContext, value: checked.CheckedExprId, expected_node: NodeId) Allocator.Error!bool {
-        var pending: std.ArrayListUnmanaged(checked.CheckedExprId) = .empty;
+        const RowDemand = struct { expr: checked.CheckedExprId, expected: NodeId };
+        var pending: std.ArrayListUnmanaged(RowDemand) = .empty;
         defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, value);
-        while (pending.pop()) |expr_id| {
+        try pending.append(self.allocator, .{ .expr = value, .expected = expected_node });
+        while (pending.pop()) |demand| {
+            const expr_id = demand.expr;
             if (self.restoredHoistedConstEntry(expr_id) != null) return false;
             const expr = self.view.bodies.expr(expr_id);
             switch (expr.data) {
-                .call => |call| if (!try self.directCallWidensClosedResult(expr_id, call, expected_node)) return false,
-                .block => |block| try pending.append(self.allocator, block.final_expr),
+                .call => |call| if (!try self.directCallWidensClosedResult(expr_id, call, demand.expected)) return false,
+                .block => |block| try pending.append(self.allocator, .{ .expr = block.final_expr, .expected = demand.expected }),
                 .if_ => |if_| {
-                    for (if_.branches) |branch| try pending.append(self.allocator, branch.body);
-                    try pending.append(self.allocator, if_.final_else);
+                    for (if_.branches) |branch| try pending.append(self.allocator, .{ .expr = branch.body, .expected = demand.expected });
+                    try pending.append(self.allocator, .{ .expr = if_.final_else, .expected = demand.expected });
                 },
-                .match_ => |match| for (match.branches) |branch| try pending.append(self.allocator, branch.value),
-                .tag, .zero_argument_tag, .crash, .runtime_error => {},
+                .match_ => |match| for (match.branches) |branch| try pending.append(self.allocator, .{ .expr = branch.value, .expected = demand.expected }),
+                .tag => |tag| {
+                    const name = try tagName(self.nameStoreMut(), self.view, tag.name);
+                    for (tag.args, 0..) |arg, index| {
+                        const slot = try self.graph.tagConstructionPayloadNode(demand.expected, name, index);
+                        if (self.graph.sameClass(try self.instNode(self.view.bodies.expr(arg).ty), slot)) continue;
+                        try pending.append(self.allocator, .{ .expr = arg, .expected = slot });
+                    }
+                },
+                .zero_argument_tag, .crash, .runtime_error => {},
                 .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .record, .empty_record, .nominal, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return false,
             }
         }
