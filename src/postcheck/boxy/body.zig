@@ -50,7 +50,7 @@ pub fn lowerWorker(program: *Program, id: WorkerId) Allocator.Error!void {
     try builder.lowerBody();
 }
 
-const Task = union(enum) {
+pub const Task = union(enum) {
     expr: CheckedExprId,
     stmt: CheckedStatementId,
     /// Pop the value of a `decl` statement's expression and bind its pattern.
@@ -130,22 +130,22 @@ const Task = union(enum) {
 /// A control-flow construct's merge of the binders it reassigns (a checked
 /// state merge plan): their values before it, and the join parameters that
 /// carry their values after it.
-const Merge = struct {
+pub const Merge = struct {
     binders: []const checked.PatternBinderId,
     pre: []LocalId,
     params: []LocalId,
 };
 
-const MergeId = u32;
+pub const MergeId = u32;
 
 /// What a join's parameters are: an optional value, then the binders of its
 /// merge.
-const JoinInfo = struct {
+pub const JoinInfo = struct {
     value: ?LocalId,
     merge: ?MergeId,
 };
 
-const Builder = struct {
+pub const Builder = struct {
     program: *Program,
     allocator: Allocator,
     worker_id: WorkerId,
@@ -177,7 +177,7 @@ const Builder = struct {
     has_dynamic_frame: bool = false,
     result_local: ?LocalId = null,
 
-    fn init(program: *Program, id: WorkerId) Allocator.Error!Builder {
+    pub fn init(program: *Program, id: WorkerId) Allocator.Error!Builder {
         const worker = program.worker(id);
         const bound = try program.arena.allocator().alloc(TypeId, worker.scheme_vars.len);
         for (bound, 0..) |*slot, index| slot.* = try program.store.variable(@intCast(index));
@@ -192,7 +192,7 @@ const Builder = struct {
         };
     }
 
-    fn deinit(self: *Builder) void {
+    pub fn deinit(self: *Builder) void {
         self.frame_locals.deinit(self.allocator);
         self.binders.deinit(self.allocator);
         self.type_descs.deinit(self.allocator);
@@ -205,29 +205,29 @@ const Builder = struct {
         self.tasks.deinit(self.allocator);
     }
 
-    fn currentWorker(self: *Builder) *lower.Worker {
+    pub fn currentWorker(self: *Builder) *lower.Worker {
         return self.program.worker(self.worker_id);
     }
 
-    fn bodies(self: *const Builder) checked.CheckedBodyStoreView {
+    pub fn bodies(self: *const Builder) checked.CheckedBodyStoreView {
         return self.view.bodies();
     }
 
     // -- Locals --
 
-    fn addLocal(self: *Builder, local: LIR.Local) Allocator.Error!LocalId {
+    pub fn addLocal(self: *Builder, local: LIR.Local) Allocator.Error!LocalId {
         const id = try self.store.addLocal(local);
         try self.frame_locals.append(self.allocator, id);
         return id;
     }
 
-    fn closedLocal(self: *Builder, layout_idx: layout.Idx) Allocator.Error!LocalId {
+    pub fn closedLocal(self: *Builder, layout_idx: layout.Idx) Allocator.Error!LocalId {
         return self.addLocal(.{ .layout_idx = layout_idx });
     }
 
     /// A local holding a value of `ty`: an ordinary local of its committed
     /// layout when `ty` is closed, otherwise a dynamic local of `storage`.
-    fn localOf(self: *Builder, ty: TypeId, storage: LIR.DynStorage) Allocator.Error!LocalId {
+    pub fn localOf(self: *Builder, ty: TypeId, storage: LIR.DynStorage) Allocator.Error!LocalId {
         if (try self.closed(ty)) return self.closedLocal(try self.program.layouts.layoutOf(ty));
         const desc = try self.descOf(ty);
         if (storage == .frame) self.has_dynamic_frame = true;
@@ -236,25 +236,25 @@ const Builder = struct {
 
     /// Whether values of `ty` have one committed layout (see
     /// `Converter.representationClosed`).
-    fn closed(self: *Builder, ty: TypeId) Allocator.Error!bool {
+    pub fn closed(self: *Builder, ty: TypeId) Allocator.Error!bool {
         return self.program.converter().representationClosed(ty);
     }
 
-    fn convert(self: *Builder, ty: checked.CheckedTypeId) Allocator.Error!TypeId {
+    pub fn convert(self: *Builder, ty: checked.CheckedTypeId) Allocator.Error!TypeId {
         return self.program.converter().convert(self.module, ty, self.env);
     }
 
-    fn exprType(self: *Builder, expr: CheckedExprId) Allocator.Error!TypeId {
+    pub fn exprType(self: *Builder, expr: CheckedExprId) Allocator.Error!TypeId {
         return self.convert(self.bodies().expr(expr).ty);
     }
 
-    fn patternType(self: *Builder, pattern: CheckedPatternId) Allocator.Error!TypeId {
+    pub fn patternType(self: *Builder, pattern: CheckedPatternId) Allocator.Error!TypeId {
         return self.convert(self.bodies().pattern(pattern).ty);
     }
 
     // -- Statements --
 
-    fn origin(self: *const Builder, kind: LIR.OriginKind) LIR.StmtOrigin {
+    pub fn origin(self: *const Builder, kind: LIR.OriginKind) LIR.StmtOrigin {
         return .{
             .loc = self.program.sourceLoc(self.module, self.region),
             .region = self.region,
@@ -263,12 +263,12 @@ const Builder = struct {
         };
     }
 
-    fn newHole(self: *Builder) Allocator.Error!CFStmtId {
+    pub fn newHole(self: *Builder) Allocator.Error!CFStmtId {
         return self.store.addCFStmt(.runtime_error, self.origin(.lowering_glue));
     }
 
     /// Replace `hole` with `stmt`.
-    fn fill(self: *Builder, hole: CFStmtId, stmt: LIR.CFStmt, kind: LIR.OriginKind) Allocator.Error!void {
+    pub fn fill(self: *Builder, hole: CFStmtId, stmt: LIR.CFStmt, kind: LIR.OriginKind) Allocator.Error!void {
         try self.store.replaceCFStmt(hole, stmt, self.origin(kind));
         self.store.noteStmtShapes(stmt);
     }
@@ -276,7 +276,7 @@ const Builder = struct {
     /// The hole the next statement goes into. Code after a diverging
     /// statement is unreachable; it is still emitted, into a hole nothing
     /// reaches.
-    fn currentHole(self: *Builder) Allocator.Error!CFStmtId {
+    pub fn currentHole(self: *Builder) Allocator.Error!CFStmtId {
         if (self.hole) |hole| return hole;
         const hole = try self.newHole();
         self.hole = hole;
@@ -284,7 +284,7 @@ const Builder = struct {
     }
 
     /// Emit a straight-line statement built by `make(next)`.
-    fn emitLinear(self: *Builder, stmt: LIR.CFStmt) Allocator.Error!void {
+    pub fn emitLinear(self: *Builder, stmt: LIR.CFStmt) Allocator.Error!void {
         const hole = try self.currentHole();
         const next = try self.newHole();
         var linked = stmt;
@@ -294,13 +294,13 @@ const Builder = struct {
     }
 
     /// Emit a terminal statement; nothing follows it.
-    fn emitTerminal(self: *Builder, stmt: LIR.CFStmt) Allocator.Error!void {
+    pub fn emitTerminal(self: *Builder, stmt: LIR.CFStmt) Allocator.Error!void {
         const hole = try self.currentHole();
         try self.fill(hole, stmt, .source);
         self.hole = null;
     }
 
-    fn emitEntry(self: *Builder, stmt: LIR.CFStmt) Allocator.Error!void {
+    pub fn emitEntry(self: *Builder, stmt: LIR.CFStmt) Allocator.Error!void {
         const next = try self.newHole();
         var linked = stmt;
         setNext(&linked, next);
@@ -308,7 +308,7 @@ const Builder = struct {
         self.entry_hole = next;
     }
 
-    fn setNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
+    pub fn setNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
         switch (stmt.*) {
             inline .init_uninitialized,
             .assign_ref,
@@ -335,7 +335,7 @@ const Builder = struct {
         }
     }
 
-    fn emitLowLevel(self: *Builder, target: LocalId, op: LIR.LowLevel, args: []const LocalId) Allocator.Error!void {
+    pub fn emitLowLevel(self: *Builder, target: LocalId, op: LIR.LowLevel, args: []const LocalId) Allocator.Error!void {
         try self.emitLinear(.{ .assign_low_level = .{
             .target = target,
             .op = op,
@@ -345,18 +345,18 @@ const Builder = struct {
         } });
     }
 
-    fn emitDyn(self: *Builder, target: ?LocalId, op: LIR.DynOp) Allocator.Error!void {
+    pub fn emitDyn(self: *Builder, target: ?LocalId, op: LIR.DynOp) Allocator.Error!void {
         try self.emitLinear(.{ .dyn = .{ .target = target, .data = try self.store.addStmtRow(LIR.DynOp, op), .next = undefined } });
     }
 
-    fn freshJoin(self: *Builder) LIR.JoinPointId {
+    pub fn freshJoin(self: *Builder) LIR.JoinPointId {
         const id: LIR.JoinPointId = @fromBackingInt(self.next_join);
         self.next_join += 1;
         return id;
     }
 
     /// Start a merge of `binders`, recording their current values.
-    fn beginMerge(self: *Builder, binders: []const checked.PatternBinderId) Allocator.Error!?MergeId {
+    pub fn beginMerge(self: *Builder, binders: []const checked.PatternBinderId) Allocator.Error!?MergeId {
         if (binders.len == 0) return null;
         const arena = self.program.arena.allocator();
         const pre = try arena.alloc(LocalId, binders.len);
@@ -377,7 +377,7 @@ const Builder = struct {
 
     /// Declare a join carrying an optional value and a merge's binders; the
     /// builder continues in its remainder. Returns the join's body hole.
-    fn declareMergeJoin(self: *Builder, id: LIR.JoinPointId, value: ?LocalId, merge: ?MergeId) Allocator.Error!CFStmtId {
+    pub fn declareMergeJoin(self: *Builder, id: LIR.JoinPointId, value: ?LocalId, merge: ?MergeId) Allocator.Error!CFStmtId {
         var params: std.ArrayList(LocalId) = .empty;
         defer params.deinit(self.allocator);
         if (value) |local| try params.append(self.allocator, local);
@@ -388,19 +388,19 @@ const Builder = struct {
         return try self.declareJoin(id, params.items);
     }
 
-    fn restoreMerge(self: *Builder, merge: MergeId) Allocator.Error!void {
+    pub fn restoreMerge(self: *Builder, merge: MergeId) Allocator.Error!void {
         const m = self.merges.items[merge];
         for (m.binders, m.pre) |binder, value| try self.binders.put(self.allocator, binder, value);
     }
 
-    fn enterMerge(self: *Builder, merge: MergeId) Allocator.Error!void {
+    pub fn enterMerge(self: *Builder, merge: MergeId) Allocator.Error!void {
         const m = self.merges.items[merge];
         for (m.binders, m.params) |binder, value| try self.binders.put(self.allocator, binder, value);
     }
 
     /// Declare join `id` with `params` here; continue in its remainder, and
     /// return the hole of its body.
-    fn declareJoin(self: *Builder, id: LIR.JoinPointId, params: []const LocalId) Allocator.Error!CFStmtId {
+    pub fn declareJoin(self: *Builder, id: LIR.JoinPointId, params: []const LocalId) Allocator.Error!CFStmtId {
         const hole = try self.currentHole();
         const body = try self.newHole();
         const remainder = try self.newHole();
@@ -413,7 +413,7 @@ const Builder = struct {
 
     /// Jump to join `id`, assigning its parameters: `value` to its value
     /// parameter, and its merge's binders' current values to theirs.
-    fn emitJump(self: *Builder, id: LIR.JoinPointId, value: ?LocalId) Allocator.Error!void {
+    pub fn emitJump(self: *Builder, id: LIR.JoinPointId, value: ?LocalId) Allocator.Error!void {
         const index = @backingInt(id);
         const info: JoinInfo = if (index < self.join_infos.items.len) self.join_infos.items[index] else .{ .value = null, .merge = null };
         if (info.value) |param| {
@@ -432,7 +432,7 @@ const Builder = struct {
 
     /// Emit `switch (cond) { 1 => then } else otherwise` and return the two
     /// holes.
-    fn emitBoolSwitch(self: *Builder, cond: LocalId) Allocator.Error!struct { then: CFStmtId, otherwise: CFStmtId } {
+    pub fn emitBoolSwitch(self: *Builder, cond: LocalId) Allocator.Error!struct { then: CFStmtId, otherwise: CFStmtId } {
         const then = try self.newHole();
         const otherwise = try self.newHole();
         const branches = try self.store.addCFSwitchBranches(&.{.{ .value = 1, .body = then }});
@@ -447,7 +447,7 @@ const Builder = struct {
     /// for a scope variable, and a composition of its components'
     /// descriptors otherwise (design.md "Type Descriptors"). Components are
     /// composed before the types that contain them, with an explicit stack.
-    fn descOf(self: *Builder, root: TypeId) Allocator.Error!LocalId {
+    pub fn descOf(self: *Builder, root: TypeId) Allocator.Error!LocalId {
         if (self.type_descs.get(root)) |existing| return existing;
         var pending: std.ArrayList(struct { ty: TypeId, expanded: bool }) = .empty;
         defer pending.deinit(self.allocator);
@@ -488,7 +488,7 @@ const Builder = struct {
 
     /// A descriptor needing no component descriptors: a static descriptor,
     /// or a scope variable's hidden parameter.
-    fn leafDesc(self: *Builder, ty: TypeId) Allocator.Error!?LocalId {
+    pub fn leafDesc(self: *Builder, ty: TypeId) Allocator.Error!?LocalId {
         const store = &self.program.store;
         if (try self.closed(ty)) return try self.staticDesc(ty);
         return switch (store.get(ty)) {
@@ -497,7 +497,7 @@ const Builder = struct {
         };
     }
 
-    fn staticDesc(self: *Builder, ty: TypeId) Allocator.Error!LocalId {
+    pub fn staticDesc(self: *Builder, ty: TypeId) Allocator.Error!LocalId {
         if (self.type_descs.get(ty)) |existing| return existing;
         const slot = try self.program.static_descs.descriptorSlot(ty);
         const local = try self.closedLocal(.opaque_ptr);
@@ -506,7 +506,7 @@ const Builder = struct {
         return local;
     }
 
-    fn nameDesc(self: *Builder, name: types.NameId) Allocator.Error!LocalId {
+    pub fn nameDesc(self: *Builder, name: types.NameId) Allocator.Error!LocalId {
         if (self.name_locals.get(name)) |existing| return existing;
         const slot = try self.program.static_descs.nameSlot(name);
         const local = try self.closedLocal(.opaque_ptr);
@@ -516,7 +516,7 @@ const Builder = struct {
     }
 
     /// The types whose descriptors compose `ty`'s. Caller frees.
-    fn descComponents(self: *Builder, ty: TypeId) Allocator.Error![]TypeId {
+    pub fn descComponents(self: *Builder, ty: TypeId) Allocator.Error![]TypeId {
         const store = &self.program.store;
         var out: std.ArrayList(TypeId) = .empty;
         errdefer out.deinit(self.allocator);
@@ -541,7 +541,7 @@ const Builder = struct {
     }
 
     /// Emit the composition of `ty`'s descriptor from its components'.
-    fn composeDesc(self: *Builder, ty: TypeId) Allocator.Error!LocalId {
+    pub fn composeDesc(self: *Builder, ty: TypeId) Allocator.Error!LocalId {
         const store = &self.program.store;
         const local = try self.closedLocal(.opaque_ptr);
         const op: LIR.DynOp = switch (store.get(ty)) {
@@ -610,7 +610,7 @@ const Builder = struct {
 
     // -- Body --
 
-    fn lowerBody(self: *Builder) Allocator.Error!void {
+    pub fn lowerBody(self: *Builder) Allocator.Error!void {
         const worker = self.currentWorker().*;
         const template = switch (worker.key) {
             .template => |key| self.view.view.checked_procedure_templates.templates.items[@backingInt(key.template)],
@@ -706,7 +706,7 @@ const Builder = struct {
     }
 
     /// Link the entry chain to the body and publish the procedure.
-    fn finishProc(self: *Builder, entry: CFStmtId, body_start: CFStmtId, args: []const LocalId, ret_layout: layout.Idx) Allocator.Error!void {
+    pub fn finishProc(self: *Builder, entry: CFStmtId, body_start: CFStmtId, args: []const LocalId, ret_layout: layout.Idx) Allocator.Error!void {
         const worker = self.currentWorker().*;
         // Entry chain, then the dynamic frame region, then the body.
         if (self.has_dynamic_frame) {
@@ -743,7 +743,7 @@ const Builder = struct {
     /// A lambda worker in the uniform erased-callable ABI: its one argument
     /// is the packed argument record, and its captures hold the captured
     /// values followed by the outer worker's descriptors.
-    fn lowerLambdaBody(self: *Builder, lambda_expr: CheckedExprId) Allocator.Error!void {
+    pub fn lowerLambdaBody(self: *Builder, lambda_expr: CheckedExprId) Allocator.Error!void {
         const worker = self.currentWorker().*;
         const lambda = switch (self.bodies().expr(lambda_expr).data) {
             .lambda => |lambda| lambda,
@@ -828,7 +828,7 @@ const Builder = struct {
     /// descriptors compose from), then views of the captured values. Returns
     /// the capture values in the closed record's order: values, descriptors,
     /// dictionaries.
-    fn dynamicCaptures(self: *Builder, worker: lower.Worker, capture_ptr: LocalId) Allocator.Error![]LocalId {
+    pub fn dynamicCaptures(self: *Builder, worker: lower.Worker, capture_ptr: LocalId) Allocator.Error![]LocalId {
         const word_count = worker.scheme_vars.len + worker.captured_dictionaries;
         const record_desc = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .assign_low_level = .{
@@ -856,13 +856,13 @@ const Builder = struct {
         return values;
     }
 
-    fn erasedLayout(self: *Builder) Allocator.Error!layout.Idx {
+    pub fn erasedLayout(self: *Builder) Allocator.Error!layout.Idx {
         return self.program.result.layouts.insertErasedCallable();
     }
 
     /// Load an erased worker's capture record (closed fields of
     /// `field_layouts`) at the start of its entry chain, returning its fields.
-    fn loadCaptures(self: *Builder, capture_ptr: LocalId, field_layouts: []const layout.Idx) Allocator.Error![]LocalId {
+    pub fn loadCaptures(self: *Builder, capture_ptr: LocalId, field_layouts: []const layout.Idx) Allocator.Error![]LocalId {
         const fields = try self.allocator.alloc(layout.StructField, field_layouts.len);
         defer self.allocator.free(fields);
         for (fields, field_layouts, 0..) |*field, field_layout, index| field.* = .{ .index = @intCast(index), .layout = field_layout };
@@ -885,7 +885,7 @@ const Builder = struct {
     /// Begin an erased-ABI worker whose captures are `field_layouts`: entry
     /// chain, capture pointer, argument record, and result. Returns what
     /// `finishErasedWorker` needs.
-    const ErasedStart = struct {
+    pub const ErasedStart = struct {
         entry: CFStmtId,
         body_start: CFStmtId,
         capture_ptr: LocalId,
@@ -895,7 +895,7 @@ const Builder = struct {
         ret_layout: layout.Idx,
     };
 
-    fn beginErasedWorker(self: *Builder, field_layouts: []const layout.Idx) Allocator.Error!ErasedStart {
+    pub fn beginErasedWorker(self: *Builder, field_layouts: []const layout.Idx) Allocator.Error!ErasedStart {
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
         const capture_ptr = try self.closedLocal(.opaque_ptr);
@@ -915,7 +915,7 @@ const Builder = struct {
     /// A root's host-visible wrapper: its checked arguments, passed to the
     /// root's target with the hidden arguments the root's instantiation
     /// names, or to the function value compile-time evaluation stored.
-    fn lowerRootWrapper(self: *Builder) Allocator.Error!void {
+    pub fn lowerRootWrapper(self: *Builder) Allocator.Error!void {
         const worker = self.currentWorker().*;
         const request = worker.root_request.?;
         self.entry_hole = try self.newHole();
@@ -981,7 +981,7 @@ const Builder = struct {
         try self.finishProc(entry, body_start, params, ret_layout);
     }
 
-    fn lowerMethodEntry(self: *Builder, target: WorkerId) Allocator.Error!void {
+    pub fn lowerMethodEntry(self: *Builder, target: WorkerId) Allocator.Error!void {
         const worker = self.currentWorker().*;
         const target_worker = self.program.worker(target).*;
         const field_layouts = try self.allocator.alloc(layout.Idx, target_worker.scheme_vars.len + target_worker.dictionary_params.len);
@@ -996,7 +996,7 @@ const Builder = struct {
     }
 
     /// A structural method over the one descriptor its dictionary captures.
-    fn lowerStructuralMethod(self: *Builder, method: lower.StructuralMethod) Allocator.Error!void {
+    pub fn lowerStructuralMethod(self: *Builder, method: lower.StructuralMethod) Allocator.Error!void {
         const worker = self.currentWorker().*;
         var start = try self.beginErasedWorker(&.{.opaque_ptr});
         defer self.allocator.free(start.captures);
@@ -1004,12 +1004,12 @@ const Builder = struct {
         try self.runErasedBody(&start, worker.params, worker.ret, .{ .structural = method });
     }
 
-    const ErasedBody = union(enum) {
+    pub const ErasedBody = union(enum) {
         call: struct { target: WorkerId, hidden: []const LocalId },
         structural: lower.StructuralMethod,
     };
 
-    fn runErasedBody(self: *Builder, start: *ErasedStart, params: []const TypeId, ret: TypeId, body: ErasedBody) Allocator.Error!void {
+    pub fn runErasedBody(self: *Builder, start: *ErasedStart, params: []const TypeId, ret: TypeId, body: ErasedBody) Allocator.Error!void {
         const worker = self.currentWorker().*;
         var args: std.ArrayList(LocalId) = .empty;
         defer args.deinit(self.allocator);
@@ -1059,7 +1059,7 @@ const Builder = struct {
     /// The closed layout of a lambda's capture record: the captured values,
     /// then one descriptor pointer per scope variable, in that order of
     /// semantic indices.
-    fn captureLayout(self: *Builder, capture_types: []const TypeId, descriptor_count: usize, dictionary_count: usize) Allocator.Error!layout.Idx {
+    pub fn captureLayout(self: *Builder, capture_types: []const TypeId, descriptor_count: usize, dictionary_count: usize) Allocator.Error!layout.Idx {
         const fields = try self.allocator.alloc(layout.StructField, capture_types.len + descriptor_count + dictionary_count);
         defer self.allocator.free(fields);
         for (fields, 0..) |*field, index| {
@@ -1079,28 +1079,28 @@ const Builder = struct {
     /// The packed erased-call argument record of `params`: a declared-order
     /// struct when every parameter type is closed, a dynamic record composed
     /// with `desc_args` otherwise.
-    fn argsRecordLocal(self: *Builder, params: []const TypeId, storage: LIR.DynStorage) Allocator.Error!LocalId {
+    pub fn argsRecordLocal(self: *Builder, params: []const TypeId, storage: LIR.DynStorage) Allocator.Error!LocalId {
         if (try self.allClosed(params)) return self.closedLocal(try self.argsRecordLayout(params));
         const desc = try self.argsRecordDesc(params);
         if (storage == .frame) self.has_dynamic_frame = true;
         return self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = storage } });
     }
 
-    fn allClosed(self: *Builder, tys: []const TypeId) Allocator.Error!bool {
+    pub fn allClosed(self: *Builder, tys: []const TypeId) Allocator.Error!bool {
         for (tys) |ty| {
             if (!try self.closed(ty)) return false;
         }
         return true;
     }
 
-    fn argsRecordLayout(self: *Builder, params: []const TypeId) Allocator.Error!layout.Idx {
+    pub fn argsRecordLayout(self: *Builder, params: []const TypeId) Allocator.Error!layout.Idx {
         const fields = try self.allocator.alloc(layout.StructField, params.len);
         defer self.allocator.free(fields);
         for (fields, params, 0..) |*field, param, index| field.* = .{ .index = @intCast(index), .layout = try self.program.layouts.layoutOf(param) };
         return try self.program.result.layouts.putNominalStructFields(fields);
     }
 
-    fn argsRecordDesc(self: *Builder, params: []const TypeId) Allocator.Error!LocalId {
+    pub fn argsRecordDesc(self: *Builder, params: []const TypeId) Allocator.Error!LocalId {
         const descs = try self.allocator.alloc(LocalId, params.len);
         defer self.allocator.free(descs);
         for (descs, params) |*desc, param| desc.* = try self.descOf(param);
@@ -1110,7 +1110,7 @@ const Builder = struct {
     }
 
     /// Argument `index` of an argument record, as a borrowed read.
-    fn argsRecordField(self: *Builder, params: []const TypeId, record: LocalId, index: u32, param_ty: TypeId) Allocator.Error!LocalId {
+    pub fn argsRecordField(self: *Builder, params: []const TypeId, record: LocalId, index: u32, param_ty: TypeId) Allocator.Error!LocalId {
         if (self.store.localDyn(record)) |dyn| {
             const local = try self.localOf(param_ty, .view);
             try self.emitDyn(local, .{ .field_addr = .{ .base = record, .desc = dyn.desc, .semantic_index = index } });
@@ -1127,24 +1127,24 @@ const Builder = struct {
         return local;
     }
 
-    fn run(self: *Builder) Allocator.Error!void {
+    pub fn run(self: *Builder) Allocator.Error!void {
         while (self.tasks.pop()) |task| try self.step(task);
         if (self.values.items.len != 0) invariant("body lowering left values on its value stack");
     }
 
-    fn push(self: *Builder, task: Task) Allocator.Error!void {
+    pub fn push(self: *Builder, task: Task) Allocator.Error!void {
         try self.tasks.append(self.allocator, task);
     }
 
-    fn popValue(self: *Builder) LocalId {
+    pub fn popValue(self: *Builder) LocalId {
         return self.values.pop() orelse invariant("body lowering popped an empty value stack");
     }
 
-    fn pushValue(self: *Builder, local: LocalId) Allocator.Error!void {
+    pub fn pushValue(self: *Builder, local: LocalId) Allocator.Error!void {
         try self.values.append(self.allocator, local);
     }
 
-    fn step(self: *Builder, task: Task) Allocator.Error!void {
+    pub fn step(self: *Builder, task: Task) Allocator.Error!void {
         switch (task) {
             .expr => |expr| try self.stepExpr(expr),
             .stmt => |stmt| try self.stepStmt(stmt),
@@ -1267,7 +1267,7 @@ const Builder = struct {
         }
     }
 
-    fn popValues(self: *Builder, count: u32) Allocator.Error![]LocalId {
+    pub fn popValues(self: *Builder, count: u32) Allocator.Error![]LocalId {
         const result = try self.allocator.alloc(LocalId, count);
         var index = count;
         while (index > 0) {
@@ -1277,26 +1277,26 @@ const Builder = struct {
         return result;
     }
 
-    fn expectSite(self: *Builder) Allocator.Error!?LIR.ExpectSiteId {
+    pub fn expectSite(self: *Builder) Allocator.Error!?LIR.ExpectSiteId {
         if (!self.program.observe_expects) return null;
         return try self.program.result.addExpectSite(self.program.sourceLoc(self.module, self.region), self.region);
     }
 
     /// The `{}` value.
-    fn unitValue(self: *Builder) Allocator.Error!LocalId {
+    pub fn unitValue(self: *Builder) Allocator.Error!LocalId {
         const local = try self.closedLocal(.zst);
         try self.emitLinear(.{ .assign_struct = .{ .target = local, .fields = LIR.LocalSpan.empty(), .next = undefined } });
         return local;
     }
 
-    fn boolValue(self: *Builder, value: bool) Allocator.Error!LocalId {
+    pub fn boolValue(self: *Builder, value: bool) Allocator.Error!LocalId {
         const local = try self.closedLocal(.bool);
         const discriminant = @import("../common.zig").boolDiscriminant(value);
         try self.emitLinear(.{ .assign_tag = .{ .target = local, .variant_index = discriminant, .discriminant = discriminant, .payload = null, .next = undefined } });
         return local;
     }
 
-    fn crashValue(self: *Builder, message: []const u8, ty: TypeId) Allocator.Error!void {
+    pub fn crashValue(self: *Builder, message: []const u8, ty: TypeId) Allocator.Error!void {
         const literal = try self.store.insertString(message);
         try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal } } });
         try self.pushValue(try self.localOf(ty, .frame));
@@ -1304,7 +1304,7 @@ const Builder = struct {
 
     // -- Expressions --
 
-    fn stepExpr(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+    pub fn stepExpr(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
         const expr = self.bodies().expr(expr_id);
         self.region = expr.source_region;
         switch (expr.data) {
@@ -1455,7 +1455,7 @@ const Builder = struct {
         }
     }
 
-    fn pushExprsReversed(self: *Builder, exprs: []const CheckedExprId) Allocator.Error!void {
+    pub fn pushExprsReversed(self: *Builder, exprs: []const CheckedExprId) Allocator.Error!void {
         var index = exprs.len;
         while (index > 0) {
             index -= 1;
@@ -1463,7 +1463,7 @@ const Builder = struct {
         }
     }
 
-    fn strLiteral(self: *Builder, text: []const u8) Allocator.Error!LocalId {
+    pub fn strLiteral(self: *Builder, text: []const u8) Allocator.Error!LocalId {
         const local = try self.closedLocal(.str);
         const backing = try self.store.insertString(text);
         try self.emitLinear(.{ .assign_literal = .{
@@ -1474,7 +1474,7 @@ const Builder = struct {
         return local;
     }
 
-    fn finishStr(self: *Builder, count: u32) Allocator.Error!void {
+    pub fn finishStr(self: *Builder, count: u32) Allocator.Error!void {
         const parts = try self.popValues(count);
         defer self.allocator.free(parts);
         if (parts.len == 0) return try self.pushValue(try self.strLiteral(""));
@@ -1487,7 +1487,7 @@ const Builder = struct {
         try self.pushValue(acc);
     }
 
-    fn lowerNumeral(self: *Builder, expr_id: CheckedExprId, numeral: checked.CheckedNumeralData) Allocator.Error!void {
+    pub fn lowerNumeral(self: *Builder, expr_id: CheckedExprId, numeral: checked.CheckedNumeralData) Allocator.Error!void {
         if (numeral.conversion_root) |root| return try self.restoreConversionRoot(root, try self.exprType(expr_id));
         if (numeral.plan) |plan| return try self.lowerLiteralConversion(expr_id, plan, .numeral);
         const ty = try self.exprType(expr_id);
@@ -1525,7 +1525,7 @@ const Builder = struct {
 
     /// A literal whose conversion a compile-time root evaluated: the root's
     /// stored value (design.md "Runtime Programs Read Stored Values").
-    fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootId, ty: TypeId) Allocator.Error!void {
+    pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootId, ty: TypeId) Allocator.Error!void {
         switch (self.view.view.compile_time_roots.root(root_id).payload) {
             .const_node => |node| try self.push(.{ .restore = .{ .module = self.module, .node = node, .ty = ty } }),
             else => |payload| invariantFmt("a literal conversion root holding {s} reached Boxy lowering", .{@tagName(payload)}),
@@ -1535,7 +1535,7 @@ const Builder = struct {
     /// A literal converted at runtime by its checked `from_numeral` or
     /// `from_quote` dispatch: the conversion's `Ok` payload, or a literal
     /// rejection carrying its error message.
-    fn lowerLiteralConversion(self: *Builder, expr_id: CheckedExprId, plan_id: static_dispatch.StaticDispatchPlanId, kind: LIR.LiteralRejectionKind) Allocator.Error!void {
+    pub fn lowerLiteralConversion(self: *Builder, expr_id: CheckedExprId, plan_id: static_dispatch.StaticDispatchPlanId, kind: LIR.LiteralRejectionKind) Allocator.Error!void {
         const plan = self.dispatchPlan(plan_id);
         const try_ty = switch (self.program.store.get(try self.convert(plan.callable_ty))) {
             .function => |function| function.ret,
@@ -1545,7 +1545,7 @@ const Builder = struct {
         try self.lowerDispatchAt(plan_id, try_ty);
     }
 
-    fn unwrapLiteral(self: *Builder, expr_id: CheckedExprId, try_ty: TypeId, kind: LIR.LiteralRejectionKind) Allocator.Error!void {
+    pub fn unwrapLiteral(self: *Builder, expr_id: CheckedExprId, try_ty: TypeId, kind: LIR.LiteralRejectionKind) Allocator.Error!void {
         const value = self.popValue();
         const store = &self.program.store;
         const try_union = try self.structuralType(try_ty);
@@ -1592,7 +1592,7 @@ const Builder = struct {
     /// The `Numeral` value `from_numeral` receives for `literal`, at the
     /// argument type `ty`: `Literal({ is_negative, digits_before_pt,
     /// digits_after_pt, digits_after_pt_count })`.
-    fn numeralArgument(self: *Builder, literal: NumeralLiteral, ty: TypeId) Allocator.Error!LocalId {
+    pub fn numeralArgument(self: *Builder, literal: NumeralLiteral, ty: TypeId) Allocator.Error!LocalId {
         const store = &self.program.store;
         const backing = try self.structuralType(ty);
         const name = try store.internName("Literal");
@@ -1625,7 +1625,7 @@ const Builder = struct {
     }
 
     /// A `List(U8)` (at `ty`) of `bytes`.
-    fn byteList(self: *Builder, bytes: []const u8, ty: TypeId) Allocator.Error!LocalId {
+    pub fn byteList(self: *Builder, bytes: []const u8, ty: TypeId) Allocator.Error!LocalId {
         const elems = try self.allocator.alloc(LocalId, bytes.len);
         defer self.allocator.free(elems);
         for (bytes, elems) |byte, *elem| {
@@ -1638,7 +1638,7 @@ const Builder = struct {
     }
 
     /// An integer of the builtin integer type `ty`.
-    fn intValue(self: *Builder, value: u64, ty: TypeId) Allocator.Error!LocalId {
+    pub fn intValue(self: *Builder, value: u64, ty: TypeId) Allocator.Error!LocalId {
         const primitive = switch (self.program.store.get(ty)) {
             .primitive => |primitive| primitive,
             else => invariant("an integer field's type is not a primitive"),
@@ -1653,11 +1653,11 @@ const Builder = struct {
         return local;
     }
 
-    fn resolvedRef(self: *const Builder, id: checked.ResolvedValueRefId) checked.ResolvedValueRefRecord {
+    pub fn resolvedRef(self: *const Builder, id: checked.ResolvedValueRefId) checked.ResolvedValueRefRecord {
         return self.view.view.resolved_value_refs.records[@backingInt(id)];
     }
 
-    fn lowerLookupLocal(self: *Builder, expr_id: CheckedExprId, pattern: CheckedPatternId, resolved: ?checked.ResolvedValueRefId) Allocator.Error!void {
+    pub fn lowerLookupLocal(self: *Builder, expr_id: CheckedExprId, pattern: CheckedPatternId, resolved: ?checked.ResolvedValueRefId) Allocator.Error!void {
         if (resolved) |id| switch (self.resolvedRef(id).ref) {
             .local_param, .local_value, .pattern_binder, .local_mutable_version => |binding| {
                 return try self.pushValue(self.binders.get(binding.binder) orelse invariant("a local lookup named a binder this body never bound"));
@@ -1671,7 +1671,7 @@ const Builder = struct {
         try self.pushValue(self.binders.get(binder) orelse invariant("a local lookup named a binder this body never bound"));
     }
 
-    fn lowerLookupExternal(self: *Builder, expr_id: CheckedExprId, resolved: checked.ResolvedValueRefId) Allocator.Error!void {
+    pub fn lowerLookupExternal(self: *Builder, expr_id: CheckedExprId, resolved: checked.ResolvedValueRefId) Allocator.Error!void {
         switch (self.resolvedRef(resolved).ref) {
             .top_level_const, .imported_const => |use| return try self.restoreConstUse(use, try self.exprType(expr_id)),
             .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use),
@@ -1686,7 +1686,7 @@ const Builder = struct {
     /// The function value of a local procedure: the closure its declaration
     /// bound, or, inside the procedure's own body, the same closure rebuilt
     /// from the captures the body received.
-    fn localProcValue(self: *Builder, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
+    pub fn localProcValue(self: *Builder, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
         if (local.is_alias) invariant("local procedure aliases are not yet lowered by Boxy");
         if (local.dispatch_scope) |scope_id| {
             const scope = self.view.view.checked_procedure_templates.dispatch_scopes[@backingInt(scope_id)];
@@ -1721,7 +1721,7 @@ const Builder = struct {
 
     /// A procedure used as a function value: an immortal callable of its
     /// dictionary entry, capturing the use site's hidden arguments.
-    fn procedureValue(self: *Builder, expr_id: CheckedExprId, use: checked.ProcedureUseTemplate) Allocator.Error!void {
+    pub fn procedureValue(self: *Builder, expr_id: CheckedExprId, use: checked.ProcedureUseTemplate) Allocator.Error!void {
         switch (try self.procedureUseCallee(use)) {
             .worker => |callee| {
                 const hidden = try self.hiddenArgs(callee, self.siteSubstitution(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{});
@@ -1734,7 +1734,7 @@ const Builder = struct {
 
     /// A read of a stored constant: its value's construction at `ty`
     /// (design.md "Compile-Time Evaluation Strategy").
-    fn restoreConstUse(self: *Builder, use: checked.ConstUseTemplate, ty: TypeId) Allocator.Error!void {
+    pub fn restoreConstUse(self: *Builder, use: checked.ConstUseTemplate, ty: TypeId) Allocator.Error!void {
         const owner = self.program.moduleByKey(use.const_ref.artifact);
         const template = owner.view.const_templates.get(use.const_ref);
         switch (template.state) {
@@ -1749,7 +1749,7 @@ const Builder = struct {
 
     /// Restore stored constant `node` of `module` at `ty`, pushing tasks for
     /// its components first.
-    fn restoreStep(self: *Builder, module_index: ModuleIndex, node: checked.ConstNodeId, raw_ty: TypeId) Allocator.Error!void {
+    pub fn restoreStep(self: *Builder, module_index: ModuleIndex, node: checked.ConstNodeId, raw_ty: TypeId) Allocator.Error!void {
         const const_store = self.program.module(module_index).view.const_store;
         const store = &self.program.store;
         if (!store.isClosed(raw_ty)) invariant("restoring a constant at an open type is not yet lowered by Boxy");
@@ -1870,7 +1870,7 @@ const Builder = struct {
     /// an erased callable.
     /// Restore a function value compile-time evaluation stored, used at the
     /// closed function type `fn_ty`.
-    fn restoreFn(self: *Builder, module_index: ModuleIndex, fn_id: check.ConstStore.ConstFnId, fn_ty: TypeId) Allocator.Error!void {
+    pub fn restoreFn(self: *Builder, module_index: ModuleIndex, fn_id: check.ConstStore.ConstFnId, fn_ty: TypeId) Allocator.Error!void {
         const const_store = self.program.module(module_index).view.const_store;
         const stored = const_store.getFn(fn_id);
         switch (stored.fn_def) {
@@ -1948,7 +1948,7 @@ const Builder = struct {
         }
     }
 
-    fn finishRestoreList(self: *Builder, ty: TypeId, count: u32) Allocator.Error!void {
+    pub fn finishRestoreList(self: *Builder, ty: TypeId, count: u32) Allocator.Error!void {
         const values = try self.popValues(count);
         defer self.allocator.free(values);
         const target = try self.localOf(ty, .frame);
@@ -1959,12 +1959,12 @@ const Builder = struct {
     /// The worker a procedure use names.
     /// What a procedure use calls: a template's worker, or a function value
     /// compile-time evaluation stored.
-    const Callee = union(enum) {
+    pub const Callee = union(enum) {
         worker: WorkerId,
         callable_eval: struct { module: ModuleIndex, template: checked.CallableEvalTemplateId },
     };
 
-    fn procedureUseCallee(self: *Builder, use: checked.ProcedureUseTemplate) Allocator.Error!Callee {
+    pub fn procedureUseCallee(self: *Builder, use: checked.ProcedureUseTemplate) Allocator.Error!Callee {
         var current = use;
         while (true) {
             // A platform requirement names the app's top-level binding.
@@ -1999,7 +1999,7 @@ const Builder = struct {
         }
     }
 
-    fn procedureUseWorker(self: *Builder, use: checked.ProcedureUseTemplate) Allocator.Error!WorkerId {
+    pub fn procedureUseWorker(self: *Builder, use: checked.ProcedureUseTemplate) Allocator.Error!WorkerId {
         return switch (use.binding) {
             .top_level => |top| blk: {
                 const owner = self.program.moduleByKey(top.artifact);
@@ -2026,7 +2026,7 @@ const Builder = struct {
         };
     }
 
-    fn lowerCall(self: *Builder, expr_id: CheckedExprId, call: @FieldType(checked.CheckedExprData, "call")) Allocator.Error!void {
+    pub fn lowerCall(self: *Builder, expr_id: CheckedExprId, call: @FieldType(checked.CheckedExprData, "call")) Allocator.Error!void {
         const func = self.bodies().expr(call.func);
         const resolved: ?checked.ResolvedValueRefId = switch (func.data) {
             .lookup_external => |r| r orelse invariant("a call's external callee was unresolved"),
@@ -2053,7 +2053,7 @@ const Builder = struct {
 
     /// A call of a function value: evaluate the function, then its
     /// arguments, then call through the erased-callable ABI.
-    fn lowerValueCall(self: *Builder, expr_id: CheckedExprId, call: @FieldType(checked.CheckedExprData, "call")) Allocator.Error!void {
+    pub fn lowerValueCall(self: *Builder, expr_id: CheckedExprId, call: @FieldType(checked.CheckedExprData, "call")) Allocator.Error!void {
         try self.push(.{ .finish_erased_call = .{ .fn_ty = try self.exprType(call.func), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
         try self.pushExprsReversed(call.args);
         try self.push(.{ .expr = call.func });
@@ -2062,7 +2062,7 @@ const Builder = struct {
     /// The hidden descriptor arguments of a call whose target's scheme
     /// variables `subst` instantiates (checked types of this body's module,
     /// in the target's `scheme_vars` order), followed by its dictionaries.
-    fn hiddenArgs(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence) Allocator.Error![]LocalId {
+    pub fn hiddenArgs(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence) Allocator.Error![]LocalId {
         const target = self.program.worker(callee).*;
         if (subst.len != target.scheme_vars.len) invariant("a call's checked substitution differs from its target's scheme");
         const hidden = try self.allocator.alloc(LocalId, subst.len + target.dictionary_params.len);
@@ -2077,7 +2077,7 @@ const Builder = struct {
 
     /// The dictionary `evidence` denotes (design.md "Dictionaries"),
     /// composed in the entry chain.
-    fn dictionaryOf(self: *Builder, evidence: static_dispatch.CheckedEvidence) Allocator.Error!LocalId {
+    pub fn dictionaryOf(self: *Builder, evidence: static_dispatch.CheckedEvidence) Allocator.Error!LocalId {
         const table = self.view.view.static_dispatch_plans;
         switch (evidence.resolution) {
             .constraint => |constraint| return self.scopeDictionary(constraint.index),
@@ -2121,7 +2121,7 @@ const Builder = struct {
     /// The hidden descriptors of a target the checker instantiated by
     /// relating its scheme to `callable` (an edge with no recorded
     /// substitution, `EvidenceTargetInstantiation.derived_from_callable`).
-    fn relatedHiddenArgs(self: *Builder, callee: WorkerId, callable: checked.CheckedTypeId) Allocator.Error![]LocalId {
+    pub fn relatedHiddenArgs(self: *Builder, callee: WorkerId, callable: checked.CheckedTypeId) Allocator.Error![]LocalId {
         const target = self.program.worker(callee).*;
         if (target.dictionary_params.len != 0) invariant("a callable-derived target with dictionaries is not yet lowered by Boxy");
         const target_fn = try self.program.store.intern(.{ .function = .{ .args = target.params, .ret = target.ret, .effectful = false } });
@@ -2134,7 +2134,7 @@ const Builder = struct {
 
     /// The Boxy type of a stored constant's type evidence `root` in the
     /// constant store of `module_index`.
-    fn constType(self: *Builder, module_index: ModuleIndex, root: check.ConstStore.ConstTypeId) Allocator.Error!TypeId {
+    pub fn constType(self: *Builder, module_index: ModuleIndex, root: check.ConstStore.ConstTypeId) Allocator.Error!TypeId {
         const view = self.program.module(module_index);
         const const_types = &view.view.const_store.type_store;
         const names = view.nameStore();
@@ -2232,12 +2232,12 @@ const Builder = struct {
     /// variable takes the component of `actual` at the position the variable
     /// has in `formal`. An open row's remainder variable takes the actual
     /// row's entries the formal row does not name.
-    fn relateVariables(self: *Builder, formal_root: TypeId, actual_root: TypeId, count: usize) Allocator.Error![]TypeId {
+    pub fn relateVariables(self: *Builder, formal_root: TypeId, actual_root: TypeId, count: usize) Allocator.Error![]TypeId {
         return try self.relateVariablesAll(&.{.{ formal_root, actual_root }}, count);
     }
 
     /// `relateVariables` over several formal and actual type pairs at once.
-    fn relateVariablesAll(self: *Builder, roots: []const [2]TypeId, count: usize) Allocator.Error![]TypeId {
+    pub fn relateVariablesAll(self: *Builder, roots: []const [2]TypeId, count: usize) Allocator.Error![]TypeId {
         const store = &self.program.store;
         const bound = try self.allocator.alloc(?TypeId, count);
         defer self.allocator.free(bound);
@@ -2308,7 +2308,7 @@ const Builder = struct {
         return result;
     }
 
-    fn composeDictionary(self: *Builder, entry: WorkerId, captures: []const LocalId) Allocator.Error!LocalId {
+    pub fn composeDictionary(self: *Builder, entry: WorkerId, captures: []const LocalId) Allocator.Error!LocalId {
         const local = try self.closedLocal(try self.erasedLayout());
         try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .dict_compose = .{
             .worker = self.program.worker(entry).proc,
@@ -2318,7 +2318,7 @@ const Builder = struct {
     }
 
     /// The dictionary in scope for canonical evidence parameter `index`.
-    fn scopeDictionary(self: *Builder, index: static_dispatch.EvidenceChainIndex) LocalId {
+    pub fn scopeDictionary(self: *Builder, index: static_dispatch.EvidenceChainIndex) LocalId {
         if (index.depth != 0) invariant("evidence from enclosing generalized scopes is not yet lowered by Boxy");
         for (self.currentWorker().scope_dictionary_indices, 0..) |param_index, position| {
             if (param_index == index.index) return self.dict_locals[position];
@@ -2326,11 +2326,11 @@ const Builder = struct {
         invariant("evidence named a dictionary parameter its scope does not have");
     }
 
-    fn siteSubstitution(self: *Builder, site: CheckedExprId) []const checked.CheckedTypeId {
+    pub fn siteSubstitution(self: *Builder, site: CheckedExprId) []const checked.CheckedTypeId {
         return self.view.view.static_dispatch_plans.siteSubstitution(site) orelse &.{};
     }
 
-    fn finishCall(self: *Builder, callee: WorkerId, hidden: []const LocalId, arg_count: u32, result_ty: TypeId) Allocator.Error!void {
+    pub fn finishCall(self: *Builder, callee: WorkerId, hidden: []const LocalId, arg_count: u32, result_ty: TypeId) Allocator.Error!void {
         const explicit = try self.popValues(arg_count);
         defer self.allocator.free(explicit);
         const args = try std.mem.concat(self.allocator, LocalId, &.{ explicit, hidden });
@@ -2341,17 +2341,17 @@ const Builder = struct {
         try self.pushValue(target);
     }
 
-    fn dispatchPlan(self: *const Builder, id: static_dispatch.StaticDispatchPlanId) static_dispatch.StaticDispatchCallPlan {
+    pub fn dispatchPlan(self: *const Builder, id: static_dispatch.StaticDispatchPlanId) static_dispatch.StaticDispatchCallPlan {
         return self.view.view.static_dispatch_plans.plans[@backingInt(id)];
     }
 
-    fn lowerDispatch(self: *Builder, expr_id: CheckedExprId, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
+    pub fn lowerDispatch(self: *Builder, expr_id: CheckedExprId, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
         try self.lowerDispatchAt(plan_id, try self.exprType(expr_id));
     }
 
     /// Push a dispatch operand: a checked expression, or a value the checker
     /// generated for a literal conversion.
-    fn pushOperand(self: *Builder, operand: static_dispatch.StaticDispatchOperand, ty: TypeId) Allocator.Error!void {
+    pub fn pushOperand(self: *Builder, operand: static_dispatch.StaticDispatchOperand, ty: TypeId) Allocator.Error!void {
         switch (operand) {
             .checked_expr => |expr| try self.push(.{ .expr = expr }),
             .generated_numeral => |literal| try self.push(.{ .numeral_arg = .{ .literal = literal, .ty = ty } }),
@@ -2360,14 +2360,14 @@ const Builder = struct {
         }
     }
 
-    fn operandTypes(self: *Builder, callable_ty: checked.CheckedTypeId) Allocator.Error![]const TypeId {
+    pub fn operandTypes(self: *Builder, callable_ty: checked.CheckedTypeId) Allocator.Error![]const TypeId {
         return switch (self.program.store.get(try self.convert(callable_ty))) {
             .function => |function| self.program.store.span(function.args),
             else => invariant("a dispatch's callable type is not a function type"),
         };
     }
 
-    fn lowerDispatchAt(self: *Builder, plan_id: static_dispatch.StaticDispatchPlanId, result_ty: TypeId) Allocator.Error!void {
+    pub fn lowerDispatchAt(self: *Builder, plan_id: static_dispatch.StaticDispatchPlanId, result_ty: TypeId) Allocator.Error!void {
         const table = self.view.view.static_dispatch_plans;
         const call_plan = self.dispatchPlan(plan_id);
         const operands = call_plan.argsSlice(table);
@@ -2460,7 +2460,7 @@ const Builder = struct {
     /// is a list operation, which takes the element descriptor of its list
     /// as a trailing argument (`LowLevelExtra.dyn_elem_desc`), or a box
     /// operation, which lowers to the dynamic box statements.
-    fn finishLowLevel(self: *Builder, op: LIR.LowLevel, arg_count: u32, result_ty: TypeId, arg_types: []const TypeId) Allocator.Error!void {
+    pub fn finishLowLevel(self: *Builder, op: LIR.LowLevel, arg_count: u32, result_ty: TypeId, arg_types: []const TypeId) Allocator.Error!void {
         const args = try self.popValues(arg_count);
         defer self.allocator.free(args);
         const store = &self.program.store;
@@ -2515,7 +2515,7 @@ const Builder = struct {
 
     /// A function value: an erased callable of the lambda's worker, whose
     /// captures hold the captured values and this worker's descriptors.
-    fn lowerClosure(self: *Builder, expr_id: CheckedExprId, lambda_expr: CheckedExprId, captures: []const checked.CheckedCapture) Allocator.Error!void {
+    pub fn lowerClosure(self: *Builder, expr_id: CheckedExprId, lambda_expr: CheckedExprId, captures: []const checked.CheckedCapture) Allocator.Error!void {
         const fn_ty = try self.exprType(expr_id);
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
@@ -2538,7 +2538,7 @@ const Builder = struct {
     /// The descriptor of a dynamic capture record (design.md "Function
     /// Values"): a declared-order record of its own descriptor word, the
     /// descriptor and dictionary words, then the captured values.
-    fn dynamicCaptureDesc(self: *Builder, capture_types: []const TypeId, word_count: usize) Allocator.Error!LocalId {
+    pub fn dynamicCaptureDesc(self: *Builder, capture_types: []const TypeId, word_count: usize) Allocator.Error!LocalId {
         const word = try self.opaqueWordDesc();
         const descs = try self.allocator.alloc(LocalId, 1 + word_count + capture_types.len);
         defer self.allocator.free(descs);
@@ -2549,7 +2549,7 @@ const Builder = struct {
         return local;
     }
 
-    fn opaqueWordDesc(self: *Builder) Allocator.Error!LocalId {
+    pub fn opaqueWordDesc(self: *Builder) Allocator.Error!LocalId {
         if (self.opaque_word_desc) |local| return local;
         const local = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = try self.program.static_descs.opaqueWordSlot() } }, .next = undefined } });
@@ -2561,7 +2561,7 @@ const Builder = struct {
     /// capture record is built in the dynamic frame region and moved into
     /// the callable. `capture_types` are the captured values' types in this
     /// body's scope.
-    fn packDynamicClosure(self: *Builder, callee: WorkerId, captured: []const LocalId, capture_types: []const TypeId, descs: []const LocalId, dicts: []const LocalId) Allocator.Error!LocalId {
+    pub fn packDynamicClosure(self: *Builder, callee: WorkerId, captured: []const LocalId, capture_types: []const TypeId, descs: []const LocalId, dicts: []const LocalId) Allocator.Error!LocalId {
         const record_desc = try self.dynamicCaptureDesc(capture_types, descs.len + dicts.len);
         const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = record_desc, .storage = .frame } });
         self.has_dynamic_frame = true;
@@ -2575,7 +2575,7 @@ const Builder = struct {
 
     /// The erased callable of lambda worker `callee` capturing `values`
     /// (of `capture_types`), then descriptors and dictionaries.
-    fn packClosure(self: *Builder, callee: WorkerId, captured: []const LocalId, capture_types: []const TypeId, descs: []const LocalId, dicts: []const LocalId) Allocator.Error!LocalId {
+    pub fn packClosure(self: *Builder, callee: WorkerId, captured: []const LocalId, capture_types: []const TypeId, descs: []const LocalId, dicts: []const LocalId) Allocator.Error!LocalId {
         const values = try std.mem.concat(self.allocator, LocalId, &.{ captured, descs, dicts });
         defer self.allocator.free(values);
         const target = try self.closedLocal(try self.erasedLayout());
@@ -2608,7 +2608,7 @@ const Builder = struct {
 
     /// Pop a function value's arguments and the function value, and call it
     /// through the uniform erased-callable ABI.
-    fn finishErasedCall(self: *Builder, fn_ty: TypeId, arg_count: u32, result_ty: TypeId) Allocator.Error!void {
+    pub fn finishErasedCall(self: *Builder, fn_ty: TypeId, arg_count: u32, result_ty: TypeId) Allocator.Error!void {
         const args = try self.popValues(arg_count);
         defer self.allocator.free(args);
         const closure = self.popValue();
@@ -2616,7 +2616,7 @@ const Builder = struct {
     }
 
     /// Call the erased callable `closure` of type `fn_ty` with `args`.
-    fn emitErasedCall(self: *Builder, closure: LocalId, fn_ty: TypeId, args: []const LocalId, result_ty: TypeId) Allocator.Error!LocalId {
+    pub fn emitErasedCall(self: *Builder, closure: LocalId, fn_ty: TypeId, args: []const LocalId, result_ty: TypeId) Allocator.Error!LocalId {
         const params = switch (self.program.store.get(fn_ty)) {
             .function => |function| self.program.store.span(function.args),
             else => invariant("a called value's type is not a function type"),
@@ -2638,7 +2638,7 @@ const Builder = struct {
         return target;
     }
 
-    fn finishEq(self: *Builder, negated: bool, operand_ty: TypeId) Allocator.Error!void {
+    pub fn finishEq(self: *Builder, negated: bool, operand_ty: TypeId) Allocator.Error!void {
         const rhs = self.popValue();
         const lhs = self.popValue();
         const result = try self.closedLocal(.bool);
@@ -2651,7 +2651,7 @@ const Builder = struct {
 
     /// `a and b` evaluates `b` only when `a` is true; `a or b` only when
     /// `a` is false.
-    fn lowerShortCircuit(self: *Builder, expr_id: CheckedExprId, is_and: bool, lhs: CheckedExprId, rhs: CheckedExprId) Allocator.Error!void {
+    pub fn lowerShortCircuit(self: *Builder, expr_id: CheckedExprId, is_and: bool, lhs: CheckedExprId, rhs: CheckedExprId) Allocator.Error!void {
         _ = expr_id;
         const result = try self.closedLocal(.bool);
         const join = self.freshJoin();
@@ -2662,7 +2662,7 @@ const Builder = struct {
         try self.push(.{ .expr = lhs });
     }
 
-    fn shortCircuit(self: *Builder, is_and: bool, rhs: CheckedExprId, join: LIR.JoinPointId) Allocator.Error!void {
+    pub fn shortCircuit(self: *Builder, is_and: bool, rhs: CheckedExprId, join: LIR.JoinPointId) Allocator.Error!void {
         const holes = try self.emitBoolSwitch(self.popValue());
         // The side that decides the result alone jumps with the constant.
         self.hole = if (is_and) holes.otherwise else holes.then;
@@ -2674,11 +2674,11 @@ const Builder = struct {
 
     // -- Aggregates --
 
-    fn requireClosed(self: *Builder, ty: TypeId, comptime what: []const u8) void {
+    pub fn requireClosed(self: *Builder, ty: TypeId, comptime what: []const u8) void {
         if (!try self.closed(ty)) invariant("building a dynamic " ++ what ++ " is not yet lowered by Boxy");
     }
 
-    fn finishRecord(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+    pub fn finishRecord(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
         const record = self.bodies().expr(expr_id).data.record;
         const ty = try self.exprType(expr_id);
         const values = try self.popValues(@intCast(record.fields.len));
@@ -2719,7 +2719,7 @@ const Builder = struct {
     }
 
     /// A record or tuple of `ty` from its fields in semantic order.
-    fn buildStruct(self: *Builder, ty: TypeId, fields: []const LocalId) Allocator.Error!LocalId {
+    pub fn buildStruct(self: *Builder, ty: TypeId, fields: []const LocalId) Allocator.Error!LocalId {
         const target = try self.localOf(ty, .frame);
         if (try self.closed(ty)) {
             try self.emitLinear(.{ .assign_struct = .{ .target = target, .fields = try self.store.addLocalSpan(fields), .next = undefined } });
@@ -2729,7 +2729,7 @@ const Builder = struct {
         return target;
     }
 
-    fn finishTuple(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+    pub fn finishTuple(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
         const items = self.bodies().expr(expr_id).data.tuple;
         const ty = try self.exprType(expr_id);
         const values = try self.popValues(@intCast(items.len));
@@ -2737,7 +2737,7 @@ const Builder = struct {
         try self.pushValue(try self.buildStruct(ty, values));
     }
 
-    fn finishTag(self: *Builder, expr_id: CheckedExprId, at_ty: ?TypeId) Allocator.Error!void {
+    pub fn finishTag(self: *Builder, expr_id: CheckedExprId, at_ty: ?TypeId) Allocator.Error!void {
         const expr = self.bodies().expr(expr_id);
         const label, const arg_count: usize = switch (expr.data) {
             .tag => |tag| .{ tag.name, tag.args.len },
@@ -2753,7 +2753,7 @@ const Builder = struct {
 
     /// The tag `name` of the tag union `ty` (through nominal wrappers) with
     /// `values` as its payloads.
-    fn buildTag(self: *Builder, ty: TypeId, name: types.NameId, values: []const LocalId) Allocator.Error!LocalId {
+    pub fn buildTag(self: *Builder, ty: TypeId, name: types.NameId, values: []const LocalId) Allocator.Error!LocalId {
         if (!try self.closed(ty)) {
             const target = try self.localOf(ty, .frame);
             try self.emitDyn(target, .{ .tag = .{ .desc = try self.descOf(try self.structuralType(ty)), .name = try self.nameDesc(name), .payloads = try self.store.addLocalSpan(values) } });
@@ -2788,7 +2788,7 @@ const Builder = struct {
         return target;
     }
 
-    fn finishList(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+    pub fn finishList(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
         const expr = self.bodies().expr(expr_id);
         const count: usize = switch (expr.data) {
             .list => |items| items.len,
@@ -2813,7 +2813,7 @@ const Builder = struct {
 
     // -- Control flow --
 
-    fn ifTest(self: *Builder, expr_id: CheckedExprId, index: u32, join: LIR.JoinPointId, merge: ?MergeId) Allocator.Error!void {
+    pub fn ifTest(self: *Builder, expr_id: CheckedExprId, index: u32, join: LIR.JoinPointId, merge: ?MergeId) Allocator.Error!void {
         const if_ = self.bodies().expr(expr_id).data.if_;
         const cond = self.popValue();
         const holes = try self.emitBoolSwitch(cond);
@@ -2835,7 +2835,7 @@ const Builder = struct {
         self.hole = holes.then;
     }
 
-    fn matchStart(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+    pub fn matchStart(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
         const scrutinee = self.popValue();
         const match = self.bodies().expr(expr_id).data.match_;
         const result = try self.localOf(try self.exprType(expr_id), .frame);
@@ -2848,7 +2848,7 @@ const Builder = struct {
         try self.push(.{ .match_branch = .{ .expr = expr_id, .index = 0, .scrutinee = scrutinee, .join = join } });
     }
 
-    fn matchBranch(self: *Builder, expr_id: CheckedExprId, index: u32, scrutinee: LocalId, join: LIR.JoinPointId) Allocator.Error!void {
+    pub fn matchBranch(self: *Builder, expr_id: CheckedExprId, index: u32, scrutinee: LocalId, join: LIR.JoinPointId) Allocator.Error!void {
         const match = self.bodies().expr(expr_id).data.match_;
         if (index >= match.branches.len) {
             // Exhaustive by checking: no value reaches past the last branch.
@@ -2873,7 +2873,7 @@ const Builder = struct {
         try self.push(.{ .expr = branch.value });
     }
 
-    fn matchGuard(self: *Builder, expr_id: CheckedExprId, index: u32, scrutinee: LocalId, join: LIR.JoinPointId, miss: CFStmtId) Allocator.Error!void {
+    pub fn matchGuard(self: *Builder, expr_id: CheckedExprId, index: u32, scrutinee: LocalId, join: LIR.JoinPointId, miss: CFStmtId) Allocator.Error!void {
         const match = self.bodies().expr(expr_id).data.match_;
         try self.branchOrMiss(self.popValue(), miss);
         try self.push(.{ .match_branch = .{ .expr = expr_id, .index = index + 1, .scrutinee = scrutinee, .join = join } });
@@ -2885,7 +2885,7 @@ const Builder = struct {
     /// Emit tests that `value` matches `pattern`, branching to `miss` when it
     /// does not, and bind the pattern's binders. Continues in the matched
     /// path.
-    fn testPattern(self: *Builder, root_pattern: CheckedPatternId, root_value: LocalId, miss: CFStmtId) Allocator.Error!void {
+    pub fn testPattern(self: *Builder, root_pattern: CheckedPatternId, root_value: LocalId, miss: CFStmtId) Allocator.Error!void {
         const Item = struct { pattern: CheckedPatternId, value: LocalId };
         var pending: std.ArrayList(Item) = .empty;
         defer pending.deinit(self.allocator);
@@ -2999,7 +2999,7 @@ const Builder = struct {
 
     /// Whether a tag union value holds the payload-free tag `label`: the
     /// checker's discriminant-only equality.
-    fn finishDiscriminantEq(self: *Builder, value_ty: TypeId, label: check.CheckedNames.TagLabelId, negated: bool) Allocator.Error!void {
+    pub fn finishDiscriminantEq(self: *Builder, value_ty: TypeId, label: check.CheckedNames.TagLabelId, negated: bool) Allocator.Error!void {
         const value = self.popValue();
         const name = try self.program.store.internName(self.view.nameStore().tagLabelText(label));
         const ty = try self.structuralType(value_ty);
@@ -3036,7 +3036,7 @@ const Builder = struct {
 
     /// A record field access: each segment reads one field of the record
     /// the previous segment produced.
-    fn finishFieldAccess(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
+    pub fn finishFieldAccess(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
         const access = self.bodies().expr(expr_id).data.field_access;
         var value = self.popValue();
         var record_ty = try self.exprType(access.receiver);
@@ -3072,7 +3072,7 @@ const Builder = struct {
     /// `ty` with its nominal wrappers peeled: a nominal type shares its
     /// backing's representation, so a tag or record of a nominal type is
     /// built and matched at its backing.
-    fn structuralType(self: *Builder, ty: TypeId) Allocator.Error!TypeId {
+    pub fn structuralType(self: *Builder, ty: TypeId) Allocator.Error!TypeId {
         var current = ty;
         while (self.program.store.get(current) == .nominal) current = try self.program.converter().backing(current);
         return current;
@@ -3080,7 +3080,7 @@ const Builder = struct {
 
     /// Field `semantic_index` (of type `field_ty`) of the record or tuple
     /// `base` of type `ty`, as a borrowed read.
-    fn readField(self: *Builder, ty: TypeId, base_local: LocalId, semantic_index: u32, field_ty: TypeId) Allocator.Error!LocalId {
+    pub fn readField(self: *Builder, ty: TypeId, base_local: LocalId, semantic_index: u32, field_ty: TypeId) Allocator.Error!LocalId {
         if (try self.closed(ty)) {
             const local = try self.localOf(field_ty, .frame);
             try self.emitLinear(.{ .assign_ref = .{ .target = local, .op = LIR.RefOp.field(base_local, semantic_index), .next = undefined } });
@@ -3093,7 +3093,7 @@ const Builder = struct {
 
     /// Test that the dynamic tag union `value` holds tag `name`, and queue
     /// its payloads against `args`.
-    fn testDynamicTag(self: *Builder, nominal_ty: TypeId, name: types.NameId, args: []const CheckedPatternId, value: LocalId, miss: CFStmtId, pending: anytype) Allocator.Error!void {
+    pub fn testDynamicTag(self: *Builder, nominal_ty: TypeId, name: types.NameId, args: []const CheckedPatternId, value: LocalId, miss: CFStmtId, pending: anytype) Allocator.Error!void {
         const store = &self.program.store;
         const ty = try self.structuralType(nominal_ty);
         const union_ty = switch (store.get(ty)) {
@@ -3121,7 +3121,7 @@ const Builder = struct {
 
     /// Continue when `cond` is true; otherwise continue at the enclosing
     /// match branch's shared `miss` continuation.
-    fn branchOrMiss(self: *Builder, cond: LocalId, miss: CFStmtId) Allocator.Error!void {
+    pub fn branchOrMiss(self: *Builder, cond: LocalId, miss: CFStmtId) Allocator.Error!void {
         const then = try self.newHole();
         const branches = try self.store.addCFSwitchBranches(&.{.{ .value = 1, .body = then }});
         try self.emitTerminal(.{ .switch_stmt = .{ .cond = cond, .branches = branches, .default_branch = miss } });
@@ -3130,7 +3130,7 @@ const Builder = struct {
 
     // -- Statements --
 
-    fn stepStmt(self: *Builder, stmt_id: CheckedStatementId) Allocator.Error!void {
+    pub fn stepStmt(self: *Builder, stmt_id: CheckedStatementId) Allocator.Error!void {
         const stmt = self.bodies().statement(stmt_id);
         self.region = stmt.source_region;
         switch (stmt.data) {
@@ -3188,7 +3188,7 @@ const Builder = struct {
     /// A condition-driven loop: a head join carrying the loop's mutated
     /// binders, entered first with their current values, and an exit join
     /// carrying them out.
-    fn lowerLoop(self: *Builder, loop: checked.CheckedConditionLoop) Allocator.Error!void {
+    pub fn lowerLoop(self: *Builder, loop: checked.CheckedConditionLoop) Allocator.Error!void {
         const binders: []const checked.PatternBinderId = if (loop.mutations) |plan| blk: {
             const range = self.bodies().loopMutations(plan).binders;
             break :blk self.bodies().patternBinderIdPool()[range.start..][0..range.len];
@@ -3212,7 +3212,7 @@ const Builder = struct {
         try self.push(.{ .expr = loop.cond });
     }
 
-    fn pushForLoop(self: *Builder, pattern: CheckedPatternId, iterable: CheckedExprId, body: CheckedExprId, plan: ?static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId) Allocator.Error!void {
+    pub fn pushForLoop(self: *Builder, pattern: CheckedPatternId, iterable: CheckedExprId, body: CheckedExprId, plan: ?static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId) Allocator.Error!void {
         const plan_id = plan orelse invariant("a for loop has no checked iterator plan");
         try self.push(.{ .unreachable_or_unit = {} });
         try self.push(.{ .for_start = .{ .pattern = pattern, .body = body, .plan = plan_id, .mutations = mutations } });
@@ -3222,7 +3222,7 @@ const Builder = struct {
     /// `for pattern in iterable { body }`: the iterable's iterator is the
     /// loop's state; each step calls `next` and matches its Done, Skip, or
     /// One tag (design.md "Iterator `for`").
-    fn forStart(self: *Builder, pattern: CheckedPatternId, body: CheckedExprId, plan_id: static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId) Allocator.Error!void {
+    pub fn forStart(self: *Builder, pattern: CheckedPatternId, body: CheckedExprId, plan_id: static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId) Allocator.Error!void {
         const table = self.view.view.static_dispatch_plans;
         const plan = table.iterator_for_plans[@backingInt(plan_id)];
         const iterable = self.popValue();
@@ -3287,7 +3287,7 @@ const Builder = struct {
 
     /// Continue at the next statement when `value` (of `ty`) holds tag
     /// `name`; otherwise continue at `miss`.
-    fn branchOnTag(self: *Builder, value: LocalId, raw_ty: TypeId, name: types.NameId, miss: CFStmtId) Allocator.Error!void {
+    pub fn branchOnTag(self: *Builder, value: LocalId, raw_ty: TypeId, name: types.NameId, miss: CFStmtId) Allocator.Error!void {
         const ty = try self.structuralType(raw_ty);
         const actual = try self.closedLocal(.u32);
         const expected = try self.closedLocal(.u32);
@@ -3310,9 +3310,9 @@ const Builder = struct {
         try self.branchOrMiss(matches, miss);
     }
 
-    const ClosedVariant = struct { index: usize, payloads: []const TypeId };
+    pub const ClosedVariant = struct { index: usize, payloads: []const TypeId };
 
-    fn closedVariant(self: *Builder, ty: TypeId, name: types.NameId) ClosedVariant {
+    pub fn closedVariant(self: *Builder, ty: TypeId, name: types.NameId) ClosedVariant {
         const rep = self.program.joins.representative(ty);
         const tags = switch (self.program.store.get(rep)) {
             .tag_union => |union_ty| self.program.store.tagSpan(union_ty.tags),
@@ -3324,10 +3324,10 @@ const Builder = struct {
         invariant("a tag test's tag is absent from its type");
     }
 
-    const TypedValue = struct { value: LocalId, ty: TypeId };
+    pub const TypedValue = struct { value: LocalId, ty: TypeId };
 
     /// Payload `index` of tag `name` in `value`, which holds that tag.
-    fn tagPayloadValue(self: *Builder, value: LocalId, raw_ty: TypeId, name: types.NameId, index: u32) Allocator.Error!TypedValue {
+    pub fn tagPayloadValue(self: *Builder, value: LocalId, raw_ty: TypeId, name: types.NameId, index: u32) Allocator.Error!TypedValue {
         const ty = try self.structuralType(raw_ty);
         if (!try self.closed(ty)) {
             const union_ty = self.program.store.get(ty).tag_union;
@@ -3352,7 +3352,7 @@ const Builder = struct {
     }
 
     /// Field `name` of the record `value`.
-    fn recordFieldValue(self: *Builder, value: LocalId, raw_ty: TypeId, name: types.NameId) Allocator.Error!TypedValue {
+    pub fn recordFieldValue(self: *Builder, value: LocalId, raw_ty: TypeId, name: types.NameId) Allocator.Error!TypedValue {
         const ty = try self.structuralType(raw_ty);
         const record = switch (self.program.store.get(ty)) {
             .record => |record| record,
@@ -3368,7 +3368,7 @@ const Builder = struct {
 
     /// Call the target a dispatch resolution names with already-lowered
     /// arguments.
-    fn emitDispatch(self: *Builder, resolution: static_dispatch.CheckedCallResolution, callable_ty: checked.CheckedTypeId, args: []const LocalId, result_ty: TypeId) Allocator.Error!LocalId {
+    pub fn emitDispatch(self: *Builder, resolution: static_dispatch.CheckedCallResolution, callable_ty: checked.CheckedTypeId, args: []const LocalId, result_ty: TypeId) Allocator.Error!LocalId {
         const table = self.view.view.static_dispatch_plans;
         switch (resolution) {
             .direct_closed, .direct_parametric => |direct| {
@@ -3399,7 +3399,7 @@ const Builder = struct {
         }
     }
 
-    fn loopTest(self: *Builder, body: CheckedExprId, head: LIR.JoinPointId, exit: LIR.JoinPointId) Allocator.Error!void {
+    pub fn loopTest(self: *Builder, body: CheckedExprId, head: LIR.JoinPointId, exit: LIR.JoinPointId) Allocator.Error!void {
         const holes = try self.emitBoolSwitch(self.popValue());
         self.hole = holes.otherwise;
         try self.emitJump(exit, null);
@@ -3412,7 +3412,7 @@ const Builder = struct {
     /// Bind an irrefutable pattern (a parameter or a `decl`) to `value`.
     /// Destructuring binds through the same tests a match uses; an
     /// irrefutable pattern never takes their miss path.
-    fn bindIrrefutable(self: *Builder, pattern_id: CheckedPatternId, value: LocalId) Allocator.Error!void {
+    pub fn bindIrrefutable(self: *Builder, pattern_id: CheckedPatternId, value: LocalId) Allocator.Error!void {
         const miss = try self.newHole();
         try self.testPattern(pattern_id, value, miss);
     }
