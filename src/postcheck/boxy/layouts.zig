@@ -26,12 +26,15 @@ pub const Layouts = struct {
     layouts: *layout.Store,
     memo: std.AutoHashMapUnmanaged(TypeId, Committed) = .empty,
     slot_memo: std.AutoHashMapUnmanaged(TypeId, TypeId) = .empty,
+    /// The payload of each presence-slot type.
+    slot_payloads: std.AutoHashMapUnmanaged(TypeId, TypeId) = .empty,
 
     const Committed = struct { idx: layout.Idx, digest: ?layout.GraphDigest };
 
     pub fn deinit(self: *Layouts) void {
         self.memo.deinit(self.allocator);
         self.slot_memo.deinit(self.allocator);
+        self.slot_payloads.deinit(self.allocator);
     }
 
     /// The presence-slot type `[#Missing, #Present(payload)]` of an
@@ -45,7 +48,13 @@ pub const Layouts = struct {
             .{ .name = present, .payloads = &.{payload} },
         }, .ext = null } });
         try self.slot_memo.put(self.allocator, payload, slot);
+        try self.slot_payloads.put(self.allocator, slot, payload);
         return slot;
+    }
+
+    /// The payload of `ty` when it is an optional field's presence slot.
+    pub fn presenceSlotPayload(self: *const Layouts, ty: TypeId) ?TypeId {
+        return self.slot_payloads.get(ty);
     }
 
     /// The stored type of a record field: its value type for an inline slot,

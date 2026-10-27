@@ -104,7 +104,11 @@ pub const Flags = packed struct(u8) {
     /// A record or tuple laid out in declared order: a nominal record with
     /// `_` padding fields, or an erased-call argument record.
     declared_order: bool = false,
-    _: u5 = 0,
+    /// A tag union that is an optional record field's presence slot
+    /// (`[#Missing, #Present(payload)]`, Missing first): it inspects as its
+    /// payload, or as `<missing>`.
+    presence_slot: bool = false,
+    _: u4 = 0,
 };
 
 /// A field label or tag name. Static and immortal.

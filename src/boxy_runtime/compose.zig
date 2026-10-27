@@ -278,6 +278,7 @@ const KeyTag = enum(u64) {
     tag_union,
     args,
     nominal,
+    presence_slot,
 };
 
 const no_name: u64 = std.math.maxInt(u64);
@@ -513,6 +514,23 @@ fn positional(cache: *Cache, ops: *RocOps, comptime tag: KeyTag, descs: []const 
     const order: Order = if (tag == .args) .declared else .structural;
     const built = buildStruct(ops, .tuple, order, members);
     return cache.intern(key, built, ops);
+}
+
+/// An optional record field's presence slot over `payload`: the tag union
+/// `[missing, present(payload)]`, marked as a presence slot.
+pub fn presenceSlot(cache: *Cache, ops: *RocOps, missing: *const Name, present: *const Name, payload: *const TypeDesc) *const TypeDesc {
+    const key = [_]u64{ @backingInt(KeyTag.presence_slot), missing.id, present.id, ptrWord(payload) };
+    if (cache.lookup(&key)) |existing| return existing;
+    const payloads = [_]*const TypeDesc{payload};
+    const variants = [_]VariantInput{
+        .{ .name = missing, .payload_count = 0, .payloads = &payloads },
+        .{ .name = present, .payload_count = 1, .payloads = &payloads },
+    };
+    const union_desc = tagUnion(cache, ops, &variants);
+    const built = immortal(TypeDesc, 1, ops);
+    built[0] = union_desc.*;
+    built[0].flags.presence_slot = true;
+    return cache.intern(&key, &built[0], ops);
 }
 
 /// A closed tag union. Tags may come in any order: a tag's discriminant is

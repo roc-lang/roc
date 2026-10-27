@@ -17090,6 +17090,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBoxyRuntime(&builder, "roc_desc_box");
                     try self.bindReturnedScalar(dst_local, 8);
                 },
+                .desc_presence_slot => |d| {
+                    try self.addWordArg(&builder, d.missing);
+                    try self.addWordArg(&builder, d.present);
+                    try self.addWordArg(&builder, d.payload);
+                    try self.callBoxyRuntime(&builder, "roc_desc_presence_slot");
+                    try self.bindReturnedScalar(dst_local, 8);
+                },
                 .desc_record => |d| {
                     const names = self.store.getLocalSpan(d.names);
                     const descs = self.store.getLocalSpan(d.descs);

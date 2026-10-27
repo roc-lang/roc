@@ -8494,6 +8494,13 @@ pub const Interpreter = struct {
                 const desc = boxy.compose.list(immortals.composeCache(), &immortals.ops, try self.descAt(frame, d.elem));
                 try self.setWordTarget(frame, stmt_id, target, @intFromPtr(desc));
             },
+            .desc_presence_slot => |d| {
+                const immortals = try self.boxyImmortals();
+                const missing: *const boxy.Name = @ptrFromInt(try self.localWord(frame, d.missing));
+                const present: *const boxy.Name = @ptrFromInt(try self.localWord(frame, d.present));
+                const desc = boxy.compose.presenceSlot(immortals.composeCache(), &immortals.ops, missing, present, try self.descAt(frame, d.payload));
+                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(desc));
+            },
             .desc_box => |d| {
                 const immortals = try self.boxyImmortals();
                 const desc = boxy.compose.box(immortals.composeCache(), &immortals.ops, try self.descAt(frame, d.payload));

@@ -300,6 +300,7 @@ pub const StaticDescs = struct {
             },
             .tag_union => |tag_union| {
                 kind = .tag_union;
+                flags.presence_slot = self.layouts.presenceSlotPayload(ty) != null;
                 const tags = try self.allocator.dupe(types.Tag, self.store.tagSpan(tag_union.tags));
                 defer self.allocator.free(tags);
                 count = @intCast(tags.len);

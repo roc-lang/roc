@@ -49,6 +49,10 @@ pub fn roc_desc_list(elem: *const TypeDesc) callconv(.c) *const TypeDesc {
     return compose.list(cache(), composeOps(), elem);
 }
 
+pub fn roc_desc_presence_slot(missing: *const Name, present: *const Name, payload: *const TypeDesc) callconv(.c) *const TypeDesc {
+    return compose.presenceSlot(cache(), composeOps(), missing, present, payload);
+}
+
 pub fn roc_desc_box(payload: *const TypeDesc) callconv(.c) *const TypeDesc {
     return compose.box(cache(), composeOps(), payload);
 }

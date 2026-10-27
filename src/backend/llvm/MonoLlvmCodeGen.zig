@@ -11587,6 +11587,7 @@ pub const MonoLlvmCodeGen = struct {
             .frame_alloc => unreachable, // handled above
             .desc_list => |d| try self.bindWord(target, try self.callBoxyRuntime("roc_desc_list", ptr_ty, &.{ptr_ty}, &.{try self.wordValue(d.elem)})),
             .desc_box => |d| try self.bindWord(target, try self.callBoxyRuntime("roc_desc_box", ptr_ty, &.{ptr_ty}, &.{try self.wordValue(d.payload)})),
+            .desc_presence_slot => |d| try self.bindWord(target, try self.callBoxyRuntime("roc_desc_presence_slot", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty }, &.{ try self.wordValue(d.missing), try self.wordValue(d.present), try self.wordValue(d.payload) })),
             .desc_record => |d| {
                 const names = self.store.getLocalSpan(d.names);
                 const descs = self.store.getLocalSpan(d.descs);

@@ -600,7 +600,7 @@ const InspectCtx = struct {
     pub const Record = Value;
     pub const Tuple = Value;
     pub const TagUnion = Value;
-    pub const PresenceSlot = void;
+    pub const PresenceSlot = Value;
     pub const Override = Value;
     pub const Child = Value;
     pub const Label = *const Name;
@@ -621,7 +621,7 @@ const InspectCtx = struct {
             .box => .{ .box = if (d.child.?.size == 0) .at(d.child.?, zeroSizedPtr()) else value.boxPayload() },
             .record => .{ .record = value },
             .tuple => .{ .tuple = value },
-            .tag_union => .{ .tag_union = value },
+            .tag_union => if (d.flags.presence_slot) .{ .presence_slot = value } else .{ .tag_union = value },
             .erased_callable => .function,
             .nominal => .{ .nominal = .{
                 .override = if (override(d, .to_inspect) != null) value else null,
@@ -772,7 +772,11 @@ pub fn inspect(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) RocStr {
                 .tuple => |tuple| Spec.tupleParts(ctx, tuple, &sink) catch |err| switch (err) {},
                 .tag_union => |tag_union| Spec.variantParts(ctx, tag_union, tag_union.desc.readDiscriminant(tag_union.ptr), &sink) catch |err| switch (err) {},
                 .uninhabited => ops.crash(inspect_rules.text.uninhabited_crash),
-                .presence_slot => invariant(ops, "a descriptor described a field-presence slot"),
+                // Missing is the slot's first variant, Present its second.
+                .presence_slot => |slot| if (slot.desc.readDiscriminant(slot.ptr) == 1)
+                    stack.push(.{ .child = slot.tagPayload(&slot.desc.variants()[1], 0) }, ops)
+                else
+                    out.append(inspect_rules.text.missing, ops),
                 .list => |list_value| {
                     out.append(inspect_rules.text.list_open, ops);
                     stack.push(.{ .list_items = .{ .list = list_value.rocList().*, .elem = list_value.desc.child.?, .index = 0 } }, ops);

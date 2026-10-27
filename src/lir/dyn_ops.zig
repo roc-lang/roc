@@ -38,6 +38,7 @@ pub fn ownership(op: DynOp) Ownership {
         .desc_box,
         .desc_record,
         .desc_tuple,
+        .desc_presence_slot,
         .desc_tag_union,
         .desc_args,
         .desc_nominal,
@@ -92,6 +93,11 @@ pub const Operands = struct {
                 result.span(desc.descs);
             },
             .desc_tuple => |desc| result.span(desc.elems),
+            .desc_presence_slot => |desc| {
+                result.single(desc.missing);
+                result.single(desc.present);
+                result.single(desc.payload);
+            },
             .desc_tag_union => |desc| {
                 if (desc.ext) |ext| result.single(ext);
                 result.span(desc.names);
@@ -268,6 +274,11 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
             .ext = try Remap.opt(context, desc.ext),
         } },
         .desc_tuple => |desc| .{ .desc_tuple = .{ .elems = try Remap.span(store, context, desc.elems) } },
+        .desc_presence_slot => |desc| .{ .desc_presence_slot = .{
+            .missing = try Remap.one(context, desc.missing),
+            .present = try Remap.one(context, desc.present),
+            .payload = try Remap.one(context, desc.payload),
+        } },
         .desc_tag_union => |desc| .{ .desc_tag_union = .{
             .names = try Remap.span(store, context, desc.names),
             .payload_counts = desc.payload_counts,

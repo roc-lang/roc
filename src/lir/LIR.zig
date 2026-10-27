@@ -1327,6 +1327,9 @@ pub const DynOp = union(enum) {
     /// join the named ones.
     desc_record: struct { names: LocalSpan, descs: LocalSpan, ext: ?LocalId = null },
     desc_tuple: struct { elems: LocalSpan },
+    /// An optional record field's presence slot over `payload`: the tag
+    /// union `[missing, present(payload)]`, marked as a presence slot.
+    desc_presence_slot: struct { missing: LocalId, present: LocalId, payload: LocalId },
     /// A tag union. `names` has one entry per variant; `payload_counts`
     /// (parallel) says how many of `payloads`, in order, belong to it.
     /// `ext`, for an open row, is the descriptor of the row's remainder,

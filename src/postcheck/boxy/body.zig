@@ -569,6 +569,14 @@ pub const Builder = struct {
     pub fn composeDesc(self: *Builder, ty: TypeId) Allocator.Error!LocalId {
         const store = &self.program.store;
         const local = try self.closedLocal(.opaque_ptr);
+        if (self.program.layouts.presenceSlotPayload(ty)) |payload| {
+            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_presence_slot = .{
+                .missing = try self.nameDesc(try store.internName(@import("layouts.zig").missing_label)),
+                .present = try self.nameDesc(try store.internName(@import("layouts.zig").present_label)),
+                .payload = self.type_descs.get(payload).?,
+            } }), .next = undefined } });
+            return local;
+        }
         const op: LIR.DynOp = switch (store.get(ty)) {
             .list => |elem| .{ .desc_list = .{ .elem = self.type_descs.get(elem).? } },
             .box => |payload| .{ .desc_box = .{ .payload = self.type_descs.get(payload).? } },
@@ -1467,7 +1475,9 @@ pub const Builder = struct {
                 try self.push(.{ .finish_low_level = .{ .op = run_ll.op, .arg_count = @intCast(run_ll.args.len), .result = try self.exprType(expr_id), .arg_types = arg_types } });
                 try self.pushExprsReversed(run_ll.args);
             },
-            .empty_record => try self.pushValue(try self.unitValue()),
+            // An empty literal at a record type of optional fields builds
+            // every field's slot as missing.
+            .empty_record => try self.push(.{ .finish_record = expr_id }),
             .record => |record| {
                 if (record.ext != null) invariant("record update is not yet lowered by Boxy");
                 if (record.unsets.len != 0) invariant("unset record fields are not yet lowered by Boxy");
@@ -3131,7 +3141,11 @@ pub const Builder = struct {
     }
 
     pub fn finishRecord(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
-        const record = self.bodies().expr(expr_id).data.record;
+        const record: @FieldType(checked.CheckedExprData, "record") = switch (self.bodies().expr(expr_id).data) {
+            .record => |record| record,
+            .empty_record => .{ .fields = &.{}, .unsets = &.{}, .ext = null },
+            else => invariant("a record construction is not a record expression"),
+        };
         const ty = try self.exprType(expr_id);
         const values = try self.popValues(@intCast(record.fields.len));
         defer self.allocator.free(values);
