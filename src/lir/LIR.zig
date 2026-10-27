@@ -1395,6 +1395,15 @@ pub const DynOp = union(enum) {
     /// dynamic local), or null for no arguments; the result is written to the
     /// target.
     call_erased: struct { closure: LocalId, args: ?LocalId },
+    /// An erased callable of `proc` (an `erased_record` procedure) whose
+    /// capture is the dynamic record `capture`, consumed. The record's first
+    /// word is its own descriptor; the callable's `on_drop` is the runtime's
+    /// shared capture drop, which releases the record through that word.
+    closure: struct { proc: LirProcSpecId, capture: LocalId },
+    /// A `view` dynamic target over the bytes at `address` (an `opaque_ptr`
+    /// local), which the target's descriptor describes; it borrows from
+    /// whatever owns those bytes.
+    view: struct { address: LocalId },
 };
 
 /// The fields of `CFStmt.decref_if_initialized` other than its condition,

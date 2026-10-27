@@ -512,10 +512,12 @@ const Pass = struct {
             },
             .dyn => |*dyn| {
                 var op = self.store.stmtRow(dyn.data);
-                if (op == .dict_compose) {
-                    op.dict_compose.worker = self.remapProc(op.dict_compose.worker);
-                    dyn.data = try self.store.addStmtRow(LIR.DynOp, op);
+                switch (op) {
+                    .dict_compose => |*dict| dict.worker = self.remapProc(dict.worker),
+                    .closure => |*closure| closure.proc = self.remapProc(closure.proc),
+                    else => {},
                 }
+                if (op == .dict_compose or op == .closure) dyn.data = try self.store.addStmtRow(LIR.DynOp, op);
             },
             .assign_literal => |*literal| {
                 switch (literal.value) {
@@ -939,6 +941,7 @@ fn stmtRefs(store: *const LirStore, stmt: LIR.CFStmt) StmtRefs {
         .assign_packed_erased_fn => |packed_fn| return .{ .procs = .{ store.stmtRow(packed_fn.data).proc, null } },
         .dyn => |dyn| return switch (store.stmtRow(dyn.data)) {
             .dict_compose => |dict| .{ .procs = .{ dict.worker, null } },
+            .closure => |closure| .{ .procs = .{ closure.proc, null } },
             else => .{},
         },
         .assign_literal => |literal| {

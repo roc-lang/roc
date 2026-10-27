@@ -100,6 +100,16 @@ const Inventory = struct {
                     const packed_fn = self.store.stmtRow(stmt.assign_packed_erased_fn.data);
                     self.escapes[@backingInt(packed_fn.proc)] = true;
                     try self.markReachable(packed_fn.proc);
+                } else if (stmt == .dyn) {
+                    const escaping: ?LIR.LirProcSpecId = switch (self.store.stmtRow(stmt.dyn.data)) {
+                        .dict_compose => |dict| dict.worker,
+                        .closure => |closure| closure.proc,
+                        else => null,
+                    };
+                    if (escaping) |proc| {
+                        self.escapes[@backingInt(proc)] = true;
+                        try self.markReachable(proc);
+                    }
                 } else if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
                     const proc = stmt.assign_literal.value.proc_ref;
                     self.escapes[@backingInt(proc)] = true;

@@ -414,7 +414,7 @@ pub fn erasedCallingProcs(allocator: Allocator, store: *const LirStore) Allocato
                 .assign_packed_erased_fn,
                 => true,
                 .dyn => |dyn| switch (store.stmtRow(dyn.data)) {
-                    .dict_compose, .call_erased => true,
+                    .dict_compose, .call_erased, .closure => true,
                     else => false,
                 },
                 .init_uninitialized,
@@ -570,6 +570,7 @@ fn stmtDirectCallee(store: *const LirStore, stmt_id: LIR.CFStmtId) ?LIR.LirProcS
         .assign_literal => |literal| store.literalExtra(literal.value).fresh_alternative,
         .dyn => |dyn| switch (store.stmtRow(dyn.data)) {
             .dict_compose => |dict| dict.worker,
+            .closure => |closure| closure.proc,
             else => null,
         },
         .init_uninitialized,

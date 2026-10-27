@@ -468,6 +468,7 @@ const Printer = struct {
                 return;
             },
             .dict_compose => |dict| try writer.print(" p{d}", .{@backingInt(dict.worker)}),
+            .closure => |closure| try writer.print(" p{d}", .{@backingInt(closure.proc)}),
             .dict_method => |method| try writer.print(" #{d}", .{method.index}),
             .field_addr => |field| try writer.print(" #{d}", .{field.semantic_index}),
             .tag_payload_addr => |payload| try writer.print(" #{d}", .{payload.payload_index}),

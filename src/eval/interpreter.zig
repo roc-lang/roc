@@ -331,6 +331,8 @@ pub const Interpreter = struct {
     const ErasedCallableCaptureDrop = enum(u8) {
         none,
         rc_helper,
+        /// A dynamic capture record whose first word is its own descriptor.
+        desc,
     };
 
     pub const ErasedCallableInterpreterContext = extern struct {
@@ -3377,6 +3379,11 @@ pub const Interpreter = struct {
     ) Error!void {
         const drop_kind: ErasedCallableCaptureDrop = @fromBackingInt(@intCast(context.drop_kind));
         if (drop_kind == .none) return;
+        if (drop_kind == .desc) {
+            const capture_ptr = capture orelse unreachable; // interpreterErasedCallableOnDrop derived context from this capture, which rejects null
+            boxy.walk.captureDrop(capture_ptr + context.capture_value_offset, &self.roc_ops);
+            return;
+        }
         const scratch_mark = self.scratch.mark();
         defer self.scratch.restore(scratch_mark);
         const capture_layout: layout_mod.Idx = if (context.drop_layout_plus_one == 0)
@@ -3389,7 +3396,7 @@ pub const Interpreter = struct {
         const capture_ptr = capture orelse unreachable; // interpreterErasedCallableOnDrop derived context from this capture, which rejects null
         const capture_value_ptr = capture_ptr + context.capture_value_offset;
         switch (drop_kind) {
-            .none => unreachable, // the .none drop kind returned above
+            .none, .desc => unreachable, // these drop kinds returned above
             .rc_helper => self.performRcHelperRequired(
                 .{ .op = .decref, .layout_idx = capture_layout },
                 .{ .ptr = capture_value_ptr },
@@ -8721,6 +8728,34 @@ pub const Interpreter = struct {
                 if (crash_boundary.set() != 0) return self.crashError();
                 const rendered = boxy.walk.inspect(desc, value, &self.roc_ops);
                 try self.setLocalChecked(frame, stmt_id, target, try self.rocStrToValue(rendered, self.store.getLocal(target).layout_idx), false);
+            },
+            .view => |v| try self.setComponentTarget(frame, stmt_id, target, @ptrFromInt(try self.localWord(frame, v.address))),
+            .closure => |c| {
+                const record = try self.localBytes(frame, c.capture);
+                const record_desc: *const boxy.TypeDesc = @ptrFromInt(@as(*const usize, @ptrCast(@alignCast(record))).*);
+                const capture_size = erased_callable_context_capture_offset + record_desc.size;
+                const data_ptr = try self.allocRocDataWithRc(
+                    builtins.erased_callable.payloadSize(capture_size),
+                    builtins.erased_callable.payload_alignment,
+                    builtins.erased_callable.allocation_has_refcounted_children,
+                );
+                builtins.erased_callable.payloadPtr(data_ptr).* = .{
+                    .callable_fn_ptr = &interpreterErasedCallableTrampoline,
+                    .on_drop = &interpreterErasedCallableOnDrop,
+                };
+                if (self.retained_owner) |owner| owner.retain();
+                erasedCallableInterpreterContextFromPayload(data_ptr).* = .{
+                    .owner = self.retained_owner,
+                    .interpreter = self,
+                    .proc_id = @backingInt(c.proc),
+                    .drop_layout_plus_one = 0,
+                    .capture_value_offset = @intCast(erased_callable_context_capture_offset),
+                    .drop_kind = @backingInt(ErasedCallableCaptureDrop.desc),
+                    .padding = .{ 0, 0, 0 },
+                };
+                // The callable takes over the record's references.
+                @memcpy(erasedCallableInterpreterCaptureValuePtr(data_ptr)[0..record_desc.size], record[0..record_desc.size]);
+                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(data_ptr));
             },
             .call_erased => |c| {
                 const closure_word = @as(*align(1) const usize, @ptrCast(try self.localBytes(frame, c.closure))).*;

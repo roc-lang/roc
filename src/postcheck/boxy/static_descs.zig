@@ -40,6 +40,7 @@ pub const StaticDescs = struct {
     desc_slots: std.AutoHashMapUnmanaged(Key, Reserved) = .empty,
     name_slots: std.AutoHashMapUnmanaged(NameId, Reserved) = .empty,
     pending: std.ArrayList(Pending) = .empty,
+    opaque_word: ?LIR.StaticDataId = null,
 
     /// A descriptor's identity: a type, or the recursion box around one.
     const Key = struct { ty: TypeId, recursive_box: bool };
@@ -83,6 +84,23 @@ pub const StaticDescs = struct {
     pub fn descriptorSlot(self: *StaticDescs, ty: TypeId) Allocator.Error!LIR.StaticDataId {
         const reserved = try self.reserveDescriptor(.{ .ty = self.layouts.joins.representative(ty), .recursive_box = false });
         try self.drain();
+        return reserved.slot;
+    }
+
+    /// The static-data slot holding the descriptor of a pointer-sized word
+    /// with no reference-counted content (a descriptor, or an immortal
+    /// dictionary, stored in a dynamic capture record).
+    pub fn opaqueWordSlot(self: *StaticDescs) Allocator.Error!LIR.StaticDataId {
+        if (self.opaque_word) |slot| return slot;
+        const desc_layout = desc_format.TypeDesc.layout(self.width);
+        const reserved = try self.addSlotWithNode(desc_layout.size, desc_layout.alignment);
+        const bytes = @constCast(self.exports.items[reserved.node].bytes);
+        writeU32(bytes, desc_layout.of(.size), self.ptrSize());
+        writeU32(bytes, desc_layout.of(.alignment), self.ptrSize());
+        bytes[desc_layout.of(.kind)] = @backingInt(desc_format.Kind.scalar);
+        bytes[desc_layout.of(.scalar)] = @backingInt(desc_format.Scalar.opaque_ptr);
+        bytes[desc_layout.of(.sort_key)] = @backingInt(layout.SortKey.pointer);
+        self.opaque_word = reserved.slot;
         return reserved.slot;
     }
 

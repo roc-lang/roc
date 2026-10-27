@@ -54,8 +54,9 @@ pub fn ownership(op: DynOp) Ownership {
         .list_elem_addr => |elem| .{ .borrow_component = elem.list },
         .box_payload_addr => |payload| .{ .borrow_component = payload.box },
         .tag_payload_addr => |payload| .{ .borrow_component = payload.base },
+        .view => |view| .{ .borrow_component = view.address },
         .tag_discriminant, .eq, .hash, .inspect => .borrow_operands,
-        .record, .tag, .list, .box => .construct,
+        .record, .tag, .list, .box, .closure => .construct,
         .call_erased => .call_erased,
     };
 }
@@ -175,6 +176,8 @@ pub const Operands = struct {
                 result.single(call.closure);
                 if (call.args) |args| result.single(args);
             },
+            .closure => |closure| result.single(closure.capture),
+            .view => |view| result.single(view.address),
         }
         return result;
     }
@@ -207,6 +210,7 @@ pub fn constructedValues(store: *const LirStore, allocator: std.mem.Allocator, o
         .box => |box| try out.append(allocator, box.payload),
         .dict_compose => |dict| try appendSpan(store, allocator, dict.captures, out),
         .dict_record => |dict| try appendSpan(store, allocator, dict.methods, out),
+        .closure => |closure| try out.append(allocator, closure.capture),
         else => unreachable, // only construct operations consume value operands
     }
 }
@@ -296,6 +300,8 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
         .hash => |hash| .{ .hash = .{ .hasher = try Remap.one(context, hash.hasher), .value = try Remap.one(context, hash.value), .desc = try Remap.one(context, hash.desc) } },
         .inspect => |inspect| .{ .inspect = .{ .value = try Remap.one(context, inspect.value), .desc = try Remap.one(context, inspect.desc) } },
         .call_erased => |call| .{ .call_erased = .{ .closure = try Remap.one(context, call.closure), .args = try Remap.opt(context, call.args) } },
+        .closure => |closure| .{ .closure = .{ .proc = closure.proc, .capture = try Remap.one(context, closure.capture) } },
+        .view => |view| .{ .view = .{ .address = try Remap.one(context, view.address) } },
     };
 }
 

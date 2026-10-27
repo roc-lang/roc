@@ -86,6 +86,8 @@ pub const Worker = struct {
     params: []const TypeId,
     ret: TypeId,
     lowered: bool = false,
+    /// Whether the worker's body is queued for lowering.
+    queued: bool = false,
     /// For a lambda worker: the checked captures of its closure expression,
     /// whose values follow it in the capture record before the outer
     /// worker's descriptors.
@@ -150,7 +152,21 @@ pub const Program = struct {
     }
 
     /// The worker for a procedure template, requested if new.
+    /// The worker of a procedure template, queued for lowering.
     pub fn templateWorker(self: *Program, module_index: ModuleIndex, template_id: canonical.CheckedProcedureTemplateId) Allocator.Error!WorkerId {
+        const id = try self.templateScope(module_index, template_id);
+        if (!self.worker(id).queued) {
+            self.worker(id).queued = true;
+            try self.worklist.append(self.allocator, id);
+        }
+        return id;
+    }
+
+    /// The worker of a procedure template as the scope of the lambdas it
+    /// contains, lowered only when something calls the template itself. The
+    /// owner of a closure that compile-time evaluation stored is such a
+    /// scope: its body ran at compile time.
+    pub fn templateScope(self: *Program, module_index: ModuleIndex, template_id: canonical.CheckedProcedureTemplateId) Allocator.Error!WorkerId {
         const key: WorkerKey = .{ .template = .{ .module = module_index, .template = template_id } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
@@ -189,8 +205,12 @@ pub const Program = struct {
             .scope_dictionary_indices = dictionary_params.items,
         });
         try self.worker_ids.put(self.allocator, key, id);
-        try self.worklist.append(self.allocator, id);
         return id;
+    }
+
+    pub fn templateRefScope(self: *Program, ref: canonical.ProcedureTemplateRef) Allocator.Error!WorkerId {
+        const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
+        return try self.templateScope(view.index, ref.template);
     }
 
     /// The erased-callable worker of a lambda or closure expression of the
@@ -203,7 +223,7 @@ pub const Program = struct {
         capture_types: []const TypeId,
         fn_ty: TypeId,
     ) Allocator.Error!WorkerId {
-        const outer_worker = self.worker(outer);
+        const outer_worker = self.worker(outer).*;
         const key: WorkerKey = .{ .lambda = .{ .module = outer_worker.module, .expr = lambda_expr, .outer = outer } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const signature = switch (self.store.get(fn_ty)) {
