@@ -3338,7 +3338,12 @@ fn fillPinnedProcContracts(
 }
 
 fn pinnedByAbi(proc: *const LIR.LirProcSpec) bool {
-    return proc.arcBody() == null or proc.hosted != null or proc.abi == .erased_callable;
+    return proc.arcBody() == null or proc.hosted != null or switch (proc.abi) {
+        .roc => false,
+        // The uniform erased-callable ABI, in either form, fixes an
+        // all-owned convention: the argument record and result are owned.
+        .erased_callable, .erased_record => true,
+    };
 }
 
 /// The procedures pinned only because they are stable: no root and no ABI

@@ -306,6 +306,30 @@ fn certifyProcAbiMetadata(
             }
         }
 
+        if (proc.abi == .erased_record) {
+            // A `.boxy` erased worker receives the packed argument record as
+            // its one explicit argument, besides its capture pointer, and
+            // takes no reuse input.
+            var explicit_args: usize = 0;
+            for (0..GuardedList.borrowLen(args)) |index| {
+                const arg = GuardedList.at(args, index);
+                if (proc.erased_capture_arg != null and arg == proc.erased_capture_arg.?) {
+                    if (store.getLocal(arg).layout_idx != .opaque_ptr) {
+                        diag.context_proc = proc_id;
+                        diag.set("proc={d}: erased-record capture argument must have opaque-pointer layout", .{proc_index});
+                        return error.Certification;
+                    }
+                    continue;
+                }
+                explicit_args += 1;
+            }
+            if (explicit_args > 1 or proc.erased_reuse_arg != null or proc.erased_call_args != null) {
+                diag.context_proc = proc_id;
+                diag.set("proc={d}: erased-record ABI proc must take only its argument record", .{proc_index});
+                return error.Certification;
+            }
+            continue;
+        }
         if (proc.abi != .erased_callable) {
             if (proc.erased_call_args != null) {
                 diag.context_proc = proc_id;
@@ -6191,7 +6215,10 @@ const Certifier = struct {
         var arg_values_buffer: [64]ValueId = undefined;
         for (0..GuardedList.borrowLen(arg_locals)) |index| {
             const arg = GuardedList.at(arg_locals, index);
-            const representation_only = index < 64 and (assign.op.representationArgs() & (@as(u64, 1) << @as(u6, @intCast(index)))) != 0;
+            // Only a closed list's inline header outlives its buffer; a
+            // dynamic list operand is read through its address.
+            const representation_only = index < 64 and (assign.op.representationArgs() & (@as(u64, 1) << @as(u6, @intCast(index)))) != 0 and
+                self.isListRepresentation(arg);
             const value = if (representation_only) try self.requireListRepresentation(state, arg) else try self.requireLive(state, arg);
             if (index < arg_values_buffer.len) arg_values_buffer[index] = value;
         }

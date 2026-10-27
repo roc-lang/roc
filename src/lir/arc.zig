@@ -1227,6 +1227,7 @@ const VariantTable = struct {
             .body = self.sources[@backingInt(callee)].body,
             .ret_layout = source_spec.ret_layout,
             .erased_capture_arg = source_spec.erased_capture_arg,
+            .dyn_result = source_spec.dyn_result,
             .abi = source_spec.abi,
             .is_static_initializer = source_spec.is_static_initializer,
             .hosted = source_spec.hosted,
@@ -6610,8 +6611,11 @@ const Inserter = struct {
                     const args = self.store.getLocalSpan(assign.args);
                     const representation_args = assign.op.representationArgs();
                     for (0..GuardedList.borrowLen(args)) |index| {
-                        if (index < 64 and (representation_args & argMaskBit(index)) != 0) continue;
-                        try self.noteLivenessUseLocal(reads, GuardedList.at(args, index));
+                        const arg = GuardedList.at(args, index);
+                        // Only a closed list's inline header outlives its
+                        // buffer; a dynamic list is read through its address.
+                        if (index < 64 and (representation_args & argMaskBit(index)) != 0 and self.isClosedList(arg)) continue;
+                        try self.noteLivenessUseLocal(reads, arg);
                     }
                 },
                 .assign_list => |assign| try self.noteLivenessUseSpan(reads, assign.elems),
@@ -7283,6 +7287,11 @@ const Inserter = struct {
             .decref, .free => .decref,
             .host_drop => arcInvariant("ARC RC statement carried a host-shaped drop adapter"),
         };
+    }
+
+    fn isClosedList(self: *const Inserter, local: LIR.LocalId) bool {
+        const tag = self.layouts.getLayout(self.store.getLocal(local).layout_idx).tag;
+        return tag == .list or tag == .list_of_zst;
     }
 
     fn localContainsRefcounted(self: *const Inserter, local: LIR.LocalId) bool {
@@ -17174,4 +17183,211 @@ test "ARC ownership iteration skips absent resources and preserves release order
     var empty = filtered.iterator(.{});
     try testing.expectEqual(null, empty.next());
     for (keys) |key| try testing.expect(owned.contains(locals[key]));
+}
+
+/// A `.boxy` fixture: dynamic locals described by opaque-pointer descriptor
+/// locals, and procedures that return through a `dyn_result` local.
+const DynFixture = struct {
+    f: ArcTest,
+    dynamic: layout_mod.Idx,
+
+    fn init() Allocator.Error!DynFixture {
+        var f = try ArcTest.init(testing.allocator);
+        errdefer f.deinit();
+        const dynamic = try f.layouts.dynamicLayout();
+        return .{ .f = f, .dynamic = dynamic };
+    }
+
+    fn deinit(self: *DynFixture) void {
+        self.f.deinit();
+    }
+
+    fn desc(self: *DynFixture) Allocator.Error!LIR.LocalId {
+        return try self.f.local(.opaque_ptr);
+    }
+
+    fn value(self: *DynFixture, descriptor: LIR.LocalId, storage: LIR.DynStorage) Allocator.Error!LIR.LocalId {
+        return try self.f.store.addLocal(.{ .layout_idx = self.dynamic, .dyn = .{ .desc = descriptor, .storage = storage } });
+    }
+
+    fn op(self: *DynFixture, target: ?LIR.LocalId, dyn_op: LIR.DynOp, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        return try self.f.store.addDynStmt(target, dyn_op, next, .test_fixture);
+    }
+
+    /// A procedure whose frame is every local allocated so far.
+    fn proc(self: *DynFixture, args: []const LIR.LocalId, body: LIR.CFStmtId, ret_layout: layout_mod.Idx, dyn_result: ?LIR.LocalId) Allocator.Error!LIR.LirProcSpecId {
+        const id = try self.f.addProc(args, body, ret_layout);
+        self.f.store.getProcSpecPtr(id).dyn_result = dyn_result;
+        return id;
+    }
+
+    fn run(self: *DynFixture, roots: []const LIR.LirProcSpecId) ResourceError!void {
+        try insert(&self.f.store, &self.f.layouts, .{ .roots = roots });
+    }
+
+    /// Every RC statement on a dynamic local names the dynamic layout, and
+    /// none is a `free`.
+    fn expectDynamicRcShape(self: *const DynFixture) ArcTest.ExpectError!void {
+        for (0..self.f.store.cfStmtCount()) |stmt_index| {
+            const stmt = self.f.store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+            switch (stmt.*) {
+                inline .incref, .decref => |rc| if (self.f.store.getLocal(rc.value).dyn != null) {
+                    try testing.expectEqual(self.dynamic, rc.rc.concrete.layout_idx);
+                },
+                .free => |rc| try testing.expect(self.f.store.getLocal(rc.value).dyn == null),
+                else => {},
+            }
+        }
+    }
+};
+
+test "ARC dyn copy of an owned dynamic parameter into the result moves its unit" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const param = try d.value(desc, .param);
+    const result = try d.value(desc, .result);
+    const ret = try d.f.ret(result);
+    const body = try d.op(result, .{ .copy = .{ .src = param, .desc = desc } }, ret);
+    const proc = try d.proc(&.{ desc, param }, body, d.dynamic, result);
+    try d.run(&.{proc});
+    try d.f.expectRc(param, 0, 0, 0);
+    try d.f.expectRc(result, 0, 0, 0);
+    try d.expectDynamicRcShape();
+}
+
+test "ARC dyn identity called from an owning caller balances the dynamic argument" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const param = try d.value(desc, .param);
+    const result = try d.value(desc, .result);
+    const identity_ret = try d.f.ret(result);
+    const identity_body = try d.op(result, .{ .copy = .{ .src = param, .desc = desc } }, identity_ret);
+    const identity = try d.proc(&.{ desc, param }, identity_body, d.dynamic, result);
+
+    const caller_desc = try d.desc();
+    const caller_param = try d.value(caller_desc, .param);
+    const caller_result = try d.value(caller_desc, .result);
+    const caller_ret = try d.f.ret(caller_result);
+    const call = try d.f.store.addCFStmt(.{ .assign_call = .{
+        .target = caller_result,
+        .proc = identity,
+        .args = try d.f.span(&.{ caller_desc, caller_param }),
+        .next = caller_ret,
+    } }, .test_fixture);
+    const caller = try d.proc(&.{ caller_desc, caller_param }, call, d.dynamic, caller_result);
+    try d.run(&.{caller});
+    // The caller owns its parameter and its result; whichever way the
+    // identity's signature solved, the parameter's unit ends exactly once:
+    // moved into an owned position, or released after a borrowed one with
+    // the borrowed result retained.
+    const moved = d.f.countRc(caller_param, .decref) == 0;
+    try testing.expectEqual(@as(usize, if (moved) 0 else 1), d.f.countRc(caller_result, .incref));
+    try d.f.expectRc(param, 0, 0, 0);
+    try d.expectDynamicRcShape();
+}
+
+test "ARC dyn record consumes its values and retains a value stored twice" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const record_desc = try d.desc();
+    const param = try d.value(desc, .param);
+    const text = try d.f.local(.str);
+    const result = try d.value(record_desc, .result);
+    const ret = try d.f.ret(result);
+    const body = try d.op(result, .{ .record = .{
+        .desc = record_desc,
+        .fields = try d.f.span(&.{ param, text, text }),
+    } }, ret);
+    const proc = try d.proc(&.{ desc, record_desc, param, text }, body, d.dynamic, result);
+    try d.run(&.{proc});
+    try d.f.expectRc(param, 0, 0, 0);
+    try d.f.expectRc(text, 1, 0, 0);
+    try d.f.expectRc(result, 0, 0, 0);
+    try d.expectDynamicRcShape();
+}
+
+test "ARC dyn field view returned through a copy is retained and its base released" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const field_desc = try d.desc();
+    const param = try d.value(desc, .param);
+    const view = try d.value(field_desc, .view);
+    const result = try d.value(field_desc, .result);
+    const ret = try d.f.ret(result);
+    const copy = try d.op(result, .{ .copy = .{ .src = view, .desc = field_desc } }, ret);
+    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .semantic_index = 0 } }, copy);
+    const proc = try d.proc(&.{ desc, field_desc, param }, read, d.dynamic, result);
+    try d.run(&.{proc});
+    // The field borrows from the record until one retain gives the result
+    // its own unit; the owned record is then released whole.
+    try testing.expectEqual(@as(usize, 1), d.f.countRc(view, .incref) + d.f.countRc(result, .incref));
+    try d.f.expectRc(param, 0, 1, 0);
+    try testing.expectEqual(@as(usize, 0), d.f.countRc(view, .decref) + d.f.countRc(result, .decref));
+    try d.expectDynamicRcShape();
+}
+
+test "ARC dyn eq and inspect borrow their operand" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const param = try d.value(desc, .param);
+    const equal = try d.f.local(.bool);
+    const text = try d.f.local(.str);
+    const ret = try d.f.ret(text);
+    const inspect = try d.op(text, .{ .inspect = .{ .value = param, .desc = desc } }, ret);
+    const eq = try d.op(equal, .{ .eq = .{ .lhs = param, .rhs = param, .desc = desc } }, inspect);
+    const proc = try d.proc(&.{ desc, param }, eq, .str, null);
+    try d.run(&.{proc});
+    try d.f.expectRc(param, 0, 1, 0);
+    try d.f.expectRc(text, 0, 0, 0);
+    try d.expectDynamicRcShape();
+    // The release comes after the last borrowing read.
+    try d.f.expectReachableRcBefore(d.f.store.getProcSpecImmediate(proc).body.?, .decref, param, .ret);
+}
+
+test "ARC dyn join parameter carries its unit around a loop" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const box_desc = try d.desc();
+    const param = try d.value(desc, .param);
+    const done = try d.f.local(.bool);
+    const state = try d.value(desc, .frame);
+    const boxed = try d.value(box_desc, .frame);
+    const result = try d.value(desc, .result);
+    const join_id = d.f.freshJoinPointId();
+
+    // join j(state) {
+    //   switch done { 1 => result = copy state; ret result
+    //                 _ => boxed = box state; state = boxed; jump j }
+    // }
+    // remainder: frame_alloc; state = param; jump j
+    const ret = try d.f.ret(result);
+    const exit = try d.op(result, .{ .copy = .{ .src = state, .desc = desc } }, ret);
+    const back_jump = try d.f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const rebind = try d.f.setLocal(state, boxed, .initialize_join_param, back_jump);
+    const wrap = try d.op(boxed, .{ .box = .{ .desc = box_desc, .payload = state } }, rebind);
+    const body = try d.f.switchStmt(done, exit, wrap, null);
+    const entry_jump = try d.f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const initialize = try d.f.setLocal(state, param, .initialize_join_param, entry_jump);
+    const frame = try d.op(null, .frame_alloc, initialize);
+    const join = try d.f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try d.f.span(&.{state}),
+        .body = body,
+        .remainder = frame,
+    } }, .test_fixture);
+    const proc = try d.proc(&.{ desc, box_desc, param, done }, join, d.dynamic, result);
+    try d.run(&.{proc});
+    // Every unit moves: the parameter into the join, the state into the box
+    // or the result, and the box back into the state.
+    try d.f.expectRc(param, 0, 0, 0);
+    try d.f.expectRc(state, 0, 0, 0);
+    try d.f.expectRc(boxed, 0, 0, 0);
+    try d.f.expectRc(result, 0, 0, 0);
+    try d.expectDynamicRcShape();
 }
