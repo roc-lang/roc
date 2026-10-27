@@ -6120,7 +6120,7 @@ fn tailArgOffsets(self: *Self, proc: LirProcSpec, offsets: ?[]u32) Allocator.Err
     for (0..args.len) |i| {
         const arg_layout = self.procLocalLayoutIdx(GuardedList.at(args, i));
         const size: u32 = if (try self.isCompositeLayout(arg_layout))
-            try self.layoutByteSize(self.runtimeRepresentationLayoutIdx(arg_layout))
+            try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(arg_layout))
         else
             16;
         if (offsets) |out| out[i] = offset;
@@ -6306,7 +6306,7 @@ fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args
         const param_layout = self.procLocalLayoutIdx(GuardedList.at(params, i));
         const slot_offset: i32 = @intCast(tail_area_args_offset + offsets[i]);
         if (try self.isCompositeLayout(param_layout)) {
-            const size = try self.layoutByteSize(self.runtimeRepresentationLayoutIdx(param_layout));
+            const size = try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(param_layout));
             const src_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitProcLocal(arg);
             try self.emitLocalSet(src_local);
@@ -6630,7 +6630,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
             const arg = GuardedList.at(args, i);
             const arg_layout = self.procLocalLayoutIdx(arg);
             if (!try self.isCompositeLayout(arg_layout)) continue;
-            const size = try self.layoutByteSize(self.runtimeRepresentationLayoutIdx(arg_layout));
+            const size = try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(arg_layout));
             const param_info = self.storage.getLocalInfo(arg) orelse unreachable; // tail-group members use the Roc ABI, whose params were all bound above
             const param_local = param_info.idx;
             try self.emitLocalGet(param_local);
@@ -8758,7 +8758,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
     }
 
     if (try self.isCompositeLayout(c.ret_layout)) {
-        const result_size = try self.layoutByteSize(self.runtimeRepresentationLayoutIdx(c.ret_layout));
+        const result_size = try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(c.ret_layout));
         const stable_local = try self.stabilizeCompositeResult(result_size);
         try self.emitLocalGet(stable_local);
     }
@@ -9254,19 +9254,10 @@ fn getLayoutStore(self: *const Self) *const LayoutStore {
     return self.layout_store;
 }
 
-/// Get the byte size of a layout index using the layout store.
-fn layoutByteSize(self: *const Self, layout_idx: layout.Idx) Allocator.Error!u32 {
-    const ls = self.getLayoutStore();
-    return switch (try WasmLayout.wasmReprWithStore(layout_idx, ls, self.cpu_level != .v1)) {
-        .primitive => |vt| switch (vt) {
-            .i32, .f32 => 4,
-            .i64, .f64 => 8,
-            .v128 => 16,
-        },
-        .stack_memory => |size| size,
-    };
-}
-
+/// The number of bytes a value of this layout occupies in memory. A scalar
+/// narrower than its wasm value type (Bool, U8, I16, ...) occupies only its own
+/// bytes, so every load and store of one must use this size, not the width of
+/// the wasm value that holds it.
 fn layoutStorageByteSize(self: *const Self, layout_idx: layout.Idx) Allocator.Error!u32 {
     const ls = self.getLayoutStore();
     const l = ls.getLayout(layout_idx);
@@ -9293,7 +9284,13 @@ fn layoutStorageByteSize(self: *const Self, layout_idx: layout.Idx) Allocator.Er
         .box, .box_of_zst, .erased_box => 4,
         .tag_union => (try WasmLayout.tagUnionLayoutWithStore(l.getTagUnion().idx, ls)).size,
         .struct_ => try WasmLayout.structSizeWithStore(l.getStruct().idx, ls),
-        .closure, .erased_callable, .ptr => try self.layoutByteSize(layout_idx),
+        .erased_callable, .ptr => 4,
+        // A closure is represented by its captures, except that captures held
+        // in stack memory are sized to the outermost closure.
+        .closure => switch (try WasmLayout.wasmReprWithStore(layout_idx, ls, self.cpu_level != .v1)) {
+            .stack_memory => |size| size,
+            .primitive => try self.layoutStorageByteSize(l.getClosure().captures_layout_idx),
+        },
     };
 }
 
@@ -9760,11 +9757,8 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
 
     const base_local = try self.emitFpOffsetToNewLocal(frame_offset);
 
-    // Store payload FIRST (payload may overlap discriminant if it is wider than
-    // the payload slot, e.g. i64 for a u32 tag payload—the i64 store would
-    // clobber the discriminant).
     if (t.payload) |payload_local| {
-        const payload_byte_size = try self.layoutByteSize(variant_payload_layout);
+        const payload_byte_size = try self.layoutStorageByteSize(variant_payload_layout);
         if (builtin.mode == .debug and self.procLocalLayoutIdx(payload_local) != variant_payload_layout) {
             base.invariant(
                 "WASM/codegen invariant violated: tag payload local layout {d} did not match variant payload layout {d}",
@@ -9783,7 +9777,6 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
         }
     }
 
-    // Store discriminant AFTER payload (so it can't be overwritten)
     const disc_size: u32 = tu_layout.discriminant_size;
     if (disc_size != 0) {
         try self.emitI32Const(@intCast(t.discriminant));
@@ -9822,7 +9815,7 @@ fn generateStoreAggregateValue(self: *Self, dest: ProcLocalId, value_layout: lay
         payload: ?ProcLocalId,
     },
 }) Allocator.Error!void {
-    const value_size = try self.layoutByteSize(value_layout);
+    const value_size = try self.layoutStorageByteSize(value_layout);
 
     const ptr_local = try self.emitProcLocalToNewLocal(dest, .i32);
 
@@ -11457,7 +11450,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const erased_box_ptr = box_layout.tag == .scalar and box_layout.getScalar().tag == .opaque_ptr;
 
             if (box_layout.tag == .box_of_zst or
-                (erased_box_ptr and try self.layoutByteSize(ll.ret_layout) == 0))
+                (erased_box_ptr and try self.layoutStorageByteSize(ll.ret_layout) == 0))
             {
                 // The input is an already-evaluated LIR local. A zero-sized
                 // payload needs no load; pushing its pointer here would leave
@@ -11465,7 +11458,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitZeroValue(try self.resolveValType(ll.ret_layout));
             } else {
                 const elem_size = if (erased_box_ptr)
-                    try self.layoutByteSize(ll.ret_layout)
+                    try self.layoutStorageByteSize(ll.ret_layout)
                 else
                     ls.builtinBoxAbi(box_layout_idx).elem_size;
                 if (elem_size == 0) {
@@ -11475,17 +11468,8 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 } else {
                     try self.emitProcLocal(box_expr);
 
-                    const result_repr = try WasmLayout.wasmReprWithStore(ll.ret_layout, ls, self.cpu_level != .v1);
-                    const result_vt: ValType = switch (result_repr) {
-                        .stack_memory => .i32,
-                        .primitive => |val_type| val_type,
-                    };
-                    const result_is_composite = switch (result_repr) {
-                        .stack_memory => true,
-                        .primitive => false,
-                    };
-                    const result_size = try self.layoutByteSize(ll.ret_layout);
-                    if (result_is_composite) {
+                    if (try self.isCompositeLayout(ll.ret_layout)) {
+                        const result_size = try self.layoutStorageByteSize(ll.ret_layout);
                         const src_local = try self.emitSetNewLocal(.i32);
 
                         const result_align: u32 = @intCast(@max(self.getLayoutStore().layoutSizeAlign(self.getLayoutStore().getLayout(ll.ret_layout)).alignment.toByteUnits(), 1));
@@ -11495,17 +11479,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                         try self.emitMemCopy(dst_local, 0, src_local, result_size);
                         try self.emitLocalGet(dst_local);
                     } else {
-                        const box_ptr = try self.emitSetNewLocal(.i32);
-                        if (result_size == 0) {
-                            try self.emitZeroValue(result_vt);
-                        } else {
-                            const temp_offset = try self.allocStackMemory(@max(result_size, 4), 4);
-                            const temp_ptr = try self.emitFpOffsetToNewLocal(temp_offset);
-
-                            try self.emitMemCopy(temp_ptr, 0, box_ptr, result_size);
-                            try self.emitLocalGet(temp_ptr);
-                            try self.emitLoadOpSized(result_vt, result_size, 0);
-                        }
+                        try self.emitLoadOpForLayout(ll.ret_layout, 0);
                     }
                 }
             }
@@ -11585,7 +11559,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .erased_capture_load => {
             const capture_ptr_expr = GuardedList.at(args, 0);
-            const result_size = try self.layoutByteSize(ll.ret_layout);
+            const result_size = try self.layoutStorageByteSize(ll.ret_layout);
             const result_vt = try self.resolveValType(ll.ret_layout);
 
             if (result_size == 0) {
@@ -11602,8 +11576,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     try self.emitLocalGet(dst_local);
                 } else {
                     try self.emitLocalGet(capture_ptr);
-                    try self.emitLoadOpSized(result_vt, result_size, 0);
-                    try self.emitCanonicalizeScalarForLayout(ll.ret_layout);
+                    try self.emitLoadOpForLayout(ll.ret_layout, 0);
                 }
             }
         },
@@ -11613,7 +11586,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // and leave its i32 address on the stack. Target layout is ptr(T).
             const ls = self.getLayoutStore();
             const elem_idx = ls.getLayout(ll.ret_layout).getIdx();
-            const elem_size = try self.layoutByteSize(elem_idx);
+            const elem_size = try self.layoutStorageByteSize(elem_idx);
             const elem_align: u32 = @intCast(@max(ls.layoutSizeAlign(ls.getLayout(elem_idx)).alignment.toByteUnits(), 1));
 
             const slot_offset = try self.allocStackMemory(@max(elem_size, 1), @max(elem_align, 4));
@@ -11648,7 +11621,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // ptr_store: (Ptr(T), T) -> {}. Copy sizeOf(T) bytes into *ptr.
             // Result is unit; leave a dummy i32 0 (zst convention).
             const value_expr = GuardedList.at(args, 1);
-            const value_size = try self.layoutByteSize(self.procLocalLayoutIdx(value_expr));
+            const value_size = try self.layoutStorageByteSize(self.procLocalLayoutIdx(value_expr));
 
             if (value_size != 0) {
                 const value_repr = try WasmLayout.wasmReprWithStore(self.procLocalLayoutIdx(value_expr), self.getLayoutStore(), self.cpu_level != .v1);
@@ -11675,7 +11648,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .ptr_load => {
             // ptr_load: (Ptr(T)) -> T. Copy sizeOf(T) bytes out of *ptr.
             // Same shape as erased_capture_load above.
-            const result_size = try self.layoutByteSize(ll.ret_layout);
+            const result_size = try self.layoutStorageByteSize(ll.ret_layout);
             const result_repr = try WasmLayout.wasmReprWithStore(ll.ret_layout, self.getLayoutStore(), self.cpu_level != .v1);
             const result_vt: ValType = switch (result_repr) {
                 .stack_memory => .i32,
@@ -11701,8 +11674,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     try self.emitLocalGet(dst_local);
                 } else {
                     try self.emitLocalGet(src_ptr);
-                    try self.emitLoadOpSized(result_vt, result_size, 0);
-                    try self.emitCanonicalizeScalarForLayout(ll.ret_layout);
+                    try self.emitLoadOpForLayout(ll.ret_layout, 0);
                 }
             }
         },
