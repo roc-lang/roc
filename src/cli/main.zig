@@ -17772,7 +17772,7 @@ const aggregate_post_check_lowering_phase_name = "Post-Check Lowering (summed)";
 /// The leading rows of `postCheckLoweringBreakdown` that are Monotype's own.
 const monotype_breakdown_rows = 18;
 
-fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [25]progress.SubTiming {
+fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [26]progress.SubTiming {
     const classified_body_ns = timing.monotype_procedure_body_type_graph_ns +|
         timing.monotype_procedure_body_call_dispatch_ns +|
         timing.monotype_procedure_body_draft_ir_ns +|
@@ -17803,6 +17803,7 @@ fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [25]pr
         .{ .name = "Lambda-Set Solving", .ns = timing.lambda_solve_ns },
         .{ .name = "Inline Planning", .ns = timing.inline_plan_ns },
         .{ .name = "LIR Generation", .ns = timing.lir_gen_ns },
+        .{ .name = "Boxy Lowering", .ns = timing.boxy_lowering_ns },
         .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
         .{ .name = "ARC", .ns = timing.arc_ns },
     };
@@ -17818,7 +17819,7 @@ fn finishPostCheckLowering(
         reporter.end();
         return;
     }
-    var subs_buf: [25]progress.SubTiming = undefined;
+    var subs_buf: [26]progress.SubTiming = undefined;
     reporter.endWithParentBreakdown(measuredSubTimings(&subs_buf, &postCheckLoweringBreakdown(snapshot)));
     recordLoweringCounters(reporter, snapshot, strategy, "");
 }
@@ -17851,6 +17852,7 @@ fn postCheckLoweringTotalNs(timing: lir.CheckedPipeline.TimingSnapshot) u64 {
         timing.lambda_solve_ns +|
         timing.inline_plan_ns +|
         timing.lir_gen_ns +|
+        timing.boxy_lowering_ns +|
         timing.lir_passes_ns +|
         timing.arc_ns;
 }

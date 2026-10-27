@@ -376,6 +376,7 @@ pub const Timing = struct {
     lambda_solve_ns: TimingCounter = .{},
     inline_plan_ns: TimingCounter = .{},
     lir_gen_ns: TimingCounter = .{},
+    boxy_lowering_ns: TimingCounter = .{},
     lir_passes_ns: TimingCounter = .{},
     arc_ns: TimingCounter = .{},
 
@@ -432,6 +433,7 @@ pub const Timing = struct {
             .lambda_solve_ns = self.lambda_solve_ns.load(),
             .inline_plan_ns = self.inline_plan_ns.load(),
             .lir_gen_ns = self.lir_gen_ns.load(),
+            .boxy_lowering_ns = self.boxy_lowering_ns.load(),
             .lir_passes_ns = self.lir_passes_ns.load(),
             .arc_ns = self.arc_ns.load(),
             .monotype_diagnostics = diagnostics,
@@ -488,6 +490,7 @@ pub const Timing = struct {
         self.lambda_solve_ns.add(snapshot_value.lambda_solve_ns);
         self.inline_plan_ns.add(snapshot_value.inline_plan_ns);
         self.lir_gen_ns.add(snapshot_value.lir_gen_ns);
+        self.boxy_lowering_ns.add(snapshot_value.boxy_lowering_ns);
         self.lir_passes_ns.add(snapshot_value.lir_passes_ns);
         self.arc_ns.add(snapshot_value.arc_ns);
         self.addMonotypeDiagnostics(snapshot_value.monotype_diagnostics);
@@ -507,6 +510,7 @@ pub const Timing = struct {
             .lambda_solve => self.lambda_solve_ns.add(elapsed_ns),
             .inline_plan => self.inline_plan_ns.add(elapsed_ns),
             .lir_gen => self.lir_gen_ns.add(elapsed_ns),
+            .boxy_lowering => self.boxy_lowering_ns.add(elapsed_ns),
             .lir_passes => self.lir_passes_ns.add(elapsed_ns),
             .arc => self.arc_ns.add(elapsed_ns),
         }
@@ -654,6 +658,7 @@ pub const TimingSnapshot = struct {
     lambda_solve_ns: u64 = 0,
     inline_plan_ns: u64 = 0,
     lir_gen_ns: u64 = 0,
+    boxy_lowering_ns: u64 = 0,
     lir_passes_ns: u64 = 0,
     arc_ns: u64 = 0,
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
@@ -667,6 +672,7 @@ const TimingPhase = enum {
     lambda_solve,
     inline_plan,
     lir_gen,
+    boxy_lowering,
     lir_passes,
     arc,
 };
@@ -2113,6 +2119,7 @@ pub const PreparedBoxy = struct {
     pub fn lower(self: *const PreparedBoxy, target: TargetConfig) LowerResourceError!LoweredProgram {
         std.debug.assert(target.specialization_strategy == .boxy);
         const allocator = self.allocator;
+        var boxy_timing_scope = PipelineStageScope.begin(target.timing, .boxy_lowering);
         var output = try postcheck.Boxy.run(allocator, .{
             .modules = checkedModules(self.modules),
             .roots = rootRequests(self.roots, self.layout_requests, self.static_data_requests),
@@ -2122,6 +2129,7 @@ pub const PreparedBoxy = struct {
                 .omit => .omit,
             },
         });
+        boxy_timing_scope.end();
         var lowered: struct {
             lir_result: LirProgram.Result,
             runtime_schemas: postcheck.SolvedLirLower.RuntimeSchemaStore,

@@ -268,6 +268,8 @@ pub const CheckArgs = struct {
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
     root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
     main_source_url: ?[]const u8 = null, // internal: bundle URL provenance when --main was a URL or installed shorthand
+    opt: OptLevel = default_dev_opt, // accepted so one command line serves every command; checking ignores it
+    specialization_strategy: ?SpecializationStrategy = null, // accepted so one command line serves every command; checking ignores it
 };
 
 /// Arguments for `roc build`
@@ -1000,7 +1002,8 @@ const commands = [_]Command{
         .usage = " [OPTIONS] [ROC_FILE]",
         .arguments = "  [ROC_FILE]  The .roc file to check [default: " ++ default_roc_file ++ "]",
         .flags = &.{
-            .{ .name = "--specialize", .form = .rejected },
+            .{ .name = "--opt", .form = .attached, .field = "opt" },
+            .{ .name = "--specialize", .form = .attached, .field = "specialization_strategy" },
             .{ .name = "--main", .form = .attached, .field = "main", .value_name = "<main>", .help = "The .roc file of the main app/package module to resolve dependencies from" },
             .{ .name = "--time", .field = "time", .help = "Print timing information for each compilation phase. Will not print anything if everything is cached." },
             .{ .name = "--timings", .field = "timings", .help = "Show how long each compilation phase took (shown automatically when checking is slow)" },
@@ -1526,10 +1529,10 @@ test "specialization strategy parsing" {
         try testing.expectEqual(SpecializationStrategy.lss, result.glue.specialization_strategy.?);
     }
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--specialize=no" });
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "check", "--specialize=no", "--opt=dev" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("check", result.problem.unexpected_argument.cmd);
-        try testing.expectEqualStrings("--specialize=no", result.problem.unexpected_argument.arg);
+        try testing.expectEqual(SpecializationStrategy.boxy, result.check.specialization_strategy.?);
+        try testing.expectEqual(OptLevel.dev, result.check.opt);
     }
 }
 
