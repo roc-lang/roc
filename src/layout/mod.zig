@@ -76,6 +76,10 @@ pub const erased_call_abi = @import("erased_call_abi.zig");
 // fields itself, so both describe the same memory layout.
 pub const field_order = @import("field_order.zig");
 
+// The byte layout of an entrypoint's argument buffer, shared by the code that
+// writes it and the code that reads it.
+pub const entrypoint_args = @import("entrypoint_args.zig");
+
 // Re-export store functionality
 pub const Store = @import("store.zig").Store;
 pub const Graph = @import("graph.zig").Graph;
@@ -140,6 +144,7 @@ test "layout tests" {
     std.testing.refAllDecls(@import("erased_call_abi.zig"));
     std.testing.refAllDecls(@import("store.zig"));
     std.testing.refAllDecls(@import("field_order.zig"));
+    std.testing.refAllDecls(@import("entrypoint_args.zig"));
     std.testing.refAllDecls(@import("abi/mod.zig"));
     std.testing.refAllDecls(@import("abi/aarch64.zig"));
     std.testing.refAllDecls(@import("abi/x86_64.zig"));

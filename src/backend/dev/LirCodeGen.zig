@@ -22419,42 +22419,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        const EntrypointArgOrder = struct {
-            index: usize,
-            alignment: u32,
-            size: u32,
-        };
-
-        fn computeEntrypointArgOffsets(self: *Self, arg_layouts: []const layout.Idx, offsets: []u32) Allocator.Error!void {
-            std.debug.assert(arg_layouts.len == offsets.len);
-
-            var ordered = try self.allocator.alloc(EntrypointArgOrder, arg_layouts.len);
-            defer self.allocator.free(ordered);
-
-            for (arg_layouts, 0..) |arg_layout, i| {
-                const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(arg_layout));
-                ordered[i] = .{
-                    .index = i,
-                    .alignment = @intCast(size_align.alignment.toByteUnits()),
-                    .size = size_align.size,
-                };
-            }
-
-            const SortCtx = struct {
-                fn lessThan(_: void, lhs: EntrypointArgOrder, rhs: EntrypointArgOrder) bool {
-                    if (lhs.alignment != rhs.alignment) return lhs.alignment > rhs.alignment;
-                    return lhs.index < rhs.index;
-                }
-            };
-
-            std.mem.sort(EntrypointArgOrder, ordered, {}, SortCtx.lessThan);
-
-            var current_offset: u32 = 0;
-            for (ordered) |arg| {
-                current_offset = std.mem.alignForward(u32, current_offset, arg.alignment);
-                offsets[arg.index] = current_offset;
-                current_offset += arg.size;
-            }
+        /// Offsets of the arguments in the buffer an entrypoint wrapper receives,
+        /// laid out as the LLVM backend's host-facing wrapper writes it.
+        fn computeEntrypointArgOffsets(self: *Self, arg_layouts: []const layout.Idx, offsets: []u32) void {
+            layout.entrypoint_args.computeOffsets(self.layout_store, arg_layouts, offsets);
         }
 
         fn entrypointParamSlotSize(self: *Self, layout_idx: layout.Idx) u32 {
@@ -22496,7 +22464,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const arg_offsets = try self.allocator.alloc(u32, arg_layouts.len);
             defer self.allocator.free(arg_offsets);
-            try self.computeEntrypointArgOffsets(arg_layouts, arg_offsets);
+            self.computeEntrypointArgOffsets(arg_layouts, arg_offsets);
 
             for (arg_layouts, 0..) |arg_layout, i| {
                 const slot_size = self.entrypointParamSlotSize(arg_layout);
@@ -25739,9 +25707,14 @@ test "entrypoint arg offsets preserve Roc alignment order" {
     defer codegen.deinit();
 
     var offsets: [2]u32 = undefined;
-    try codegen.computeEntrypointArgOffsets(&.{ .bool, .i64 }, offsets[0..]);
+    codegen.computeEntrypointArgOffsets(&.{ .bool, .i64 }, offsets[0..]);
 
     try std.testing.expectEqualSlices(u32, &.{ 8, 0 }, offsets[0..]);
+
+    // Each argument takes a slot of at least 8 bytes, as the LLVM entrypoint
+    // wrapper that fills the buffer lays it out.
+    codegen.computeEntrypointArgOffsets(&.{ .u32, .u32 }, offsets[0..]);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 8 }, offsets[0..]);
 }
 
 test "entrypoint param slots round aggregates to ABI word width" {
