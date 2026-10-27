@@ -237,6 +237,8 @@ pub const ModuleType = enum {
     backend,
     lir_core,
     value_rules,
+    boxy_runtime,
+    boxy_layout_equivalence,
     postcheck,
     lir,
     symbol,
@@ -372,6 +374,21 @@ pub const ModuleType = enum {
             .value_rules => .{
                 .root = "src/postcheck/value_rules/mod.zig",
                 .tests = .{ .unit = .{ .aggregators = &.{"value rules declarations are referenced"} } },
+            },
+            // The Boxy runtime: descriptors, composition, and walkers. It must
+            // compile without libc and without the rest of the compiler.
+            .boxy_runtime => .{
+                .root = "src/boxy_runtime/mod.zig",
+                .deps = &.{ .builtins, .layout_shape, .value_rules },
+                .tests = .{ .unit = .{ .aggregators = &.{"boxy runtime tests"} } },
+            },
+            // Composes a corpus of closed types through both the layout store
+            // and the Boxy runtime and requires identical shapes.
+            .boxy_layout_equivalence => .{
+                .root = "src/boxy_runtime/layout_equivalence_test.zig",
+                .deps = &.{ .base, .builtins, .layout, .boxy_runtime },
+                .tests = .{ .unit = .{} },
+                .available = .dependents_only,
             },
             .postcheck => .{
                 .root = "src/postcheck/mod.zig",
@@ -571,6 +588,8 @@ pub const RocModules = struct {
     backend: *Module,
     lir_core: *Module,
     value_rules: *Module,
+    boxy_runtime: *Module,
+    boxy_layout_equivalence: *Module,
     postcheck: *Module,
     lir: *Module,
     symbol: *Module,

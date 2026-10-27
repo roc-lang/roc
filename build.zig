@@ -2118,6 +2118,11 @@ pub fn build(b: *std.Build) void {
         }),
     };
 
+    // The native Boxy runtime object (`roc_desc_*`) for the host target.
+    const build_boxy_runtime_step = b.step("build-boxy-runtime", "Build the native Boxy runtime object");
+    const boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, "roc_boxy_runtime", target, optimize);
+    build_boxy_runtime_step.dependOn(&b.addInstallArtifact(boxy_runtime_obj, .{ .dest_dir = .{ .override = .{ .custom = "boxy_runtime" } } }).step);
+
     // Build-time compiler for builtin .roc modules
     //
     // Always rebuild builtins when building roc to ensure they match the compiler.
@@ -5455,6 +5460,45 @@ fn addBuiltinsObject(
     });
     addBuiltinsImports(b, roc_modules, obj.root_module);
     obj.bundle_compiler_rt = bundle_compiler_rt;
+    configureBackend(obj, target);
+    return obj;
+}
+
+/// The position-independent native Boxy runtime object: the `roc_desc_*`
+/// entry points over the builtins, reaching the host through the runtime
+/// symbols (`src/boxy_runtime/static_lib.zig`). It gets its own builtins
+/// module instance with the minimal builtins imports, as the builtins objects
+/// do.
+fn addBoxyRuntimeObject(
+    b: *std.Build,
+    roc_modules: modules.RocModules,
+    name: []const u8,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+) *Step.Compile {
+    const builtins_module = b.createModule(.{ .root_source_file = b.path("src/builtins/mod.zig") });
+    addBuiltinsImports(b, roc_modules, builtins_module);
+    builtins_module.addImport("roc_str_view", roc_modules.roc_str_view);
+    const shape_module = b.createModule(.{ .root_source_file = b.path("src/layout/shape.zig") });
+    const value_rules_module = b.createModule(.{ .root_source_file = b.path("src/postcheck/value_rules/mod.zig") });
+    const runtime_module = b.createModule(.{ .root_source_file = b.path("src/boxy_runtime/mod.zig") });
+    runtime_module.addImport("builtins", builtins_module);
+    runtime_module.addImport("layout_shape", shape_module);
+    runtime_module.addImport("value_rules", value_rules_module);
+    const obj = b.addObject(.{
+        .name = name,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/boxy_runtime/static_lib.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = program_object_strip,
+            .omit_frame_pointer = program_object_omit_frame_pointer,
+            .pic = true,
+        }),
+    });
+    obj.root_module.addImport("builtins", builtins_module);
+    obj.root_module.addImport("boxy_runtime", runtime_module);
+    obj.root_module.addImport("shim_io", b.createModule(.{ .root_source_file = b.path("src/shim_io.zig") }));
     configureBackend(obj, target);
     return obj;
 }
