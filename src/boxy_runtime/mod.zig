@@ -12,6 +12,7 @@ pub const desc = @import("desc.zig");
 pub const compose = @import("compose.zig");
 pub const walk = @import("walk.zig");
 pub const exports = @import("exports.zig");
+pub const compiled = @import("compiled.zig");
 
 pub const TypeDesc = desc.TypeDesc;
 pub const Field = desc.Field;
