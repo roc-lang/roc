@@ -54,7 +54,7 @@ pub const Task = union(enum) {
     expr: CheckedExprId,
     stmt: CheckedStatementId,
     /// Pop the value of a `decl` statement's expression and bind its pattern.
-    bind: CheckedPatternId,
+    bind: struct { pattern: CheckedPatternId, ty: TypeId },
     /// Pop and drop one value.
     discard,
     /// Pop the arguments of a call to `callee` and call it.
@@ -155,6 +155,9 @@ pub const JoinInfo = struct {
 };
 
 pub const Builder = struct {
+/// A value a pattern tests, with the value's type.
+pub const PatternItem = struct { pattern: CheckedPatternId, value: LocalId, ty: TypeId };
+
     program: *Program,
     allocator: Allocator,
     worker_id: WorkerId,
@@ -661,7 +664,7 @@ pub const Builder = struct {
                 switch (root.data) {
                     .lambda => |lambda| {
                         if (lambda.args.len != params.len) invariant("a template's lambda arity differs from its signature");
-                        for (lambda.args, params) |pattern, param| try self.bindIrrefutable(pattern, param);
+                        for (lambda.args, params, worker.params) |pattern, param, param_ty| try self.bindIrrefutable(pattern, param, param_ty);
                         try self.tasks.append(self.allocator, .ret);
                         try self.tasks.append(self.allocator, .{ .expr = lambda.body });
                     },
@@ -834,7 +837,7 @@ pub const Builder = struct {
                 try self.emitDyn(local, .{ .field_addr = .{ .base = record_param.?, .desc = self.store.localDyn(record_param.?).?.desc, .semantic_index = @intCast(own_words + index) } });
                 break :blk local;
             } else try self.argsRecordField(worker.params, record_param.?, @intCast(index), param_ty);
-            try self.bindIrrefutable(pattern, value);
+            try self.bindIrrefutable(pattern, value, param_ty);
         }
         try self.tasks.append(self.allocator, .ret);
         try self.tasks.append(self.allocator, .{ .expr = lambda.body });
@@ -1199,7 +1202,7 @@ pub const Builder = struct {
         switch (task) {
             .expr => |expr| try self.stepExpr(expr),
             .stmt => |stmt| try self.stepStmt(stmt),
-            .bind => |pattern| try self.bindIrrefutable(pattern, self.popValue()),
+            .bind => |bind| try self.bindIrrefutable(bind.pattern, self.popValue(), bind.ty),
             .discard => _ = self.popValue(),
             .push_value => |local| try self.pushValue(local),
             .unreachable_value => |ty| try self.pushValue(try self.localOf(ty, .frame)),
@@ -3107,7 +3110,7 @@ pub const Builder = struct {
         const patterns = branch.patternsSlice(self.bodies());
         if (patterns.len != 1) invariant("match branches with alternative patterns are not yet lowered by Boxy");
         const miss = try self.newHole();
-        try self.testPattern(patterns[0].pattern, scrutinee, miss);
+        try self.testPattern(patterns[0].pattern, scrutinee, try self.exprType(match.cond), miss);
         if (branch.guard) |guard| {
             try self.push(.{ .match_guard = .{ .expr = expr_id, .index = index, .scrutinee = scrutinee, .join = join, .miss = miss } });
             try self.push(.{ .expr = guard });
@@ -3131,11 +3134,14 @@ pub const Builder = struct {
     /// Emit tests that `value` matches `pattern`, branching to `miss` when it
     /// does not, and bind the pattern's binders. Continues in the matched
     /// path.
-    pub fn testPattern(self: *Builder, root_pattern: CheckedPatternId, root_value: LocalId, miss: CFStmtId) Allocator.Error!void {
-        const Item = struct { pattern: CheckedPatternId, value: LocalId };
-        var pending: std.ArrayList(Item) = .empty;
+    /// Test `root_value`, of type `root_ty`, against a pattern, binding its
+    /// binders. Every sub-value takes its type from the value it is read
+    /// from: a pattern's own checked type can be a narrower row than the
+    /// value's.
+    pub fn testPattern(self: *Builder, root_pattern: CheckedPatternId, root_value: LocalId, root_ty: TypeId, miss: CFStmtId) Allocator.Error!void {
+        var pending: std.ArrayList(PatternItem) = .empty;
         defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, .{ .pattern = root_pattern, .value = root_value });
+        try pending.append(self.allocator, .{ .pattern = root_pattern, .value = root_value, .ty = root_ty });
         while (pending.pop()) |item| {
             const pattern = self.bodies().pattern(item.pattern);
             switch (pattern.data) {
@@ -3143,11 +3149,11 @@ pub const Builder = struct {
                 .underscore => {},
                 .as => |as| {
                     try self.binders.put(self.allocator, as.binder, item.value);
-                    try pending.append(self.allocator, .{ .pattern = as.pattern, .value = item.value });
+                    try pending.append(self.allocator, .{ .pattern = as.pattern, .value = item.value, .ty = item.ty });
                 },
-                .nominal => |nominal| try pending.append(self.allocator, .{ .pattern = nominal.backing_pattern, .value = item.value }),
+                .nominal => |nominal| try pending.append(self.allocator, .{ .pattern = nominal.backing_pattern, .value = item.value, .ty = try self.structuralType(item.ty) }),
                 .applied_tag => |tag| {
-                    const ty = try self.patternType(item.pattern);
+                    const ty = item.ty;
                     const name = try self.program.store.internName(self.view.nameStore().tagLabelText(tag.name));
                     if (!try self.closed(ty)) {
                         try self.testDynamicTag(ty, name, tag.args, item.value, miss, &pending);
@@ -3188,7 +3194,7 @@ pub const Builder = struct {
                                     // zero-sized payloads.
                                     if (self.store.getLocal(payload_local).layout_idx != .zst) invariant("a storage-free union has a payload with storage");
                                     try self.emitLinear(.{ .assign_struct = .{ .target = payload_local, .fields = LIR.LocalSpan.empty(), .next = undefined } });
-                                    try pending.append(self.allocator, .{ .pattern = arg_pattern, .value = payload_local });
+                                    try pending.append(self.allocator, .{ .pattern = arg_pattern, .value = payload_local, .ty = payloads[arg_index] });
                                     continue;
                                 }
                                 // A one-argument payload is the variant's whole payload.
@@ -3201,25 +3207,25 @@ pub const Builder = struct {
                                 } else {
                                     try self.emitLinear(.{ .assign_ref = .{ .target = payload_local, .op = op, .next = undefined } });
                                 }
-                                try pending.append(self.allocator, .{ .pattern = arg_pattern, .value = payload_local });
+                                try pending.append(self.allocator, .{ .pattern = arg_pattern, .value = payload_local, .ty = payloads[arg_index] });
                             }
                         },
                         else => invariant("a tag pattern's type is not a tag union"),
                     }
                 },
                 .tuple => |items| {
-                    const ty = try self.structuralType(try self.patternType(item.pattern));
+                    const ty = try self.structuralType(item.ty);
                     const elems = switch (self.program.store.get(ty)) {
                         .tuple => |span| self.program.store.span(span),
                         else => invariant("a tuple pattern's type is not a tuple"),
                     };
                     for (items, 0..) |sub, index| {
                         const local = try self.readField(ty, item.value, @intCast(index), elems[index]);
-                        try pending.append(self.allocator, .{ .pattern = sub, .value = local });
+                        try pending.append(self.allocator, .{ .pattern = sub, .value = local, .ty = elems[index] });
                     }
                 },
                 .record_destructure => |destructs| {
-                    const ty = try self.structuralType(try self.patternType(item.pattern));
+                    const ty = try self.structuralType(item.ty);
                     const fields = switch (self.program.store.get(ty)) {
                         .record => |record| self.program.store.fieldSpan(record.fields),
                         else => invariant("a record pattern's type is not a record"),
@@ -3235,7 +3241,7 @@ pub const Builder = struct {
                             .required, .sub_pattern => |p| p,
                             .rest => invariant("record rest patterns are not yet lowered by Boxy"),
                         };
-                        try pending.append(self.allocator, .{ .pattern = sub, .value = local });
+                        try pending.append(self.allocator, .{ .pattern = sub, .value = local, .ty = fields[semantic].ty });
                     }
                 },
                 else => invariantFmt("{s} patterns are not yet lowered by Boxy", .{@tagName(pattern.data)}),
@@ -3361,7 +3367,7 @@ pub const Builder = struct {
         for (args, payload_types, 0..) |arg, payload_ty, index| {
             const local = try self.localOf(payload_ty, .view);
             try self.emitDyn(local, .{ .tag_payload_addr = .{ .base = value, .desc = desc, .name = name_local, .payload_index = @intCast(index) } });
-            try pending.append(self.allocator, .{ .pattern = arg, .value = local });
+            try pending.append(self.allocator, .{ .pattern = arg, .value = local, .ty = payload_ty });
         }
     }
 
@@ -3382,21 +3388,21 @@ pub const Builder = struct {
         switch (stmt.data) {
             .decl => |decl| {
                 if (decl.recursive) invariant("recursive value declarations are not yet lowered by Boxy");
-                try self.push(.{ .bind = decl.pattern });
+                try self.push(.{ .bind = .{ .pattern = decl.pattern, .ty = try self.exprType(decl.expr) } });
                 try self.push(.{ .expr = decl.expr });
             },
             .var_ => |var_| {
-                try self.push(.{ .bind = var_.pattern });
+                try self.push(.{ .bind = .{ .pattern = var_.pattern, .ty = try self.exprType(var_.expr) } });
                 try self.push(.{ .expr = var_.expr });
             },
             .reassign => |reassign| {
-                try self.push(.{ .bind = reassign.pattern });
+                try self.push(.{ .bind = .{ .pattern = reassign.pattern, .ty = try self.exprType(reassign.expr) } });
                 try self.push(.{ .expr = reassign.expr });
             },
             .var_uninitialized => |var_| {
                 const local = try self.localOf(try self.patternType(var_.pattern), .frame);
                 try self.emitLinear(.{ .init_uninitialized = .{ .target = local, .next = undefined } });
-                try self.bindIrrefutable(var_.pattern, local);
+                try self.bindIrrefutable(var_.pattern, local, try self.patternType(var_.pattern));
             },
             .while_, .infinite_loop, .breakable_loop => |loop| try self.lowerLoop(loop),
             .for_ => |for_| {
@@ -3520,7 +3526,7 @@ pub const Builder = struct {
         const item = try self.recordFieldValue(payload.value, payload.ty, item_name);
         const rest = try self.recordFieldValue(payload.value, payload.ty, rest_name);
         _ = item_ty;
-        try self.bindIrrefutable(pattern, item.value);
+        try self.bindIrrefutable(pattern, item.value, item.ty);
         try self.loops.append(self.allocator, exit);
         try self.push(.end_loop);
         if (exit_merge) |m| try self.push(.{ .enter_merge = m });
@@ -3658,8 +3664,8 @@ pub const Builder = struct {
     /// Bind an irrefutable pattern (a parameter or a `decl`) to `value`.
     /// Destructuring binds through the same tests a match uses; an
     /// irrefutable pattern never takes their miss path.
-    pub fn bindIrrefutable(self: *Builder, pattern_id: CheckedPatternId, value: LocalId) Allocator.Error!void {
+    pub fn bindIrrefutable(self: *Builder, pattern_id: CheckedPatternId, value: LocalId, ty: TypeId) Allocator.Error!void {
         const miss = try self.newHole();
-        try self.testPattern(pattern_id, value, miss);
+        try self.testPattern(pattern_id, value, ty, miss);
     }
 };
