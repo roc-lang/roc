@@ -23,6 +23,7 @@ const lir_core = @import("lir_core");
 
 const types = @import("types.zig");
 const lower = @import("lower.zig");
+const Codec = @import("codec.zig");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
@@ -640,6 +641,7 @@ pub const Builder = struct {
             .method_entry => |target| return try self.lowerMethodEntry(target),
             .structural => |method| return try self.lowerStructuralMethod(method),
             .root => return try self.lowerRootWrapper(),
+            .codec => |piece| return try Codec.lowerPiece(self, piece),
         };
         // Signature: explicit parameters, then hidden descriptors and
         // dictionaries.
@@ -709,7 +711,7 @@ pub const Builder = struct {
                 const message = try self.store.insertString(@import("../common.zig").unimplemented_declaration_crash);
                 try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = message } } });
             },
-            .intrinsic_wrapper => invariant("intrinsic wrappers are not yet lowered by Boxy"),
+            .intrinsic_wrapper => |wrapper| try Codec.lowerIntrinsic(self, self.view.view.intrinsic_wrappers.get(wrapper).intrinsic, params),
             .entry_wrapper => |wrapper_id| {
                 const wrapper = self.view.view.entry_wrappers.get(wrapper_id);
                 const root = self.view.view.compile_time_roots.root(wrapper.root);
@@ -2239,6 +2241,7 @@ pub const Builder = struct {
                     try self.push(.{ .restore = .{ .module = module_index, .node = stored_captures[index].value, .ty = concrete_capture_types[index] } });
                 }
             },
+            inline .parser_runtime, .encoder_for_runtime => |runtime| try Codec.restoreRuntime(self, module_index, fn_id, runtime.owner, runtime.expr),
             else => invariantFmt("restoring stored {s} function values is not yet lowered by Boxy", .{@tagName(stored.fn_def)}),
         }
     }
@@ -2410,6 +2413,7 @@ pub const Builder = struct {
                 const method: lower.StructuralMethod = switch (structural.derivation) {
                     .equality => .is_eq,
                     .hash => .to_hash,
+                    .parser, .encoder => return try Codec.dictionary(self, structural),
                     else => invariantFmt("structural {s} dictionaries are not yet lowered by Boxy", .{@tagName(structural.derivation)}),
                 };
                 const entry = try self.program.structuralWorker(self.module, method);
@@ -2703,11 +2707,11 @@ pub const Builder = struct {
                 };
                 const hidden = try self.hiddenArgs(callee, subst, nested);
                 switch (call_plan.result_mode) {
-                    .value => {},
+                    // A codec method is an ordinary call of its target.
+                    .value, .parser_for, .encoder_for, .hash, .map, .map_effectful => {},
                     .equality => |equality| if (equality.negated) {
                         try self.push(.{ .finish_low_level = .{ .op = .bool_not, .arg_count = 1, .result = result_ty } });
                     },
-                    else => invariantFmt("dispatch result mode {s} is not yet lowered by Boxy", .{@tagName(call_plan.result_mode)}),
                 }
                 try self.push(.{ .finish_call = .{ .callee = callee, .hidden = hidden, .arg_count = @intCast(operands.len), .result = if (call_plan.result_mode == .equality) try self.program.store.primitive(.bool) else result_ty } });
                 var index = operands.len;
@@ -2741,17 +2745,18 @@ pub const Builder = struct {
                     try self.push(.{ .expr = rhs });
                     try self.push(.{ .expr = lhs });
                 },
+                .parser, .encoder => try Codec.dispatch(self, call_plan, operands, operand_types, result_ty),
                 else => invariantFmt("structural {s} dispatch is not yet lowered by Boxy", .{@tagName(derivation)}),
             },
             .evidence_dependent => |dependent| {
                 const dict = self.scopeDictionary(dependent.index);
                 const fn_ty = try self.convert(call_plan.callable_ty);
                 switch (call_plan.result_mode) {
-                    .value => {},
+                    // A codec method is an ordinary call of its target.
+                    .value, .parser_for, .encoder_for, .hash, .map, .map_effectful => {},
                     .equality => |equality| if (equality.negated) {
                         try self.push(.{ .finish_low_level = .{ .op = .bool_not, .arg_count = 1, .result = result_ty } });
                     },
-                    else => invariantFmt("dispatch result mode {s} is not yet lowered by Boxy", .{@tagName(call_plan.result_mode)}),
                 }
                 const call_result = switch (self.program.store.get(fn_ty)) {
                     .function => |function| function.ret,

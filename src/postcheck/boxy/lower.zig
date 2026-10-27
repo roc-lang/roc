@@ -20,6 +20,7 @@ const RowJoins = @import("row_joins.zig");
 const Layouts = @import("layouts.zig").Layouts;
 const StaticDescs = @import("static_descs.zig").StaticDescs;
 const Body = @import("body.zig");
+const Codec = @import("codec.zig");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
@@ -70,6 +71,8 @@ pub const WorkerKey = union(enum) {
     /// dictionaries the root's instantiation names, and calls its target
     /// (design.md "Host ABI").
     root: u32,
+    /// A worker of a generated codec family (`Codec.Piece`, by index).
+    codec: u32,
 };
 
 /// The structural methods a dictionary can denote.
@@ -166,6 +169,8 @@ pub const Program = struct {
     local_scopes: std.AutoHashMapUnmanaged(ExprKey, checked.DispatchScopeId) = .empty,
     /// The lambda and closure expressions local procedures bind.
     local_procs: std.AutoHashMapUnmanaged(ExprKey, void) = .empty,
+    /// The generated codec families and their workers.
+    codec: Codec.State = .{},
 
     pub fn converter(self: *Program) types.Converter {
         return .{ .store = &self.store, .modules = &self.modules };
@@ -434,6 +439,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.hosted.deinit(allocator);
         program.local_scopes.deinit(allocator);
         program.local_procs.deinit(allocator);
+        program.codec.deinit(allocator);
         program.arena.deinit();
     }
     errdefer program.result.deinit();

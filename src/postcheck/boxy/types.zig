@@ -510,6 +510,10 @@ pub const Converter = struct {
     /// body lowering converts it in, so it seeds as a variable, keeping the
     /// types it occurs in out of every ground join set.
     seed_scheme_vars: ?*const std.AutoHashMapUnmanaged(checked.CheckedTypeId, void) = null,
+    /// Whether an undetermined field kind outside every scheme commits to
+    /// `required` (a generated codec contract's snapshot, whose kinds no
+    /// caller can pin), rather than keeping its presence-slot representation.
+    seal_undetermined_kinds: bool = false,
 
     /// The variable a seeding conversion gives a scheme variable.
     pub const seed_variable_index: u32 = std.math.maxInt(u32);
@@ -558,7 +562,7 @@ pub const Converter = struct {
             pending.shrinkRetainingCapacity(frame.pending_start);
             // A type with no identity variables converts the same under
             // every environment.
-            if (!rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
+            if (!self.seal_undetermined_kinds and !rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
                 try self.store.closed_memo.put(allocator, .{ .module = frame.module, .ty = frame.ty }, built);
             }
             if (frames.items.len == 0) return built;
@@ -580,7 +584,7 @@ pub const Converter = struct {
     fn leaf(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env) Allocator.Error!?TypeId {
         if (env.lookup(module, ty)) |bound| return bound;
         const view = self.modules.get(module);
-        if (!rootHasIdentityVariables(view, ty)) {
+        if (!self.seal_undetermined_kinds and !rootHasIdentityVariables(view, ty)) {
             if (self.store.closed_memo.get(.{ .module = module, .ty = ty })) |memo| return memo;
         }
         return switch (view.types().payload(ty)) {
@@ -716,7 +720,7 @@ pub const Converter = struct {
                         try fields.append(allocator, .{
                             .name = try self.store.internName(name_store.recordFieldLabelText(field.name)),
                             .ty = children[child_index],
-                            .kind = fieldKind(field.kind),
+                            .kind = self.fieldKind(field.kind),
                         });
                         child_index += 1;
                     }
@@ -810,6 +814,13 @@ pub const Converter = struct {
                         .list => return try self.store.intern(.{ .list = children[0] }),
                         .box => return try self.store.intern(.{ .box = children[0] }),
                         .primitive => unreachable, // `leaf` answers primitive builtins
+                        // Generated codecs' serialization evidence: a field
+                        // set is the list of its field handles, and a
+                        // tag-union spec is the callable that parses its
+                        // union.
+                        .fields => return try self.store.intern(.{ .list = try self.fieldHandle() }),
+                        .field => return try self.fieldHandle(),
+                        .parse_tag_union_spec => return try self.store.intern(.{ .function = .{ .args = &.{}, .ret = children[0], .effectful = false } }),
                         else => {},
                     },
                     else => {},
@@ -845,10 +856,11 @@ pub const Converter = struct {
         return try self.store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
     }
 
-    fn fieldKind(kind: checked.CheckedFieldKind) FieldKind {
+    fn fieldKind(self: Converter, kind: checked.CheckedFieldKind) FieldKind {
         return switch (kind.tag) {
             .required, .defaulted => .inline_slot,
-            .optional, .undetermined => .presence_slot,
+            .optional => .presence_slot,
+            .undetermined => if (self.seal_undetermined_kinds) .inline_slot else .presence_slot,
             .err => invariant("an erroneous record field kind reached Boxy lowering"),
         };
     }
