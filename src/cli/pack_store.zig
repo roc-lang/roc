@@ -947,6 +947,42 @@ pub fn encodeDiscovery(allocator: Allocator, summaries: []const lir.CheckedPipel
 /// Every pack in a directory, indexed by specialization key and by procedure
 /// identity. Files load in name order so the indexes are deterministic when
 /// two packs carry the same entry.
+/// Exclusive phases within indexed native lookup. This diagnostic is owned by
+/// the coordinator; interface workers use a different cache entry point.
+const NativeLookupProfile = struct {
+    const Phase = enum { buckets, offers, decode, metadata, graph, eligibility, payloads, install };
+    ns: [8]i128 = @splat(0),
+    const Scope = struct {
+        profile: ?*NativeLookupProfile = null,
+        phase: Phase = .buckets,
+        started: i128 = 0,
+        fn now() i128 {
+            return std.Io.Timestamp.now(std.Io.Threaded.global_single_threaded.io(), .awake).nanoseconds;
+        }
+        fn begin(profile: *NativeLookupProfile) Scope {
+            if (!base.dev_diagnostics.isSet(.spec_resolution_profile)) return .{};
+            return .{ .profile = profile, .started = now() };
+        }
+        fn enter(self: *Scope, phase: Phase) void {
+            const profile = self.profile orelse return;
+            const current = now();
+            profile.ns[@backingInt(self.phase)] += current - self.started;
+            self.started = current;
+            self.phase = phase;
+        }
+        fn end(self: *Scope) void {
+            self.enter(self.phase);
+            self.profile = null;
+        }
+    };
+    fn report(self: *const NativeLookupProfile) void {
+        if (!base.dev_diagnostics.isSet(.spec_resolution_profile)) return;
+        inline for (@typeInfo(Phase).@"enum".field_names, 0..) |name, i| {
+            if (self.ns[i] != 0) std.debug.print("native-lookup-profile phase={s} ns={d}\n", .{ name, self.ns[i] });
+        }
+    }
+};
+
 pub const LoadedPacks = struct {
     const LinkedOffer = struct {
         hit: Common.SpecCacheHit,
@@ -1005,6 +1041,7 @@ pub const LoadedPacks = struct {
     retained_offers: std.AutoHashMapUnmanaged([32]u8, *const base.retained_cache.Record) = .empty,
 
     index_stats: IndexStats = .{},
+    lookup_profile: NativeLookupProfile = .{},
     /// A completed-output probe has priority over procedure discovery. Until
     /// it misses, compile-time demand uses source bodies and cached values.
     defer_code_lookup: bool = false,
@@ -1387,6 +1424,8 @@ pub const LoadedPacks = struct {
     /// providers. Provider rank remains root-first, independent of disk order.
     fn findIndexed(self: *LoadedPacks, key: [32]u8, takes: Common.SpecCacheTakes, modules: Common.ProgramModules) Allocator.Error!IndexedResult {
         if (self.index_roots.items.len == 0) return .unavailable;
+        var profile = NativeLookupProfile.Scope.begin(&self.lookup_profile);
+        defer profile.end();
         const allocator = self.allocator;
         const Candidate = struct {
             digest: [32]u8,
@@ -1402,6 +1441,7 @@ pub const LoadedPacks = struct {
         defer candidates.deinit(allocator);
         var cacheable = true;
         for (self.index_roots.items) |root| {
+            profile.enter(.buckets);
             self.index_stats.bucket_opens += 1;
             const group = root.store.indexedIdentity(root.origin, key, @splat(0), .offer);
             const keys = (try self.retentionBatch(root.store)).groupKeys(allocator, group) catch |err| switch (err) {
@@ -1413,6 +1453,7 @@ pub const LoadedPacks = struct {
             };
             defer allocator.free(keys);
             if (keys.len == 0) self.index_stats.bucket_absent += 1;
+            profile.enter(.offers);
             for (keys) |catalog_key| {
                 const owner = try self.recordOwner(root.store.roc_ctx.std_io);
                 const record = root.store.acquireRetained(owner, try self.retentionBatch(root.store), catalog_key, .native_offer_v3) catch |err| switch (err) {
@@ -1443,6 +1484,7 @@ pub const LoadedPacks = struct {
         }
         std.mem.sort(Candidate, candidates.items, {}, Candidate.less);
         for (candidates.items, 0..) |candidate, candidate_index| {
+            profile.enter(.decode);
             self.index_stats.candidates += 1;
             if (candidate_index != 0) self.index_stats.duplicates += 1;
             const offer_record = candidate.record;
@@ -1459,6 +1501,7 @@ pub const LoadedPacks = struct {
             var adopted = false;
             defer if (!adopted) selection.pack.deinit();
             if (takes == .test_dev_code and !selection.pack.specs[0].test_compatible) continue;
+            profile.enter(.metadata);
             const metadata = try self.loadMetadata(store, selection.component) orelse {
                 cacheable = false;
                 continue;
@@ -1470,10 +1513,12 @@ pub const LoadedPacks = struct {
                 cacheable = false;
                 continue;
             }
+            profile.enter(.graph);
             if (!try self.ensureGraph(store, metadata)) {
                 cacheable = false;
                 continue;
             }
+            profile.enter(.eligibility);
             const pack = self.indexed_pack.?;
             var spec = selection.pack.specs[0];
             spec.excerpt = metadata.start.? + selection.index;
@@ -1491,10 +1536,12 @@ pub const LoadedPacks = struct {
                 }
             }
             self.index_stats.requested_artifacts += metadata.pack.set.excerpts.len;
+            profile.enter(.payloads);
             if (!try self.materializeComponent(store, metadata)) {
                 cacheable = false;
                 continue;
             }
+            profile.enter(.install);
             _ = try self.adoptPack(selection.pack);
             adopted = true;
             try self.excerpts.ensureUnusedCapacity(1);
@@ -1948,6 +1995,7 @@ pub const LoadedPacks = struct {
     }
 
     pub fn deinit(self: *LoadedPacks) void {
+        self.lookup_profile.report();
         if (base.dev_diagnostics.isSet(.pack_stats)) {
             const stats = self.index_stats;
             if (self.record_owner) |owner| std.debug.print("pack acquisitions: {any}\n", .{owner.metrics});

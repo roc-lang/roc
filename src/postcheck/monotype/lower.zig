@@ -1296,7 +1296,7 @@ const ParallelCoordinatorTimingScope = struct {
 };
 
 const ResolutionProfile = struct {
-    const Phase = enum { evidence_completion, evidence_encoding, identity, local_lookup, local_reuse, native_lookup, evidence_copy, reservation, body_address, discovery_dispatch, immediate_body, demand_shape };
+    const Phase = enum { evidence_completion, evidence_encoding, identity, local_lookup, local_reuse, native_classification, native_lookup, evidence_copy, reservation, body_address, discovery_dispatch, immediate_body, demand_shape };
     const count = @typeInfo(Phase).@"enum".field_names.len;
     ns: [count]u64 = @splat(0),
     entries: [count]u64 = @splat(0),
@@ -8956,7 +8956,7 @@ const Builder = struct {
             if (request_accounting == .count) self.count("template_misses");
         }
 
-        resolution_profile.enter(.native_lookup);
+        resolution_profile.enter(.native_classification);
         var fn_template = self.fnDefForTemplate(view, template_ref, source_fn_ty, source_fn_key, lower_fn_ty);
         fn_template.evidence_digest = evidence_digest;
         // Only a closed request names a specialization the object cache can
@@ -8993,6 +8993,7 @@ const Builder = struct {
                 const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
                 std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
             }
+            resolution_profile.enter(.native_lookup);
             // A queued discovery request whose outcome an earlier compilation
             // settled is parked below with no body, so answering it consults
             // no cached code, and a program whose every request is settled

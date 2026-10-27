@@ -26543,7 +26543,10 @@ Performance work that needs them on an optimized compiler builds it with
 phases. Nested resolution pauses its parent's phase, and resuming restores
 that phase; these durations must not double-count recursive resolution. Each
 builder owns its counters and prints them on destruction. This is diagnostic
-measurement only and does not alter specialization or cache admission.
+measurement only and does not alter specialization or cache admission. Native
+lookup separates function-type classification from provider queries; the
+provider reports exclusive bucket, offer, metadata, graph, eligibility, payload,
+and installation phases under the same diagnostic.
 
 `ROC_TEST_COMMAND_WORK` prints deterministic test-command counters at exit.
 The specialization, evaluation, runtime LIR, ARC, static-data and native test
