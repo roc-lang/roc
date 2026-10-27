@@ -3815,11 +3815,11 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc install rejects an invalid shorthand", .body = .{ .command = .{ .args = &.{ "install", "Bad_Name", "https://example.com/x/1.0.0/AQmoxbAY7eQfXMbi9XUxBvBGZcxZCs1tdNeFriRRkwSc.tar.zst" }, .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "not a valid shorthand name" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc install rejects a URL without a content hash", .body = .{ .command = .{ .args = &.{ "install", "tool", "https://example.com/tool.tar.zst" }, .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "Invalid URL format or missing hash" }} } } },
     // spellchecker:ignore-next-line
-    .{ .id = 0, .suite = .subcommands, .name = "issue 12353: roc run reports an unknown flag instead of looking for a file", .body = .{ .command = .{ .args = &.{ "run", "--targt=x64mac" }, .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "roc run does not have a `--targt` flag." }, .{ .stream = .stderr, .text = "Did you mean `--target`?" }, .{ .stream = .stderr, .text = "app.roc -- --targt=x64mac" }, .{ .stream = .stderr, .text = "./--targt=x64mac" } }, .not_contains = &.{.{ .stream = .stderr, .text = "file not found" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12353: roc run reports an unknown flag instead of looking for a file", .body = .{ .command = .{ .args = &.{ "run", "--targt=x64mac" }, .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "roc run does not have a `--targt` flag." }, .{ .stream = .stderr, .text = "Did you mean `--target`?" }, .{ .stream = .stderr, .text = "app.roc --targt=x64mac" }, .{ .stream = .stderr, .text = "./--targt=x64mac" } }, .not_contains = &.{.{ .stream = .stderr, .text = "file not found" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc run reports an unknown shorthand", .body = .{ .command = .{ .args = &.{ "run", "nosuchtool" }, .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Nothing is installed under the name" }, .{ .stream = .stderr, .text = "roc install nosuchtool" }, .{ .stream = .stderr, .text = "./nosuchtool" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "bare roc rejects a shorthand and points at roc run", .body = .{ .command = .{ .args = &.{"sometool"}, .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "roc run sometool" }, .{ .stream = .stderr, .text = "./sometool" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc run --help prints run usage", .body = .{ .command = .{ .args = &.{ "run", "--help" }, .contains = &.{.{ .stream = .stdout, .text = "Usage: roc run" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc run rejects --watch for installed shorthands", .body = .{ .command = .{ .args = &.{ "run", "sometool", "--watch" }, .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "--watch is not supported for installed shorthands" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc run rejects --watch for installed shorthands", .body = .{ .command = .{ .args = &.{ "run", "--watch", "sometool" }, .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "--watch is not supported for installed shorthands" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc install/run roundtrip over loopback HTTP", .body = .{ .custom = .install_run_roundtrip } },
     .{ .id = 0, .suite = .subcommands, .name = "URL and platform bundles enforce expanded-size limits during extraction", .body = .{ .custom = .url_bundle_expanded_limit } },
     .{ .id = 0, .suite = .subcommands, .name = "roc install rejects a hash mismatch and leaves no entry", .body = .{ .custom = .install_hash_mismatch } },
@@ -4510,7 +4510,7 @@ fn runInterpreterTest(
     const opt_arg = std.fmt.allocPrint(allocator, "--opt={s}", .{backend.cliName()}) catch
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to allocate opt arg" };
 
-    var argv_buf: [7][]const u8 = undefined;
+    var argv_buf: [6][]const u8 = undefined;
     var argc: usize = 0;
     argv_buf[argc] = roc_binary_path;
     argc += 1;
@@ -4523,11 +4523,9 @@ fn runInterpreterTest(
     switch (platform.test_kind) {
         .native_run => {},
         .io_spec => |io_spec| {
-            // App args go after `--` so the CLI forwards them to the host
-            // instead of parsing them; the host takes `--test <spec>` as two
-            // arguments, matching the built-executable path below.
-            argv_buf[argc] = "--";
-            argc += 1;
+            // App args follow the app's file, so the CLI forwards them to the
+            // host; the host takes `--test <spec>` as two arguments, matching
+            // the built-executable path below.
             argv_buf[argc] = "--test";
             argc += 1;
             argv_buf[argc] = io_spec;
@@ -5001,10 +4999,7 @@ fn buildRocArgv(
         };
         try argv.append(allocator, resolved);
     }
-    if (app_args.len > 0) {
-        try argv.append(allocator, "--");
-        try argv.appendSlice(allocator, app_args);
-    }
+    try argv.appendSlice(allocator, app_args);
     return try argv.toOwnedSlice(allocator);
 }
 
@@ -6611,7 +6606,6 @@ fn customHotReloadDevShim(
         "--no-cache",
         target_arg,
         app_path,
-        "--",
         app_path,
         data_path,
         extra_path,
@@ -7002,7 +6996,6 @@ fn customHotReloadModelBoundary(
         "--no-cache",
         target_arg,
         app_path,
-        "--",
         app_path,
     }, project_root_path, null, child_timeout_ms) catch |err|
         return customInfraFailure(allocator, timer, "model roc --watch spawn error: {}", .{err});
@@ -15728,7 +15721,7 @@ fn customInstallRunRoundtrip(io: std.Io, allocator: Allocator, env: *const CaseE
 
     // 7. Build flags that cannot apply to a prebuilt binary are rejected.
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-        .args = &.{ "run", "hello_tool", "--opt=speed" },
+        .args = &.{ "run", "--opt=speed", "hello_tool" },
         .exit = .failure,
         .contains = &.{.{ .stream = .stderr, .text = "--opt has no effect" }},
     })) |failure| return failure;
