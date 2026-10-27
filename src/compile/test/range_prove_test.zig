@@ -1892,6 +1892,7 @@ const RuleCounts = struct {
     rem_plain: usize = 0,
     is_lt: usize = 0,
     is_lte: usize = 0,
+    is_eq: usize = 0,
 };
 
 var rule_marker: []const u8 = "";
@@ -1920,6 +1921,7 @@ fn countRule(store: *const lir.LirStore, layouts: *const layout.Store) harness.L
             .rem_plain = std.mem.count(u8, text, "num_rem_by("),
             .is_lt = std.mem.count(u8, text, "num_is_lt("),
             .is_lte = std.mem.count(u8, text, "num_is_lte("),
+            .is_eq = std.mem.count(u8, text, "num_is_eq("),
         };
         return;
     }
@@ -2026,6 +2028,24 @@ test "a remainder is below its divisor" {
     try std.testing.expectEqual(@as(usize, 1), dynamic.sub_proven);
     const unrelated = try ruleCounts("calc : U8, U8, U8 -> U8\ncalc = |a, b, c| c - a % b\n", three_bytes, "num_rem_by");
     try std.testing.expectEqual(@as(usize, 1), unrelated.sub_crash);
+}
+
+test "a remainder bounds its divisor only where the remainder ran" {
+    // Mapping an empty list never runs the closure's remainder, so the
+    // divisor can still be zero after the map: `n == 0` stays beside the
+    // map loop's own exit test.
+    const skipped = try ruleCounts("calc : List(U64) -> Bool\ncalc = |xs| {\n    n = xs.len()\n    _ys = xs.map(|i| i % n)\n    n == 0\n}\n", "calc(List.map(_args, Str.count_utf8_bytes))", "num_rem_by");
+    try std.testing.expectEqual(@as(usize, 2), skipped.is_eq);
+    // Every path to the test runs the remainder, so its divisor is nonzero
+    // there even past a merge.
+    const dominated = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| {\n    r = a % b\n    c = if a > 3 { r } else { a }\n    if b == 0 { 1 } else { c }\n}\n", two_bytes, "num_rem_by");
+    try std.testing.expectEqual(@as(usize, 0), dominated.is_eq);
+    // A loop after the remainder keeps its ordering with the divisor, so
+    // `b - r` in the body is proven where `c - r` is not.
+    const looped = try ruleCounts("calc : U8, U8, U8 -> U8\ncalc = |a, b, _c| {\n    r = a % b\n    var $acc = 0\n    for x in [a, b] {\n        $acc = $acc.bitwise_xor(x.bitwise_and(b - r))\n    }\n    $acc\n}\n", three_bytes, "num_rem_by");
+    const looped_unrelated = try ruleCounts("calc : U8, U8, U8 -> U8\ncalc = |a, b, c| {\n    r = a % b\n    var $acc = 0\n    for x in [a, b] {\n        $acc = $acc.bitwise_xor(x.bitwise_and(c - r))\n    }\n    $acc\n}\n", three_bytes, "num_rem_by");
+    try std.testing.expectEqual(looped_unrelated.sub_proven + 1, looped.sub_proven);
+    try std.testing.expectEqual(looped_unrelated.sub_crash, looped.sub_crash + 1);
 }
 
 test "a right shift is at most its operand and a left shift by a constant scales its range" {

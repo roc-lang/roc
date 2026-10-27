@@ -10685,14 +10685,29 @@ would close the result (Row Subsumption). The body's own result follows the
 same rule. A host-boundary row is the exception: it never widens, so it is
 related whole, and a result wider than it is a mismatch (Row Joins).
 
-A source already identical to the destination's residual tail is included
-without equating it to the whole destination row. Independent contributions
-otherwise retain ordinary full-row equality. This preserves
-normal merging of compatible overlapping tags, including overlaps exposed by
-later instantiation. Composition does not introduce general row subsumption
-or reinterpret an annotation that already identifies source and destination.
-The success parameters remain equal. Explicit shared-tail annotations obey
-the same composition rule.
+A TAGLESS open contribution into an unannotated result becomes the result's
+residual tail. The composed row's heads never flow back into it, so a
+forwarded callback's error row stays the callback's own:
+`fetch = |send, url| { response = send(url)?; if response == 0 Err(Bad(url)) else Ok(response) }`
+infers `(a -> Try(ok, err)), a -> Try(ok, [Bad(a), ..err])`, exactly the
+signature an author can annotate, and accepts a callback whose row is closed
+(an annotated value's, Value Rows: Uses Share One Row) without `Bad`.
+Equating the rows instead would write `Bad(a)` into the callback's row, so the
+inferred signature would be strictly less general than an annotation the
+checker accepts. Two tagless contributions share the one tail. A tag the
+source turns out to carry at a use merges with a same-named head whose
+payload agrees and is a mismatch otherwise (Row Union Normalization).
+
+Under an ANNOTATED result the residual tail is the annotation's—rigid, or
+bounded by it—so a tagless source there is a row still being resolved (a
+method checked later, a derived codec) and is related to the whole declared
+row, which checks the tags it resolves to. A source already identical to the
+annotation's residual tail (an explicitly shared tail) is included without
+that relation. Independent contributions with tags retain ordinary full-row
+equality, which preserves normal merging of compatible overlapping tags.
+Composition does not introduce general row subsumption or reinterpret an
+annotation that already identifies source and destination. The success
+parameters remain equal.
 
 The nested-position inventory is one batch traversal, visiting a type-store
 class at most once per position. Its indexed scratch and row buffers retain
@@ -10716,10 +10731,8 @@ with a recursive row. With inclusion,
 infers `(a -> Try(ok, err)), ({} -> Try(ok, b)) -> Try(ok, [BeginFailed(err), ..b])`,
 and `transaction(execute, |{}| execute("INSERT"))` checks at
 `[BeginFailed(err), ..err]`. A body error row that is independent of the
-composed row is related to the residual extension all the same: the tagless
-`?` discrimination above exists so that an independent PROPAGATED row keeps
-merging overlapping compatible tags, whereas the body row is the value the
-function returns, and equating it is exactly the widening this rule removes.
+composed row is related to the residual extension all the same, as a tagless
+`?` contribution's is.
 
 Because the body's checked type and the function's checked result then differ,
 the body's value crosses the explicit return boundary exactly as a `?` return
@@ -13345,8 +13358,9 @@ Other solved-graph mutations:
   result tail. A batch structural inventory records nested
   uses before error-row relations run. A source row used in a payload
   contributes through a fresh spine with unchanged payload identities, and
-  relates its residual tail after visible tags have merged; independent
-  contributions retain full-row equality. A contribution whose source ends in
+  relates its residual tail after visible tags have merged; a tagless
+  contribution into an unannotated result becomes its residual tail, and
+  other independent contributions retain full-row equality. A contribution whose source ends in
   a row still open in a fixpoint (`collectOpenTryRowTails`) waits for that
   fixpoint's boundary (`relateTryRowFixpoint`), where cyclic components
   collapse by ordinary unification before the rest relate as classified. No
@@ -21341,7 +21355,15 @@ change schedules no liveness work.
 Join ownership is a must-property. Each reachable jump site contributes a
 state that can only shrink; a join summary maintains their running
 intersection incrementally, and recomputes the body keep-set from that exact
-meet plus the join parameters the back edges rebind. A parameter counts as
+meet plus the join parameters the back edges rebind and the body reads. An
+ordinary parameter the body never reads before rebinding it is dead where the
+body begins, like every other unit of the meet the body does not read, so it
+stays out of the keep-set and each arrival releases it at its jump, right after
+the value was produced; keeping it would hold the value until the body exits,
+across everything the body does first. A maybe-initialized parameter is always
+placed, conditionally: its producer makes the overwrite of the cell the
+lifetime end of the previous payload, even on a solved-borrowed binding that
+no arrival owns. A parameter counts as
 freshly owned in the body only when every arrival hands it a new unit: back
 edges are excluded from the general meet because they conform at emission by
 releasing down to the keep, but a parameter a back edge leaves alone re-enters
