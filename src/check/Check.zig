@@ -43638,7 +43638,16 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
             .none, .whole => continue,
             .tail => |residual| {
                 tail = residual.var_;
-                if (!residual.nested and !plan.is_body) {
+                // An unannotated result's residual tail is this
+                // composition's own fresh variable, so a tagless source
+                // becomes that tail below and the result's heads never flow
+                // back into it: a forwarded callback's error row stays the
+                // callback's own. An annotated result's residual tail is the
+                // annotation's, rigid or bounded, so a tagless source there
+                // is a row still being resolved (a later-checked method, a
+                // derived codec) and is related to the whole declared row,
+                // which checks the tags it is resolved to.
+                if (frame.expected_result != null and !residual.nested and !plan.is_body) {
                     // An explicitly shared result tail already includes
                     // this source. Equating it with the whole row would
                     // push the result's heads backwards into the source.
@@ -44020,17 +44029,9 @@ fn relateDeferredTryRowEdge(self: *Self, edge: DeferredTryRowEdge, env: *Env) Al
     switch (plan.relation) {
         .none => {},
         .whole => try self.checkReturnRelation(edge.composed, plan.expr, edge.ctx, env),
-        .tail => |source_tail| {
-            if (!source_tail.nested and !plan.is_body) {
-                if (self.types.resolveVar(plan.err).var_ == self.types.resolveVar(residual).var_) return;
-                if ((try self.unifyReturnContribution(edge.composed_err, plan.err, env, edge.ctx)).isProblem()) {
-                    try self.markErroneousValueExpr(plan.expr);
-                }
-                return;
-            }
-            try self.includeTryRowDirected(edge, env);
-        },
-        .projected => try self.includeTryRowDirected(edge, env),
+        // Only an unannotated result defers, so every tagless source here
+        // becomes the result's residual tail, as it does undeferred.
+        .tail, .projected => try self.includeTryRowDirected(edge, env),
     }
 }
 
