@@ -451,6 +451,54 @@ pub const RetentionBatch = struct {
         return artifact;
     }
 
+    /// Acquire a producer-supplied group under bounded shard ownership. Each
+    /// result still owns its individual generation lease and open payload.
+    /// The output has the same order as keys; absence remains per-record.
+    pub fn acquireKeys(self: *RetentionBatch, allocator: Allocator, keys: []const catalog.Key, timestamp: i64) Error![]?Artifact {
+        const result = try allocator.alloc(?Artifact, keys.len);
+        errdefer allocator.free(result);
+        @memset(result, null);
+        errdefer for (result) |*item| if (item.*) |*artifact| artifact.deinit();
+        const order = try allocator.alloc(usize, keys.len);
+        defer allocator.free(order);
+        var counts: [shard_count]usize = @splat(0);
+        for (keys) |key| counts[Store.shardFor(key)] += 1;
+        var starts: [shard_count + 1]usize = @splat(0);
+        for (counts, 0..) |count, i| starts[i + 1] = starts[i] + count;
+        var cursors = starts[0..shard_count].*;
+        for (keys, 0..) |key, i| {
+            const number = Store.shardFor(key);
+            order[cursors[number]] = i;
+            cursors[number] += 1;
+        }
+        for (0..shard_count) |raw_number| {
+            const number: u4 = @intCast(raw_number);
+            var next = starts[number];
+            const end = starts[raw_number + 1];
+            while (next < end) {
+                if (self.counts[number] == catalog.max_changes) try self.flushShard(number);
+                const shard = self.acquireShard(number) catch |err| switch (err) {
+                    error.Missing => break,
+                    else => return err,
+                };
+                defer shard.lock.unlock(self.store.io);
+                // Reuse the retention transaction's existing bound, also when
+                // every item is absent or already has a current timestamp.
+                const limit = next + @min(end - next, catalog.max_changes - self.counts[number]);
+                while (next < limit) : (next += 1) {
+                    const index = order[next];
+                    var observation: ?Observation = null;
+                    result[index] = try self.store.acquireFromShard(keys[index], timestamp, &observation, shard);
+                    if (observation) |value| {
+                        self.pending[number][self.counts[number]] = value;
+                        self.counts[number] += 1;
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
     fn acquireShard(self: *RetentionBatch, number: u4) Error!*Shard {
         if (self.shards[number]) |*shard| {
             shard.lock.lock(self.store.io, .exclusive) catch return error.IoFailure;
@@ -1325,4 +1373,49 @@ test "retention batches discard observations of a retired generation" {
         const ptr = (try tx.find(.artifacts, key)).?;
         try std.testing.expectEqual(20, (try currentMetadata(&tx, key, ptr.value)).used);
     }
+}
+
+test "grouped acquisitions preserve order absence duplicates and generation leases" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmp.dir.realPathFileAlloc(io, ".", a);
+    defer a.free(path);
+    var store = try Store.init(a, io, path);
+    defer store.deinit();
+    var identities: [80]Identity = undefined;
+    for (&identities, 0..) |*id, i| {
+        id.* = .{ .namespace = @splat(7), .family = .local_pack, .group = @splat(if (i < 64) 1 else @intCast(i)), .key = @splat(@intCast(i)) };
+        try store.write(id.*, &.{@intCast(i)}, 1);
+    }
+    var keys: [83]catalog.Key = undefined;
+    for (identities, 0..) |id, i| keys[79 - i] = id.indexedKey();
+    keys[80] = identities[0].indexedKey();
+    var missing = identities[0];
+    missing.key = @splat(255);
+    keys[81] = missing.indexedKey();
+    keys[82] = identities[79].indexedKey();
+    var batch = try RetentionBatch.init(&store);
+    defer batch.deinit();
+    const held = try batch.acquireKeys(a, &keys, 100);
+    defer a.free(held);
+    defer for (held) |*item| if (item.*) |*artifact| artifact.deinit();
+    try std.testing.expect(held[81] == null);
+    for (held, 0..) |item, i| {
+        if (i == 81) continue;
+        const bytes = try item.?.read(a);
+        defer a.free(bytes);
+        const expected: u8 = if (i == 80) 0 else if (i == 82) 79 else @intCast(79 - i);
+        try std.testing.expectEqualSlices(u8, &.{expected}, bytes);
+    }
+    try batch.flush();
+    try store.write(identities[0], "replacement", 200);
+    const old = try held[80].?.read(a);
+    defer a.free(old);
+    try std.testing.expectEqualSlices(u8, &.{0}, old);
+    const current = (try store.read(a, identities[0], 300)).?;
+    defer a.free(current);
+    try std.testing.expectEqualStrings("replacement", current);
+    try std.testing.expectError(error.Busy, store.invalidate(identities[79]));
 }

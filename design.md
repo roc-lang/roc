@@ -27330,6 +27330,18 @@ holds; no pointer into that mapping escapes decoding. Payload acquisition opens
 the file relative to the already owned shard directory, with the same generation
 lease and size validation as absolute-path acquisition.
 
+Native component acquisition may group the exact content addresses supplied by
+validated dependency records. It groups acquisitions by physical shard while
+retaining the input-to-result mapping. Each shard ownership interval acquires at
+most one retention transaction's existing record bound; file reading, hashing,
+and decoding happen after releasing shard ownership. Every acquired artifact
+still retains its individual generation lease and validated content identity.
+Metadata acquisition follows the explicit dependency frontier. Topological and
+source-eligibility validation still precede payload consumption. Payload groups
+contain only dependencies of the selected component, never unrelated historical
+offers. Missing or corrupt members reject the optional offer; allocation failure
+propagates and releases every acquisition not transferred to a record owner.
+
 
 Lambda Solved retains completed erased-callable reachability markings only for
 the exact graph mutation epoch in which a walk made no changes. A later query

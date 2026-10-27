@@ -385,10 +385,17 @@ pub const Store = struct {
     };
 
     fn acquireRetained(self: *const Store, owner: *base.retained_cache.Owner, batch: *compile.artifacts.RetentionBatch, key: [64]u8, kind: base.retained_cache.Kind) (Allocator.Error || error{ Unavailable, Corrupt })!*const base.retained_cache.Record {
-        var acquired = (batch.acquireKey(key, self.read_timestamp) catch |err| switch (err) {
+        const acquired = (batch.acquireKey(key, self.read_timestamp) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.Unavailable,
         }) orelse return error.Unavailable;
+        return self.retainAcquired(owner, acquired, key, kind);
+    }
+
+    /// Consumes an acquisition on success or failure, preserving its exact
+    /// generation lease until the validated record owner releases it.
+    fn retainAcquired(self: *const Store, owner: *base.retained_cache.Owner, value: compile.artifacts.Artifact, key: [64]u8, kind: base.retained_cache.Kind) (Allocator.Error || error{ Unavailable, Corrupt })!*const base.retained_cache.Record {
+        var acquired = value;
         errdefer acquired.deinit();
         const bytes = acquired.read(owner.allocator) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
@@ -1269,7 +1276,6 @@ pub const LoadedPacks = struct {
 
     fn loadMetadata(self: *LoadedPacks, store: *const Store, hash: [32]u8) Allocator.Error!?*IndexedMetadata {
         if (self.metadata.get(hash)) |existing| return existing;
-        const allocator = self.allocator;
         self.index_stats.metadata_opens += 1;
         const owner = try self.recordOwner(store.roc_ctx.std_io);
         const record = store.acquireRetained(owner, try self.retentionBatch(store), store.indexedIdentity(.local, @splat(0), hash, .metadata).indexedKey(), .native_component_v1) catch |err| switch (err) {
@@ -1283,6 +1289,11 @@ pub const LoadedPacks = struct {
                 return null;
             },
         };
+        return self.adoptMetadata(owner, hash, record);
+    }
+
+    fn adoptMetadata(self: *LoadedPacks, owner: *base.retained_cache.Owner, hash: [32]u8, record: *const base.retained_cache.Record) Allocator.Error!?*IndexedMetadata {
+        const allocator = self.allocator;
         self.bytes_loaded +|= record.bytes.len;
         self.index_stats.index_bytes += record.bytes.len;
         self.index_stats.metadata_bytes += record.bytes.len;
@@ -1323,6 +1334,82 @@ pub const LoadedPacks = struct {
         entry.* = .{ .record = record, .pack = pack, .hashes = decoded.hashes, .edges = decoded.edges };
         self.metadata.putAssumeCapacity(hash, entry);
         return entry;
+    }
+
+    /// The graph producer supplies exact content addresses. Grouping changes
+    /// only catalog acquisition; every payload keeps its own hash validation,
+    /// storage generation, and lifetime.
+    fn acquireRecords(self: *LoadedPacks, store: *const Store, hashes: []const [32]u8, comptime kind: Store.IndexedKind) Allocator.Error!?[]?*const base.retained_cache.Record {
+        const allocator = self.allocator;
+        const keys = try allocator.alloc([64]u8, hashes.len);
+        defer allocator.free(keys);
+        for (hashes, keys) |hash, *key| key.* = store.indexedIdentity(.local, @splat(0), hash, kind).indexedKey();
+        const batch = try self.retentionBatch(store);
+        const acquired = batch.acquireKeys(allocator, keys, store.read_timestamp) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null,
+        };
+        defer allocator.free(acquired);
+        defer for (acquired) |*item| if (item.*) |*artifact| artifact.deinit();
+        const records = try allocator.alloc(?*const base.retained_cache.Record, hashes.len);
+        errdefer allocator.free(records);
+        @memset(records, null);
+        const owner = try self.recordOwner(store.roc_ctx.std_io);
+        for (acquired, keys, records) |*item, key, *record| {
+            if (kind == .metadata) self.index_stats.metadata_opens += 1 else self.index_stats.payload_opens += 1;
+            const value = item.* orelse {
+                self.index_stats.missing += 1;
+                continue;
+            };
+            item.* = null;
+            record.* = store.retainAcquired(owner, value, key, if (kind == .metadata) .native_component_v1 else .native_payload_v1) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.Corrupt => blk: {
+                    self.index_stats.corrupt += 1;
+                    break :blk null;
+                },
+                error.Unavailable => blk: {
+                    self.index_stats.missing += 1;
+                    break :blk null;
+                },
+            };
+        }
+        return records;
+    }
+
+    fn acquireGraphMetadata(self: *LoadedPacks, store: *const Store, root: *IndexedMetadata) Allocator.Error!bool {
+        var entries: std.ArrayList(*IndexedMetadata) = .empty;
+        defer entries.deinit(self.allocator);
+        var hashes: std.ArrayList([32]u8) = .empty;
+        defer hashes.deinit(self.allocator);
+        var seen: std.AutoHashMapUnmanaged([32]u8, void) = .empty;
+        defer seen.deinit(self.allocator);
+        try entries.append(self.allocator, root);
+        try seen.put(self.allocator, root.record.digest, {});
+        var next: usize = 0;
+        while (next < entries.items.len) {
+            hashes.clearRetainingCapacity();
+            while (next < entries.items.len) : (next += 1) {
+                const entry = entries.items[next];
+                if (entry.start != null) continue;
+                for (entry.edges) |edge| {
+                    const hash = edge.target.component orelse continue;
+                    if ((try seen.getOrPut(self.allocator, hash)).found_existing) continue;
+                    if (self.metadata.get(hash)) |known| {
+                        try entries.append(self.allocator, known);
+                    } else try hashes.append(self.allocator, hash);
+                }
+            }
+            if (hashes.items.len == 0) break;
+            const records = try self.acquireRecords(store, hashes.items, .metadata) orelse return false;
+            defer self.allocator.free(records);
+            const owner = try self.recordOwner(store.roc_ctx.std_io);
+            for (hashes.items, records) |hash, record| {
+                const entry = try self.adoptMetadata(owner, hash, record orelse return false) orelse return false;
+                try entries.append(self.allocator, entry);
+            }
+        }
+        return true;
     }
 
     /// Append each immutable component once to a coordinator-owned view. Existing
@@ -1389,6 +1476,7 @@ pub const LoadedPacks = struct {
 
     fn ensureGraph(self: *LoadedPacks, store: *const Store, root: *IndexedMetadata) Allocator.Error!bool {
         if (root.start != null) return true;
+        if (!try self.acquireGraphMetadata(store, root)) return false;
         const Frame = struct { entry: *IndexedMetadata, next: usize = 0 };
         var stack = std.ArrayList(Frame).empty;
         defer stack.deinit(self.allocator);
@@ -1426,6 +1514,7 @@ pub const LoadedPacks = struct {
 
     fn materializeComponent(self: *LoadedPacks, store: *const Store, root: *IndexedMetadata) Allocator.Error!bool {
         if (root.materialized) return true;
+        if (!try self.acquireGraphPayloads(store, root)) return false;
         const Frame = struct { entry: *IndexedMetadata, next: usize = 0 };
         var stack = std.ArrayList(Frame).empty;
         defer stack.deinit(self.allocator);
@@ -1457,6 +1546,36 @@ pub const LoadedPacks = struct {
             }
             entry.materialized = true;
             _ = stack.pop();
+        }
+        return true;
+    }
+
+    fn acquireGraphPayloads(self: *LoadedPacks, store: *const Store, root: *IndexedMetadata) Allocator.Error!bool {
+        var entries: std.ArrayList(*IndexedMetadata) = .empty;
+        defer entries.deinit(self.allocator);
+        var seen_entries: std.AutoHashMapUnmanaged(*IndexedMetadata, void) = .empty;
+        defer seen_entries.deinit(self.allocator);
+        var hashes: std.AutoArrayHashMapUnmanaged([32]u8, void) = .empty;
+        defer hashes.deinit(self.allocator);
+        try entries.append(self.allocator, root);
+        while (entries.pop()) |entry| {
+            if (entry.materialized or (try seen_entries.getOrPut(self.allocator, entry)).found_existing) continue;
+            for (entry.hashes) |hash| if (!self.payloads.contains(hash)) {
+                try hashes.put(self.allocator, hash, {});
+            };
+            for (entry.edges) |edge| if (edge.target.component) |hash| {
+                try entries.append(self.allocator, self.metadata.get(hash).?);
+            };
+        }
+        if (hashes.count() == 0) return true;
+        const records = try self.acquireRecords(store, hashes.keys(), .payload) orelse return false;
+        defer self.allocator.free(records);
+        for (hashes.keys(), records) |hash, maybe_record| {
+            const record = maybe_record orelse return false;
+            try self.payloads.put(self.allocator, hash, record);
+            self.bytes_loaded +|= record.bytes.len;
+            self.index_stats.payload_bytes += record.bytes.len;
+            self.index_stats.payload_files += 1;
         }
         return true;
     }
