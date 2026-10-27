@@ -1125,7 +1125,7 @@ fn testNodeRoot(index: u32) Solve.NodeId {
 
 fn typeSummary(ty: Type.TypeId, nodes: *[1]Constraints.Node) Summary {
     nodes.* = .{.{ .mono = ty }};
-    return .{ .constraints = .{ .roots = &.{testNodeRoot(0)}, .nodes = nodes, .open_nodes = &.{}, .kinds = &.{} } };
+    return .{ .constraints = .{ .roots = &.{comptime testNodeRoot(0)}, .nodes = nodes, .open_nodes = &.{}, .kinds = &.{} } };
 }
 
 test "persistent interface composite graph preserves sharing defaults and representation metadata" {
@@ -1281,7 +1281,7 @@ test "persistent interface open variables and defaulted field kinds remain relat
     defer store.deinit();
     const module = try ns.internModuleIdentity(&@as([32]u8, @splat(1)));
     const summary: Summary = .{ .constraints = .{
-        .roots = &.{ testNodeRoot(0), testNodeRoot(0) },
+        .roots = &.{ comptime testNodeRoot(0), comptime testNodeRoot(0) },
         .nodes = &.{.{ .open = 0 }},
         .open_nodes = &.{.{ .content = .{ .unresolved = Solve.InstVariable.checkedVariable(null, null) } }},
         .kinds = &.{.{ .resolved = .{ .defaulted = .{ .module = module, .expr_node = 1 } }, .cells = null }},
@@ -1460,7 +1460,7 @@ test "persistent parametric interfaces retain explicit holes and reject unfinish
         try std.testing.expectEqual(Type.Primitive.str, (try graph.content((try graph.content(instance[0])).list)).primitive);
     }
     const parameter: Summary = .{ .constraints = .{
-        .roots = &.{testNodeRoot(0)},
+        .roots = &.{comptime testNodeRoot(0)},
         .nodes = &.{.{ .open = 0 }},
         .open_nodes = &.{.{ .content = .{ .unresolved = Solve.InstVariable.interfaceParameter() } }},
         .kinds = &.{},

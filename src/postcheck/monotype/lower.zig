@@ -73536,7 +73536,11 @@ test "fresh closed named occurrences agree with persistent replay and preserve o
     const key: [32]u8 = @splat(73);
     const Fixture = struct {
         fn add(store: *checked.CheckedTypeStore, identity: [32]u8, open: bool) Allocator.Error!checked.CheckedTypeId {
-            const backing = try store.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = @splat(3) }, false);
+            // Each alias has its own backing root; a shared identity would
+            // name one already-filled root.
+            var backing_identity = identity;
+            backing_identity[0] ^= 0xff;
+            const backing = try store.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = backing_identity }, false);
             try store.fillSyntheticTypeRoot(std.testing.allocator, backing, .empty_record);
             const id = try store.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = identity }, open);
             try store.fillSyntheticTypeRoot(std.testing.allocator, id, .{ .alias = .{
