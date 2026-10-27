@@ -1675,7 +1675,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     const lifted_input = lifted;
     lifted_owned = false;
     lifted = undefined;
-    var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted_input);
+    var solved = try postcheck.LambdaSolved.Solve.runWithCache(allocator, lifted_input, if (target.spec_cache) |cache| cache.interfaces else null);
     errdefer solved.deinit();
     lambda_solve_timing_scope.end();
 

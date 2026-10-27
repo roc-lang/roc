@@ -27346,3 +27346,15 @@ propagated. A record is not reusable merely because its serialized types match:
 its source, dispatch context, compile-time inputs, and lowering policy must match
 as well. Persisting a completed result does not change the meaning or ownership
 of captures and does not introduce runtime closure dispatch into specialization.
+
+Lambda Solved may reuse a completed analysis only under the exact identity of
+its consumed lifted input. That identity includes the monomorphic type graph,
+name meanings, function signatures and bodies, expression and binding topology,
+capture identities, and ABI, layout, and runtime-schema boundaries. Literal byte
+backings and reporting locations are not solver inputs. The current lifted
+program always supplies executable expressions, literal contents, and reporting
+metadata; an analysis cache never replaces it with an earlier program. Numeric
+ids in an analysis record belong to the precisely identified input tables, not
+to an assumed stable source position. A changed input-table identity invalidates
+the record. This whole-analysis boundary is independent of finer-grained
+specialization body caching.
