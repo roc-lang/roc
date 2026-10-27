@@ -779,6 +779,101 @@ jobs:
             exit 1
           fi
 
+  # roc itself cannot be built on the BSDs (roc-bootstrap ships no LLVM for
+  # them), so the BSD smoke test cross-compiles the builtin platform's hello
+  # world on Linux and runs the executables inside BSD VMs below. OpenBSD is
+  # absent because the builtin platform cannot cross-link it.
+  bsd-build-hello-world:
+    needs: check-changes
+    if: needs.check-changes.outputs.heavy == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
+        with:
+          version: 0.17.0
+          use-cache: false
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
+        with:
+          # See the same step in `minici-build-linux`.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: build release roc
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build build-release
+          retry_count: 3
+
+      - name: cross-compile hello world
+        run: |
+          set -euo pipefail
+
+          mkdir bsd-hello-world
+          for target in x64freebsd x64netbsd; do
+            ./zig-out/bin/roc build --opt=speed --no-cache \
+              --target="$target" --output="bsd-hello-world/hello_$target" \
+              test/echo/hello.roc
+          done
+
+      - name: Upload BSD executables
+        uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
+        with:
+          name: bsd-hello-world
+          path: bsd-hello-world
+          if-no-files-found: error
+          retention-days: 1
+
+  # Runs on a Linux runner, where bsd-action boots the VM under QEMU. The
+  # `cpa.sh` shell runs a step inside the VM.
+  bsd-hello-world:
+    needs: bsd-build-hello-world
+    name: bsd-hello-world (${{ matrix.os }} ${{ matrix.version }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: freebsd
+            version: '15.1'
+            target: x64freebsd
+          - os: netbsd
+            version: '11.0'
+            target: x64netbsd
+    steps:
+      - name: Download BSD executables
+        uses: actions/download-artifact@v8.0.1 # ratchet:actions/download-artifact@v8.0.1
+        with:
+          name: bsd-hello-world
+
+      - name: Start ${{ matrix.os }} VM
+        uses: Anton-4/bsd-action@210435e2d3ab2393c7cad5c69014330efadd8f39 # master
+        with:
+          operating_system: ${{ matrix.os }}
+          version: ${{ matrix.version }}
+
+      - name: run hello world
+        shell: cpa.sh {0}
+        run: |
+          set -eu
+
+          chmod +x ./hello_${{ matrix.target }}
+          output="$(./hello_${{ matrix.target }})"
+          echo "$output"
+
+          if [ "$output" != "Hello, World!" ]; then
+            echo "Expected 'Hello, World!' but got '$output'."
+            exit 1
+          fi
+
   finish:
     needs:
       - check-changes
@@ -791,6 +886,8 @@ jobs:
       - minici-build-windows
       - minici-windows
       - arm64-linux-hello-world
+      - bsd-build-hello-world
+      - bsd-hello-world
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     if: always()
@@ -813,6 +910,8 @@ jobs:
           BUILD_WINDOWS: ${{ needs.minici-build-windows.result }}
           MINICI_WINDOWS: ${{ needs.minici-windows.result }}
           ARM64_HELLO_WORLD: ${{ needs.arm64-linux-hello-world.result }}
+          BSD_BUILD_HELLO_WORLD: ${{ needs.bsd-build-hello-world.result }}
+          BSD_HELLO_WORLD: ${{ needs.bsd-hello-world.result }}
         run: |
           set -euo pipefail
           failed=0
@@ -834,6 +933,8 @@ jobs:
             expect minici-build-linux "$BUILD_LINUX" success
             expect minici-linux "$MINICI_LINUX" success
             expect arm64-linux-hello-world "$ARM64_HELLO_WORLD" success
+            expect bsd-build-hello-world "$BSD_BUILD_HELLO_WORLD" success
+            expect bsd-hello-world "$BSD_HELLO_WORLD" success
 
             if [ "$DRAFT" = true ]; then
               scarce=skipped

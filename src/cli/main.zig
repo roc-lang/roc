@@ -699,6 +699,11 @@ const EmbeddedTargetObjects = struct {
     /// program works wherever a standalone dev build works at all.
     boxy_runtime: ?[]const u8 = null,
     boxy_runtime_digest: ?[32]u8 = null,
+    /// A wasm target's builtins and boxy runtime for platforms that reserve
+    /// low memory, whose runtime functions check the stack bounds wherever
+    /// they recurse (`builtins.stack_guard`).
+    builtins_extern_stack_checked: ?[]const u8 = null,
+    boxy_runtime_stack_checked: ?[]const u8 = null,
 
     const DefaultPlatform = enum { none, runtime, runtime_and_compiler_rt };
 
@@ -721,6 +726,10 @@ const EmbeddedTargetObjects = struct {
             .boxy_runtime_digest = embeddedBlake3("boxy_runtime_" ++ name),
             .boxy_runtime = embedded(dir ++ "roc_boxy_runtime" ++ ext),
         };
+        if (target.toCpuArch() == .wasm32) {
+            objects.builtins_extern_stack_checked = embedded(dir ++ "roc_builtins_extern_stack_checked.o");
+            objects.boxy_runtime_stack_checked = embedded(dir ++ "roc_boxy_runtime_stack_checked.o");
+        }
         switch (default_platform) {
             .none => {},
             .runtime, .runtime_and_compiler_rt => {
@@ -7597,6 +7606,26 @@ fn bundleArchivePath(
     return relative_path;
 }
 
+/// The `main.roc` among `source_paths` that roots a bundle: the one whose
+/// directory contains every other `main.roc` given, such as the headers of
+/// local packages it depends on. Null when no `main.roc` qualifies.
+fn bundleRootMain(allocator: Allocator, source_paths: []const []const u8) Allocator.Error!?[]const u8 {
+    for (source_paths) |candidate| {
+        if (!std.mem.eql(u8, std.fs.path.basename(candidate), "main.roc")) continue;
+        const candidate_dir = std.fs.path.dirname(candidate) orelse continue;
+        const contains_every_main = for (source_paths) |other| {
+            if (!std.mem.eql(u8, std.fs.path.basename(other), "main.roc")) continue;
+            const relative_path = bundleArchivePath(allocator, candidate_dir, other) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidPath => break false,
+            };
+            allocator.free(relative_path);
+        } else true;
+        if (contains_every_main) return candidate;
+    }
+    return null;
+}
+
 /// Bundles a roc package and its dependencies into a compressed tar archive
 pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     const stdout = ctx.io.stdout();
@@ -7627,11 +7656,6 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     // If no paths provided, default to "main.roc"
     const paths_to_use = if (args.paths.len == 0) &[_][]const u8{"main.roc"} else args.paths;
 
-    // Find the first .roc file to use as entry point for module discovery
-    const first_roc_index: ?usize = for (paths_to_use, 0..) |path, index| {
-        if (std.mem.endsWith(u8, path, ".roc")) break index;
-    } else null;
-
     // Resolve every explicitly requested file exactly once. Discovered module
     // paths are already absolute, so all following work uses one path form.
     for (paths_to_use) |path| {
@@ -7642,7 +7666,16 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
         try source_paths.append(ctx.arena, abs_path);
     }
 
-    const entry_source_path = source_paths.items[first_roc_index orelse 0];
+    // Consumers load a fetched bundle from its root directory's `main.roc`,
+    // so that file is the package root the bundle is built and laid out
+    // from, wherever it appears among the arguments.
+    const entry_source_path = try bundleRootMain(ctx.arena, source_paths.items) orelse {
+        try stderr.print(
+            "Error: A bundle must include its package's main.roc, in a directory containing every other main.roc given. Consumers load the bundle from that main.roc.\n",
+            .{},
+        );
+        return error.InvalidPath;
+    };
     const bundle_root_path = std.fs.path.dirname(entry_source_path) orelse {
         try stderr.print("Error: Could not determine the directory containing entry point '{s}'.\n", .{entry_source_path});
         return error.InvalidPath;
@@ -7650,9 +7683,7 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
 
     // Discover transitive modules and their recorded file imports, including
     // modules exposed by a `package [...]` header, and add their source paths.
-    if (first_roc_index != null) {
-        try discoverAndAddBundleInputs(ctx, entry_source_path, &source_paths, stderr);
-    }
+    try discoverAndAddBundleInputs(ctx, entry_source_path, &source_paths, stderr);
 
     var entries = std.ArrayList(bundle.Entry).empty;
     defer entries.deinit(ctx.arena);
@@ -9961,6 +9992,7 @@ fn writeSealedWasmObject(
     lir_result: *const lir.Program.Result,
     public_definitions: []const []const u8,
     allowed_undefined_functions: []const []const u8,
+    stack_checks: bool,
 ) CliMainError![]const u8 {
     const unsealed_bytes = try module.encodeRelocatable(ctx.gpa);
     defer ctx.gpa.free(unsealed_bytes);
@@ -9974,24 +10006,49 @@ fn writeSealedWasmObject(
     try compiler_inputs.append(unsealed_path);
     try compiler_inputs.append(compiler_rt_path);
     if (lirResultNeedsBoxyRuntime(lir_result)) {
-        const runtime_bytes = EmbeddedTargetObjects.forTarget(target).boxy_runtime orelse return error.UnsupportedTarget;
+        const objects = EmbeddedTargetObjects.forTarget(target);
+        const runtime_bytes = (if (stack_checks) objects.boxy_runtime_stack_checked else objects.boxy_runtime) orelse return error.UnsupportedTarget;
         const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_boxy_runtime_support.o" });
         backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, runtime_bytes) catch return error.WasmOutputWriteFailed;
         try compiler_inputs.append(runtime_path);
+    }
+    var sealed_public_definitions = public_definitions;
+    const stack_support = backend.wasm.StackSupport.Contents{
+        .accessors = target.cpuLevel() == .v1,
+        .overflow = stack_checks,
+    };
+    if (stack_support.accessors or stack_support.overflow) {
+        const support_bytes = try backend.wasm.StackSupport.encodeObject(ctx.gpa, stack_support);
+        defer ctx.gpa.free(support_bytes);
+        const support_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_stack_support.o" });
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, support_path, support_bytes) catch return error.WasmOutputWriteFailed;
+        try compiler_inputs.append(support_path);
+    }
+    if (stack_support.accessors) {
+        const accessor_names = [_][]const u8{ shim_symbols.roc_wasm_stack_pointer, shim_symbols.roc_wasm_set_stack_pointer };
+        sealed_public_definitions = try std.mem.concat(ctx.arena, []const u8, &.{ public_definitions, &accessor_names });
     }
     const composed_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_app_composed_wasm32.o" });
     linker.linkWasmObjectsRelocatable(ctx, composed_path, compiler_inputs.items) catch |err| {
         return failLink(ctx, err, "wasm32");
     };
 
-    const composed_bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, composed_path, ctx.gpa, .unlimited);
+    var composed_bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, composed_path, ctx.gpa, .unlimited);
     defer ctx.gpa.free(composed_bytes);
+    // Every compiler-owned definition is composed now, so every frame size a
+    // stack-bound check depends on is known.
+    if (stack_checks) {
+        if (try backend.wasm.StackRoom.fillCheckRooms(ctx.gpa, composed_bytes)) |filled| {
+            ctx.gpa.free(composed_bytes);
+            composed_bytes = filled;
+        }
+    }
     var sealed_module = backend.wasm.WasmModule.preload(ctx.gpa, composed_bytes, .relocatable_for_sealing) catch |err| {
         std.log.err("Failed to inspect composed Roc wasm object {s}: {}", .{ composed_path, err });
         return err;
     };
     defer sealed_module.deinit();
-    try sealed_module.sealRocObject(public_definitions, allowed_undefined_functions);
+    try sealed_module.sealRocObject(sealed_public_definitions, allowed_undefined_functions);
     try sealed_module.verifyNoLinkObjectContract();
     try sealed_module.patchRelocatableSymbolFlags(composed_bytes);
     const output_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, output_filename });
@@ -10280,6 +10337,7 @@ fn writeDevWasmObject(
     linked_packs: []const *const backend.dev.PackFile.ObjectPack,
     target: RocTarget,
     executor: ?base.post_check_task_executor.Executor,
+    stack_checks: bool,
 ) CliMainError![]const u8 {
     if (entrypoints.len == 0) {
         base.invariant("wasm object invariant violated: no exported platform entrypoints", .{});
@@ -10314,10 +10372,12 @@ fn writeDevWasmObject(
     // Register the runtime and hosted symbol imports while the module has no
     // defined functions yet; a function import added later would shift every
     // defined function index.
+    if (stack_checks) try codegen.configureStackChecks(try staticDataFunctionPointerTargets(ctx, static_data_exports));
     try codegen.registerHostedSymbolTargets(lowered.lir_result.store.getProcSpecs());
     if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) try codegen.registerBoxySymbolTargets();
 
-    const builtins_bytes = EmbeddedTargetObjects.forTarget(target).builtins_extern;
+    const target_objects = EmbeddedTargetObjects.forTarget(target);
+    const builtins_bytes = if (stack_checks) target_objects.builtins_extern_stack_checked.? else target_objects.builtins_extern;
     if (builtins_bytes.len > 0) {
         var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, .relocatable_for_merge) catch |err| {
             std.log.err("Failed to preload wasm builtins: {}", .{err});
@@ -10385,7 +10445,27 @@ fn writeDevWasmObject(
         &lowered.lir_result,
         try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
         pack_imports.items,
+        stack_checks,
     );
+}
+
+/// Whether code compiled for a wasm platform must check its stack bounds:
+/// only when the platform reserves low memory, so the stack cannot sit at
+/// address 0 where an overflow traps by itself.
+fn wasmStackChecks(wasm: ?roc_target.WasmTargetConfig) bool {
+    const config = wasm orelse return false;
+    return config.reservesLowMemory();
+}
+
+/// The functions static data calls through the function table, by symbol.
+fn staticDataFunctionPointerTargets(ctx: *CliCtx, static_data_exports: []const backend.StaticDataExport) Allocator.Error![]const []const u8 {
+    var names = std.ArrayList([]const u8).empty;
+    for (static_data_exports) |data_export| {
+        for (data_export.relocations) |relocation| {
+            if (relocation.kind == .function_pointer) try names.append(ctx.arena, relocation.target_symbol_name);
+        }
+    }
+    return names.toOwnedSlice(ctx.arena);
 }
 
 /// Links one relocatable wasm app object against the platform's wasm inputs
@@ -10401,6 +10481,21 @@ fn linkWasmOutput(
 ) CliMainError!void {
     const object_files = try ctx.arena.alloc([]const u8, 1);
     object_files[0] = obj_path;
+    const stack_size = configuredWasmStackBytes(args, link_inputs.wasm);
+    const global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null;
+    const maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null;
+    switch (linker.wasmStackLayout(global_base)) {
+        .stack_first => if (maximum_memory) |bytes| {
+            const limit = linker.stackFirstMaximumMemory(stack_size);
+            if (bytes > limit) return ctx.fail(.{ .wasm_maximum_memory_too_large = .{
+                .target = link_inputs.target_name,
+                .maximum_memory = bytes,
+                .limit = limit,
+                .stack_size = stack_size,
+            } });
+        },
+        .data_first => {},
+    }
     const link_config = linker.LinkConfig{
         .target_format = .wasm,
         .target_abi = null,
@@ -10414,14 +10509,14 @@ fn linkWasmOutput(
         .can_exit_early = false,
         .disable_output = false,
         .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
-        .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
-        .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
+        .wasm_maximum_memory = maximum_memory,
+        .wasm_stack_size = stack_size,
         .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
         .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
         .wasm_debug_info = args.debug,
         .wasm_optimize = wasmOptimizeMode(args.opt),
         .wasm_cpu_level = target.cpuLevel(),
-        .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
+        .wasm_global_base = global_base,
         .wasm_exports = requiredWasmPlatformExports(link_inputs),
         .platform_files_dir = link_inputs.platform_files_dir,
         .scratch_dir = scratch_dir,
@@ -10450,6 +10545,7 @@ fn rocBuildWasm(
     }
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
+    const stack_checks = wasmStackChecks(link_inputs.wasm);
 
     // The intermediate objects have fixed names, so concurrent builds sharing
     // one directory would link each other's half-written files.
@@ -10461,7 +10557,7 @@ fn rocBuildWasm(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const obj_path = try writeDevWasmObject(ctx, scratch_dir, lowered, entrypoints, static_data_exports, linked_packs, target, executor);
+        const obj_path = try writeDevWasmObject(ctx, scratch_dir, lowered, entrypoints, static_data_exports, linked_packs, target, executor, stack_checks);
         try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{obj_path});
         return;
     }
@@ -10483,6 +10579,7 @@ fn rocBuildWasm(
         linked_packs,
         target,
         executor,
+        stack_checks,
     );
 
     try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, obj_path, scratch_dir);
@@ -10808,6 +10905,9 @@ fn compileLlvmAppObject(
     static_data_exports: []const backend.StaticDataExport,
     enable_default_platform_runtime: bool,
     enable_default_platform_hosted_calls: bool,
+    // Whether the program is for a wasm platform that reserves low memory,
+    // so generated code and the linked builtins check the stack bounds.
+    stack_checks: bool,
     // When present, the caller has an active "LLVM IR Generation" phase covering
     // LIR-to-bitcode lowering; this transitions it to a distinct
     // "LLVM Optimize + Emit" phase at the point LLVM takes over the bitcode.
@@ -10835,6 +10935,7 @@ fn compileLlvmAppObject(
         codegen.enable_default_platform_runtime = enable_default_platform_runtime;
         codegen.enable_default_platform_hosted_calls = enable_default_platform_hosted_calls;
         codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and emit_debug_info;
+        codegen.stack_checks = stack_checks;
         codegen.debug_producer = "roc " ++ @import("compiler_version").compiler_version;
         defer codegen.deinit();
 
@@ -10909,6 +11010,7 @@ fn compileLlvmAppObject(
             // through extern symbols, never through a RocOps parameter.
             .host_call_extern = true,
             .sha256_rounds = Sha256Rounds.forCpu(std_target.cpu),
+            .stack_checked = stack_checks,
         },
         .pic = pic,
         .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
@@ -10969,6 +11071,7 @@ fn writeCombinedLlvmWasmObject(
     static_data_exports: []const backend.StaticDataExport,
     opt: cli_args.OptLevel,
     owned_inputs: *std.ArrayList([]u8),
+    stack_checks: bool,
 ) CliMainError![]const u8 {
     var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
     defer wasm_module.deinit();
@@ -10994,6 +11097,7 @@ fn writeCombinedLlvmWasmObject(
         lir_result,
         try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
         try wasmRocHostRequirements(ctx.arena, &lir_result.store),
+        stack_checks,
     );
 }
 
@@ -11014,6 +11118,7 @@ fn rocBuildWasmLlvm(
         base.invariant("LLVM wasm build invariant violated: no exported platform entrypoints", .{});
     }
 
+    const stack_checks = wasmStackChecks(if (targets_config.getLinkSpec(target)) |spec| spec.wasm else null);
     const app_object = try compileLlvmAppObject(
         ctx,
         args,
@@ -11024,6 +11129,7 @@ fn rocBuildWasmLlvm(
         static_data_exports,
         false,
         false,
+        stack_checks,
         reporter,
     );
     defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
@@ -11038,7 +11144,7 @@ fn rocBuildWasmLlvm(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
+        const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs, stack_checks);
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, &.{combined_obj});
         return;
     }
@@ -11048,7 +11154,7 @@ fn rocBuildWasmLlvm(
         return error.UnsupportedTarget;
     }
 
-    const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
+    const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs, stack_checks);
     try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, combined_obj, app_object.artifact_dir);
 }
 
@@ -11446,6 +11552,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
             static_data_exports,
             enable_default_platform_runtime,
             args.synthetic_default_platform,
+            false,
             &reporter,
         );
 
@@ -11638,7 +11745,14 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // place of compiling the procedures they offer.
     var linked_stores: ?pack_store.LinkedStores = null;
     defer if (linked_stores) |*stores| stores.deinit();
-    if (object_cache_enabled and llvm_available) {
+    // Object packs hold code compiled without stack-bound checks, so a
+    // program for a platform that reserves low memory links none and
+    // compiles every procedure itself.
+    const header_targets_config = build_env.getPlatformTargetsConfig() orelse {
+        base.invariant("roc build invariant violated: a resolved platform has no targets config", .{});
+    };
+    const reserves_low_memory = target_arch == .wasm32 and wasmStackChecks(if (header_targets_config.getLinkSpec(target)) |spec| spec.wasm else null);
+    if (object_cache_enabled and llvm_available and !reserves_low_memory) {
         const store_config = CacheConfig{ .enabled = true, .verbose = args.verbose, .roc_ctx = ctx.coreCtx() };
         linked_stores = initLinkedStores(ctx.gpa, store_config, target) catch |err| {
             std.log.warn("object cache unavailable: {}", .{err});

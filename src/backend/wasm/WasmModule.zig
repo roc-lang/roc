@@ -2504,7 +2504,11 @@ pub fn sealRocObject(
                         return error.UnexpectedUndefinedSymbol;
                     }
                 },
-                .data, .section, .event => return error.UnexpectedUndefinedSymbol,
+                .data => {
+                    const data_name = name orelse return error.UnexpectedUndefinedSymbol;
+                    if (!isAllowedObjectAbiData(data_name)) return error.UnexpectedUndefinedSymbol;
+                },
+                .section, .event => return error.UnexpectedUndefinedSymbol,
             }
         }
     }
@@ -2618,9 +2622,16 @@ pub fn verifyNoLinkObjectContract(self: *const Self) NoLinkObjectContractError!v
             .function => {},
             .global => if (!isAllowedObjectAbiGlobal(name)) return error.UnexpectedUndefinedSymbol,
             .table => if (!std.mem.eql(u8, name, "__indirect_function_table")) return error.UnexpectedUndefinedSymbol,
-            .data, .section, .event => return error.UnexpectedUndefinedSymbol,
+            .data => if (!isAllowedObjectAbiData(name)) return error.UnexpectedUndefinedSymbol,
+            .section, .event => return error.UnexpectedUndefinedSymbol,
         }
     }
+}
+
+/// The only data a sealed object may leave undefined: the linker-defined
+/// bottom of the stack, which stack-bound checks compare against.
+fn isAllowedObjectAbiData(name: []const u8) bool {
+    return std.mem.eql(u8, name, "__stack_low");
 }
 
 fn isAllowedObjectAbiGlobal(name: []const u8) bool {

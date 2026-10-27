@@ -1965,6 +1965,14 @@ checker recovery. The recovery rules:
   A relation over values that are not erroneous keeps its report: genuine
   independent errors, such as `Str.concat(1.U8, "x")` or `[1.U8, "s"]` beside
   such a cascade, are still reported.
+- A definition whose generalization a method conflict rejects (Static
+  Dispatch At The Checked Boundary, "Evidence params") is retired, with every
+  other definition its boundary generalizes: each right-hand side becomes the
+  runtime error and each binder binds nothing, so every use is erroneous at
+  the use, in this module and, through the checked artifact's `checked_error`
+  procedure bindings, in every module that imports it. Poisoning the receiver
+  alone would leave a lambda whose parameter type is erroneous, which
+  post-check lowering instantiates.
 - An uninitialized `var` whose annotation contains an error binds nothing:
   its binders are erroneous and the declaration is a runtime error.
 - An expression statement whose expression's checked type contains an error
@@ -7133,7 +7141,7 @@ stores the built value into it. A worker reads the value from its captured slot
 once on entry, before any of its code runs, and keeps the slot in scope for the
 callables it builds that capture the binder too.
 
-The settled-state occurs sweep rejects an anonymous-recursive or infinite type
+The settled infinite-type check rejects an anonymous-recursive or infinite type
 at a local binding root. The root's initializer has the rejected type and its
 binders carry parts of it, so the statement and every use of its binders
 become runtime errors, as for a rejected pattern/RHS relation.
@@ -11403,14 +11411,29 @@ would close the result (Row Subsumption). The body's own result follows the
 same rule. A host-boundary row is the exception: it never widens, so it is
 related whole, and a result wider than it is a mismatch (Row Joins).
 
-A source already identical to the destination's residual tail is included
-without equating it to the whole destination row. Independent contributions
-otherwise retain ordinary full-row equality. This preserves
-normal merging of compatible overlapping tags, including overlaps exposed by
-later instantiation. Composition does not introduce general row subsumption
-or reinterpret an annotation that already identifies source and destination.
-The success parameters remain equal. Explicit shared-tail annotations obey
-the same composition rule.
+A TAGLESS open contribution into an unannotated result becomes the result's
+residual tail. The composed row's heads never flow back into it, so a
+forwarded callback's error row stays the callback's own:
+`fetch = |send, url| { response = send(url)?; if response == 0 Err(Bad(url)) else Ok(response) }`
+infers `(a -> Try(ok, err)), a -> Try(ok, [Bad(a), ..err])`, exactly the
+signature an author can annotate, and accepts a callback whose row is closed
+(an annotated value's, Value Rows: Uses Share One Row) without `Bad`.
+Equating the rows instead would write `Bad(a)` into the callback's row, so the
+inferred signature would be strictly less general than an annotation the
+checker accepts. Two tagless contributions share the one tail. A tag the
+source turns out to carry at a use merges with a same-named head whose
+payload agrees and is a mismatch otherwise (Row Union Normalization).
+
+Under an ANNOTATED result the residual tail is the annotation's—rigid, or
+bounded by it—so a tagless source there is a row still being resolved (a
+method checked later, a derived codec) and is related to the whole declared
+row, which checks the tags it resolves to. A source already identical to the
+annotation's residual tail (an explicitly shared tail) is included without
+that relation. Independent contributions with tags retain ordinary full-row
+equality, which preserves normal merging of compatible overlapping tags.
+Composition does not introduce general row subsumption or reinterpret an
+annotation that already identifies source and destination. The success
+parameters remain equal.
 
 The nested-position inventory is one batch traversal, visiting a type-store
 class at most once per position. Its indexed scratch and row buffers retain
@@ -11434,10 +11457,8 @@ with a recursive row. With inclusion,
 infers `(a -> Try(ok, err)), ({} -> Try(ok, b)) -> Try(ok, [BeginFailed(err), ..b])`,
 and `transaction(execute, |{}| execute("INSERT"))` checks at
 `[BeginFailed(err), ..err]`. A body error row that is independent of the
-composed row is related to the residual extension all the same: the tagless
-`?` discrimination above exists so that an independent PROPAGATED row keeps
-merging overlapping compatible tags, whereas the body row is the value the
-function returns, and equating it is exactly the widening this rule removes.
+composed row is related to the residual extension all the same, as a tagless
+`?` contribution's is.
 
 Because the body's checked type and the function's checked result then differ,
 the body's value crosses the explicit return boundary exactly as a `?` return
@@ -11589,6 +11610,21 @@ stands for every empty row, so an empty error row is widened by pointing its
 position—the `Err` payload and the `Try` argument—at the request's row rather
 than by rewriting the node.
 
+When the closed row ends in a variable the template QUANTIFIES, and nothing
+else in the template's type reaches that variable—no argument, payload or
+other position—the variable is determined by the result alone
+(`requestDeterminedResultRowVariable`). The specialization's substitution
+gives that slot a fresh cell instead of the variable the use site recorded
+(`requestDeterminedSubstitution`), so relating the template's root to the
+request binds it to the request's row, and the root and the body read that
+row. Nothing is widened in place. The recorded variable is the USE's own
+row. For a reference inside the template's own recursive group, the checker
+records no instantiation, so it is the enclosing specialization's binding,
+which can be narrower than the row the request's result flows into. Seeding
+the template with it and widening afterwards would rewrite cells that other
+types share, such as an indexed nominal backing, while the body still read
+the narrower row.
+
 The set of positions a use may WIDEN is kept within the row coercion's reach
 by construction rather than by a second rule that could drift: polarity's
 per-use opening is withheld at generation time from every position outside
@@ -11663,6 +11699,26 @@ is normalized without a second list to keep in step.
 The settled walk owns isolated scratch shared across all its output roots and
 released when the walk ends. Its module-sized visited set must not enlarge the
 common checker scratch used by subsequent small queries.
+
+The same walk is the checked module's infinite-type check. No checked type is
+infinite or anonymously recursive: a cycle in a type must pass through a
+nominal's backing, and the value graph sees a nominal application's arguments
+only, so every cycle the walk can close through structure is rejected. The walk
+is depth-first and marks each variable in progress until everything it reaches
+through structure is done, so an edge back to an in-progress variable is
+exactly such a cycle, found whichever root reaches it first. A type
+variable's method requirements and a function's effect dependencies are not
+part of a type's structure: the walk visits their types as roots of their own
+once nothing is in progress, so a requirement that refers back to its receiver
+(`a.plus : a, a -> a`) closes no cycle while a cycle inside a requirement's
+own types still does. A module without an infinite type pays only the walk it
+already makes for rows. When the walk closed a cycle, each binding root
+(the REPL expression, then local bindings, then definitions) is checked with
+the occurs check, which follows the same edges, and the tightest root whose
+type reaches a cycle reports it by name and becomes `.err`. A cycle no
+rejected root's type reaches, such as one in a lambda passed straight to a
+call, is reported at the output root whose walk found it, and one of the
+cycle's variables becomes `.err` after every report has its snapshot.
 
 Normalization needs no metadata on type variables and adds no work where no
 label repeats: detection rides on the unifier's gather,
@@ -14036,8 +14092,9 @@ Other solved-graph mutations:
   result tail. A batch structural inventory records nested
   uses before error-row relations run. A source row used in a payload
   contributes through a fresh spine with unchanged payload identities, and
-  relates its residual tail after visible tags have merged; independent
-  contributions retain full-row equality. A contribution whose source ends in
+  relates its residual tail after visible tags have merged; a tagless
+  contribution into an unannotated result becomes its residual tail, and
+  other independent contributions retain full-row equality. A contribution whose source ends in
   a row still open in a fixpoint (`collectOpenTryRowTails`) waits for that
   fixpoint's boundary (`relateTryRowFixpoint`), where cyclic components
   collapse by ordinary unification before the rest relate as classified. No
@@ -14157,10 +14214,12 @@ Other solved-graph mutations:
   generalized, as declared in Static Dispatch At The Checked Boundary
   ("Evidence params"). Each same-name callable pair on a receiver still flex
   at the boundary's rank is related through an ordinary committed probe; a
-  probe that cannot establish the pair rolls back, reports the method
-  conflict, and poisons the receiver. A relation that defers checks is
-  redone after recording the two method types, so a deferred check that later
-  fails reports the method conflict and poisons the definition.
+  probe that cannot establish the pair, or that makes the related callable's
+  type infinite, rolls back, reports the method conflict, poisons the
+  receiver, and retires every definition the boundary generalizes. A relation
+  that defers checks is redone after recording the two method types and the
+  boundary's definitions, so a deferred check that later fails reports the
+  method conflict and retires those definitions.
 - `deduplicateGeneralizedDispatchRequirements` (`setVarContent` of a retained
   constraint list, `unifyEquivalentGeneralizedCallables` committed probe)—
   policy: evidence-param collapse of same-shape requirements as declared in
@@ -17623,11 +17682,20 @@ when a receiver is still a type variable at its definition's generalization
 boundary, its requirements of one method become one requirement: the boundary
 relates their callables before it defaults literals and generalizes, and an
 inferred scheme never holds two requirements of one method on one type.
-Requirements that cannot be one are a type mismatch. The report says the use
+Requirements that cannot be one are a type mismatch. That includes a relation
+that would make the method's type infinite, which no type can be (two uses of
+`row.i32()` whose results must be both `a` and `{ id: a }`); unification
+admits the cycle, so the boundary checks the related callable for one and
+rolls the relation back, unless either callable's type was already infinite,
+which the settled walk reports instead. The report says the use
 requires the type to have two different methods of that name and shows both
 method types, at the use that introduced the second requirement, or at the
 definition when another definition introduced it; the receiver is poisoned so
-it reports nothing further. An annotation that declares two such requirements
+it reports nothing further, and every definition the boundary generalizes is
+retired: the receiver belongs to the type they share, so none of them has a
+type to run under (Every Rejection Is Explicit Recovery). When relating the
+requirements defers checks onto the types it related, a deferred check that
+later fails is that same mismatch and retires the same definitions. An annotation that declares two such requirements
 is the same mismatch, reported at the second requirement. A requirement a
 use copies out of a definition's type fails at that use, not inside the
 definition: its report shows the code in the definition that introduced it,
@@ -22173,7 +22241,15 @@ change schedules no liveness work.
 Join ownership is a must-property. Each reachable jump site contributes a
 state that can only shrink; a join summary maintains their running
 intersection incrementally, and recomputes the body keep-set from that exact
-meet plus the join parameters the back edges rebind. A parameter counts as
+meet plus the join parameters the back edges rebind and the body reads. An
+ordinary parameter the body never reads before rebinding it is dead where the
+body begins, like every other unit of the meet the body does not read, so it
+stays out of the keep-set and each arrival releases it at its jump, right after
+the value was produced; keeping it would hold the value until the body exits,
+across everything the body does first. A maybe-initialized parameter is always
+placed, conditionally: its producer makes the overwrite of the cell the
+lifetime end of the previous payload, even on a solved-borrowed binding that
+no arrival owns. A parameter counts as
 freshly owned in the body only when every arrival hands it a new unit: back
 edges are excluded from the general meet because they conform at emission by
 releasing down to the keep, but a parameter a back edge leaves alone re-enters
@@ -25717,6 +25793,64 @@ final linked module. Every declared export must resolve to a defined function
 during the final link. Undefined functions referenced by the linked objects may
 remain host imports, but the linker must not treat a missing declared export as
 such an import or silently discard it.
+
+A wasm target's `global_base` is the first address the Roc program may use;
+the host owns every address below it, so it is at least 1. Whether a target
+has one selects the stack layout (`linker.wasmStackLayout`), and nothing else
+does: the layout follows from which addresses the host owns, never from a
+separate switch or a guess. The header shows it before a `global_base` naming
+a constant resolves (`WasmTargetConfig.reservesLowMemory`), so a build knows
+before checking whether its procedures may come from object packs.
+
+- Without `global_base`, the link is `--stack-first`: the stack occupies the
+  lowest addresses and an overflow wraps the stack pointer below 0, where the
+  first write traps. Detection costs nothing at runtime, and no code checks
+  anything. The module's maximum memory is at most 4 GiB minus the stack size,
+  so the addresses a wrapped stack pointer reaches are never memory; a
+  platform's larger `maximum_memory` is a reported configuration error.
+- With `global_base`, the link is `--no-stack-first` with static data at
+  `global_base` and the stack above it, where nothing traps an overflow. Code
+  compiled for the platform checks the stack bounds wherever the stack can grow
+  without limit: in every host entry wrapper, in every function the function
+  table holds (builtins and the runtime call back into those on cycles code
+  generation cannot see), and in every function with a frame on a cycle of
+  direct calls. The dev backend places its checks when it flushes its pending
+  bodies, where its call graph, table, and frames are known; the LLVM backend
+  checks the procedures on LIR call cycles, the procedures whose address is
+  taken, and every helper it generates other than refcount increments, which
+  only reach the refcounts a value holds directly and so never recurse, and
+  marks each checked function `noinline` so its check stays at its entry.
+
+A check compares the stack pointer with `__stack_low` plus the room the check
+needs: how far below the function's entry stack pointer the function and every
+call chain it can start before another check runs can reach. That depends on
+frame sizes only known once code is compiled, so each check's bound is an
+`i32.const` relocated against `__stack_low`, and `StackRoom.fillCheckRooms`
+writes its addend once every compiler-owned object is composed and before the
+object is sealed. The analysis follows stack-pointer-derived values through
+structured control flow to the frames each function reserves and the stack
+pointer each call starts at; a function that reads the stack pointer without
+lowering it uses LLVM's red zone of at most 128 bytes. A cycle of unchecked
+functions with a frame, or a stack pointer set to a value not derived from it,
+is a compiler invariant violation. Code the host provides is the host's own
+business and needs no room.
+
+Compiler-owned code compiled ahead of time follows the same rule. Builtins
+never recurse. The runtime functions that walk values and layouts of any depth
+call `builtins.stack_guard.check` at their entry, which compiles to nothing
+except in the stack-checked twins of the embedded wasm builtins, boxy runtime,
+and LLVM builtins bitcode, whose roots declare `roc_wasm_stack_checks`. Only a
+platform that reserves low memory links those twins, so no other build carries
+a check. Such a build also takes no object-cache entries, whose code was
+compiled without checks.
+
+A failed check calls `roc_wasm_stack_overflow`, which sets the stack pointer
+below `__stack_low` and traps. Every wasm module exports `__stack_pointer`,
+`__stack_low`, and `__stack_high` (WebAssembly 1.0 cannot export a mutable
+global, so `wasm32v1` exports `roc_wasm_stack_pointer` and
+`roc_wasm_set_stack_pointer` instead), so in either layout a host tells a stack
+overflow from any other trap the same way: the stack pointer is outside
+`[__stack_low + 128, __stack_high]`.
 
 After the final wasm link, LLVM speed builds run an explicit Binaryen cleanup
 pipeline: directize, remove-unused-brs, optimize-instructions, dce, vacuum,

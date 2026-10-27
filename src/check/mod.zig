@@ -89,6 +89,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/custom_num_type_test.zig"));
     std.testing.refAllDecls(@import("test/builtin_low_level_types_test.zig"));
     std.testing.refAllDecls(@import("test/builtin_scope_test.zig"));
+    std.testing.refAllDecls(@import("test/builtin_opacity_test.zig"));
     std.testing.refAllDecls(@import("test/num_type_inference_test.zig"));
     std.testing.refAllDecls(@import("test/unify_test.zig"));
     std.testing.refAllDecls(@import("test/instantiate_tag_union_test.zig"));
@@ -176,6 +177,8 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_12309_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12489_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12553_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12586_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12587_test.zig"));
     std.testing.refAllDecls(@import("test/nominal_decl_growth_test.zig"));
     std.testing.refAllDecls(@import("test/frame_owned_judgment_test.zig"));
 

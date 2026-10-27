@@ -666,8 +666,8 @@ test "TargetsConfig.fromAST extracts targets configuration" {
     defer ast.deinit();
 
     // Try to extract targets config from the AST
-    var path_diagnostic: target_mod.InvalidTargetPathDiagnostic = undefined;
-    const maybe_config = try TargetsConfig.fromAST(allocator, ast, &path_diagnostic);
+    var config_diagnostic: target_mod.TargetsConfigDiagnostic = undefined;
+    const maybe_config = try TargetsConfig.fromAST(allocator, ast, &config_diagnostic);
     try std.testing.expect(maybe_config != null);
 
     const config = maybe_config.?;
