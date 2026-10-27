@@ -4993,4 +4993,19 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "\"Boom\"" },
     },
+    .{
+        // Checking orders a scheme's evidence by its walk of the scheme's row
+        // chains, so `p.y`, read first, puts `y`'s `is_eq` ahead of `x`'s
+        // `trim`. Boxy pairs each signature dictionary group with its own
+        // checked slot rather than its position in the label-sorted
+        // signature.
+        .name = "dictionary groups read their checked evidence slot when the row reads fields out of label order",
+        .source =
+        \\{
+        \\    run = |p| if p.y == "" p.x.trim() else p.y
+        \\    run({ x: " b ", y: "" })
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"b\"" },
+    },
 };

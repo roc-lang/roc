@@ -14106,6 +14106,11 @@ receiver and callable share a dictionary group. The worker ABI includes that
 group once, retaining its checked owner and evidence index even when signature
 or body traversal also reaches it. Inline closures capture that group once;
 the owner's selected method keeps its exact slot within the group.
+Every dictionary group a worker's signature or body reaches carries the
+checked evidence index of its first method's evidence parameter: checking
+emits a receiver's constraints consecutively in the group's order, but orders
+receivers by its own walk of the scheme's row chains, so a group's position in
+the worker's label-sorted representation never names its evidence.
 Function lookups plan the worker from its declared callable type, just as direct
 calls do. The lookup's instantiated type describes the callable boundary and
 supplies hidden arguments; it must not erase dictionary parameters from a
