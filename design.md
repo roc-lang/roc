@@ -27358,3 +27358,9 @@ ids in an analysis record belong to the precisely identified input tables, not
 to an assumed stable source position. A changed input-table identity invalidates
 the record. This whole-analysis boundary is independent of finer-grained
 specialization body caching.
+
+Completed Lambda Solved records contain only the type graph reachable from
+output annotations. Serialization resolves redirects and assigns compact local
+ids while preserving cycles and sharing. Discarded unification rows, unreachable
+lazy Monotype leaves, and solver-private clone-context ids are not output and
+must never be persisted. The current executable IR remains unchanged.

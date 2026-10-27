@@ -268,6 +268,7 @@ pub fn runWithCache(allocator: Allocator, lifted: Lifted.Program, cache: ?Common
     errdefer program.deinit();
 
     const key = if (cache != null) AnalysisCache.identity(program.lifted.view()) else null;
+    if (diagnostics.isSet(.pack_trace)) AnalysisCache.traceIdentity(program.lifted.view());
     var family: [32]u8 = undefined;
     baseHash("roc.lambda-analysis-cache.v1", &family);
     if (cache) |provider| {

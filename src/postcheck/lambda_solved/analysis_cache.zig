@@ -49,6 +49,30 @@ pub fn identity(input: Lifted.ProgramView) [32]u8 {
     return out.finish();
 }
 
+/// Developer trace of the exact input columns, for explaining invalidation.
+pub fn traceIdentity(input: Lifted.ProgramView) void {
+    inline for (columns) |field| {
+        var out = Fingerprint{ .names = input.names };
+        out.value(@TypeOf(@field(input, field)), @field(input, field));
+        std.debug.print("lambda-input {s}={x}\n", .{ field, out.finish() });
+    }
+    inline for (type_columns) |field| {
+        var out = Fingerprint{ .names = input.names };
+        out.value(@TypeOf(@field(input.types, field)), @field(input.types, field));
+        std.debug.print("lambda-input types.{s}={x}\n", .{ field, out.finish() });
+    }
+    var fns = Fingerprint{ .names = input.names };
+    for (input.fns) |f| {
+        fns.value(@TypeOf(f.symbol), f.symbol);
+        fns.value(@TypeOf(f.signature), f.signature);
+        fns.value(@TypeOf(f.args), f.args);
+        fns.value(@TypeOf(f.captures), f.captures);
+        fns.value(@TypeOf(f.body), f.body);
+        fns.value(@TypeOf(f.ret), f.ret);
+    }
+    std.debug.print("lambda-input fns={x}\n", .{fns.finish()});
+}
+
 const Fingerprint = struct {
     names: *const names.NameStore,
     hash: base.Sha256 = .init(.{}),
@@ -148,6 +172,118 @@ fn payloadOf(program: *const Ast.Program, key: [32]u8) Payload {
         .runtime_schema_requests = program.runtime_schema_requests.items,
     };
 }
+
+/// Copy only the completed graph reachable from output annotations. Solver
+/// scratch rows (including abandoned lazy leaves) have no persistent meaning.
+/// Reserve a destination before visiting its children, preserving cycles and
+/// sharing without recursive traversal of user types.
+const CompletedClosure = struct {
+    allocator: Allocator,
+    input: Type.Store.View,
+    output: Type.Store,
+    ids: []Type.MaybeTypeVarId,
+    pending: std.ArrayList(Type.TypeVarId) = .empty,
+    spans: std.AutoHashMapUnmanaged(SpanKey, Type.Span) = .empty,
+    const Column = enum { spans, fields, tags, captures, fn_members, declared_fields };
+    const SpanKey = struct { column: Column, span: Type.Span };
+
+    fn copy(allocator: Allocator, original: Payload) Allocator.Error!Payload {
+        const ids = try allocator.alloc(Type.MaybeTypeVarId, original.types.vars.len);
+        @memset(ids, .none);
+        var self = CompletedClosure{ .allocator = allocator, .input = original.types, .output = Type.Store.init(allocator), .ids = ids };
+        var result: Payload = undefined;
+        inline for (@typeInfo(Payload).@"struct".field_names) |field| {
+            if (comptime !std.mem.eql(u8, field, "types")) @field(result, field) = try self.value(@TypeOf(@field(original, field)), @field(original, field));
+        }
+        var index: usize = 0;
+        while (index < self.pending.items.len) : (index += 1) {
+            const source = self.pending.items[index];
+            const node = try self.content(self.input.get(source));
+            try self.output.set(@fromBackingInt(@as(u32, @intCast(index))), node);
+        }
+        result.types = self.output.view();
+        return result;
+    }
+
+    fn ref(self: *CompletedClosure, id: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
+        const root = self.input.root(id);
+        if (self.ids[@backingInt(root)].get()) |existing| return existing;
+        const fresh = try self.output.add(.unbound);
+        self.ids[@backingInt(root)] = .of(fresh);
+        try self.pending.append(self.allocator, root);
+        return fresh;
+    }
+
+    fn value(self: *CompletedClosure, comptime T: type, v: T) Allocator.Error!T {
+        if (T == Type.TypeVarId) return self.ref(v);
+        return switch (@typeInfo(T)) {
+            .@"struct" => |info| blk: {
+                var out: T = undefined;
+                inline for (info.field_names, info.field_types) |field, F| @field(out, field) = try self.value(F, @field(v, field));
+                break :blk out;
+            },
+            .@"union" => |info| blk: {
+                inline for (info.field_names, info.field_types) |field, F| if (std.meta.activeTag(v) == @field(info.tag_type.?, field)) break :blk @unionInit(T, field, try self.value(F, @field(v, field)));
+                unreachable;
+            },
+            .optional => |info| if (v) |present| try self.value(info.child, present) else null,
+            .pointer => |info| blk: {
+                if (info.size != .slice) @compileError("completed annotations contain owned slices");
+                const out = try self.allocator.alloc(info.child, v.len);
+                for (v, out) |source, *dest| dest.* = try self.value(info.child, source);
+                break :blk out;
+            },
+            else => v,
+        };
+    }
+
+    fn span(self: *CompletedClosure, comptime column: Column, old: Type.Span) Allocator.Error!Type.Span {
+        if (old.len == 0) return .empty();
+        const key = SpanKey{ .column = column, .span = old };
+        if (self.spans.get(key)) |existing| return existing;
+        const input = @field(self.input, @tagName(column))[old.start..][0..old.len];
+        const list = &@field(self.output, @tagName(column));
+        const start = std.math.cast(u32, list.items.len) orelse return error.OutOfMemory;
+        const result = Type.Span{ .start = start, .len = old.len };
+        // Reserve the whole span first; processing member captures or tag
+        // payloads only appends to different columns.
+        const slots = try list.addManyAsSlice(self.allocator, old.len);
+        for (input, slots) |item, *slot| {
+            slot.* = try self.value(@TypeOf(item), item);
+            if (comptime column == .tags) slot.payloads = try self.span(.spans, item.payloads);
+            if (comptime column == .fn_members) slot.captures = try self.span(.captures, item.captures);
+        }
+        try self.spans.put(self.allocator, key, result);
+        return result;
+    }
+
+    fn content(self: *CompletedClosure, old: Type.Content) Allocator.Error!Type.Content {
+        return switch (old) {
+            .link, .mono => @import("../common.zig").invariant("completed lambda output reached private solver state"),
+            .unbound, .forall, .primitive, .zst, .hole => old,
+            .list => |id| .{ .list = try self.ref(id) },
+            .box => |id| .{ .box = try self.ref(id) },
+            .tuple => |items| .{ .tuple = try self.span(.spans, items) },
+            .record => |items| .{ .record = try self.span(.fields, items) },
+            .tag_union => |items| .{ .tag_union = try self.span(.tags, items) },
+            .lambda_set => |items| .{ .lambda_set = try self.span(.fn_members, items) },
+            .func => |f| .{ .func = .{ .args = try self.span(.spans, f.args), .callable = try self.ref(f.callable), .ret = try self.ref(f.ret) } },
+            .named => |n| blk: {
+                var out = n;
+                out.args = try self.span(.spans, n.args);
+                out.declared_order = try self.span(.declared_fields, n.declared_order);
+                if (out.backing) |*backing| backing.ty = try self.ref(backing.ty);
+                break :blk .{ .named = out };
+            },
+            .erased => |e| blk: {
+                var out = e;
+                out.members = try self.span(.fn_members, e.members);
+                if (out.abi_fn) |ty| out.abi_fn = try self.ref(ty);
+                break :blk .{ .erased = out };
+            },
+        };
+    }
+};
 
 const Context = struct {
     allocator: Allocator,
@@ -310,7 +446,10 @@ fn validate(allocator: Allocator, input: Lifted.ProgramView, p: Payload) Codec.D
 pub fn encode(allocator: Allocator, program: *Ast.Program, key: [32]u8) Allocator.Error!?[]u8 {
     var context = try Context.init(allocator, program.lifted.view(), key);
     defer context.deinit();
-    return Codec.encodeFrozen(Payload, "LSAN0001".*, allocator, &program.lifted.types, &program.lifted.names, payloadOf(program, key), &context, null) catch |err| switch (err) {
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+    const payload = try CompletedClosure.copy(scratch.allocator(), payloadOf(program, key));
+    return Codec.encodeFrozen(Payload, "LSAN0001".*, allocator, &program.lifted.types, &program.lifted.names, payload, &context, null) catch |err| switch (err) {
         error.NotRepresentable => return null,
         error.OutOfMemory => return error.OutOfMemory,
     };
@@ -420,8 +559,9 @@ test "lambda analysis reuse keeps the current literal and reporting metadata" {
     defer restored.deinit();
     try std.testing.expectEqualStrings("after with different length", restored.lifted.view().string_literals[0].text());
     try std.testing.expectEqual(@as(u32, 88), restored.lifted.current_loc.line);
-    try std.testing.expectEqualDeep(first.types.view(), restored.types.view());
-    try std.testing.expectEqualDeep(first.fn_tys.items, restored.fn_tys.items);
+    const func = restored.types.rootContentCompressed(restored.fn_tys.items[0]).func;
+    try std.testing.expectEqual(Mono.Primitive.str, restored.types.rootContentCompressed(func.ret).primitive);
+    try std.testing.expectEqual(restored.types.rootCompressed(func.ret), restored.types.rootCompressed(restored.expr_tys.items[0]));
 }
 
 test "lambda analysis identity includes callable topology and rejects mismatched records" {
@@ -484,8 +624,13 @@ test "lambda analysis preserves recursive callable relations and rejects redirec
     var restored = (try restore(gpa, &current, key, bytes)).?;
     owned = false;
     defer restored.deinit();
-    try std.testing.expectEqualDeep(first.types.view(), restored.types.view());
-    try std.testing.expectEqualDeep(first.local_tys.items, restored.local_tys.items);
+    const func = restored.types.rootContentCompressed(restored.fn_tys.items[0]).func;
+    const argument = restored.types.spanItem(func.args, 0);
+    const row = restored.types.rootContentCompressed(argument).record;
+    const next = restored.types.fieldItem(row, 0);
+    const callback = restored.types.rootContentCompressed(next.ty).func;
+    try std.testing.expectEqual(restored.types.rootCompressed(argument), restored.types.rootCompressed(callback.ret));
+    try std.testing.expectEqual(restored.types.rootCompressed(argument), restored.types.rootCompressed(restored.local_tys.items[0]));
     var bad = payloadOf(&first, key);
     const vars = try gpa.dupe(Type.StoredNode, bad.types.vars);
     defer gpa.free(vars);
@@ -514,4 +659,25 @@ test "lambda analysis identity distinguishes callbacks with the same signature" 
     const before = identity(input.view());
     input.setExprData(closure, .{ .fn_ref = .{ .fn_id = second, .captures = .empty() } });
     try std.testing.expect(!std.mem.eql(u8, &before, &identity(input.view())));
+}
+
+test "lambda analysis persistence excludes abandoned lazy solver rows" {
+    const gpa = std.testing.allocator;
+    var first = try @import("solve.zig").run(gpa, try literalInput(gpa, "before"));
+    defer first.deinit();
+    const key = identity(first.lifted.view());
+    const clean = (try encode(gpa, &first, key)).?;
+    defer gpa.free(clean);
+    _ = try first.types.add(.{ .mono = .{ .id = first.lifted.view().fns[0].ret, .ctx = 1234 } });
+    const with_scratch = (try encode(gpa, &first, key)).?;
+    defer gpa.free(with_scratch);
+    try std.testing.expectEqualSlices(u8, clean, with_scratch);
+    var current = try literalInput(gpa, "after");
+    current.types.freeze();
+    var owned = true;
+    defer if (owned) current.deinit();
+    var restored = (try restore(gpa, &current, key, with_scratch)).?;
+    owned = false;
+    defer restored.deinit();
+    for (restored.types.vars.items) |node| try std.testing.expect(node != .mono and node != .link);
 }
