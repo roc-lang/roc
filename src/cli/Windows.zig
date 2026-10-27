@@ -84,6 +84,13 @@ pub fn deinit(state: Windows) void {
     _ = windows.SetConsoleMode(h_in, state.input_mode);
 }
 
+/// Whether `file` is a console, which is the only case where the REPL can ask
+/// the terminal where the cursor is.
+pub fn isConsole(file: std.Io.File) bool {
+    var mode: windows.DWORD = 0;
+    return 0 != windows.GetConsoleMode(file.handle, &mode);
+}
+
 /// Whether the console attached to stdin currently has line input disabled, as
 /// it does while a TUI or line editor has put it in raw mode.
 pub fn stdinRawModeActive() bool {
@@ -93,6 +100,7 @@ pub fn stdinRawModeActive() bool {
     return input_mode & enable_line_input == 0;
 }
 
+/// Errors `waitInputReady` returns when it cannot read console input events.
 pub const WaitInputError = error{GetNumberOfConsoleInputEventsFailure};
 
 /// How long to sleep between console-input polls. Console input handles cannot

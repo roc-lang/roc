@@ -3,7 +3,6 @@
 const std = @import("std");
 const control_code = std.ascii.control_code;
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
 
 const ansi_term = @import("ansi_term.zig");
 const unicode = @import("unicode.zig");
@@ -12,55 +11,10 @@ const Unix = @import("Unix.zig");
 const Windows = @import("Windows.zig");
 const base = @import("base");
 
-const SupportedOS = enum { windows, posix };
+const SupportedOS = @import("SupportedOS.zig");
 
 /// The operating system this build is targeting.
-pub const SUPPORTED_OS = switch (builtin.os.tag) {
-    .windows => SupportedOS.windows,
-    .linux, .macos, .freebsd, .openbsd, .netbsd, .dragonfly => SupportedOS.posix,
-    .freestanding,
-    .other,
-    .contiki,
-    .fuchsia,
-    .hermit,
-    .managarm,
-    .haiku,
-    .hurd,
-    .illumos,
-    .plan9,
-    .rtems,
-    .serenity,
-    .driverkit,
-    .ios,
-    .maccatalyst,
-    .tvos,
-    .visionos,
-    .watchos,
-    .uefi,
-    .@"3ds",
-    .wiiu,
-    .@"switch",
-    .gba,
-    .psx,
-    .tios,
-    .ashetos,
-    .ps3,
-    .ps4,
-    .ps5,
-    .psp,
-    .vita,
-    .emscripten,
-    .wasi,
-    .amdhsa,
-    .amdpal,
-    .cuda,
-    .mesa3d,
-    .nvcl,
-    .opencl,
-    .opengl,
-    .vulkan,
-    => |tag| @compileError(@tagName(tag) ++ " is not a supported OS for ReplLine!"),
-};
+pub const SUPPORTED_OS = SupportedOS.current;
 
 /// Platform-specific newline sequence.
 pub const NEW_LINE = switch (SUPPORTED_OS) {

@@ -29,6 +29,7 @@ const builtin = @import("builtin");
 const unicode = @import("unicode.zig");
 const Unix = @import("Unix.zig");
 const Windows = @import("Windows.zig");
+const SupportedOS = @import("SupportedOS.zig");
 
 /// How long to wait for the terminal's reply to one cursor-position report
 /// before concluding that it does not answer. A terminal that answers at all
@@ -55,8 +56,7 @@ const merged_glyph_width: usize = 2;
 /// it is not, there is nothing to ask and the caller keeps the default model.
 pub fn interactive(in: std.Io.File) bool {
     if (comptime builtin.os.tag == .windows) {
-        var mode: std.os.windows.CONSOLE_MODE = undefined;
-        return std.os.windows.GetConsoleMode(in.handle, &mode) != 0;
+        return Windows.isConsole(in);
     }
 
     // `TIOCGWINSZ` succeeds only for a terminal; a pipe or a file has no window
@@ -173,9 +173,9 @@ fn readCursorReport(
 
         // A poll that fails, times out, or sees stdin hang up means the
         // terminal will not answer, which is not an error for a probe.
-        const input_ready = switch (comptime builtin.os.tag) {
+        const input_ready = switch (SupportedOS.current) {
             .windows => Windows.waitInputReady(report_timeout_ms),
-            else => Unix.waitInputReady(report_timeout_ms),
+            .posix => Unix.waitInputReady(report_timeout_ms),
         } catch return null;
         if (!input_ready) return null;
 
