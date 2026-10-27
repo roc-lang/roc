@@ -11382,7 +11382,8 @@ fn mkBuiltinNominalContent(
     args: []const Var,
     source_decl: u32,
 ) Allocator.Error!Content {
-    const owner_env = if (self.isCheckingBuiltinModuleDirectly()) self.cir else self.builtin_ctx.builtin_module orelse self.cir;
+    const owner_env = if (self.isCheckingBuiltinModuleDirectly()) self.cir else self.builtin_ctx.builtin_module orelse
+        base.invariant("type checker invariant violated: a Builtin nominal was built without the Builtin module env", .{});
     const is_opaque = switch (owner_env.store.getStatement(@fromBackingInt(source_decl))) {
         .s_nominal_decl => |nominal| nominal.is_opaque,
         .s_alias_decl,
