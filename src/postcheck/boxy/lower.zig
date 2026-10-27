@@ -65,6 +65,11 @@ pub const WorkerKey = union(enum) {
     /// A compiler-derived structural method over the descriptor its
     /// dictionary captures.
     structural: StructuralMethod,
+    /// The host-visible wrapper of root request `index`: it takes the
+    /// root's checked arguments, supplies the static descriptors and
+    /// dictionaries the root's instantiation names, and calls its target
+    /// (design.md "Host ABI").
+    root: u32,
 };
 
 /// The structural methods a dictionary can denote.
@@ -88,6 +93,8 @@ pub const Worker = struct {
     lowered: bool = false,
     /// Whether the worker's body is queued for lowering.
     queued: bool = false,
+    /// For a root wrapper: the root request it wraps.
+    root_request: ?checked.RootRequest = null,
     /// For a lambda worker: the checked captures of its closure expression,
     /// whose values follow it in the capture record before the outer
     /// worker's descriptors.
@@ -101,6 +108,13 @@ pub const Worker = struct {
     /// captures from its outer worker.
     scope_dictionary_indices: []const u32 = &.{},
 };
+
+/// A procedure template by its module in this lowering.
+pub const TemplateKey = struct { module: ModuleIndex, template: canonical.CheckedProcedureTemplateId };
+
+/// A hosted procedure's external symbol and its slot in the host's dispatch
+/// table, or null when the platform's hosted section omits it.
+pub const HostedEntry = struct { symbol: []const u8, dispatch_index: ?u32 };
 
 pub const Program = struct {
     allocator: Allocator,
@@ -121,6 +135,8 @@ pub const Program = struct {
     by_module_idx: std.AutoHashMapUnmanaged(u32, ModuleIndex) = .empty,
     observe_expects: bool,
     arena: std.heap.ArenaAllocator,
+    /// The host binding of each hosted procedure template.
+    hosted: std.AutoHashMapUnmanaged(TemplateKey, HostedEntry) = .empty,
 
     pub fn converter(self: *Program) types.Converter {
         return .{ .store = &self.store, .modules = &self.modules };
@@ -256,6 +272,37 @@ pub const Program = struct {
         return id;
     }
 
+    /// The wrapper of root request `index` (see `WorkerKey.root`).
+    pub fn rootWorker(self: *Program, index: u32, request: checked.RootRequest, module_index: ModuleIndex) Allocator.Error!WorkerId {
+        const key: WorkerKey = .{ .root = index };
+        if (self.worker_ids.get(key)) |existing| return existing;
+        const fn_ty = try self.converter().convert(module_index, request.checked_type, .{ .module = module_index, .vars = &.{}, .bound = &.{} });
+        const signature = switch (self.store.get(fn_ty)) {
+            .function => |function| function,
+            else => invariant("a procedure root's checked type is not a function type"),
+        };
+        const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
+        const proc = try self.result.store.addProcSpec(.{
+            .name = self.result.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.programLocal("boxy.root", @backingInt(id)),
+            .args = .empty(),
+            .ret_layout = .zst,
+        }, base.SourceLoc.none);
+        try self.workers.append(self.allocator, .{
+            .key = key,
+            .proc = proc,
+            .module = module_index,
+            .scheme_vars = &.{},
+            .dictionary_params = &.{},
+            .params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args)),
+            .ret = signature.ret,
+            .root_request = request,
+        });
+        try self.worker_ids.put(self.allocator, key, id);
+        try self.worklist.append(self.allocator, id);
+        return id;
+    }
+
     /// The dictionary entry of template worker `target`.
     pub fn methodEntryWorker(self: *Program, target: WorkerId) Allocator.Error!WorkerId {
         const key: WorkerKey = .{ .method_entry = target };
@@ -353,6 +400,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.worker_ids.deinit(allocator);
         program.worklist.deinit(allocator);
         program.by_module_idx.deinit(allocator);
+        program.hosted.deinit(allocator);
         program.arena.deinit();
     }
     errdefer program.result.deinit();
@@ -373,6 +421,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         try program.by_module_idx.put(allocator, view.view.module_identity.module_idx, view.index);
     }
     try seedSourceFiles(&program);
+    try initHosted(&program);
 
     // Row joins are sealed before any layout is committed.
     try program.joins.seal(&program.store);
@@ -383,7 +432,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             program.modules.views.items[0].index
         else
             program.moduleByKey(input.roots.source_modules[index]).index;
-        const proc = try lowerRoot(&program, request, source_module);
+        const proc = try lowerRoot(&program, request, @intCast(index), source_module);
         try program.result.root_procs.append(allocator, proc);
         var metadata = RootMetadata.fromCheckedRoot(request);
         metadata.test_plan = Common.testPlanMetadataForRoot(input.roots, request, index);
@@ -433,13 +482,71 @@ fn seedSourceFiles(program: *Program) Allocator.Error!void {
 
 /// A root's procedure: its template's worker, which a host-shaped wrapper
 /// would call with static hidden arguments when the worker has any.
-fn lowerRoot(program: *Program, request: checked.RootRequest, source_module: ModuleIndex) Allocator.Error!LIR.LirProcSpecId {
-    _ = source_module;
-    const template = request.procedure_template orelse invariantFmt("a {s} root has no procedure template", .{@tagName(request.kind)});
-    const id = try program.templateRefWorker(template);
-    const worker = program.worker(id);
-    if (worker.scheme_vars.len != 0 or worker.dictionary_params.len != 0) {
-        invariant("a root whose template has hidden parameters needs a host wrapper, which Boxy does not yet emit");
+/// Bind every hosted procedure in scope to its external symbol and dispatch
+/// slot: the platform header's hosted section, in order, when a platform is
+/// in scope; otherwise every declaration in a stable order.
+fn initHosted(program: *Program) Allocator.Error!void {
+    const allocator = program.allocator;
+    const DefKey = struct { module: ModuleIndex, def: u32 };
+    var by_def: std.AutoHashMapUnmanaged(DefKey, TemplateKey) = .empty;
+    defer by_def.deinit(allocator);
+    const Ordered = struct { key: TemplateKey, order: []const u8, def: u32, digest: [32]u8 };
+    var ordered: std.ArrayList(Ordered) = .empty;
+    defer ordered.deinit(allocator);
+    var platform: ?*const types.ModuleView = null;
+    for (program.modules.views.items) |*view| {
+        if (view.view.module_identity.kind == .platform) platform = view;
+        for (view.view.hosted_procs.procs) |proc| {
+            const owner = program.moduleByKey(.{ .bytes = proc.template.artifact.bytes });
+            const key: TemplateKey = .{ .module = owner.index, .template = proc.template.template };
+            try program.hosted.put(allocator, key, .{
+                .symbol = view.view.canonical_names.externalSymbolNameText(proc.external_symbol_name),
+                .dispatch_index = null,
+            });
+            try by_def.put(allocator, .{ .module = view.index, .def = @backingInt(proc.def_idx) }, key);
+            try ordered.append(allocator, .{ .key = key, .order = proc.orderKey(view.view.hosted_procs), .def = @backingInt(proc.def_idx), .digest = view.key.bytes });
+        }
     }
-    return worker.proc;
+    if (platform) |view| {
+        for (view.view.hosted_bindings.bindings, 0..) |binding, index| {
+            const target = program.moduleByKey(binding.target_checked_module);
+            const key = by_def.get(.{ .module = target.index, .def = @backingInt(binding.target_def) }) orelse
+                invariant("a hosted section names a function with no hosted declaration in scope");
+            program.hosted.getPtr(key).?.* = .{
+                .symbol = view.view.canonical_names.externalSymbolNameText(binding.external_symbol_name),
+                .dispatch_index = @intCast(index),
+            };
+        }
+        return;
+    }
+    std.mem.sort(Ordered, ordered.items, {}, struct {
+        fn lessThan(_: void, a: Ordered, b: Ordered) bool {
+            return switch (std.mem.order(u8, a.order, b.order)) {
+                .lt => true,
+                .gt => false,
+                .eq => if (a.def != b.def) a.def < b.def else std.mem.order(u8, &a.digest, &b.digest) == .lt,
+            };
+        }
+    }.lessThan);
+    for (ordered.items, 0..) |item, index| program.hosted.getPtr(item.key).?.dispatch_index = @intCast(index);
+}
+
+fn lowerRoot(program: *Program, request: checked.RootRequest, index: u32, source_module: ModuleIndex) Allocator.Error!LIR.LirProcSpecId {
+    // A root whose target takes no hidden arguments is the target itself.
+    const direct: ?canonical.ProcedureTemplateRef = if (request.procedure_template) |template|
+        template
+    else if (request.procedure_binding) |binding| switch (program.module(source_module).view.top_level_procedure_bindings.bindings.items[@backingInt(binding)].body) {
+        .direct_template => |direct| switch (direct.template) {
+            .checked => |ref| ref,
+            .lifted, .synthetic => invariant("lifted and synthetic procedure templates are not yet lowered by Boxy"),
+        },
+        .callable_eval_template => null,
+        .checked_error => invariant("a root names a rejected procedure binding"),
+    } else null;
+    if (direct) |template| {
+        const id = try program.templateRefWorker(template);
+        const worker = program.worker(id);
+        if (worker.scheme_vars.len == 0 and worker.dictionary_params.len == 0) return worker.proc;
+    }
+    return program.worker(try program.rootWorker(index, request, source_module)).proc;
 }

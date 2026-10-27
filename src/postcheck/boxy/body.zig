@@ -102,7 +102,7 @@ const Task = union(enum) {
     /// Push the function value a callable-eval binding stored.
     restore_callable_eval: struct { module: ModuleIndex, template: checked.CallableEvalTemplateId, ty: TypeId },
     /// Pop a restored closure's capture values and build it.
-    finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const LocalId },
+    finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const LocalId, capture_types: []const TypeId },
     finish_restore_struct: struct { ty: TypeId, count: u32 },
     finish_restore_tag: struct { ty: TypeId, name: types.NameId, count: u32 },
     finish_restore_list: struct { ty: TypeId, count: u32 },
@@ -228,10 +228,16 @@ const Builder = struct {
     /// A local holding a value of `ty`: an ordinary local of its committed
     /// layout when `ty` is closed, otherwise a dynamic local of `storage`.
     fn localOf(self: *Builder, ty: TypeId, storage: LIR.DynStorage) Allocator.Error!LocalId {
-        if (self.program.store.isClosed(ty)) return self.closedLocal(try self.program.layouts.layoutOf(ty));
+        if (try self.closed(ty)) return self.closedLocal(try self.program.layouts.layoutOf(ty));
         const desc = try self.descOf(ty);
         if (storage == .frame) self.has_dynamic_frame = true;
         return self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = storage } });
+    }
+
+    /// Whether values of `ty` have one committed layout (see
+    /// `Converter.representationClosed`).
+    fn closed(self: *Builder, ty: TypeId) Allocator.Error!bool {
+        return self.program.converter().representationClosed(ty);
     }
 
     fn convert(self: *Builder, ty: checked.CheckedTypeId) Allocator.Error!TypeId {
@@ -484,7 +490,7 @@ const Builder = struct {
     /// or a scope variable's hidden parameter.
     fn leafDesc(self: *Builder, ty: TypeId) Allocator.Error!?LocalId {
         const store = &self.program.store;
-        if (store.isClosed(ty)) return try self.staticDesc(ty);
+        if (try self.closed(ty)) return try self.staticDesc(ty);
         return switch (store.get(ty)) {
             .variable => |index| self.var_descs[index],
             else => null,
@@ -611,6 +617,7 @@ const Builder = struct {
             .lambda => |key| return try self.lowerLambdaBody(key.expr),
             .method_entry => |target| return try self.lowerMethodEntry(target),
             .structural => |method| return try self.lowerStructuralMethod(method),
+            .root => return try self.lowerRootWrapper(),
         };
         // Signature: explicit parameters, then hidden descriptors and
         // dictionaries.
@@ -629,7 +636,7 @@ const Builder = struct {
         for (self.dict_locals) |*slot| slot.* = try self.closedLocal(try self.erasedLayout());
         try args.appendSlice(self.allocator, self.dict_locals);
         var ret_layout: layout.Idx = undefined;
-        if (self.program.store.isClosed(worker.ret)) {
+        if (try self.closed(worker.ret)) {
             ret_layout = try self.program.layouts.layoutOf(worker.ret);
         } else {
             ret_layout = try self.program.result.layouts.dynamicLayout();
@@ -649,7 +656,25 @@ const Builder = struct {
                         try self.tasks.append(self.allocator, .ret);
                         try self.tasks.append(self.allocator, .{ .expr = lambda.body });
                     },
-                    .hosted_lambda => invariant("hosted procedures are not yet lowered by Boxy"),
+                    .hosted_lambda => {
+                        // A hosted procedure is an extern at its declaration's
+                        // own type (design.md "Host ABI").
+                        if (worker.scheme_vars.len != 0 or worker.dictionary_params.len != 0) invariant("a hosted procedure's type is generic");
+                        const key = worker.key.template;
+                        const hosted = self.program.hosted.get(.{ .module = key.module, .template = key.template }) orelse
+                            invariant("a hosted procedure has no host binding");
+                        if (hosted.dispatch_index) |dispatch_index| {
+                            const proc = self.store.getProcSpecPtr(worker.proc);
+                            proc.args = try self.store.addLocalSpan(params);
+                            proc.ret_layout = ret_layout;
+                            proc.hosted = .{ .symbol = try self.store.insertString(hosted.symbol), .dispatch_index = dispatch_index };
+                            return;
+                        }
+                        // The platform's hosted section omits it: it has no
+                        // host slot, as checking reported.
+                        const message = try self.store.insertString("a hosted function the platform does not provide was called");
+                        try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = message }, .checked_error = true } });
+                    },
                     else => {
                         if (params.len != 0) invariant("a non-lambda template body has parameters");
                         try self.tasks.append(self.allocator, .ret);
@@ -667,7 +692,7 @@ const Builder = struct {
                 const wrapper = self.view.view.entry_wrappers.get(wrapper_id);
                 const root = self.view.view.compile_time_roots.root(wrapper.root);
                 switch (root.kind) {
-                    .expect, .repl_expr => {},
+                    .expect, .repl_expr, .callable_binding, .constant, .hoisted_constant => {},
                     else => invariantFmt("{s} entry wrappers are not yet lowered by Boxy", .{@tagName(root.kind)}),
                 }
                 if (params.len != 0) invariant("an entry wrapper has parameters");
@@ -732,7 +757,7 @@ const Builder = struct {
         self.var_descs = try self.program.arena.allocator().alloc(LocalId, worker.scheme_vars.len);
         const capture_count = worker.capture_types.len + worker.scheme_vars.len + worker.captured_dictionaries;
         var capture_values: []LocalId = &.{};
-        if (!self.allClosed(worker.capture_types)) {
+        if (!try self.allClosed(worker.capture_types)) {
             capture_values = try self.dynamicCaptures(worker, capture_ptr);
         } else if (capture_count != 0) {
             const capture_layout = try self.captureLayout(worker.capture_types, worker.scheme_vars.len, worker.captured_dictionaries);
@@ -774,7 +799,7 @@ const Builder = struct {
             try args.append(self.allocator, record_param.?);
         }
         var ret_layout: layout.Idx = undefined;
-        if (self.program.store.isClosed(worker.ret)) {
+        if (try self.closed(worker.ret)) {
             ret_layout = try self.program.layouts.layoutOf(worker.ret);
         } else {
             ret_layout = try self.program.result.layouts.dynamicLayout();
@@ -791,6 +816,7 @@ const Builder = struct {
         try self.tasks.append(self.allocator, .ret);
         try self.tasks.append(self.allocator, .{ .expr = lambda.body });
         try self.run();
+        try args.append(self.allocator, capture_ptr);
         try self.finishProc(entry, body_start, args.items, ret_layout);
         const proc = self.store.getProcSpecPtr(worker.proc);
         proc.erased_capture_arg = capture_ptr;
@@ -886,6 +912,75 @@ const Builder = struct {
     }
 
     /// The entry of a template worker reached through a dictionary.
+    /// A root's host-visible wrapper: its checked arguments, passed to the
+    /// root's target with the hidden arguments the root's instantiation
+    /// names, or to the function value compile-time evaluation stored.
+    fn lowerRootWrapper(self: *Builder) Allocator.Error!void {
+        const worker = self.currentWorker().*;
+        const request = worker.root_request.?;
+        self.entry_hole = try self.newHole();
+        const entry = self.entry_hole;
+        self.var_descs = &.{};
+        self.dict_locals = &.{};
+        const params = try self.allocator.alloc(LocalId, worker.params.len);
+        defer self.allocator.free(params);
+        for (params, worker.params) |*param, param_ty| param.* = try self.localOf(param_ty, .param);
+        const ret_layout = try self.program.layouts.layoutOf(worker.ret);
+        const body_start = try self.newHole();
+        self.hole = body_start;
+
+        const fn_ty = try self.program.store.intern(.{ .function = .{ .args = worker.params, .ret = worker.ret, .effectful = false } });
+        const callee: Callee = if (request.procedure_template) |template|
+            .{ .worker = try self.program.templateRefWorker(template) }
+        else if (request.procedure_binding) |binding| switch (self.view.view.top_level_procedure_bindings.bindings.items[@backingInt(binding)].body) {
+            .direct_template => |direct| switch (direct.template) {
+                .checked => |ref| .{ .worker = try self.program.templateRefWorker(ref) },
+                .lifted, .synthetic => invariant("lifted and synthetic procedure templates are not yet lowered by Boxy"),
+            },
+            .callable_eval_template => |template| .{ .callable_eval = .{ .module = self.module, .template = template } },
+            .checked_error => invariant("a root names a rejected procedure binding"),
+        } else if (request.procedure_use) |use|
+            try self.procedureUseCallee(use)
+        else
+            invariantFmt("a {s} root names no procedure", .{@tagName(request.kind)});
+
+        try self.tasks.append(self.allocator, .ret);
+        switch (callee) {
+            .worker => |target| {
+                const target_worker = self.program.worker(target).*;
+                const formal = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
+                const bound = try self.relateVariables(formal, fn_ty, target_worker.scheme_vars.len);
+                defer self.allocator.free(bound);
+                const hidden = try self.allocator.alloc(LocalId, bound.len + target_worker.dictionary_params.len);
+                defer self.allocator.free(hidden);
+                for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
+                if (target_worker.dictionary_params.len != 0) {
+                    const span = request.root_evidence orelse invariant("a root whose target takes dictionaries has no root evidence");
+                    const owner = self.program.moduleByKey(span.checked_module);
+                    if (owner.index != self.module) invariant("a root's evidence was recorded by another module");
+                    const evidence = owner.view.static_dispatch_plans.evidence_refs[span.span.start..][0..span.span.len];
+                    for (target_worker.dictionary_params, hidden[bound.len..]) |param_index, *dict| {
+                        if (param_index >= evidence.len) invariant("a root's evidence does not cover its target's dictionaries");
+                        dict.* = try self.dictionaryOf(evidence[param_index]);
+                    }
+                }
+                for (params) |param| try self.pushValue(param);
+                try self.finishCall(target, hidden, @intCast(params.len), worker.ret);
+            },
+            .callable_eval => |eval| {
+                try self.tasks.append(self.allocator, .{ .finish_erased_call = .{ .fn_ty = fn_ty, .arg_count = @intCast(params.len), .result = worker.ret } });
+                var index = params.len;
+                while (index > 0) {
+                    index -= 1;
+                    try self.tasks.append(self.allocator, .{ .push_value = params[index] });
+                }
+                try self.tasks.append(self.allocator, .{ .restore_callable_eval = .{ .module = eval.module, .template = eval.template, .ty = fn_ty } });
+            },
+        }
+        try self.run();
+        try self.finishProc(entry, body_start, params, ret_layout);
+    }
+
     fn lowerMethodEntry(self: *Builder, target: WorkerId) Allocator.Error!void {
         const worker = self.currentWorker().*;
         const target_worker = self.program.worker(target).*;
@@ -924,7 +1019,7 @@ const Builder = struct {
             try args.append(self.allocator, record.?);
         }
         var ret_layout: layout.Idx = undefined;
-        if (self.program.store.isClosed(ret)) {
+        if (try self.closed(ret)) {
             ret_layout = try self.program.layouts.layoutOf(ret);
         } else {
             ret_layout = try self.program.result.layouts.dynamicLayout();
@@ -954,6 +1049,7 @@ const Builder = struct {
         };
         try self.pushValue(result);
         try self.step(.ret);
+        try args.append(self.allocator, start.capture_ptr);
         try self.finishProc(start.entry, body_start, args.items, ret_layout);
         const proc = self.store.getProcSpecPtr(worker.proc);
         proc.erased_capture_arg = start.capture_ptr;
@@ -984,15 +1080,15 @@ const Builder = struct {
     /// struct when every parameter type is closed, a dynamic record composed
     /// with `desc_args` otherwise.
     fn argsRecordLocal(self: *Builder, params: []const TypeId, storage: LIR.DynStorage) Allocator.Error!LocalId {
-        if (self.allClosed(params)) return self.closedLocal(try self.argsRecordLayout(params));
+        if (try self.allClosed(params)) return self.closedLocal(try self.argsRecordLayout(params));
         const desc = try self.argsRecordDesc(params);
         if (storage == .frame) self.has_dynamic_frame = true;
         return self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = desc, .storage = storage } });
     }
 
-    fn allClosed(self: *Builder, tys: []const TypeId) bool {
+    fn allClosed(self: *Builder, tys: []const TypeId) Allocator.Error!bool {
         for (tys) |ty| {
-            if (!self.program.store.isClosed(ty)) return false;
+            if (!try self.closed(ty)) return false;
         }
         return true;
     }
@@ -1022,6 +1118,11 @@ const Builder = struct {
         }
         _ = params;
         const local = try self.localOf(param_ty, .frame);
+        if (self.store.getLocal(record).layout_idx == .zst) {
+            // A record of zero-sized arguments has no storage to read.
+            try self.emitLinear(.{ .assign_struct = .{ .target = local, .fields = LIR.LocalSpan.empty(), .next = undefined } });
+            return local;
+        }
         try self.emitLinear(.{ .assign_ref = .{ .target = local, .op = LIR.RefOp.field(record, index), .next = undefined } });
         return local;
     }
@@ -1086,6 +1187,22 @@ const Builder = struct {
                 const root = owner.view.compile_time_roots.root(template.root);
                 switch (root.payload) {
                     .fn_value => |fn_id| try self.restoreFn(eval.module, fn_id, eval.ty),
+                    // No compile-time evaluation produced the value (a
+                    // binding of the app a platform's roots name): its entry
+                    // wrapper computes it.
+                    .pending, .unevaluated => {
+                        const wrapper = owner.view.entry_wrappers.lookupByRoot(template.root) orelse
+                            invariant("a callable-eval binding's root has no entry wrapper");
+                        const callee = try self.program.templateRefWorker(wrapper.template);
+                        const callee_worker = self.program.worker(callee).*;
+                        if (callee_worker.params.len != 0 or callee_worker.dictionary_params.len != 0) invariant("a callable-eval entry wrapper takes arguments");
+                        const bound = try self.relateVariables(callee_worker.ret, eval.ty, callee_worker.scheme_vars.len);
+                        defer self.allocator.free(bound);
+                        const hidden = try self.allocator.alloc(LocalId, bound.len);
+                        defer self.allocator.free(hidden);
+                        for (bound, hidden) |ty, *desc| desc.* = try self.descOf(ty);
+                        try self.finishCall(callee, hidden, 0, eval.ty);
+                    },
                     else => invariantFmt("a callable-eval binding whose root holds {s} is not yet lowered by Boxy", .{@tagName(root.payload)}),
                 }
             },
@@ -1093,10 +1210,10 @@ const Builder = struct {
                 const values = try self.popValues(closure.count);
                 defer self.allocator.free(values);
                 const worker = self.program.worker(closure.worker).*;
-                if (self.allClosed(worker.capture_types)) {
+                if (try self.allClosed(worker.capture_types)) {
                     try self.pushValue(try self.packClosure(closure.worker, values, worker.capture_types, closure.descs, &.{}));
                 } else {
-                    try self.pushValue(try self.packDynamicClosure(closure.worker, values, worker.capture_types, closure.descs, &.{}));
+                    try self.pushValue(try self.packDynamicClosure(closure.worker, values, closure.capture_types, closure.descs, &.{}));
                 }
             },
             .finish_restore_struct => |restore| {
@@ -1203,6 +1320,7 @@ const Builder = struct {
             },
             .lookup_local => |lookup| try self.lowerLookupLocal(expr_id, lookup.pattern, lookup.resolved),
             .lookup_external => |resolved| try self.lowerLookupExternal(expr_id, resolved orelse invariant("an external lookup had no resolved reference")),
+            .lookup_required => |resolved| try self.lowerLookupExternal(expr_id, resolved orelse invariant("a platform requirement lookup had no resolved reference")),
             .block => |block| {
                 var index = block.statements.len;
                 try self.push(.{ .expr = block.final_expr });
@@ -1545,6 +1663,8 @@ const Builder = struct {
                 return try self.pushValue(self.binders.get(binding.binder) orelse invariant("a local lookup named a binder this body never bound"));
             },
             .top_level_const, .imported_const => |use| return try self.restoreConstUse(use, try self.exprType(expr_id)),
+            .local_proc => |local| return try self.pushValue(try self.localProcValue(local)),
+            .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use),
             else => |ref| invariantFmt("local lookup of a {s} is not yet lowered by Boxy", .{@tagName(ref)}),
         };
         const binder = self.bodies().pattern_binder_by_pattern[@backingInt(pattern)].get() orelse invariant("a local lookup named a pattern without a binder");
@@ -1554,9 +1674,62 @@ const Builder = struct {
     fn lowerLookupExternal(self: *Builder, expr_id: CheckedExprId, resolved: checked.ResolvedValueRefId) Allocator.Error!void {
         switch (self.resolvedRef(resolved).ref) {
             .top_level_const, .imported_const => |use| return try self.restoreConstUse(use, try self.exprType(expr_id)),
+            .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use),
+            .platform_required_proc => |required| return try self.procedureValue(expr_id, required.procedure),
+            .platform_required_const => |required| return try self.restoreConstUse(required.const_use, try self.exprType(expr_id)),
+            .platform_required_checked_error => return try self.crashValue("runtime error", try self.exprType(expr_id)),
             else => {},
         }
         invariantFmt("external value lookups ({s}) are not yet lowered by Boxy outside calls", .{@tagName(self.resolvedRef(resolved).ref)});
+    }
+
+    /// The function value of a local procedure: the closure its declaration
+    /// bound, or, inside the procedure's own body, the same closure rebuilt
+    /// from the captures the body received.
+    fn localProcValue(self: *Builder, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
+        if (local.is_alias) invariant("local procedure aliases are not yet lowered by Boxy");
+        if (local.dispatch_scope) |scope_id| {
+            const scope = self.view.view.checked_procedure_templates.dispatch_scopes[@backingInt(scope_id)];
+            if (scope.scheme_vars.len != 0 or scope.evidence_params.len != 0) invariant("generalized local procedures are not yet lowered by Boxy");
+        }
+        if (self.binders.get(local.binder)) |value| return value;
+        const worker = self.currentWorker().*;
+        const lambda_expr = switch (self.bodies().expr(local.expr).data) {
+            .lambda => local.expr,
+            .closure => |closure| closure.lambda,
+            else => invariant("a local procedure's expression is not a lambda or closure"),
+        };
+        const own = switch (worker.key) {
+            .lambda => |key| key.expr == lambda_expr,
+            else => false,
+        };
+        if (!own) invariant("a local procedure was referenced before its declaration bound it");
+        const values = try self.allocator.alloc(LocalId, worker.captures.len);
+        defer self.allocator.free(values);
+        for (worker.captures, values) |capture, *value| {
+            const binder = self.bodies().pattern_binder_by_pattern[@backingInt(capture.pattern)].get() orelse
+                invariant("a closure capture named a pattern without a binder");
+            value.* = self.binders.get(binder) orelse invariant("a closure capture was never bound");
+        }
+        const closure = if (try self.allClosed(worker.capture_types))
+            try self.packClosure(self.worker_id, values, worker.capture_types, self.var_descs, self.dict_locals)
+        else
+            try self.packDynamicClosure(self.worker_id, values, worker.capture_types, self.var_descs, self.dict_locals);
+        try self.binders.put(self.allocator, local.binder, closure);
+        return closure;
+    }
+
+    /// A procedure used as a function value: an immortal callable of its
+    /// dictionary entry, capturing the use site's hidden arguments.
+    fn procedureValue(self: *Builder, expr_id: CheckedExprId, use: checked.ProcedureUseTemplate) Allocator.Error!void {
+        switch (try self.procedureUseCallee(use)) {
+            .worker => |callee| {
+                const hidden = try self.hiddenArgs(callee, self.siteSubstitution(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{});
+                defer self.allocator.free(hidden);
+                try self.pushValue(try self.composeDictionary(try self.program.methodEntryWorker(callee), hidden));
+            },
+            .callable_eval => |eval| try self.push(.{ .restore_callable_eval = .{ .module = eval.module, .template = eval.template, .ty = try self.exprType(expr_id) } }),
+        }
     }
 
     /// A read of a stored constant: its value's construction at `ty`
@@ -1735,29 +1908,40 @@ const Builder = struct {
                 for (variables, 0..) |*variable, index| variable.* = try self.program.store.variable(@intCast(index));
                 const generic: types.Env = .{ .module = owner.module, .vars = owner.scheme_vars, .bound = variables };
                 const generic_fn = try self.program.converter().convert(owner.module, expr.ty, generic);
-                const bound = try self.relateVariables(generic_fn, fn_ty, owner.scheme_vars.len);
-                defer self.allocator.free(bound);
-                const concrete: types.Env = .{ .module = owner.module, .vars = owner.scheme_vars, .bound = bound };
                 const capture_types = try self.allocator.alloc(TypeId, captures.len);
                 defer self.allocator.free(capture_types);
+                const stored_captures = try self.allocator.alloc(check.ConstStore.ConstCapture, captures.len);
+                defer self.allocator.free(stored_captures);
+                // The variables relate through the function's type and
+                // through the stored captures' types, which can mention
+                // variables the function's type does not.
+                var relations: std.ArrayList([2]TypeId) = .empty;
+                defer relations.deinit(self.allocator);
+                try relations.append(self.allocator, .{ generic_fn, fn_ty });
+                for (captures, capture_types, stored_captures) |capture, *capture_ty, *stored_capture| {
+                    capture_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().pattern(capture.pattern).ty, generic);
+                    stored_capture.* = for (stored.captures) |candidate| {
+                        if (std.meta.eql(candidate.id, capture.capture_id)) break candidate;
+                    } else invariant("a stored closure lacks one of its site's captures");
+                    if (stored_capture.kind != .lexical) invariant("restoring a closure capturing its own recursive binding is not yet lowered by Boxy");
+                    try relations.append(self.allocator, .{ capture_ty.*, try self.constType(module_index, stored_capture.ty) });
+                }
+                const bound = try self.relateVariablesAll(relations.items, owner.scheme_vars.len);
+                defer self.allocator.free(bound);
+                const concrete: types.Env = .{ .module = owner.module, .vars = owner.scheme_vars, .bound = bound };
                 const concrete_capture_types = try self.allocator.alloc(TypeId, captures.len);
                 defer self.allocator.free(concrete_capture_types);
-                for (captures, capture_types, concrete_capture_types) |capture, *capture_ty, *concrete_ty| {
-                    const checked_ty = owner_view.bodies().pattern(capture.pattern).ty;
-                    capture_ty.* = try self.program.converter().convert(owner.module, checked_ty, generic);
-                    concrete_ty.* = try self.program.converter().convert(owner.module, checked_ty, concrete);
+                for (captures, concrete_capture_types) |capture, *concrete_ty| {
+                    concrete_ty.* = try self.program.converter().convert(owner.module, owner_view.bodies().pattern(capture.pattern).ty, concrete);
                 }
                 const worker = try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn);
                 const descs = try self.program.arena.allocator().alloc(LocalId, bound.len);
                 for (bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
-                try self.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = descs } });
+                try self.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = descs, .capture_types = try self.program.arena.allocator().dupe(TypeId, concrete_capture_types) } });
                 var index = captures.len;
                 while (index > 0) {
                     index -= 1;
-                    const stored_capture = for (stored.captures) |candidate| {
-                        if (std.meta.eql(candidate.id, captures[index].capture_id)) break candidate;
-                    } else invariant("a stored closure lacks one of its site's captures");
-                    try self.push(.{ .restore = .{ .module = module_index, .node = stored_capture.value, .ty = concrete_capture_types[index] } });
+                    try self.push(.{ .restore = .{ .module = module_index, .node = stored_captures[index].value, .ty = concrete_capture_types[index] } });
                 }
             },
             else => invariantFmt("restoring stored {s} function values is not yet lowered by Boxy", .{@tagName(stored.fn_def)}),
@@ -1783,6 +1967,11 @@ const Builder = struct {
     fn procedureUseCallee(self: *Builder, use: checked.ProcedureUseTemplate) Allocator.Error!Callee {
         var current = use;
         while (true) {
+            // A platform requirement names the app's top-level binding.
+            switch (current.binding) {
+                .platform_required => |required| current.binding = .{ .top_level = .{ .artifact = required.artifact, .binding = required.procedure_binding } },
+                else => {},
+            }
             switch (current.binding) {
                 .top_level => |top| {
                     const owner = self.program.moduleByKey(top.artifact);
@@ -1841,11 +2030,12 @@ const Builder = struct {
         const func = self.bodies().expr(call.func);
         const resolved: ?checked.ResolvedValueRefId = switch (func.data) {
             .lookup_external => |r| r orelse invariant("a call's external callee was unresolved"),
+            .lookup_required => |r| r orelse invariant("a call's platform requirement callee was unresolved"),
             .lookup_local => |lookup| lookup.resolved,
             else => null,
         };
         const callee: WorkerId = if (resolved) |id| switch (self.resolvedRef(id).ref) {
-            .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| switch (try self.procedureUseCallee(use)) {
+            inline .top_level_proc, .imported_proc, .promoted_top_level_proc, .platform_required_proc => |ref, tag| switch (try self.procedureUseCallee(if (tag == .platform_required_proc) ref.procedure else ref)) {
                 .worker => |worker_id| worker_id,
                 .callable_eval => |eval| {
                     try self.push(.{ .finish_erased_call = .{ .fn_ty = try self.exprType(call.func), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
@@ -1854,7 +2044,7 @@ const Builder = struct {
                     return;
                 },
             },
-            .local_param, .local_value, .pattern_binder, .local_mutable_version => return try self.lowerValueCall(expr_id, call),
+            .local_param, .local_value, .pattern_binder, .local_mutable_version, .local_proc, .platform_required_const, .top_level_const, .imported_const => return try self.lowerValueCall(expr_id, call),
             else => |ref| invariantFmt("calls through a {s} reference are not yet lowered by Boxy", .{@tagName(ref)}),
         } else return try self.lowerValueCall(expr_id, call);
         try self.push(.{ .finish_call = .{ .callee = callee, .hidden = try self.hiddenArgs(callee, self.siteSubstitution(call.func), self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{}), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
@@ -1942,18 +2132,119 @@ const Builder = struct {
         return hidden;
     }
 
+    /// The Boxy type of a stored constant's type evidence `root` in the
+    /// constant store of `module_index`.
+    fn constType(self: *Builder, module_index: ModuleIndex, root: check.ConstStore.ConstTypeId) Allocator.Error!TypeId {
+        const view = self.program.module(module_index);
+        const const_types = &view.view.const_store.type_store;
+        const names = view.nameStore();
+        const store = &self.program.store;
+        var done: std.AutoHashMapUnmanaged(check.ConstStore.ConstTypeId, TypeId) = .empty;
+        defer done.deinit(self.allocator);
+        const Frame = struct { id: check.ConstStore.ConstTypeId, expanded: bool };
+        var stack: std.ArrayList(Frame) = .empty;
+        defer stack.deinit(self.allocator);
+        try stack.append(self.allocator, .{ .id = root, .expanded = false });
+        while (stack.pop()) |frame| {
+            if (done.contains(frame.id)) continue;
+            const ty = const_types.get(frame.id);
+            if (!frame.expanded) {
+                try stack.append(self.allocator, .{ .id = frame.id, .expanded = true });
+                switch (ty) {
+                    .list, .box => |child| try stack.append(self.allocator, .{ .id = child, .expanded = false }),
+                    .tuple => |range| for (const_types.typeSpan(range)) |child| try stack.append(self.allocator, .{ .id = child, .expanded = false }),
+                    .record => |range| for (const_types.fieldSpan(range)) |field| try stack.append(self.allocator, .{ .id = field.ty, .expanded = false }),
+                    .tag_union => |range| for (const_types.tagSpan(range)) |tag| {
+                        for (const_types.typeSpan(tag.payloads)) |child| try stack.append(self.allocator, .{ .id = child, .expanded = false });
+                    },
+                    .func => |func| {
+                        for (const_types.typeSpan(func.args)) |child| try stack.append(self.allocator, .{ .id = child, .expanded = false });
+                        try stack.append(self.allocator, .{ .id = func.ret, .expanded = false });
+                    },
+                    .primitive, .named, .erased, .zst => {},
+                }
+                continue;
+            }
+            const converted: TypeId = switch (ty) {
+                .primitive => |primitive| try store.primitive(primitive),
+                .zst => try store.emptyRecord(),
+                .list => |child| try store.intern(.{ .list = done.get(child).? }),
+                .box => |child| try store.intern(.{ .box = done.get(child).? }),
+                .tuple => |range| blk: {
+                    const items = try self.allocator.alloc(TypeId, range.len);
+                    defer self.allocator.free(items);
+                    for (const_types.typeSpan(range), items) |child, *item| item.* = done.get(child).?;
+                    break :blk try store.intern(.{ .tuple = items });
+                },
+                .record => |range| blk: {
+                    const fields = try self.allocator.alloc(types.Field, range.len);
+                    defer self.allocator.free(fields);
+                    for (const_types.fieldSpan(range), fields) |field, *out| {
+                        if (field.value_ty != null or field.default != null) invariant("restoring optional or defaulted record fields of a stored capture type is not yet lowered by Boxy");
+                        out.* = .{ .name = try store.internName(names.recordFieldLabelText(field.name)), .ty = done.get(field.ty).?, .kind = .inline_slot };
+                    }
+                    std.mem.sort(types.Field, fields, store, struct {
+                        fn lessThan(s: *types.Store, a: types.Field, b: types.Field) bool {
+                            return s.nameLessThan(a.name, b.name);
+                        }
+                    }.lessThan);
+                    break :blk if (fields.len == 0) try store.emptyRecord() else try store.intern(.{ .record = .{ .fields = fields, .ext = null } });
+                },
+                .tag_union => |range| blk: {
+                    const tags = const_types.tagSpan(range);
+                    const inputs = try self.allocator.alloc(types.TagInput, tags.len);
+                    defer self.allocator.free(inputs);
+                    var payload_store: std.ArrayList(TypeId) = .empty;
+                    defer payload_store.deinit(self.allocator);
+                    for (tags) |tag| {
+                        for (const_types.typeSpan(tag.payloads)) |child| try payload_store.append(self.allocator, done.get(child).?);
+                    }
+                    var at: usize = 0;
+                    for (tags, inputs) |tag, *input| {
+                        input.* = .{ .name = try store.internName(names.tagLabelText(tag.checked_name)), .payloads = payload_store.items[at..][0..tag.payloads.len] };
+                        at += tag.payloads.len;
+                    }
+                    std.mem.sort(types.TagInput, inputs, store, struct {
+                        fn lessThan(s: *types.Store, a: types.TagInput, b: types.TagInput) bool {
+                            return s.nameLessThan(a.name, b.name);
+                        }
+                    }.lessThan);
+                    break :blk try store.intern(.{ .tag_union = .{ .tags = inputs, .ext = null } });
+                },
+                .func => |func| blk: {
+                    const args = try self.allocator.alloc(TypeId, func.args.len);
+                    defer self.allocator.free(args);
+                    for (const_types.typeSpan(func.args), args) |child, *arg| arg.* = done.get(child).?;
+                    break :blk try store.intern(.{ .function = .{ .args = args, .ret = done.get(func.ret).?, .effectful = false } });
+                },
+                .named => |named| blk: {
+                    const owner = self.program.moduleByKey(.{ .bytes = named.named_type.ty_module.bytes });
+                    break :blk try self.program.converter().convert(owner.index, named.named_type.ty, .{ .module = owner.index, .vars = &.{}, .bound = &.{} });
+                },
+                .erased => invariant("restoring a stored capture of erased function type is not yet lowered by Boxy"),
+            };
+            try done.put(self.allocator, frame.id, converted);
+        }
+        return done.get(root).?;
+    }
+
     /// The types that variables `0..count` of `formal` take in `actual`: each
     /// variable takes the component of `actual` at the position the variable
     /// has in `formal`. An open row's remainder variable takes the actual
     /// row's entries the formal row does not name.
     fn relateVariables(self: *Builder, formal_root: TypeId, actual_root: TypeId, count: usize) Allocator.Error![]TypeId {
+        return try self.relateVariablesAll(&.{.{ formal_root, actual_root }}, count);
+    }
+
+    /// `relateVariables` over several formal and actual type pairs at once.
+    fn relateVariablesAll(self: *Builder, roots: []const [2]TypeId, count: usize) Allocator.Error![]TypeId {
         const store = &self.program.store;
         const bound = try self.allocator.alloc(?TypeId, count);
         defer self.allocator.free(bound);
         @memset(bound, null);
         var pending: std.ArrayList([2]TypeId) = .empty;
         defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, .{ formal_root, actual_root });
+        try pending.appendSlice(self.allocator, roots);
         while (pending.pop()) |pair| {
             const formal = store.get(pair[0]);
             if (formal == .variable) {
@@ -2237,7 +2528,7 @@ const Builder = struct {
             values[index] = self.binders.get(binder) orelse invariant("a closure captured a binder this body never bound");
         }
         const callee = try self.program.lambdaWorker(self.worker_id, lambda_expr, captures, capture_types, fn_ty);
-        if (self.allClosed(capture_types)) {
+        if (try self.allClosed(capture_types)) {
             try self.pushValue(try self.packClosure(callee, values[0..captures.len], capture_types, self.var_descs, self.dict_locals));
         } else {
             try self.pushValue(try self.packDynamicClosure(callee, values[0..captures.len], capture_types, self.var_descs, self.dict_locals));
@@ -2268,7 +2559,8 @@ const Builder = struct {
 
     /// A function value whose captures include values of open types: the
     /// capture record is built in the dynamic frame region and moved into
-    /// the callable.
+    /// the callable. `capture_types` are the captured values' types in this
+    /// body's scope.
     fn packDynamicClosure(self: *Builder, callee: WorkerId, captured: []const LocalId, capture_types: []const TypeId, descs: []const LocalId, dicts: []const LocalId) Allocator.Error!LocalId {
         const record_desc = try self.dynamicCaptureDesc(capture_types, descs.len + dicts.len);
         const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = record_desc, .storage = .frame } });
@@ -2383,7 +2675,7 @@ const Builder = struct {
     // -- Aggregates --
 
     fn requireClosed(self: *Builder, ty: TypeId, comptime what: []const u8) void {
-        if (!self.program.store.isClosed(ty)) invariant("building a dynamic " ++ what ++ " is not yet lowered by Boxy");
+        if (!try self.closed(ty)) invariant("building a dynamic " ++ what ++ " is not yet lowered by Boxy");
     }
 
     fn finishRecord(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
@@ -2396,27 +2688,40 @@ const Builder = struct {
             .empty_record => return try self.pushValue(try self.unitValue()),
             else => invariant("a record expression's type is not a record"),
         };
-        const fields = self.program.store.fieldSpan(record_ty.fields);
-        if (fields.len != values.len) invariant("record construction omitting fields is not yet lowered by Boxy");
-        // Values arrive in source order; store them by semantic index.
-        const ordered = try self.allocator.alloc(LocalId, fields.len);
+        const fields = try self.allocator.dupe(types.Field, self.program.store.fieldSpan(record_ty.fields));
+        defer self.allocator.free(fields);
+        // Values arrive in source order; store them by semantic index. An
+        // optional field's slot holds `#Present(value)`, or `#Missing` when
+        // the literal omits it (design.md "Field Kinds").
+        const ordered = try self.allocator.alloc(?LocalId, fields.len);
         defer self.allocator.free(ordered);
+        @memset(ordered, null);
         const name_store = self.view.nameStore();
         for (record.fields, values) |field, value| {
             const name = try self.program.store.internName(name_store.recordFieldLabelText(field.label));
             const semantic = for (fields, 0..) |candidate, index| {
                 if (candidate.name == name) break index;
             } else invariant("a record expression's field is absent from its type");
-            if (fields[semantic].kind != .inline_slot) invariant("constructing optional record fields is not yet lowered by Boxy");
-            ordered[semantic] = value;
+            ordered[semantic] = switch (fields[semantic].kind) {
+                .inline_slot => value,
+                .presence_slot => try self.buildTag(try self.program.layouts.presenceSlot(fields[semantic].ty), try self.program.store.internName(@import("layouts.zig").present_label), &.{value}),
+            };
         }
-        try self.pushValue(try self.buildStruct(ty, ordered));
+        const slots = try self.allocator.alloc(LocalId, fields.len);
+        defer self.allocator.free(slots);
+        for (fields, ordered, slots) |field, value, *slot| {
+            slot.* = value orelse switch (field.kind) {
+                .presence_slot => try self.buildTag(try self.program.layouts.presenceSlot(field.ty), try self.program.store.internName(@import("layouts.zig").missing_label), &.{}),
+                .inline_slot => invariant("record construction omitting a defaulted field is not yet lowered by Boxy"),
+            };
+        }
+        try self.pushValue(try self.buildStruct(ty, slots));
     }
 
     /// A record or tuple of `ty` from its fields in semantic order.
     fn buildStruct(self: *Builder, ty: TypeId, fields: []const LocalId) Allocator.Error!LocalId {
         const target = try self.localOf(ty, .frame);
-        if (self.program.store.isClosed(ty)) {
+        if (try self.closed(ty)) {
             try self.emitLinear(.{ .assign_struct = .{ .target = target, .fields = try self.store.addLocalSpan(fields), .next = undefined } });
         } else {
             try self.emitDyn(target, .{ .record = .{ .desc = try self.descOf(ty), .fields = try self.store.addLocalSpan(fields) } });
@@ -2449,7 +2754,7 @@ const Builder = struct {
     /// The tag `name` of the tag union `ty` (through nominal wrappers) with
     /// `values` as its payloads.
     fn buildTag(self: *Builder, ty: TypeId, name: types.NameId, values: []const LocalId) Allocator.Error!LocalId {
-        if (!self.program.store.isClosed(ty)) {
+        if (!try self.closed(ty)) {
             const target = try self.localOf(ty, .frame);
             try self.emitDyn(target, .{ .tag = .{ .desc = try self.descOf(try self.structuralType(ty)), .name = try self.nameDesc(name), .payloads = try self.store.addLocalSpan(values) } });
             return target;
@@ -2494,7 +2799,7 @@ const Builder = struct {
         const values = try self.popValues(@intCast(count));
         defer self.allocator.free(values);
         const target = try self.localOf(ty, .frame);
-        if (self.program.store.isClosed(ty)) {
+        if (try self.closed(ty)) {
             try self.emitLinear(.{ .assign_list = .{ .target = target, .elems = try self.store.addLocalSpan(values), .next = undefined } });
         } else {
             const elem = switch (self.program.store.get(ty)) {
@@ -2598,7 +2903,7 @@ const Builder = struct {
                 .applied_tag => |tag| {
                     const ty = try self.patternType(item.pattern);
                     const name = try self.program.store.internName(self.view.nameStore().tagLabelText(tag.name));
-                    if (!self.program.store.isClosed(ty)) {
+                    if (!try self.closed(ty)) {
                         try self.testDynamicTag(ty, name, tag.args, item.value, miss, &pending);
                         continue;
                     }
@@ -2632,11 +2937,16 @@ const Builder = struct {
                             const payloads = self.program.store.span(tags[variant].payloads);
                             for (tag.args, 0..) |arg_pattern, arg_index| {
                                 const payload_local = try self.localOf(payloads[arg_index], .frame);
+                                if (committed.tag != .tag_union) {
+                                    // A union without storage has only
+                                    // zero-sized payloads.
+                                    if (self.store.getLocal(payload_local).layout_idx != .zst) invariant("a storage-free union has a payload with storage");
+                                    try self.emitLinear(.{ .assign_struct = .{ .target = payload_local, .fields = LIR.LocalSpan.empty(), .next = undefined } });
+                                    try pending.append(self.allocator, .{ .pattern = arg_pattern, .value = payload_local });
+                                    continue;
+                                }
                                 // A one-argument payload is the variant's whole payload.
-                                const op: LIR.RefOp = if (committed.tag == .tag_union)
-                                    LIR.RefOp.tagPayloadStruct(item.value, @intCast(variant), @intCast(variant))
-                                else
-                                    invariant("destructuring a tag of a storage-free union is not yet lowered by Boxy");
+                                const op = LIR.RefOp.tagPayloadStruct(item.value, @intCast(variant), @intCast(variant));
                                 if (tag.args.len > 1) {
                                     // A multi-argument payload is a struct.
                                     const payload_struct = try self.localOf((try self.program.layouts.tagPayload(payloads)).?, .frame);
@@ -2695,7 +3005,7 @@ const Builder = struct {
         const ty = try self.structuralType(value_ty);
         const actual = try self.closedLocal(.u32);
         const expected = try self.closedLocal(.u32);
-        if (self.program.store.isClosed(ty)) {
+        if (try self.closed(ty)) {
             const rep = self.program.joins.representative(ty);
             const tags = switch (self.program.store.get(rep)) {
                 .tag_union => |union_ty| self.program.store.tagSpan(union_ty.tags),
@@ -2771,7 +3081,7 @@ const Builder = struct {
     /// Field `semantic_index` (of type `field_ty`) of the record or tuple
     /// `base` of type `ty`, as a borrowed read.
     fn readField(self: *Builder, ty: TypeId, base_local: LocalId, semantic_index: u32, field_ty: TypeId) Allocator.Error!LocalId {
-        if (self.program.store.isClosed(ty)) {
+        if (try self.closed(ty)) {
             const local = try self.localOf(field_ty, .frame);
             try self.emitLinear(.{ .assign_ref = .{ .target = local, .op = LIR.RefOp.field(base_local, semantic_index), .next = undefined } });
             return local;
@@ -2981,7 +3291,7 @@ const Builder = struct {
         const ty = try self.structuralType(raw_ty);
         const actual = try self.closedLocal(.u32);
         const expected = try self.closedLocal(.u32);
-        if (self.program.store.isClosed(ty)) {
+        if (try self.closed(ty)) {
             const variant = self.closedVariant(ty, name);
             const committed = self.program.result.layouts.getLayout(try self.program.layouts.layoutOf(ty));
             if (committed.tag == .tag_union) {
@@ -3019,7 +3329,7 @@ const Builder = struct {
     /// Payload `index` of tag `name` in `value`, which holds that tag.
     fn tagPayloadValue(self: *Builder, value: LocalId, raw_ty: TypeId, name: types.NameId, index: u32) Allocator.Error!TypedValue {
         const ty = try self.structuralType(raw_ty);
-        if (!self.program.store.isClosed(ty)) {
+        if (!try self.closed(ty)) {
             const union_ty = self.program.store.get(ty).tag_union;
             const payload_ty = for (self.program.store.tagSpan(union_ty.tags)) |tag| {
                 if (tag.name == name) break self.program.store.span(tag.payloads)[index];

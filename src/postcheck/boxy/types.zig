@@ -199,6 +199,8 @@ pub const Store = struct {
     closed_memo: std.AutoHashMapUnmanaged(ClosedKey, TypeId) = .empty,
     /// The backing of each instantiated nominal node.
     backing_memo: std.AutoHashMapUnmanaged(TypeId, TypeId) = .empty,
+    /// `Converter.representationClosed` of each type asked about.
+    representation_closed: std.AutoHashMapUnmanaged(TypeId, bool) = .empty,
     /// Each module's nominal declarations by nominal key, filled once per
     /// module on first use.
     decl_by_key: std.AutoHashMapUnmanaged(DeclKey, checked.CheckedNominalDeclarationId) = .empty,
@@ -252,6 +254,7 @@ pub const Store = struct {
         self.name_arena.deinit();
         self.closed_memo.deinit(self.allocator);
         self.backing_memo.deinit(self.allocator);
+        self.representation_closed.deinit(self.allocator);
         self.decl_by_key.deinit(self.allocator);
         self.decl_keys_indexed.deinit(self.allocator);
     }
@@ -286,7 +289,7 @@ pub const Store = struct {
         return self.name_texts.items.len;
     }
 
-    fn nameLessThan(self: *const Store, a: NameId, b: NameId) bool {
+    pub fn nameLessThan(self: *const Store, a: NameId, b: NameId) bool {
         return base.Ident.textLessThan(self.nameText(a), self.nameText(b));
     }
 
@@ -855,6 +858,51 @@ pub const Converter = struct {
 
     /// The backing node of an instantiated nominal node: the declaration's
     /// checked backing with its formals bound to the node's arguments.
+    /// Whether values of `ty` have one committed layout: no type variable is
+    /// reachable through the type's representation. A nominal is represented
+    /// by its backing, so a nominal argument its backing does not store (a
+    /// phantom argument, or one only a function type mentions) leaves the
+    /// nominal's representation closed.
+    pub fn representationClosed(self: Converter, root: TypeId) Allocator.Error!bool {
+        const store = self.store;
+        if (store.isClosed(root)) return true;
+        if (store.representation_closed.get(root)) |memo| return memo;
+        var seen: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+        defer seen.deinit(store.allocator);
+        var pending: std.ArrayList(TypeId) = .empty;
+        defer pending.deinit(store.allocator);
+        try pending.append(store.allocator, root);
+        const closed = walk: while (pending.pop()) |ty| {
+            if (store.isClosed(ty)) continue;
+            if (store.representation_closed.get(ty)) |memo| {
+                if (memo) continue else break :walk false;
+            }
+            if ((try seen.getOrPut(store.allocator, ty)).found_existing) continue;
+            switch (store.get(ty)) {
+                .variable => break :walk false,
+                .primitive, .empty_record, .function => {},
+                .record => |record| {
+                    for (store.fieldSpan(record.fields)) |field| try pending.append(store.allocator, field.ty);
+                    if (record.ext) |ext| try pending.append(store.allocator, ext);
+                },
+                .tuple => |items| try pending.appendSlice(store.allocator, store.span(items)),
+                .tag_union => |tag_union| {
+                    for (store.tagSpan(tag_union.tags)) |tag| try pending.appendSlice(store.allocator, store.span(tag.payloads));
+                    if (tag_union.ext) |ext| try pending.append(store.allocator, ext);
+                },
+                .list => |elem| try pending.append(store.allocator, elem),
+                .box => |payload| try pending.append(store.allocator, payload),
+                .nominal => |nominal| if (nominal.has_backing) {
+                    try pending.append(store.allocator, try self.backing(ty));
+                } else {
+                    try pending.appendSlice(store.allocator, store.nominalArgs(nominal));
+                },
+            }
+        } else true;
+        try store.representation_closed.put(store.allocator, root, closed);
+        return closed;
+    }
+
     pub fn backing(self: Converter, nominal_ty: TypeId) Allocator.Error!TypeId {
         if (self.store.backing_memo.get(nominal_ty)) |memo| return memo;
         const nominal = switch (self.store.get(nominal_ty)) {
