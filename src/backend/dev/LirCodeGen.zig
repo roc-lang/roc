@@ -17320,6 +17320,43 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBoxyRuntime(&builder, "roc_desc_inspect");
                     try self.finishTarget(dst_local, dst);
                 },
+                .view => |v| {
+                    // The address word becomes the view's address, or a
+                    // closed target loads the bytes there.
+                    const reg = try self.allocTempGeneral();
+                    try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(v.address));
+                    try self.emitMovRegReg(ret_reg_0, reg);
+                    self.codegen.freeGeneral(reg);
+                    try self.bindComponentAddress(dst_local);
+                },
+                .closure => |c| {
+                    const fn_slot = self.codegen.allocStackSlot(8);
+                    try self.emitProcAddressToSlot(c.proc, fn_slot);
+                    var code_ref_slot: ?i32 = null;
+                    if (self.hotReloadEnabled()) {
+                        var retain = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                        defer retain.deinit();
+                        try self.callBuiltin(&retain, .hot_reload_retain_current);
+                        code_ref_slot = self.codegen.allocStackSlot(8);
+                        try self.emitStore(.w64, frame_ptr, code_ref_slot.?, ret_reg_0);
+                    }
+                    try builder.addMemArg(frame_ptr, fn_slot);
+                    try self.addBytesArg(&builder, c.capture);
+                    if (code_ref_slot) |slot| {
+                        const drop_slot = self.codegen.allocStackSlot(8);
+                        const reg = try self.allocTempGeneral();
+                        try self.emitBuiltinAddress(reg, .hot_reload_erased_callable_drop);
+                        try self.emitStore(.w64, frame_ptr, drop_slot, reg);
+                        self.codegen.freeGeneral(reg);
+                        try builder.addMemArg(frame_ptr, slot);
+                        try builder.addMemArg(frame_ptr, drop_slot);
+                    } else {
+                        try builder.addImmArg(0);
+                        try builder.addImmArg(0);
+                    }
+                    try self.callBoxyRuntime(&builder, "roc_desc_closure");
+                    try self.bindReturnedScalar(dst_local, 8);
+                },
                 .call_erased => |c| {
                     const closure_slot = self.codegen.allocStackSlot(8);
                     const capture_slot = self.codegen.allocStackSlot(8);

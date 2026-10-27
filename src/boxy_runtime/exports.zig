@@ -196,3 +196,29 @@ pub fn roc_desc_carry_free(carry: ?[*]u8) callconv(.c) void {
 }
 
 const carry_alignment = 16;
+
+/// A function value of the erased-record entry `callable_fn` whose capture
+/// is the dynamic record at `record`, whose first word is the record's own
+/// descriptor; the callable takes over the record's references. With a
+/// hot-reload drop, the capture is preceded by the hot-reload header holding
+/// `code_ref`, and that drop runs the record's release after it.
+pub fn roc_desc_closure(
+    callable_fn: builtins.erased_callable.CallableFnPtr,
+    record: [*]const u8,
+    hot_reload_code_ref: ?*anyopaque,
+    hot_reload_drop: ?builtins.erased_callable.OnDropFn,
+) callconv(.c) [*]u8 {
+    const erased = builtins.erased_callable;
+    const record_desc: *const TypeDesc = @as(*const *const TypeDesc, @ptrCast(@alignCast(record))).*;
+    const prefix: usize = if (hot_reload_drop != null) erased.hot_reload_capture_prefix_size else 0;
+    const data = erased.allocate(callable_fn, hot_reload_drop orelse &roc_desc_capture_drop, prefix + record_desc.size, ops());
+    const capture = erased.capturePtr(data);
+    if (hot_reload_drop != null) {
+        @as(*erased.HotReloadCaptureHeader, @ptrCast(@alignCast(capture))).* = .{
+            .code_ref = hot_reload_code_ref,
+            .original_on_drop = &roc_desc_capture_drop,
+        };
+    }
+    @memcpy((capture + prefix)[0..record_desc.size], record[0..record_desc.size]);
+    return data;
+}
