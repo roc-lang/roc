@@ -54,8 +54,8 @@ const RunnerError = std.mem.Allocator.Error || std.fmt.ParseIntError || test_har
 const Strategy = base.SpecializationStrategy;
 const strategies = [_]Strategy{ .lss, .boxy };
 
-const Backend = enum { interpreter, dev };
-const backends = [_]Backend{ .interpreter, .dev };
+const Backend = enum { interpreter, dev, wasm };
+const backends = [_]Backend{ .interpreter, .dev, .wasm };
 
 const dev_backend_available = eval.backendAvailable(.dev);
 
@@ -159,6 +159,7 @@ fn execute(gpa: std.mem.Allocator, backend: Backend, lowered: *const helpers.Low
     const result = switch (backend) {
         .interpreter => helpers.inspectedRunResult(gpa, .interpreter, lowered),
         .dev => helpers.inspectedRunResult(gpa, .dev, lowered),
+        .wasm => helpers.inspectedRunResult(gpa, .wasm, lowered),
     } catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return .{ .failed = @errorName(err) },
@@ -176,10 +177,12 @@ const Label = struct {
             .lss => switch (label.backend) {
                 .interpreter => "lss/interpreter",
                 .dev => "lss/dev",
+                .wasm => "lss/wasm",
             },
             .boxy => switch (label.backend) {
                 .interpreter => "boxy/interpreter",
                 .dev => "boxy/dev",
+                .wasm => "boxy/wasm",
             },
         };
     }
@@ -196,7 +199,7 @@ fn runCase(gpa: std.mem.Allocator, io: std.Io, case: Case) std.mem.Allocator.Err
     for (strategies, 0..) |strategy, strategy_index| {
         var compiled = helpers.compileInspectedProgramWithOptions(gpa, io, case.source_kind, case.source, case.imports, .{
             .specialization_strategy = strategy,
-            .wasm = .skip,
+            .wasm = .lower,
         }) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => {
@@ -228,6 +231,7 @@ fn runCase(gpa: std.mem.Allocator, io: std.Io, case: Case) std.mem.Allocator.Err
                     if (strategy_index == 0) try unsupported.appendSlice(gpa, "case skips the interpreter backend\n");
                     continue;
                 },
+                .wasm => {},
                 .dev => {
                     if (!dev_backend_available) {
                         if (strategy_index == 0) try unsupported.appendSlice(gpa, "dev backend unavailable on this host\n");
@@ -239,7 +243,7 @@ fn runCase(gpa: std.mem.Allocator, io: std.Io, case: Case) std.mem.Allocator.Err
                     }
                 },
             }
-            attempts[slot] = try execute(gpa, backend, &compiled.lowered);
+            attempts[slot] = try execute(gpa, backend, if (backend == .wasm) &compiled.wasm_lowered.? else &compiled.lowered);
         }
     }
 
