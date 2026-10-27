@@ -11353,7 +11353,7 @@ test "RC join param move excludes old source from loop body ownership" {
 
 /// Asserts `start` is the call that writes `param`, followed immediately by
 /// the param's release and then the jump into its join.
-fn expectReleasedRightAfterCall(f: *const ArcTest, start: LIR.CFStmtId, param: LIR.LocalId) !void {
+fn expectReleasedRightAfterCall(f: *const ArcTest, start: LIR.CFStmtId, param: LIR.LocalId) ArcTest.ExpectError!void {
     const call = f.store.getCFStmt(start);
     if (call != .assign_call) return error.TestUnexpectedResult;
     try testing.expectEqual(param, call.assign_call.target);
