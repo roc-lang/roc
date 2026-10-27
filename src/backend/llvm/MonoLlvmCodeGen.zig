@@ -11778,6 +11778,11 @@ pub const MonoLlvmCodeGen = struct {
                 }));
             },
             .view => |v| try self.bindComponentAddress(target, try self.wordValue(v.address)),
+            .numeral => |n| _ = try self.callBoxyRuntime("roc_desc_numeral", .void, &.{ ptr_ty, ptr_ty, ptr_ty }, &.{
+                try self.wordValue(n.desc),
+                try self.wordValue(n.table),
+                try self.targetAddress(target),
+            }),
         }
     }
 

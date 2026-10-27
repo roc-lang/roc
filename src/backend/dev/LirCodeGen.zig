@@ -17320,6 +17320,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBoxyRuntime(&builder, "roc_desc_inspect");
                     try self.finishTarget(dst_local, dst);
                 },
+                .numeral => |n| {
+                    const dst = try self.dynTarget(dst_local);
+                    try self.addWordArg(&builder, n.desc);
+                    try self.addWordArg(&builder, n.table);
+                    try addTargetArg(&builder, dst);
+                    try self.callBoxyRuntime(&builder, "roc_desc_numeral");
+                    try self.finishTarget(dst_local, dst);
+                },
                 .view => |v| {
                     // The address word becomes the view's address, or a
                     // closed target loads the bytes there.

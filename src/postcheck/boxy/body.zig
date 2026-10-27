@@ -1601,6 +1601,45 @@ pub const Builder = struct {
         try self.pushValue(try self.builtinNumeral(numeral.literal, try self.exprType(expr_id)));
     }
 
+    /// A numeric literal at the type `ty` a generic body knows by its
+    /// descriptor: the literal's value under every builtin number type,
+    /// selected at runtime by the descriptor.
+    pub fn descriptorNumeral(self: *Builder, literal: NumeralLiteral, ty: TypeId) Allocator.Error!LocalId {
+        const Table = boxy_runtime.desc.NumeralTable;
+        const Scalar = boxy_runtime.desc.Scalar;
+        var table: [Table.size]u8 = @splat(0);
+        var mask: u32 = 0;
+        const exact = self.view.view.module_env.exactNumeral(literal);
+        const exact_numeral = checked.exact_numeral;
+        inline for (.{ "u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64", "u128", "i128" }) |name| {
+            if (exact_numeral.intBits(exact, @field(exact_numeral.Target, name))) |bits| {
+                const scalar = @field(Scalar, name);
+                const wide: u128 = switch (bits) {
+                    .i128 => |v| @bitCast(v),
+                    .u128 => |v| v,
+                };
+                std.mem.writeInt(u128, table[Table.slotOffset(scalar)..][0..16], wide, .little);
+                mask |= @as(u32, 1) << @intCast(@backingInt(scalar));
+            }
+        }
+        const f32_bits: u32 = @bitCast(try exact_numeral.floatBits(f32, self.allocator, exact));
+        std.mem.writeInt(u32, table[Table.slotOffset(.f32)..][0..4], f32_bits, .little);
+        mask |= @as(u32, 1) << @intCast(@backingInt(Scalar.f32));
+        const f64_bits: u64 = @bitCast(try exact_numeral.floatBits(f64, self.allocator, exact));
+        std.mem.writeInt(u64, table[Table.slotOffset(.f64)..][0..8], f64_bits, .little);
+        mask |= @as(u32, 1) << @intCast(@backingInt(Scalar.f64));
+        if (try exact_numeral.decBits(self.allocator, exact)) |dec| {
+            std.mem.writeInt(i128, table[Table.slotOffset(.dec)..][0..16], dec, .little);
+            mask |= @as(u32, 1) << @intCast(@backingInt(Scalar.dec));
+        }
+        std.mem.writeInt(u32, table[0..4], mask, .little);
+        const table_local = try self.closedLocal(.opaque_ptr);
+        try self.emitEntry(.{ .assign_literal = .{ .target = table_local, .value = .{ .static_data = .{ .id = try self.program.static_descs.numeralTableSlot(&table) } }, .next = undefined } });
+        const target = try self.localOf(ty, .frame);
+        try self.emitDyn(target, .{ .numeral = .{ .desc = try self.descOf(ty), .table = table_local } });
+        return target;
+    }
+
     /// A numeric literal at the builtin numeric type `ty`.
     pub fn builtinNumeral(self: *Builder, literal: NumeralLiteral, ty: TypeId) Allocator.Error!LocalId {
         const primitive = switch (self.program.store.get(ty)) {
@@ -1649,6 +1688,14 @@ pub const Builder = struct {
     /// rejection carrying its error message.
     pub fn lowerLiteralConversion(self: *Builder, expr_id: CheckedExprId, plan_id: static_dispatch.StaticDispatchPlanId, kind: LIR.LiteralRejectionKind) Allocator.Error!void {
         const plan = self.dispatchPlan(plan_id);
+        // A numeral whose type a generic body knows only by its descriptor
+        // converts by that descriptor: its evidence carries no dictionary
+        // (design.md "Compiler-generated operands ... compose the
+        // descriptors of what they construct").
+        if (kind == .numeral and plan.resolution == .evidence_dependent) {
+            const literal = self.bodies().expr(expr_id).data.numeral.literal;
+            return try self.pushValue(try self.descriptorNumeral(literal, try self.exprType(expr_id)));
+        }
         const try_ty = switch (self.program.store.get(try self.convert(plan.callable_ty))) {
             .function => |function| function.ret,
             else => invariant("a literal conversion's callable type is not a function type"),

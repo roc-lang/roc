@@ -1404,6 +1404,10 @@ pub const DynOp = union(enum) {
     /// local), which the target's descriptor describes; it borrows from
     /// whatever owns those bytes.
     view: struct { address: LocalId },
+    /// The numeric literal `table` (an `opaque_ptr` to a static
+    /// `NumeralTable` of the Boxy runtime) holds, at the number type `desc`
+    /// describes; the program crashes when the literal does not fit it.
+    numeral: struct { desc: LocalId, table: LocalId },
 };
 
 /// The fields of `CFStmt.decref_if_initialized` other than its condition,

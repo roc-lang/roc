@@ -8732,6 +8732,17 @@ pub const Interpreter = struct {
                 try self.setLocalChecked(frame, stmt_id, target, try self.rocStrToValue(rendered, self.store.getLocal(target).layout_idx), false);
             },
             .view => |v| try self.setComponentTarget(frame, stmt_id, target, @ptrFromInt(try self.localWord(frame, v.address))),
+            .numeral => |n| {
+                const desc = try self.descAt(frame, n.desc);
+                const table: [*]const u8 = @ptrFromInt(try self.localWord(frame, n.table));
+                if (self.store.getLocal(target).dyn != null) {
+                    boxy.walk.numeral(desc, table, try self.dynAddress(frame, target), &self.roc_ops);
+                } else {
+                    const value = try self.alloc(self.store.getLocal(target).layout_idx);
+                    boxy.walk.numeral(desc, table, value.ptr, &self.roc_ops);
+                    try self.setLocalChecked(frame, stmt_id, target, value, false);
+                }
+            },
             .closure => |c| {
                 const record = try self.localBytes(frame, c.capture);
                 const record_desc: *const boxy.TypeDesc = @ptrFromInt(@as(*const usize, @ptrCast(@alignCast(record))).*);

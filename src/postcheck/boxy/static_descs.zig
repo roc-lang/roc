@@ -41,6 +41,7 @@ pub const StaticDescs = struct {
     name_slots: std.AutoHashMapUnmanaged(NameId, Reserved) = .empty,
     pending: std.ArrayList(Pending) = .empty,
     opaque_word: ?LIR.StaticDataId = null,
+    numeral_tables: std.StringHashMapUnmanaged(LIR.StaticDataId) = .empty,
 
     /// A descriptor's identity: a type, or the recursion box around one.
     const Key = struct { ty: TypeId, recursive_box: bool };
@@ -72,6 +73,9 @@ pub const StaticDescs = struct {
         self.exports.deinit(self.allocator);
         self.desc_slots.deinit(self.allocator);
         self.name_slots.deinit(self.allocator);
+        var tables = self.numeral_tables.keyIterator();
+        while (tables.next()) |key| self.allocator.free(key.*);
+        self.numeral_tables.deinit(self.allocator);
         self.pending.deinit(self.allocator);
     }
 
@@ -101,6 +105,16 @@ pub const StaticDescs = struct {
         bytes[desc_layout.of(.scalar)] = @backingInt(desc_format.Scalar.opaque_ptr);
         bytes[desc_layout.of(.sort_key)] = @backingInt(layout.SortKey.pointer);
         self.opaque_word = reserved.slot;
+        return reserved.slot;
+    }
+
+    /// The static-data slot pointing at a numeric literal's
+    /// `NumeralTable` with contents `table`.
+    pub fn numeralTableSlot(self: *StaticDescs, table: []const u8) Allocator.Error!LIR.StaticDataId {
+        if (self.numeral_tables.get(table)) |slot| return slot;
+        const reserved = try self.addSlotWithNode(@intCast(table.len), desc_format.NumeralTable.alignment);
+        @memcpy(@constCast(self.exports.items[reserved.node].bytes), table);
+        try self.numeral_tables.put(self.allocator, try self.allocator.dupe(u8, table), reserved.slot);
         return reserved.slot;
     }
 

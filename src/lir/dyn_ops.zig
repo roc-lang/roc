@@ -55,7 +55,7 @@ pub fn ownership(op: DynOp) Ownership {
         .box_payload_addr => |payload| .{ .borrow_component = payload.box },
         .tag_payload_addr => |payload| .{ .borrow_component = payload.base },
         .view => |view| .{ .borrow_component = view.address },
-        .tag_discriminant, .eq, .hash, .inspect => .borrow_operands,
+        .tag_discriminant, .eq, .hash, .inspect, .numeral => .borrow_operands,
         .record, .tag, .list, .box, .closure => .construct,
         .call_erased => .call_erased,
     };
@@ -178,6 +178,10 @@ pub const Operands = struct {
             },
             .closure => |closure| result.single(closure.capture),
             .view => |view| result.single(view.address),
+            .numeral => |numeral| {
+                result.single(numeral.desc);
+                result.single(numeral.table);
+            },
         }
         return result;
     }
@@ -222,6 +226,7 @@ pub fn borrowedValues(op: DynOp) struct { locals: [2]LocalId, len: u8 } {
         .eq => |eq| .{ .locals = .{ eq.lhs, eq.rhs }, .len = 2 },
         .hash => |hash| .{ .locals = .{ hash.hasher, hash.value }, .len = 2 },
         .inspect => |inspect| .{ .locals = .{ inspect.value, undefined }, .len = 1 },
+        .numeral => .{ .locals = undefined, .len = 0 },
         else => unreachable, // only borrow_operands operations borrow value operands
     };
 }
@@ -302,6 +307,7 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
         .call_erased => |call| .{ .call_erased = .{ .closure = try Remap.one(context, call.closure), .args = try Remap.opt(context, call.args) } },
         .closure => |closure| .{ .closure = .{ .proc = closure.proc, .capture = try Remap.one(context, closure.capture) } },
         .view => |view| .{ .view = .{ .address = try Remap.one(context, view.address) } },
+        .numeral => |numeral| .{ .numeral = .{ .desc = try Remap.one(context, numeral.desc), .table = try Remap.one(context, numeral.table) } },
     };
 }
 
