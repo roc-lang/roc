@@ -18,6 +18,7 @@ const std = @import("std");
 const base = @import("base");
 const check = @import("check");
 const layout = @import("layout");
+const boxy_runtime = @import("boxy_runtime");
 const lir_core = @import("lir_core");
 
 const types = @import("types.zig");
