@@ -3174,7 +3174,18 @@ pub const Builder = struct {
     pub fn buildStruct(self: *Builder, ty: TypeId, fields: []const LocalId) Allocator.Error!LocalId {
         const target = try self.localOf(ty, .frame);
         if (try self.closed(ty)) {
-            try self.emitLinear(.{ .assign_struct = .{ .target = target, .fields = try self.store.addLocalSpan(fields), .next = undefined } });
+            const struct_layout = self.store.getLocal(target).layout_idx;
+            const component_types = try self.structComponentTypes(ty);
+            defer self.allocator.free(component_types);
+            const slots = try self.allocator.alloc(LocalId, fields.len);
+            defer self.allocator.free(slots);
+            for (fields, slots, 0..) |field, *slot, index| {
+                slot.* = if (component_types.len == fields.len and fields.len != 0)
+                    try self.intoSlot(field, component_types[index], self.structFieldLayout(struct_layout, @intCast(index)))
+                else
+                    field;
+            }
+            try self.emitLinear(.{ .assign_struct = .{ .target = target, .fields = try self.store.addLocalSpan(slots), .next = undefined } });
         } else {
             try self.emitDyn(target, .{ .record = .{ .desc = try self.descOf(ty), .fields = try self.store.addLocalSpan(fields) } });
         }
@@ -3224,12 +3235,21 @@ pub const Builder = struct {
         const selected = try self.selectVariant(try self.structuralType(ty), self.ownTag(try self.structuralType(ty), name, values.len));
         const variant = selected.index;
         const target = try self.localOf(ty, .frame);
-        const payload: ?LocalId = switch (values.len) {
-            0 => null,
-            1 => values[0],
-            else => try self.buildStruct((try self.program.layouts.tagPayload(selected.payloads)).?, values),
-        };
         const committed = self.program.result.layouts.getLayout(try self.program.layouts.layoutOf(ty));
+        const payload: ?LocalId = if (values.len == 0 or committed.tag != .tag_union) null else blk: {
+            const payload_layout = try self.variantPayloadLayout(try self.structuralType(ty), variant);
+            if (values.len == 1) break :blk try self.intoSlot(values[0], selected.payloads[0], payload_layout);
+            // A payload of several values is a struct at the variant's
+            // committed payload layout.
+            const slots = try self.allocator.alloc(LocalId, values.len);
+            defer self.allocator.free(slots);
+            for (values, selected.payloads, slots, 0..) |value, payload_ty, *slot, index| {
+                slot.* = try self.intoSlot(value, payload_ty, self.structFieldLayout(payload_layout, @intCast(index)));
+            }
+            const payload_struct = try self.closedLocal(payload_layout);
+            try self.emitLinear(.{ .assign_struct = .{ .target = payload_struct, .fields = try self.store.addLocalSpan(slots), .next = undefined } });
+            break :blk payload_struct;
+        };
         if (committed.tag != .tag_union) {
             // A single-variant union of zero-sized payloads has no tag storage.
             try self.emitLinear(.{ .assign_struct = .{ .target = target, .fields = LIR.LocalSpan.empty(), .next = undefined } });
@@ -3460,25 +3480,16 @@ pub const Builder = struct {
                             }
                             const payloads = self.program.store.span(tags[variant].payloads);
                             for (tag.args, 0..) |arg_pattern, arg_index| {
-                                const payload_local = try self.localOf(payloads[arg_index], .frame);
                                 if (committed.tag != .tag_union) {
                                     // A union without storage has only
                                     // zero-sized payloads.
+                                    const payload_local = try self.localOf(payloads[arg_index], .frame);
                                     if (self.store.getLocal(payload_local).layout_idx != .zst) invariant("a storage-free union has a payload with storage");
                                     try self.emitLinear(.{ .assign_struct = .{ .target = payload_local, .fields = LIR.LocalSpan.empty(), .next = undefined } });
                                     try pending.append(self.allocator, .{ .pattern = arg_pattern, .value = payload_local, .ty = payloads[arg_index] });
                                     continue;
                                 }
-                                // A one-argument payload is the variant's whole payload.
-                                const op = LIR.RefOp.tagPayloadStruct(item.value, @intCast(variant), @intCast(variant));
-                                if (tag.args.len > 1) {
-                                    // A multi-argument payload is a struct.
-                                    const payload_struct = try self.localOf((try self.program.layouts.tagPayload(payloads)).?, .frame);
-                                    try self.emitLinear(.{ .assign_ref = .{ .target = payload_struct, .op = LIR.RefOp.tagPayloadStruct(item.value, @intCast(variant), @intCast(variant)), .next = undefined } });
-                                    try self.emitLinear(.{ .assign_ref = .{ .target = payload_local, .op = LIR.RefOp.field(payload_struct, @intCast(arg_index)), .next = undefined } });
-                                } else {
-                                    try self.emitLinear(.{ .assign_ref = .{ .target = payload_local, .op = op, .next = undefined } });
-                                }
+                                const payload_local = try self.readTagPayload(item.value, structural, variant, payloads, arg_index);
                                 try pending.append(self.allocator, .{ .pattern = arg_pattern, .value = payload_local, .ty = payloads[arg_index] });
                             }
                         },
@@ -3640,6 +3651,22 @@ pub const Builder = struct {
         try self.pushValue(value);
     }
 
+    /// The stored types of a record's or tuple's components, by semantic
+    /// index.
+    pub fn structComponentTypes(self: *Builder, raw_ty: TypeId) Allocator.Error![]TypeId {
+        const ty = try self.structuralType(raw_ty);
+        return switch (self.program.store.get(ty)) {
+            .tuple => |items| try self.allocator.dupe(TypeId, self.program.store.span(items)),
+            .record => |record| blk: {
+                const fields = self.program.store.fieldSpan(record.fields);
+                const out = try self.allocator.alloc(TypeId, fields.len);
+                for (fields, out) |field, *slot| slot.* = try self.program.layouts.fieldStorage(field);
+                break :blk out;
+            },
+            else => try self.allocator.alloc(TypeId, 0),
+        };
+    }
+
     /// `ty` with its nominal wrappers peeled: a nominal type shares its
     /// backing's representation, so a tag or record of a nominal type is
     /// built and matched at its backing.
@@ -3653,9 +3680,13 @@ pub const Builder = struct {
     /// `base` of type `ty`, as a borrowed read.
     pub fn readField(self: *Builder, ty: TypeId, base_local: LocalId, semantic_index: u32, field_ty: TypeId) Allocator.Error!LocalId {
         if (try self.closed(ty)) {
-            const local = try self.localOf(field_ty, .frame);
-            try self.emitLinear(.{ .assign_ref = .{ .target = local, .op = LIR.RefOp.field(base_local, semantic_index), .next = undefined } });
-            return local;
+            const base_layout = self.store.getLocal(base_local).layout_idx;
+            if (self.program.result.layouts.getLayout(base_layout).tag != .struct_) {
+                const local = try self.localOf(field_ty, .frame);
+                try self.emitLinear(.{ .assign_ref = .{ .target = local, .op = LIR.RefOp.field(base_local, semantic_index), .next = undefined } });
+                return local;
+            }
+            return try self.readSlot(LIR.RefOp.field(base_local, semantic_index), field_ty, self.structFieldLayout(base_layout, semantic_index));
         }
         const local = try self.localOf(field_ty, .view);
         try self.emitDyn(local, .{ .field_addr = .{ .base = base_local, .desc = try self.descOf(ty), .semantic_index = semantic_index } });
@@ -3939,15 +3970,68 @@ pub const Builder = struct {
         }
         const variant = try self.closedVariant(ty, name);
         const payload_ty = variant.payloads[index];
-        const local = try self.localOf(payload_ty, .frame);
-        if (variant.payloads.len == 1) {
-            try self.emitLinear(.{ .assign_ref = .{ .target = local, .op = LIR.RefOp.tagPayloadStruct(value, @intCast(variant.index), @intCast(variant.index)), .next = undefined } });
-        } else {
-            const payload_struct = try self.localOf((try self.program.layouts.tagPayload(variant.payloads)).?, .frame);
-            try self.emitLinear(.{ .assign_ref = .{ .target = payload_struct, .op = LIR.RefOp.tagPayloadStruct(value, @intCast(variant.index), @intCast(variant.index)), .next = undefined } });
-            try self.emitLinear(.{ .assign_ref = .{ .target = local, .op = LIR.RefOp.field(payload_struct, index), .next = undefined } });
+        return .{ .value = try self.readTagPayload(value, ty, variant.index, variant.payloads, index), .ty = payload_ty };
+    }
+
+    /// The committed layout a closed tag union stores variant `variant`'s
+    /// payload in.
+    pub fn variantPayloadLayout(self: *Builder, union_ty: TypeId, variant: usize) Allocator.Error!layout.Idx {
+        const layouts = &self.program.result.layouts;
+        const committed = layouts.getLayout(try self.program.layouts.layoutOf(union_ty));
+        if (committed.tag != .tag_union) invariant("a stored tag payload's union has no storage");
+        return layouts.getTagUnionInfo(committed).variants.get(variant).payload_layout;
+    }
+
+    /// Whether a component of type `ty` stored at `slot` is held in a box
+    /// the committed layout inserted to break a recursive type.
+    pub fn isRecursionBox(self: *Builder, slot: layout.Idx, ty: TypeId) Allocator.Error!bool {
+        if (self.program.result.layouts.getLayout(slot).tag != .box) return false;
+        return self.program.store.get(self.program.joins.representative(try self.structuralType(ty))) != .box;
+    }
+
+    /// `value` (of `ty`) as it is stored at `slot`: boxed when the slot is a
+    /// recursion box.
+    pub fn intoSlot(self: *Builder, value: LocalId, ty: TypeId, slot: layout.Idx) Allocator.Error!LocalId {
+        if (!try self.isRecursionBox(slot, ty)) return value;
+        const boxed = try self.closedLocal(slot);
+        try self.emitLowLevel(boxed, .box_box, &.{value});
+        return boxed;
+    }
+
+    /// Read the component at `op`, stored at `slot`, as a value of `ty`:
+    /// unboxed when the slot is a recursion box.
+    pub fn readSlot(self: *Builder, op: LIR.RefOp, ty: TypeId, slot: layout.Idx) Allocator.Error!LocalId {
+        if (!try self.isRecursionBox(slot, ty)) {
+            const local = try self.localOf(ty, .frame);
+            try self.emitLinear(.{ .assign_ref = .{ .target = local, .op = op, .next = undefined } });
+            return local;
         }
-        return .{ .value = local, .ty = payload_ty };
+        const boxed = try self.closedLocal(slot);
+        try self.emitLinear(.{ .assign_ref = .{ .target = boxed, .op = op, .next = undefined } });
+        const local = try self.localOf(ty, .frame);
+        try self.emitLowLevel(local, .box_unbox, &.{boxed});
+        return local;
+    }
+
+    /// Payload `index` of variant `variant` (with payload types `payloads`)
+    /// of the closed tag union `value` of type `union_ty`.
+    pub fn readTagPayload(self: *Builder, value: LocalId, union_ty: TypeId, variant: usize, payloads: []const TypeId, index: usize) Allocator.Error!LocalId {
+        const payload_layout = try self.variantPayloadLayout(union_ty, variant);
+        const whole = LIR.RefOp.tagPayloadStruct(value, @intCast(variant), @intCast(variant));
+        if (payloads.len == 1) return try self.readSlot(whole, payloads[0], payload_layout);
+        const payload_struct = try self.closedLocal(payload_layout);
+        try self.emitLinear(.{ .assign_ref = .{ .target = payload_struct, .op = whole, .next = undefined } });
+        const field_layout = self.structFieldLayout(payload_layout, @intCast(index));
+        return try self.readSlot(LIR.RefOp.field(payload_struct, @intCast(index)), payloads[index], field_layout);
+    }
+
+    /// The committed layout of field `index` (by semantic index) of the
+    /// struct layout `struct_layout`.
+    pub fn structFieldLayout(self: *Builder, struct_layout: layout.Idx, index: u32) layout.Idx {
+        const layouts = &self.program.result.layouts;
+        const committed = layouts.getLayout(struct_layout);
+        if (committed.tag != .struct_) invariant("a component read names a field of a non-struct layout");
+        return layouts.getStructFieldLayoutByOriginalIndex(committed.getStruct().idx, index);
     }
 
     /// Field `name` of the record `value`.
