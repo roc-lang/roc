@@ -18136,9 +18136,21 @@ fn customRocTestCachesLocalDependencyExpects(
         .not_contains = reused_results,
     })) |failure| return failure;
 
-    // Editing the dependency changes its source hash, which must invalidate the
-    // entry it keys and send those roots back through execution.
-    if (writeCaseFile(io, allocator, timer, dep_dir, "Greeting.roc", "# edited\n" ++ dep_module_source)) |failure| return failure;
+    // Editing the dependency's code changes the values its expects compute
+    // from, which must invalidate their stored results and send those roots
+    // back through execution. (A comment-only edit changes no value, so its
+    // results stay reusable.)
+    const edited_dep_module_source =
+        \\Greeting := [].{
+        \\    greet : Str -> Str
+        \\    greet = |name| Str.concat("Hello, ", "${name}!")
+        \\}
+        \\
+        \\expect Greeting.greet("Roc") == "Hello, Roc!"
+        \\expect Greeting.greet("") == "Hello, !"
+        \\
+    ;
+    if (writeCaseFile(io, allocator, timer, dep_dir, "Greeting.roc", edited_dep_module_source)) |failure| return failure;
 
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{"test"},
