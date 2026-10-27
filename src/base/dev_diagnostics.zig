@@ -22,6 +22,8 @@ pub const Var = enum {
     sealed_body_profile,
     /// Exercise validated completed specialization-body replay.
     completed_body_cache,
+    /// Separate coordinator request-resolution costs into exclusive phases.
+    spec_resolution_profile,
     /// Print the final LIR of every procedure whose debug name contains the value.
     lir_dump,
     /// Print every closed specialization key.
@@ -58,6 +60,7 @@ pub const Var = enum {
         return switch (self) {
             .sealed_body_profile => "ROC_SEALED_BODY_PROFILE",
             .completed_body_cache => "ROC_COMPLETED_BODY_CACHE",
+            .spec_resolution_profile => "ROC_SPEC_RESOLUTION_PROFILE",
             .trace_boxy_work => "ROC_TRACE_BOXY_WORK",
             .lir_dump => "ROC_LIR_DUMP",
             .spec_census => "ROC_SPEC_CENSUS",

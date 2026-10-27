@@ -1295,6 +1295,51 @@ const ParallelCoordinatorTimingScope = struct {
     }
 };
 
+const ResolutionProfile = struct {
+    const Phase = enum { evidence_completion, evidence_encoding, identity, local_lookup, local_reuse, native_lookup, evidence_copy, reservation, body_address, discovery_dispatch, immediate_body, demand_shape };
+    const count = @typeInfo(Phase).@"enum".field_names.len;
+    ns: [count]u64 = @splat(0),
+    entries: [count]u64 = @splat(0),
+    active: ?Phase = null,
+    started: i64 = 0,
+
+    fn transition(self: *ResolutionProfile, next: ?Phase) void {
+        const now = timingNowNs(std.Io.Threaded.global_single_threaded.io());
+        if (self.active) |phase| self.ns[@backingInt(phase)] +%= @intCast(@max(0, now - self.started));
+        self.started = now;
+        self.active = next;
+    }
+
+    fn report(self: *const ResolutionProfile) void {
+        if (!dev_diagnostics.isSet(.spec_resolution_profile)) return;
+        inline for (@typeInfo(Phase).@"enum".field_names, 0..) |name, i| {
+            if (self.entries[i] != 0) std.debug.print("resolution-profile phase={s} ns={d} entries={d}\n", .{ name, self.ns[i], self.entries[i] });
+        }
+    }
+
+    const Scope = struct {
+        profile: ?*ResolutionProfile = null,
+        previous: ?Phase = null,
+        fn begin(profile: *ResolutionProfile, phase: Phase) Scope {
+            if (!dev_diagnostics.isSet(.spec_resolution_profile)) return .{};
+            const previous = profile.active;
+            profile.transition(phase);
+            profile.entries[@backingInt(phase)] += 1;
+            return .{ .profile = profile, .previous = previous };
+        }
+        fn enter(self: *Scope, phase: Phase) void {
+            const profile = self.profile orelse return;
+            profile.transition(phase);
+            profile.entries[@backingInt(phase)] += 1;
+        }
+        fn end(self: *Scope) void {
+            const profile = self.profile orelse return;
+            profile.transition(self.previous);
+            self.profile = null;
+        }
+    };
+};
+
 const BodyWorkTimingPhase = enum {
     type_graph,
     call_dispatch,
@@ -5301,6 +5346,7 @@ const LoweringModuleIds = std.AutoHashMap([32]u8, Common.LoweringModuleId);
 const CheckedOccurrence = struct { module: checked.ModuleId, ty: checked.CheckedTypeId };
 
 const Builder = struct {
+    resolution_profile: ResolutionProfile = .{},
     /// `appModuleIdentity` of this lowering's modules.
     app_module_identity: ?[32]u8,
     allocator: Allocator,
@@ -5943,6 +5989,7 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        self.resolution_profile.report();
         self.allocator.free(self.program_module_buffer);
         deinitSpecJobLanes(self.allocator, self.spec_job_lanes);
         for (self.lower_frame_pool.items) |*frames| frames.deinit(self.allocator);
@@ -8809,6 +8856,8 @@ const Builder = struct {
     ) Allocator.Error!Ast.DefId {
         var lookup_timing_scope = ProcedureTimingScope.begin(self.timing, .lookup_reservation);
         defer lookup_timing_scope.end();
+        var resolution_profile = ResolutionProfile.Scope.begin(&self.resolution_profile, .evidence_completion);
+        defer resolution_profile.end();
 
         if (request_accounting == .count) self.count("template_requests");
         const lower_fn_ty = fn_ty;
@@ -8826,9 +8875,11 @@ const Builder = struct {
         else
             rootEvidence(template_ref, spec_evidence);
         const identity_topology = source_topology orelse rootEvidence(template_ref, spec_evidence);
+        resolution_profile.enter(.evidence_encoding);
         const identity_evidence = try self.constFnEvidence(identity_topology);
         const evidence_digest = identity_evidence.digest;
         const stored_source_topology = if (source_topology != null) identity_evidence else null;
+        resolution_profile.enter(.identity);
         const request_digest = precomputed_request_digest orelse self.specializationTypeDigest(fn_ty);
         const spec_identity = self.templateSpecIdentity(
             template_ref,
@@ -8838,7 +8889,9 @@ const Builder = struct {
             fn_ty,
             request_digest,
         );
+        resolution_profile.enter(.local_lookup);
         if (try self.spec_store.findLocal(spec_identity, specializationEvidenceView(identity_evidence))) |hit| {
+            resolution_profile.enter(.local_reuse);
             if (request_accounting == .count) self.count("template_hits");
             const existing = self.lowered_templates.get(hit.fn_id) orelse
                 Common.invariant("Monotype specialization index found a local template missing from lowering state");
@@ -8903,6 +8956,7 @@ const Builder = struct {
             if (request_accounting == .count) self.count("template_misses");
         }
 
+        resolution_profile.enter(.native_lookup);
         var fn_template = self.fnDefForTemplate(view, template_ref, source_fn_ty, source_fn_key, lower_fn_ty);
         fn_template.evidence_digest = evidence_digest;
         // Only a closed request names a specialization the object cache can
@@ -8952,12 +9006,14 @@ const Builder = struct {
                 } else if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("lookup monotype key={x} miss\n", .{key.bytes[0..8]});
             };
         }
+        resolution_profile.enter(.evidence_copy);
         if (stored_source_topology) |stored_evidence| {
             fn_template.const_evidence = try self.program.addConstFnEvidence(stored_evidence.entries);
             fn_template.const_evidence_frames = try self.program.addConstFnEvidenceFrames(stored_evidence.frames);
             fn_template.const_evidence_frame_head = stored_evidence.head;
         }
 
+        resolution_profile.enter(.reservation);
         const ReservedSpec = struct { reservation: TemplateReservation, spec: Ast.SpecId };
         const reserved: ReservedSpec = blk: {
             // This reservation is appended directly to the durable Program even
@@ -9016,6 +9072,7 @@ const Builder = struct {
                 if (retained_topology != null) {
                     Common.invariant("queued Monotype specialization request cannot carry a retained lexical topology");
                 }
+                resolution_profile.enter(.body_address);
                 const job: PendingSpecJob = .{
                     .completed_body_address = if (dev_diagnostics.isSet(.completed_body_cache)) try self.completedBodyAddress(spec_identity, view, method_scope, source_fn_key, subst, signature_relation, demand) else null,
                     .profile_key = if (dev_diagnostics.isSet(.sealed_body_profile)) Ast.specIdentityKey(spec_identity).bytes else @splat(0),
@@ -9034,6 +9091,7 @@ const Builder = struct {
                     .codec_contract = codec_contract,
                     .demand = demand,
                 };
+                resolution_profile.enter(.discovery_dispatch);
                 if (self.parking_root_job) {
                     // A demand-driven root's body waits until the program
                     // demands the root; its dispatch index is assigned when
@@ -9077,6 +9135,7 @@ const Builder = struct {
             },
         }
 
+        resolution_profile.enter(.immediate_body);
         if (self.spec_job_parallel_callback) {
             Common.compilerBug("parallel specialization worker attempted coordinator-owned immediate completion");
         }
@@ -15369,6 +15428,8 @@ const Builder = struct {
         fn_ty: Type.TypeId,
         subst: SealedSubstitution,
     ) Allocator.Error!?ShapedRequest {
+        var resolution_profile = ResolutionProfile.Scope.begin(&self.resolution_profile, .demand_shape);
+        defer resolution_profile.end();
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
         const demands = view.templates.templateDemands(&template);

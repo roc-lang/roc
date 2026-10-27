@@ -26539,6 +26539,12 @@ cases that set one of these variables skip against a compiler without them.
 Performance work that needs them on an optimized compiler builds it with
 `zig build roc -Doptimize=ReleaseFast -Ddev-diagnostics`.
 
+`spec_resolution_profile` records exclusive coordinator request-resolution
+phases. Nested resolution pauses its parent's phase, and resuming restores
+that phase; these durations must not double-count recursive resolution. Each
+builder owns its counters and prints them on destruction. This is diagnostic
+measurement only and does not alter specialization or cache admission.
+
 `ROC_TEST_COMMAND_WORK` prints deterministic test-command counters at exit.
 The specialization, evaluation, runtime LIR, ARC, static-data and native test
 execution producers increment their own counters. A complete result hit leaves
