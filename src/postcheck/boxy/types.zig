@@ -505,6 +505,14 @@ pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
 pub const Converter = struct {
     store: *Store,
     modules: *const Modules,
+    /// For row-join seeding: the scheme variables of every scope of the
+    /// module being seeded. A variable among them is a scheme variable in the
+    /// body lowering converts it in, so it seeds as a variable, keeping the
+    /// types it occurs in out of every ground join set.
+    seed_scheme_vars: ?*const std.AutoHashMapUnmanaged(checked.CheckedTypeId, void) = null,
+
+    /// The variable a seeding conversion gives a scheme variable.
+    pub const seed_variable_index: u32 = std.math.maxInt(u32);
 
     const Frame = struct {
         module: ModuleIndex,
@@ -577,8 +585,12 @@ pub const Converter = struct {
         }
         return switch (view.types().payload(ty)) {
             .pending => invariant("a pending checked type reached Boxy lowering"),
-            .err => invariant("an erroneous checked type reached Boxy lowering"),
-            .flex, .rigid => |variable| try self.sealVariable(variable),
+            .err => if (self.seed_scheme_vars != null)
+                // A rejected type is never lowered; it joins nothing.
+                try self.store.variable(seed_variable_index)
+            else
+                invariant("an erroneous checked type reached Boxy lowering"),
+            .flex, .rigid => |variable| if (self.seed_scheme_vars) |vars| (if (vars.contains(ty)) try self.store.variable(seed_variable_index) else try self.sealVariable(variable)) else try self.sealVariable(variable),
             .empty_record => try self.store.emptyRecord(),
             .empty_tag_union => try self.store.emptyTagUnion(),
             .nominal => |nominal| switch (nominal.representation) {
@@ -814,6 +826,23 @@ pub const Converter = struct {
             },
             .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => unreachable, // `leaf` answers these
         }
+    }
+
+    /// The representation of `Encoding.FieldName`: a record field's
+    /// position in its record, its (renamed) name, and the name's length.
+    pub fn fieldHandle(self: Converter) Allocator.Error!TypeId {
+        const u64_ty = try self.store.primitive(.u64);
+        var fields = [_]Field{
+            .{ .name = try self.store.internName("index"), .ty = u64_ty, .kind = .inline_slot },
+            .{ .name = try self.store.internName("name"), .ty = try self.store.primitive(.str), .kind = .inline_slot },
+            .{ .name = try self.store.internName("name_len"), .ty = u64_ty, .kind = .inline_slot },
+        };
+        std.mem.sort(Field, &fields, self.store, struct {
+            fn lessThan(s: *Store, a: Field, b: Field) bool {
+                return s.nameLessThan(a.name, b.name);
+            }
+        }.lessThan);
+        return try self.store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
     }
 
     fn fieldKind(kind: checked.CheckedFieldKind) FieldKind {

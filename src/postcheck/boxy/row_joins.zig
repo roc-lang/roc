@@ -45,6 +45,8 @@ pub const Joins = struct {
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, .{ a, b });
         while (pending.pop()) |pair| {
+            // A variable is no flow of any one type: it joins nothing.
+            if (store.get(pair[0]) == .variable or store.get(pair[1]) == .variable) continue;
             const left = self.find(pair[0]);
             const right = self.find(pair[1]);
             if (left == right) continue;

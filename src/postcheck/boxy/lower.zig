@@ -101,13 +101,34 @@ pub const Worker = struct {
     captures: []const checked.CheckedCapture = &.{},
     /// For a lambda worker: the stored type of each captured value.
     capture_types: []const TypeId = &.{},
-    /// For a lambda worker: the outer worker's dictionaries it captures.
-    captured_dictionaries: u32 = 0,
-    /// The canonical evidence-parameter index of each dictionary in scope:
-    /// a template's own runtime dictionaries, or the ones a lambda
-    /// captures from its outer worker.
-    scope_dictionary_indices: []const u32 = &.{},
+    /// The dictionaries in scope, by generalized scope, innermost first:
+    /// each scope's runtime evidence-parameter indices. A template has its
+    /// own scope; a lambda shares its outer worker's scopes; a generalized
+    /// local procedure has its own scope inside its outer worker's.
+    dict_scopes: []const []const u32 = &.{},
+    /// For a generalized local procedure: how many descriptors and
+    /// dictionaries of its own scope its argument record carries before its
+    /// explicit arguments (they vary per call, unlike its captures).
+    own_descs: u32 = 0,
+    own_dicts: u32 = 0,
+
+    /// The dictionaries a lambda worker captures: every scope's but its own.
+    pub fn capturedDictionaryCount(self: Worker) u32 {
+        var count: u32 = 0;
+        for (self.dict_scopes) |scope| count += @intCast(scope.len);
+        return count - self.own_dicts;
+    }
 };
+
+/// A generalized local procedure's own scheme: its quantified variables and
+/// its runtime evidence-parameter indices.
+pub const LocalScheme = struct {
+    scheme_vars: []const checked.CheckedTypeId,
+    dictionaries: []const u32,
+};
+
+/// A checked expression by its module in this lowering.
+pub const ExprKey = struct { module: ModuleIndex, expr: checked.CheckedExprId };
 
 /// A procedure template by its module in this lowering.
 pub const TemplateKey = struct { module: ModuleIndex, template: canonical.CheckedProcedureTemplateId };
@@ -137,6 +158,8 @@ pub const Program = struct {
     arena: std.heap.ArenaAllocator,
     /// The host binding of each hosted procedure template.
     hosted: std.AutoHashMapUnmanaged(TemplateKey, HostedEntry) = .empty,
+    /// The generalized-local scope a lambda or closure expression owns.
+    local_scopes: std.AutoHashMapUnmanaged(ExprKey, checked.DispatchScopeId) = .empty,
 
     pub fn converter(self: *Program) types.Converter {
         return .{ .store = &self.store, .modules = &self.modules };
@@ -218,7 +241,7 @@ pub const Program = struct {
             .dictionary_params = dictionary_params.items,
             .params = params,
             .ret = signature.ret,
-            .scope_dictionary_indices = dictionary_params.items,
+            .dict_scopes = try self.arena.allocator().dupe([]const u32, &.{dictionary_params.items}),
         });
         try self.worker_ids.put(self.allocator, key, id);
         return id;
@@ -238,6 +261,7 @@ pub const Program = struct {
         captures: []const checked.CheckedCapture,
         capture_types: []const TypeId,
         fn_ty: TypeId,
+        own: ?LocalScheme,
     ) Allocator.Error!WorkerId {
         const outer_worker = self.worker(outer).*;
         const key: WorkerKey = .{ .lambda = .{ .module = outer_worker.module, .expr = lambda_expr, .outer = outer } };
@@ -258,14 +282,15 @@ pub const Program = struct {
             .key = key,
             .proc = proc,
             .module = outer_worker.module,
-            .scheme_vars = outer_worker.scheme_vars,
+            .scheme_vars = if (own) |scheme| try std.mem.concat(self.arena.allocator(), checked.CheckedTypeId, &.{ outer_worker.scheme_vars, scheme.scheme_vars }) else outer_worker.scheme_vars,
             .dictionary_params = &.{},
             .params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args)),
             .ret = signature.ret,
             .captures = try self.arena.allocator().dupe(checked.CheckedCapture, captures),
             .capture_types = try self.arena.allocator().dupe(TypeId, capture_types),
-            .captured_dictionaries = @intCast(outer_worker.scope_dictionary_indices.len),
-            .scope_dictionary_indices = outer_worker.scope_dictionary_indices,
+            .dict_scopes = if (own) |scheme| try std.mem.concat(self.arena.allocator(), []const u32, &.{ &.{scheme.dictionaries}, outer_worker.dict_scopes }) else outer_worker.dict_scopes,
+            .own_descs = if (own) |scheme| @intCast(scheme.scheme_vars.len) else 0,
+            .own_dicts = if (own) |scheme| @intCast(scheme.dictionaries.len) else 0,
         });
         try self.worker_ids.put(self.allocator, key, id);
         try self.worklist.append(self.allocator, id);
@@ -401,6 +426,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.worklist.deinit(allocator);
         program.by_module_idx.deinit(allocator);
         program.hosted.deinit(allocator);
+        program.local_scopes.deinit(allocator);
         program.arena.deinit();
     }
     errdefer program.result.deinit();
@@ -422,8 +448,21 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     }
     try seedSourceFiles(&program);
     try initHosted(&program);
+    for (program.modules.views.items) |*view| {
+        const bodies = view.bodies();
+        for (view.view.checked_procedure_templates.dispatch_scopes, 0..) |scope, index| {
+            const id: checked.DispatchScopeId = @fromBackingInt(@intCast(index));
+            try program.local_scopes.put(allocator, .{ .module = view.index, .expr = scope.checked_expr }, id);
+            switch (bodies.expr(scope.checked_expr).data) {
+                .closure => |closure| try program.local_scopes.put(allocator, .{ .module = view.index, .expr = closure.lambda }, id),
+                else => {},
+            }
+        }
+    }
 
-    // Row joins are sealed before any layout is committed.
+    // Row joins are seeded from every checked body and sealed before any
+    // layout is committed.
+    try seedRowJoins(&program);
     try program.joins.seal(&program.store);
 
     const requests = input.roots.requests;
@@ -482,6 +521,57 @@ fn seedSourceFiles(program: *Program) Allocator.Error!void {
 
 /// A root's procedure: its template's worker, which a host-shaped wrapper
 /// would call with static hidden arguments when the worker has any.
+/// Seed the row joins (design.md "Row Joins"): each `row_coerce` with its
+/// value, each lambda's body with its function's result, and each `return`
+/// with its function's result, in every module's checked bodies.
+fn seedRowJoins(program: *Program) Allocator.Error!void {
+    const allocator = program.allocator;
+    for (program.modules.views.items) |*view| {
+        var scheme_vars: std.AutoHashMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        defer scheme_vars.deinit(allocator);
+        for (view.view.checked_procedure_templates.scheme_vars_pool) |variable| try scheme_vars.put(allocator, variable, {});
+        var converter = program.converter();
+        converter.seed_scheme_vars = &scheme_vars;
+        const bodies = view.bodies();
+        for (0..bodies.exprCount()) |index| {
+            const id: checked.CheckedExprId = @fromBackingInt(@intCast(index));
+            const expr = bodies.expr(id);
+            const pair: [2]checked.CheckedTypeId = switch (expr.data) {
+                .row_coerce => |coerce| .{ expr.ty, bodies.expr(coerce.value).ty },
+                .lambda => |lambda| .{ checkedResult(view, expr.ty) orelse continue, bodies.expr(lambda.body).ty },
+                .return_ => |ret| .{ checkedResult(view, bodies.expr(ret.lambda).ty) orelse continue, bodies.expr(ret.expr).ty },
+                else => continue,
+            };
+            try seedJoin(program, converter, view.index, pair);
+        }
+        for (0..bodies.statementCount()) |index| {
+            const id: checked.CheckedStatementId = @fromBackingInt(@intCast(index));
+            switch (bodies.statement(id).data) {
+                .return_ => |ret| try seedJoin(program, converter, view.index, .{ checkedResult(view, bodies.expr(ret.lambda).ty) orelse continue, bodies.expr(ret.expr).ty }),
+                else => {},
+            }
+        }
+    }
+}
+
+/// Join the types of a flow edge; one type flowing to itself joins nothing.
+fn seedJoin(program: *Program, converter: types.Converter, module_index: ModuleIndex, pair: [2]checked.CheckedTypeId) Allocator.Error!void {
+    if (pair[0] == pair[1]) return;
+    const env: types.Env = .{ .module = module_index, .vars = &.{}, .bound = &.{} };
+    try program.joins.join(&program.store, try converter.convert(module_index, pair[0], env), try converter.convert(module_index, pair[1], env));
+}
+
+/// The checked result type of a lambda's function type, through aliases; a
+/// rejected lambda's type has none.
+fn checkedResult(view: *const types.ModuleView, fn_ty: checked.CheckedTypeId) ?checked.CheckedTypeId {
+    var current = fn_ty;
+    while (true) switch (view.types().payload(current)) {
+        .alias => |alias| current = alias.backing,
+        .function => |function| return function.ret,
+        else => return null,
+    };
+}
+
 /// Bind every hosted procedure in scope to its external symbol and dispatch
 /// slot: the platform header's hosted section, in order, when a platform is
 /// in scope; otherwise every declaration in a stable order.
