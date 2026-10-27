@@ -69,6 +69,9 @@ const NameEntry = struct { record: TypeId, label: NameId };
 
 pub const Family = struct {
     module: ModuleIndex,
+    /// The family's type variables (the derivation's), which every family
+    /// worker takes as hidden descriptors.
+    env: types.Env,
     kind: Kind,
     root: DerivationId,
     /// The value type the codec reads or writes.
@@ -150,12 +153,56 @@ fn emptyEnv(module: ModuleIndex) types.Env {
     return .{ .module = module, .vars = &.{}, .bound = &.{} };
 }
 
-/// A contract type: its variables seal to their defaults and its
+/// A contract type: its variables are the family's type variables, and its
 /// undetermined field kinds commit to `required`, as no caller pins them.
-fn convertIn(program: *Program, module: ModuleIndex, ty: checked.CheckedTypeId) Allocator.Error!TypeId {
+fn convertIn(program: *Program, env: types.Env, ty: checked.CheckedTypeId) Allocator.Error!TypeId {
     var converter = program.converter();
     converter.seal_undetermined_kinds = true;
-    return converter.convert(module, ty, emptyEnv(module));
+    return converter.convert(env.module, ty, env);
+}
+
+/// The type variables of a derivation: those its constructor type mentions,
+/// in first-visit order, each bound to the family's variable at its index.
+fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.CheckedTypeId) Allocator.Error!types.Env {
+    const allocator = program.allocator;
+    const store = program.module(module).types();
+    var vars: std.ArrayList(checked.CheckedTypeId) = .empty;
+    defer vars.deinit(allocator);
+    var seen: std.AutoHashMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+    defer seen.deinit(allocator);
+    var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+    defer pending.deinit(allocator);
+    try pending.append(allocator, constructor_ty);
+    while (pending.pop()) |ty| {
+        if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+        const start = pending.items.len;
+        switch (store.payload(ty)) {
+            .flex, .rigid => try vars.append(allocator, ty),
+            .alias => |alias| try pending.append(allocator, alias.backing),
+            .record => |record| {
+                for (record.fields) |field| try pending.append(allocator, field.ty);
+                try pending.append(allocator, record.ext);
+            },
+            .tuple => |items| try pending.appendSlice(allocator, items),
+            .nominal => |nominal| try pending.appendSlice(allocator, nominal.args),
+            .function => |function| {
+                try pending.appendSlice(allocator, function.args);
+                try pending.append(allocator, function.ret);
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(store));
+                try pending.append(allocator, tag_union.ext);
+            },
+            .empty_record, .empty_tag_union => {},
+            .pending, .err => invariant("a generated codec contract's type is not a checked type"),
+        }
+        // Components are visited in source order.
+        std.mem.reverse(checked.CheckedTypeId, pending.items[start..]);
+    }
+    const arena = program.arena.allocator();
+    const bound = try arena.alloc(TypeId, vars.items.len);
+    for (bound, 0..) |*slot, index| slot.* = try program.store.variable(@intCast(index));
+    return .{ .module = module, .vars = try arena.dupe(checked.CheckedTypeId, vars.items), .bound = bound };
 }
 
 fn functionOf(program: *Program, ty: TypeId) @FieldType(types.Node, "function") {
@@ -186,7 +233,8 @@ pub fn familyFor(program: *Program, module: ModuleIndex, id: DerivationId) Alloc
     const key: FamilyKey = .{ .kind = kind, .digest = derivation.content.bytes };
     if (state.family_ids.get(key)) |existing| return existing;
 
-    const constructor_fn = try convertIn(program, module, derivation.constructor_ty);
+    const env = try contractEnv(program, module, derivation.constructor_ty);
+    const constructor_fn = try convertIn(program, env, derivation.constructor_ty);
     if (fnArgs(program, constructor_fn).len != 1) invariant("a generated codec constructor does not take one encoding");
     const encoding_ty = fnArgs(program, constructor_fn)[0];
     const runtime_fn = fnRet(program, constructor_fn);
@@ -195,21 +243,18 @@ pub fn familyFor(program: *Program, module: ModuleIndex, id: DerivationId) Alloc
         .parser => if (runtime_args.len == 1) runtime_args[0] else invariant("a generated parser's runtime does not take one state"),
         .encoder => if (runtime_args.len == 2) runtime_args[1] else invariant("a generated encoder's runtime does not take a value and a state"),
     };
-    const shape = try convertIn(program, module, derivation.shape_ty);
+    const shape = try convertIn(program, env, derivation.shape_ty);
+    // The codec walks a value whose shape its contract fixes; only the
+    // results (their error rows) vary with the family's variables.
     const conv = program.converter();
-    if (!try conv.representationClosed(constructor_fn) or !try conv.representationClosed(fnRet(program, runtime_fn)) or
-        !try conv.representationClosed(shape))
-    {
-        invariant("generated codecs over open types are not yet lowered by Boxy");
-    }
-    var arg_index: usize = 0;
-    while (arg_index < fnArgs(program, runtime_fn).len) : (arg_index += 1) {
-        if (!try conv.representationClosed(fnArgs(program, runtime_fn)[arg_index])) invariant("generated codecs over open types are not yet lowered by Boxy");
+    if (!try conv.representationClosed(shape) or !try conv.representationClosed(encoding_ty) or !try conv.representationClosed(state_ty)) {
+        invariant("generated codecs over open value shapes are not yet lowered by Boxy");
     }
 
     const index: u32 = @intCast(state.families.items.len);
     try state.families.append(allocator, .{
         .module = module,
+        .env = env,
         .kind = kind,
         .root = id,
         .shape = shape,
@@ -262,6 +307,7 @@ fn peelable(nominal: types.Nominal) bool {
 fn collectCalls(program: *Program, family_index: u32) Allocator.Error!void {
     const allocator = program.allocator;
     const module = program.codec.families.items[family_index].module;
+    const env = program.codec.families.items[family_index].env;
     const table = program.module(module).view.static_dispatch_plans;
     const names = program.module(module).nameStore();
     var visited: std.AutoHashMapUnmanaged(DerivationId, void) = .empty;
@@ -275,13 +321,13 @@ fn collectCalls(program: *Program, family_index: u32) Allocator.Error!void {
         for (derivation.callsSlice(table)) |call| {
             const method = try methodName(program, names.methodNameText(call.method));
             const subject = if (call.subject_ty) |subject_ty|
-                try subjectKey(program, method, try convertIn(program, module, subject_ty))
+                try subjectKey(program, method, try convertIn(program, env, subject_ty))
             else
                 no_subject;
             const resolved: Resolved = switch (call.resolution) {
                 .pending => invariant("a generated codec contract retained an unlinked call"),
-                .checked_error => .{ .checked_error = try convertIn(program, module, call.callable_ty) },
-                .callable => |node| .{ .callable = .{ .node = node, .fn_ty = try convertIn(program, module, call.callable_ty), .checked_fn = call.callable_ty } },
+                .checked_error => .{ .checked_error = try convertIn(program, env, call.callable_ty) },
+                .callable => |node| .{ .callable = .{ .node = node, .fn_ty = try convertIn(program, env, call.callable_ty), .checked_fn = call.callable_ty } },
                 .structural => |nested| blk: {
                     if ((try visited.getOrPut(allocator, nested)).found_existing == false) try pending.append(allocator, nested);
                     break :blk .{ .structural = nested };
@@ -517,6 +563,7 @@ fn planNames(program: *Program, family_index: u32) Allocator.Error!void {
 
 /// The worker of `piece`, created on first request.
 fn pieceWorker(program: *Program, module: ModuleIndex, piece: Piece, params: []const TypeId, ret: TypeId, captures: []const TypeId, erased: bool) Allocator.Error!WorkerId {
+    const scheme_vars: []const checked.CheckedTypeId = if (piece.family == no_family) &.{} else program.codec.families.items[piece.family].env.vars;
     const state = &program.codec;
     if (state.piece_ids.get(piece)) |existing| return existing;
     const arena = program.arena.allocator();
@@ -536,7 +583,7 @@ fn pieceWorker(program: *Program, module: ModuleIndex, piece: Piece, params: []c
         .key = key,
         .proc = proc,
         .module = module,
-        .scheme_vars = &.{},
+        .scheme_vars = scheme_vars,
         .dictionary_params = &.{},
         .params = try arena.dupe(TypeId, params),
         .ret = ret,
@@ -601,7 +648,20 @@ fn callbackWorker(program: *Program, family_index: u32, piece: Piece, fn_ty: Typ
 pub fn dictionary(b: *Builder, structural: static_dispatch.StructuralEvidence) Allocator.Error!LocalId {
     const id = structural.generated_codec_derivation orelse invariant("structural codec evidence names no generated derivation");
     const family = try familyFor(b.program, b.module, id);
-    return try b.composeDictionary(try constructorWorker(b.program, family), &.{});
+    const descs = try familyDescs(b, family, b.program.codec.families.items[family].constructor_fn, try b.convert(structural.callable_ty));
+    defer b.allocator.free(descs);
+    return try b.composeDictionary(try constructorWorker(b.program, family), descs);
+}
+
+/// The descriptors of a family's variables at a use whose type `actual`
+/// instantiates the family's `formal` type.
+fn familyDescs(b: *Builder, family: u32, formal: TypeId, actual: TypeId) Allocator.Error![]LocalId {
+    const count = b.program.codec.families.items[family].env.vars.len;
+    const bound = try b.relateVariables(formal, actual, count);
+    defer b.allocator.free(bound);
+    const descs = try b.allocator.alloc(LocalId, count);
+    for (bound, descs) |ty, *desc| desc.* = try b.descOf(ty);
+    return descs;
 }
 
 /// A structural `parser_for`/`encoder_for` dispatch: the derivation's
@@ -610,8 +670,10 @@ pub fn dispatch(b: *Builder, call_plan: static_dispatch.StaticDispatchCallPlan, 
     const id = call_plan.generated_codec_derivation orelse invariant("a structural codec dispatch names no generated derivation");
     if (operands.len != 1) invariant("a structural codec dispatch does not take one encoding");
     const family = try familyFor(b.program, b.module, id);
-    const constructor = try b.composeDictionary(try constructorWorker(b.program, family), &.{});
     const fn_ty = try b.convert(call_plan.callable_ty);
+    const descs = try familyDescs(b, family, b.program.codec.families.items[family].constructor_fn, fn_ty);
+    defer b.allocator.free(descs);
+    const constructor = try b.composeDictionary(try constructorWorker(b.program, family), descs);
     try b.push(.{ .finish_erased_call = .{ .fn_ty = fn_ty, .arg_count = 1, .result = result_ty } });
     try b.pushOperand(operands[0], operand_types[0]);
     try b.pushValue(constructor);
@@ -620,7 +682,7 @@ pub fn dispatch(b: *Builder, call_plan: static_dispatch.StaticDispatchCallPlan, 
 /// Restore a stored generated runtime: its family's runtime callable over
 /// the stored encoding and renamed names. Compile-time evaluation numbered
 /// those captures in the family's name order after the encoding.
-pub fn restoreRuntime(b: *Builder, module_index: ModuleIndex, fn_id: check.ConstStore.ConstFnId, owner: check.CheckedNames.ProcTemplate, expr: checked.CheckedExprId) Allocator.Error!void {
+pub fn restoreRuntime(b: *Builder, module_index: ModuleIndex, fn_id: check.ConstStore.ConstFnId, owner: check.CheckedNames.ProcTemplate, expr: checked.CheckedExprId, fn_ty: TypeId) Allocator.Error!void {
     const program = b.program;
     const stored = program.module(module_index).view.const_store.getFn(fn_id);
     const owner_view = program.moduleByKey(.{ .bytes = owner.artifact.bytes });
@@ -633,7 +695,9 @@ pub fn restoreRuntime(b: *Builder, module_index: ModuleIndex, fn_id: check.Const
     const family = try familyFor(program, owner_view.index, derivation);
     const worker = try runtimeWorker(program, family);
     const captures = try runtimeCaptures(program, family);
-    try b.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = &.{}, .capture_types = captures } });
+    const descs = try familyDescs(b, family, program.codec.families.items[family].runtime_fn, fn_ty);
+    try b.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = try program.arena.allocator().dupe(LocalId, descs), .capture_types = captures } });
+    b.allocator.free(descs);
     var index = captures.len;
     while (index > 0) {
         index -= 1;
@@ -745,7 +809,7 @@ const Gen = struct {
     }
 
     fn local(self: *Gen, ty: TypeId) Allocator.Error!LocalId {
-        return self.b.closedLocal(try self.layoutOf(ty));
+        return self.b.localOf(ty, .frame);
     }
 
     fn u64Ty(self: *Gen) Allocator.Error!TypeId {
@@ -789,7 +853,13 @@ const Gen = struct {
     }
 
     fn ret(self: *Gen, value: LocalId) Allocator.Error!void {
-        try self.b.emitTerminal(.{ .ret = .{ .value = value } });
+        const b = self.b;
+        if (b.result_local) |result| {
+            try b.emitDyn(result, .{ .copy = .{ .src = value, .desc = b.store.localDyn(result).?.desc } });
+            try b.emitTerminal(.{ .ret = .{ .value = result } });
+        } else {
+            try b.emitTerminal(.{ .ret = .{ .value = value } });
+        }
     }
 
     // -- Control flow --
@@ -1016,37 +1086,15 @@ const Gen = struct {
                 // instantiation, and the target's own evidence is the edge's
                 // nested evidence (design.md "Workers And Hidden Parameters").
                 const target_worker = program_.worker(callee).*;
-                const bound = try b.allocator.alloc(TypeId, target_worker.scheme_vars.len);
-                defer b.allocator.free(bound);
-                switch (node.instantiation) {
+                const nested: []const static_dispatch.CheckedEvidence = if (target_worker.dictionary_params.len == 0) &.{} else switch (node.nested) {
+                    .resolved => table.nestedEvidence(node),
+                    .from_callable, .through_alias => invariant("a generated codec call's evidence is not resolved"),
+                };
+                const hidden = switch (node.instantiation) {
                     .alias => invariant("generated codec calls of targets reached through a procedure alias are not yet lowered by Boxy"),
-                    .derived_from_callable => |callable_ty| {
-                        const formal = try program_.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
-                        const related = try b.relateVariables(formal, try convertIn(program_, self.fam().module, callable_ty), bound.len);
-                        defer b.allocator.free(related);
-                        @memcpy(bound, related);
-                    },
-                    .callable, .monomorphic => {
-                        const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
-                        if (subst.len != bound.len) invariant("a generated codec call's substitution differs from its target's scheme");
-                        for (subst, bound) |checked_ty, *slot| {
-                            if (b.view.types().payload(checked_ty) == .err) invariant("a generated codec call's checked substitution leaves one of its target's variables erroneous");
-                            slot.* = try convertIn(program_, self.fam().module, checked_ty);
-                        }
-                    },
-                }
-                const hidden = try b.allocator.alloc(LocalId, bound.len + target_worker.dictionary_params.len);
-                for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try b.descOf(ty);
-                if (target_worker.dictionary_params.len != 0) {
-                    const nested: []const static_dispatch.CheckedEvidence = switch (node.nested) {
-                        .resolved => table.nestedEvidence(node),
-                        .from_callable, .through_alias => invariant("a generated codec call's evidence is not resolved"),
-                    };
-                    for (target_worker.dictionary_params, hidden[bound.len..]) |param_index, *dict| {
-                        if (param_index >= nested.len) invariant("a generated codec call's evidence does not cover its target's dictionaries");
-                        dict.* = try b.dictionaryOf(nested[param_index]);
-                    }
-                }
+                    .derived_from_callable => |callable_ty| try b.relatedHiddenArgs(callee, callable_ty),
+                    .callable, .monomorphic => try b.hiddenArgsAt(callee, table.site_substitutions[node.subst.start..][0..node.subst.len], nested, callable.fn_ty),
+                };
                 defer b.allocator.free(hidden);
                 const all = try std.mem.concat(b.allocator, LocalId, &.{ args, hidden });
                 defer b.allocator.free(all);
@@ -1061,7 +1109,7 @@ const Gen = struct {
     /// Call the family helper for `value_ty` at result type `ret_ty`.
     fn callHelper(self: *Gen, kind: Kind, value_ty: TypeId, ret_ty: TypeId, explicit: []const LocalId) Allocator.Error!LocalId {
         const worker = try helperWorker(self.program(), self.family, kind, value_ty, ret_ty);
-        const all = try std.mem.concat(self.b.allocator, LocalId, &.{ explicit, &.{ self.encoding, self.names } });
+        const all = try std.mem.concat(self.b.allocator, LocalId, &.{ explicit, &.{ self.encoding, self.names }, self.b.var_descs });
         defer self.b.allocator.free(all);
         const target = try self.local(ret_ty);
         try self.b.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program().worker(worker).proc, .args = try self.b.store.addLocalSpan(all), .next = undefined } });
@@ -1076,7 +1124,7 @@ const Gen = struct {
         defer self.b.allocator.free(captured);
         const capture_types = try std.mem.concat(self.b.allocator, TypeId, &.{ value_types, &.{ fam_.encoding, fam_.names_ty } });
         defer self.b.allocator.free(capture_types);
-        return self.b.packClosure(worker, captured, capture_types, &.{}, &.{});
+        return self.b.packClosure(worker, captured, capture_types, self.b.var_descs, &.{});
     }
 
     /// Renamed name `index` of the family's names.
@@ -1092,14 +1140,29 @@ const Gen = struct {
 
     const Direct = struct { entry: CFStmtId, body_start: CFStmtId, params: []LocalId, ret_layout: layout.Idx };
 
+    /// A worker's result layout: its committed layout, or a dynamic result
+    /// written through the result local.
+    fn resultLayout(self: *Gen, ret_ty: TypeId) Allocator.Error!layout.Idx {
+        const b = self.b;
+        if (try b.closed(ret_ty)) return self.layoutOf(ret_ty);
+        b.result_local = try b.localOf(ret_ty, .result);
+        return b.program.result.layouts.dynamicLayout();
+    }
+
     fn beginDirect(self: *Gen) Allocator.Error!Direct {
         const b = self.b;
         const worker = b.currentWorker().*;
         b.entry_hole = try b.newHole();
         const entry = b.entry_hole;
-        const params = try b.allocator.alloc(LocalId, worker.params.len);
-        for (params, worker.params) |*param, ty| param.* = try b.localOf(ty, .param);
-        const ret_layout = try self.layoutOf(worker.ret);
+        // Explicit parameters, then the family's descriptors.
+        const params = try b.allocator.alloc(LocalId, worker.params.len + worker.scheme_vars.len);
+        b.var_descs = try b.program.arena.allocator().alloc(LocalId, worker.scheme_vars.len);
+        for (b.var_descs, params[worker.params.len..]) |*desc, *param| {
+            desc.* = try b.closedLocal(.opaque_ptr);
+            param.* = desc.*;
+        }
+        for (params[0..worker.params.len], worker.params) |*param, ty| param.* = try b.localOf(ty, .param);
+        const ret_layout = try self.resultLayout(worker.ret);
         const body_start = try b.newHole();
         b.hole = body_start;
         return .{ .entry = entry, .body_start = body_start, .params = params, .ret_layout = ret_layout };
@@ -1122,11 +1185,12 @@ const Gen = struct {
     fn beginErased(self: *Gen) Allocator.Error!Erased {
         const b = self.b;
         const worker = b.currentWorker().*;
-        const capture_layouts = try b.allocator.alloc(layout.Idx, worker.capture_types.len);
+        // Captured values, then the family's descriptors.
+        const capture_layouts = try b.allocator.alloc(layout.Idx, worker.capture_types.len + worker.scheme_vars.len);
         defer b.allocator.free(capture_layouts);
         var all_zero_sized = true;
-        for (capture_layouts, worker.capture_types) |*slot, ty| {
-            slot.* = try self.layoutOf(ty);
+        for (capture_layouts, 0..) |*slot, index| {
+            slot.* = if (index < worker.capture_types.len) try self.layoutOf(worker.capture_types[index]) else .opaque_ptr;
             if (slot.* != .zst) all_zero_sized = false;
         }
         // A capture record of zero-sized values has no storage to read.
@@ -1139,14 +1203,15 @@ const Gen = struct {
                 try b.emitEntry(.{ .assign_struct = .{ .target = capture.*, .fields = LIR.LocalSpan.empty(), .next = undefined } });
             }
         }
+        b.var_descs = try b.program.arena.allocator().dupe(LocalId, start.captures[worker.capture_types.len..]);
         var record: ?LocalId = null;
         if (worker.params.len != 0) record = try b.argsRecordLocal(worker.params, .param);
-        const ret_layout = try self.layoutOf(worker.ret);
+        const ret_layout = try self.resultLayout(worker.ret);
         const body_start = try b.newHole();
         b.hole = body_start;
         const args = try b.allocator.alloc(LocalId, worker.params.len);
         for (args, worker.params, 0..) |*arg, ty, index| arg.* = try b.argsRecordField(worker.params, record.?, @intCast(index), ty);
-        return .{ .start = start, .record = record, .ret_layout = ret_layout, .body_start = body_start, .args = args, .captures = start.captures };
+        return .{ .start = start, .record = record, .ret_layout = ret_layout, .body_start = body_start, .args = args, .captures = start.captures[0..worker.capture_types.len] };
     }
 
     fn finishErased(self: *Gen, frame: Erased) Allocator.Error!void {
@@ -1186,7 +1251,7 @@ const Gen = struct {
             slot.* = (try self.callFormat("rename_field", null, &.{ encoding, label })).value;
         }
         const runtime = try runtimeWorker(program_, self.family);
-        const closure = try self.b.packClosure(runtime, captured, program_.worker(runtime).capture_types, &.{}, &.{});
+        const closure = try self.b.packClosure(runtime, captured, program_.worker(runtime).capture_types, self.b.var_descs, &.{});
         try self.ret(closure);
         try self.finishErased(frame);
     }

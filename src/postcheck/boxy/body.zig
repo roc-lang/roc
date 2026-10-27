@@ -2301,7 +2301,7 @@ pub const Builder = struct {
                     try self.push(.{ .restore = .{ .module = module_index, .node = stored_captures[index].value, .ty = concrete_capture_types[index] } });
                 }
             },
-            inline .parser_runtime, .encoder_for_runtime => |runtime| try Codec.restoreRuntime(self, module_index, fn_id, runtime.owner, runtime.expr),
+            inline .parser_runtime, .encoder_for_runtime => |runtime| try Codec.restoreRuntime(self, module_index, fn_id, runtime.owner, runtime.expr, fn_ty),
             else => invariantFmt("restoring stored {s} function values is not yet lowered by Boxy", .{@tagName(stored.fn_def)}),
         }
     }
