@@ -7812,6 +7812,34 @@ test "nominal value does not inverse-lift through an annotated structural parame
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
+test "structural value lifts through an annotated structural parameter feeding a backing" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\LogEntry := [Entry([Info, Error])]
+        \\
+        \\make : [Info, Error] -> LogEntry
+        \\make = |x| Entry(x)
+        \\
+        \\entry = make(Info)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "LogEntry");
+}
+
+test "narrower structural parameter widens into a backing payload" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\LogEntry := [Entry([Info, Error])]
+        \\
+        \\make : [Info] -> LogEntry
+        \\make = |x| Entry(x)
+        \\
+        \\entry = make(Info)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "LogEntry");
+}
+
 test "nominal value does not inverse-lift into an imported nominal backing" {
     const source_lib =
         \\module [LogEntry]

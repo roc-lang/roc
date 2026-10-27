@@ -21910,12 +21910,15 @@ fn appendWidenedReachChildren(self: *Self, var_: Var, children: *std.ArrayListUn
 
 /// A reached tag union's copy: every tag on its extension chain, each payload
 /// copied through the reach, under a fresh open extension. A row whose chain
-/// ends in a rigid is not the value's to widen and is shared.
+/// ends in a rigid, or in a tail that is still open, is not the value's to
+/// re-open: the copy keeps that tail, and is the row itself unless a payload's
+/// copy widens.
 fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!Var {
     const tags_start = self.widened_use_tags.items.len;
     defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
     var current = row;
     var at_head = true;
+    var kept_tail: ?Var = null;
     while (true) {
         const resolved = self.types.resolveVar(current);
         if (at_head) {
@@ -21941,10 +21944,14 @@ fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, regi
                 // it; only a row that cannot gain a tag needs its own re-opened
                 // copy: a closed one, or one an annotation bounds (an annotated
                 // value's row, which closes when its module finishes).
-                if (self.widen_closed_rows_only and !resolved.desc.flags.bounded_row_ext) return self.types.resolveVar(row).var_;
+                if (self.widen_closed_rows_only and !resolved.desc.flags.bounded_row_ext) kept_tail = resolved.var_;
                 break;
             },
-            .rigid, .err, .field_presence => return self.types.resolveVar(row).var_,
+            .rigid => {
+                kept_tail = resolved.var_;
+                break;
+            },
+            .err, .field_presence => return self.types.resolveVar(row).var_,
         }
     }
     // A row with no tags asserts that no value has it (design.md "Polarity"
@@ -21956,11 +21963,23 @@ fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, regi
     // payload's own copy was built before this row's (`widenedReachCopy`).
     const tags = try self.gpa.dupe(types_mod.Tag, self.widened_use_tags.items[tags_start..]);
     defer self.gpa.free(tags);
+    var payload_widened = false;
     for (tags) |*tag| {
         const args = try self.gpa.dupe(Var, self.types.sliceVars(tag.args));
         defer self.gpa.free(args);
-        for (args) |*arg| arg.* = self.widenedCopyOf(arg.*);
+        for (args) |*arg| {
+            const arg_copy = self.widenedCopyOf(arg.*);
+            payload_widened = payload_widened or arg_copy != self.types.resolveVar(arg.*).var_;
+            arg.* = arg_copy;
+        }
         tag.* = try self.types.mkTag(tag.name, args);
+    }
+    // A kept tail is shared with the value's own row, so every tag either
+    // row gains through it is the other's too, and the copy re-opens no row
+    // of its own to record.
+    if (kept_tail) |tail| {
+        if (!payload_widened) return self.types.resolveVar(row).var_;
+        return try self.freshFromContent(try self.types.mkTagUnion(tags, tail), env, region);
     }
     const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
     const copy = try self.freshFromContent(try self.types.mkTagUnion(tags, ext), env, region);
@@ -22018,6 +22037,15 @@ fn widenResultValue(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env) std.mem.Allo
 /// The relation admitted the widened value: the expression flows into its
 /// function's result through a row coercion (`ModuleEnv.RowCoercedResult`).
 fn recordResultWidening(self: *Self, widening: ResultWidening) std.mem.Allocator.Error!void {
+    // A re-opened row whose copy the relation made a nominal backing's
+    // declared structure carries the value there, so the value's own row
+    // admits no nominal value either (design.md "Declared Backing
+    // Structure").
+    for (self.widened_use_rows.items[widening.rows_start..widening.rows_end]) |pair| {
+        if (self.types.resolveVar(pair.use_row).desc.flags.nominal_backing_structure) {
+            try self.types.markCoercedIntoNominalBackingStructure(pair.value_row);
+        }
+    }
     try self.widened_results.append(self.gpa, .{
         .expr_idx = widening.expr_idx,
         .rows_start = widening.rows_start,

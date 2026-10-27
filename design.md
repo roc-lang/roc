@@ -4489,11 +4489,25 @@ equivalence class: merges keep it if either side had it, scheme
 instantiation copies it, and import copying carries it across modules. The
 nominal-versus-anonymous unification entry points reject a lift whose
 anonymous side carries the mark, so the verdict does not depend on which
-relation reached the structure first. The rejected side is pinned in
+relation reached the structure first.
+
+A row coercion (Row Subsumption) separates a value's closed row from the
+re-opened copy its result relates to, so a mark the copy takes from a backing
+would not reach the value's own row, and a nominal value could then lift into
+that row and cross into the declared structure through the coercion. Recording
+an accepted coercion therefore marks each re-opened row's source when its copy
+is marked (`Store.markCoercedIntoNominalBackingStructure`): the source's
+values flow into the declared structure, so the source admits no nominal
+value either. This is a policy rule; it rejects exactly what relating the
+value to the backing without a coercion rejects, and accepts structural values
+the coercion widens into the backing, such as `make : [Info] -> LogEntry`
+forwarding its parameter with `make = |x| Entry(x)`. The rejected side is pinned in
 `src/check/test/type_checking_integration.zig` for a tag payload, a record
 field, a generalized constructor helper, an annotated structural parameter
-that feeds a backing, and an imported backing; the accepted control keeps a
-structural payload and a nominal payload side by side in one backing.
+that feeds a backing, and an imported backing; the accepted controls keep a
+structural payload and a nominal payload side by side in one backing, and
+pass structural values through a forwarding parameter of the backing's row
+and of a narrower one.
 
 ### Settled-State Re-Decision
 
@@ -10253,7 +10267,12 @@ body, a branch of an `if` or `match` in result position, the value of a
 `return`—and whose type reaches a closed tag union that is not a host-boundary
 row (the reach is fixed below) relates to the result through a copy of its type in which each such closed row
 is re-opened (`Check.widenedClosedRowsCopy`), with every open row and every
-position outside the reach shared with the value. The expression keeps its own
+position outside the reach shared with the value. An open row whose payload
+reaches a closed row—the open row a construction mints, as in `Err(x)` with a
+closed parameter `x`—is copied with its own tail kept: the copy lists the
+re-opened payload, and every tag either row gains through that shared tail is
+the other's too. A forwarding construction is then interchangeable with one
+that builds the same payload. The expression keeps its own
 type. Checking records it with the copy (`ModuleEnv.RowCoercedResult`), and
 checked-body construction keeps the expression's own node and adds a
 `row_coerce` of it at the copy's type, which is the node the expression's
