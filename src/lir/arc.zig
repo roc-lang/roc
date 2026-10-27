@@ -11372,8 +11372,9 @@ test "RC join param the body never reads is released at the jump, not at the bod
 
     // join j(param) { result = hosted(); ret result }
     // remainder: param = call(); jump j
-    // The call writes the param directly, as an inlined call's result does,
-    // so nothing but the join separates the value from its release.
+    // The call writes the param directly, as a call inlined into a join
+    // does, so no statement death after the call can release the value;
+    // only the body keep decides where it dies.
     const ret = try f.ret(result);
     const body = try f.assignHostedCall(result, &.{}, ret);
     const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
@@ -11427,7 +11428,7 @@ test "RC loop join param the body never reads is released at every arrival" {
     _ = try f.addProc(&.{}, join, .i64);
     try f.run();
 
-    // One release per write, each right after its call; the exit branch
+    // One release per write, at the jump that carries it; the exit branch
     // owns nothing of the param.
     try f.expectRc(param, 0, 2, 0);
     const dispatched = f.walkToSwitch(f.joinBody(join_id));
