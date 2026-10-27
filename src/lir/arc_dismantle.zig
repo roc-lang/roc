@@ -30,6 +30,7 @@ const TaskExecutor = base.post_check_task_executor;
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
+const DynOps = core.DynOps;
 const GuardedList = collections.GuardedList;
 const Allocator = std.mem.Allocator;
 
@@ -1069,6 +1070,7 @@ const FutureFields = struct {
                 .str_match_set,
                 .ret,
                 .crash,
+                .dyn,
                 => for (self.stack.items[reached..]) |next| try self.addPredecessor(gpa, cursor, next, .plain, 0),
             }
         }
@@ -1242,6 +1244,7 @@ fn fieldObservedAfter(
             .str_match_set,
             .ret,
             .crash,
+            .dyn,
             => try body_clone.appendSuccessors(store, &work, cursor, gpa),
         }
     }
@@ -2130,6 +2133,21 @@ fn classifyStatement(
         .join => {},
         .ret => |stmt| try analysis.useWholeAt(stmt.value, current),
         .crash => |stmt| if (stmt.msg.localId()) |message| try analysis.useWholeAt(message, current),
+        // A dynamic value is opaque: every operand of a `dyn` statement is a
+        // whole use, so no container it touches dismantles.
+        .dyn => |stmt| {
+            const Use = struct {
+                analysis: *Analysis,
+                current: LIR.CFStmtId,
+
+                fn visit(self: *const @This(), operand: LIR.LocalId) Error!void {
+                    try self.analysis.useWhole(self.current, operand);
+                }
+            };
+            const use: Use = .{ .analysis = analysis, .current = current };
+            try DynOps.Operands.of(store.stmtRow(stmt.data)).each(store, &use, Use.visit);
+            if (stmt.target) |target| try analysis.noteDef(target, current);
+        },
     }
 }
 
@@ -2204,6 +2222,7 @@ fn operandSiteUse(
         .assign_call_erased,
         .assign_packed_erased_fn,
         .assign_list,
+        .dyn,
         .assign_struct,
         .assign_tag,
         .store_struct,
@@ -2445,6 +2464,7 @@ const StatementFacts = struct {
                 .jump,
                 .ret,
                 .crash,
+                .dyn,
                 => {},
             }
         }
@@ -2878,7 +2898,7 @@ pub fn compute(
     defer gpa.free(straight_next);
     for (straight_next, 0..) |*next, stmt_index| {
         next.* = switch (store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt_index))).*) {
-            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| @backingInt(stmt.next),
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .dyn => |stmt| @backingInt(stmt.next),
             .set_local,
             .join,
             .switch_stmt,
@@ -3264,6 +3284,7 @@ pub fn compute(
                             analysis.projected_root[@backingInt(local)] != no_index or
                             (stmt.op.kind == .local and !solution.isBorrowed(local))) stmt.next else continue :candidates,
                         .set_local => continue :candidates,
+                        .dyn => |stmt| if (solution.isBorrowed(local)) continue :candidates else stmt.next,
                         .init_uninitialized,
                         .store_struct,
                         .store_tag,
@@ -3577,7 +3598,7 @@ pub fn compute(
                                     continue :chain;
                                 }
                                 switch (store.getCFStmtImmediate(cursor).*) {
-                                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .dyn => |stmt| cursor = stmt.next,
                                     .set_local => |stmt| {
                                         // The value operand above still observes the old
                                         // definition. Only the explicit write starts a fresh

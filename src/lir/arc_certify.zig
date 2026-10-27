@@ -161,6 +161,7 @@ const erased_owner = @import("erased_owner.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
+const DynOps = core.DynOps;
 const GuardedList = collections.GuardedList;
 const Allocator = std.mem.Allocator;
 
@@ -762,6 +763,19 @@ fn writeFailureContext(
                 context.append(" next={d}", .{@backingInt(a.next)});
             },
             inline .assign_literal, .assign_packed_erased_fn => |a| context.append(" target={d} next={d}", .{ @backingInt(a.target), @backingInt(a.next) }),
+            .dyn => |a| {
+                const op = store.stmtRow(a.data);
+                if (a.target) |target| context.append(" target={d}", .{@backingInt(target)});
+                context.append(" op={s} operands=[", .{@tagName(op)});
+                const operands = DynOps.Operands.of(op);
+                const Append = struct {
+                    fn visit(ctx: *FailureContext, operand: LIR.LocalId) error{}!void {
+                        ctx.append(" {d}", .{@backingInt(operand)});
+                    }
+                };
+                operands.each(store, context, Append.visit) catch |err| switch (err) {};
+                context.append(" ] next={d}", .{@backingInt(a.next)});
+            },
             .store_struct,
             .store_tag,
             .debug,
@@ -1887,6 +1901,8 @@ const Certifier = struct {
     work_stats: ?*CertifierWorkStats,
     /// Immutable layout claim sets survive per-procedure state-arena resets.
     claim_layouts: std.AutoHashMapUnmanaged(layout_mod.Idx, ClaimSet) = .empty,
+    /// Scratch for one `dyn` statement's operands.
+    dyn_operands: std.ArrayList(LIR.LocalId) = .empty,
     claim_arena: base.SingleThreadArena,
     /// Proc and statement being certified; written by `certifyProc` and
     /// `runSegment` before any read.
@@ -1948,6 +1964,7 @@ const Certifier = struct {
         self.lender_arena.deinit();
         self.state_arena.deinit();
         self.claim_layouts.deinit(self.allocator);
+        self.dyn_operands.deinit(self.allocator);
         self.claim_arena.deinit();
         self.clearRecords();
         self.records.deinit();
@@ -2420,6 +2437,7 @@ const Certifier = struct {
                 .zst,
                 .hole,
                 .ptr,
+                .dynamic,
                 => break :walk false,
             };
             carried = null;
@@ -2608,6 +2626,7 @@ const Certifier = struct {
             .zst,
             .hole,
             .ptr,
+            .dynamic,
             => return null,
         };
         try self.claim_layouts.put(self.allocator, layout_idx, required);
@@ -3834,6 +3853,10 @@ const Certifier = struct {
                 },
                 .ret => |ret_stmt| try self.noteProcLocal(ret_stmt.value),
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteProcLocal(message),
+                .dyn => |dyn_stmt| {
+                    if (dyn_stmt.target) |target| try self.noteProcLocal(target);
+                    try DynOps.Operands.of(self.store.stmtRow(dyn_stmt.data)).each(self.store, self, Certifier.noteProcLocal);
+                },
                 .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
             }
             // Every other statement's successors stay in its region.
@@ -3920,6 +3943,7 @@ const Certifier = struct {
                 .join,
                 .ret,
                 .crash,
+                .dyn,
                 => {
                     successors.clearRetainingCapacity();
                     try body_clone.appendSuccessorsInOrder(self.store, &successors, current, self.allocator, .{ .switch_edges = .arms_first });
@@ -4102,6 +4126,7 @@ const Certifier = struct {
                 .str_match_set,
                 .ret,
                 .crash,
+                .dyn,
                 => {
                     successors.clearRetainingCapacity();
                     try body_clone.appendSuccessors(self.store, &successors, stmt, self.allocator);
@@ -5428,13 +5453,28 @@ const Certifier = struct {
                     if (!self.isRc(rc.value)) {
                         return self.fail("incref of non-refcounted local {d}", .{@backingInt(rc.value)});
                     }
+                    try self.checkDynamicRcHelper(rc.value, rc.rc);
                     const value = try self.requireLive(&state, rc.value);
                     try state.addBalance(value, std.math.cast(i32, rc.count) orelse return error.OutOfMemory);
                     cursor = rc.next;
                 },
-                inline .decref, .free => |rc| {
+                .decref => |rc| {
+                    try self.checkDynamicRcHelper(rc.value, rc.rc);
                     try self.applyRelease(&state, rc.value);
                     cursor = rc.next;
+                },
+                .free => |rc| {
+                    // A dynamic value's contents are not statically known, so
+                    // nothing can have been moved out of it first.
+                    if (self.store.getLocal(rc.value).dyn != null) {
+                        return self.fail("free of dynamic local {d}", .{@backingInt(rc.value)});
+                    }
+                    try self.applyRelease(&state, rc.value);
+                    cursor = rc.next;
+                },
+                .dyn => |dyn_stmt| {
+                    try self.applyDyn(&state, dyn_stmt.target, self.store.stmtRow(dyn_stmt.data));
+                    cursor = dyn_stmt.next;
                 },
                 .decref_if_initialized => |rc| {
                     _ = try self.requireLive(&state, rc.cond);
@@ -5853,6 +5893,7 @@ const Certifier = struct {
             .zst,
             .hole,
             .ptr,
+            .dynamic,
             => false,
         };
         if (!taken or try self.hasIntactSurplusUnit(state, container)) return;
@@ -6230,6 +6271,78 @@ const Certifier = struct {
             else
                 state.valueOf(operand);
             try self.consumeIntoHolder(state, value, target_value);
+        }
+    }
+
+    /// A dynamic local is reference counted through its runtime descriptor:
+    /// its RC statements name the dynamic layout itself, never a layout plan
+    /// of some other shape.
+    fn checkDynamicRcHelper(self: *Certifier, local: LIR.LocalId, rc: LIR.RcHelperRef) CertifyError!void {
+        const local_layout = self.store.getLocal(local).layout_idx;
+        const is_dynamic = self.layouts.getLayout(local_layout).tag == .dynamic;
+        const helper_layout = rc.concrete.layout_idx;
+        const helper_dynamic = self.layouts.getLayout(helper_layout).tag == .dynamic;
+        if (is_dynamic != helper_dynamic) {
+            return self.fail("RC statement on local {d} named layout {d}, but the local has layout {d}", .{
+                @backingInt(local),
+                @backingInt(helper_layout),
+                @backingInt(local_layout),
+            });
+        }
+    }
+
+    /// A `dyn` statement, by `DynOps.ownership`: every operand must be live;
+    /// a component read borrows its target from the base (an immortal
+    /// dictionary component, whose base holds no unit, is owned as a static
+    /// literal is); `copy` binds its target to the source's value; a
+    /// construction moves one unit per refcounted operand into its fresh
+    /// target; an operand-borrowing operation produces a fresh target; and
+    /// `call_erased` consumes its argument record and produces a fresh
+    /// result while its callable is only read. Descriptor, name, and
+    /// dictionary operands are never refcounted.
+    fn applyDyn(self: *Certifier, state: *State, target: ?LIR.LocalId, op: LIR.DynOp) CertifyError!void {
+        self.dyn_operands.clearRetainingCapacity();
+        try DynOps.Operands.of(op).appendAll(self.store, self.allocator, &self.dyn_operands);
+        const ownership = DynOps.ownership(op);
+        if (target == null and op != .frame_alloc) return self.fail("dyn {s} has no target", .{@tagName(op)});
+        if (target != null and op == .frame_alloc) return self.fail("dyn frame_alloc has a target", .{});
+        for (self.dyn_operands.items) |operand| _ = try self.requireLive(state, operand);
+        switch (ownership) {
+            .none => {
+                for (self.dyn_operands.items) |operand| {
+                    if (self.isRc(operand)) return self.fail("dyn {s} named refcounted operand {d}", .{ @tagName(op), @backingInt(operand) });
+                }
+                if (target) |defined| {
+                    if (self.isRc(defined)) return self.fail("dyn {s} defined refcounted local {d}", .{ @tagName(op), @backingInt(defined) });
+                }
+            },
+            .borrow_component => |base_local| {
+                const defined = target.?;
+                if (!self.isRc(defined)) return;
+                if (!self.isRc(base_local)) {
+                    _ = try self.bindFresh(state, defined, 1, &.{});
+                } else {
+                    _ = try self.bindFresh(state, defined, 0, &.{state.valueOf(base_local)});
+                }
+            },
+            .alias => |source| {
+                const defined = target.?;
+                if (defined == source) return self.fail("dyn copy into its own source {d}", .{@backingInt(source)});
+                try self.bindSameValue(state, defined, source);
+            },
+            .construct => try self.applyAggregate(state, target.?, self.dyn_operands.items),
+            .borrow_operands => {
+                const defined = target.?;
+                if (self.isRc(defined)) _ = try self.bindFresh(state, defined, 1, &.{});
+            },
+            .call_erased => {
+                const call = op.call_erased;
+                if (call.args) |args| {
+                    if (self.isRc(args)) try self.consumeUnit(state, state.valueOf(args), args);
+                }
+                const defined = target.?;
+                if (self.isRc(defined)) _ = try self.bindFresh(state, defined, 1, &.{});
+            },
         }
     }
 

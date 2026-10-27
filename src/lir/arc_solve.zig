@@ -58,6 +58,7 @@ const task_executor = @import("base").post_check_task_executor;
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
+const DynOps = core.DynOps;
 const GuardedList = collections.GuardedList;
 const Allocator = std.mem.Allocator;
 
@@ -1437,6 +1438,7 @@ pub fn findOutcomeRefinement(
             .jump,
             .ret,
             .crash,
+            .dyn,
             => return null,
         }
     }
@@ -1753,6 +1755,40 @@ fn computeOutcomeRestitution(
                     .incref, .decref, .decref_if_initialized, .free => {
                         valid = false;
                         break;
+                    },
+                    .dyn => |dyn_stmt| {
+                        if (dyn_stmt.target == active_param) {
+                            valid = false;
+                            break;
+                        }
+                        const op = store.stmtRow(dyn_stmt.data);
+                        switch (DynOps.ownership(op)) {
+                            .none, .borrow_component, .alias, .borrow_operands => {},
+                            // Constructed operands move their entry unit into
+                            // the result, which cannot promise restitution.
+                            .construct => {
+                                const Consume = struct {
+                                    solution: *Solution,
+                                    active_param: LIR.LocalId,
+                                    present: *bool,
+                                    valid: bool = true,
+
+                                    fn visit(self: *@This(), value: LIR.LocalId) error{}!void {
+                                        if (!consumeOutcomeLocal(self.solution, self.active_param, self.present, value)) self.valid = false;
+                                    }
+                                };
+                                var consume: Consume = .{ .solution = solution, .active_param = active_param, .present = &next_state.present };
+                                DynOps.Operands.of(op).each(store, &consume, Consume.visit) catch |err| switch (err) {};
+                                if (!consume.valid) {
+                                    valid = false;
+                                    break;
+                                }
+                            },
+                            .call_erased => {
+                                valid = false;
+                                break;
+                            },
+                        }
                     },
                     .jump => |jump_stmt| {
                         const target = joins.get(jump_stmt.target) orelse {
@@ -2279,6 +2315,7 @@ fn liftProcStmtFacts(
         .str_match,
         .str_match_set,
         .crash,
+        .dyn,
         => {},
     }
 }
@@ -3115,6 +3152,93 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         },
         .jump => {},
         .runtime_error, .comptime_exhaustiveness_failed => {},
+        .dyn => |dyn_stmt| try liftDynStmtFacts(solver, current, dyn_stmt.target, store.stmtRow(dyn_stmt.data)),
+    }
+}
+
+/// Lifts the facts of one `dyn` statement from `DynOps.ownership`. Every
+/// operand outside the ARC domain (descriptors, names, dictionaries, scalars)
+/// carries no ownership, so a statement's refcounted operands are exactly its
+/// value operands. A component read borrows from its base as a payload
+/// `assign_ref` does, and a component of a base outside the domain (a
+/// dictionary's method) is an immortal value, owned as a static literal is.
+/// `copy` is a pure alias as `assign_ref .local` is; a construction consumes
+/// its values into a fresh owned target as `assign_struct` does; an
+/// operand-borrowing operation reads its values and defines a fresh target;
+/// `call_erased` borrows the callable, consumes the argument record, and
+/// defines a fresh foreign result.
+fn liftDynStmtFacts(solver: *Solver, current: LIR.CFStmtId, target: ?LIR.LocalId, op: LIR.DynOp) SolveError!void {
+    const allocator = solver.allocator;
+    const Lift = struct {
+        solver: *Solver,
+        target: LIR.LocalId,
+
+        fn consumed(self: *const @This(), value: LIR.LocalId) SolveError!void {
+            if (self.solver.domain.indexOf(value) == null) return;
+            try self.solver.binding_facts.append(self.solver.allocator, .{ .demand = value });
+            try liftVisibilityLink(self.solver, self.target, value);
+            try self.solver.unique_facts.append(self.solver.allocator, .{ .destroy = value });
+        }
+
+        fn borrowed(self: *const @This(), value: LIR.LocalId) SolveError!void {
+            if (self.solver.domain.indexOf(value) == null) return;
+            try liftVisibilityLink(self.solver, self.target, value);
+            try self.solver.unique_facts.append(self.solver.allocator, .{ .read = value });
+        }
+    };
+    switch (DynOps.ownership(op)) {
+        .none => if (target) |defined| try solver.binding_facts.append(allocator, .{ .fresh = defined }),
+        .borrow_component => |base| {
+            const defined = target orelse solveInvariant("ARC dyn component read had no target");
+            if (solver.domain.indexOf(base) == null) {
+                try solver.binding_facts.append(allocator, .{ .fresh = defined });
+                try solver.unique_facts.append(allocator, .{ .foreign = defined });
+                return;
+            }
+            try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = defined, .source = base } });
+            try liftVisibilityLink(solver, defined, base);
+            try solver.unique_facts.append(allocator, .{ .foreign = defined });
+            try solver.unique_facts.append(allocator, .{ .read = base });
+        },
+        .alias => |source| {
+            const defined = target orelse solveInvariant("ARC dyn copy had no target");
+            if (defined != source) {
+                try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = defined, .source = source } });
+                try solver.binding_facts.append(allocator, .{ .alias = .{ .target = defined, .source = source } });
+            } else {
+                try solver.binding_facts.append(allocator, .{ .multi = defined });
+            }
+            try liftVisibilityLink(solver, defined, source);
+            try solver.unique_facts.append(allocator, .{ .alias = .{ .target = defined, .source = source, .stmt = current } });
+        },
+        .construct => {
+            const defined = target orelse solveInvariant("ARC dyn construction had no target");
+            try solver.binding_facts.append(allocator, .{ .fresh = defined });
+            try solver.unique_facts.append(allocator, .{ .birth = defined });
+            const lift: Lift = .{ .solver = solver, .target = defined };
+            try DynOps.Operands.of(op).each(solver.store, &lift, Lift.consumed);
+        },
+        .borrow_operands => {
+            const defined = target orelse solveInvariant("ARC dyn operand read had no target");
+            try solver.binding_facts.append(allocator, .{ .fresh = defined });
+            try solver.unique_facts.append(allocator, .{ .foreign = defined });
+            const lift: Lift = .{ .solver = solver, .target = defined };
+            try DynOps.Operands.of(op).each(solver.store, &lift, Lift.borrowed);
+        },
+        .call_erased => {
+            const defined = target orelse solveInvariant("ARC dyn erased call had no target");
+            const call = op.call_erased;
+            try solver.binding_facts.append(allocator, .{ .fresh = defined });
+            if (call.args) |args| {
+                try solver.binding_facts.append(allocator, .{ .demand = args });
+                try liftVisibilitySeed(solver, args);
+            }
+            try liftVisibilitySeed(solver, call.closure);
+            try liftVisibilitySeed(solver, defined);
+            try solver.unique_facts.append(allocator, .{ .foreign = defined });
+            try solver.unique_facts.append(allocator, .{ .destroy = call.closure });
+            if (call.args) |args| try solver.unique_facts.append(allocator, .{ .destroy = args });
+        },
     }
 }
 
@@ -3379,6 +3503,7 @@ fn computeVisibilityFromLift(
                     .join,
                     .jump,
                     .crash,
+                    .dyn,
                     => {},
                 }
                 try body_clone.appendSuccessorsInOrder(store, &stack, current, allocator, .{ .switch_edges = .arms_first });
@@ -3561,6 +3686,35 @@ fn computeVisibilityFromLift(
                         const arg = GuardedList.at(args, arg_index);
                         addEdge(&sets, rc_local, target, @backingInt(arg));
                     }
+                }
+            },
+            .dyn => |dyn_stmt| {
+                const op = store.stmtRow(dyn_stmt.data);
+                const Link = struct {
+                    sets: *collections.DisjointSets,
+                    rc: []const bool,
+                    target: u32,
+
+                    fn visit(self: *const @This(), value: LIR.LocalId) error{}!void {
+                        addEdge(self.sets, self.rc, self.target, @backingInt(value));
+                    }
+                };
+                switch (DynOps.ownership(op)) {
+                    .none => {},
+                    .borrow_component => |base| addEdge(&sets, rc_local, @backingInt(dyn_stmt.target.?), @backingInt(base)),
+                    .alias => |source| addEdge(&sets, rc_local, @backingInt(dyn_stmt.target.?), @backingInt(source)),
+                    .construct, .borrow_operands => {
+                        const link: Link = .{ .sets = &sets, .rc = rc_local, .target = @backingInt(dyn_stmt.target.?) };
+                        DynOps.Operands.of(op).each(store, &link, Link.visit) catch |err| switch (err) {};
+                    },
+                    .call_erased => {
+                        // The callee is unknown; the boundary is treated
+                        // like a pinned signature.
+                        const call = op.call_erased;
+                        seedLocal(&visible, rc_local, @backingInt(call.closure));
+                        if (call.args) |args| seedLocal(&visible, rc_local, @backingInt(args));
+                        seedLocal(&visible, rc_local, @backingInt(dyn_stmt.target.?));
+                    },
                 }
             },
             .init_uninitialized,
@@ -5990,6 +6144,53 @@ fn computeUniquenessDetailed(
             .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
                 try marks.consumeAt(allocator, &consumes, message, @intCast(stmt_index));
             },
+            // A `dyn` statement reads as its `DynOps.ownership` analogue:
+            // a component read as a payload read, `copy` as a pure alias, a
+            // construction as a fresh aggregate whose operands lose their
+            // uniqueness (its opaque contents are never taken back), and an
+            // erased call as a foreign boundary.
+            .dyn => |dyn_stmt| {
+                const op = store.stmtRow(dyn_stmt.data);
+                if (dyn_stmt.target) |target| marks.trackDef(&has_def, &multi_def, target);
+                switch (DynOps.ownership(op)) {
+                    .none => {},
+                    .borrow_component, .borrow_operands => marks.destroy(&foreign_def, dyn_stmt.target.?),
+                    .alias => |source| {
+                        const target = dyn_stmt.target.?;
+                        const is_view = borrowed != null and borrowed.?.isSet(@backingInt(target));
+                        if (is_view) {
+                            marks.destroy(&foreign_def, target);
+                            if (marks.indexOf(target)) |target_index| if (marks.indexOf(source)) |source_index| {
+                                if (source_index != target_index) {
+                                    view_source[target_index] = source_index;
+                                    try view_defs.append(allocator, .{ .target = target_index, .source = source_index, .stmt = @intCast(stmt_index) });
+                                }
+                            };
+                        } else {
+                            try Alias.record(marks, allocator, &alias_defs, &foreign_def, &consumes, target, source, @intCast(stmt_index));
+                        }
+                    },
+                    .construct => {
+                        marks.noteBirth(&born, dyn_stmt.target.?);
+                        const Destroy = struct {
+                            marks: @TypeOf(marks),
+                            destroyed: *std.bit_set.DynamicBitSetUnmanaged,
+
+                            fn visit(self: *const @This(), value: LIR.LocalId) error{}!void {
+                                self.marks.destroy(self.destroyed, value);
+                            }
+                        };
+                        const destroy: Destroy = .{ .marks = marks, .destroyed = &destroyed };
+                        DynOps.Operands.of(op).each(store, &destroy, Destroy.visit) catch |err| switch (err) {};
+                    },
+                    .call_erased => {
+                        const call = op.call_erased;
+                        marks.destroy(&foreign_def, dyn_stmt.target.?);
+                        marks.destroy(&destroyed, call.closure);
+                        if (call.args) |args| marks.destroy(&destroyed, args);
+                    },
+                }
+            },
             .debug => {},
             // The failure report is the message's consuming use.
             .expect_err => |expect_err_stmt| try marks.consumeAt(allocator, &consumes, expect_err_stmt.message, @intCast(stmt_index)),
@@ -6468,6 +6669,7 @@ fn computeUniquenessDetailed(
                 .jump,
                 .ret,
                 .crash,
+                .dyn,
                 => {},
             }
         }

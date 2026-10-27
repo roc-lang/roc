@@ -36,6 +36,7 @@ const debug_print = @import("debug_print.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
+const DynOps = core.DynOps;
 const GuardedList = collections.GuardedList;
 const TaskExecutor = @import("base").post_check_task_executor;
 
@@ -883,6 +884,7 @@ const ArcLaneScratch = struct {
     transfer_positions: std.ArrayList(u32) = .empty,
     retain_args: std.ArrayList(LIR.LocalId) = .empty,
     dismantle_temps: std.ArrayList(LIR.LocalId) = .empty,
+    dyn_operands: std.ArrayList(LIR.LocalId) = .empty,
 
     const Key = struct {
         var value: u8 = 0;
@@ -897,6 +899,7 @@ const ArcLaneScratch = struct {
         self.transfer_positions.deinit(self.allocator);
         self.retain_args.deinit(self.allocator);
         self.dismantle_temps.deinit(self.allocator);
+        self.dyn_operands.deinit(self.allocator);
     }
 
     /// Empties every buffer, keeping its capacity.
@@ -905,6 +908,7 @@ const ArcLaneScratch = struct {
         self.transfer_positions.clearRetainingCapacity();
         self.retain_args.clearRetainingCapacity();
         self.dismantle_temps.clearRetainingCapacity();
+        self.dyn_operands.clearRetainingCapacity();
     }
 
     fn forLane(lane: *TaskExecutor.LaneState) Allocator.Error!*ArcLaneScratch {
@@ -1796,6 +1800,7 @@ const Inserter = struct {
     death_scratch: *std.ArrayList(ReleaseDecision) = undefined,
     transfer_position_scratch: *std.ArrayList(u32) = undefined,
     retain_arg_scratch: *std.ArrayList(LIR.LocalId) = undefined,
+    dyn_operand_scratch: *std.ArrayList(LIR.LocalId) = undefined,
     lane_allocator: Allocator = undefined,
     /// Storage that dies when the current ARC task callback returns.
     task_scratch: Allocator = undefined,
@@ -1843,6 +1848,7 @@ const Inserter = struct {
         self.death_scratch = &env.lane.deaths;
         self.transfer_position_scratch = &env.lane.transfer_positions;
         self.retain_arg_scratch = &env.lane.retain_args;
+        self.dyn_operand_scratch = &env.lane.dyn_operands;
         self.dismantle_temps = &env.lane.dismantle_temps;
         self.lane_allocator = env.lane.allocator;
         self.task_scratch = env.scratch;
@@ -2383,6 +2389,20 @@ const Inserter = struct {
                 if (assign.target != assign.value and step.retain_set_target) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .alias_bind }, next);
                 break :blk try self.addWithNext(stmt, next, origin);
             },
+            .dyn => |dyn_stmt| blk: {
+                const op = self.store.stmtRow(dyn_stmt.data);
+                switch (DynOps.ownership(op)) {
+                    .none, .borrow_operands, .call_erased => {},
+                    .borrow_component, .alias => if (step.retain_assign_ref_target) {
+                        next = try self.retainLocalIfRc(dyn_stmt.target.?, .{ .stmt = at, .reason = .alias_bind }, next);
+                    },
+                    .construct => {
+                        const operands = try self.dynOperands(op);
+                        next = try self.retainLocalsExceptPositions(operands, step.transfer_positions.of(u32, &self.arc_plans.positions), .{ .stmt = at, .reason = .stored_in_aggregate }, next);
+                    },
+                }
+                break :blk try self.addWithNext(stmt, next, origin);
+            },
             .init_uninitialized,
             .debug,
             .expect,
@@ -2651,6 +2671,7 @@ const Inserter = struct {
                     const singles = [_]LIR.LocalId{ body_clone.refOpSource(assign.op), assign.target };
                     try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
                 },
+                .dyn => |dyn_stmt| try self.planDynStmt(segment, dyn_stmt),
                 .init_uninitialized => |uninit| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     step.pre_release = if (try self.transferForInit(&segment.owned, uninit.target)) self.releaseDecision(uninit.target) else null;
@@ -4658,6 +4679,91 @@ const Inserter = struct {
         };
     }
 
+    /// Every operand local of a `dyn` operation in `DynOps.Operands` order,
+    /// in the lane's scratch. Descriptor, name, and dictionary operands are
+    /// never refcounted, so every refcounted operand is a value operand.
+    fn dynOperands(self: *Inserter, op: LIR.DynOp) ResourceError![]const LIR.LocalId {
+        self.dyn_operand_scratch.clearRetainingCapacity();
+        try DynOps.Operands.of(op).appendAll(self.store, self.lane_allocator, self.dyn_operand_scratch);
+        return self.dyn_operand_scratch.items;
+    }
+
+    /// Plans one `dyn` statement from `DynOps.ownership`, the same reading
+    /// the solver lifted its facts from: a component read binds like a
+    /// payload `assign_ref` (a borrowed view, or an owned target retained
+    /// after the read; the component of an immortal dictionary is owned
+    /// without a retain, as a static literal is); `copy` binds like an
+    /// `assign_ref .local` alias; a construction moves or retains each
+    /// refcounted operand into its owned target like `assign_struct`; an
+    /// operand-borrowing operation binds a fresh owned target; and
+    /// `call_erased` keeps its callable borrowed across the call, moves or
+    /// retains its argument record into the call, and binds an owned result.
+    fn planDynStmt(self: *Inserter, segment: *SolveSegment, dyn_stmt: @FieldType(LIR.CFStmt, "dyn")) ResourceError!void {
+        const op = self.store.stmtRow(dyn_stmt.data);
+        const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
+        const owned = &segment.owned;
+        const next = dyn_stmt.next;
+        const operands = try self.dynOperands(op);
+        const target = dyn_stmt.target orelse {
+            try self.finishArcPlanStepDeaths(step, owned, operands, null, next);
+            return;
+        };
+        step.retain_assign_ref_target = false;
+        switch (DynOps.ownership(op)) {
+            .none, .borrow_operands => {
+                step.pre_release = if (try self.transferForFreshBind(owned, target)) self.releaseDecision(target) else null;
+            },
+            .borrow_component => |base| {
+                if (!self.isBindingBorrowed(target)) {
+                    step.pre_release = if (try self.transferForFreshBind(owned, target)) self.releaseDecision(target) else null;
+                    step.retain_assign_ref_target = self.localContainsRefcounted(base);
+                }
+            },
+            .alias => |source| {
+                if (source == target) arcInvariant("ARC dyn copy named its own source as target");
+                if (!self.isBindingBorrowed(target)) {
+                    const transfer = try self.transferForAliasBind(owned, target, source, next);
+                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(target) else null;
+                    step.retain_assign_ref_target = transfer.retain_target;
+                }
+            },
+            .construct => {
+                self.transfer_position_scratch.clearRetainingCapacity();
+                try self.localsTransferPositions(operands, next, target, owned, self.transfer_position_scratch);
+                const release_old_target = try self.takeRebindTarget(owned, target);
+                try self.placeUnit(owned, target);
+                step.pre_release = if (release_old_target) self.releaseDecision(target) else null;
+                try step.transfer_positions.append(u32, self.solve_allocator, &self.arc_plans.positions, self.transfer_position_scratch.items);
+            },
+            .call_erased => {
+                const call = op.call_erased;
+                if (call.args) |args| if (self.localContainsRefcounted(args)) {
+                    if (args == target or args == call.closure) arcInvariant("ARC dyn erased call named its argument record as its callable or result");
+                    const owner = self.unitOf(args);
+                    const shares_closure = self.solution.leaderOf(args) == self.solution.leaderOf(call.closure);
+                    const can_transfer = owned.contains(owner) and !shares_closure and !(try self.groupUsedInPath(next, args));
+                    if (can_transfer) {
+                        try owned.unset(owner);
+                    } else {
+                        try self.appendStepRetain(step, .{ .local = args, .reason = .owned_param_demand });
+                    }
+                };
+                const release_old_target = if (target == call.closure) false else try self.takeRebindTarget(owned, target);
+                try self.placeCallResultUnit(owned, target, .owned);
+                step.pre_release = if (release_old_target) self.releaseDecision(target) else null;
+                self.death_scratch.clearRetainingCapacity();
+                try self.noteCallResultDeathIfUnused(owned, target, .owned, next, self.death_scratch);
+                try self.postStmtDeaths(owned, operands, null, next, self.death_scratch);
+                try self.copyDeathScratchToStep(step);
+                return;
+            },
+        }
+        self.death_scratch.clearRetainingCapacity();
+        try self.postStmtDeaths(owned, operands, null, next, self.death_scratch);
+        try self.postStmtDeaths(owned, &.{target}, null, next, self.death_scratch);
+        try self.copyDeathScratchToStep(step);
+    }
+
     const LowLevelTransfer = struct {
         /// Consumed positions that pay a retain before the op, either because
         /// their group survives or because an owned variant needs a unit from
@@ -4806,8 +4912,19 @@ const Inserter = struct {
         owned: *OwnedSet,
         transferred_positions: ?*std.ArrayList(u32),
     ) ResourceError!void {
+        try self.localsTransferPositions(self.store.getLocalSpan(span), next, target, owned, transferred_positions);
+    }
+
+    /// `spanTransferPositions` over any list of operand locals.
+    fn localsTransferPositions(
+        self: *Inserter,
+        locals: anytype,
+        next: LIR.CFStmtId,
+        target: LIR.LocalId,
+        owned: *OwnedSet,
+        transferred_positions: ?*std.ArrayList(u32),
+    ) ResourceError!void {
         if (!self.localContainsRefcounted(target)) return;
-        const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |i| {
             const local = GuardedList.at(locals, i);
             if (local == target) continue;
@@ -5364,6 +5481,8 @@ const Inserter = struct {
             .expect_err => |expect_err_stmt| try uses.append(gpa, expect_err_stmt.message),
             .decref, .decref_if_initialized, .free => return .{ .uses_every_place = true },
             inline .str_match, .str_match_set => |match| try uses.append(gpa, match.source),
+            // Every operand of an opaque dynamic operation uses its place.
+            .dyn => |dyn_stmt| try DynOps.Operands.of(self.store.stmtRow(dyn_stmt.data)).appendAll(self.store, gpa, uses),
             .assign_literal,
             .init_uninitialized,
             .join,
@@ -5396,6 +5515,7 @@ const Inserter = struct {
             .debug,
             .expect,
             .incref,
+            .dyn,
             => |payload| try out.append(gpa, payload.next),
             .switch_stmt => |switch_stmt| {
                 if (switch_stmt.continuation) |continuation| try out.append(gpa, continuation);
@@ -6458,6 +6578,7 @@ const Inserter = struct {
                 .str_match_set,
                 .ret,
                 .crash,
+                .dyn,
                 => {},
             }
             successors.clearRetainingCapacity();
@@ -6536,6 +6657,18 @@ const Inserter = struct {
                 .ret => |ret_stmt| try self.noteLivenessUseLocal(reads, ret_stmt.value),
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
                     try self.noteLivenessUseLocal(reads, message);
+                },
+                .dyn => |dyn_stmt| {
+                    const Note = struct {
+                        inserter: *const Inserter,
+                        reads: *Row,
+
+                        fn visit(note: *const @This(), operand: LIR.LocalId) ResourceError!void {
+                            try note.inserter.noteLivenessUseLocal(note.reads, operand);
+                        }
+                    };
+                    const note: Note = .{ .inserter = self, .reads = reads };
+                    try DynOps.Operands.of(self.store.stmtRow(dyn_stmt.data)).each(self.store, &note, Note.visit);
                 },
                 .assign_literal,
                 .init_uninitialized,
@@ -6702,8 +6835,17 @@ const Inserter = struct {
         cause: RcCause,
         next: LIR.CFStmtId,
     ) ResourceError!LIR.CFStmtId {
+        return self.retainLocalsExceptPositions(self.store.getLocalSpan(span), skip_positions, cause, next);
+    }
+
+    fn retainLocalsExceptPositions(
+        self: *Inserter,
+        locals: anytype,
+        skip_positions: []const u32,
+        cause: RcCause,
+        next: LIR.CFStmtId,
+    ) ResourceError!LIR.CFStmtId {
         var current = next;
-        const locals = self.store.getLocalSpan(span);
         var skip_index = skip_positions.len;
         var i = locals.len;
         while (i > 0) {
@@ -7082,6 +7224,13 @@ const Inserter = struct {
 
     fn rcHelperForLocal(self: *const Inserter, op: layout_mod.RcOp, local: LIR.LocalId) LIR.RcHelper {
         const local_layout = self.store.getLocal(local).layout_idx;
+        // A dynamic local is reference counted through its runtime
+        // descriptor; its RC statements name the dynamic layout itself and
+        // have no layout plan.
+        if (self.layouts.getLayout(local_layout).tag == .dynamic) {
+            if (op == .free) arcInvariant("ARC requested a free of a dynamic local");
+            return LIR.RcHelper.fromConcrete(.{ .op = op, .layout_idx = local_layout });
+        }
         const helper = self.rcHelperForLayout(op, local_layout);
         if (self.layouts.rcHelperPlan(helper) == .noop) {
             if (comptime builtin.mode == .debug and builtin.target.os.tag == .freestanding) {
@@ -7859,6 +8008,7 @@ const ArcTest = struct {
                 .assign_packed_erased_fn,
                 .assign_low_level,
                 .assign_list,
+                .dyn,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
@@ -7917,6 +8067,7 @@ const ArcTest = struct {
                 .assign_packed_erased_fn,
                 .assign_low_level,
                 .assign_list,
+                .dyn,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
@@ -8019,6 +8170,7 @@ const ArcTest = struct {
                 .assign_call_erased,
                 .assign_packed_erased_fn,
                 .assign_list,
+                .dyn,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
@@ -8073,6 +8225,7 @@ const ArcTest = struct {
                 .assign_call_erased,
                 .assign_packed_erased_fn,
                 .assign_list,
+                .dyn,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
@@ -8134,6 +8287,7 @@ const ArcTest = struct {
                 .assign_packed_erased_fn,
                 .assign_low_level,
                 .assign_list,
+                .dyn,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
@@ -8174,6 +8328,7 @@ const ArcTest = struct {
                 .assign_packed_erased_fn,
                 .assign_low_level,
                 .assign_list,
+                .dyn,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
@@ -8226,6 +8381,7 @@ const ArcTest = struct {
                 .assign_packed_erased_fn,
                 .assign_low_level,
                 .assign_list,
+                .dyn,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
@@ -8258,6 +8414,7 @@ const ArcTest = struct {
                 .assign_packed_erased_fn,
                 .assign_low_level,
                 .assign_list,
+                .dyn,
                 .assign_struct,
                 .assign_tag,
                 .store_struct,
@@ -8362,6 +8519,7 @@ const ArcTest = struct {
             .str_match_set,
             .join,
             .jump,
+            .dyn,
             => false,
         };
     }
@@ -8437,6 +8595,7 @@ test "ARC preserves erased callable repack reuse" {
             .assign_call_erased,
             .assign_low_level,
             .assign_list,
+            .dyn,
             .assign_struct,
             .assign_tag,
             .store_struct,
@@ -8562,6 +8721,7 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
             .assign_call_erased,
             .assign_low_level,
             .assign_list,
+            .dyn,
             .assign_struct,
             .assign_tag,
             .store_struct,
@@ -8635,6 +8795,7 @@ test "ARC transfers erased call ownership from an explicit outer source" {
             .assign_packed_erased_fn,
             .assign_low_level,
             .assign_list,
+            .dyn,
             .assign_struct,
             .assign_tag,
             .store_struct,
@@ -8734,6 +8895,7 @@ test "ARC retains an erased call reuse source that is read after the call" {
             .assign_packed_erased_fn,
             .assign_low_level,
             .assign_list,
+            .dyn,
             .assign_struct,
             .assign_tag,
             .store_struct,
@@ -8813,6 +8975,7 @@ test "ARC retains an erased callable whose repack input is used later" {
             .assign_call_erased,
             .assign_low_level,
             .assign_list,
+            .dyn,
             .assign_struct,
             .assign_tag,
             .store_struct,
@@ -13615,6 +13778,7 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .assign_packed_erased_fn => |a| cursor = a.next,
             .assign_low_level => |a| cursor = a.next,
             .assign_list => |a| cursor = a.next,
+            .dyn => |a| cursor = a.next,
             .assign_struct => |a| cursor = a.next,
             .assign_tag => |a| cursor = a.next,
             .set_local => |a| cursor = a.next,
@@ -13936,6 +14100,7 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
         const target_proc = while (true) switch (f.store.getCFStmtImmediate(cursor).*) {
             .assign_call => |assign| break assign.proc,
             .assign_list => |assign| cursor = assign.next,
+            .dyn => |assign| cursor = assign.next,
             inline .incref, .decref => |rc| cursor = rc.next,
             .init_uninitialized,
             .assign_ref,
@@ -13979,6 +14144,7 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .assign_call_erased,
             .assign_packed_erased_fn,
             .assign_list,
+            .dyn,
             .assign_struct,
             .assign_tag,
             .store_struct,
@@ -14503,7 +14669,7 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
             break;
         }
         cursor = switch (stmt) {
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |linear| linear.next,
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .dyn, .free => |linear| linear.next,
             .init_uninitialized,
             .assign_call,
             .assign_call_erased,
@@ -14875,7 +15041,7 @@ test "RC outcome restitution releases every returned argument before a nested jo
         }
         cursor = switch (stmt) {
             .join => |join| join.remainder,
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |linear| linear.next,
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .dyn, .free => |linear| linear.next,
             .init_uninitialized,
             .assign_call,
             .assign_call_erased,
@@ -14908,7 +15074,7 @@ test "RC outcome restitution releases every returned argument before a nested jo
         }
         cursor = switch (stmt) {
             .join => |join| join.remainder,
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |linear| linear.next,
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .dyn, .free => |linear| linear.next,
             .init_uninitialized,
             .assign_call,
             .assign_call_erased,
@@ -15918,7 +16084,7 @@ test "RC field take restores the exact aggregate field on checked failure withou
                 break;
             }
             cursor = switch (stmt) {
-                inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |linear| linear.next,
+                inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .dyn, .free => |linear| linear.next,
                 .init_uninitialized,
                 .assign_call,
                 .assign_call_erased,
@@ -16079,7 +16245,7 @@ test "RC specialization: caller body survives variant proc append" {
                 }
                 cursor = assign.next;
             },
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |stmt| {
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free, .dyn => |stmt| {
                 cursor = stmt.next;
             },
             .init_uninitialized,
