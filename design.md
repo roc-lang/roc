@@ -27403,6 +27403,12 @@ ownership flags and parent ordering; it never synthesizes a missing context.
 Default-root nested sites validate against their explicit declaring module
 identity, while their recorded owner template remains separately validated.
 
+`requires_local` alone does not imply a lexical dependency: taking an ordinary
+procedure as a value sets that flag on a deferred context-free request. Such a
+request retains its full frontier evidence and sealed substitution and may be
+replayed unchanged. Only `local_context_dependent` requires an already-lowered
+owned body; neither kind may retain an unfinished `lowering` state in a record.
+
 The complete-analysis cache is currently an experiment enabled only by the
 `lambda_analysis_cache` developer diagnostic. Native object reuse changes the
 assembled lifted program between builds, so this coarse boundary has not

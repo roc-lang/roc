@@ -10321,7 +10321,7 @@ const Builder = struct {
         const callee_context = (try self.interfaceCalleeContext(view)) orelse return null;
         const top = (try self.literalTopModules()).?;
         var family = TypeDigestHasher.init();
-        family.update("roc.completed-body-family.v4");
+        family.update("roc.completed-body-family.v5");
         family.update(&view.key.bytes);
         family.update(&(view.code_generation_key orelse view.key).bytes);
         family.update(&scope_context);
@@ -10438,7 +10438,7 @@ const Builder = struct {
             self.allocator.destroy(arena);
         };
         const validation = CompletedBodyValidation{ .builder = self, .job = job, .names = &workspace.name_store };
-        var payload = PersistentInterface.decodeFrozen(FrozenBodyProbe, "BODY0004".*, arena.allocator(), &workspace.types, &workspace.name_store, bytes, BodyContext.PersistentProvenance{ .builder = self, .completed_body_validation = &validation }, null) catch |err| switch (err) {
+        var payload = PersistentInterface.decodeFrozen(FrozenBodyProbe, "BODY0005".*, arena.allocator(), &workspace.types, &workspace.name_store, bytes, BodyContext.PersistentProvenance{ .builder = self, .completed_body_validation = &validation }, null) catch |err| switch (err) {
             error.InvalidSummary => return null,
             error.OutOfMemory => return error.OutOfMemory,
         };
@@ -10588,7 +10588,7 @@ const Builder = struct {
             return null;
         }
         if (replay and job.completed_body_address == null) return null;
-        const bytes = PersistentInterface.encodeFrozen(FrozenBodyProbe, if (replay) "BODY0004".* else "BODYPR02".*, self.allocator, &workspace.types, &workspace.name_store, payload, BodyContext.PersistentProvenance{ .builder = self }, &stats) catch |err| switch (err) {
+        const bytes = PersistentInterface.encodeFrozen(FrozenBodyProbe, if (replay) "BODY0005".* else "BODYPR02".*, self.allocator, &workspace.types, &workspace.name_store, payload, BodyContext.PersistentProvenance{ .builder = self }, &stats) catch |err| switch (err) {
             error.NotRepresentable => return null,
             error.OutOfMemory => return error.OutOfMemory,
         };
@@ -73534,8 +73534,8 @@ const CompletedBodyValidation = struct {
     }
     fn coverage(payload: FrozenBodyProbe) bool {
         if (payload.comptime_value_roots.len != 0 or payload.literal_roots.len != 0 or payload.layout_requests.len != 0 or payload.roots.len != 0) return false;
-        for (payload.templates) |spec| if (spec.state == .lowering or ((spec.requires_local or spec.local_context_dependent) and spec.state != .lowered)) return false;
-        for (payload.nested) |spec| if (spec.state == .lowering or ((spec.requires_local or spec.local_context_dependent) and spec.state != .lowered)) return false;
+        for (payload.templates) |spec| if (spec.state == .lowering or (spec.local_context_dependent and spec.state != .lowered)) return false;
+        for (payload.nested) |spec| if (spec.state == .lowering or (spec.local_context_dependent and spec.state != .lowered)) return false;
         return true;
     }
     fn staticNode(self: *const CompletedBodyValidation, request: DraftStaticDataRequest, dependency: CompletedBodyStaticDependency) Error!checked.ConstNodeId {
@@ -73597,7 +73597,7 @@ const CompletedBodyValidation = struct {
             .root, .reserved_fn => {},
         };
         for (payload.templates) |spec| {
-            if (spec.state == .lowering or ((spec.requires_local or spec.local_context_dependent) and spec.state != .lowered)) return rejected(@src().line);
+            if (spec.state == .lowering or (spec.local_context_dependent and spec.state != .lowered)) return rejected(@src().line);
             const closed_local = spec.local_context_dependent and spec.state == .lowered;
             if ((spec.evidence == null) != closed_local) return rejected(@src().line);
             if (closed_local and (spec.def_id != null or spec.lexical_owner == null)) return rejected(@src().line);
@@ -73606,7 +73606,7 @@ const CompletedBodyValidation = struct {
                 try stored_evidence.validate(self);
             }
         }
-        for (payload.nested) |spec| if (spec.state == .lowering or ((spec.requires_local or spec.local_context_dependent) and spec.state != .lowered)) return rejected(@src().line);
+        for (payload.nested) |spec| if (spec.state == .lowering or (spec.local_context_dependent and spec.state != .lowered)) return rejected(@src().line);
         var walker = Walker{ .validation = self, .payload = &payload };
         var read_only = payload;
         try walker.walk(FrozenBodyProbe, &read_only, false);
@@ -73988,6 +73988,23 @@ test "completed body rejects incompatible demand missing columns and invalid dra
     payload.layout_requests = &layouts;
     try std.testing.expect(!CompletedBodyValidation.coverage(payload));
     try std.testing.expectError(error.InvalidSummary, validation.validate(payload));
+}
+
+test "completed body admits context-free procedure values but requires finished lexical bodies" {
+    var payload = std.mem.zeroes(FrozenBodyProbe);
+    var specs = [_]FrozenTemplateProbe{std.mem.zeroes(FrozenTemplateProbe)};
+    payload.templates = &specs;
+    // Taking a context-free procedure as a value sets requires_local even
+    // while its body remains a deferred coordinator request.
+    specs[0].state = .deferred;
+    specs[0].requires_local = true;
+    try std.testing.expect(CompletedBodyValidation.coverage(payload));
+    specs[0].local_context_dependent = true;
+    try std.testing.expect(!CompletedBodyValidation.coverage(payload));
+    specs[0].state = .lowering;
+    try std.testing.expect(!CompletedBodyValidation.coverage(payload));
+    specs[0].state = .lowered;
+    try std.testing.expect(CompletedBodyValidation.coverage(payload));
 }
 
 /// A selector in the producer's stored value, independent of allocation ids.
