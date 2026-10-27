@@ -2112,8 +2112,27 @@ pub const PreparedBoxy = struct {
 
     pub fn lower(self: *const PreparedBoxy, target: TargetConfig) LowerResourceError!LoweredProgram {
         std.debug.assert(target.specialization_strategy == .boxy);
-        _ = self;
-        @panic("boxy lowering is being reimplemented; see design.md");
+        const allocator = self.allocator;
+        var output = try postcheck.Boxy.run(allocator, .{
+            .modules = checkedModules(self.modules),
+            .roots = rootRequests(self.roots, self.layout_requests, self.static_data_requests),
+            .target_usize = target.target_usize,
+            .inline_expects = switch (target.inline_expects) {
+                .run => .run,
+                .omit => .omit,
+            },
+        });
+        var lowered: struct {
+            lir_result: LirProgram.Result,
+            runtime_schemas: postcheck.SolvedLirLower.RuntimeSchemaStore,
+        } = .{
+            .lir_result = output.lir_result,
+            .runtime_schemas = postcheck.SolvedLirLower.RuntimeSchemaStore.init(allocator),
+        };
+        defer lowered.runtime_schemas.deinit();
+        var frozen: ?LirProgram.FrozenStaticData = .{ .allocator = allocator, .exports = output.static_data };
+        output = undefined;
+        return finishLoweredOutput(allocator, self.roots.requests.len, target, &lowered, &frozen);
     }
 };
 

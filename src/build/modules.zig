@@ -336,7 +336,7 @@ pub const ModuleType = enum {
             },
             .eval => .{
                 .root = "src/eval/mod.zig",
-                .deps = &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .static_data, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc, .value_rules },
+                .deps = &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .static_data, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc, .value_rules, .boxy_runtime },
                 .extra_imports = &.{"vendor_relocatable_loader"},
                 .tests = .{ .unit = .{ .aggregators = &.{"eval tests"} } },
             },
@@ -392,7 +392,7 @@ pub const ModuleType = enum {
             },
             .postcheck => .{
                 .root = "src/postcheck/mod.zig",
-                .deps = &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core, .types, .value_rules, .build_options },
+                .deps = &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core, .types, .value_rules, .build_options, .boxy_runtime },
                 .tests = .{ .unit = .{ .aggregators = &.{"postcheck declarations are referenced"} } },
             },
             .lir => .{

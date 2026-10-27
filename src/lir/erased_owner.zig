@@ -72,6 +72,7 @@ pub const Owners = struct {
             .store_struct,
             .store_tag,
             .set_local,
+            .dyn,
             .debug,
             .expect,
             .expect_err,

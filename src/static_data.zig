@@ -409,6 +409,7 @@ const StaticInitializerMachine = struct {
                 .assign_call_erased,
                 .store_struct,
                 .store_tag,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -684,6 +685,7 @@ const StaticInitializerMachine = struct {
             .box => self.layoutValue(self.layouts().builtinBoxAbi(layout_idx).elem_layout_idx orelse .zst),
             .zst, .box_of_zst, .struct_, .scalar, .list, .list_of_zst, .closure, .erased_callable, .ptr, .tag_union => value,
             .hole => staticDataInvariant("a demand hole reached static data"),
+            .dynamic => staticDataInvariant("a dynamic value reached static data"),
         };
     }
 
@@ -693,6 +695,7 @@ const StaticInitializerMachine = struct {
             .zst, .box_of_zst => .zst,
             .box, .scalar, .list, .list_of_zst, .closure, .erased_callable, .ptr, .tag_union => staticDataInvariant("stored product had a non-struct layout"),
             .hole => staticDataInvariant("a demand hole reached static data"),
+            .dynamic => staticDataInvariant("a dynamic value reached static data"),
         };
     }
 
@@ -891,6 +894,7 @@ const StaticInitializerMachine = struct {
                 .assign_call_erased,
                 .store_struct,
                 .store_tag,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -1202,6 +1206,7 @@ const StaticInitializerMachine = struct {
         const target = self.layoutValue(target_layout);
         return switch (target.tag) {
             .hole => staticDataInvariant("a demand hole reached static data"),
+            .dynamic => staticDataInvariant("a dynamic value reached static data"),
             .zst => blk: {
                 const value = try self.newValue(target_layout);
                 break :blk .{ .outer = value, .base = value, .base_layout = target_layout };
@@ -1278,6 +1283,7 @@ const StaticInitializerMachine = struct {
         const tag_layout = switch (outer.tag) {
             .tag_union => outer,
             .hole => staticDataInvariant("a demand hole reached static data"),
+            .dynamic => staticDataInvariant("a dynamic value reached static data"),
             .box => self.layoutValue(self.layouts().builtinBoxAbi(union_layout).elem_layout_idx orelse .zst),
             .scalar,
             .box_of_zst,

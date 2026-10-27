@@ -52,7 +52,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
             try Body.appendSuccessors(store, &work, stmt_id, allocator);
             const assign = switch (store.getCFStmtImmediate(stmt_id).*) {
                 .assign_literal => |a| a,
-                .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => continue,
+                .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .dyn, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => continue,
             };
             const slot = switch (assign.value) {
                 .static_data => |read| read.id,

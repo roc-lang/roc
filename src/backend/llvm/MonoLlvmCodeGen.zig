@@ -1344,6 +1344,7 @@ pub const MonoLlvmCodeGen = struct {
     ) Error!DebugTypeStep {
         const lay = self.layoutValue(frame.idx);
         switch (lay.tag) {
+            .dynamic => return .{ .done = try self.buildDebugType(builder, frame.idx, null) },
             .box, .ptr, .list => {
                 const elem = component orelse return .{ .component = lay.getIdx() };
                 return .{ .done = try self.buildDebugType(builder, frame.idx, elem) };
@@ -1551,7 +1552,7 @@ pub const MonoLlvmCodeGen = struct {
                     0,
                 ) catch return error.OutOfMemory;
             },
-            .ptr => {
+            .ptr, .dynamic => {
                 const elem_ty = elem.?;
                 return builder.debugPointerType(
                     builder.metadataString("Ptr") catch return error.OutOfMemory,
@@ -1622,7 +1623,7 @@ pub const MonoLlvmCodeGen = struct {
                     .erased_callable => "ErasedCallable",
                     .zst => "Unit",
                     .hole => "hole",
-                    .scalar, .box, .box_of_zst, .list, .list_of_zst, .struct_, .tag_union, .ptr => unreachable, // the enclosing prong matched only closure, erased_callable, zst, and hole
+                    .scalar, .box, .box_of_zst, .list, .list_of_zst, .struct_, .tag_union, .ptr, .dynamic => unreachable, // the enclosing prong matched only closure, erased_callable, zst, and hole
                 };
                 return builder.debugStructType(
                     builder.metadataString(name) catch return error.OutOfMemory,
@@ -3607,6 +3608,7 @@ pub const MonoLlvmCodeGen = struct {
                 .assign_list,
                 .assign_struct,
                 .assign_tag,
+                .dyn,
                 .store_struct,
                 .store_tag,
                 .set_local,
@@ -3713,7 +3715,7 @@ pub const MonoLlvmCodeGen = struct {
             switch (stmt) {
                 .join => |join| try joins.append(self.allocator, .{ .id = join.id, .body = join.body }),
                 .assign_call => |call| try shape.callees.append(self.allocator, call.proc),
-                .assign_call_erased, .assign_packed_erased_fn => shape.opaque_call = true,
+                .assign_call_erased, .assign_packed_erased_fn, .dyn => shape.opaque_call = true,
                 .init_uninitialized,
                 .assign_ref,
                 .assign_literal,
@@ -3943,6 +3945,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.setStmtDebugLocation(stmt_id);
         try self.emitSlotLifetimeMarkers(stmt_id);
         switch (stmt) {
+            .dyn => std.debug.panic("LLVM codegen invariant violated: the LLVM backend does not lower `dyn` statements yet", .{}),
             .assign_ref => |assign| {
                 try self.emitAssignRef(assign.target, assign.op);
                 try work.append(wa, .{ .node = assign.next });
@@ -11012,7 +11015,7 @@ pub const MonoLlvmCodeGen = struct {
                 );
                 try self.storePointer(self.slot(target).ptr, result);
             },
-            .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr => return error.CompilationFailed,
+            .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr, .dynamic => return error.CompilationFailed,
         }
     }
 
@@ -12544,7 +12547,7 @@ pub const MonoLlvmCodeGen = struct {
                 .frac => direct_idx == .dec,
                 .vector, .opaque_ptr, .str => false,
             },
-            .tag_union, .box, .box_of_zst, .ptr => false,
+            .tag_union, .box, .box_of_zst, .ptr, .dynamic => false,
             .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole => direct_idx.isSigned(),
         };
     }

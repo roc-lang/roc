@@ -533,6 +533,39 @@ pub const JoinPointId = enum(u32) {
 /// One explicitly typed LIR local.
 pub const Local = struct {
     layout_idx: layout.Idx,
+    /// Set exactly for a local of `dynamic` layout.
+    dyn: ?DynLocal = null,
+};
+
+/// What a `dynamic` local's value is (design.md "Dynamic Values In LIR"):
+/// bytes the runtime type descriptor in `desc` describes, which the local
+/// addresses. `desc` is a local of `opaque_ptr` layout holding the
+/// descriptor; it is defined before the dynamic local is.
+pub const DynLocal = struct {
+    desc: LocalId,
+    storage: DynStorage,
+};
+
+/// Where the bytes of a `dynamic` local live, which decides how its address
+/// is set.
+pub const DynStorage = enum(u32) {
+    /// The procedure's dynamic frame region. The backend reserves
+    /// `desc.size` bytes at `desc.alignment` for the local when it executes
+    /// the procedure's `dyn` `frame_alloc` statement, which follows every
+    /// descriptor composition the region's sizes read. Writing such a local
+    /// (the target of a call or `dyn` operation, a join parameter a jump
+    /// assigns, a `set_local` target) writes its bytes there.
+    frame,
+    /// A procedure parameter: the caller passes the address of storage it
+    /// owns, and the local is that address.
+    param,
+    /// Storage inside another value: the `dyn` statement that defines the
+    /// local sets its address. Such a local borrows from the value it points
+    /// into.
+    view,
+    /// The procedure's own result storage (`LirProcSpec.dyn_result`): the
+    /// caller passes its address after the explicit arguments.
+    result,
 };
 
 /// Span into flat local-id storage.
@@ -917,6 +950,14 @@ pub const ErasedCallableOnDrop = union(enum) {
 pub const ProcAbi = enum {
     roc,
     erased_callable,
+    /// The uniform erased-callable ABI as a `.boxy` worker receives it: the
+    /// procedure has at most one explicit argument, the packed argument
+    /// record itself (a closed struct, or a `param` dynamic local whose
+    /// address is the `args` pointer), its capture pointer in
+    /// `erased_capture_arg`, and its result written to the `ret` pointer (a
+    /// `dyn_result` local when the result is dynamic). It takes no reuse
+    /// input and writes no `out_desc`.
+    erased_record,
 };
 
 /// Where the erased calls a callee left pending are run. A tail call through
@@ -1093,6 +1134,13 @@ pub const LowLevelExtra = struct {
     /// with different storage representations use this explicit fact rather
     /// than reconstructing the transform function return type.
     map_output_elem: ?layout.Idx = null,
+    /// Set on a list operation a `.boxy` generic body emits: its last
+    /// argument is the `opaque_ptr` descriptor of the list's elements, which
+    /// supplies the element width, alignment, and reference counting the
+    /// monomorphic form reads from a static element layout. List arguments
+    /// and results of such an operation may be dynamic locals (addresses of
+    /// the list values).
+    dyn_elem_desc: bool = false,
     /// Exact in-range byte alignment count proved by range analysis.
     /// Only `simd_concat_shift_bytes` uses this; null retains the dynamic
     /// operation. Backends consume this fact without inspecting definitions.
@@ -1245,6 +1293,104 @@ pub const PackedErasedFnData = struct {
     reuse_unique: bool = false,
 };
 
+/// One operation of a `CFStmt.dyn` statement, stored out of line (design.md
+/// "Dynamic Values In LIR", "Type Descriptors", "Dictionaries").
+///
+/// Descriptor, name, and dictionary operands are locals of `opaque_ptr`
+/// layout: a static descriptor or name is a `static_data` read, and a
+/// composed one is the target of a composition operation. Descriptors and
+/// names are immortal and never reference counted.
+///
+/// Ownership: an operation that defines a `view` target borrows the target
+/// from its `base` operand, as an `assign_ref` of a component does; `copy`
+/// makes its target an alias of `src`, as an `assign_ref` of a local does;
+/// `record`, `tuple`, `tag`, `list`, and `box` consume their value operands
+/// into the target, as `assign_struct`, `assign_tag`, and `assign_list` do;
+/// `eq`, `hash`, `inspect`, and `tag_discriminant` borrow their value
+/// operands; `call_erased` consumes `args` and borrows `closure`.
+pub const DynOp = union(enum) {
+    /// Allocate the procedure's dynamic frame region and set the address of
+    /// every `frame` dynamic local. Exactly one per procedure with such
+    /// locals, after every operation its descriptors depend on and before any
+    /// use of those locals. Has no target.
+    frame_alloc,
+
+    // -- Descriptor composition (targets: `opaque_ptr`) --
+
+    desc_list: struct { elem: LocalId },
+    desc_box: struct { payload: LocalId },
+    /// A structural record of the named fields; `names` and `descs` are
+    /// parallel, in any order (the runtime orders by name).
+    desc_record: struct { names: LocalSpan, descs: LocalSpan },
+    desc_tuple: struct { elems: LocalSpan },
+    /// A tag union. `names` has one entry per variant; `payload_counts`
+    /// (parallel) says how many of `payloads`, in order, belong to it.
+    desc_tag_union: struct { names: LocalSpan, payload_counts: U32Span, payloads: LocalSpan },
+    /// The packed erased-call argument record of `elems`, in declaration
+    /// order (`layout.erased_call_abi.plan`).
+    desc_args: struct { elems: LocalSpan },
+    /// A nominal type over `backing`. `methods` is null or a local holding a
+    /// `Methods` record of override callables.
+    desc_nominal: struct { backing: LocalId, name: LocalId, methods: ?LocalId, inspect_opaque: bool },
+
+    // -- Dictionaries (targets: `opaque_ptr`, except `dict_method`) --
+
+    /// A dictionary callable composed at runtime: an immortal erased callable
+    /// of `worker` capturing `captures` (descriptors and dictionaries, in the
+    /// worker's capture order), interned by worker and capture identities.
+    dict_compose: struct { worker: LirProcSpecId, captures: LocalSpan },
+    /// A dictionary record of several method callables, interned.
+    dict_record: struct { methods: LocalSpan },
+    /// The callable of method `index` of a dictionary record. Target:
+    /// `erased_callable`, borrowed from the immortal dictionary.
+    dict_method: struct { dict: LocalId, index: u32 },
+
+    // -- Values --
+
+    /// Copy `desc.size` bytes from `src` to the target. Reference counts are
+    /// separate (`incref`/`decref` of the target as of any alias).
+    copy: struct { src: LocalId, desc: LocalId },
+    /// Field `semantic_index` of the record or tuple `base` described by
+    /// `desc`. The target is a `view` dynamic local, or a closed local the
+    /// field's bytes are loaded into.
+    field_addr: struct { base: LocalId, desc: LocalId, semantic_index: u32 },
+    /// The field named `name` of the record `base` described by `desc`.
+    field_addr_named: struct { base: LocalId, desc: LocalId, name: LocalId },
+    /// Element `index` (a `u64` local) of the list `list`, whose elements
+    /// `elem_desc` describes. The caller has checked the bound.
+    list_elem_addr: struct { list: LocalId, elem_desc: LocalId, index: LocalId },
+    /// The payload of the box `box`, whose payload `desc` describes.
+    box_payload_addr: struct { box: LocalId, desc: LocalId },
+    /// The discriminant (target: `u32`) of the tag union `base`.
+    tag_discriminant: struct { base: LocalId, desc: LocalId },
+    /// The discriminant (target: `u32`) tag `name` has under `desc`.
+    tag_discriminant_of: struct { desc: LocalId, name: LocalId },
+    /// Payload `payload_index` of tag `name` in the tag union `base`, which
+    /// holds that tag.
+    tag_payload_addr: struct { base: LocalId, desc: LocalId, name: LocalId, payload_index: u32 },
+    /// Build the record or tuple `desc` describes from `fields`, given in
+    /// semantic index order.
+    record: struct { desc: LocalId, fields: LocalSpan },
+    /// Build tag `name` of the tag union `desc` describes from `payloads`.
+    tag: struct { desc: LocalId, name: LocalId, payloads: LocalSpan },
+    /// Build a list of `elems`, whose elements `elem_desc` describes.
+    list: struct { elem_desc: LocalId, elems: LocalSpan },
+    /// Box `payload`, which `desc` describes.
+    box: struct { desc: LocalId, payload: LocalId },
+    /// Structural equality (target: `Bool`) honoring nominal overrides.
+    eq: struct { lhs: LocalId, rhs: LocalId, desc: LocalId },
+    /// Structural hashing of `value` into `hasher` (target: the hasher's
+    /// layout) honoring nominal overrides.
+    hash: struct { hasher: LocalId, value: LocalId, desc: LocalId },
+    /// `Str.inspect` rendering (target: `Str`) honoring nominal overrides.
+    inspect: struct { value: LocalId, desc: LocalId },
+    /// Call the erased callable `closure` in the uniform erased-callable ABI:
+    /// `args` is the packed argument record (a closed struct local or a
+    /// dynamic local), or null for no arguments; the result is written to the
+    /// target.
+    call_erased: struct { closure: LocalId, args: ?LocalId },
+};
+
 /// The fields of `CFStmt.decref_if_initialized` other than its condition,
 /// value, and successor, stored out of line (see `StmtRowId`).
 pub const DecrefIfInitializedData = struct {
@@ -1358,6 +1504,13 @@ pub const CFStmt = union(enum) {
         message: LocalId,
         /// Source region of the `?` expression, for failure reporting.
         region: base.Region,
+    },
+    /// An operation on dynamic values, descriptors, or dictionaries
+    /// (`DynOp`). `target` is null only for `frame_alloc`.
+    dyn: struct {
+        target: ?LocalId,
+        data: StmtRowId(DynOp),
+        next: CFStmtId,
     },
     /// Compiler-generated impossible execution path. This is terminal.
     runtime_error: void,
@@ -1600,6 +1753,10 @@ pub const LirProcSpec = struct {
     ret_layout: layout.Idx,
     /// Hidden capture-pointer parameter for an erased callable procedure.
     erased_capture_arg: ?LocalId = null,
+    /// For a procedure whose result is dynamic (`ret_layout` is the dynamic
+    /// layout): the `result` dynamic local addressing the storage the caller
+    /// passes after the explicit arguments.
+    dyn_result: ?LocalId = null,
     abi: ProcAbi = .roc,
     /// This closed proc exists only so target static-data materialization can
     /// execute its exact post-layout construction. Runtime backends register

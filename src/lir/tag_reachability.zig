@@ -265,6 +265,7 @@ const Pass = struct {
             .assign_low_level,
             .assign_list,
             => |s| return self.localInfoMut(s.target).markAll(self.allocator),
+            .dyn => |s| return if (s.target) |target| self.localInfoMut(target).markAll(self.allocator) else false,
             .store_struct,
             .store_tag,
             .debug,

@@ -10556,6 +10556,7 @@ const Lowerer = struct {
             .hole,
             .tag_union,
             .ptr,
+            .dynamic,
             => Common.invariant("recursive Monotype let statement must bind a boxed runtime layout"),
         };
         return .{
@@ -14276,6 +14277,7 @@ const Lowerer = struct {
                 => return .{ .value = lhs.eql(rhs) },
                 .zst,
                 .hole,
+                .dynamic,
                 .box_of_zst,
                 .list_of_zst,
                 => return .{ .value = true },
@@ -15754,7 +15756,7 @@ const Lowerer = struct {
             },
             .box => unreachable, // the loop above unwraps every box layout
             .box_of_zst, .zst, .scalar => .zst,
-            .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr, .hole => Common.invariant("tag payload operation expected tag-union layout"),
+            .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr, .hole, .dynamic => Common.invariant("tag payload operation expected tag-union layout"),
         };
     }
 
@@ -15775,7 +15777,7 @@ const Lowerer = struct {
         return switch (list_layout.tag) {
             .list => list_layout.getIdx(),
             .list_of_zst => .zst,
-            .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr => Common.invariant("list expression target was not a list layout"),
+            .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr, .dynamic => Common.invariant("list expression target was not a list layout"),
         };
     }
 

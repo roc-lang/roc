@@ -11,6 +11,7 @@ const layout_mod = @import("layout");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
+const DynOps = core.DynOps;
 const GuardedList = collections.GuardedList;
 
 /// Errors produced while printing: allocation for the visited set, or the
@@ -419,6 +420,16 @@ const Printer = struct {
                     }
                     return;
                 },
+                .dyn => |s| {
+                    if (s.target) |target| {
+                        try self.writeTarget(target, indent, writer);
+                    } else {
+                        try writeIndent(indent, writer);
+                    }
+                    try self.writeDynOp(self.store.stmtRow(s.data), writer);
+                    try writer.writeAll("\n");
+                    current = s.next;
+                },
                 .runtime_error => {
                     try writeIndent(indent, writer);
                     try writer.writeAll("runtime_error\n");
@@ -439,6 +450,39 @@ const Printer = struct {
         try writer.writeAll(" = ");
     }
 
+    fn writeDynOp(self: *Printer, op: LIR.DynOp, writer: *std.Io.Writer) Error!void {
+        try writer.print("dyn.{s}", .{@tagName(op)});
+        switch (op) {
+            .desc_tag_union => |desc| {
+                try writer.writeAll(" names(");
+                try self.writeLocals(desc.names, writer);
+                try writer.writeAll(") counts(");
+                const counts = self.store.getU32Span(desc.payload_counts);
+                for (0..counts.len) |i| {
+                    if (i > 0) try writer.writeAll(", ");
+                    try writer.print("{d}", .{GuardedList.at(counts, i)});
+                }
+                try writer.writeAll(") payloads(");
+                try self.writeLocals(desc.payloads, writer);
+                try writer.writeAll(")");
+                return;
+            },
+            .dict_compose => |dict| try writer.print(" p{d}", .{@backingInt(dict.worker)}),
+            .dict_method => |method| try writer.print(" #{d}", .{method.index}),
+            .field_addr => |field| try writer.print(" #{d}", .{field.semantic_index}),
+            .tag_payload_addr => |payload| try writer.print(" #{d}", .{payload.payload_index}),
+            .desc_nominal => |nominal| if (nominal.inspect_opaque) try writer.writeAll(" opaque"),
+            else => {},
+        }
+        const operands = DynOps.Operands.of(op);
+        for (operands.singles[0..operands.single_count]) |local| try writer.print(" l{d}", .{@backingInt(local)});
+        for (operands.spans[0..operands.span_count]) |span| {
+            try writer.writeAll(" (");
+            try self.writeLocals(span, writer);
+            try writer.writeAll(")");
+        }
+    }
+
     fn writeLocals(self: *Printer, span: LIR.LocalSpan, writer: *std.Io.Writer) Error!void {
         const locals = self.store.getLocalSpan(span);
         for (0..locals.len) |i| {
@@ -456,7 +500,12 @@ fn writeTypedLocal(
     writer: *std.Io.Writer,
 ) Error!void {
     try writer.print("l{d}:", .{@backingInt(local)});
-    try writeLayout(layouts, store.getLocal(local).layout_idx, writer);
+    const value = store.getLocal(local);
+    if (value.dyn) |dyn| {
+        try writer.print("dyn({s},l{d})", .{ @tagName(dyn.storage), @backingInt(dyn.desc) });
+        return;
+    }
+    try writeLayout(layouts, value.layout_idx, writer);
 }
 
 fn writeLayout(layouts: *const layout_mod.Store, idx: layout_mod.Idx, writer: *std.Io.Writer) Error!void {

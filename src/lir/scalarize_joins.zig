@@ -40,6 +40,7 @@ const body_clone = @import("body_clone.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
+const DynOps = core.DynOps;
 const GuardedList = collections.GuardedList;
 const Allocator = std.mem.Allocator;
 
@@ -757,6 +758,7 @@ const Pass = struct {
                     .store_struct,
                     .store_tag,
                     .set_local,
+                    .dyn,
                     .debug,
                     .expect,
                     .expect_err,
@@ -1897,6 +1899,7 @@ const Pass = struct {
                 .store_struct,
                 .store_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -1968,6 +1971,7 @@ const Pass = struct {
                 .store_struct,
                 .store_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -2095,6 +2099,10 @@ const Pass = struct {
                 .store_tag => |assign| {
                     try self.noteUse(assign.dest);
                     if (assign.payload) |payload| try self.noteUse(payload);
+                },
+                .dyn => |assign| {
+                    if (assign.target) |target| try self.noteWrite(target);
+                    try DynOps.Operands.of(self.store.stmtRow(assign.data)).each(self.store, self, noteUse);
                 },
                 .set_local => |assign| {
                     if (assign.mode == .initialize_join_param) {

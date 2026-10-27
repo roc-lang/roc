@@ -2634,6 +2634,7 @@ const Pass = struct {
                 .assign_struct,
                 .assign_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -2782,6 +2783,7 @@ const Pass = struct {
                 .store_struct,
                 .store_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -2930,6 +2932,7 @@ const Pass = struct {
                 .store_struct,
                 .store_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -3074,6 +3077,7 @@ const Pass = struct {
                 .store_struct,
                 .store_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -4689,6 +4693,7 @@ const Pass = struct {
                 .store_struct,
                 .store_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -4728,6 +4733,7 @@ const Pass = struct {
                 .store_struct,
                 .store_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,
@@ -4818,6 +4824,7 @@ const Pass = struct {
                     .store_struct,
                     .store_tag,
                     .set_local,
+                    .dyn,
                     .debug,
                     .expect,
                     .expect_err,
@@ -5110,6 +5117,11 @@ const Pass = struct {
                     inline .store_struct, .store_tag => |s| {
                         try self.visited.put(current, {});
                         try self.bindFresh(s.dest);
+                        current = s.next;
+                    },
+                    .dyn => |s| {
+                        try self.visited.put(current, {});
+                        if (s.target) |target| try self.bindFresh(target);
                         current = s.next;
                     },
                     inline .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
@@ -6853,6 +6865,7 @@ const RangeProveCertify = struct {
                 .store_struct,
                 .store_tag,
                 .set_local,
+                .dyn,
                 .debug,
                 .expect,
                 .expect_err,

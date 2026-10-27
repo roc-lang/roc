@@ -585,7 +585,7 @@ const Detection = struct {
                     }
                 },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {},
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .dyn, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try work.append(gpa, .{ .stmt = s.next, .edge = .{ .stmt_next = item.stmt } });
                 },
             }
@@ -753,6 +753,7 @@ const Detection = struct {
             .store_struct,
             .store_tag,
             .set_local,
+            .dyn,
             .debug,
             .expect,
             .expect_err,
@@ -828,6 +829,7 @@ const Detection = struct {
             .assign_packed_erased_fn,
             .assign_low_level,
             .assign_list,
+            .dyn,
             .assign_struct,
             .assign_tag,
             .store_struct,

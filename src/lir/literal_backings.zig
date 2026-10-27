@@ -78,6 +78,7 @@ const Collector = struct {
                 .assign_list,
                 .assign_struct,
                 .assign_tag,
+                .dyn,
                 .store_struct,
                 .store_tag,
                 .set_local,

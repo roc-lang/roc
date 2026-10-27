@@ -162,6 +162,8 @@ fn handsUp(store: *const LirStore, outside: *const std.bit_set.DynamicBitSetUnma
     const proc = store.getProcSpecImmediate(@fromBackingInt(proc_index));
     return switch (proc.abi) {
         .erased_callable => .when_runtime_called,
+        // A `.boxy` erased worker leaves no call pending.
+        .erased_record => .never,
         .roc => if (outside.isSet(proc_index)) .never else .always,
     };
 }

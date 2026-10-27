@@ -16,6 +16,8 @@ pub const RootMetadata = core.RootMetadata;
 pub const Hosted = core.Hosted;
 /// LIR program result shared by post-check lowering and consumers.
 pub const Program = core.Program;
+/// Operand and ownership facts of `dyn` statements.
+pub const DynOps = core.DynOps;
 /// Public checked-module-to-LIR lowering entrypoint.
 pub const CheckedPipeline = @import("checked_pipeline.zig");
 /// One module's closed exports lowered as a program of their own.

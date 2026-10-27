@@ -62,6 +62,7 @@ pub const stmt_row_types = .{
     lir_defs.PackedErasedFnData,
     lir_defs.DecrefIfInitializedData,
     lir_defs.CrashExtra,
+    lir_defs.DynOp,
 };
 
 /// Number of out-of-line statement row columns.
@@ -1316,6 +1317,7 @@ pub fn failureMeaning(self: *const Self, stmt: CFStmtId) ?lir_defs.FailureMeanin
         .store_struct,
         .store_tag,
         .set_local,
+        .dyn,
         .debug,
         .expect,
         .expect_err,
@@ -1626,9 +1628,25 @@ fn assertBodyMetadataImmutable(self: *const Self) void {
     base.invariant("LirStore invariant violated: attempted to mutate coordinator metadata from body worker", .{});
 }
 
-/// A local as the store keeps it: the layout every consumer reads.
+/// A local as the store keeps it: the layout every consumer reads and, for a
+/// dynamic local, its descriptor local and storage (`LIR.DynLocal`).
 pub const StoredLocal = struct {
     layout_idx: layout.Idx,
+    /// The descriptor local of a dynamic local; `no_dyn_desc` otherwise.
+    dyn_desc: u32 = no_dyn_desc,
+    dyn_storage: lir_defs.DynStorage = .frame,
+
+    pub const no_dyn_desc: u32 = std.math.maxInt(u32);
+
+    fn fromLocal(local: Local) StoredLocal {
+        const dyn = local.dyn orelse return .{ .layout_idx = local.layout_idx };
+        return .{ .layout_idx = local.layout_idx, .dyn_desc = @backingInt(dyn.desc), .dyn_storage = dyn.storage };
+    }
+
+    pub fn toLocal(self: StoredLocal) Local {
+        if (self.dyn_desc == no_dyn_desc) return .{ .layout_idx = self.layout_idx };
+        return .{ .layout_idx = self.layout_idx, .dyn = .{ .desc = @fromBackingInt(self.dyn_desc), .storage = self.dyn_storage } };
+    }
 };
 
 /// Registers one LIR local and returns its id.
@@ -1636,7 +1654,7 @@ pub fn addLocal(self: *Self, local: Local) Allocator.Error!LocalId {
     const idx = self.locals.len() + if (self.body_coordinator != null) self.body_prefix.locals else 0;
     try self.locals.ensureUnusedCapacity(self.allocator, 1);
     try self.local_names.ensureUnusedCapacity(self.allocator, 1);
-    self.locals.appendAssumeCapacity(.{ .layout_idx = local.layout_idx });
+    self.locals.appendAssumeCapacity(StoredLocal.fromLocal(local));
     self.local_names.appendAssumeCapacity(no_local_name);
     return @fromBackingInt(@intCast(@as(u32, @intCast(idx))));
 }
@@ -1662,8 +1680,12 @@ fn storedLocal(self: *const Self, id: LocalId) StoredLocal {
 
 /// Returns one stored LIR local.
 pub fn getLocal(self: *const Self, id: LocalId) Local {
-    const stored = self.storedLocal(id);
-    return .{ .layout_idx = stored.layout_idx };
+    return self.storedLocal(id).toLocal();
+}
+
+/// The descriptor and storage of a dynamic local, or null for any other.
+pub fn localDyn(self: *const Self, id: LocalId) ?lir_defs.DynLocal {
+    return self.storedLocal(id).toLocal().dyn;
 }
 
 /// The layout of one stored LIR local.
@@ -2024,6 +2046,21 @@ pub fn addLowLevelStmt(
     } }, origin);
 }
 
+/// Appends `target = op` (a `dyn` statement) followed by `next`.
+pub fn addDynStmt(
+    self: *Self,
+    target: ?LocalId,
+    op: lir_defs.DynOp,
+    next: CFStmtId,
+    origin: StmtOrigin,
+) Allocator.Error!CFStmtId {
+    return self.addCFStmt(.{ .dyn = .{
+        .target = target,
+        .data = try self.addStmtRow(lir_defs.DynOp, op),
+        .next = next,
+    } }, origin);
+}
+
 /// Appends switch branches and returns the corresponding flat-storage span.
 pub fn addCFSwitchBranches(self: *Self, branches: []const CFSwitchBranch) Allocator.Error!CFSwitchBranchSpan {
     return self.appendStoreSpan(CFSwitchBranchSpan, "cf_switch_branches", branches);
@@ -2094,7 +2131,7 @@ pub fn addProcSpec(self: *Self, proc: LirProcSpec, loc: base.SourceLoc) Allocato
 }
 
 /// Record the statement-level procedure shapes one appended statement implies.
-fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
+pub fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
     switch (stmt) {
         .assign_call => |call| {
             // Only a tail-call builder names the procedure a statement belongs
@@ -2138,6 +2175,7 @@ fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
         .assign_call_erased,
         .assign_packed_erased_fn,
         .assign_list,
+        .dyn,
         .store_struct,
         .store_tag,
         .set_local,

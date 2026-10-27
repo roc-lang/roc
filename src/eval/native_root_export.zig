@@ -178,6 +178,7 @@ const Builder = struct {
                 .box => try self.boxed(job, element, physical.getIdx()),
                 .erased_callable => try self.enqueue(element, job.layout_idx, job.source, job.dest, .value),
                 .hole => invariant("a demand hole reached a native root export"),
+                .dynamic => invariant("a dynamic value reached a native root export"),
                 .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr => invariant("box export plan had incompatible layout"),
             },
             .tuple, .record => |child_plans| {

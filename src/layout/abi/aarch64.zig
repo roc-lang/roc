@@ -80,7 +80,7 @@ pub fn classifyType(allocator: std.mem.Allocator, store: *const Store, start: Id
             }
         },
         // A Box is a single pointer.
-        .box, .box_of_zst, .ptr => return .byval,
+        .box, .box_of_zst, .ptr, .dynamic => return .byval,
         // RocList is a three-word aggregate.
         .list, .list_of_zst => return classifyBySize(store, lay),
         .struct_ => {
@@ -157,7 +157,7 @@ fn countVectors(allocator: std.mem.Allocator, store: *const Store, idx: Idx, may
                 if (info.variants.len != 1 or info.data.discriminant_size != 0) return invalid_float_count;
                 try pending.append(pending_allocator, info.variants.get(0).payload_layout);
             },
-            .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .hole, .ptr => return invalid_float_count,
+            .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => return invalid_float_count,
         }
     }
     return count;
@@ -230,7 +230,7 @@ fn countFloats(allocator: std.mem.Allocator, store: *const Store, idx: Idx, mayb
             },
             // Anything else (pointer, list, box, non-transparent tag union, …)
             // makes the aggregate non-homogeneous.
-            .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .hole, .ptr => return invalid_float_count,
+            .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => return invalid_float_count,
         }
     }
     return count;

@@ -2075,7 +2075,7 @@ const LayoutHashContext = struct {
                     .str, .opaque_ptr => {},
                 }
             },
-            .box, .list, .ptr => try self.hashIdx(hasher, layout_val.getIdx()),
+            .box, .list, .ptr, .dynamic => try self.hashIdx(hasher, layout_val.getIdx()),
             .box_of_zst, .list_of_zst, .erased_callable, .zst, .hole => {},
             .closure => try self.hashIdx(hasher, layout_val.getClosure().captures_layout_idx),
             .struct_ => {

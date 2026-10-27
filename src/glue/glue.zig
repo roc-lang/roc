@@ -2693,7 +2693,7 @@ const TypeTable = struct {
                     .list => layout_val.getIdx(),
                     .hole => unreachable, // glue reads only host-boundary layouts, and a hole appears only in a demand-shaped specialization's parameters
                     .list_of_zst => .zst,
-                    .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => glueInvariant("list glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
+                    .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .dynamic => glueInvariant("list glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
                 };
                 const slot = try self.childSlotFor(store, list_repr.elem_id, elem_layout);
                 self.entries.items[@intCast(entry_idx)].repr.list.elem_id = slot.entry;
@@ -2725,7 +2725,7 @@ const TypeTable = struct {
                 const inner_layout: layout.Idx = switch (layout_val.tag) {
                     .box => layout_val.getIdx(),
                     .box_of_zst => .zst,
-                    .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .hole, .tag_union, .ptr, .erased_callable => glueInvariant("box glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
+                    .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .hole, .tag_union, .ptr, .dynamic, .erased_callable => glueInvariant("box glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
                 };
                 const slot = try self.childSlotFor(store, box_repr.inner_id, inner_layout);
                 self.entries.items[@intCast(entry_idx)].repr.box.inner_id = slot.entry;
@@ -3662,7 +3662,7 @@ const GlueRocValueWriter = struct {
             .list => list_layout.getIdx(),
             .hole => unreachable, // glue reads only host-boundary layouts, and a hole appears only in a demand-shaped specialization's parameters
             .list_of_zst => .zst,
-            .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => glueInvariant("glue expected list layout, got {s}", .{@tagName(list_layout.tag)}),
+            .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .dynamic => glueInvariant("glue expected list layout, got {s}", .{@tagName(list_layout.tag)}),
         };
     }
 

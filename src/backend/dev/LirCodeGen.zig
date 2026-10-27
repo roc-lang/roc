@@ -1953,6 +1953,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .hole,
                             .tag_union,
                             .ptr,
+                            .dynamic,
                             => {
                                 base.invariant(
                                     "LIR/codegen invariant violated: list_append first argument must have list/list_of_zst layout, got {s}",
@@ -1974,6 +1975,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .hole,
                         .tag_union,
                         .ptr,
+                        .dynamic,
                         => unreachable, // the ret_layout check above rejects every non-list layout
                     };
 
@@ -2122,6 +2124,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .hole,
                         .tag_union,
                         .ptr,
+                        .dynamic,
                         => {
                             base.invariant(
                                 "LIR/codegen invariant violated: list_get argument must have list/list_of_zst layout, got {s}",
@@ -8492,6 +8495,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_list,
                     .assign_struct,
                     .assign_tag,
+                    .dyn,
                     .store_struct,
                     .store_tag,
                     .debug,
@@ -11436,6 +11440,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .zst,
                 .tag_union,
                 .ptr,
+                .dynamic,
                 => {},
             }
 
@@ -12924,6 +12929,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .hole,
                 .tag_union,
                 .ptr,
+                .dynamic,
                 => source_layout_idx,
             };
             const struct_loc = try self.normalizeValueLocationToLayout(raw_struct_loc, source_layout_idx, base_layout_idx);
@@ -13011,6 +13017,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .zst,
                 .hole,
                 .ptr,
+                .dynamic,
                 => tpa.target_layout,
             };
             const payload_layout = ls.getLayout(payload_layout_idx);
@@ -13034,6 +13041,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .hole,
                 .tag_union,
                 .ptr,
+                .dynamic,
                 => blk: {
                     if (builtin.mode == .debug and tpa.payload_idx != 0) {
                         base.invariant(
@@ -13127,6 +13135,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .zst,
                 .hole,
                 .ptr,
+                .dynamic,
                 => tps.target_layout,
             };
             const payload_size = ls.layoutSizeAlign(ls.getLayout(payload_layout_idx)).size;
@@ -13404,6 +13413,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .erased_callable,
                 .tag_union,
                 .ptr,
+                .dynamic,
                 => {
                     base.invariant(
                         "LIR/codegen invariant violated: assign_struct target local {d} layout {d} ({s}) is not runtime struct or zst layout; proc={d} stmt={d}",
@@ -14882,6 +14892,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .hole,
                     .tag_union,
                     .ptr,
+                    .dynamic,
                     => return current,
                 }
             }
@@ -14974,7 +14985,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             });
                         }
                     },
-                    .closure, .erased_callable, .ptr => return false,
+                    .closure, .erased_callable, .ptr, .dynamic => return false,
                 }
             }
             return true;
@@ -15846,7 +15857,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             // Zero-sized type—nothing to store.
                             return;
                         },
-                        .box, .box_of_zst, .erased_callable, .ptr => {
+                        .box, .box_of_zst, .erased_callable, .ptr, .dynamic => {
                             // Box is a heap pointer (machine word)
                             const reg = try self.ensureInGeneralReg(loc);
                             try self.emitStoreToMem(saved_ptr_reg, reg);
@@ -18449,7 +18460,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .hole => base.invariant("LIR/codegen invariant violated: a demand hole reached a value location", .{}),
                 .zst => {},
                 // Box: single pointer (1 register)
-                .box, .box_of_zst, .erased_callable, .ptr => try self.moveOneRegToReturn(loc),
+                .box, .box_of_zst, .erased_callable, .ptr, .dynamic => try self.moveOneRegToReturn(loc),
                 .closure => {
                     base.invariant(
                         "LIR/codegen invariant violated: runtimeRepresentationLayoutIdx returned closure for return layout {}",
@@ -18749,6 +18760,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const stmt = self.store.getCFStmt(stmt_id);
                     switch (stmt) {
+                        .dyn => base.invariant("LIR/codegen invariant violated: the dev backend does not lower `dyn` statements yet", .{}),
                         .assign_ref => |assign| {
                             const value_loc = try self.generateRefOp(assign.op, self.localLayout(assign.target));
                             try self.bindAssignedLocal(assign.target, value_loc);

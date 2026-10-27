@@ -1108,6 +1108,7 @@ fn noteAddressedOperands(self: *Self, store: *const LirStore, stmt: lir.LIR.CFSt
         .join, .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
         .assign_call_erased,
         .assign_packed_erased_fn,
+        .dyn,
         .debug,
         .expect_err,
         .crash,

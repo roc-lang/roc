@@ -129,7 +129,7 @@ pub const Digests = struct {
     fn pushChildren(self: *Digests, pending: anytype, idx: Idx) Allocator.Error!void {
         const layout = self.store.getLayout(idx);
         switch (layout.tag) {
-            .scalar, .box_of_zst, .list_of_zst, .erased_callable, .zst, .hole => {},
+            .scalar, .box_of_zst, .list_of_zst, .erased_callable, .zst, .hole, .dynamic => {},
             .box, .list, .ptr => try self.pushChild(pending, layout.getIdx()),
             .closure => try self.pushChild(pending, layout.getClosure().captures_layout_idx),
             .struct_ => {
@@ -164,7 +164,7 @@ pub const Digests = struct {
             },
             .box, .list, .ptr => try self.writeChild(hasher, layout.getIdx()),
             .closure => try self.writeChild(hasher, layout.getClosure().captures_layout_idx),
-            .box_of_zst, .list_of_zst, .erased_callable, .zst, .hole => {},
+            .box_of_zst, .list_of_zst, .erased_callable, .zst, .hole, .dynamic => {},
             .struct_ => {
                 const struct_layout = layout.getStruct();
                 writeBytes(hasher, @tagName(struct_layout.sort_key));

@@ -68,6 +68,7 @@ const Spec = struct {
             .zst,
             .hole,
             .ptr,
+            .dynamic,
             => false,
         };
     }

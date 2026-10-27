@@ -20,6 +20,7 @@ const layout_mod = @import("layout");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
+const DynOps = core.DynOps;
 const GuardedList = LirStore.GuardedList;
 const CFStmtId = LIR.CFStmtId;
 const LocalId = LIR.LocalId;
@@ -315,6 +316,7 @@ pub fn forEachSuccessor(
         .decref,
         .decref_if_initialized,
         .free,
+        .dyn,
         => |s| visit(ctx, s.next),
 
         .switch_stmt => |s| {
@@ -394,6 +396,7 @@ pub fn redirectSuccessors(
         .decref,
         .decref_if_initialized,
         .free,
+        .dyn,
         => |*s| s.next = resolve(ctx, s.next),
         .str_match => |*s| {
             s.on_match = resolve(ctx, s.on_match);
@@ -520,6 +523,11 @@ pub fn forEachStmtRead(
         .assign_tag => |s| {
             if (s.payload) |payload| note(ctx, payload);
         },
+        .dyn => |s| {
+            const operands = DynOps.Operands.of(store.stmtRow(s.data));
+            for (operands.singles[0..operands.single_count]) |local| note(ctx, local);
+            for (operands.spans[0..operands.span_count]) |span| emitSpan(store, ctx, note, span);
+        },
         .store_struct => |s| {
             note(ctx, s.dest);
             const fields = store.getLocalSpan(s.fields);
@@ -602,6 +610,7 @@ pub fn forEachStmtDef(
         => |s| note(ctx, s.target),
         .assign_call => |s| note(ctx, s.target),
         .assign_call_erased => |s| note(ctx, s.target),
+        .dyn => |s| if (s.target) |target| note(ctx, target),
         .join => |s| emitSpan(store, ctx, note, s.params),
         .str_match => |s_stmt| blk_s: {
             const s = store.stmtRow(s_stmt.data);
@@ -722,6 +731,7 @@ pub fn definedTarget(stmt: LIR.CFStmt) ?LocalId {
         .assign_tag,
         .set_local,
         => |s| s.target,
+        .dyn => |s| s.target,
         .join,
         .jump,
         .store_struct,
@@ -761,6 +771,7 @@ pub fn writtenLocal(stmt: LIR.CFStmt) ?LocalId {
         .assign_struct,
         .assign_tag,
         .set_local,
+        .dyn,
         .debug,
         .expect,
         .expect_err,
@@ -976,6 +987,7 @@ pub fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: C
         => |stmt| noteDefinition(defined, stmt.target),
         .assign_call => |stmt| noteDefinition(defined, stmt.target),
         .assign_call_erased => |stmt| noteDefinition(defined, stmt.target),
+        .dyn => |stmt| if (stmt.target) |target| noteDefinition(defined, target),
         .join => |join| {
             const params = store.getLocalSpan(join.params);
             for (0..params.len) |index| noteDefinition(defined, GuardedList.at(params, index));
@@ -1725,7 +1737,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                         if (frame.owns_run) switch (frame.source) {
                             .switch_stmt => self.branches.shrinkRetainingCapacity(frame.run_start),
                             .str_match_set => self.arms.shrinkRetainingCapacity(frame.run_start),
-                            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .join, .jump, .ret, .crash => {},
+                            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .dyn, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .join, .jump, .ret, .crash => {},
                         };
                         frames.items.len -= 1;
                         returned = cloned;
@@ -1795,7 +1807,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     },
                     .extra = s.extra,
                 } }, origin),
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join => null,
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .dyn, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join => null,
             };
         }
 
@@ -1940,6 +1952,11 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .atomicity = s.atomicity,
                     .next = s.next,
                 } },
+                .dyn => |s| .{ .dyn = .{
+                    .target = try self.mapMaybeLocal(s.target),
+                    .data = try self.store.addStmtRow(LIR.DynOp, try DynOps.remapOperands(self.store, self.store.stmtRow(s.data), self, Self.mapLocal)),
+                    .next = s.next,
+                } },
                 .switch_stmt,
                 .switch_initialized_payload,
                 .str_match,
@@ -2043,7 +2060,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                         },
                     };
                 },
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .jump, .ret, .crash => {
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .dyn, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .jump, .ret, .crash => {
                     if (step == 0) return .{ .clone = linearNext(frame.source) };
                     setLinearNext(&frame.built, returned.?);
                     return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
@@ -2257,7 +2274,11 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     return old;
                 }
             }
-            const fresh = try self.store.addLocal(.{ .layout_idx = self.store.getLocal(old).layout_idx });
+            const old_local = self.store.getLocal(old);
+            // A dynamic local's descriptor is an `opaque_ptr` local, never
+            // itself dynamic, so this maps at most one more level.
+            const dyn: ?LIR.DynLocal = if (old_local.dyn) |old_dyn| .{ .desc = try self.mapLocal(old_dyn.desc), .storage = old_dyn.storage } else null;
+            const fresh = try self.store.addLocal(.{ .layout_idx = old_local.layout_idx, .dyn = dyn });
             try self.local_map.put(old, fresh);
             try self.new_locals.append(self.allocator, fresh);
             return fresh;
@@ -2387,6 +2408,7 @@ pub fn linearNextPtr(stmt: *LIR.CFStmt) ?*CFStmtId {
         .decref,
         .decref_if_initialized,
         .free,
+        .dyn,
         => |*s| &s.next,
         .expect_err,
         .runtime_error,

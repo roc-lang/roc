@@ -167,6 +167,7 @@ fn collectCandidates(self: *Self, store: *const LirStore, root: CFStmtId, params
                 for (0..arms.len) |i| try self.noteDeferredCaptures(store, s.source, GuardedList.at(arms, i).steps);
             },
             .init_uninitialized,
+            .dyn,
             .assign_literal,
             .assign_call_erased,
             .assign_packed_erased_fn,

@@ -18,6 +18,8 @@ pub const CheckedArithmetic = @import("checked_arithmetic.zig");
 pub const TailCallBuilder = @import("tail_call_builder.zig");
 /// The representation-transparent `assign_ref` edge erased ownership follows.
 pub const ErasedOwnerEdge = @import("erased_owner_edge.zig");
+/// Operand and ownership facts of `dyn` statements.
+pub const DynOps = @import("dyn_ops.zig");
 
 test "lir core declarations are referenced" {
     std.testing.refAllDecls(@This());
@@ -28,6 +30,7 @@ test "lir core declarations are referenced" {
     std.testing.refAllDecls(Program);
     std.testing.refAllDecls(CheckedArithmetic);
     std.testing.refAllDecls(ErasedOwnerEdge);
+    std.testing.refAllDecls(DynOps);
 }
 
 /// Canonical packed product data and committed-layout copy plans.

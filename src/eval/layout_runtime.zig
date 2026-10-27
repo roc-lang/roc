@@ -151,6 +151,7 @@ pub const LayoutRuntime = struct {
             .zst,
             .tag_union,
             .ptr,
+            .dynamic,
             => {},
         }
 
@@ -239,6 +240,7 @@ pub const LayoutRuntime = struct {
             .zst,
             .hole,
             .ptr,
+            .dynamic,
             => .zst,
         };
     }
@@ -295,7 +297,7 @@ pub const LayoutRuntime = struct {
                 "LIR/interpreter invariant violated: equality on erased callable layout {d} survived lowering",
                 .{@backingInt(layout_idx)},
             ),
-            .ptr => return self.invariantFailedError(
+            .ptr, .dynamic => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: equality on compiler-internal ptr layout {d}",
                 .{@backingInt(layout_idx)},
             ),
@@ -638,6 +640,7 @@ pub const LayoutRuntime = struct {
             .zst,
             .tag_union,
             .ptr,
+            .dynamic,
             => self.invariantFailed(
                 "LIR/interpreter invariant violated: expected box layout, got {s}",
                 .{@tagName(box_layout.tag)},
@@ -719,6 +722,7 @@ pub const LayoutRuntime = struct {
             .zst,
             .tag_union,
             .ptr,
+            .dynamic,
             => {
                 const val = try hooks.allocValue(ret_layout);
                 @memcpy(val.ptr[0..@sizeOf(RocList)], std.mem.asBytes(&rl));
@@ -758,6 +762,7 @@ pub const LayoutRuntime = struct {
             .zst,
             .tag_union,
             .ptr,
+            .dynamic,
             => return error.RuntimeError,
         }
     }

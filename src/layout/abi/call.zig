@@ -384,7 +384,7 @@ fn isCAbiAggregate(store: *const Store, start: Idx) bool {
         .scalar => lay.getScalar().tag == .frac and lay.getScalar().getFrac() == .dec,
         // A union with a runtime discriminant is a C struct.
         .tag_union => true,
-        .box, .box_of_zst, .list, .list_of_zst, .zst, .hole, .ptr => false,
+        .box, .box_of_zst, .list, .list_of_zst, .zst, .hole, .ptr, .dynamic => false,
     };
 }
 
@@ -395,7 +395,7 @@ fn isCAbiI128Scalar(store: *const Store, start: Idx) bool {
         .scalar => lay.getScalar().tag == .int and store.layoutSize(lay) == 16,
         // A union with a runtime discriminant is a C struct.
         .tag_union => false,
-        .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .ptr => false,
+        .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => false,
     };
 }
 
@@ -409,7 +409,7 @@ fn cAbiI128VectorKind(store: *const Store, start: Idx) ?layout.Vector {
             null,
         // A union with a runtime discriminant is a C struct.
         .tag_union => null,
-        .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .ptr => null,
+        .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => null,
     };
 }
 
@@ -641,7 +641,7 @@ fn narrowScalarExtension(store: *const Store, start: Idx) RegExtension {
             }
             break :blk .zero;
         },
-        .struct_, .closure, .erased_callable, .box, .box_of_zst, .list, .list_of_zst, .zst, .hole, .ptr => .none,
+        .struct_, .closure, .erased_callable, .box, .box_of_zst, .list, .list_of_zst, .zst, .hole, .ptr, .dynamic => .none,
     };
 }
 
@@ -744,7 +744,7 @@ fn placementAarch64(
                 }
                 return integerPieces(arena, size, if (size == 16) .integer else .piecewise, extend);
             },
-            .box, .box_of_zst, .ptr => return integerPieces(arena, size, .piecewise, .none),
+            .box, .box_of_zst, .ptr, .dynamic => return integerPieces(arena, size, .piecewise, .none),
             .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .zst, .hole => unreachable, // aarch64.classifyType returns byval only for scalar and pointer-like layouts
         },
     }
@@ -901,7 +901,7 @@ fn findVectorKind(arena: std.mem.Allocator, store: *const Store, idx: Idx) std.m
                     try pending.append(pending_allocator, info.variants.get(0).payload_layout);
                 }
             },
-            .box, .box_of_zst, .list, .list_of_zst, .erased_callable, .zst, .hole, .ptr => {},
+            .box, .box_of_zst, .list, .list_of_zst, .erased_callable, .zst, .hole, .ptr, .dynamic => {},
         }
     }
     return null;

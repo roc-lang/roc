@@ -7108,6 +7108,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
 
     const stmt = self.store.getCFStmt(stmt_id);
     switch (stmt) {
+        .dyn => base.invariant("WASM/codegen invariant violated: the wasm backend does not lower `dyn` statements yet", .{}),
         .assign_ref => |assign| {
             try self.generateRefOp(assign.op, self.procLocalLayoutIdx(assign.target));
             try self.bindAssignedLocal(assign.target);
@@ -7741,7 +7742,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                     try self.emitI32Const(0);
                     break :blk .i32;
                 },
-                .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => blk: {
+                .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr, .dynamic => blk: {
                     try self.emitProcLocal(op.source);
                     break :blk try self.procLocalValType(op.source);
                 },
@@ -7792,7 +7793,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner.getTagUnion().idx));
                     break :blk variants.get(op.variant_index).payload_layout;
                 },
-                .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .ptr => .zst,
+                .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => .zst,
             };
             const payload_layout = ls.getLayout(payload_layout_idx);
             if (payload_layout.tag == .struct_) {
@@ -7827,7 +7828,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner.getTagUnion().idx));
                     break :blk variants.get(op.variant_index).payload_layout;
                 },
-                .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .ptr => .zst,
+                .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => .zst,
             };
             if (builtin.mode == .debug and payload_layout_idx != target_layout) {
                 const payload_layout = ls.getLayout(payload_layout_idx);
@@ -7871,7 +7872,7 @@ fn listElemLayout(self: *Self, list_layout_idx: layout.Idx) layout.Idx {
     return switch (list_layout.tag) {
         .list => self.runtimeRepresentationLayoutIdx(list_layout.getIdx()),
         .list_of_zst => list_layout_idx,
-        .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr => wasmInvariantFmt("WASM/codegen invariant violated: list element layout requested for {s} layout", .{@tagName(list_layout.tag)}),
+        .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr, .dynamic => wasmInvariantFmt("WASM/codegen invariant violated: list element layout requested for {s} layout", .{@tagName(list_layout.tag)}),
     };
 }
 
@@ -7882,7 +7883,7 @@ fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: layout.Idx) lay
         const layout_val = ls.getLayout(current);
         switch (layout_val.tag) {
             .closure => current = layout_val.getClosure().captures_layout_idx,
-            .scalar, .box, .box_of_zst, .list, .list_of_zst, .struct_, .erased_callable, .zst, .hole, .tag_union, .ptr => return current,
+            .scalar, .box, .box_of_zst, .list, .list_of_zst, .struct_, .erased_callable, .zst, .hole, .tag_union, .ptr, .dynamic => return current,
         }
     }
 }
@@ -8264,7 +8265,7 @@ fn layoutStorageByteSize(self: *const Self, layout_idx: layout.Idx) Allocator.Er
         .box, .box_of_zst => 4,
         .tag_union => (try WasmLayout.tagUnionLayoutWithStore(l.getTagUnion().idx, ls)).size,
         .struct_ => try WasmLayout.structSizeWithStore(l.getStruct().idx, ls),
-        .closure, .erased_callable, .ptr => try self.layoutByteSize(layout_idx),
+        .closure, .erased_callable, .ptr, .dynamic => try self.layoutByteSize(layout_idx),
     };
 }
 
@@ -8281,7 +8282,7 @@ fn layoutByteAlign(self: *const Self, layout_idx: layout.Idx) Allocator.Error!u3
             return switch (l.tag) {
                 .list, .list_of_zst, .box, .box_of_zst => 4,
                 .scalar => if (l.getScalar().tag == .str) 4 else @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),
-                .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr => @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),
+                .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr, .dynamic => @intCast(ls.layoutSizeAlign(l).alignment.toByteUnits()),
             };
         },
     };
@@ -8310,7 +8311,7 @@ fn layoutStorageByteAlign(self: *const Self, layout_idx: layout.Idx) Allocator.E
         },
         .list, .list_of_zst, .box, .box_of_zst => 4,
         .tag_union, .struct_ => WasmLayout.layoutAlignWasm(l),
-        .closure, .erased_callable, .ptr => try self.layoutByteAlign(layout_idx),
+        .closure, .erased_callable, .ptr, .dynamic => try self.layoutByteAlign(layout_idx),
     };
 }
 
@@ -8646,7 +8647,7 @@ fn generateStructAccess(self: *Self, sa: anytype) Allocator.Error!void {
     const source_layout = ls.getLayout(sa.struct_layout);
     const struct_layout_idx = switch (source_layout.tag) {
         .box => source_layout.getIdx(),
-        .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr => sa.struct_layout,
+        .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr, .dynamic => sa.struct_layout,
     };
     const struct_layout = ls.getLayout(struct_layout_idx);
     if (struct_layout.tag != .struct_) {
