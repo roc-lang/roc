@@ -5,6 +5,7 @@ const builtin = @import("builtin");
 const target = @import("target.zig");
 const reporting = @import("reporting");
 const builtins = @import("builtins");
+const base = @import("base");
 const builtin_registry = builtins.builtin_registry;
 const BuiltinFn = builtin_registry.BuiltinFn;
 
@@ -74,6 +75,9 @@ pub const LinkedBuiltins = struct {
     /// name). The 64-bit builtin payload links the compression function built
     /// for them.
     sha256_rounds: builtins.sha256.Rounds,
+    /// Link the stack-checked builtins, for a wasm platform that reserves low
+    /// memory (`builtins.stack_guard`).
+    stack_checked: bool = false,
 };
 
 /// Configuration for compiling LLVM bitcode to object files
@@ -277,6 +281,8 @@ const llvm_embedded = if (llvm_available) @import("llvm_embedded") else struct {
     pub const builtins64_extern_bc: []const u8 = "";
     pub const builtins32_core_extern_bc: []const u8 = "";
     pub const builtins64_core_extern_bc: []const u8 = "";
+    pub const builtins32_extern_stack_checked_bc: []const u8 = "";
+    pub const builtins32_core_extern_stack_checked_bc: []const u8 = "";
     pub const sha256_portable_bc: []const u8 = "";
     pub const sha256_x86_sha_bc: []const u8 = "";
     pub const sha256_aarch64_sha2_bc: []const u8 = "";
@@ -296,8 +302,14 @@ fn canUseCoreBuiltins(app_decls: *const std.StringHashMap(void)) bool {
     return true;
 }
 
-fn selectBuiltinBitcode(ptr_width: u16, app_decls: *const std.StringHashMap(void), host_call_extern: bool) []const u8 {
+fn selectBuiltinBitcode(ptr_width: u16, app_decls: *const std.StringHashMap(void), host_call_extern: bool, stack_checked: bool) []const u8 {
     const use_core = canUseCoreBuiltins(app_decls);
+    if (stack_checked) {
+        if (ptr_width != 32 or !host_call_extern) {
+            base.invariant("LLVM builtins invariant violated: stack-checked builtins requested for {d}-bit {s} output", .{ ptr_width, if (host_call_extern) "symbol-ABI" else "RocOps-ABI" });
+        }
+        return if (use_core) llvm_embedded.builtins32_core_extern_stack_checked_bc else llvm_embedded.builtins32_extern_stack_checked_bc;
+    }
     if (host_call_extern) {
         return switch (ptr_width) {
             32 => if (use_core) llvm_embedded.builtins32_core_extern_bc else llvm_embedded.builtins32_extern_bc,
@@ -528,7 +540,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
             try app_defs.put(name, {});
         }
 
-        const builtins_bc = selectBuiltinBitcode(config.target.ptrBitWidth(), &app_decls, linked_builtins.host_call_extern);
+        const builtins_bc = selectBuiltinBitcode(config.target.ptrBitWidth(), &app_decls, linked_builtins.host_call_extern, linked_builtins.stack_checked);
         if (builtins_bc.len == 0) {
             std.log.err("No embedded builtin bitcode for {d}-bit target pointers", .{config.target.ptrBitWidth()});
             return false;

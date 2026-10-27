@@ -1330,6 +1330,9 @@ const fixture_target_aliases = [_]TestFixturePlan.Alias{
     .{ .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/static-lib-platform/targets" },
     .{ .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/field_default_root_order/platform/targets" },
     .{ .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/target_config_not_constant/platform/targets" },
+    .{ .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/issue_12554_reserved_low_memory/platform/targets" },
+    .{ .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/target_config_unknown_field/platform/targets" },
+    .{ .has_checked_in_inputs = false, .source = "test/wasm/platform/targets", .destination = "test/wasm/stack_first_maximum_memory_too_large/platform/targets" },
     .{ .source = "test/fx/platform/targets", .destination = "test/hosted_nominal_return/platform/targets" },
     .{ .has_checked_in_inputs = false, .source = "test/dylib/platform/targets", .destination = "test/missing-host-symbol/platform/targets" },
     .{ .source = "test/fx/platform/targets", .destination = "test/cli/issue_9864_static_dispatch_package_nominal/platform/targets" },
@@ -1618,6 +1621,10 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     .{ .app = "list_builtin_static_lib_app.roc", .options = &.{}, .output = "list_builtin_static_lib_app.wasm", .run_args = &.{ "--expected", "ok" } },
     .{ .app = "builtin_routing_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "builtin_routing_static_lib_app.wasm.a", .run_args = null },
     .{ .app = "builtin_routing_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "builtin_routing_static_lib_app_v1.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" } },
+    // The optimizing backend inlines every builtin this cart routes to, and the
+    // wasm backend must select all of them in position-independent code.
+    .{ .app = "builtin_routing_static_lib_app.roc", .options = &.{"--opt=size"}, .output = "builtin_routing_size_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" } },
+    .{ .app = "builtin_routing_static_lib_app.roc", .options = &.{"--opt=speed"}, .output = "builtin_routing_speed_static_lib_app.wasm", .run_args = &.{ "--expected", "ok", "--assert-alloc-balanced" } },
     .{ .app = "single_variant_hosted_static_lib_app.roc", .options = &.{"--opt=speed"}, .output = "single_variant_hosted_static_lib_app.wasm", .run_args = &.{ "--expected", "ok" } },
     // Host ABI gate on wasm32: a hosted Try unwrapped with `?` into a wider
     // error row must still reach the host through its declared boundary,
@@ -1687,6 +1694,17 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     // Both backends allocate their own shadow-stack frames.
     .{ .app = "stack_overflow_traps_static_lib_app.roc", .options = &.{ "--opt=speed", "--wasm-stack-size=16384" }, .output = "stack_overflow_traps_static_lib_app.wasm", .run_args = &.{"--expect-stack-overflow-trap"} },
     .{ .app = "stack_overflow_traps_static_lib_app.roc", .options = &.{ "--opt=dev", "--wasm-stack-size=16384" }, .output = "stack_overflow_traps_dev_static_lib_app.wasm", .run_args = &.{"--expect-stack-overflow-trap"} },
+    // The same recursion on a platform that reserves the addresses below its
+    // global_base: the stack sits above static data, so generated code checks
+    // its bounds and traps at the check instead (#12554).
+    .{ .app = "stack_overflow_reserved_low_memory_static_lib_app.roc", .options = &.{ "--opt=speed", "--wasm-stack-size=16384" }, .output = "stack_overflow_reserved_low_memory_static_lib_app.wasm", .run_args = &.{"--expect-stack-overflow-trap"} },
+    .{ .app = "stack_overflow_reserved_low_memory_static_lib_app.roc", .options = &.{ "--opt=dev", "--wasm-stack-size=16384" }, .output = "stack_overflow_reserved_low_memory_dev_static_lib_app.wasm", .run_args = &.{"--expect-stack-overflow-trap"} },
+    .{ .app = "stack_overflow_reserved_low_memory_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no", "--wasm-stack-size=16384" }, .output = "stack_overflow_reserved_low_memory_boxy_static_lib_app.wasm", .run_args = &.{"--expect-stack-overflow-trap"} },
+    // Programs on that platform run as they do on any other.
+    .{ .app = "reserved_low_memory_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "reserved_low_memory_dev_static_lib_app.wasm", .run_args = &.{ "--expected", "20203" } },
+    .{ .app = "reserved_low_memory_static_lib_app.roc", .options = &.{"--opt=size"}, .output = "reserved_low_memory_size_static_lib_app.wasm", .run_args = &.{ "--expected", "20203" } },
+    .{ .app = "reserved_low_memory_static_lib_app.roc", .options = &.{ "--opt=dev", "--specialize=no" }, .output = "reserved_low_memory_boxy_static_lib_app.wasm", .run_args = &.{ "--expected", "20203" } },
+    .{ .app = "reserved_low_memory_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "reserved_low_memory_v1_static_lib_app.wasm", .target = "wasm32v1", .run_args = &.{ "--expected", "20203" } },
     .{ .app = "issue_11529_top_level_boxed_function_static_lib_app.roc", .options = &.{ "--opt=dev", "--no-cache" }, .output = "issue_11529_top_level_boxed_function_static_lib_app.wasm", .run_args = &.{ "--expected", "x" } },
 };
 
@@ -2799,6 +2817,10 @@ pub fn build(b: *std.Build) void {
     const builtins64_core_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "64_core_extern_bc", "src/builtins/extern_static_lib_core.zig", builtins64_target, null);
     const builtins32_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "32_extern_bc", "src/builtins/extern_static_lib.zig", builtins32_target, null);
     const builtins32_core_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "32_core_extern_bc", "src/builtins/extern_static_lib_core.zig", builtins32_target, null);
+    // Linked instead of the two above when a wasm platform reserves low memory
+    // (see src/builtins/stack_guard.zig).
+    const builtins32_extern_stack_checked_bc_file = addBuiltinsBitcode(b, roc_modules, "32_extern_stack_checked_bc", "src/builtins/extern_static_lib_stack_checked.zig", builtins32_target, null);
+    const builtins32_core_extern_stack_checked_bc_file = addBuiltinsBitcode(b, roc_modules, "32_core_extern_stack_checked_bc", "src/builtins/extern_static_lib_core_stack_checked.zig", builtins32_target, null);
 
     // The 64-bit builtins bitcode references its SHA-256 compression by name
     // (see `Sha256` in src/builtins/crypto.zig), and the LLVM backend links the
@@ -2826,6 +2848,8 @@ pub fn build(b: *std.Build) void {
     _ = llvm_embedded_files.addCopyFile(builtins64_extern_bc_file, "builtins64_extern.bc");
     _ = llvm_embedded_files.addCopyFile(builtins32_core_extern_bc_file, "builtins32_core_extern.bc");
     _ = llvm_embedded_files.addCopyFile(builtins64_core_extern_bc_file, "builtins64_core_extern.bc");
+    _ = llvm_embedded_files.addCopyFile(builtins32_extern_stack_checked_bc_file, "builtins32_extern_stack_checked.bc");
+    _ = llvm_embedded_files.addCopyFile(builtins32_core_extern_stack_checked_bc_file, "builtins32_core_extern_stack_checked.bc");
     _ = llvm_embedded_files.addCopyFile(sha256_portable_bc_file, "sha256_portable.bc");
     _ = llvm_embedded_files.addCopyFile(sha256_x86_sha_bc_file, "sha256_x86_sha.bc");
     _ = llvm_embedded_files.addCopyFile(sha256_aarch64_sha2_bc_file, "sha256_aarch64_sha2.bc");
@@ -2838,6 +2862,8 @@ pub fn build(b: *std.Build) void {
         \\pub const builtins32_extern_bc = @embedFile("builtins32_extern.bc");
         \\pub const builtins64_extern_bc = @embedFile("builtins64_extern.bc");
         \\pub const builtins32_core_extern_bc = @embedFile("builtins32_core_extern.bc");
+        \\pub const builtins32_extern_stack_checked_bc = @embedFile("builtins32_extern_stack_checked.bc");
+        \\pub const builtins32_core_extern_stack_checked_bc = @embedFile("builtins32_core_extern_stack_checked.bc");
         \\pub const builtins64_core_extern_bc = @embedFile("builtins64_core_extern.bc");
         \\pub const sha256_portable_bc = @embedFile("sha256_portable.bc");
         \\pub const sha256_x86_sha_bc = @embedFile("sha256_x86_sha.bc");
@@ -3532,6 +3558,8 @@ pub fn build(b: *std.Build) void {
         _ = wasm_app_sources.addCopyFile(test_fixtures.output(wasm_test_hosts.wasm32v1, "test/wasm/platform/targets/wasm32v1/host.wasm"), "platform/targets/wasm32v1/host.wasm");
         _ = wasm_app_sources.addCopyFile(test_fixtures.output(wasm_host_step, "test/wasm/platform/targets/wasm32/host.wasm"), "static-lib-platform/targets/wasm32/host.wasm");
         _ = wasm_app_sources.addCopyFile(test_fixtures.output(wasm_test_hosts.wasm32v1, "test/wasm/platform/targets/wasm32v1/host.wasm"), "static-lib-platform/targets/wasm32v1/host.wasm");
+        _ = wasm_app_sources.addCopyFile(test_fixtures.output(wasm_host_step, "test/wasm/platform/targets/wasm32/host.wasm"), "reserved-low-memory-platform/targets/wasm32/host.wasm");
+        _ = wasm_app_sources.addCopyFile(test_fixtures.output(wasm_test_hosts.wasm32v1, "test/wasm/platform/targets/wasm32v1/host.wasm"), "reserved-low-memory-platform/targets/wasm32v1/host.wasm");
         wasm_app_sources.step.dependOn(wasm_host_step);
 
         const build_wasm_provided_callable_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, provided_callable_app_sources, "app.roc", &.{}, "app.wasm", "wasm32");
@@ -6077,6 +6105,33 @@ fn addMainExe(
             cross_builtins_extern_obj.getEmittedBin(),
             b.pathJoin(&.{ "targets", cross_target.name, builtins_extern_ext }),
         );
+
+        // Stack-checked twins of the wasm builtins and boxy runtime objects,
+        // linked instead of them when a platform reserves low memory (see
+        // `src/builtins/stack_guard.zig`).
+        if (cross_is_wasm) {
+            const checked_builtins_obj = addBuiltinsObject(b, roc_modules, b.fmt("roc_builtins_extern_stack_checked_{s}", .{cross_target.name}), "src/builtins/extern_static_lib_stack_checked.zig", cross_resolved_target, optimize, cross_bundle_compiler_rt);
+            embedded_digests.addArg(b.fmt("builtins_extern_stack_checked_{s}", .{cross_target.name}));
+            embedded_digests.addFileArg(checked_builtins_obj.getEmittedBin());
+            _ = embedded_assets.addCopyFile(
+                checked_builtins_obj.getEmittedBin(),
+                b.pathJoin(&.{ "targets", cross_target.name, "roc_builtins_extern_stack_checked.o" }),
+            );
+
+            const checked_boxy_runtime_artifact = wasmObjectArtifact(b, buildBoxyRuntimeObject(
+                b,
+                roc_modules,
+                cross_resolved_target,
+                b.fmt("roc_boxy_runtime_stack_checked_{s}", .{cross_target.name}),
+                b.path("src/boxy_runtime/main_stack_checked.zig"),
+            ));
+            embedded_digests.addArg(b.fmt("boxy_runtime_stack_checked_{s}", .{cross_target.name}));
+            embedded_digests.addFileArg(checked_boxy_runtime_artifact);
+            _ = embedded_assets.addCopyFile(
+                checked_boxy_runtime_artifact,
+                b.pathJoin(&.{ "targets", cross_target.name, "roc_boxy_runtime_stack_checked.o" }),
+            );
+        }
 
         // Boxy runtime object for this target, linked by `roc build --opt=dev`
         // into programs that emit boxy statements.

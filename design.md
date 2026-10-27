@@ -24733,6 +24733,64 @@ during the final link. Undefined functions referenced by the linked objects may
 remain host imports, but the linker must not treat a missing declared export as
 such an import or silently discard it.
 
+A wasm target's `global_base` is the first address the Roc program may use;
+the host owns every address below it, so it is at least 1. Whether a target
+has one selects the stack layout (`linker.wasmStackLayout`), and nothing else
+does: the layout follows from which addresses the host owns, never from a
+separate switch or a guess. The header shows it before a `global_base` naming
+a constant resolves (`WasmTargetConfig.reservesLowMemory`), so a build knows
+before checking whether its procedures may come from object packs.
+
+- Without `global_base`, the link is `--stack-first`: the stack occupies the
+  lowest addresses and an overflow wraps the stack pointer below 0, where the
+  first write traps. Detection costs nothing at runtime, and no code checks
+  anything. The module's maximum memory is at most 4 GiB minus the stack size,
+  so the addresses a wrapped stack pointer reaches are never memory; a
+  platform's larger `maximum_memory` is a reported configuration error.
+- With `global_base`, the link is `--no-stack-first` with static data at
+  `global_base` and the stack above it, where nothing traps an overflow. Code
+  compiled for the platform checks the stack bounds wherever the stack can grow
+  without limit: in every host entry wrapper, in every function the function
+  table holds (builtins and the runtime call back into those on cycles code
+  generation cannot see), and in every function with a frame on a cycle of
+  direct calls. The dev backend places its checks when it flushes its pending
+  bodies, where its call graph, table, and frames are known; the LLVM backend
+  checks the procedures on LIR call cycles, the procedures whose address is
+  taken, and every helper it generates other than refcount increments, which
+  only reach the refcounts a value holds directly and so never recurse, and
+  marks each checked function `noinline` so its check stays at its entry.
+
+A check compares the stack pointer with `__stack_low` plus the room the check
+needs: how far below the function's entry stack pointer the function and every
+call chain it can start before another check runs can reach. That depends on
+frame sizes only known once code is compiled, so each check's bound is an
+`i32.const` relocated against `__stack_low`, and `StackRoom.fillCheckRooms`
+writes its addend once every compiler-owned object is composed and before the
+object is sealed. The analysis follows stack-pointer-derived values through
+structured control flow to the frames each function reserves and the stack
+pointer each call starts at; a function that reads the stack pointer without
+lowering it uses LLVM's red zone of at most 128 bytes. A cycle of unchecked
+functions with a frame, or a stack pointer set to a value not derived from it,
+is a compiler invariant violation. Code the host provides is the host's own
+business and needs no room.
+
+Compiler-owned code compiled ahead of time follows the same rule. Builtins
+never recurse. The runtime functions that walk values and layouts of any depth
+call `builtins.stack_guard.check` at their entry, which compiles to nothing
+except in the stack-checked twins of the embedded wasm builtins, boxy runtime,
+and LLVM builtins bitcode, whose roots declare `roc_wasm_stack_checks`. Only a
+platform that reserves low memory links those twins, so no other build carries
+a check. Such a build also takes no object-cache entries, whose code was
+compiled without checks.
+
+A failed check calls `roc_wasm_stack_overflow`, which sets the stack pointer
+below `__stack_low` and traps. Every wasm module exports `__stack_pointer`,
+`__stack_low`, and `__stack_high` (WebAssembly 1.0 cannot export a mutable
+global, so `wasm32v1` exports `roc_wasm_stack_pointer` and
+`roc_wasm_set_stack_pointer` instead), so in either layout a host tells a stack
+overflow from any other trap the same way: the stack pointer is outside
+`[__stack_low + 128, __stack_high]`.
+
 After the final wasm link, LLVM speed builds run an explicit Binaryen cleanup
 pipeline: directize, remove-unused-brs, optimize-instructions, dce, vacuum,
 duplicate-function elimination, unused module item removal, and memory

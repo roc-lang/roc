@@ -1,6 +1,7 @@
-# Calls a URL package's closed exports from a wasm32 app. A warm dev build
-# composes the package's size-optimized object pack into its object and
-# must behave exactly like a build that compiles the package itself.
+# Calls a URL package's closed exports from a wasm32 app. Once the app is
+# edited after a size-optimized build, a dev build composes the package's
+# object pack into its object and must behave exactly like a build that
+# compiles the package itself.
 app [main!] {
 	pf: platform "../static-lib-platform/main.roc",
 	num: "https://example.com/roc/numeric/1.0.0/FakeHashAbcDefGhiJkLmNoPqRsTuVwXyZ123456789o.tar.zst",

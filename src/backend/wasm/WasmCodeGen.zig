@@ -88,6 +88,7 @@ const WasmLayout = @import("WasmLayout.zig");
 const Storage = @import("Storage.zig");
 const CodeBuilder = @import("CodeBuilder.zig");
 const BodyArtifact = @import("BodyArtifact.zig");
+const StackRoom = @import("StackRoom.zig");
 const task_waves = @import("../task_waves.zig");
 const tasks = base.post_check_task_executor;
 const BuiltinSignatures = @import("builtin_signatures.zig");
@@ -384,6 +385,12 @@ external_calls: ExternalCalls = .unconfigured,
 stack_pointer_symbol: ?SymbolIndex = null,
 /// Undefined `__indirect_function_table` symbol used only while emitting relocatable app objects.
 indirect_table_symbol: ?SymbolIndex = null,
+/// Set when the platform reserves low memory, so the stack sits above static
+/// data and generated code must check its bounds; see `prependStackChecks`.
+stack_checks: ?StackCheckSymbols = null,
+/// The host-callable entry wrappers, each of which checks the stack bounds
+/// when `stack_checks` is set.
+stack_check_entries: std.ArrayList(LocalFunctionIndex) = .empty,
 /// Undefined `__memory_base` symbol used only while emitting relocatable app objects.
 memory_base_symbol: ?SymbolIndex = null,
 /// Undefined `__table_base` symbol used only while emitting relocatable app objects.
@@ -491,6 +498,30 @@ pub fn configureStackPointerReloc(self: *Self, symbol: SymbolIndex) void {
     self.stack_pointer_symbol = symbol;
 }
 
+/// The symbols a stack-bound check names.
+pub const StackCheckSymbols = struct {
+    /// The undefined `__stack_low` data symbol; a check's bound is relocated
+    /// against it, with the room the check needs as the addend.
+    stack_low: SymbolIndex,
+    /// The undefined `roc_wasm_stack_overflow` function a failed check calls.
+    overflow: SymbolIndex,
+    /// Functions static data calls through the function table, by symbol name.
+    static_data_callees: []const []const u8,
+};
+
+/// Check the stack bounds in generated code, for a platform that reserves
+/// low memory. Call before any defined function exists, since the overflow
+/// function is an import.
+pub fn configureStackChecks(self: *Self, static_data_callees: []const []const u8) Allocator.Error!void {
+    const overflow_type = try self.internFuncType(&.{}, &.{});
+    const overflow = try self.module.addFunctionImportWithSymbol("env", builtins.shim_symbols.roc_wasm_stack_overflow, overflow_type);
+    self.stack_checks = .{
+        .stack_low = try self.module.addUndefinedDataSymbol(StackRoom.stack_low_symbol),
+        .overflow = overflow.symbol,
+        .static_data_callees = static_data_callees,
+    };
+}
+
 /// Configure relocatable indirect-call table operands to target the imported table symbol.
 pub fn configureTableReloc(self: *Self, symbol: SymbolIndex) void {
     self.indirect_table_symbol = symbol;
@@ -516,6 +547,7 @@ pub fn deinit(self: *Self) void {
     }
     self.pending_bodies.deinit();
     self.active_fn_stack.deinit(self.allocator);
+    self.stack_check_entries.deinit(self.allocator);
     self.storage.deinit();
     self.registered_procs.deinit();
     for (self.tail_drivers.items) |*driver| driver.members.deinit(self.allocator);
@@ -1545,6 +1577,7 @@ fn prependStackPrefix(
     prefix: []const u8,
     prefix_relocs: []const CodeBuilder.Relocation,
 ) Allocator.Error!void {
+    self.currentBody().frame_bytes = self.stack_frame_size;
     try self.currentBody().prependToCode(self.allocator, prefix);
     for (prefix_relocs) |reloc| {
         switch (reloc) {
@@ -1570,6 +1603,8 @@ pub fn flushPendingBodies(self: *Self) Allocator.Error!void {
         }
     }.lessThan);
 
+    if (self.stack_checks) |symbols| try self.prependStackChecks(symbols, keys.items);
+
     for (keys.items) |local_idx| {
         const expected: u32 = @intCast(self.module.function_offsets.items.len);
         if (local_idx.raw() != expected) {
@@ -1582,6 +1617,117 @@ pub fn flushPendingBodies(self: *Self) Allocator.Error!void {
         defer body.deinit(self.allocator);
         _ = try body.insertIntoModule(self.allocator, &self.module);
     }
+}
+
+/// Prepend a stack-bound check to every pending body that needs one, before
+/// its prologue reserves anything. Code compiled for a platform that reserves
+/// low memory has its stack above static data, where nothing traps an
+/// overflow, so a check must run wherever the stack can grow without limit:
+///
+/// - in every host-callable entry wrapper, since the host can call in with
+///   any amount of stack left;
+/// - in every function in the table, since builtins and the runtime call
+///   back into them on cycles code generation cannot see;
+/// - in every function with a frame on a cycle of direct calls.
+///
+/// A cycle of functions without frames leaves the stack the same height at
+/// every pass around it, so it needs no check. Each check's room is filled in
+/// once the object is composed (`StackRoom.fillCheckRooms`).
+fn prependStackChecks(self: *Self, symbols: StackCheckSymbols, locals: []const LocalFunctionIndex) Allocator.Error!void {
+    const import_count = self.module.importCount();
+    const count = locals.len;
+    const first = if (count == 0) 0 else locals[0].raw();
+    const position = struct {
+        fn of(local: LocalFunctionIndex, first_local: u32, total: usize) ?u32 {
+            const raw = local.raw();
+            if (raw < first_local or raw - first_local >= total) return null;
+            return raw - first_local;
+        }
+    }.of;
+
+    const needs_check = try self.allocator.alloc(bool, count);
+    defer self.allocator.free(needs_check);
+    @memset(needs_check, false);
+    for (self.stack_check_entries.items) |local| if (position(local, first, count)) |pos| {
+        needs_check[pos] = true;
+    };
+    for (self.module.table_func_indices.items) |func_idx| {
+        if (func_idx < import_count) continue;
+        if (position(self.localFunctionIndexFromGlobal(func_idx), first, count)) |pos| needs_check[pos] = true;
+    }
+    for (symbols.static_data_callees) |name| {
+        const symbol = self.module.findDefinedFunctionSymbolExact(name) catch |err|
+            wasmInvariantFmt("WASM/codegen invariant violated: static data names function {s} ({s})", .{ name, @errorName(err) });
+        const func_idx = self.module.linking.symbol_table.items[symbol.raw()].index;
+        if (position(self.localFunctionIndexFromGlobal(func_idx), first, count)) |pos| needs_check[pos] = true;
+    }
+
+    // Direct calls between pending bodies, as a compressed graph.
+    var succ_starts = try self.allocator.alloc(u32, count + 1);
+    defer self.allocator.free(succ_starts);
+    var succs = std.ArrayList(u32).empty;
+    defer succs.deinit(self.allocator);
+    for (locals, 0..) |local, pos| {
+        succ_starts[pos] = @intCast(succs.items.len);
+        const body = self.pending_bodies.getPtr(local).?;
+        for (body.import_relocations.items) |reloc| {
+            const index = switch (reloc) {
+                .index => |index| index,
+                .offset => continue,
+            };
+            if (index.type_id != .function_index_leb) continue;
+            const sym = self.module.linking.symbol_table.items[index.symbol_index.raw()];
+            if (sym.isUndefined() or sym.index < import_count) continue;
+            if (position(self.localFunctionIndexFromGlobal(sym.index), first, count)) |callee| try succs.append(self.allocator, callee);
+        }
+    }
+    succ_starts[count] = @intCast(succs.items.len);
+
+    var scc_arena = base.SingleThreadArena.init(self.allocator);
+    defer scc_arena.deinit();
+    const arena = scc_arena.allocator();
+    const preds = try collections.csr.transpose(arena, succ_starts, succs.items);
+    const components = try collections.scc.compute(arena, succ_starts, succs.items, preds.starts, preds.targets);
+    for (0..components.count()) |component| {
+        const members = components.membersOf(component);
+        var cyclic = members.len > 1;
+        if (!cyclic) {
+            const member = members[0];
+            for (succs.items[succ_starts[member]..succ_starts[member + 1]]) |callee| cyclic = cyclic or callee == member;
+        }
+        if (!cyclic) continue;
+        for (members) |member| {
+            if (self.pending_bodies.getPtr(locals[member]).?.frame_bytes != 0) needs_check[member] = true;
+        }
+    }
+
+    for (locals, needs_check) |local, needed| {
+        if (needed) try self.prependStackCheck(self.pending_bodies.getPtr(local).?, symbols);
+    }
+}
+
+/// Prepend `if (__stack_pointer < __stack_low + room) roc_wasm_stack_overflow()`.
+fn prependStackCheck(self: *Self, body: *CodeBuilder, symbols: StackCheckSymbols) Allocator.Error!void {
+    var check = std.ArrayList(u8).empty;
+    defer check.deinit(self.allocator);
+    var relocs: [3]CodeBuilder.Relocation = undefined;
+
+    try check.append(self.allocator, Op.global_get);
+    relocs[0] = .{ .index = .{ .type_id = .global_index_leb, .code_pos = @intCast(check.items.len), .symbol_index = self.stack_pointer_symbol.? } };
+    try WasmModule.appendPaddedU32(self.allocator, &check, 0);
+    try check.append(self.allocator, Op.i32_const);
+    relocs[1] = .{ .offset = .{ .type_id = .memory_addr_sleb, .code_pos = @intCast(check.items.len), .symbol_index = symbols.stack_low, .addend = 0 } };
+    try WasmModule.appendPaddedI32(self.allocator, &check, 0);
+    try check.appendSlice(self.allocator, &.{ Op.i32_lt_u, Op.@"if", 0x40, Op.call });
+    relocs[2] = .{ .index = .{ .type_id = .function_index_leb, .code_pos = @intCast(check.items.len), .symbol_index = symbols.overflow } };
+    try WasmModule.appendPaddedU32(self.allocator, &check, self.module.linking.symbol_table.items[symbols.overflow.raw()].index);
+    try check.append(self.allocator, Op.end);
+
+    try body.prependToCode(self.allocator, check.items);
+    for (relocs) |reloc| switch (reloc) {
+        .index => |idx| try body.addIndexRelocation(self.allocator, idx.type_id, idx.code_pos, idx.symbol_index),
+        .offset => |off| try body.addOffsetRelocation(self.allocator, off.type_id, off.code_pos, off.symbol_index, off.addend),
+    };
 }
 
 fn localFunctionIndexFromGlobal(self: *const Self, global_func_idx: u32) LocalFunctionIndex {
@@ -1658,6 +1804,7 @@ pub fn generateEntrypointWrapper(
     const type_idx = try self.internFuncType(param_types.items, result_types.items);
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
     const func_idx = defined.function.raw();
+    if (self.stack_checks != null) try self.stack_check_entries.append(self.allocator, defined.local);
     _ = try self.addTrackedDefinedFunctionSymbol(defined, symbol_name, 0);
 
     const saved = self.saveState() catch return error.OutOfMemory;

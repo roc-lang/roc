@@ -1621,12 +1621,12 @@ pub const BuildEnv = struct {
                 }
 
                 // Extract targets config from the platform AST
-                var path_diagnostic: targets_config_mod.InvalidTargetPathDiagnostic = undefined;
-                info.targets_config = targets_config_mod.TargetsConfig.fromAST(self.gpa, ast, &path_diagnostic) catch |err| switch (err) {
+                var config_diagnostic: targets_config_mod.TargetsConfigDiagnostic = undefined;
+                info.targets_config = targets_config_mod.TargetsConfig.fromAST(self.gpa, ast, &config_diagnostic) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    error.InvalidTargetPath => {
+                    error.InvalidTargetConfig => {
                         const pkg_name = "main";
-                        const report = try path_diagnostic.toReport(self.gpa, &parsed.module_env.common, file_abs);
+                        const report = try config_diagnostic.toReport(self.gpa, &parsed.module_env.common, file_abs);
                         try self.sink.emitReport(pkg_name, file_abs, report);
                         try self.sink.buildOrder(&[_][]const u8{pkg_name}, &[_][]const u8{file_abs}, &[_]u32{0});
                         self.sink.tryEmit();

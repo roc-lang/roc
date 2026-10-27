@@ -102,6 +102,49 @@ pub const WasmOptimizeMode = enum {
 /// Default WASM stack size: 8MB
 pub const DEFAULT_WASM_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+/// WebAssembly linear memory is at most 4 GiB.
+const wasm_memory_limit: u64 = 1 << 32;
+const wasm_page_size: u64 = 64 * 1024;
+
+/// Where a linked wasm module's stack sits relative to its static data.
+pub const WasmStackLayout = union(enum) {
+    /// The stack occupies the lowest addresses, so an overflow wraps the
+    /// stack pointer below 0 and traps on its first write.
+    stack_first,
+    /// The host owns every address below the payload; static data starts
+    /// there and the stack sits above it, so generated code checks the stack
+    /// bounds wherever the stack can grow without limit.
+    data_first: u32,
+};
+
+/// The layout a platform's `global_base` selects: the stack can occupy
+/// address 0 only when the host reserves none of the low addresses.
+pub fn wasmStackLayout(global_base: ?u32) WasmStackLayout {
+    const reserved = global_base orelse return .stack_first;
+    if (reserved == 0) base.invariant("wasm link invariant violated: a zero global_base passed target configuration", .{});
+    return .{ .data_first = reserved };
+}
+
+/// The largest maximum memory a stack-first module may declare. A stack
+/// pointer that wraps below 0 lands at most `stack_size` bytes below 4 GiB, so
+/// memory must never reach those addresses for the first write to trap.
+pub fn stackFirstMaximumMemory(stack_size: usize) usize {
+    const usable = wasm_memory_limit - @min(@as(u64, stack_size), wasm_memory_limit);
+    return @intCast(usable - usable % wasm_page_size);
+}
+
+/// The names a linked wasm module exports so its host can tell a stack
+/// overflow from any other trap: a trap that leaves the stack pointer outside
+/// `[__stack_low + 128, __stack_high]` overflowed the stack. WebAssembly 1.0
+/// cannot export a mutable global, so there the stack pointer is read and
+/// reset through functions the compiler defines instead.
+pub fn wasmStackExports(cpu_level: roc_target.CpuLevel) []const []const u8 {
+    return switch (cpu_level) {
+        .v1 => &.{ "__stack_low", "__stack_high", shim_symbols.roc_wasm_stack_pointer, shim_symbols.roc_wasm_set_stack_pointer },
+        .default => &.{ "__stack_pointer", "__stack_low", "__stack_high" },
+    };
+}
+
 /// Sequential wall times, not summed LLD worker time.
 pub const Timing = struct {
     arguments_ns: u64 = 0,
@@ -199,7 +242,10 @@ pub const LinkConfig = struct {
     /// preserve or introduce while optimizing the linked module.
     wasm_cpu_level: roc_target.CpuLevel = .default,
 
-    /// Optional data/global base for freestanding WASM links.
+    /// The first address the Roc program may use in a freestanding WASM link.
+    /// Every address below it belongs to the host, so the stack cannot occupy
+    /// address 0 and static data starts here instead. Null means the program
+    /// owns all of linear memory.
     wasm_global_base: ?u32 = null,
 
     /// Function exports from the platform host object that are part of the
@@ -816,21 +862,43 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 try args.append(initial_memory_str);
             }
 
-            if (config.wasm_maximum_memory) |maximum_memory| {
-                const maximum_memory_str = std.fmt.allocPrint(ctx.arena, "--max-memory={d}", .{maximum_memory}) catch return LinkError.OutOfMemory;
-                try args.append(maximum_memory_str);
+            switch (wasmStackLayout(config.wasm_global_base)) {
+                // The stack occupies the lowest addresses and grows down
+                // toward 0, with static data and the heap above it. An
+                // overflow wraps the stack pointer below 0 and the first write
+                // traps out of bounds, so detecting it costs nothing at
+                // runtime. The cap on maximum memory keeps the addresses a
+                // wrapped stack pointer reaches outside memory.
+                .stack_first => {
+                    try args.append("--stack-first");
+                    const maximum_memory = config.wasm_maximum_memory orelse stackFirstMaximumMemory(config.wasm_stack_size);
+                    if (maximum_memory > stackFirstMaximumMemory(config.wasm_stack_size)) {
+                        base.invariant("wasm link invariant violated: maximum memory {d} lets a wrapped stack pointer address memory", .{maximum_memory});
+                    }
+                    const maximum_memory_str = std.fmt.allocPrint(ctx.arena, "--max-memory={d}", .{maximum_memory}) catch return LinkError.OutOfMemory;
+                    try args.append(maximum_memory_str);
+                },
+                // The host owns every address below the global base, so
+                // static data starts there and the stack sits above it.
+                // Generated code checks the stack bounds wherever the stack
+                // can grow without limit.
+                .data_first => |global_base| {
+                    try args.append("--no-stack-first");
+                    const global_base_str = std.fmt.allocPrint(ctx.arena, "--global-base={d}", .{global_base}) catch return LinkError.OutOfMemory;
+                    try args.append(global_base_str);
+                    if (config.wasm_maximum_memory) |maximum_memory| {
+                        const maximum_memory_str = std.fmt.allocPrint(ctx.arena, "--max-memory={d}", .{maximum_memory}) catch return LinkError.OutOfMemory;
+                        try args.append(maximum_memory_str);
+                    }
+                },
             }
 
-            // Place the stack at the lowest addresses, growing down toward 0,
-            // with static data and the heap above it. A stack overflow then
-            // wraps below 0 and traps out of bounds instead of silently
-            // overwriting static data, which hosts running many tasks in one
-            // instance rely on.
-            try args.append("--stack-first");
-
-            if (config.wasm_global_base) |global_base| {
-                const global_base_str = std.fmt.allocPrint(ctx.arena, "--global-base={d}", .{global_base}) catch return LinkError.OutOfMemory;
-                try args.append(global_base_str);
+            // Hosts read the stack bounds and the stack pointer after a trap
+            // to tell a stack overflow from any other trap, and reset the
+            // stack pointer before calling in again.
+            for (wasmStackExports(config.wasm_cpu_level)) |export_name| {
+                const export_arg = std.fmt.allocPrint(ctx.arena, "--export={s}", .{export_name}) catch return LinkError.OutOfMemory;
+                try args.append(export_arg);
             }
 
             // Set stack size (configurable, default 8MB)

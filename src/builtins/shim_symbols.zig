@@ -12,6 +12,15 @@
 
 const std = @import("std");
 
+/// Returns a WebAssembly 1.0 module's stack pointer, which it cannot export
+/// as a mutable global.
+pub const roc_wasm_stack_pointer = "roc_wasm_stack_pointer";
+/// Replaces a WebAssembly 1.0 module's stack pointer, which it cannot export
+/// as a mutable global.
+pub const roc_wasm_set_stack_pointer = "roc_wasm_set_stack_pointer";
+/// Called by a failed stack-bound check in a wasm module whose platform
+/// reserves low memory; leaves the stack pointer below `__stack_low` and traps.
+pub const roc_wasm_stack_overflow = "roc_wasm_stack_overflow";
 /// Returns the process-global `RocOps` built by the prelinked shim.
 pub const roc_shim_get_ops = "roc_shim_get_ops";
 /// Dispatches an entrypoint index into the prelinked shim.
