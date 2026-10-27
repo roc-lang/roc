@@ -9760,10 +9760,14 @@ fn customEarlyCtfeCache(
         return customInfraFailure(allocator, timer, "failed to import the CTFE helper: {}", .{err});
     const with_helper = std.mem.replaceOwned(u8, allocator, with_import, "Shapes.sides_of(\"hexagon\")", "Closed.total(4)") catch |err|
         return customInfraFailure(allocator, timer, "failed to select the CTFE helper: {}", .{err});
+    // A build evaluates the compile-time roots its program demands, so the
+    // runtime reads the debugging root in place of the value it returns.
+    const with_reader = std.mem.replaceOwned(u8, allocator, with_helper, "comptime_total = hexagon_sides +", "comptime_total = replayed +") catch |err|
+        return customInfraFailure(allocator, timer, "failed to read the CTFE debugging root: {}", .{err});
     const with_debug = std.fmt.allocPrint(
         allocator,
         "{s}\nreplayed = {{\n    dbg \"early ctfe replay\"\n    hexagon_sides\n}}\nexpect replayed == hexagon_sides\n",
-        .{with_helper},
+        .{with_reader},
     ) catch |err| return customInfraFailure(allocator, timer, "failed to allocate CTFE app: {}", .{err});
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = with_debug }) catch |err|
         return customInfraFailure(allocator, timer, "failed to write CTFE app: {}", .{err});
