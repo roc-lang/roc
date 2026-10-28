@@ -404,7 +404,19 @@ pub fn tagUnionExtended(cache: *Cache, ops: *RocOps, variants: []const VariantIn
     defer payload_scratch.deinit(ops);
     const payloads = payload_scratch.get(payload_count, ops);
     var next: usize = 0;
-    for (ext_variants, all[variants.len..]) |variant, *input| {
+    var count: usize = variants.len;
+    for (ext_variants) |variant| {
+        // A row's remainder can carry a tag the row names: the rows are one
+        // union, so it is that tag.
+        const named = for (variants) |known| {
+            if (known.name.id == variant.name.id) break known;
+        } else null;
+        if (named) |known| {
+            if (known.payload_count != variant.payload_count) invariant(ops, "a tag row and its remainder give one tag different arities");
+            continue;
+        }
+        const input = &all[count];
+        count += 1;
         const start = next;
         switch (variant.payload_count) {
             0 => {},
@@ -422,7 +434,7 @@ pub fn tagUnionExtended(cache: *Cache, ops: *RocOps, variants: []const VariantIn
         }
         input.* = .{ .name = variant.name, .payload_count = variant.payload_count, .payloads = payloads.ptr + start };
     }
-    return tagUnion(cache, ops, all);
+    return tagUnion(cache, ops, all[0..count]);
 }
 
 /// A nominal record laid out in declared order with C-style padding, as a
