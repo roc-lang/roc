@@ -60,6 +60,8 @@ pub const State = struct {
     named_fields: std.ArrayList(types.NameId) = .empty,
     /// String pattern shapes, by their encoding.
     shapes: std.StringHashMapUnmanaged(u32) = .empty,
+    /// The field-reading destructs of each record pattern.
+    field_destructs: std.AutoHashMapUnmanaged(CheckedPatternId, []const checked.CheckedRecordDestruct) = .empty,
 };
 
 /// Field indices at and past this one name an open row's field by name.
@@ -176,11 +178,13 @@ pub const Ctx = struct {
 
     /// The destructs of a record pattern that read a field.
     fn fieldDestructs(self: Ctx, pat: CheckedPatternId) Allocator.Error![]const checked.CheckedRecordDestruct {
+        if (self.state.field_destructs.get(pat)) |memo| return memo;
         var out: std.ArrayList(checked.CheckedRecordDestruct) = .empty;
         for (self.pattern(pat).data.record_destructure) |destruct| switch (destruct.kind) {
             .rest => {},
             .required, .sub_pattern => try out.append(self.arena(), destruct),
         };
+        try self.state.field_destructs.put(self.arena(), pat, out.items);
         return out.items;
     }
 
