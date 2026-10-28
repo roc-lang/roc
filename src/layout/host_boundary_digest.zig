@@ -252,7 +252,6 @@ pub fn Walk(comptime Node: type, comptime Graph: type, comptime Error: type) typ
         /// The finished digest of `start`, or null after pushing its frame.
         fn visit(self: *Self, start: Node) Error!?Child {
             var node = start;
-            var edges_start = self.edges.items.len;
             while (true) {
                 if (self.memo.get(node)) |digest| return .{ .digest = digest, .shallowest_ref = std.math.maxInt(usize) };
                 if (self.active.get(node)) |depth| {
@@ -261,7 +260,7 @@ pub fn Walk(comptime Node: type, comptime Graph: type, comptime Error: type) typ
                     updateHashU32(&hasher, @intCast(self.frames.items.len - depth));
                     return .{ .digest = hasher.finalResult(), .shallowest_ref = depth };
                 }
-                edges_start = self.edges.items.len;
+                const edges_start = self.edges.items.len;
                 switch (try self.graph.shape(node, &self.edges)) {
                     .leaf => {
                         std.debug.assert(self.edges.items.len == edges_start);
@@ -271,15 +270,16 @@ pub fn Walk(comptime Node: type, comptime Graph: type, comptime Error: type) typ
                         std.debug.assert(self.edges.items.len == edges_start);
                         node = next;
                     },
-                    .container => break,
+                    .container => {
+                        try self.pushFrame(node, false, edges_start);
+                        return null;
+                    },
                     .erased => {
                         try self.pushFrame(node, true, edges_start);
                         return null;
                     },
                 }
             }
-            try self.pushFrame(node, false, edges_start);
-            return null;
         }
 
         fn pushFrame(self: *Self, node: ?Node, erased: bool, edges_start: usize) Error!void {
@@ -382,7 +382,7 @@ fn testDigest(store: *const Store, nodes: []const TestGraph.TestNode, root: u32)
     return try walk.signature(&.{.{ .node = root, .position = 0, .layout = .u64 }});
 }
 
-fn expectDistinct(lhs: Digest, rhs: Digest) !void {
+fn expectDistinct(lhs: Digest, rhs: Digest) error{TestUnexpectedResult}!void {
     try std.testing.expect(!std.mem.eql(u8, &lhs, &rhs));
 }
 

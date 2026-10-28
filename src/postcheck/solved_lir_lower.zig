@@ -4941,11 +4941,13 @@ const Lowerer = struct {
     /// The host boundary digest of a platform entrypoint taking `entry`'s
     /// arguments and returning its result.
     fn hostBoundaryDigest(self: *Lowerer, entry: FnEntry) Common.LowerError!host_boundary.Digest {
-        const arg_tys = self.types.span(entry.args);
+        // Laying out a type may grow the type store, so the arguments are
+        // copied out of its span first.
+        const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.types.span(entry.args));
+        defer self.allocator.free(arg_tys);
         const values = try self.allocator.alloc(HostBoundaryGraph.Edge, arg_tys.len + 1);
         defer self.allocator.free(values);
-        for (values[0..arg_tys.len], 0..) |*value, index| {
-            const arg_ty = GuardedList.at(arg_tys, index);
+        for (values[0..arg_tys.len], arg_tys, 0..) |*value, arg_ty, index| {
             value.* = .{ .node = arg_ty, .position = @intCast(index), .layout = try self.layoutOfType(arg_ty) };
         }
         values[arg_tys.len] = .{ .node = entry.ret, .position = @intCast(arg_tys.len), .layout = try self.layoutOfType(entry.ret) };
