@@ -5413,7 +5413,19 @@ fn testingPrepareHotReloadDescriptorWithStaticPool(
     static_pool_start: usize,
     allocation_end: usize,
 ) CliMainError!*ipc.hot_reload.ImageDescriptor {
-    const chunk: *backend.RunImage.StaticDataPool.Chunk = @ptrCast(@alignCast(shm.base_ptr + static_pool_start));
+    const Chunk = backend.RunImage.StaticDataPool.Chunk;
+    // The run commits its pool through the allocator; this writes the chunk
+    // directly, so it commits the page itself on Windows (SEC_RESERVE).
+    if (comptime is_windows) {
+        const commit_result = ipc.platform.windows.VirtualAlloc(
+            @ptrCast(shm.base_ptr + static_pool_start),
+            @sizeOf(Chunk),
+            ipc.platform.windows.MEM_COMMIT,
+            ipc.platform.windows.PAGE_READWRITE,
+        );
+        if (commit_result == null) return error.OutOfMemory;
+    }
+    const chunk: *Chunk = @ptrCast(@alignCast(shm.base_ptr + static_pool_start));
     chunk.* = .{ .entries_offset = 0, .entry_count = 0, .relocations_offset = 0, .relocation_count = 0 };
     const descriptor = try testingHotReloadDescriptor(shm, descriptor_offset);
     ipc.hot_reload.prepareDescriptor(
