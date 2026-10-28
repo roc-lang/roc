@@ -3426,19 +3426,22 @@ test "native publication allocation failures release temporary records and retai
             try std.testing.expectEqual(set.excerpts[0].payload_record, owned.excerpts[0].payload_record);
         }
     };
-    std.testing.checkAllAllocationFailures(F.allocator, Check.publish, .{}) catch |err| {
+    // In-place growth under the testing allocator depends on the heap's
+    // layout, so the failure checks run over an allocator that refuses it.
+    var deterministic = @import("base").DeterministicAllocator.init(F.allocator);
+    std.testing.checkAllAllocationFailures(deterministic.allocator(), Check.publish, .{}) catch |err| {
         std.debug.print("publication allocation check: {}\n", .{err});
         return err;
     };
     try fixture.publish(&.{F.excerpt(1, "code")}, &.{F.spec(1, 0)}, &.{});
-    std.testing.checkAllAllocationFailures(F.allocator, Check.load, .{&fixture.store}) catch |err| {
+    std.testing.checkAllAllocationFailures(deterministic.allocator(), Check.load, .{&fixture.store}) catch |err| {
         std.debug.print("load allocation check: {}\n", .{err});
         return err;
     };
     var loaded = try fixture.loader();
     defer loaded.deinit();
     _ = loaded.specCacheLookup().lookup(@splat(1), .dev_code, &.{}) orelse return error.TestUnexpectedResult;
-    std.testing.checkAllAllocationFailures(F.allocator, Check.copy, .{loaded.excerpts.get(@splat(1)).?.set}) catch |err| {
+    std.testing.checkAllAllocationFailures(deterministic.allocator(), Check.copy, .{loaded.excerpts.get(@splat(1)).?.set}) catch |err| {
         std.debug.print("copy allocation check: {}\n", .{err});
         return err;
     };

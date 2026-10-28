@@ -751,12 +751,15 @@ pub const Staging = struct {
     generation: u64,
     lease: Io.File,
     path: []u8,
+    /// Publication releases the lease while the shard lock still excludes
+    /// readers, so no reader ever finds a published slot leased exclusively.
+    published: bool = false,
 
     /// Closing a failed staging operation leaves a registered, abandoned slot.
     /// Maintenance can reclaim it after the staging window; no finalizer must
     /// run for its ownership to become recoverable.
     pub fn deinit(self: *Staging) void {
-        self.lease.close(self.store.io);
+        if (!self.published) self.lease.close(self.store.io);
         self.store.allocator.free(self.path);
     }
 
@@ -792,6 +795,8 @@ pub const Staging = struct {
         @memcpy(value[0..64], &self.key);
         _ = try tx.putValue(.recency, metadata.recency(self.slot), value);
         try tx.commit();
+        self.lease.close(self.store.io);
+        self.published = true;
     }
 };
 
@@ -1094,11 +1099,11 @@ test "interleaved publication and retirement preserve generations and acquired s
     try std.testing.expectError(error.InvalidArtifact, first.publish());
     try Dir.cwd().writeFile(io, .{ .sub_path = second.path, .data = "new" });
     try second.publish();
-    // Publication ownership is exclusive until the producer closes it.
-    second.deinit();
-    second_open = false;
+    // Readers accept a published generation while its producer is still open.
     var accepted = (try store.acquire(id, 2)).?;
     defer accepted.deinit();
+    second.deinit();
+    second_open = false;
     try Dir.cwd().writeFile(io, .{ .sub_path = first.path, .data = "old" });
     try first.publish();
     const bytes = try accepted.read(allocator);
