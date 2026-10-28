@@ -185,6 +185,8 @@ pub const Options = struct {
     /// (`CheckedPipeline.TargetConfig.site_code_keys`); required whenever
     /// `spec_cache` is set.
     site_code_keys: bool = false,
+    /// Explicit dev ownership policy, independent of cache availability.
+    owned_proc_signatures: bool = false,
     inline_plan: SolvedInline.Plan = .{},
     /// Lower every keyed specialization's procedure body, even one whose every
     /// call was inlined, so a pack program can offer it.
@@ -908,6 +910,7 @@ const Lowerer = struct {
     spec_cache: ?Common.SpecCacheLookup,
     spec_cache_takes: Common.SpecCacheTakes,
     site_code_keys: bool,
+    owned_proc_signatures: bool,
     /// The module identities of this program's source files, which the
     /// object cache serves entries for (`Common.ProgramModules`).
     program_modules: Common.ProgramModules = &.{},
@@ -1282,6 +1285,7 @@ const Lowerer = struct {
             .spec_cache = options.spec_cache,
             .spec_cache_takes = options.spec_cache_takes,
             .site_code_keys = options.site_code_keys,
+            .owned_proc_signatures = options.owned_proc_signatures,
             .root_manifest = options.root_manifest,
             .fn_queue_index = 0,
             .initializer_queue_index = 0,
@@ -1500,7 +1504,8 @@ const Lowerer = struct {
         self.result.deinit();
     }
 
-    /// Mark every procedure with a code key that code without one can call
+    /// The explicit owned-ABI policy pins every procedure. Otherwise, mark
+    /// every procedure with a code key that code without one can call
     /// (`LIR.LirProcSpec.stable_signature`): a member of a lambda set in the
     /// signature of a procedure without a code key, or an app function such
     /// a procedure's code reaches (`Lifted.Program.appCalleesReachedBy`).
@@ -1510,6 +1515,13 @@ const Lowerer = struct {
     /// from a pack, so every program marks the same procedures. Every
     /// specialization of a marked source function is marked.
     fn markStableSignatures(self: *Lowerer) Common.LowerError!void {
+        if (self.owned_proc_signatures) {
+            for (self.fn_entries.items) |entry| {
+                const proc = entry.proc orelse continue;
+                self.result.store.getProcSpecPtr(proc).stable_signature = true;
+            }
+            return;
+        }
         // Without code keys no procedure is stable.
         if (!self.site_code_keys) return;
         const stable_sources = try self.allocator.alloc(bool, self.solved.lifted.fnCount());
@@ -3333,9 +3345,14 @@ const Lowerer = struct {
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
             .external = cached != null,
+            .may_leave_pending = if (cached) |hit| hit.may_leave_pending else false,
             .cache_key = cached_key,
             .code_key = code_key,
             .source_monotype_fn = if (source_fn.source) |template| if (template.frozen_fn) |mono_fn| @backingInt(mono_fn) else null else null,
+            .cache_provider_module = if (keyed_offer) if (source_fn.source) |template| switch (template.fn_def) {
+                .local_template, .imported_template, .checked_generated => |owner| owner.artifact.bytes,
+                .nested, .local_hosted, .imported_hosted, .parser_runtime, .encoder_for_runtime => null,
+            } else null else null,
             .c_abi_entry = if (cached) |hit| hit.c_abi_entry else false,
             .rc_borrowed_params = if (cached) |hit| hit.rc_borrowed_params else 0,
             .rc_ret_borrowed = if (cached) |hit| hit.rc_ret_borrowed else false,
@@ -4493,7 +4510,7 @@ const Lowerer = struct {
         const keyed = try self.allocator.alloc(Keyed, tags.len);
         defer self.allocator.free(keyed);
         for (tags, keyed) |tag, *entry| {
-            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+            var hasher = base.Sha256.init(.{});
             const payloads = self.types.span(tag.payloads);
             for (0..payloads.len) |payload_index| {
                 const digest = try self.types.typeDigest(&self.solved.lifted.names, GuardedList.at(payloads, payload_index));

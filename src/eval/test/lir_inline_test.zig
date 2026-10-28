@@ -1745,16 +1745,27 @@ fn whileRecordStateWorkerIsGeneric(shape: ProcShape) bool {
         shape.jump_count >= 2;
 }
 
-/// The shape aggregate loop state takes without call specialization now that
-/// join scalarization sees through lowered aliases: the loop carries the
-/// fields as separate join parameters, while the seeded initializer builds
-/// remain live outside the loop.
+/// The shape aggregate loop state takes without call specialization: join
+/// scalarization carries the fields as separate join parameters. Pruning then
+/// deletes the initializer builds that only fed them, so the loop has the
+/// specialized worker's shape.
 fn whileRecordStateWorkerIsScalarizedUnspecialized(shape: ProcShape) bool {
     return shape.self_call_count == 0 and
         shape.join_count >= 1 and
         shape.max_join_param_count >= 2 and
+        shape.jump_count >= 2;
+}
+
+/// Loop state of a counter and a zero-capture callable without call
+/// specialization: the callable's field is a parameter nothing reads, so
+/// pruning removes it, and the loop carries only the counter and builds no
+/// struct.
+fn whileRecordStateWithUnreadCallableIsScalarized(shape: ProcShape) bool {
+    return shape.self_call_count == 0 and
+        shape.join_count >= 1 and
+        shape.max_join_param_count == 1 and
         shape.jump_count >= 2 and
-        shape.struct_assign_count >= 1;
+        shape.struct_assign_count == 0;
 }
 
 fn directTupleWorkerIsSpecialized(shape: ProcShape) bool {
@@ -4267,7 +4278,6 @@ test "spec constr specializes record state carried by while loop" {
     try std.testing.expectEqual(@as(usize, 0), optimized_root_shape.struct_assign_count);
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsGeneric));
 
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
@@ -7934,7 +7944,6 @@ test "spec constr specializes primitive-start record state carried by while loop
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsGeneric));
 
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
@@ -8018,9 +8027,7 @@ test "spec constr splits loop record state with opaque callable field" {
 
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWithZeroCaptureCallableIsSpecialized));
 
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
-    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWithUnreadCallableIsScalarized));
 }
 
 test "spec constr splits loop record state with direct callable captures" {
@@ -8251,7 +8258,6 @@ test "spec constr specializes if-joined record state carried by while loop" {
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
 
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
@@ -8292,7 +8298,6 @@ test "spec constr specializes match-joined record state carried by while loop" {
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
 
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }

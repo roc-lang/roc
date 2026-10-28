@@ -207,6 +207,8 @@ pub const Command = enum {
 /// Shared context for CLI operations.
 /// Contains allocators, I/O, and accumulated problems.
 pub const CliCtx = struct {
+    /// Registered scratch leases survive until explicit release or CLI teardown.
+    scratch: std.ArrayList(@import("compile").artifacts.Scratch) = .empty,
     /// General purpose allocator for long-lived allocations
     gpa: Allocator,
     /// Arena allocator for temporary/scoped allocations
@@ -334,6 +336,8 @@ pub const CliCtx = struct {
 
     /// Clean up resources and flush I/O
     pub fn deinit(self: *Self) void {
+        for (self.scratch.items) |*scratch| scratch.deinit();
+        self.scratch.deinit(self.gpa);
         self.io.flush();
         self.problems.deinit(self.gpa);
     }

@@ -33854,11 +33854,21 @@ pub const CompileTimeRootReadTable = struct {
 /// Value identity and site of a compile-time root (design.md "Compile-Time
 /// Value Reuse Across Edits").
 pub const CompileTimeRootIdentity = value_identity.CompileTimeRootIdentity;
+/// A relocatable test observation site and its current source span.
+pub const TestReportSite = value_identity.TestReportSite;
 
 /// Every compile-time root's value identity and site, dense by root id, and
 /// the module's value context, computed when the module is published.
 pub const CompileTimeRootIdentityTable = struct {
     rows: []const CompileTimeRootIdentity = &.{},
+    /// Root semantic dependencies for outcome reuse, independent of CTFE reuse.
+    test_rows: []const CompileTimeRootIdentity = &.{},
+    /// One context digest covering checking policy, types and visible methods.
+    test_context: []const [32]u8 = &.{},
+    /// Implementation identities sorted by the producer's exact definition id.
+    test_definitions: []const value_identity.DefinitionIdentity = &.{},
+    test_report_sites: []const value_identity.TestReportSite = &.{},
+    test_declarations: []const value_identity.DeclarationIdentity = &.{},
     /// The module's value context (`value_identity.ModuleIdentities.context`):
     /// one digest in every published module, none in a table that was never
     /// computed.
@@ -33874,6 +33884,11 @@ pub const CompileTimeRootIdentityTable = struct {
 
     pub const Serialized = extern struct {
         rows: SerializedSlice(CompileTimeRootIdentity) = .{},
+        test_rows: SerializedSlice(CompileTimeRootIdentity) = .{},
+        test_context: SerializedSlice([32]u8) = .{},
+        test_definitions: SerializedSlice(value_identity.DefinitionIdentity) = .{},
+        test_report_sites: SerializedSlice(value_identity.TestReportSite) = .{},
+        test_declarations: SerializedSlice(value_identity.DeclarationIdentity) = .{},
         context: SerializedSlice([32]u8) = .{},
         exports: SerializedSlice(value_identity.ExportIdentity) = .{},
         method_requires: SerializedSlice([32]u8) = .{},
@@ -33886,6 +33901,12 @@ pub const CompileTimeRootIdentityTable = struct {
     pub fn validate(self: CompileTimeRootIdentityTable, root_count: usize) error{CorruptArtifact}!void {
         if (self.rows.len != 0 and self.rows.len != root_count) return error.CorruptArtifact;
         if (self.context.len > 1) return error.CorruptArtifact;
+        if (self.test_rows.len != 0 and self.test_rows.len != root_count) return error.CorruptArtifact;
+        if (self.test_context.len > 1) return error.CorruptArtifact;
+        for (self.test_report_sites) |site| if (site.start > site.end) return error.CorruptArtifact;
+        for (self.test_declarations, 0..) |declaration, i| {
+            if (i > 0 and @backingInt(self.test_declarations[i - 1].statement) >= @backingInt(declaration.statement)) return error.CorruptArtifact;
+        }
     }
 
     /// The module's value context, when it was computed.
@@ -34239,8 +34260,9 @@ pub const CheckedModuleArtifact = struct {
             // identity table its rows, value context, exports and method and
             // export requirements, and the portability column one more. Stored
             // function evidence keeps its target and structural payloads in
-            // two pools of their own. Template demand vectors add one.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 246);
+            // two pools of their own. Template demand vectors add one. Test outcome
+            // identities add roots, context, definition summaries, report sites and declaration identities.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 251);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -37451,6 +37473,45 @@ pub fn checkedModuleKeyFromModuleEnv(
     );
 }
 
+/// Inference admission is deliberately separate from artifact identity. The
+/// producer-owned checking scope supplies dependency facts and owner equality;
+/// the full imported implementation keys continue to key every publication.
+pub fn inferenceKeyFromModuleEnv(
+    module_env: *const ModuleEnv,
+    scope_hash: [32]u8,
+    platform_requirement_owner: ?u32,
+    explicit_roots: []const ExplicitRootRequestInput,
+    validation: can.Can.Validation,
+    source_pin_validation: [32]u8,
+    missing_public_types: []const []const u8,
+) [32]u8 {
+    var hasher = base.Sha256.init(.{});
+    hasher.update("roc-inference-inputs-v2");
+    hasher.update(&hashModuleSourceInputs(module_env));
+    hasher.update(&scope_hash);
+    hashByteSlice(&hasher, module_env.module_name);
+    hashByteSlice(&hasher, @tagName(module_env.module_kind));
+    hashByteSlice(&hasher, @tagName(module_env.module_role));
+    if (platform_requirement_owner) |owner| {
+        hasher.update(&.{1});
+        hashU32(&hasher, owner);
+    } else hasher.update(&.{0});
+    hashByteSlice(&hasher, @tagName(validation));
+    hasher.update(&source_pin_validation);
+    hashU32(&hasher, @intCast(explicit_roots.len));
+    for (explicit_roots) |root| hashExplicitRootRequestInput(&hasher, root);
+    const imports = module_env.imports.imports.items.items;
+    hashU32(&hasher, @intCast(imports.len));
+    for (imports, 0..) |name, i| {
+        hashByteSlice(&hasher, module_env.getString(name));
+        const import_idx: CIR.Import.Idx = @fromBackingInt(@as(u32, @intCast(i)));
+        hashU32(&hasher, module_env.imports.getResolvedModule(import_idx) orelse std.math.maxInt(u32));
+    }
+    hashU32(&hasher, @intCast(missing_public_types.len));
+    for (missing_public_types) |name| hashByteSlice(&hasher, name);
+    return hasher.finalResult();
+}
+
 /// Public `publishFromTypedModule` function.
 pub fn publishFromTypedModule(
     allocator: Allocator,
@@ -37896,13 +37957,20 @@ pub fn publishFromTypedModule(
         .names = &canonical_names,
         .types = checked_types.view(),
         .roots = compile_time_roots.roots,
+        .bodies = checked_bodies,
         .top_level_values = &top_level_values,
         .context = .{
             .checking_context = hashCheckingContextIdentity(checking_context_identity),
             .direct_import_keys = hashDirectImportArtifactKeys(direct_import_module_keys),
         },
         .own_identity = module_identity.stable_hash,
+        .imports = inputs.imports,
+        .available = inputs.available_artifacts,
+        .relations = inputs.relation_artifacts,
     });
+    defer allocator.free(module_identities.definitions);
+    defer allocator.free(module_identities.report_sites);
+    defer allocator.free(module_identities.declarations);
     var compile_time_root_identities = CompileTimeRootIdentityTable{
         .rows = module_identities.roots,
         .exports = module_identities.exports,
@@ -37911,6 +37979,38 @@ pub fn publishFromTypedModule(
     };
     errdefer compile_time_root_identities.deinit(allocator);
     compile_time_root_identities.context = try allocator.dupe([32]u8, &.{module_identities.context});
+    // Preserve checking policy and import names, but each imported value's
+    // implementation is supplied by its checked summary, not its module key.
+    const test_import_names = try allocator.dupe(ImportIdentity, checking_context_identity.imports);
+    defer allocator.free(test_import_names);
+    for (test_import_names) |*imported| imported.artifact_key = null;
+    var test_checking_context = checking_context_identity;
+    test_checking_context.imports = test_import_names;
+    const test_identities = try value_identity.compute(allocator, .{
+        .env = module.moduleEnvConst(),
+        .names = &canonical_names,
+        .types = checked_types.view(),
+        .roots = compile_time_roots.roots,
+        .bodies = checked_bodies,
+        .top_level_values = &top_level_values,
+        .context = .{
+            .checking_context = hashCheckingContextIdentity(test_checking_context),
+            .direct_import_keys = undefined, // Test identities consume explicit imported summaries.
+        },
+        .own_identity = module_identity.stable_hash,
+        .test_dependencies = true,
+        .imports = inputs.imports,
+        .available = inputs.available_artifacts,
+        .relations = inputs.relation_artifacts,
+    });
+    compile_time_root_identities.test_declarations = test_identities.declarations;
+    compile_time_root_identities.test_report_sites = test_identities.report_sites;
+    compile_time_root_identities.test_rows = test_identities.roots;
+    compile_time_root_identities.test_definitions = test_identities.definitions;
+    defer allocator.free(test_identities.exports);
+    defer allocator.free(test_identities.method_requires);
+    defer allocator.free(test_identities.export_requires);
+    compile_time_root_identities.test_context = try allocator.dupe([32]u8, &.{test_identities.context});
 
     var provided_exports = try ProvidedExportTable.fromModule(
         allocator,
@@ -40537,8 +40637,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x0F, 0xB8, 0xF9, 0x4D, 0xFB, 0x75, 0x54, 0x0E, 0xD7, 0xFC, 0x0B, 0xF5, 0x24, 0x00, 0x01, 0x45,
-        0xE1, 0x86, 0x76, 0xF2, 0x41, 0xBF, 0x8D, 0x93, 0x10, 0xA2, 0x97, 0xCC, 0x13, 0xB7, 0xA5, 0xBD,
+        0xE4, 0xD3, 0xF1, 0x91, 0xE2, 0x97, 0x1A, 0x7C, 0x15, 0xC5, 0xB5, 0x00, 0x17, 0x2C, 0xE0, 0x80,
+        0x09, 0x89, 0x12, 0x69, 0x7D, 0xA4, 0x81, 0x03, 0xC6, 0xD1, 0x13, 0xB0, 0xD4, 0x9D, 0x43, 0x14,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

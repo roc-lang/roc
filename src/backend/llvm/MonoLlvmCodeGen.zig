@@ -386,7 +386,7 @@ pub const MonoLlvmCodeGen = struct {
     /// objects, which may define the same entries and constants.
     object_cache_pack: bool = false,
     /// By static-data export row, the content name an object-cache pack's
-    /// object defines each export under (`ProcArtifact.ContentNames.
+    /// object defines each export under (`CodeExcerpt.ContentNames.
     /// initObjectData`); a host-visible export keeps its own name and stays
     /// internal to the object.
     pack_data_names: []const []const u8 = &.{},

@@ -1773,11 +1773,25 @@ pub const Store = struct {
         errdefer transaction.abort(self);
         const reserved = try self.allocator.alloc(TypeId, closure.items.len);
         defer self.allocator.free(reserved);
-        for (reserved) |*slot| slot.* = try transaction.reserve(self);
+        var first_new: ?TypeId = null;
+        for (closure.items, reserved) |source_ty, *slot| {
+            // Both stores use the same full structural digest domain. Reuse
+            // an already committed destination type before allocating its
+            // rows, rather than materializing a copy for commit to discard.
+            if (source.cachedDigest(source_ty, .full)) |digest| {
+                if (self.full_digest_interned.get(DigestBucketKey.from(digest))) |existing| {
+                    slot.* = existing;
+                    continue;
+                }
+            }
+            slot.* = try transaction.reserve(self);
+            if (first_new == null) first_new = slot.*;
+        }
         var scratch: ImportScratch = .{};
         defer scratch.deinit(self.allocator);
 
         for (closure.items, reserved) |source_ty, destination_ty| {
+            if (@backingInt(destination_ty) < transaction.mark_.types_len) continue;
             const imported = try self.importContent(
                 source,
                 source_names,
@@ -1795,15 +1809,21 @@ pub const Store = struct {
         // digest its source already computed. Seeding the copies lets the
         // commit intern them by lookup instead of hashing each one again.
         for (closure.items, reserved) |source_ty, destination_ty| {
+            if (@backingInt(destination_ty) < transaction.mark_.types_len) continue;
             inline for (.{ NamedDigestMode.full, NamedDigestMode.identity_only, NamedDigestMode.equality, NamedDigestMode.representation }) |mode| {
                 if (source.cachedDigest(source_ty, mode)) |digest| try self.setCachedDigest(destination_ty, mode, digest);
             }
         }
 
-        var committed = try self.commitTransaction(destination_names, transaction, reserved[0]);
-        defer committed.deinit();
-        for (closure.items, reserved) |source_ty, speculative| {
-            relocation.map.getPtr(source_ty).?.* = committed.remapType(speculative);
+        if (first_new) |root| {
+            var committed = try self.commitTransaction(destination_names, transaction, root);
+            defer committed.deinit();
+            for (closure.items, reserved) |source_ty, speculative| {
+                relocation.map.getPtr(source_ty).?.* = committed.remapType(speculative);
+            }
+        } else {
+            transaction.abort(self);
+            for (closure.items, reserved) |source_ty, existing| relocation.map.getPtr(source_ty).?.* = existing;
         }
         for (source_roots, imported_roots) |source_root, *destination_root| {
             destination_root.* = relocation.remapType(source, source_root);
@@ -2523,6 +2543,11 @@ pub const Store = struct {
         stats: ?*DigestStats,
     ) names.TypeDigest {
         return self.computeDigest(name_store, ty, .representation, stats) catch digestOutOfMemory();
+    }
+
+    /// Fallible representation hashing for optional persistent data commits.
+    pub fn representationDigestFallible(self: *Store, name_store: *const names.NameStore, ty: TypeId) std.mem.Allocator.Error!names.TypeDigest {
+        return self.computeDigest(name_store, ty, .representation, null);
     }
 
     /// Exact structural equality for closed Monotype types.
@@ -4858,6 +4883,8 @@ test "monotype cross-store import reuses every member of a preexisting recursive
         &destination_names,
     );
     defer relocation.deinit();
+    var digest_stats: Store.DigestStats = .{};
+    destination.digest_stats = &digest_stats;
     var imported = try destination.importTypes(
         &destination_names,
         &source,
@@ -4876,6 +4903,23 @@ test "monotype cross-store import reuses every member of a preexisting recursive
     try std.testing.expectEqual(destination_leaf, relocation.remapType(&source, source_leaf));
     try std.testing.expectEqual(initial_types, destination.types.len());
     try std.testing.expectEqual(initial_spans, destination.spans.len());
+    try std.testing.expectEqual(@as(u64, 0), digest_stats.commit_root_requests);
+
+    // A different source-store import can share the complete existing cycle
+    // and still add a new parent without copying that cycle into its suffix.
+    const parent = try source.internFunc(&source_names, &.{source_c_final}, source_a_final);
+    var fresh = Store.TypeRelocation.init(std.testing.allocator, &source, &source_names, &destination, &destination_names);
+    defer fresh.deinit();
+    var with_parent = try destination.importTypes(&destination_names, &source, &source_names, &fresh, &.{parent});
+    defer with_parent.deinit();
+    try std.testing.expectEqual(initial_types + 1, destination.types.len());
+    try std.testing.expectEqual(@as(u64, 1), digest_stats.commit_root_requests);
+    try std.testing.expectEqual(destination_a_final, fresh.remapType(&source, source_a_final));
+    try std.testing.expectEqual(destination_b_final, fresh.remapType(&source, source_b_final));
+    try std.testing.expectEqual(destination_c_final, fresh.remapType(&source, source_c_final));
+    const function = destination.get(with_parent.roots[0]).func;
+    try std.testing.expectEqual(destination_a_final, function.ret);
+    try std.testing.expectEqual(destination_c_final, GuardedList.at(destination.span(function.args), 0));
 }
 
 test "monotype cross-store import is atomic under allocation failure" {

@@ -112,12 +112,12 @@ pub const Store = struct {
 
     /// Get a stored pattern string by its range
     pub fn getExtraString(self: *const Self, idx: ExtraStringIdx) []const u8 {
-        return self.extra_strings_backing.items[idx.start..][0..idx.count];
+        return self.extra_strings_backing.items[@as(usize, @intCast(idx.start))..][0..@as(usize, @intCast(idx.count))];
     }
 
     /// Get the slice of missing pattern indices by range
     pub fn getMissingPatterns(self: *const Self, range: MissingPatternsRange) []const ExtraStringIdx {
-        return self.missing_patterns_backing.items[range.start..][0..range.count];
+        return self.missing_patterns_backing.items[@as(usize, @intCast(range.start))..][0..@as(usize, @intCast(range.count))];
     }
 
     /// Create a deep snapshot from a Var, storing it in this SnapshotStore
