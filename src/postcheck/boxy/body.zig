@@ -49,6 +49,11 @@ const CheckedStatementId = checked.CheckedStatementId;
 pub fn lowerWorker(program: *Program, id: WorkerId) Allocator.Error!void {
     var builder = try Builder.init(program, id);
     defer builder.deinit();
+    // Statement emission records the procedure's calls and joins, from
+    // which its finish proves the tail calls (design.md "Tail Return
+    // Continuations").
+    program.result.store.tail_call_builder = &builder.tail_calls;
+    defer program.result.store.tail_call_builder = null;
     try builder.lowerBody();
 }
 
@@ -74,7 +79,8 @@ pub const Task = union(enum) {
     /// Pop a Bool and check it as an `expect`.
     finish_expect: CheckedExprId,
     /// Pop the condition of if-branch `index` of `expr`.
-    if_test: struct { expr: CheckedExprId, index: u32, join: LIR.JoinPointId, merge: ?MergeId },
+    /// A null `join` is a construct in tail position: each branch returns.
+    if_test: struct { expr: CheckedExprId, index: u32, join: ?LIR.JoinPointId, merge: ?MergeId },
     /// Pop a value and jump to `join` with it.
     jump: LIR.JoinPointId,
     /// Jump to a join that carries no value (a loop's head or exit).
@@ -140,10 +146,10 @@ pub const Task = union(enum) {
     /// Pop the scrutinee of a match and compile its branches.
     match_start: CheckedExprId,
     /// Test branch `index` of a match against the scrutinee.
-    match_branch: struct { expr: CheckedExprId, index: u32, scrutinee: LocalId, join: LIR.JoinPointId },
+    match_branch: struct { expr: CheckedExprId, index: u32, scrutinee: LocalId, join: ?LIR.JoinPointId },
     /// Pop a branch guard and continue into the branch's body or the next
     /// branch.
-    match_guard: struct { expr: CheckedExprId, index: u32, scrutinee: LocalId, join: LIR.JoinPointId, miss: CFStmtId },
+    match_guard: struct { expr: CheckedExprId, index: u32, scrutinee: LocalId, join: ?LIR.JoinPointId, miss: CFStmtId },
 };
 
 /// A control-flow construct's merge of the binders it reassigns (a checked
@@ -190,6 +196,12 @@ pub const Builder = struct {
     /// Expressions whose value is built at a row coercion's destination
     /// type rather than their own (design.md "Row Coercion Primitive").
     destination_types: std.AutoHashMapUnmanaged(CheckedExprId, TypeId) = .empty,
+    /// The expressions whose value is the procedure's result.
+    tail_exprs: std.AutoHashMapUnmanaged(CheckedExprId, void) = .empty,
+    /// The procedure's calls and joins as emitted, for its tail calls.
+    tail_calls: lir_core.TailCallBuilder,
+    /// The statement emitted last, while nothing follows it.
+    last_stmt: ?CFStmtId = null,
     name_locals: std.AutoHashMapUnmanaged(types.NameId, LocalId) = .empty,
     entry_hole: CFStmtId = undefined,
     hole: ?CFStmtId = null,
@@ -218,6 +230,7 @@ pub const Builder = struct {
             .view = program.module(worker.module),
             .env = .{ .module = worker.module, .vars = worker.scheme_vars, .bound = bound },
             .store = &program.result.store,
+            .tail_calls = lir_core.TailCallBuilder.init(program.allocator, worker.proc),
         };
     }
 
@@ -229,6 +242,8 @@ pub const Builder = struct {
         self.join_points.deinit(self.allocator);
         self.join_infos.deinit(self.allocator);
         self.destination_types.deinit(self.allocator);
+        self.tail_exprs.deinit(self.allocator);
+        self.tail_calls.deinit();
         self.merges.deinit(self.allocator);
         self.loops.deinit(self.allocator);
         self.values.deinit(self.allocator);
@@ -328,6 +343,7 @@ pub const Builder = struct {
         setNext(&linked, next);
         try self.fill(hole, linked, .source);
         self.hole = next;
+        self.last_stmt = hole;
     }
 
     /// Emit a terminal statement; nothing follows it.
@@ -712,6 +728,7 @@ pub const Builder = struct {
                         // The body's value is built at the function's result
                         // type, which its rows join (design.md "Row Joins").
                         try self.destination_types.put(self.allocator, lambda.body, worker.ret);
+                        try self.tail_exprs.put(self.allocator, lambda.body, {});
                         try self.tasks.append(self.allocator, .{ .expr = lambda.body });
                     },
                     .hosted_lambda => {
@@ -796,6 +813,7 @@ pub const Builder = struct {
         proc.body = proc_body;
         proc.shapes = self.store.shapes;
         self.store.shapes = .{};
+        proc.tail_calls = try self.tail_calls.finish(self.store);
     }
 
     /// A lambda worker in the uniform erased-callable ABI: its one argument
@@ -887,6 +905,7 @@ pub const Builder = struct {
         }
         try self.tasks.append(self.allocator, .ret);
         try self.destination_types.put(self.allocator, lambda.body, worker.ret);
+        try self.tail_exprs.put(self.allocator, lambda.body, {});
         try self.tasks.append(self.allocator, .{ .expr = lambda.body });
         try self.run();
         try args.append(self.allocator, capture_ptr);
@@ -1468,8 +1487,14 @@ pub const Builder = struct {
             .resume_at => |hole| self.hole = hole,
             .ret => {
                 const value = self.popValue();
+                // Every branch of a construct in tail position returned.
+                if (self.hole == null) return;
                 if (self.result_local) |result| {
-                    try self.emitDyn(result, .{ .copy = .{ .src = value, .desc = self.store.localDyn(result).?.desc } });
+                    // A call's result is written straight into the result
+                    // storage, so the call returns it directly.
+                    if (!try self.retargetLastCall(value, result)) {
+                        try self.emitDyn(result, .{ .copy = .{ .src = value, .desc = self.store.localDyn(result).?.desc } });
+                    }
                     try self.emitTerminal(.{ .ret = .{ .value = result } });
                 } else {
                     try self.emitTerminal(.{ .ret = .{ .value = value } });
@@ -1668,6 +1693,7 @@ pub const Builder = struct {
             .lookup_external => |resolved| try self.lowerLookupExternal(expr_id, resolved orelse invariant("an external lookup had no resolved reference")),
             .lookup_required => |resolved| try self.lowerLookupExternal(expr_id, resolved orelse invariant("a platform requirement lookup had no resolved reference")),
             .block => |block| {
+                if (self.tail_exprs.contains(expr_id)) try self.tail_exprs.put(self.allocator, block.final_expr, {});
                 var index = block.statements.len;
                 try self.push(.{ .expr = block.final_expr });
                 while (index > 0) {
@@ -1756,6 +1782,16 @@ pub const Builder = struct {
                 try self.pushValue(try self.localOf(try self.exprType(expr_id), .frame));
             },
             .if_ => |if_| {
+                if (self.tail_exprs.contains(expr_id)) {
+                    for (if_.branches) |branch| try self.tail_exprs.put(self.allocator, branch.body, {});
+                    try self.tail_exprs.put(self.allocator, if_.final_else, {});
+                    // Each branch returns; nothing reads the construct's
+                    // own value.
+                    try self.push(.unreachable_or_unit);
+                    try self.push(.{ .if_test = .{ .expr = expr_id, .index = 0, .join = null, .merge = null } });
+                    try self.push(.{ .expr = if_.branches[0].cond });
+                    return;
+                }
                 const result_ty = try self.exprType(expr_id);
                 const result = try self.localOf(result_ty, .frame);
                 const join = self.freshJoin();
@@ -3278,6 +3314,29 @@ pub const Builder = struct {
         return self.view.view.static_dispatch_plans.siteSubstitution(site) orelse &.{};
     }
 
+    /// When the statement emitted last is a call whose target is `value`,
+    /// a dynamic frame local, make `result` its target instead.
+    pub fn retargetLastCall(self: *Builder, value: LocalId, result: LocalId) Allocator.Error!bool {
+        const last = self.last_stmt orelse return false;
+        const dyn = self.store.localDyn(value) orelse return false;
+        if (dyn.storage != .frame) return false;
+        var stmt = self.store.getCFStmt(last);
+        switch (stmt) {
+            .assign_call => |*call| {
+                if (call.target != value or call.next != self.hole.?) return false;
+                call.target = result;
+            },
+            .dyn => |*op| {
+                if (op.target != value or op.next != self.hole.?) return false;
+                if (self.store.stmtRow(op.data) != .call_erased) return false;
+                op.target = result;
+            },
+            else => return false,
+        }
+        try self.store.replaceCFStmt(last, stmt, self.store.stmtOrigin(last));
+        return true;
+    }
+
     pub fn finishCall(self: *Builder, callee: WorkerId, hidden: []const LocalId, arg_count: u32, result_ty: TypeId) Allocator.Error!void {
         const explicit = try self.popValues(arg_count);
         defer self.allocator.free(explicit);
@@ -3916,7 +3975,7 @@ pub const Builder = struct {
 
     // -- Control flow --
 
-    pub fn ifTest(self: *Builder, expr_id: CheckedExprId, index: u32, join: LIR.JoinPointId, merge: ?MergeId) Allocator.Error!void {
+    pub fn ifTest(self: *Builder, expr_id: CheckedExprId, index: u32, join: ?LIR.JoinPointId, merge: ?MergeId) Allocator.Error!void {
         const if_ = self.bodies().expr(expr_id).data.if_;
         const cond = self.popValue();
         const holes = try self.emitBoolSwitch(cond);
@@ -3927,20 +3986,32 @@ pub const Builder = struct {
             try self.push(.{ .if_test = .{ .expr = expr_id, .index = index + 1, .join = join, .merge = merge } });
             try self.push(.{ .expr = if_.branches[index + 1].cond });
         } else {
-            try self.push(.{ .jump = join });
+            try self.pushBranchEnd(join);
             try self.push(.{ .expr = if_.final_else });
         }
         if (merge) |m| try self.push(.{ .restore_merge = m });
         try self.push(.{ .resume_at = holes.otherwise });
-        try self.push(.{ .jump = join });
+        try self.pushBranchEnd(join);
         try self.push(.{ .expr = if_.branches[index].body });
         if (merge) |m| try self.restoreMerge(m);
         self.hole = holes.then;
     }
 
+    /// Where a branch of a construct ends: a jump to its join, or, in tail
+    /// position, a return.
+    pub fn pushBranchEnd(self: *Builder, join: ?LIR.JoinPointId) Allocator.Error!void {
+        try self.push(if (join) |id| .{ .jump = id } else .ret);
+    }
+
     pub fn matchStart(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
         const scrutinee = self.popValue();
         const match = self.bodies().expr(expr_id).data.match_;
+        if (self.tail_exprs.contains(expr_id)) {
+            for (match.branches) |branch| try self.tail_exprs.put(self.allocator, branch.value, {});
+            try self.push(.unreachable_or_unit);
+            try self.push(.{ .match_branch = .{ .expr = expr_id, .index = 0, .scrutinee = scrutinee, .join = null } });
+            return;
+        }
         const result = try self.localOf(try self.exprType(expr_id), .frame);
         const join = self.freshJoin();
         const merge = try self.beginMerge(if (match.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{});
@@ -3951,7 +4022,7 @@ pub const Builder = struct {
         try self.push(.{ .match_branch = .{ .expr = expr_id, .index = 0, .scrutinee = scrutinee, .join = join } });
     }
 
-    pub fn matchBranch(self: *Builder, expr_id: CheckedExprId, index: u32, scrutinee: LocalId, join: LIR.JoinPointId) Allocator.Error!void {
+    pub fn matchBranch(self: *Builder, expr_id: CheckedExprId, index: u32, scrutinee: LocalId, join: ?LIR.JoinPointId) Allocator.Error!void {
         const match = self.bodies().expr(expr_id).data.match_;
         if (index >= match.branches.len) {
             // Exhaustive by checking: no value reaches past the last branch.
@@ -3959,8 +4030,7 @@ pub const Builder = struct {
             return;
         }
         const branch = match.branches[index];
-        const join_index = @backingInt(join);
-        if (self.join_infos.items[join_index].merge) |m| try self.restoreMerge(m);
+        if (join) |id| if (self.join_infos.items[@backingInt(id)].merge) |m| try self.restoreMerge(m);
         const patterns = branch.patternsSlice(self.bodies());
         if (patterns.len != 1) return try self.matchAlternatives(expr_id, index, scrutinee, join);
         const miss = try self.newHole();
@@ -3972,14 +4042,14 @@ pub const Builder = struct {
         }
         try self.push(.{ .match_branch = .{ .expr = expr_id, .index = index + 1, .scrutinee = scrutinee, .join = join } });
         try self.push(.{ .resume_at = miss });
-        try self.push(.{ .jump = join });
+        try self.pushBranchEnd(join);
         try self.push(.{ .expr = branch.value });
     }
 
     /// A branch of alternative patterns: each alternative that matches
     /// jumps to the branch's one body with the values it bound, and the last
     /// one's miss continues to the next branch.
-    pub fn matchAlternatives(self: *Builder, expr_id: CheckedExprId, index: u32, scrutinee: LocalId, join: LIR.JoinPointId) Allocator.Error!void {
+    pub fn matchAlternatives(self: *Builder, expr_id: CheckedExprId, index: u32, scrutinee: LocalId, join: ?LIR.JoinPointId) Allocator.Error!void {
         const match = self.bodies().expr(expr_id).data.match_;
         const branch = match.branches[index];
         if (branch.guard != null) invariant("guarded match branches with alternative patterns are not yet lowered by Boxy");
@@ -4008,7 +4078,7 @@ pub const Builder = struct {
         for (bound.items, params) |binder, param| try self.binders.put(self.allocator, binder.binder, param);
         try self.push(.{ .match_branch = .{ .expr = expr_id, .index = index + 1, .scrutinee = scrutinee, .join = join } });
         try self.push(.{ .resume_at = next_branch });
-        try self.push(.{ .jump = join });
+        try self.pushBranchEnd(join);
         try self.push(.{ .expr = branch.value });
     }
 
@@ -4042,12 +4112,12 @@ pub const Builder = struct {
         }
     }
 
-    pub fn matchGuard(self: *Builder, expr_id: CheckedExprId, index: u32, scrutinee: LocalId, join: LIR.JoinPointId, miss: CFStmtId) Allocator.Error!void {
+    pub fn matchGuard(self: *Builder, expr_id: CheckedExprId, index: u32, scrutinee: LocalId, join: ?LIR.JoinPointId, miss: CFStmtId) Allocator.Error!void {
         const match = self.bodies().expr(expr_id).data.match_;
         try self.branchOrMiss(self.popValue(), miss);
         try self.push(.{ .match_branch = .{ .expr = expr_id, .index = index + 1, .scrutinee = scrutinee, .join = join } });
         try self.push(.{ .resume_at = miss });
-        try self.push(.{ .jump = join });
+        try self.pushBranchEnd(join);
         try self.push(.{ .expr = match.branches[index].value });
     }
 
