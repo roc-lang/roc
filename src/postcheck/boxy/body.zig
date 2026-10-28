@@ -1914,8 +1914,14 @@ pub const Builder = struct {
 
     pub fn step(self: *Builder, task: Task) Allocator.Error!void {
         switch (task) {
-            .expr => |expr| try self.stepExpr(expr),
-            .stmt => |stmt| try self.stepStmt(stmt),
+            // Code after a terminal is unreachable: nothing of it is
+            // lowered, and an expression there stands for a value no
+            // execution produces.
+            .expr => |expr| if (self.hole == null) {
+                const checked_ty = self.bodies().expr(expr).ty;
+                try self.pushValue(if (try self.program.converter().hasError(self.module, checked_ty)) try self.closedLocal(.zst) else try self.localOf(try self.exprType(expr), .frame));
+            } else try self.stepExpr(expr),
+            .stmt => |stmt| if (self.hole != null) try self.stepStmt(stmt),
             .bind => |bind| try self.bindIrrefutable(bind.pattern, self.popValue(), bind.ty),
             .discard => _ = self.popValue(),
             .runtime_error => |ty| try self.runtimeErrorValue(ty),
@@ -2198,11 +2204,18 @@ pub const Builder = struct {
                 // unreachable: nothing after it is lowered, and the block's
                 // value is never produced.
                 const mode = self.inlineExpectMode();
-                const reached = for (block.statements, 0..) |stmt, position| {
-                    if (self.bodies().statementDiverges(stmt, mode)) break position + 1;
-                } else block.statements.len;
-                var index = reached;
-                if (reached == block.statements.len) {
+                const diverges_at: ?usize = for (block.statements, 0..) |stmt, position| {
+                    if (self.bodies().statementDiverges(stmt, mode)) break position;
+                    // A declaration whose value diverges binds nothing, so
+                    // nothing after it is reached either.
+                    switch (self.bodies().statement(stmt).data) {
+                        .decl => |decl| if (self.bodies().exprDiverges(decl.expr, mode)) break position,
+                        .var_ => |var_| if (self.bodies().exprDiverges(var_.expr, mode)) break position,
+                        else => {},
+                    }
+                } else null;
+                var index = if (diverges_at) |position| position + 1 else block.statements.len;
+                if (diverges_at == null) {
                     try self.push(.{ .expr = block.final_expr });
                 } else {
                     const block_ty = self.bodies().expr(expr_id).ty;
@@ -4813,14 +4826,17 @@ pub const Builder = struct {
         var own_dicts: std.ArrayList(LocalId) = .empty;
         defer own_dicts.deinit(self.allocator);
         if (generalized) |scheme| if (!scheme.per_call) {
+            // A construction the checker recorded no instantiation for (no
+            // use relates the value's variables) seals each of them as a
+            // variable no use relates.
             const subst = self.siteSubstitution(expr_id);
-            if (subst.len != scheme.scheme_vars.len) invariant("a generalized lambda's construction substitution differs from its scheme");
+            if (subst.len != 0 and subst.len != scheme.scheme_vars.len) invariant("a generalized lambda's construction substitution differs from its scheme");
             const evidence = self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{};
             try own_descs.appendSlice(self.allocator, self.var_descs);
-            const own_types = try self.allocator.alloc(TypeId, subst.len);
+            const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
             defer self.allocator.free(own_types);
-            for (subst, own_types) |checked_ty, *own_ty| {
-                own_ty.* = try self.convert(checked_ty);
+            for (own_types, scheme.scheme_vars, 0..) |*own_ty, variable, index| {
+                own_ty.* = if (subst.len != 0) try self.convert(subst[index]) else try self.program.converter().sealedScheme(self.module, variable);
                 try own_descs.append(self.allocator, try self.descOf(own_ty.*));
             }
             const scope_id = self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }).?;
