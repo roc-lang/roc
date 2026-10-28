@@ -4153,6 +4153,14 @@ type keys, and every other consumer of solved variable identity observe that
 checked representative exactly as they did before structural balancing. They
 must never observe or infer meaning from the storage root.
 
+An expression whose type is the type of one of its operands (a lookup of a
+binding, a block's final value, a record update's base) relates its own
+variable as the first operand, so the operand's class keeps its checked
+representative and the expression joins it as an occurrence. A later mismatch
+at the expression, such as against an annotation, then poisons only that
+occurrence (`Store.poisonOnMismatch`) and never the binding the operand reads,
+which other definitions may already have used.
+
 The storage root is selected by a separate union-find rank. This structural
 rank is not `Descriptor.rank`: descriptor rank is the Hindley-Milner scope level
 used to decide generalization, while union-find rank is private data-structure
