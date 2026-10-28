@@ -18706,7 +18706,7 @@ runtime. Each participating local owns one
 resource per rc node reachable in its committed layout or dynamic descriptor:
 
 - the top-level value itself, when its layout is `str`, `list`, `list_of_zst`,
-  `box`, `erased_box`, or `erased_callable`
+  `box`, or `erased_callable`
 - the item resource of a `list`
 - the payload resource of a `box`
 - one resource per refcounted field of a `struct_`
@@ -18725,14 +18725,6 @@ emission shares it until the first capture-view exclusion requires a private
 copy. The certifier uses
 the same classification rule on the final LIR store and independently checks
 ownership; it does not reuse the pre-emission table or inferred balances.
-
-An `erased_capture_load` target whose aggregate contains an `erased_box` is
-explicitly a borrowed view into the executing callable's capture allocation.
-The committed aggregate layout identifies the dynamic fields it may project,
-but the view has no aggregate descriptor for emitting descriptor-driven RC.
-ARC excludes that target from the emission resource table and includes it in
-the solver-only borrow-anchor table, where projected dynamic fields keep the
-callable allocation live through their uses.
 
 Rc positions are interned per `layout.Idx` as a stage-local place table. The
 place graph is finite: committed layouts guard every recursive occurrence

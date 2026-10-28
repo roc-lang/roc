@@ -50,7 +50,7 @@ const row_marker_width: usize = 4;
 
 /// Maximum number of top-level phases a single operation reports.
 const max_phases: usize = 16;
-const max_subphases: usize = 25;
+const max_subphases: usize = 32;
 // Shared lowering and a runtime continuation each report nine lowering groups
 // and native emission. Also reserve compile-time roots, test result admission,
 // and dev test emission.

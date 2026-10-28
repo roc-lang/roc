@@ -17939,11 +17939,12 @@ fn recordPostCheckLowering(
 ) void {
     const snapshot = timing.snapshot();
     if (std.meta.eql(snapshot, lir.CheckedPipeline.TimingSnapshot{})) return;
+    var subs_buf: [26]progress.SubTiming = undefined;
     reporter.recordCompletedWithBreakdown(
         aggregate_post_check_lowering_phase_name,
         postCheckLoweringTotalNs(snapshot),
         .{},
-        &postCheckLoweringBreakdown(snapshot),
+        measuredSubTimings(&subs_buf, &postCheckLoweringBreakdown(snapshot)),
     );
     recordLoweringCounters(reporter, snapshot, strategy, "");
 }
