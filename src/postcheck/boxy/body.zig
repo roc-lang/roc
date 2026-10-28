@@ -6217,6 +6217,15 @@ pub const Builder = struct {
 
     pub fn pushForLoop(self: *Builder, pattern: CheckedPatternId, iterable: CheckedExprId, body: CheckedExprId, plan: ?static_dispatch.IteratorForPlanId, mutations: ?checked.LoopMutationPlanId) Allocator.Error!void {
         const plan_id = plan orelse invariant("a for loop has no checked iterator plan");
+        // A loop whose pattern checking rejected evaluates its iterable,
+        // then crashes where it would begin: its pattern binds nothing.
+        const item_ty = self.view.view.static_dispatch_plans.iterator_for_plans[@backingInt(plan_id)].item_ty;
+        if (try self.program.converter().hasError(self.module, item_ty) or try self.program.converter().hasError(self.module, self.bodies().pattern(pattern).ty)) {
+            try self.push(.{ .runtime_error = null });
+            try self.push(.discard);
+            try self.push(.{ .expr = iterable });
+            return;
+        }
         try self.push(.{ .unreachable_or_unit = {} });
         try self.push(.{ .for_start = .{ .pattern = pattern, .body = body, .plan = plan_id, .mutations = mutations } });
         try self.push(.{ .expr = iterable });
