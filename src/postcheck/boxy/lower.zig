@@ -89,7 +89,7 @@ pub const WorkerKey = union(enum) {
     codec: u32,
     /// The method of a dictionary whose checked evidence resolves its slot
     /// to a crash: a dispatch checking rejected, or one no value can reach
-    /// (design.md "Static Dispatch"). Calling it crashes.
+    /// (design.md "Static Dispatch In Monotype"). Calling it crashes.
     crash_dictionary: CrashDictionary,
 };
 
