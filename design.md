@@ -25313,6 +25313,20 @@ matches the already-linked host shim. If the interface changes, the rebuild
 reports that the user must restart `roc --watch` and leaves the previous
 `RunImage` active.
 
+Old images stay loaded, so a value the host holds can be produced by one
+generation and consumed by another, including through an erased callable that
+one generation packed and another calls. The identity therefore covers each
+platform entrypoint's host boundary digest (`layout.host_boundary_digest`):
+the committed layout of every argument and result, and, for every erased
+callable those values reach, the layouts of its ABI arguments and result,
+recursively. Every erased callable shares one layout, so its ABI comes from
+the function type it was erased from, which only the lowering stage knows.
+Lowering records the digest in the entrypoint's root metadata when the
+consumer sets `TargetConfig.host_boundary_digests`; consumers that never
+compare host interfaces do not compute it. An erased callable's captures are
+not part of the digest, because only the image that packed a callable reads
+its captures.
+
 Successful rebuild workers write a fresh shared-memory image descriptor plus a
 new dev `RunImage` candidate into either a compiler-selected free image region
 or the append position of the same mapping. Descriptor slots are managed

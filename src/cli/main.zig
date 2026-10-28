@@ -87,7 +87,6 @@ const shim_symbols = @import("builtins").shim_symbols;
 const Sha256Rounds = @import("builtins").sha256.Rounds;
 const base = @import("base");
 const dev_diagnostics = base.dev_diagnostics;
-const collections = @import("collections");
 const reporting = @import("reporting");
 const parse = @import("parse");
 const tracy = @import("tracy");
@@ -2040,104 +2039,6 @@ fn checkedHostedTable(
     };
 }
 
-const LayoutHashContext = struct {
-    layouts: *const layout.Store,
-    seen: collections.DenseMap(layout.Idx, u32),
-    next_seen: u32 = 0,
-
-    fn init(allocator: Allocator, layouts: *const layout.Store) LayoutHashContext {
-        return .{
-            .layouts = layouts,
-            .seen = collections.DenseMap(layout.Idx, u32).init(allocator),
-        };
-    }
-
-    fn deinit(self: *LayoutHashContext) void {
-        self.seen.deinit();
-    }
-
-    fn hashIdx(
-        self: *LayoutHashContext,
-        hasher: *base.Sha256,
-        idx: layout.Idx,
-    ) Allocator.Error!void {
-        if (idx == layout.Idx.none) {
-            updateHashBytes(hasher, "layout-none");
-            return;
-        }
-
-        if (self.seen.get(idx)) |seen_index| {
-            updateHashBytes(hasher, "layout-ref");
-            updateHashU32(hasher, seen_index);
-            return;
-        }
-
-        const seen_index = self.next_seen;
-        self.next_seen += 1;
-        try self.seen.put(idx, seen_index);
-
-        const layout_val = self.layouts.getLayout(idx);
-        const size_align = self.layouts.layoutSizeAlign(layout_val);
-        updateHashBytes(hasher, "layout-node");
-        updateHashU32(hasher, seen_index);
-        updateHashU32(hasher, @intCast(@backingInt(layout_val.tag)));
-        updateHashU32(hasher, @intCast(size_align.size));
-        updateHashU32(hasher, @intCast(size_align.alignment.toByteUnits()));
-        updateHashBool(hasher, self.layouts.layoutContainsRefcounted(layout_val));
-
-        switch (layout_val.tag) {
-            .scalar => {
-                const scalar = layout_val.getScalar();
-                updateHashU32(hasher, @intCast(@backingInt(scalar.tag)));
-                switch (scalar.tag) {
-                    .int => updateHashU32(hasher, @intCast(@backingInt(scalar.getInt()))),
-                    .frac => updateHashU32(hasher, @intCast(@backingInt(scalar.getFrac()))),
-                    .vector => updateHashU32(hasher, @intCast(@backingInt(scalar.getVector()))),
-                    .str, .opaque_ptr => {},
-                }
-            },
-            .box, .list, .ptr => try self.hashIdx(hasher, layout_val.getIdx()),
-            .box_of_zst, .erased_box, .list_of_zst, .erased_callable, .zst, .hole => {},
-            .closure => try self.hashIdx(hasher, layout_val.getClosure().captures_layout_idx),
-            .struct_ => {
-                const info = self.layouts.getStructInfo(layout_val);
-                updateHashU32(hasher, @intCast(info.alignment.toByteUnits()));
-                updateHashU32(hasher, info.size());
-                updateHashU32(hasher, @intCast(info.fields.len));
-                for (0..info.fields.len) |i| {
-                    const field = info.fields.get(i);
-                    updateHashU32(hasher, @intCast(field.index));
-                    updateHashBool(hasher, field.is_padding);
-                    try self.hashIdx(hasher, field.layout);
-                }
-            },
-            .tag_union => {
-                const info = self.layouts.getTagUnionInfo(layout_val);
-                updateHashU32(hasher, @intCast(info.alignment.toByteUnits()));
-                updateHashU32(hasher, info.size());
-                updateHashU32(hasher, info.discriminant_offset);
-                updateHashU32(hasher, @intCast(info.data.discriminant_size));
-                updateHashU32(hasher, @intCast(info.variants.len));
-                for (0..info.variants.len) |i| {
-                    const variant = info.variants.get(i);
-                    try self.hashIdx(hasher, variant.payload_layout);
-                }
-            },
-        }
-    }
-};
-
-fn updateLayoutFingerprint(
-    allocator: Allocator,
-    hasher: *base.Sha256,
-    layouts: *const layout.Store,
-    layout_idx: layout.Idx,
-) Allocator.Error!void {
-    var ctx = LayoutHashContext.init(allocator, layouts);
-    defer ctx.deinit();
-    try ctx.hashIdx(hasher, layout_idx);
-}
-
 fn updatePlatformAppRelationIdentity(
     hasher: *base.Sha256,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
@@ -2173,46 +2074,37 @@ fn updatePlatformAppRelationIdentity(
     for (checked_error_requires) |requires_idx| updateHashU32(hasher, requires_idx);
 }
 
-fn updateHostCallableLayoutIdentity(
-    allocator: Allocator,
+/// Each platform entrypoint's host boundary digest, which covers every
+/// layout a value crossing the boundary has, including the argument and
+/// result layouts of the erased callables those values reach.
+fn updateHostBoundaryIdentity(
     hasher: *base.Sha256,
-    store: *const lir.LirStore,
-    layouts: *const layout.Store,
-    platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
-) Allocator.Error!void {
-    updateHashBytes(hasher, "host-callable-layouts-v1");
-    updateHashU32(hasher, @intCast(platform_entrypoints.len));
-    for (platform_entrypoints) |entrypoint| {
-        updateHashU32(hasher, entrypoint.ordinal);
-        const proc = store.getProcSpec(entrypoint.root_proc);
-        const arg_layouts = try argLayoutsForProc(allocator, store, entrypoint.root_proc);
-        defer allocator.free(arg_layouts);
-        updateHashU32(hasher, @intCast(arg_layouts.len));
-        for (arg_layouts) |arg_layout| {
-            try updateLayoutFingerprint(allocator, hasher, layouts, arg_layout);
-        }
-        try updateLayoutFingerprint(allocator, hasher, layouts, proc.ret_layout);
+    root_metadata: []const lir.RootMetadata.RootMetadata,
+) void {
+    updateHashBytes(hasher, "host-boundary-digests-v1");
+    updateHashU32(hasher, @intCast(root_metadata.len));
+    for (root_metadata) |metadata| {
+        const digest = metadata.host_boundary_digest orelse
+            base.invariant("platform entrypoint was lowered without its host boundary digest", .{});
+        hasher.update(&digest);
     }
 }
 
 fn checkedInterpreterHostIdentity(
-    allocator: Allocator,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    store: *const lir.LirStore,
-    layouts: *const layout.Store,
-    platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
+    root_metadata: []const lir.RootMetadata.RootMetadata,
     entrypoint_names: []const []const u8,
     target_usize: base.target.TargetUsize,
     hosted_table: CheckedHostedTable,
-) Allocator.Error![32]u8 {
+) [32]u8 {
     var hasher = base.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-checked-host-interface-v2");
+    updateHashBytes(&hasher, "roc-run-checked-host-interface-v3");
     updateHashU32(&hasher, @backingInt(target_usize));
 
     const declarations_hash = root_artifact.platform_required_declarations.identityHash(&root_artifact.canonical_names);
     hasher.update(&declarations_hash);
     updatePlatformAppRelationIdentity(&hasher, root_artifact);
-    try updateHostCallableLayoutIdentity(allocator, &hasher, store, layouts, platform_entrypoints);
+    updateHostBoundaryIdentity(&hasher, root_metadata);
 
     updateHashU32(&hasher, @intCast(entrypoint_names.len));
     for (entrypoint_names) |name| {
@@ -6923,6 +6815,8 @@ fn lowerDiscoveredLir(
         RocTarget.detectNative(),
         false,
     );
+    // The checked host identity covers each entrypoint's host boundary digest.
+    runtime_lowering.target.host_boundary_digests = true;
     if (object_cache) |cache| {
         cache.attach(ctx.io.std_io, build_env);
         runtime_lowering.target.spec_cache = cache.packs.specCacheLookup();
@@ -6971,6 +6865,7 @@ fn lowerDiscoveredLir(
         specialization_strategy,
         RocTarget.detectNative(),
         false,
+        true,
         build_env.postCheckExecutor(),
         &spec_timing,
         build_env.runtimeProgramSession(),
@@ -7001,14 +6896,9 @@ fn lowerDiscoveredLir(
         imported_artifacts,
         relation_artifacts,
     );
-    const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
-    defer ctx.gpa.free(platform_entrypoints);
-    const interface_identity = try checkedInterpreterHostIdentity(
-        ctx.gpa,
+    const interface_identity = checkedInterpreterHostIdentity(
         root_artifact,
-        &lowered.lir_result.store,
-        &lowered.lir_result.layouts,
-        platform_entrypoints,
+        lowered.lir_result.root_metadata.items,
         entrypoint_names,
         lowered.target_usize,
         hosted_table,
@@ -11585,6 +11475,7 @@ fn lowerBuildCommandToLir(
         specialization_strategy,
         target,
         proc_debug_names,
+        false,
         build_env.postCheckExecutor(),
         &spec_timing,
         build_env.runtimeProgramSession(),
@@ -14078,6 +13969,7 @@ fn lowerCheckedSourceToLir(
     specialization_strategy: base.SpecializationStrategy,
     target: RocTarget,
     proc_debug_names: bool,
+    host_boundary_digests: bool,
     post_check_executor: ?base.post_check_task_executor.Executor,
     timing: ?*lir.CheckedPipeline.Timing,
     session: ?*eval.CompileTimeFinalization.ProgramSession,
@@ -14095,6 +13987,7 @@ fn lowerCheckedSourceToLir(
     };
 
     var config = checkedRuntimeLoweringConfig(roots, opt, specialization_strategy, target, proc_debug_names);
+    config.target.host_boundary_digests = host_boundary_digests;
     config.target.post_check_executor = post_check_executor;
     config.target.timing = timing;
     config.target.spec_cache = spec_cache;

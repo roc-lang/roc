@@ -201,6 +201,10 @@ pub const TargetConfig = struct {
     list_in_place_map: bool = false,
     /// Preserve source-level procedure names in LIR for runtime diagnostics.
     proc_debug_names: bool = false,
+    /// Record each platform entrypoint's host boundary digest in its root
+    /// metadata. Only consumers that compare host interfaces across hot
+    /// reload generations ask for it.
+    host_boundary_digests: bool = false,
     /// The object cache Monotype asks for closed specializations.
     spec_cache: ?postcheck.Common.SpecCacheLookup = null,
     /// Give every procedure whose identity names its template by site a code
@@ -1123,6 +1127,7 @@ pub const LirPolicy = struct {
     zero_dict_seed: bool,
     list_in_place_map: bool,
     proc_debug_names: bool,
+    host_boundary_digests: bool,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
     site_code_keys: bool,
     code_provision: CodeProvision,
@@ -1846,6 +1851,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .list_in_place_map = target.list_in_place_map,
         .dict_seed_mode = if (target.zero_dict_seed) .comptime_zero else .runtime,
         .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+        .host_boundary_digests = target.host_boundary_digests,
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,
         .parallel_metrics = parallel_metrics,
@@ -2132,6 +2138,7 @@ pub const PreparedBoxy = struct {
                 .target_usize = target.target_usize,
                 .list_in_place_map = target.list_in_place_map,
                 .proc_debug_names = target.proc_debug_names,
+                .host_boundary_digests = target.host_boundary_digests,
                 .observe_expects = self.roots.test_plan_metadata.len != 0,
             },
         );
