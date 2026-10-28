@@ -4041,6 +4041,12 @@ pub const Builder = struct {
     /// The dictionary `evidence` denotes (design.md "Dictionaries"),
     /// composed in the entry chain.
     pub fn dictionaryOf(self: *Builder, evidence: static_dispatch.CheckedEvidence) Allocator.Error!LocalId {
+        return try self.dictionaryOfAt(evidence, null);
+    }
+
+    /// `dictionaryOf`, its method adapted to the callable type `interface`
+    /// its consumer calls it at when one is known (the parameter it fills).
+    pub fn dictionaryOfAt(self: *Builder, evidence: static_dispatch.CheckedEvidence, interface: ?TypeId) Allocator.Error!LocalId {
         const table = self.view.view.static_dispatch_plans;
         switch (evidence.resolution) {
             .constraint => |constraint| return self.scopeDictionary(constraint.index),
@@ -4073,7 +4079,7 @@ pub const Builder = struct {
                 // slots, or holds rows its consumers' type widens, is adapted
                 // to the representation they call it with (design.md "Field
                 // Kinds", "Row Coercion Primitive").
-                const expected = callable orelse return dictionary;
+                const expected = interface orelse callable orelse return dictionary;
                 const target_worker = self.program.worker(target).*;
                 const bound = try self.boundTypesAt(target, subst, callable);
                 defer self.allocator.free(bound);
@@ -4147,7 +4153,10 @@ pub const Builder = struct {
     /// dictionary of the parameter's dispatcher at the types the context
     /// binds.
     pub fn paramDictionary(self: *Builder, evidence: []const static_dispatch.CheckedEvidence, index: u32, context: ParamContext) Allocator.Error!LocalId {
-        if (evidence[index].resolution != .from_callable) return try self.dictionaryOf(evidence[index]);
+        if (evidence[index].resolution != .from_callable) {
+            const interface = if (index < context.params.len) try self.program.converter().convert(context.module, context.params[index].callable_ty, context.env) else null;
+            return try self.dictionaryOfAt(evidence[index], interface);
+        }
         if (index >= context.params.len) invariant("callable-derived evidence names a parameter its scheme does not have");
         const param = context.params[index];
         const converter = self.program.converter();
@@ -4573,6 +4582,22 @@ pub const Builder = struct {
         return local;
     }
 
+    /// The callable type the requirement of evidence parameter `index` of
+    /// this worker's scopes names, at this body's types: what its
+    /// dictionary's method is called at. Null for an alias scope's
+    /// parameter.
+    pub fn scopeInterface(self: *Builder, index: static_dispatch.EvidenceChainIndex) Allocator.Error!?TypeId {
+        if (self.foreign_scopes != null) return null;
+        const aliases = self.alias_scopes.items.len;
+        if (index.depth < aliases) return null;
+        const depth = index.depth - aliases;
+        const worker = self.currentWorker().*;
+        if (depth >= worker.dict_scope_params.len) invariant("evidence named a generalized scope outside its worker's scopes");
+        const params = worker.dict_scope_params[depth];
+        if (index.index >= params.len) invariant("evidence named a parameter its scope does not have");
+        return try self.convert(params[index.index].callable_ty);
+    }
+
     /// The dictionary in scope for canonical evidence parameter `index`.
     /// Depth 0 is the innermost scope: an entered scheme alias's, then the
     /// worker's own.
@@ -4768,7 +4793,10 @@ pub const Builder = struct {
             },
             .evidence_dependent => |dependent| {
                 const dict = self.scopeDictionary(dependent.index);
-                const fn_ty = try self.convert(call_plan.callable_ty);
+                // The dictionary's method is called at the interface its
+                // scope's requirement names; its result is read at the
+                // dispatch's type.
+                const fn_ty = (try self.scopeInterface(dependent.index)) orelse try self.convert(call_plan.callable_ty);
                 switch (call_plan.result_mode) {
                     // A codec method is an ordinary call of its target.
                     .value, .parser_for, .encoder_for, .hash, .map, .map_effectful => {},
@@ -4776,7 +4804,7 @@ pub const Builder = struct {
                         try self.push(.{ .finish_low_level = .{ .op = .bool_not, .arg_count = 1, .result = result_ty } });
                     },
                 }
-                const call_result = switch (self.program.store.get(fn_ty)) {
+                const call_result = switch (self.program.store.get(try self.convert(call_plan.callable_ty))) {
                     .function => |function| function.ret,
                     else => invariant("a dispatch's callable type is not a function type"),
                 };
@@ -5158,7 +5186,15 @@ pub const Builder = struct {
             }
             record = local;
         }
-        return try self.callErased(closure, record, result_ty);
+        // The callee writes its result as the called type's result; a use
+        // whose type rows it differently reads it re-tagged (design.md
+        // "Row Joins").
+        const ret = switch (self.program.store.get(fn_ty)) {
+            .function => |function| function.ret,
+            else => unreachable, // checked above
+        };
+        if (ret == result_ty) return try self.callErased(closure, record, result_ty);
+        return try self.adaptValue(try self.callErased(closure, record, ret), ret, result_ty);
     }
 
     /// Call the erased callable `closure` with the packed argument record
@@ -6503,7 +6539,8 @@ pub const Builder = struct {
                 return target;
             },
             .evidence_dependent => |dependent| {
-                return try self.emitErasedCall(self.scopeDictionary(dependent.index), try self.convert(callable_ty), args, result_ty);
+                const fn_ty = (try self.scopeInterface(dependent.index)) orelse try self.convert(callable_ty);
+                return try self.emitErasedCall(self.scopeDictionary(dependent.index), fn_ty, args, result_ty);
             },
             .checked_error, .@"unreachable" => {
                 try self.emitDispatchCrash(if (resolution == .checked_error) .checked_error else .unreachable_value);
