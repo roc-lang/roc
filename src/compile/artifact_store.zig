@@ -682,7 +682,16 @@ pub const Shard = struct {
             else => return error.IoFailure,
         };
         errdefer dir.close(store.io);
-        const lock = dir.createFile(store.io, "coordination", .{ .read = true, .truncate = false, .lock = .exclusive, .lock_nonblocking = !required }) catch |err| switch (err) {
+        // macOS can fail concurrent non-exclusive creations of one name with
+        // FileNotFound. Exactly one exclusive creation succeeds; every opener
+        // then locks the existing file without creating it.
+        if (dir.createFile(store.io, "coordination", .{ .exclusive = true })) |created| {
+            created.close(store.io);
+        } else |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => return error.IoFailure,
+        }
+        const lock = dir.openFile(store.io, "coordination", .{ .mode = .read_write, .lock = .exclusive, .lock_nonblocking = !required }) catch |err| switch (err) {
             error.WouldBlock => return error.Busy,
             else => return error.IoFailure,
         };
