@@ -13739,6 +13739,22 @@ Descriptors come from two sources and nowhere else:
   by constructor and operand identities, so a composition executed again
   returns the same pointer and allocates nothing.
 
+A recursive type composes through placeholders. The lowerer finds the
+type's recursive component in the graph of inline components (record fields,
+tuple elements, tag payloads, nominal backings) and boxes exactly the slots
+the shared layout store boxes for that component: a struct slot leading back
+into it, and a non-struct tag payload leading back into it. Each member a
+boxed slot points at is opened first (`desc_recursive_open`, keyed by a static
+word naming the member and the descriptors of its variables), which yields
+the finished descriptor when an earlier composition interned it and a
+placeholder otherwise. The boxed slots compose as `desc_recursive_box` over
+the placeholder, which reads nothing from it, and once the member's own
+composition is done `desc_recursive_close` fills the placeholder and interns
+it. A composed recursive type therefore has the layout its closed instances
+commit. Component addressing and construction see through recursion boxes: a
+field or payload address is the boxed value's, and building a value boxes
+the components its descriptor's slots box.
+
 Every descriptor a body needs depends only on its hidden parameters, so the
 lowerer hoists all composition statements to the worker's entry block. A body
 composes each descriptor it needs once per activation, and a descriptor's
