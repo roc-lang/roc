@@ -250,11 +250,14 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
                 }
             },
             .tag_union => {
-                if (f.count != t.count) invariant(ops, "adapted tag unions have different variants");
-                const discriminant = f.readDiscriminant(work.src);
+                // The destination's variant is the source's by tag name; a
+                // label a joined row holds at several payload types names
+                // the variant whose payload describes the same values.
+                const source = &f.variants()[f.readDiscriminant(work.src)];
+                const target = targetVariant(t, source, ops);
                 @memset(work.dst[0..t.size], 0);
-                writeDiscriminant(t, work.dst, discriminant);
-                stack.push(.{ .from = f.variants()[discriminant].payload, .to = t.variants()[discriminant].payload, .src = work.src, .dst = work.dst }, ops);
+                writeDiscriminant(t, work.dst, target.discriminant);
+                if (source.payload_count != 0) stack.push(.{ .from = source.payload, .to = target.payload, .src = work.src, .dst = work.dst }, ops);
             },
             .list => {
                 const source: *const RocList = @ptrCast(@alignCast(work.src));
@@ -286,6 +289,22 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
             },
         }
     }
+}
+
+/// The variant of the tag union `to` a value of variant `source` is
+/// re-tagged as: the one with its name and payload count, and among several,
+/// the one whose payload has the source payload's shape.
+fn targetVariant(to: *const TypeDesc, source: *const Variant, ops: *RocOps) *const Variant {
+    var found: ?*const Variant = null;
+    for (to.variants()) |*candidate| {
+        if (candidate.name.id != source.name.id or candidate.payload_count != source.payload_count) continue;
+        if (found != null) {
+            if (!walk.sameShape(candidate.payload, source.payload, ops)) continue;
+            if (walk.sameShape(found.?.payload, source.payload, ops)) invariant(ops, "a re-tagged variant matches two destination variants");
+        }
+        found = candidate;
+    }
+    return found orelse invariant(ops, "a re-tagged variant is not in its destination's row");
 }
 
 // Dictionaries.

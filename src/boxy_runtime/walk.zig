@@ -82,6 +82,47 @@ pub fn zeroSizedPtr() [*]u8 {
 
 /// A last-in, first-out work stack, inline while small and grown through
 /// `RocOps` after.
+/// Whether two descriptors describe values of one shape: the same kinds,
+/// scalars, sizes, and field and tag names all the way down. A recursion box
+/// is compared by its payload's own kind and name, so the walk is finite.
+pub fn sameShape(a: *const TypeDesc, b: *const TypeDesc, ops: *RocOps) bool {
+    const Pair = struct { a: *const TypeDesc, b: *const TypeDesc };
+    var stack: Stack(Pair, 16) = .{};
+    defer stack.deinit(ops);
+    stack.push(.{ .a = a, .b = b }, ops);
+    while (stack.pop()) |pair| {
+        const x = pair.a;
+        const y = pair.b;
+        if (x == y) continue;
+        if (x.kind != y.kind or x.size != y.size or x.count != y.count) return false;
+        switch (x.kind) {
+            .scalar => if (x.scalar != y.scalar) return false,
+            .zst, .str, .bool, .erased_callable, .opaque_unknown => {},
+            .list, .box => stack.push(.{ .a = x.child.?, .b = y.child.? }, ops),
+            .recursive_box => {
+                const px = x.child.?;
+                const py = y.child.?;
+                if (px.kind != py.kind) return false;
+                if (px.kind == .nominal and px.name.?.id != py.name.?.id) return false;
+            },
+            .nominal => {
+                if (x.name.?.id != y.name.?.id) return false;
+                stack.push(.{ .a = x.child.?, .b = y.child.? }, ops);
+            },
+            .record, .tuple => for (x.fields(), y.fields()) |*fx, *fy| {
+                if ((fx.name == null) != (fy.name == null)) return false;
+                if (fx.name != null and fx.name.?.id != fy.name.?.id) return false;
+                stack.push(.{ .a = fx.desc, .b = fy.desc }, ops);
+            },
+            .tag_union => for (x.variants(), y.variants()) |*vx, *vy| {
+                if (vx.name.id != vy.name.id or vx.payload_count != vy.payload_count) return false;
+                if (vx.payload_count != 0) stack.push(.{ .a = vx.payload, .b = vy.payload }, ops);
+            },
+        }
+    }
+    return true;
+}
+
 pub fn Stack(comptime T: type, comptime inline_count: usize) type {
     return struct {
         inline_items: [inline_count]T = undefined,

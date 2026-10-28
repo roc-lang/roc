@@ -10309,11 +10309,25 @@ wrapper; such a child produces no value, so the join has nothing to relate.
   destination local. In debug builds it first asserts that the two solved
   types are value-encoding equivalent; a difference is a compiler bug, because
   Lambda Solved joined them.
-- `.boxy` lowers the child straight into the destination local: the two
-  checked types are in one join set (Row Joins), so a ground pair shares one
-  layout, and a pair involving an open row shares one descriptor-composed
-  layout in a generic body. In debug builds it asserts the pair is within the
-  join's reach.
+- `.boxy` lowers a child that builds its value (a tag, record, tuple, or list
+  construction, or a block, `if`, `match`, nominal wrapper, or `dbg` whose
+  value is such a construction) straight into the destination's type: a
+  constructed tag's payloads are reached positions of the destination's row
+  and are built at its payload types. A child that produces its value (a
+  read or a call) has its own type's representation, and when the two types
+  differ it is re-tagged into the destination by a descriptor-driven `adapt`
+  along the coercion's reach: at each reached tag row the destination
+  discriminant is the one the tag's name has under the destination's
+  descriptor (`tag_discriminant_of`; of a label the joined row holds at
+  several payload types, the variant whose payload has the source payload's
+  shape), the payloads copy into the destination's payload addresses, and the
+  walk descends only into reached positions—tag payloads and nominal
+  backings. Records, lists, boxes, and function values are outside the reach
+  by the checker's rule and copy as they are. The re-tag is elided when the
+  two types are one, or are ground members of one join set. A dictionary of a
+  method whose signature holds a row its consumers' type widens is wrapped in
+  an adapter that re-tags the method's result the same way. The same rule
+  lowers a `?` return and a `return` into an open result.
 - SpecConstr clones and walks through the child like any wrapper, and treats
   a self call under a widen as NOT a tail call. A widen changes no value, so
   the child's known structure carries across it at the widen's type
@@ -10423,7 +10437,11 @@ its explicit tags and the descriptor of its row variable, and a caller
 supplies a row variable's descriptor as the residual of the actual row's
 representative (the representative's tags the open row does not name), so
 the composed layout is the representative's. A `where` result opened per use
-is such an open row, so a dispatch edge needs no seed of its own.
+is such an open row, so a dispatch edge needs no seed of its own. A ground
+value that flows into an open-row destination of a generic body cannot share
+its layout, whose rows every caller widens differently: it is re-tagged by
+tag name into the destination's descriptor-composed layout (Row Coercion
+Primitive), and no join is seeded per instantiation.
 
 **One label, two payload types.** A join unites rows that may name one tag
 at two payload types: a value of `[Shared]` forwarded into both

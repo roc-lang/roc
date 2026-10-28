@@ -66,6 +66,10 @@ pub const Task = union(enum) {
     bind: struct { pattern: CheckedPatternId, ty: TypeId },
     /// Pop and drop one value.
     discard,
+    /// Re-tag the popped ground value of type `from` into the open-row type
+    /// `to`: each reached tag row's discriminant by its tag's name, under
+    /// `to`'s descriptor.
+    retag: struct { from: TypeId, to: TypeId },
     /// After a divergent statement: no statement is reached, and the value
     /// of its block, of this type or of no type when the checker gave it
     /// one holding the erroneous type, is never produced.
@@ -333,11 +337,32 @@ pub const Builder = struct {
         const own = try self.convert(self.bodies().expr(expr).ty);
         // A value flowing to a destination of the same shape is built at the
         // destination's type; a diverging value's own type can differ in
-        // shape, and it builds nothing.
+        // shape, and it builds nothing. A value no construction builds
+        // keeps its own type and is re-tagged into its destination
+        // (`retagTarget`).
         if (self.destination_types.get(expr)) |destination| {
+            if (try self.retagTarget(expr, own) != null) return own;
             if (try @import("row_joins.zig").compatible(self.allocator, &self.program.store, own, destination)) return destination;
         }
         return own;
+    }
+
+    /// The destination a value of expression `expr` (of its own type `own`)
+    /// is re-tagged into: an expression that produces its value rather than
+    /// building it (a read or a call) has the representation of its own
+    /// type, which differs from its destination's where a row the
+    /// destination widens is closed in it (design.md "Row Coercion
+    /// Primitive").
+    pub fn retagTarget(self: *Builder, expr: CheckedExprId, own: TypeId) Allocator.Error!?TypeId {
+        const destination = self.destination_types.get(expr) orelse return null;
+        if (destination == own) return null;
+        switch (self.bodies().expr(expr).data) {
+            .block, .if_, .match_, .nominal, .dbg, .tag, .zero_argument_tag, .record, .empty_record, .tuple, .list, .empty_list, .numeral, .str_from_quote, .str_segment, .str, .interpolation, .lambda, .closure, .runtime_error, .crash, .return_ => return null,
+            else => {},
+        }
+        // Two closed types of one join share a layout.
+        if (try self.closed(own) and try self.closed(destination) and self.program.joins.representative(own) == self.program.joins.representative(destination)) return null;
+        return destination;
     }
 
     /// The type a read of a stored constant restores its value at: the
@@ -1194,6 +1219,13 @@ pub const Builder = struct {
                 },
                 .tuple => |items| for (store.span(items), store.span(to.tuple)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = inner }),
                 .tag_union => |tag_union| {
+                    // A row the destination widens holds its tags under
+                    // other discriminants: the value is re-tagged.
+                    if (tag_union.tags.len != to.tag_union.tags.len or (tag_union.ext == null) != (to.tag_union.ext == null)) switch (pair.place) {
+                        .data => result = .data,
+                        .root_function, .signature_data => return .function,
+                        .nested_function => invariant("a function value inside data whose result row the destination widens has no representation of the destination's"),
+                    };
                     for (store.tagSpan(to.tag_union.tags)) |to_tag| {
                         for (store.tagSpan(tag_union.tags)) |from_tag| {
                             if (from_tag.name != to_tag.name or from_tag.payloads.len != to_tag.payloads.len) continue;
@@ -1658,6 +1690,12 @@ pub const Builder = struct {
             .bind => |bind| try self.bindIrrefutable(bind.pattern, self.popValue(), bind.ty),
             .discard => _ = self.popValue(),
             .runtime_error => |ty| try self.runtimeErrorValue(ty),
+            .retag => |retag| {
+                const value = self.popValue();
+                const target = try self.localOf(retag.to, .frame);
+                try self.emitDyn(target, .{ .adapt = .{ .src = value, .from = try self.descOf(retag.from), .to = try self.descOf(retag.to) } });
+                try self.pushValue(target);
+            },
             .diverged => |ty| {
                 if (self.hole != null) try self.emitTerminal(.runtime_error);
                 try self.pushValue(if (ty) |value_ty| try self.localOf(value_ty, .frame) else try self.closedLocal(.zst));
@@ -1899,6 +1937,10 @@ pub const Builder = struct {
         const expr = self.bodies().expr(expr_id);
         if (self.destination_types.get(expr_id)) |destination| try self.passDestination(expr.data, destination);
         self.region = expr.source_region;
+        if (self.destination_types.contains(expr_id) and !try self.program.converter().hasError(self.module, expr.ty)) {
+            const own = try self.convert(expr.ty);
+            if (try self.retagTarget(expr_id, own)) |destination| try self.push(.{ .retag = .{ .from = own, .to = destination } });
+        }
         switch (expr.data) {
             .numeral => |numeral| try self.lowerNumeral(expr_id, numeral),
             .str_segment => |literal| try self.pushValue(try self.strLiteral(self.bodies().stringLiteral(literal))),
@@ -1978,7 +2020,9 @@ pub const Builder = struct {
                 const backing = self.bodies().expr(nominal.backing_expr);
                 switch (backing.data) {
                     .tag => |tag| {
-                        try self.push(.{ .finish_tag_at = .{ .expr = nominal.backing_expr, .ty = try self.exprType(expr_id) } });
+                        const nominal_ty = try self.exprType(expr_id);
+                        try self.passDestination(self.bodies().expr(nominal.backing_expr).data, nominal_ty);
+                        try self.push(.{ .finish_tag_at = .{ .expr = nominal.backing_expr, .ty = nominal_ty } });
                         try self.pushExprsReversed(tag.args);
                     },
                     .zero_argument_tag => try self.push(.{ .finish_tag_at = .{ .expr = nominal.backing_expr, .ty = try self.exprType(expr_id) } }),
@@ -2103,6 +2147,21 @@ pub const Builder = struct {
             .match_ => |match| for (match.branches) |branch| try self.destination_types.put(self.allocator, branch.value, destination),
             .nominal => |nominal| try self.destination_types.put(self.allocator, nominal.backing_expr, try self.structuralType(destination)),
             .dbg => |inner| try self.destination_types.put(self.allocator, inner, destination),
+            // A tag's payloads are reached positions of its destination's
+            // row (design.md "Row Coercion Primitive").
+            .tag => |tag| {
+                const store = &self.program.store;
+                const tag_union = switch (store.get(try self.structuralType(destination))) {
+                    .tag_union => |value| value,
+                    else => return,
+                };
+                const name = try store.internName(self.view.nameStore().tagLabelText(tag.name));
+                for (store.tagSpan(tag_union.tags)) |candidate| {
+                    if (candidate.name != name or candidate.payloads.len != tag.args.len) continue;
+                    for (tag.args, store.span(candidate.payloads)) |arg, payload_ty| try self.destination_types.put(self.allocator, arg, payload_ty);
+                    return;
+                }
+            },
             else => {},
         }
     }
@@ -3467,11 +3526,11 @@ pub const Builder = struct {
                 defer self.allocator.free(hidden);
                 const entry = try self.program.methodEntryWorker(target);
                 const dictionary = try self.composeDictionary(entry, hidden);
-                // A method storing record fields of its signature in presence
-                // slots is adapted to the storage its consumers call it with
-                // (design.md "Field Kinds").
+                // A method whose signature stores record fields in presence
+                // slots, or holds rows its consumers' type widens, is adapted
+                // to the representation they call it with (design.md "Field
+                // Kinds", "Row Coercion Primitive").
                 const expected = callable orelse return dictionary;
-                if (!try self.program.signatureHasSlots(target)) return dictionary;
                 const target_worker = self.program.worker(target).*;
                 const bound = try self.boundTypesAt(target, subst, callable);
                 defer self.allocator.free(bound);

@@ -268,7 +268,9 @@ pub const StaticDescs = struct {
         errdefer self.allocator.free(relocations);
         relocations[0] = .{
             .offset = static_callable_header,
-            .target_symbol_name = try std.fmt.allocPrint(self.allocator, "roc__boxy_entry_{d}", .{@backingInt(proc)}),
+            // The procedure's identity names it, whatever id compaction
+            // later gives it.
+            .target_symbol_name = try self.result.store.getProcSpec(proc).identity.symbolName(self.allocator),
             .owns_target_symbol_name = true,
             .kind = .function_pointer,
             .procedure = proc,
