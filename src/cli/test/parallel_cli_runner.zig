@@ -7355,7 +7355,6 @@ fn runHotReloadStaticDataCase(
         "--no-cache",
         target_arg,
         app_path,
-        "--",
         app_path,
     }, project_root_path, null, child_timeout_ms) catch |err|
         return customInfraFailure(allocator, timer, "roc --watch spawn error: {}", .{err});
@@ -7908,7 +7907,6 @@ fn customIssue12633HotReloadErasedCallableState(
         specialize_arg,
         target_arg,
         app_path,
-        "--",
         app_path,
         edited_app_path,
     }, project_root_path, null, child_timeout_ms) catch |err|
