@@ -3300,9 +3300,20 @@ pub const Builder = struct {
     pub fn procedureValue(self: *Builder, expr_id: CheckedExprId, use: checked.ProcedureUseTemplate) Allocator.Error!void {
         switch (try self.procedureUseCallee(use)) {
             .worker => |callee| {
-                const hidden = try self.hiddenArgsAt(callee, self.siteSubstitution(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{}, try self.exprType(expr_id));
+                const use_ty = try self.exprType(expr_id);
+                const subst = self.siteSubstitution(expr_id);
+                const hidden = try self.hiddenArgsAt(callee, subst, self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{}, use_ty);
                 defer self.allocator.free(hidden);
-                try self.pushValue(try self.composeDictionary(try self.program.methodEntryWorker(callee), hidden));
+                const value = try self.composeDictionary(try self.program.methodEntryWorker(callee), hidden);
+                // The procedure stores record fields its own way where its
+                // kinds are its own scheme's (design.md "Field Kinds"); the
+                // value is adapted to the representation its use calls it
+                // with.
+                const target_worker = self.program.worker(callee).*;
+                const bound = try self.boundTypesAt(callee, subst, use_ty);
+                defer self.allocator.free(bound);
+                const own_fn = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
+                try self.pushValue(try self.adaptValue(value, try self.program.substitute(self.allocator, own_fn, bound), use_ty));
             },
             .callable_eval => |eval| try self.push(.{ .restore_callable_eval = .{ .module = eval.module, .template = eval.template, .ty = try self.exprType(expr_id) } }),
         }
