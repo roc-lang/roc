@@ -17382,6 +17382,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBoxyRuntime(&builder, "roc_desc_build_list");
                     try self.finishTarget(dst_local, dst);
                 },
+                .slot_alloc => |s| {
+                    const dst = try self.dynTarget(dst_local);
+                    try self.addWordArg(&builder, s.desc);
+                    try addTargetArg(&builder, dst);
+                    try self.callBoxyRuntime(&builder, "roc_desc_slot_alloc");
+                    try self.finishTarget(dst_local, dst);
+                },
+                .slot_store => |s| {
+                    const dst = try self.dynTarget(dst_local);
+                    try self.addWordArg(&builder, s.desc);
+                    try self.addBytesArg(&builder, s.slot);
+                    try self.addBytesArg(&builder, s.value);
+                    try addTargetArg(&builder, dst);
+                    try self.callBoxyRuntime(&builder, "roc_desc_slot_store");
+                    try self.finishTarget(dst_local, dst);
+                },
                 .box => |b| {
                     const dst = try self.dynTarget(dst_local);
                     try self.addWordArg(&builder, b.desc);

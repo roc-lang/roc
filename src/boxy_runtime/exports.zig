@@ -199,6 +199,14 @@ pub fn roc_desc_build_box(desc: *const TypeDesc, dst: *usize, payload: ?[*]u8) c
     compiled.buildBox(desc, dst, valuePtr(payload), ops());
 }
 
+pub fn roc_desc_slot_alloc(desc: *const TypeDesc, dst: *usize) callconv(.c) void {
+    compiled.allocSlot(desc, dst, ops());
+}
+
+pub fn roc_desc_slot_store(desc: *const TypeDesc, slot: *const usize, value: ?[*]u8, dst: *usize) callconv(.c) void {
+    compiled.storeSlot(desc, slot, valuePtr(value), dst);
+}
+
 /// A dictionary callable of the erased-record entry `callable_fn` capturing
 /// `captures` after `capture_prefix` reserved bytes.
 pub fn roc_desc_dict_compose(callable_fn: builtins.erased_callable.CallableFnPtr, capture_prefix: u32, count: u32, captures: ?[*]const usize) callconv(.c) [*]u8 {

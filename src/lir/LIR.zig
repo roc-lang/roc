@@ -1410,6 +1410,14 @@ pub const DynOp = union(enum) {
     list: struct { elem_desc: LocalId, elems: LocalSpan },
     /// Box `payload`, which `desc` describes.
     box: struct { desc: LocalId, payload: LocalId },
+    /// A box whose payload `desc` describes, zeroed: the slot of a recursive
+    /// value (design.md "Recursive values"), filled by `slot_store` once
+    /// the value is built.
+    slot_alloc: struct { desc: LocalId },
+    /// Move `value`, which `desc` describes, into the zeroed payload of the
+    /// box `slot`; the target is the filled slot. `slot` and `value` are
+    /// consumed.
+    slot_store: struct { slot: LocalId, value: LocalId, desc: LocalId },
     /// Structural equality (target: `Bool`) honoring nominal overrides.
     eq: struct { lhs: LocalId, rhs: LocalId, desc: LocalId },
     /// Structural hashing of `value` into `hasher` (target: the hasher's

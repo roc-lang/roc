@@ -118,6 +118,9 @@ pub const Task = union(enum) {
     end_loop,
     /// Leave the innermost scheme alias scope (`Builder.alias_scopes`).
     leave_alias_scope,
+    /// Fill the slots of a recursive value declaration's binders, once the
+    /// declaration's pattern bound them.
+    fill_recursive_slots: CheckedPatternId,
     /// Continue emitting at `hole`.
     resume_at: CFStmtId,
     finish_field_access: CheckedExprId,
@@ -237,6 +240,10 @@ pub const Builder = struct {
     /// side at one of its uses, innermost last. Each is a generalized scope
     /// nested inside the worker's own scopes.
     alias_scopes: std.ArrayList(AliasScope) = .empty,
+    /// The slot of each recursive value binder in scope (design.md
+    /// "Recursive values"): a `Box` of a one-item tuple holding the value,
+    /// which callables capture in place of the value.
+    recursive_slots: std.AutoHashMapUnmanaged(checked.PatternBinderId, LocalId) = .empty,
     /// While lowering an exact procedure alias's forwarded lookup in the
     /// alias's own module (`aliasTargetHidden`): where that alias's scopes
     /// start in `alias_scopes`. Its lookup reaches no scope outside them.
@@ -299,6 +306,7 @@ pub const Builder = struct {
         self.frame_locals.deinit(self.allocator);
         self.binders.deinit(self.allocator);
         self.alias_scopes.deinit(self.allocator);
+        self.recursive_slots.deinit(self.allocator);
         self.type_descs.deinit(self.allocator);
         self.opened_components.deinit(self.allocator);
         self.open_members.deinit(self.allocator);
@@ -1211,10 +1219,18 @@ pub const Builder = struct {
             @memcpy(self.dict_locals[worker.own_dicts..], capture_values[worker.capture_types.len + outer_descs ..]);
         }
         defer if (capture_count != 0) self.allocator.free(capture_values);
-        for (worker.captures, 0..) |capture, index| {
+        for (worker.captures, worker.capture_types, 0..) |capture, capture_ty, index| {
             const binder = self.bodies().pattern_binder_by_pattern[@backingInt(capture.pattern)].get() orelse
                 invariant("a closure capture named a pattern without a binder");
-            try self.binders.put(self.allocator, binder, capture_values[index]);
+            if (self.bodies().patternBinder(binder).recursive_value) {
+                // A recursive value's slot: the value is read from it on
+                // entry, and the slot stays in scope for the callables this
+                // body builds that capture the binder too.
+                try self.recursive_slots.put(self.allocator, binder, capture_values[index]);
+                try self.binders.put(self.allocator, binder, try self.readRecursiveSlot(capture_values[index], capture_ty));
+            } else {
+                try self.binders.put(self.allocator, binder, capture_values[index]);
+            }
         }
 
         // The argument record.
@@ -1998,6 +2014,7 @@ pub const Builder = struct {
                 const literal = try self.store.insertString(message);
                 try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal } } });
             },
+            .fill_recursive_slots => |pattern| try self.fillRecursiveSlots(pattern),
             .leave_alias_scope => {
                 const scope = self.alias_scopes.pop().?;
                 self.env = scope.saved_env;
@@ -2908,9 +2925,7 @@ pub const Builder = struct {
         const values = try self.allocator.alloc(LocalId, per_call_worker.captures.len);
         defer self.allocator.free(values);
         for (per_call_worker.captures, values) |capture, *value| {
-            const binder = self.bodies().pattern_binder_by_pattern[@backingInt(capture.pattern)].get() orelse
-                invariant("a closure capture named a pattern without a binder");
-            value.* = self.binders.get(binder) orelse invariant("a local procedure's capture is not visible where the procedure is used");
+            value.* = self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is used");
         }
         var declaring_dicts: usize = 0;
         for (declaring.dict_scopes) |dict_scope| declaring_dicts += dict_scope.len;
@@ -3013,8 +3028,113 @@ pub const Builder = struct {
         const fn_ty = try self.program.converter().convert(self.module, closure_expr.ty, env);
         const capture_types = try self.allocator.alloc(TypeId, captures.len);
         defer self.allocator.free(capture_types);
-        for (captures, capture_types) |capture, *capture_ty| capture_ty.* = try self.program.converter().convert(self.module, self.bodies().pattern(capture.pattern).ty, env);
+        for (captures, capture_types) |capture, *capture_ty| capture_ty.* = try self.capturedType(capture.pattern, try self.program.converter().convert(self.module, self.bodies().pattern(capture.pattern).ty, env));
         return .{ scope_worker, try self.program.lambdaWorker(scope_worker, lambda_expr, captures, capture_types, fn_ty, own) };
+    }
+
+    /// The type a callable captures `pattern`'s binder at: its value's type
+    /// `ty`, or for a recursive value, the slot's.
+    fn capturedType(self: *Builder, pattern: CheckedPatternId, ty: TypeId) Allocator.Error!TypeId {
+        const binder = self.bodies().pattern_binder_by_pattern[@backingInt(pattern)].get() orelse
+            invariant("a closure capture named a pattern without a binder");
+        if (!self.bodies().patternBinder(binder).recursive_value) return ty;
+        return try self.recursiveSlotType(ty);
+    }
+
+    /// What a callable captures for `pattern`'s binder: its value, or for a
+    /// recursive value, its slot.
+    fn capturedValue(self: *Builder, pattern: CheckedPatternId) ?LocalId {
+        const binder = self.bodies().pattern_binder_by_pattern[@backingInt(pattern)].get() orelse
+            invariant("a closure capture named a pattern without a binder");
+        if (self.bodies().patternBinder(binder).recursive_value) return self.recursive_slots.get(binder);
+        return self.binders.get(binder);
+    }
+
+    /// The slot type of a recursive value of type `ty`: a `Box` of the
+    /// one-item tuple holding it.
+    fn recursiveSlotType(self: *Builder, ty: TypeId) Allocator.Error!TypeId {
+        return try self.program.store.intern(.{ .box = try self.program.store.intern(.{ .tuple = &.{ty} }) });
+    }
+
+    /// The value the recursive value slot `slot` (of type `slot_ty`) holds,
+    /// read in the entry chain.
+    fn readRecursiveSlot(self: *Builder, slot: LocalId, slot_ty: TypeId) Allocator.Error!LocalId {
+        const tuple_ty = switch (self.program.store.get(slot_ty)) {
+            .box => |payload| payload,
+            else => invariant("a recursive value's slot is not a box"),
+        };
+        const value_ty = self.program.store.span(switch (self.program.store.get(tuple_ty)) {
+            .tuple => |items| items,
+            else => invariant("a recursive value's slot does not hold a tuple"),
+        })[0];
+        const payload = try self.localOf(tuple_ty, .view);
+        try self.emitEntry(.{ .dyn = .{ .target = payload, .data = try self.store.addStmtRow(LIR.DynOp, .{ .box_payload_addr = .{ .box = slot, .desc = try self.descOf(tuple_ty) } }), .next = undefined } });
+        const value = try self.localOf(value_ty, .view);
+        try self.emitEntry(.{ .dyn = .{ .target = value, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = payload, .desc = try self.descOf(tuple_ty), .semantic_index = 0 } }), .next = undefined } });
+        return value;
+    }
+
+    /// The recursive value binders `pattern` binds.
+    fn recursiveBinders(self: *Builder, pattern: CheckedPatternId, out: *std.ArrayList(checked.PatternBinderId)) Allocator.Error!void {
+        var stack: std.ArrayList(CheckedPatternId) = .empty;
+        defer stack.deinit(self.allocator);
+        try stack.append(self.allocator, pattern);
+        while (stack.pop()) |current| {
+            switch (self.bodies().pattern(current).data) {
+                .assign => |binder| if (self.bodies().patternBinder(binder).recursive_value) try out.append(self.allocator, binder),
+                .as => |as| {
+                    if (self.bodies().patternBinder(as.binder).recursive_value) try out.append(self.allocator, as.binder);
+                    try stack.append(self.allocator, as.pattern);
+                },
+                .applied_tag => |tag| try stack.appendSlice(self.allocator, tag.args),
+                .nominal => |nominal| try stack.append(self.allocator, nominal.backing_pattern),
+                .record_destructure => |destructs| for (destructs) |destruct| switch (destruct.kind) {
+                    .required, .sub_pattern, .rest => |sub| try stack.append(self.allocator, sub),
+                },
+                .list => |list| {
+                    try stack.appendSlice(self.allocator, list.patterns);
+                    if (list.rest) |rest| if (rest.pattern) |sub| try stack.append(self.allocator, sub);
+                },
+                .tuple => |items| try stack.appendSlice(self.allocator, items),
+                else => {},
+            }
+        }
+    }
+
+    /// Allocate a zeroed slot for each recursive value binder `pattern`
+    /// binds.
+    fn allocRecursiveSlots(self: *Builder, pattern: CheckedPatternId) Allocator.Error!void {
+        var binders: std.ArrayList(checked.PatternBinderId) = .empty;
+        defer binders.deinit(self.allocator);
+        try self.recursiveBinders(pattern, &binders);
+        for (binders.items) |binder| {
+            const value_ty = try self.patternType(self.bodies().patternBinder(binder).pattern);
+            const slot_ty = try self.recursiveSlotType(value_ty);
+            const tuple_ty = try self.program.store.intern(.{ .tuple = &.{value_ty} });
+            const slot = try self.localOf(slot_ty, .frame);
+            try self.emitDyn(slot, .{ .slot_alloc = .{ .desc = try self.descOf(tuple_ty) } });
+            try self.recursive_slots.put(self.allocator, binder, slot);
+        }
+    }
+
+    /// Store each recursive value binder's value, now bound, in its slot.
+    fn fillRecursiveSlots(self: *Builder, pattern: CheckedPatternId) Allocator.Error!void {
+        var binders: std.ArrayList(checked.PatternBinderId) = .empty;
+        defer binders.deinit(self.allocator);
+        try self.recursiveBinders(pattern, &binders);
+        for (binders.items) |binder| {
+            const value = self.binders.get(binder) orelse invariant("a recursive value's binder was not bound by its declaration");
+            const value_ty = try self.patternType(self.bodies().patternBinder(binder).pattern);
+            const tuple_ty = try self.program.store.intern(.{ .tuple = &.{value_ty} });
+            const tuple = try self.buildStruct(tuple_ty, &.{value});
+            const filled = try self.localOf(try self.recursiveSlotType(value_ty), .frame);
+            try self.emitDyn(filled, .{ .slot_store = .{
+                .slot = self.recursive_slots.get(binder).?,
+                .value = tuple,
+                .desc = try self.descOf(tuple_ty),
+            } });
+            try self.recursive_slots.put(self.allocator, binder, filled);
+        }
     }
 
     /// The function value of a local procedure: the closure its declaration
@@ -3039,9 +3159,7 @@ pub const Builder = struct {
         const values = try self.allocator.alloc(LocalId, target_worker.captures.len);
         defer self.allocator.free(values);
         for (target_worker.captures, values) |capture, *value| {
-            const binder = self.bodies().pattern_binder_by_pattern[@backingInt(capture.pattern)].get() orelse
-                invariant("a closure capture named a pattern without a binder");
-            value.* = self.binders.get(binder) orelse invariant("a local procedure's capture is not visible where the procedure is referenced");
+            value.* = self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is referenced");
         }
         var declaring_dicts: usize = 0;
         for (declaring.dict_scopes) |scope| declaring_dicts += scope.len;
@@ -4876,10 +4994,8 @@ pub const Builder = struct {
         const values = try self.allocator.alloc(LocalId, captures.len + self.var_descs.len + self.dict_locals.len);
         defer self.allocator.free(values);
         for (captures, capture_types, 0..) |capture, *capture_ty, index| {
-            capture_ty.* = try self.patternType(capture.pattern);
-            const binder = self.bodies().pattern_binder_by_pattern[@backingInt(capture.pattern)].get() orelse
-                invariant("a closure capture named a pattern without a binder");
-            values[index] = self.binders.get(binder) orelse invariant("a closure captured a binder this body never bound");
+            capture_ty.* = try self.capturedType(capture.pattern, try self.patternType(capture.pattern));
+            values[index] = self.capturedValue(capture.pattern) orelse invariant("a closure captured a binder this body never bound");
         }
         const callee = try self.program.lambdaWorker(self.worker_id, lambda_expr, captures, capture_types, fn_ty, generalized);
         // A generalized lambda that is not a local procedure is instantiated
@@ -5959,7 +6075,13 @@ pub const Builder = struct {
                 // derivation) has no value, and every use of it resolves to
                 // what it requests.
                 if (self.bodies().expr(decl.expr).data == .anno_only) return;
-                if (decl.recursive) invariant("recursive value declarations are not yet lowered by Boxy");
+                // A recursive value's binders get slots before its value is
+                // built, which the callables in the value capture, and the
+                // slots are filled once the value is bound.
+                if (decl.recursive) {
+                    try self.allocRecursiveSlots(decl.pattern);
+                    try self.push(.{ .fill_recursive_slots = decl.pattern });
+                }
                 // A scheme alias with a generalized scheme binds nothing:
                 // each use lowers its right-hand side at the use's
                 // instantiation (`lowerAliasUse`).

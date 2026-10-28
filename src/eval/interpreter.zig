@@ -8824,6 +8824,31 @@ pub const Interpreter = struct {
                 @memcpy(dst[0..@sizeOf(RocList)], std.mem.asBytes(&list));
                 try self.finishResultStorage(frame, stmt_id, target, dst);
             },
+            .slot_alloc => |s| {
+                const payload = try self.descAt(frame, s.desc);
+                const word: usize = if (payload.size == 0) 0 else blk: {
+                    const data = try self.allocRocDataWithRc(payload.size, payload.alignment, payload.containsRefcounted());
+                    @memset(data[0..payload.size], 0);
+                    // Its payload holds no value until `slot_store` fills it.
+                    if (builtin.mode == .debug) try self.inflight_zeroed_box_payloads.put(self.allocator, @intFromPtr(data), {});
+                    break :blk @intFromPtr(data);
+                };
+                const dst = try self.targetStorage(frame, target);
+                @as(*align(1) usize, @ptrCast(dst)).* = word;
+                try self.finishResultStorage(frame, stmt_id, target, dst);
+            },
+            .slot_store => |s| {
+                const payload = try self.descAt(frame, s.desc);
+                const word = @as(*align(1) const usize, @ptrCast(try self.localBytes(frame, s.slot))).*;
+                if (payload.size != 0) {
+                    const data: [*]u8 = @ptrFromInt(word);
+                    @memcpy(data[0..payload.size], (try self.localBytes(frame, s.value))[0..payload.size]);
+                    if (builtin.mode == .debug) _ = self.inflight_zeroed_box_payloads.remove(word);
+                }
+                const dst = try self.targetStorage(frame, target);
+                @as(*align(1) usize, @ptrCast(dst)).* = word;
+                try self.finishResultStorage(frame, stmt_id, target, dst);
+            },
             .box => |b| {
                 const payload = try self.descAt(frame, b.desc);
                 const word: usize = if (payload.size == 0) 0 else blk: {

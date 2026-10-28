@@ -8787,6 +8787,22 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitBoxyRuntimeCall(.build_list);
             try self.finishTarget(dst, t);
         },
+        .slot_alloc => |s| {
+            const t = try self.dynTarget(dst);
+            try self.emitProcLocal(s.desc);
+            try self.emitTargetAddress(t);
+            try self.emitBoxyRuntimeCall(.slot_alloc);
+            try self.finishTarget(dst, t);
+        },
+        .slot_store => |s| {
+            const t = try self.dynTarget(dst);
+            try self.emitProcLocal(s.desc);
+            try self.emitBytesAddress(s.slot);
+            try self.emitBytesAddress(s.value);
+            try self.emitTargetAddress(t);
+            try self.emitBoxyRuntimeCall(.slot_store);
+            try self.finishTarget(dst, t);
+        },
         .box => |b| {
             const t = try self.dynTarget(dst);
             try self.emitProcLocal(b.desc);

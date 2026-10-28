@@ -215,6 +215,27 @@ pub fn buildBox(desc: *const TypeDesc, dst: *usize, payload: [*]const u8, ops: *
     dst.* = @intFromPtr(data);
 }
 
+/// A box at `dst` whose payload `desc` describes, zeroed.
+pub fn allocSlot(desc: *const TypeDesc, dst: *usize, ops: *RocOps) void {
+    if (desc.size == 0) {
+        dst.* = 0;
+        return;
+    }
+    const data = utils.allocateWithRefcount(desc.size, desc.alignment, desc.flags.contains_refcounted, ops);
+    @memset(data[0..desc.size], 0);
+    dst.* = @intFromPtr(data);
+}
+
+/// Move the value at `value` into the zeroed payload of the box `slot`
+/// holds, and write that box to `dst`.
+pub fn storeSlot(desc: *const TypeDesc, slot: *const usize, value: [*]const u8, dst: *usize) void {
+    if (desc.size != 0) {
+        const data: [*]u8 = @ptrFromInt(slot.*);
+        @memcpy(data[0..desc.size], value[0..desc.size]);
+    }
+    dst.* = slot.*;
+}
+
 // Representation adaptation.
 
 /// One value of an adaptation: the source bytes `from` describes, rebuilt at

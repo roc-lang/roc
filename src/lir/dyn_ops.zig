@@ -64,7 +64,7 @@ pub fn ownership(op: DynOp) Ownership {
         .tag_payload_addr => |payload| .{ .borrow_component = payload.base },
         .view => |view| .{ .borrow_component = view.address },
         .tag_discriminant, .eq, .hash, .inspect, .numeral, .adapt => .borrow_operands,
-        .record, .record_update, .tag, .list, .box, .closure => .construct,
+        .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .closure => .construct,
         .call_erased => .call_erased,
     };
 }
@@ -173,6 +173,12 @@ pub const Operands = struct {
                 result.single(record.desc);
                 result.span(record.fields);
             },
+            .slot_alloc => |slot| result.single(slot.desc),
+            .slot_store => |store_| {
+                result.single(store_.slot);
+                result.single(store_.value);
+                result.single(store_.desc);
+            },
             .record_update => |update| {
                 result.single(update.base);
                 result.single(update.base_desc);
@@ -256,6 +262,8 @@ pub fn constructedValues(store: *const LirStore, allocator: std.mem.Allocator, o
         .tag => |tag| try appendSpan(store, allocator, tag.payloads, out),
         .list => |list| try appendSpan(store, allocator, list.elems, out),
         .box => |box| try out.append(allocator, box.payload),
+        .slot_alloc => {},
+        .slot_store => |slot| try out.appendSlice(allocator, &.{ slot.slot, slot.value }),
         .dict_compose => |dict| try appendSpan(store, allocator, dict.captures, out),
         .closure => |closure| try out.append(allocator, closure.capture),
         else => unreachable, // only construct operations consume value operands
@@ -357,6 +365,8 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
             .payload_index = payload.payload_index,
         } },
         .record => |record| .{ .record = .{ .desc = try Remap.one(context, record.desc), .fields = try Remap.span(store, context, record.fields) } },
+        .slot_alloc => |slot| .{ .slot_alloc = .{ .desc = try Remap.one(context, slot.desc) } },
+        .slot_store => |slot| .{ .slot_store = .{ .slot = try Remap.one(context, slot.slot), .value = try Remap.one(context, slot.value), .desc = try Remap.one(context, slot.desc) } },
         .record_update => |update| .{ .record_update = .{
             .base = try Remap.one(context, update.base),
             .base_desc = try Remap.one(context, update.base_desc),

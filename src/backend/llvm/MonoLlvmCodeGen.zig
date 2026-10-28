@@ -11758,6 +11758,16 @@ pub const MonoLlvmCodeGen = struct {
                     elems,
                 });
             },
+            .slot_alloc => |s| _ = try self.callBoxyRuntime("roc_desc_slot_alloc", .void, &.{ ptr_ty, ptr_ty }, &.{
+                try self.wordValue(s.desc),
+                try self.targetAddress(target),
+            }),
+            .slot_store => |s| _ = try self.callBoxyRuntime("roc_desc_slot_store", .void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{
+                try self.wordValue(s.desc),
+                try self.bytesAddress(s.slot),
+                try self.bytesAddress(s.value),
+                try self.targetAddress(target),
+            }),
             .box => |b| _ = try self.callBoxyRuntime("roc_desc_build_box", .void, &.{ ptr_ty, ptr_ty, ptr_ty }, &.{
                 try self.wordValue(b.desc),
                 try self.targetAddress(target),
