@@ -2544,10 +2544,9 @@ pub const Builder = struct {
                     .record => |record| blk: {
                         const fields = store.fieldSpan(record.fields);
                         const storage = try self.program.arena.allocator().alloc(TypeId, fields.len);
-                        for (fields, storage) |field, *slot| {
-                            if (field.kind != .inline_slot) invariant("restoring optional record fields is not yet lowered by Boxy");
-                            slot.* = field.ty;
-                        }
+                        // An optional field's stored value is its presence
+                        // slot's tag (design.md "Field Kinds").
+                        for (fields, storage) |field, *slot| slot.* = try self.program.layouts.fieldStorage(field);
                         break :blk storage;
                     },
                     .empty_record => &.{},
@@ -2595,9 +2594,21 @@ pub const Builder = struct {
                     },
                     .empty => try self.finishRestoreList(raw_ty, 0),
                     .packed_bytes => |packed_list| {
-                        if (packed_list.element == null) invariant("restoring packed product lists is not yet lowered by Boxy");
                         const local = try self.localOf(raw_ty, .frame);
-                        const bytes = const_store.blobBytes(packed_list.bytes);
+                        var bytes = const_store.blobBytes(packed_list.bytes);
+                        // A product's items are its scalar leaves in field
+                        // order, laid out here as its layout stores them.
+                        var decoded: ?[]u8 = null;
+                        defer if (decoded) |owned| self.allocator.free(owned);
+                        if (packed_list.element == null) {
+                            var plan = try lir_core.PackedData.Plan.init(self.allocator, &self.program.result.layouts, try self.program.layouts.layoutOf(elem));
+                            defer plan.deinit();
+                            if (plan.packed_width != packed_list.product_width) invariant("a stored packed list's items differ from their type's fields");
+                            const memory = try self.allocator.alloc(u8, @as(usize, packed_list.len) * plan.memory_width);
+                            decoded = memory;
+                            plan.decode(memory, bytes, packed_list.len);
+                            bytes = memory;
+                        }
                         const backing = try self.store.insertStringAligned(bytes, 16);
                         try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .bytes_literal = .{
                             .bytes = .{ .backing = backing, .offset = 0, .len = @intCast(bytes.len) },
