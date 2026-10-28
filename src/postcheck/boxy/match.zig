@@ -295,7 +295,7 @@ pub const Ctx = struct {
             .rest => |rest| {
                 // `..` with nothing to bind reads nothing.
                 if (self.pattern(rest).data == .underscore) return null;
-                invariant("record rest patterns that bind the rest are not yet lowered by Boxy");
+                return .{ .index = 0, .ty = try self.b.patternType(rest), .pat = rest };
             },
             .required, .sub_pattern => {},
         };
@@ -609,8 +609,12 @@ pub const Ctx = struct {
         return try self.b.store.addCFStmt(.{ .assign_ref = .{ .target = dest, .op = LIR.RefOp.local(source), .next = next } }, self.b.origin(.source));
     }
 
-    pub fn readRecordRest(_: Ctx, _: LIR.LocalId, _: types.TypeId, _: LIR.LocalId, _: types.TypeId, _: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
-        invariant("a record rest occurrence reached Boxy match lowering");
+    /// The fields of `source` a record pattern does not name, as the rest
+    /// record of type `ty` (`adapt` reads its fields by name).
+    pub fn readRecordRest(self: Ctx, dest: LIR.LocalId, ty: types.TypeId, source: LIR.LocalId, source_ty: types.TypeId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        const start = try self.b.beginBackward();
+        try self.b.emitDyn(dest, .{ .adapt = .{ .src = source, .from = try self.b.descOf(source_ty), .to = try self.b.descOf(ty) } });
+        return try self.b.endBackward(start, next);
     }
 
     pub fn readRetype(self: Ctx, dest: LIR.LocalId, ty: types.TypeId, source: LIR.LocalId, source_ty: types.TypeId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {

@@ -5561,7 +5561,13 @@ pub const Builder = struct {
                             .rest => |rest| {
                                 // `..` with nothing to bind reads nothing.
                                 if (self.bodies().pattern(rest).data == .underscore) continue;
-                                invariant("record rest patterns that bind the rest are not yet lowered by Boxy");
+                                // The rest is the fields the pattern does
+                                // not name, read by name.
+                                const rest_ty = try self.patternType(rest);
+                                const rest_value = try self.localOf(rest_ty, .frame);
+                                try self.emitDyn(rest_value, .{ .adapt = .{ .src = item.value, .from = try self.descOf(item.ty), .to = try self.descOf(rest_ty) } });
+                                try pending.append(self.allocator, .{ .pattern = rest, .value = rest_value, .ty = rest_ty });
+                                continue;
                             },
                         };
                         const semantic = for (fields, 0..) |field, index| {
