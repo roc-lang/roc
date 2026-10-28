@@ -45,8 +45,11 @@ pub fn main(init: std.process.Init) !void {
 
     var diagnostic: DyldExportStrip.Diagnostic = .{};
     _ = DyldExportStrip.stripFile(io, gpa, arena, output_path, &diagnostic) catch |err| switch (err) {
-        error.NonSystemDylib, error.RunPathEntry => {
-            const what = if (err == error.NonSystemDylib) "loads a dylib from outside macOS" else "has a run-path search entry";
+        error.NonSystemDylib, error.RunPathEntry => |rejected| {
+            const what = switch (rejected) {
+                error.NonSystemDylib => "loads a dylib from outside macOS",
+                error.RunPathEntry => "has a run-path search entry",
+            };
             const message = try std.fmt.allocPrint(arena, "{s} {s}: {s}\nEvery library the roc CLI uses beyond the OS must be linked statically (see src/cli/macho/DyldExportStrip.zig).\n", .{ input_path, what, diagnostic.path });
             stderr_file.writeStreamingAll(io, message) catch {};
             std.process.exit(1);

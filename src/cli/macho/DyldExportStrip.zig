@@ -282,7 +282,7 @@ pub fn stripHeader(bytes: []u8, diagnostic: *Diagnostic) StripError!Summary {
 fn loadCommandString(cmd: []const u8, str_off: u32, fixed_size: usize) StripError![]const u8 {
     if (str_off < fixed_size or str_off >= cmd.len) return error.TruncatedLoadCommands;
     const tail = cmd[str_off..];
-    const len = std.mem.indexOfScalar(u8, tail, 0) orelse return error.TruncatedLoadCommands;
+    const len = std.mem.findScalar(u8, tail, 0) orelse return error.TruncatedLoadCommands;
     return tail[0..len];
 }
 
