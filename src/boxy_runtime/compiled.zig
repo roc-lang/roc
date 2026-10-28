@@ -201,6 +201,15 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
             stack.push(.{ .from = present.payload, .to = t, .src = work.src, .dst = work.dst }, ops);
             continue;
         }
+        // A nominal shares its backing's representation.
+        if (f.kind == .nominal and t.kind != .nominal) {
+            stack.push(.{ .from = f.child.?, .to = t, .src = work.src, .dst = work.dst }, ops);
+            continue;
+        }
+        if (t.kind == .nominal and f.kind != .nominal) {
+            stack.push(.{ .from = f, .to = t.child.?, .src = work.src, .dst = work.dst }, ops);
+            continue;
+        }
         if (f.kind != t.kind) invariant(ops, "adapted descriptors describe different kinds of value");
         switch (t.kind) {
             .zst, .scalar, .str, .bool, .erased_callable, .opaque_unknown => {
@@ -209,13 +218,20 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
             },
             .nominal => stack.push(.{ .from = f.child.?, .to = t.child.?, .src = work.src, .dst = work.dst }, ops),
             .record, .tuple => {
-                if (f.count != t.count) invariant(ops, "adapted records have different fields");
                 @memset(work.dst[0..t.size], 0);
-                for (0..t.count) |index| {
-                    const from_field = f.fieldBySemanticIndex(@intCast(index));
-                    const to_field = t.fieldBySemanticIndex(@intCast(index));
+                for (t.fields()) |*to_field| {
                     if (to_field.is_padding != 0) continue;
-                    stack.push(.{ .from = from_field.desc, .to = to_field.desc, .src = work.src + from_field.offset, .dst = work.dst + to_field.offset }, ops);
+                    // Fields match by name, tuple elements by position.
+                    const from_field: ?*const Field = if (t.kind == .tuple) f.fieldBySemanticIndex(to_field.semantic_index) else for (f.fields()) |*candidate| {
+                        if (candidate.name != null and candidate.name.?.id == to_field.name.?.id) break candidate;
+                    } else null;
+                    if (from_field) |source| {
+                        stack.push(.{ .from = source.desc, .to = to_field.desc, .src = work.src + source.offset, .dst = work.dst + to_field.offset }, ops);
+                    } else {
+                        // An optional field the source lacks is missing.
+                        if (!to_field.desc.flags.presence_slot) invariant(ops, "an adapted record lacks a field its destination requires");
+                        writeDiscriminant(to_field.desc, work.dst + to_field.offset, to_field.desc.variants()[0].discriminant);
+                    }
                 }
             },
             .tag_union => {
