@@ -352,15 +352,16 @@ test "a pack evicted between listing its directory and reading it is a miss, not
     // Another `roc`'s cache sweep deletes the first pack after the listing
     // names it and before the loader opens it.
     const Eviction = struct {
-        deleted: usize = 0,
+        // Every hooked call receives the testing Io's own context, so the
+        // hook's count lives outside it.
+        var deleted: usize = 0;
 
         fn openFile(context: ?*anyopaque, dir: std.Io.Dir, path: []const u8, options: std.Io.Dir.OpenFileOptions) std.Io.File.OpenError!std.Io.File {
-            const self: *@This() = @ptrCast(@alignCast(context.?));
-            if (self.deleted == 0 and std.mem.endsWith(u8, path, "a-evicted.rpk")) {
-                std.testing.io.vtable.dirDeleteFile(std.testing.io.userdata, dir, path) catch unreachable; // the fixture wrote this pack and only this hook deletes it, once
-                self.deleted += 1;
+            if (deleted == 0 and std.mem.endsWith(u8, path, "a-evicted.rpk")) {
+                std.testing.io.vtable.dirDeleteFile(context, dir, path) catch unreachable; // the fixture wrote this pack and only this hook deletes it, once
+                deleted += 1;
             }
-            return std.testing.io.vtable.dirOpenFile(std.testing.io.userdata, dir, path, options);
+            return std.testing.io.vtable.dirOpenFile(context, dir, path, options);
         }
 
         fn packBytes(allocator: Allocator, key: [32]u8, identity: lir.ProcIdentity) Allocator.Error![]u8 {
@@ -408,15 +409,15 @@ test "a pack evicted between listing its directory and reading it is a miss, not
     const dir_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
     defer allocator.free(dir_path);
 
-    var eviction = Eviction{};
+    Eviction.deleted = 0;
     var vtable = std.testing.io.vtable.*;
     vtable.dirOpenFile = Eviction.openFile;
-    const io: std.Io = .{ .userdata = &eviction, .vtable = &vtable };
+    const io: std.Io = .{ .userdata = std.testing.io.userdata, .vtable = &vtable };
 
     var packs = LoadedPacks.init(allocator);
     defer packs.deinit();
     try packs.loadDirInto(io, dir_path, .cache_offers);
-    try std.testing.expectEqual(@as(usize, 1), eviction.deleted);
+    try std.testing.expectEqual(@as(usize, 1), Eviction.deleted);
     try std.testing.expect(packs.failure == null);
     try std.testing.expectEqual(@as(usize, 1), packs.packs.items.len);
     try packs.indexPacks();
