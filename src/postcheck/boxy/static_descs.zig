@@ -215,7 +215,7 @@ pub const StaticDescs = struct {
     }
 
     fn program(self: *StaticDescs) *lower.Program {
-        return @fieldParentPtr("static_descs", self);
+        return @alignCast(@fieldParentPtr("static_descs", self));
     }
 
     /// The `Methods` node of the closed nominal type `ty`'s overrides, or
