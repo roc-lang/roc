@@ -2400,7 +2400,15 @@ pub const Builder = struct {
         defer self.allocator.free(related);
         const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
         defer self.allocator.free(own_types);
-        for (own_types, related[outer_count..]) |*slot, ty| slot.* = ty orelse invariant("a local procedure call leaves one of the procedure's own variables unrelated");
+        // A variable the call's type does not relate takes the call's
+        // checked instantiation of it, or, the checker having fixed none,
+        // seals as a variable no use relates.
+        const subst = self.siteSubstitution(call.func);
+        for (own_types, related[outer_count..], scheme.scheme_vars, 0..) |*slot, ty, variable, index| slot.* = ty orelse
+            if (index < subst.len and self.view.types().payload(subst[index]) != .err)
+                try self.convert(subst[index])
+            else
+                try self.program.converter().sealedScheme(self.module, variable);
         const bound = try self.allocator.alloc(TypeId, vars.len);
         defer self.allocator.free(bound);
         @memcpy(bound[0..own_types.len], own_types);
