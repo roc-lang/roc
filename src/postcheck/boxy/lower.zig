@@ -111,6 +111,14 @@ pub const CrashDictionary = enum { checked_error, unreachable_value };
 /// program's converted literal values (`Input.literal_values`).
 pub const ConstSource = union(enum) { module: ModuleIndex, literals };
 
+/// Whether `primitive` is a 128-bit SIMD vector.
+fn descFormatIsVector(primitive: types.Primitive) bool {
+    return switch (primitive) {
+        .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => true,
+        else => false,
+    };
+}
+
 /// An exported procedure binding's identity within its module.
 pub const ExportedBindingKey = struct { module: ModuleIndex, def: @FieldType(checked.ImportedProcedureBindingRef, "def"), pattern: checked.CheckedPatternId };
 
@@ -713,6 +721,30 @@ pub const Program = struct {
         if (self.nominal_overrides.get(nominal_ty)) |memo| return memo;
         const nominal = switch (self.store.get(nominal_ty)) {
             .nominal => |value| value,
+            // A SIMD vector inspects through its builtin `to_inspect`.
+            .primitive => |primitive| {
+                var result: NominalOverrides = .{ null, null, null };
+                if (descFormatIsVector(primitive)) {
+                    const owner: static_dispatch.MethodOwner = .{ .builtin = checked.builtinOwnerForPrimitive(primitive) };
+                    const root_module = self.modules.views.items[0].index;
+                    const found = self.registeredMethod(root_module, null, owner, "to_inspect") orelse
+                        invariant("a SIMD vector type registers no to_inspect, which Builtin declares for each");
+                    const template = switch (found) {
+                        .target => |target| switch (target.kind) {
+                            .procedure => |procedure| procedure.template,
+                            .local_proc, .structural => invariant("a SIMD vector's to_inspect is a Builtin procedure"),
+                        },
+                        .rejected => invariant("Builtin's SIMD vector to_inspect is rejected"),
+                    };
+                    const worker_id = try self.templateRefWorker(template);
+                    const target_worker = self.worker(worker_id).*;
+                    const formal = try self.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
+                    const instance = try self.instantiateTarget(worker_id, formal, try self.overrideInterface(2, nominal_ty));
+                    result[2] = .{ .entry = try self.methodEntryWorker(worker_id), .bound = instance.bound, .dicts = instance.obligations };
+                }
+                try self.nominal_overrides.put(self.allocator, nominal_ty, result);
+                return result;
+            },
             else => invariant("asked for the overrides of a non-nominal type"),
         };
         var result: NominalOverrides = .{ null, null, null };

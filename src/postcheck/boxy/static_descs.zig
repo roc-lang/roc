@@ -427,6 +427,9 @@ pub const StaticDescs = struct {
                 else => {
                     kind = .scalar;
                     scalar = scalarOf(primitive);
+                    if (scalar.isVector()) {
+                        if (try self.methodsNode(ty)) |methods| try pointers.append(self.allocator, .{ .offset = desc_layout.of(.methods), .target = methods });
+                    }
                 },
             },
             .empty_record => kind = .record,
