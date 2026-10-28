@@ -118,6 +118,9 @@ pub const Task = union(enum) {
     end_loop,
     /// Leave the innermost scheme alias scope (`Builder.alias_scopes`).
     leave_alias_scope,
+    /// A loop whose pattern checking rejected, its iterable evaluated:
+    /// crash as the iterator dispatch that cannot run, or as rejected code.
+    rejected_for: static_dispatch.IteratorForPlanId,
     /// Fill the slots of a recursive value declaration's binders, once the
     /// declaration's pattern bound them.
     fill_recursive_slots: CheckedPatternId,
@@ -2020,6 +2023,19 @@ pub const Builder = struct {
                 try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal } } });
             },
             .fill_recursive_slots => |pattern| try self.fillRecursiveSlots(pattern),
+            .rejected_for => |plan_id| {
+                _ = self.popValue();
+                const plan = self.view.view.static_dispatch_plans.iterator_for_plans[@backingInt(plan_id)];
+                switch (plan.iter.resolution) {
+                    .checked_error => try self.emitDispatchCrash(.checked_error),
+                    .@"unreachable" => try self.emitDispatchCrash(.unreachable_value),
+                    else => {
+                        const literal = try self.store.insertString("runtime error");
+                        try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal }, .checked_error = true } });
+                    },
+                }
+                try self.pushValue(try self.closedLocal(.zst));
+            },
             .leave_alias_scope => {
                 const scope = self.alias_scopes.pop().?;
                 self.env = scope.saved_env;
@@ -6257,8 +6273,7 @@ pub const Builder = struct {
         // then crashes where it would begin: its pattern binds nothing.
         const item_ty = self.view.view.static_dispatch_plans.iterator_for_plans[@backingInt(plan_id)].item_ty;
         if (try self.program.converter().hasError(self.module, item_ty) or try self.program.converter().hasError(self.module, self.bodies().pattern(pattern).ty)) {
-            try self.push(.{ .runtime_error = null });
-            try self.push(.discard);
+            try self.push(.{ .rejected_for = plan_id });
             try self.push(.{ .expr = iterable });
             return;
         }
