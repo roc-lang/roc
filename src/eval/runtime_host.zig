@@ -20,12 +20,14 @@ const RuntimeHostEnv = @This();
 /// or reallocation reads the block's size and alignment back from the block
 /// itself, and the live blocks form a list that `deinit` can release.
 ///
-/// The payload sits `alignment` bytes past `header_region`, so its address is
-/// a multiple of the requested alignment and never of twice it. Code that
-/// leans on more alignment than it asked for then misbehaves in every eval
-/// test instead of only on a host whose allocator happens to differ, and a
-/// free or reallocation at a different alignment than the allocation fails
-/// loudly: production hosts locate a block from the alignment they are given.
+/// In safety-checked builds the payload sits `alignment` bytes past
+/// `header_region`, so its address is a multiple of the requested alignment
+/// and never of twice it. Code that leans on more alignment than it asked for
+/// then misbehaves in every eval test instead of only on a host whose
+/// allocator happens to differ, and a free or reallocation at a different
+/// alignment than the allocation fails loudly: production hosts locate a
+/// block from the alignment they are given. Release builds place the payload
+/// right after `header_region` and check nothing.
 const Header = extern struct {
     prev: ?*Header,
     next: ?*Header,
@@ -42,26 +44,32 @@ const Header = extern struct {
         std.debug.assert(max_payload_alignment < block_alignment.toByteUnits());
     }
 
+    /// Bytes between `header_region` and a payload at `alignment`.
+    fn payloadSkew(alignment: usize) usize {
+        return if (std.debug.runtime_safety) alignment else 0;
+    }
+
     fn fromPayload(ptr: *anyopaque) *Header {
-        // payload = block start + header_region + alignment, and alignment is
-        // less than block_alignment, so rounding down recovers the start.
+        // payload = block start + header_region + skew, and the skew is less
+        // than block_alignment, so rounding down recovers the start.
         const start = (@intFromPtr(ptr) - header_region) & ~(block_alignment.toByteUnits() - 1);
         return @ptrFromInt(start);
     }
 
     fn payload(self: *Header) [*]u8 {
         const bytes: [*]u8 = @ptrCast(self);
-        return bytes + header_region + self.alignment;
+        return bytes + header_region + payloadSkew(self.alignment);
     }
 
     fn block(self: *Header) []align(32) u8 {
         const bytes: [*]align(32) u8 = @ptrCast(@alignCast(self));
-        return bytes[0 .. header_region + self.alignment + self.size];
+        return bytes[0 .. header_region + payloadSkew(self.alignment) + self.size];
     }
 
-    /// Fail loudly when `alignment` is not the one the block was allocated at.
+    /// In safety-checked builds, fail loudly when `alignment` is not the one
+    /// the block was allocated at.
     fn expectAlignment(self: *Header, alignment: usize, comptime operation: []const u8) void {
-        if (self.alignment != alignment) {
+        if (std.debug.runtime_safety and self.alignment != alignment) {
             std.debug.panic("RuntimeHostEnv: " ++ operation ++ " at alignment {d} of a block allocated at alignment {d} (ptr=0x{x})", .{ alignment, self.alignment, @intFromPtr(self.payload()) });
         }
     }
@@ -447,7 +455,7 @@ fn allocateBlock(self: *RuntimeHostEnv, size: usize, alignment: usize) *Header {
         1, 2, 4, 8, 16 => {},
         else => std.debug.panic("RuntimeHostEnv: unsupported alignment {d}", .{alignment}),
     }
-    const block = runtime_bytes_allocator.alignedAlloc(u8, Header.block_alignment, Header.header_region + alignment + size) catch oom("roc_alloc");
+    const block = runtime_bytes_allocator.alignedAlloc(u8, Header.block_alignment, Header.header_region + Header.payloadSkew(alignment) + size) catch oom("roc_alloc");
     const header: *Header = @ptrCast(@alignCast(block.ptr));
     header.* = .{ .prev = null, .next = self.live_blocks, .size = size, .alignment = alignment };
     if (std.debug.runtime_safety) {

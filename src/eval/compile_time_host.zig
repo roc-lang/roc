@@ -25,12 +25,14 @@ const CompileTimeHost = @This();
 /// length and alignment; reallocation reads the old length from it, and
 /// deallocation does nothing: the root's arena frees everything at once.
 ///
-/// The Roc bytes sit `alignment` bytes past the header region, so their
-/// address is a multiple of the requested alignment and never of twice it.
-/// Code that leans on more alignment than it asked for then misbehaves here
-/// instead of only on a host whose allocator differs, and a free or
-/// reallocation at a different alignment than the allocation fails loudly:
-/// production hosts locate a block from the alignment they are given.
+/// In safety-checked builds the Roc bytes sit `alignment` bytes past the
+/// header region, so their address is a multiple of the requested alignment
+/// and never of twice it. Code that leans on more alignment than it asked for
+/// then misbehaves here instead of only on a host whose allocator differs,
+/// and a free or reallocation at a different alignment than the allocation
+/// fails loudly: production hosts locate a block from the alignment they are
+/// given. Release builds place the bytes right after the header region and
+/// check nothing.
 const allocation_header_bytes = 32;
 const max_allocation_alignment = 16;
 /// Debug-only stamp a live header carries, so a pointer Roc hands back that
@@ -310,23 +312,29 @@ fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: u
 }
 
 fn releaseAllocation(ptr: *anyopaque, alignment: usize, comptime operation: []const u8) void {
+    if (!std.debug.runtime_safety) return;
     const header = allocationHeader(ptr);
     if (header.alignment != alignment) {
         std.debug.panic("CompileTimeHost: " ++ operation ++ " at alignment {d} of a block allocated at alignment {d} (ptr=0x{x})", .{ alignment, header.alignment, @intFromPtr(ptr) });
     }
-    if (!std.debug.runtime_safety) return;
     std.debug.assert(header.stamp == allocation_header_stamp);
     header.stamp = 0;
 }
 
-/// Hand out `length` bytes (at least one) at exactly `alignment` from the
-/// root's arena, after their header.
+/// Bytes between the header region and Roc bytes at `alignment`.
+fn payloadSkew(alignment: usize) usize {
+    return if (std.debug.runtime_safety) alignment else 0;
+}
+
+/// Hand out `length` bytes (at least one) at `alignment` from the root's
+/// arena, after their header; exactly `alignment` in safety-checked builds.
 fn allocateRocBytes(self: *CompileTimeHost, length: usize, alignment: usize) [*]u8 {
     if (alignment > max_allocation_alignment or !std.math.isPowerOfTwo(alignment)) {
         base.invariant("{s}", .{"unsupported compile-time RocOps allocation alignment"});
     }
     const alloc_len = @max(length, 1);
-    const total = std.math.add(usize, allocation_header_bytes + alignment, alloc_len) catch self.jump(.host_oom);
+    const skew = payloadSkew(alignment);
+    const total = std.math.add(usize, allocation_header_bytes + skew, alloc_len) catch self.jump(.host_oom);
     const block = self.arena.allocator().alignedAlloc(u8, .fromByteUnits(allocation_header_bytes), total) catch {
         self.jump(.host_oom);
     };
@@ -334,12 +342,12 @@ fn allocateRocBytes(self: *CompileTimeHost, length: usize, alignment: usize) [*]
     header.size = alloc_len;
     header.alignment = alignment;
     if (std.debug.runtime_safety) header.stamp = allocation_header_stamp;
-    return block.ptr + allocation_header_bytes + alignment;
+    return block.ptr + allocation_header_bytes + skew;
 }
 
 fn allocationHeader(ptr: *anyopaque) *AllocationHeader {
-    // ptr = block start + allocation_header_bytes + alignment, and alignment is
-    // less than allocation_header_bytes, so rounding down recovers the start.
+    // ptr = block start + allocation_header_bytes + skew, and the skew is less
+    // than allocation_header_bytes, so rounding down recovers the start.
     const start = (@intFromPtr(ptr) - allocation_header_bytes) & ~@as(usize, allocation_header_bytes - 1);
     return @ptrFromInt(start);
 }
@@ -423,6 +431,7 @@ test "compile-time allocations honor alignment, keep their bytes across realloca
     inline for (.{ 1, 2, 4, 8, 16 }) |alignment| {
         const ptr = roc_ops.roc_alloc(roc_ops, 3, alignment);
         try std.testing.expect(@intFromPtr(ptr) % alignment == 0);
+        if (std.debug.runtime_safety) try std.testing.expect(@intFromPtr(ptr) % (2 * alignment) != 0);
         roc_ops.roc_dealloc(roc_ops, ptr, alignment);
     }
 
