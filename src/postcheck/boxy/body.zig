@@ -3162,6 +3162,15 @@ pub const Builder = struct {
         return hidden;
     }
 
+    /// The function type an evidence edge instantiated its target at, when
+    /// it recorded one.
+    pub fn instantiationCallable(self: *Builder, instantiation: static_dispatch.EvidenceTargetInstantiation) Allocator.Error!?TypeId {
+        return switch (instantiation) {
+            .callable, .alias, .derived_from_callable => |callable| try self.convert(callable),
+            .monomorphic => null,
+        };
+    }
+
     /// The types the scheme variables of `callee` take at a call: the
     /// checked substitution's, where an erroneous entry takes what the call's
     /// function type `call_fn` relates it to, or seals.
@@ -3170,18 +3179,27 @@ pub const Builder = struct {
         if (subst.len != target.scheme_vars.len) invariant("a call's checked substitution differs from its target's scheme");
         const bound = try self.allocator.alloc(TypeId, subst.len);
         errdefer self.allocator.free(bound);
-        var related: ?[]?TypeId = null;
-        defer if (related) |r| self.allocator.free(r);
+        // A row variable takes its open row's remainder of the call's row
+        // representative, whose layout the caller's values have (design.md
+        // "Row Joins").
+        const row_vars = try self.allocator.alloc(bool, subst.len);
+        defer self.allocator.free(row_vars);
+        @memset(row_vars, false);
+        const related: []?TypeId = if (call_fn) |actual| blk: {
+            const formal = try self.program.store.intern(.{ .function = .{ .args = target.params, .ret = target.ret, .effectful = false } });
+            break :blk try self.program.relateVariablesRows(self.allocator, &.{.{ formal, actual }}, target.scheme_vars.len, row_vars);
+        } else try self.allocator.alloc(?TypeId, 0);
+        defer self.allocator.free(related);
         for (subst, bound, 0..) |checked_ty, *slot, index| {
+            const ty = if (index < related.len) related[index] else null;
+            if (row_vars[index] and ty != null) {
+                slot.* = ty.?;
+                continue;
+            }
             if (self.view.types().payload(checked_ty) != .err) {
                 slot.* = try self.convert(checked_ty);
                 continue;
             }
-            if (related == null) {
-                const formal = try self.program.store.intern(.{ .function = .{ .args = target.params, .ret = target.ret, .effectful = false } });
-                related = if (call_fn) |actual| try self.relateVariablesPartial(&.{.{ formal, actual }}, target.scheme_vars.len) else try self.allocator.alloc(?TypeId, 0);
-            }
-            const ty = if (index < related.?.len) related.?[index] else null;
             slot.* = ty orelse try self.program.converter().sealedScheme(target.module, target.scheme_vars[index]);
         }
         return bound;
@@ -3220,7 +3238,7 @@ pub const Builder = struct {
                     .from_callable => if (self.program.worker(target).dictionary_params.len == 0) &.{} else invariant("callable-derived dictionary evidence is not yet lowered by Boxy"),
                     .through_alias => invariant("alias-scope dictionary evidence is not yet lowered by Boxy"),
                 };
-                const hidden = try self.hiddenArgs(target, subst, nested);
+                const hidden = try self.hiddenArgsAt(target, subst, nested, try self.instantiationCallable(node.instantiation));
                 defer self.allocator.free(hidden);
                 const entry = try self.program.methodEntryWorker(target);
                 return try self.composeDictionary(entry, hidden);
@@ -3486,7 +3504,7 @@ pub const Builder = struct {
                             .from_callable => if (self.program.worker(callee).dictionary_params.len == 0) &.{} else invariant("callable-derived call evidence is not yet lowered by Boxy"),
                             .through_alias => invariant("alias-scope call evidence is not yet lowered by Boxy"),
                         };
-                        break :blk try self.hiddenArgs(callee, subst, nested);
+                        break :blk try self.hiddenArgsAt(callee, subst, nested, try self.convert(call_plan.callable_ty));
                     },
                 };
                 switch (call_plan.result_mode) {
@@ -5008,7 +5026,7 @@ pub const Builder = struct {
                     .from_callable => if (self.program.worker(callee).dictionary_params.len == 0) &.{} else invariant("callable-derived call evidence is not yet lowered by Boxy"),
                     .through_alias => invariant("alias-scope call evidence is not yet lowered by Boxy"),
                 };
-                const hidden = try self.hiddenArgs(callee, subst, nested);
+                const hidden = try self.hiddenArgsAt(callee, subst, nested, try self.convert(callable_ty));
                 defer self.allocator.free(hidden);
                 const all = try std.mem.concat(self.allocator, LocalId, &.{ args, hidden });
                 defer self.allocator.free(all);

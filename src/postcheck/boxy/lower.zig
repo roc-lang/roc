@@ -347,6 +347,15 @@ pub const Program = struct {
     /// The relation of `relateVariablesAll`, leaving variables the types do
     /// not relate null.
     pub fn relateVariablesPartial(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize) Allocator.Error![]?TypeId {
+        return try self.relateVariablesRows(allocator, roots, count, null);
+    }
+
+    /// `relateVariablesPartial`, also marking in `row_vars` each variable
+    /// related as an open tag row's remainder. A closed actual row relates
+    /// through its join representative, whose layout it has: an open row's
+    /// remainder is the representative's tags the row does not name
+    /// (design.md "Row Joins").
+    pub fn relateVariablesRows(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize, row_vars: ?[]bool) Allocator.Error![]?TypeId {
         const store = &self.store;
         const bound = try allocator.alloc(?TypeId, count);
         defer allocator.free(bound);
@@ -404,7 +413,11 @@ pub const Program = struct {
                 .tag_union => |tag_union| {
                     var residual: std.ArrayList(types.TagInput) = .empty;
                     defer residual.deinit(allocator);
-                    for (store.tagSpan(other.tag_union.tags)) |candidate| {
+                    const actual = if (tag_union.ext != null and other.tag_union.ext == null) switch (store.get(self.joins.representative(pair[1]))) {
+                        .tag_union => |rep| rep,
+                        else => other.tag_union,
+                    } else other.tag_union;
+                    for (store.tagSpan(actual.tags)) |candidate| {
                         var named = false;
                         for (store.tagSpan(tag_union.tags)) |tag| {
                             if (candidate.name == tag.name and candidate.payloads.len == tag.payloads.len) {
@@ -416,7 +429,15 @@ pub const Program = struct {
                     }
                     // An open formal row's remainder is the actual row's
                     // tags it does not name.
-                    if (tag_union.ext) |ext| try pending.append(allocator, .{ ext, try store.intern(.{ .tag_union = .{ .tags = residual.items, .ext = other.tag_union.ext } }) });
+                    if (tag_union.ext) |ext| {
+                        if (row_vars) |marks| switch (store.get(ext)) {
+                            .variable => |index| if (index < marks.len) {
+                                marks[index] = true;
+                            },
+                            else => {},
+                        };
+                        try pending.append(allocator, .{ ext, try store.intern(.{ .tag_union = .{ .tags = residual.items, .ext = actual.ext } }) });
+                    }
                 },
                 .primitive, .empty_record, .variable => {},
             }
