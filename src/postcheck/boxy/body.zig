@@ -3679,6 +3679,7 @@ pub const Builder = struct {
                         }
                     }
                 },
+                .list => |list| try self.testListPattern(item, list.patterns, list.rest, miss, &pending),
                 .numeral_literal => |numeral| {
                     if (numeral.guard) |guard| {
                         try self.literalPatternGuard(item, guard, miss);
@@ -3702,6 +3703,66 @@ pub const Builder = struct {
                 else => invariantFmt("{s} patterns are not yet lowered by Boxy", .{@tagName(pattern.data)}),
             }
         }
+    }
+
+    /// A list pattern: the length test (exact, or at least the items' count
+    /// with a rest), then each item and the rest's sublist.
+    pub fn testListPattern(self: *Builder, item: PatternItem, items: []const CheckedPatternId, rest: ?checked.CheckedListRestPattern, miss: CFStmtId, pending: *std.ArrayList(PatternItem)) Allocator.Error!void {
+        const store = &self.program.store;
+        const list_ty = try self.structuralType(item.ty);
+        const elem_ty = switch (store.get(list_ty)) {
+            .list => |elem| elem,
+            else => invariant("a list pattern's value is not a List"),
+        };
+        const u64_ty = try store.primitive(.u64);
+        const len = try self.closedLocal(.u64);
+        try self.emitListLowLevel(len, .list_len, &.{item.value}, elem_ty, list_ty);
+        const count = try self.intValue(items.len, u64_ty);
+        const fits = try self.closedLocal(.bool);
+        try self.emitLowLevel(fits, if (rest == null) .num_is_eq else .num_is_gte, &.{ len, count });
+        try self.branchOrMiss(fits, miss);
+        for (items, 0..) |sub, index| {
+            const at = if (rest != null and index >= rest.?.index) blk: {
+                // An item after the rest counts from the end.
+                const from_end = try self.intValue(items.len - index, u64_ty);
+                const position = try self.closedLocal(.u64);
+                try self.emitLowLevel(position, .num_int_sub_wrap, &.{ len, from_end });
+                break :blk position;
+            } else try self.intValue(index, u64_ty);
+            const elem = try self.localOf(elem_ty, .frame);
+            try self.emitListLowLevel(elem, .list_get_unsafe, &.{ item.value, at }, elem_ty, list_ty);
+            try pending.append(self.allocator, .{ .pattern = sub, .value = elem, .ty = elem_ty });
+        }
+        if (rest) |rest_info| if (rest_info.pattern) |rest_pattern| {
+            if (self.bodies().pattern(rest_pattern).data == .underscore) return;
+            const rest_len = try self.closedLocal(.u64);
+            try self.emitLowLevel(rest_len, .num_int_sub_wrap, &.{ len, count });
+            // `{ len, start }` in field-name order.
+            const range_ty = try store.intern(.{ .record = .{ .fields = &.{
+                .{ .name = try store.internName("len"), .ty = u64_ty, .kind = .inline_slot },
+                .{ .name = try store.internName("start"), .ty = u64_ty, .kind = .inline_slot },
+            }, .ext = null } });
+            const range = try self.buildStruct(range_ty, &.{ rest_len, try self.intValue(rest_info.index, u64_ty) });
+            const sublist = try self.localOf(list_ty, .frame);
+            try self.emitListLowLevel(sublist, .list_sublist, &.{ item.value, range }, elem_ty, list_ty);
+            try pending.append(self.allocator, .{ .pattern = rest_pattern, .value = sublist, .ty = item.ty });
+        };
+    }
+
+    /// A list low-level over a list of `elem_ty`: an ordinary low-level for
+    /// closed items, the descriptor-carrying form otherwise.
+    pub fn emitListLowLevel(self: *Builder, target: LocalId, op: LIR.LowLevel, args: []const LocalId, elem_ty: TypeId, list_ty: TypeId) Allocator.Error!void {
+        if (try self.closed(list_ty)) return try self.emitLowLevel(target, op, args);
+        const with_desc = try std.mem.concat(self.allocator, LocalId, &.{ args, &.{try self.descOf(elem_ty)} });
+        defer self.allocator.free(with_desc);
+        try self.emitLinear(.{ .assign_low_level = .{
+            .target = target,
+            .op = op,
+            .rc_effect = try self.store.addRcEffect(op.rcEffect()),
+            .extra = try self.store.addStmtRow(LIR.LowLevelExtra, .{ .dyn_elem_desc = true }),
+            .args = try self.store.addLocalSpan(with_desc),
+            .next = undefined,
+        } });
     }
 
     /// A literal pattern at a type whose literals convert through a method:
