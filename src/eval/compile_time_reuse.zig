@@ -30,6 +30,8 @@ pub inline fn traceEnabled() bool {
 /// borrowed from its relocated artifact body.
 pub const Previous = struct {
     key: checked.CheckedModuleArtifactKey,
+    checked_types: checked.CheckedTypeStore,
+    own_identity: [32]u8,
     names: canonical.CanonicalNameStore,
     roots: checked.CompileTimeRootTable,
     identities: checked.CompileTimeRootIdentityTable,
@@ -45,6 +47,8 @@ pub const Previous = struct {
         const base_addr = @intFromPtr(serialized);
         return .{
             .key = serialized.key,
+            .own_identity = serialized.module_identity.stable_hash,
+            .checked_types = deserializeField(serialized, "checked_types", base_addr, gpa),
             .names = deserializeField(serialized, "canonical_names", base_addr, gpa),
             .roots = deserializeField(serialized, "compile_time_roots", base_addr, gpa),
             .identities = deserializeField(serialized, "compile_time_root_identities", base_addr, gpa),
@@ -57,6 +61,7 @@ pub const Previous = struct {
     }
 
     pub fn deinit(self: *Previous) void {
+        self.checked_types.deinit(self.const_store.allocator);
         self.names.deinit();
         self.const_store.deinit();
     }
@@ -93,8 +98,10 @@ pub const Transplant = struct {
     reads: std.ArrayList(checked.CompileTimeRootReadTable.Ref) = .empty,
     /// How many roots were waiting for evaluation.
     pending_roots: u32 = 0,
+    type_occurrences: check.ConstStore.TypeOccurrenceMap,
 
     pub fn deinit(self: *Transplant) void {
+        self.type_occurrences.deinit();
         self.matches.deinit(self.allocator);
         self.reads.deinit(self.allocator);
     }
@@ -131,9 +138,35 @@ fn reusable(previous: *const Previous, root: checked.CompileTimeRoot) bool {
     };
 }
 
+/// A value reusable under semantic dependency identities must hold no module
+/// version references, including references in its recorded demand. This is
+/// stricter than transplantation across edits of its own module: imported
+/// artifacts may have changed too. Version-bearing values retain the ordinary
+/// artifact-key contract until their producer supplies explicit rebinding data.
+fn reusableAcrossImports(previous: *const Previous, root: checked.CompileTimeRoot) Allocator.Error!bool {
+    if (previous.reads.readsOf(root.id).len != 0) return false;
+    switch (root.payload) {
+        .const_node => |node| {
+            if (!try previous.const_store.valuePortable(node, null)) return false;
+            return switch (root.kind) {
+                .constant, .hoisted_constant => previous.const_store.type_store.typePortable(
+                    &previous.names,
+                    storedRootType(previous, root.id),
+                    null,
+                    null,
+                ),
+                .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion => true,
+                .expect, .repl_expr => false,
+            };
+        },
+        .discarded => return true,
+        .pending, .unevaluated, .fn_value, .expect, .runtime => return false,
+    }
+}
+
 /// Find the previous root each pending root of `module` copies.
 pub fn plan(allocator: Allocator, module: *const checked.CheckedModuleArtifact, previous: *const Previous) Allocator.Error!Transplant {
-    var transplant = Transplant{ .allocator = allocator };
+    var transplant = Transplant{ .allocator = allocator, .type_occurrences = .init(allocator) };
     errdefer transplant.deinit();
     const identities = module.compile_time_root_identities.rows;
     const previous_identities = previous.identities.rows;
@@ -143,8 +176,41 @@ pub fn plan(allocator: Allocator, module: *const checked.CheckedModuleArtifact, 
     defer by_identity_and_site.deinit(allocator);
     var by_identity = std.AutoHashMapUnmanaged([32]u8, ComptimeRootId).empty;
     defer by_identity.deinit(allocator);
+    var by_semantics = std.AutoHashMapUnmanaged([32]u8, ComptimeRootId).empty;
+    defer by_semantics.deinit(allocator);
+    const semantic_rows = module.compile_time_root_identities.test_rows;
+    const previous_semantics = previous.identities.test_rows;
+    const has_semantics = semantic_rows.len == identities.len and previous_semantics.len == previous_identities.len;
+    var occurrences_prepared = false;
     for (previous.roots.roots) |root| {
-        if (!reusable(previous, root)) continue;
+        if (!reusable(previous, root)) {
+            if (root.payload != .const_node) continue;
+            if (!occurrences_prepared) {
+                for (previous.checked_types.view().rootRows()) |old| {
+                    if (module.checked_types.view().rootForKey(old.key)) |current| {
+                        try transplant.type_occurrences.put(old.id, current);
+                    }
+                }
+                occurrences_prepared = true;
+            }
+            const own: canonical.CheckedModuleDigest = .{ .bytes = previous.key.bytes };
+            if (!try previous.const_store.valuePortableWithOccurrences(root.payload.const_node, own, &transplant.type_occurrences)) continue;
+            switch (root.kind) {
+                .constant, .hoisted_constant => if (!try previous.const_store.type_store.typePortableWithOccurrences(
+                    &previous.names,
+                    storedRootType(previous, root.id),
+                    own,
+                    &previous.own_identity,
+                    &transplant.type_occurrences,
+                )) continue,
+                .numeral_conversion, .quote_conversion, .hoisted_validation => {},
+                .callable_binding, .expect, .repl_expr => continue,
+            }
+        }
+        if (has_semantics and try reusableAcrossImports(previous, root)) {
+            const entry = try by_semantics.getOrPut(allocator, previous_semantics[@backingInt(root.id)].value);
+            if (!entry.found_existing) entry.value_ptr.* = root.id;
+        }
         const identity = previous_identities[@backingInt(root.id)];
         const exact = try by_identity_and_site.getOrPut(allocator, identityKey(identity));
         if (!exact.found_existing) exact.value_ptr.* = root.id;
@@ -165,7 +231,8 @@ pub fn plan(allocator: Allocator, module: *const checked.CheckedModuleArtifact, 
         if (root.payload != .pending or root.kind == .repl_expr) continue;
         transplant.pending_roots += 1;
         const identity = identities[@backingInt(root.id)];
-        const source = by_identity_and_site.get(identityKey(identity)) orelse by_identity.get(identity.value) orelse continue;
+        const semantic_source = if (has_semantics) by_semantics.get(semantic_rows[@backingInt(root.id)].value) else null;
+        const source = by_identity_and_site.get(identityKey(identity)) orelse by_identity.get(identity.value) orelse semantic_source orelse continue;
         const reads_start = transplant.reads.items.len;
         for (previous.reads.readsOf(source)) |read| {
             if (!std.meta.eql(read.module, previous.key.bytes)) {
@@ -206,10 +273,12 @@ const Copy = struct {
     root_type: ?ConstTypeId,
 };
 
-fn copyRoot(module: *checked.CheckedModuleArtifact, previous: *const Previous, match: Match) Allocator.Error!Copy {
+fn copyRoot(module: *checked.CheckedModuleArtifact, previous: *const Previous, match: Match, occurrences: *const check.ConstStore.TypeOccurrenceMap) Allocator.Error!Copy {
     const root = module.compile_time_roots.root(match.root);
     const source = previous.roots.root(match.previous);
-    return switch (source.payload) {
+    const values_start = module.const_store.values.items.len;
+    const types_start = module.const_store.type_store.named_pool.items.len;
+    const copy: Copy = switch (source.payload) {
         .const_node => |node| .{
             .payload = .{ .const_node = try module.const_store.cloneValueFrom(&previous.const_store, node) },
             .root_type = switch (root.kind) {
@@ -225,6 +294,19 @@ fn copyRoot(module: *checked.CheckedModuleArtifact, previous: *const Previous, m
         .discarded => .{ .payload = .discarded, .root_type = null },
         .pending, .unevaluated, .fn_value, .expect, .runtime => base.invariant("a compile-time root without reusable stored data was transplanted", .{}),
     };
+    for (module.const_store.values.items[values_start..]) |*value| {
+        if (value.* == .nominal) rebindOccurrence(&value.nominal.named_type, previous.key, module.key, occurrences);
+    }
+    for (module.const_store.type_store.named_pool.items[types_start..]) |*named| {
+        rebindOccurrence(&named.named_type, previous.key, module.key, occurrences);
+    }
+    return copy;
+}
+
+fn rebindOccurrence(named: *check.ConstStore.NamedType, previous: checked.CheckedModuleArtifactKey, current: checked.CheckedModuleArtifactKey, occurrences: *const check.ConstStore.TypeOccurrenceMap) void {
+    if (!std.meta.eql(named.ty_module.bytes, previous.bytes)) return;
+    named.ty = occurrences.get(named.ty) orelse base.invariant("stored value admission established every local type occurrence", .{});
+    named.ty_module = current.digest();
 }
 
 /// Install every match's copy before evaluation: payload, stored templates,
@@ -232,7 +314,7 @@ fn copyRoot(module: *checked.CheckedModuleArtifact, previous: *const Previous, m
 /// roots from the store like a reopened entry's evaluated roots.
 pub fn install(module: *checked.CheckedModuleArtifact, previous: *const Previous, transplant: *const Transplant) Allocator.Error!void {
     for (transplant.matches.items) |match| {
-        const copy = try copyRoot(module, previous, match);
+        const copy = try copyRoot(module, previous, match, &transplant.type_occurrences);
         fillRoot(module, match.root, copy);
     }
     try installEvaluationRows(module, previous, transplant, transplant.matches.items);
@@ -299,7 +381,7 @@ pub fn verifyAndInstall(module: *checked.CheckedModuleArtifact, previous: *const
     for (transplant.matches.items) |match| {
         const root = module.compile_time_roots.root(match.root);
         const fresh = root.payload;
-        const copy = try copyRoot(module, previous, match);
+        const copy = try copyRoot(module, previous, match, &transplant.type_occurrences);
         try verifyNamedTypeOccurrences(module, previous, modules, copy);
         switch (fresh) {
             .unevaluated => {
@@ -323,8 +405,9 @@ pub fn verifyAndInstall(module: *checked.CheckedModuleArtifact, previous: *const
 }
 
 /// Assert that every named type of a copied value graph and stored type
-/// re-enters a checked type store of another module at the nominal type it
-/// names: a copy carries no checked occurrence of the version that stored it.
+/// re-enters a current checked type store at the nominal type it names. A
+/// copy may name this edited module only after explicit occurrence rebinding;
+/// it never carries an occurrence of the previous version.
 fn verifyNamedTypeOccurrences(module: *const checked.CheckedModuleArtifact, previous: *const Previous, modules: CheckedModules, copy: Copy) Allocator.Error!void {
     const allocator = module.canonical_names.allocator;
     const store = &module.const_store;
@@ -401,10 +484,10 @@ fn verifyNamedTypeOccurrence(
     named_type: check.ConstStore.NamedType,
     kind: ?check.ConstStore.TypeNamedKind,
 ) void {
-    if (std.meta.eql(named_type.ty_module.bytes, previous.key.bytes) or std.meta.eql(named_type.ty_module.bytes, module.key.bytes)) {
+    if (std.meta.eql(named_type.ty_module.bytes, previous.key.bytes)) {
         base.invariant("a transplanted named type's checked occurrence was in the version of its module that stored it", .{});
     }
-    const owner = modules.find(modules.context, named_type.ty_module.bytes) orelse
+    const owner = if (std.meta.eql(named_type.ty_module.bytes, module.key.bytes)) module else modules.find(modules.context, named_type.ty_module.bytes) orelse
         base.invariant("a transplanted named type's checked occurrence named a module outside the compilation", .{});
     const types = owner.checked_types.view();
     if (@backingInt(named_type.ty) >= types.payloadCount()) {

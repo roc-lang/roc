@@ -370,6 +370,44 @@ fn transparentAliasBacking(content: SolvedType.Content) ?SolvedType.TypeVarId {
 const writeBytes = recursive_digest.writeBytes;
 const writeU32 = recursive_digest.writeU32;
 
+test "procedure identity folds partial recursive copies across component boundaries" {
+    const a = std.testing.allocator;
+    var types = SolvedType.Store.init(a);
+    defer types.deinit();
+    var name_store = names.NameStore.init(a);
+    defer name_store.deinit();
+    var fn_by_symbol = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(a);
+    defer fn_by_symbol.deinit();
+    // A = (A, B), B = List(A). A partial copy C = (C, B) denotes
+    // exactly A, but C is a separate strongly connected component.
+    const original = try types.add(.unbound);
+    const list = try types.add(.{ .list = original });
+    try types.set(original, .{ .tuple = try types.addSpan(&.{ original, list }) });
+    const copy = try types.add(.unbound);
+    try types.set(copy, .{ .tuple = try types.addSpan(&.{ copy, list }) });
+    const scalar = try types.add(.{ .primitive = .u8 });
+    const different_list = try types.add(.{ .list = scalar });
+    const different = try types.add(.unbound);
+    try types.set(different, .{ .tuple = try types.addSpan(&.{ different, different_list }) });
+    for ([_]bool{ false, true }) |copy_first| {
+        var memo = Memo.init(a);
+        defer memo.deinit();
+        const renderer = Renderer{
+            .allocator = a,
+            .types = types.view(),
+            .names = &name_store,
+            .fn_tys = &.{},
+            .source_digests = &.{},
+            .fn_by_symbol = &fn_by_symbol,
+            .memo = &memo,
+        };
+        const first = try renderer.typeDigest(if (copy_first) copy else original);
+        const second = try renderer.typeDigest(if (copy_first) original else copy);
+        try std.testing.expectEqual(first, second);
+        try std.testing.expect(!std.mem.eql(u8, &first, &try renderer.typeDigest(different)));
+    }
+}
+
 test "procedure identity excludes outer callable sets but retains nested callable sets" {
     const allocator = std.testing.allocator;
     var types = SolvedType.Store.init(allocator);

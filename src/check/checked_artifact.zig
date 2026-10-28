@@ -2482,10 +2482,12 @@ pub const CheckedTypeVariable = struct {
     constraints: []const CheckedStaticDispatchConstraint = &.{},
     numeric_default_phase: ?NumericDefaultPhase = null,
     row_default: ?RowDefault = null,
-    /// A flex row tail whose every constraint is an `is_eq` or `to_hash`: the
+    /// A variable whose every constraint is an `is_eq` or `to_hash`: the
     /// obligations deriving those methods over an open row give its tail.
-    /// Closing the row satisfies them, so the tail still seals to its row
-    /// default (design.md "Derived Equality And Hashing Over Open Rows").
+    /// Closing the row satisfies them, so a flex tail still seals to its row
+    /// default (design.md "Derived Equality And Hashing Over Open Rows"), and
+    /// a result row ending in the variable may still be determined by its
+    /// request (design.md "Closed Result Rows At Template Boundaries").
     row_default_discharges_constraints: bool = false,
 };
 
@@ -8585,6 +8587,7 @@ const CheckedTypePublisher = struct {
                 else => {
                     build.rigid.constraints = input.?.get(.constraints);
                     build.rigid.numeric_default_phase = numericDefaultPhaseForConstraints(module, rigid.constraints);
+                    build.rigid.row_default_discharges_constraints = rowDefaultDischargesConstraints(module, rigid.constraints);
                 },
             },
             .alias => |alias| switch (cursor) {
@@ -8630,6 +8633,7 @@ const CheckedTypePublisher = struct {
                 },
                 .nominal_type => |nominal| switch (cursor) {
                     0 => {
+                        debugAssertNominalOpacityMatchesDeclaration(type_store, nominal);
                         const scratch = &self.active.scratch.?;
                         const builtin_nominal = try scratch.imported_origins.builtinNominal(module.moduleEnvConst(), self.imports, nominal);
                         const name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx);
@@ -10613,6 +10617,17 @@ test "imported origin resolution visits each import view and owner declaration o
 fn moduleEnvIdentityMatches(module_env: *const ModuleEnv, origin_hash: *const [32]u8) bool {
     const env_hash = module_env.contentIdentityHash() orelse return false;
     return base.ModuleIdentity.eql(env_hash, origin_hash);
+}
+
+/// A nominal application's opacity is its declaration's: checked type keys
+/// identify a nominal by its declaration alone, so applications that disagree
+/// would share one key while lowering to different types.
+fn debugAssertNominalOpacityMatchesDeclaration(type_store: *const types.Store, nominal: types.NominalType) void {
+    if (builtin.mode != .debug) return;
+    const decl_idx = type_store.lookupNominalDecl(nominal) orelse return;
+    if (type_store.getNominalDecl(decl_idx).source.isOpaque() != nominal.isOpaque()) {
+        checkedArtifactInvariant("nominal application opacity disagrees with its declaration", .{});
+    }
 }
 
 fn checkedNominalRepresentationForSourceNominal(
@@ -18209,6 +18224,87 @@ const TemplateIteratorRefs = struct {
     }
 };
 
+/// Nested functions that own a callable-derived dispatch scope, keyed by
+/// checked expression, each mapped to its own type variable.
+///
+/// A function no construction edge generalized (a lambda that supplies a
+/// conditional's, match's, or block's value inside a stored value) shares its
+/// variables with the value holding it. When checking left such a variable
+/// unquantified and constrained, nothing in this module pins it, yet every
+/// importing use copies the value's type and requests the function at a
+/// concrete one. The function's own callable type is then the path to that
+/// receiver, exactly as a generalized nested function's scheme is, so its
+/// scope publishes those requirements as callable-derived parameters instead
+/// of letting the unpinned-dispatch rule commit them to `unreachable`. Only a
+/// function whose type reaches the receiver of a dispatch plan checking left
+/// unquantified owns one; a module with no such plan walks no types.
+fn collectCallableDerivedSchemes(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    checked_bodies: *const CheckedBodyStore,
+    plan_build_data: *const static_dispatch.PlanTableBuildData,
+    local_schemes: *const collections.DenseMap(u32, Var),
+    out: *collections.DenseMap(u32, Var),
+) Allocator.Error!void {
+    const types_store = module.typeStoreConst();
+    var unquantified = collections.DenseMap(Var, void).init(allocator);
+    defer unquantified.deinit();
+    for (plan_build_data.plan_sources) |source| {
+        try noteUnquantifiedReceiver(types_store, source.dispatcher_var, &unquantified);
+    }
+    for (plan_build_data.iterator_plan_sources) |source| {
+        try noteUnquantifiedReceiver(types_store, source.iter_dispatcher_var, &unquantified);
+        try noteUnquantifiedReceiver(types_store, source.next_dispatcher_var, &unquantified);
+    }
+    if (unquantified.count() == 0) return;
+
+    // A closure's scope belongs to the closure, never to the lambda it wraps.
+    var closure_lambdas = collections.DenseMap(CIR.Expr.Idx, void).init(allocator);
+    defer closure_lambdas.deinit();
+    var raw_node: u32 = 0;
+    while (raw_node < module.nodeCount()) : (raw_node += 1) {
+        if (module.nodeTag(@fromBackingInt(@intCast(raw_node))) != .expr_closure) continue;
+        const closure_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node));
+        try closure_lambdas.put(module.expr(closure_expr).data.e_closure.lambda_idx, {});
+    }
+
+    var scratch = dispatch_evidence.Scratch{};
+    defer scratch.deinit(allocator);
+    var params = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
+    defer params.deinit(allocator);
+    raw_node = 0;
+    while (raw_node < module.nodeCount()) : (raw_node += 1) {
+        const tag = module.nodeTag(@fromBackingInt(@intCast(raw_node)));
+        if (tag != .expr_lambda and tag != .expr_closure) continue;
+        const source_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node));
+        if (closure_lambdas.contains(source_expr)) continue;
+        const checked_expr = checked_bodies.exprIdForSource(source_expr) orelse continue;
+        if (local_schemes.contains(@backingInt(checked_expr))) continue;
+        const fn_var = ModuleEnv.varFrom(source_expr);
+        params.clearRetainingCapacity();
+        try dispatch_evidence.enumerateEvidenceParams(allocator, types_store, fn_var, &scratch, &params);
+        for (params.items) |param| {
+            if (param.path_len == 0) continue;
+            if (!unquantified.contains(types_store.resolveVar(param.dispatcher_var).var_)) continue;
+            try out.put(@backingInt(checked_expr), fn_var);
+            break;
+        }
+    }
+}
+
+fn noteUnquantifiedReceiver(
+    types_store: *const types.Store,
+    receiver: Var,
+    out: *collections.DenseMap(Var, void),
+) Allocator.Error!void {
+    const resolved = types_store.resolveVar(receiver);
+    if (resolved.desc.rank == .generalized) return;
+    switch (resolved.desc.content) {
+        .flex => try out.put(resolved.var_, {}),
+        .rigid, .alias, .structure, .field_presence, .err => {},
+    }
+}
+
 fn sealCheckedProcedureTemplateRefs(
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -18220,6 +18316,7 @@ fn sealCheckedProcedureTemplateRefs(
     method_registry: *static_dispatch.MethodRegistry,
     resolved_value_refs: *ResolvedValueRefTable,
     template_iterator_refs: *TemplateIteratorRefs,
+    plan_build_data: *const static_dispatch.PlanTableBuildData,
 ) Allocator.Error!void {
     // Local functions with dispatch obligations: entering one while collecting
     // pushes an evidence scope. Declarations map to their pattern scheme;
@@ -18229,6 +18326,8 @@ fn sealCheckedProcedureTemplateRefs(
     defer local_schemes.deinit();
     var nested_function_uses = collections.DenseMap(u32, u32).init(allocator);
     defer nested_function_uses.deinit();
+    var callable_derived_schemes = collections.DenseMap(u32, Var).init(allocator);
+    defer callable_derived_schemes.deinit();
     {
         const types_store = module.typeStoreConst();
 
@@ -18285,6 +18384,8 @@ fn sealCheckedProcedureTemplateRefs(
             try local_schemes.put(@backingInt(checked_expr), @fromBackingInt(@intCast(record.scheme_root)));
             try nested_function_uses.put(@backingInt(checked_expr), @intCast(record_idx));
         }
+
+        try collectCallableDerivedSchemes(allocator, module, checked_bodies, plan_build_data, &local_schemes, &callable_derived_schemes);
     }
 
     var collector = CheckedTemplateRefCollector.init(
@@ -18295,6 +18396,7 @@ fn sealCheckedProcedureTemplateRefs(
         static_dispatch_plans,
         &local_schemes,
         &nested_function_uses,
+        &callable_derived_schemes,
     );
     defer collector.deinit();
 
@@ -18732,8 +18834,6 @@ const EvidencePass = struct {
     /// naming the same substitution range of the same scheme (uses replayed
     /// from one source) resolve it once.
     record_spans_by_substitution: std.AutoHashMapUnmanaged(RecordSubstitutionKey, RecordSiteSpans) = .empty,
-    /// The same, for procedure values' evidence.
-    procedure_value_spans_by_substitution: std.AutoHashMapUnmanaged(RecordSubstitutionKey, RecordSiteSpans) = .empty,
     /// The param chain in scope while resolving a site's evidence entries, so
     /// a fresh var that settled onto an enclosing where-var forwards as
     /// `constraint(depth, k)`. Index 0 is the innermost generalized callable.
@@ -18852,7 +18952,6 @@ const EvidencePass = struct {
         self.callable_contracts.deinit(self.allocator);
         self.site_evidence.deinit(self.allocator);
         self.record_spans_by_substitution.deinit(self.allocator);
-        self.procedure_value_spans_by_substitution.deinit(self.allocator);
         self.evidence_params_pool.deinit(self.allocator);
         self.evidence_path_nodes.deinit(self.allocator);
         self.published_path_nodes.deinit(self.allocator);
@@ -19088,7 +19187,7 @@ const EvidencePass = struct {
                 const deferred = self.deferred_use_sites.items[i];
                 if (self.site_seen.contains(deferred.site_key)) continue;
                 self.current_chain = &.{};
-                const spans = (try self.evidenceRefsForRecord(deferred.record_idx, true)).?;
+                const spans = (try self.evidenceRefsForRecord(deferred.record_idx, .commit)).?;
                 if (spans.refs.len == 0 and spans.subst.len == 0) continue;
                 try self.site_seen.put(deferred.site_key, {});
                 try self.site_evidence.append(self.allocator, .{
@@ -21101,13 +21200,29 @@ const EvidencePass = struct {
         scheme_root: u32,
         pairs_start: u32,
         pairs_len: u32,
-        commit_unpinned: bool,
+        unpinned: UnpinnedRecordEvidence,
+    };
+
+    /// How a scheme-use record publishes an obligation that neither the
+    /// record's substitution nor the current chain pins.
+    const UnpinnedRecordEvidence = enum {
+        /// Publish nothing yet: a later walk may bind it.
+        defer_resolution,
+        /// Commit it by the unpinned-dispatch rule.
+        commit,
+        /// The record places a function into a value as data. A containing
+        /// record, tuple, list, tag, or nominal can cross a module boundary
+        /// before that function is requested at a concrete type, so an
+        /// obligation reachable through the function's own callable type
+        /// resolves from that eventual request instead of committing to
+        /// `unreachable`.
+        from_callable,
     };
 
     /// Resolve one scheme-use record's obligations (in the scheme's canonical
     /// order) into a contiguous `evidence_refs` range, and record the
     /// substitution the instantiation applied to the scheme.
-    fn evidenceRefsForRecord(self: *EvidencePass, record_idx: u32, commit_unpinned: bool) Allocator.Error!?RecordSiteSpans {
+    fn evidenceRefsForRecord(self: *EvidencePass, record_idx: u32, unpinned: UnpinnedRecordEvidence) Allocator.Error!?RecordSiteSpans {
         const module_env = self.module.moduleEnvConst();
         const record = module_env.scheme_uses.items.items[record_idx];
         if (record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
@@ -21120,7 +21235,7 @@ const EvidencePass = struct {
             .scheme_root = record.scheme_root,
             .pairs_start = record.pairs_start,
             .pairs_len = record.pairs_len,
-            .commit_unpinned = commit_unpinned,
+            .unpinned = unpinned,
         } else null;
         if (key) |shared| if (self.record_spans_by_substitution.get(shared)) |spans| return spans;
 
@@ -21133,7 +21248,11 @@ const EvidencePass = struct {
         try entries.ensureTotalCapacity(self.allocator, params.items.len);
 
         for (params.items) |param| {
-            const evidence = (try self.evidenceForRecordParam(pairs, param, commit_unpinned)) orelse return null;
+            const evidence = switch (unpinned) {
+                .defer_resolution => (try self.evidenceForRecordParam(pairs, param, false)) orelse return null,
+                .commit => (try self.evidenceForRecordParam(pairs, param, true)).?,
+                .from_callable => try self.storedFunctionEvidenceForRecordParam(pairs, param),
+            };
             entries.appendAssumeCapacity(evidence);
         }
 
@@ -21492,11 +21611,30 @@ const EvidencePass = struct {
         return;
     }
 
-    /// Publish a procedure value's evidence without committing an unpinned
-    /// callable component to `unreachable`. A containing record,
-    /// tuple, list, tag, or nominal can cross a module boundary before that
-    /// component is selected; its eventual function request supplies every
-    /// path-bearing entry exactly.
+    /// One obligation of a function stored as data (`UnpinnedRecordEvidence.from_callable`).
+    fn storedFunctionEvidenceForRecordParam(
+        self: *EvidencePass,
+        pairs: []const ModuleEnv.SchemeUsePair,
+        param: EvidenceParam,
+    ) Allocator.Error!static_dispatch.CheckedEvidence {
+        if (try self.evidenceForRecordParam(pairs, param, false)) |evidence| return evidence;
+        if (param.path_len == 0 or param.source == .constraint_callable or param.source == .erased_row_remainder) {
+            return (try self.evidenceForRecordParam(pairs, param, true)).?;
+        }
+        const dispatcher_root = self.types.resolveVar(param.dispatcher_var).var_;
+        const dispatcher_var = self.pairForResolved(pairs, dispatcher_root) orelse param.dispatcher_var;
+        const dispatcher_ty = self.checked_types.rootForSourceVar(self.module, dispatcher_var) orelse
+            checkedArtifactInvariant("checked stored-function dispatcher type was not published", .{});
+        return .{
+            .dispatcher_ty = dispatcher_ty,
+            .runtime_dictionary = static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
+            .resolution = .from_callable,
+        };
+    }
+
+    /// Publish a procedure value's evidence. The value is a function used as
+    /// data, so its unpinned callable components resolve from its eventual
+    /// request.
     fn emitProcedureValueSiteEvidence(
         self: *EvidencePass,
         record_idx: u32,
@@ -21507,67 +21645,14 @@ const EvidencePass = struct {
 
         self.current_chain = chain;
         defer self.current_chain = &.{};
-
-        const module_env = self.module.moduleEnvConst();
-        const record = module_env.scheme_uses.items.items[record_idx];
-        const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
-        // Records naming the same substitution of the same scheme (uses
-        // checking replayed from one source) publish the same evidence, so
-        // chain-free resolutions are shared.
-        const key: ?RecordSubstitutionKey = if (evidenceChainIsEmpty(chain)) .{
-            .scheme_root = record.scheme_root,
-            .pairs_start = record.pairs_start,
-            .pairs_len = record.pairs_len,
-            .commit_unpinned = false,
-        } else null;
-        if (key) |shared| if (self.procedure_value_spans_by_substitution.get(shared)) |spans| {
-            try self.site_seen.put(site_key, {});
-            try self.site_evidence.append(self.allocator, .{
-                .key = site_key,
-                .start = spans.refs.start,
-                .len = spans.refs.len,
-                .subst_start = spans.subst.start,
-                .subst_len = spans.subst.len,
-            });
-            return;
-        };
-        var params = std.ArrayListUnmanaged(EvidenceParam).empty;
-        defer params.deinit(self.allocator);
-        try self.enumerateParams(@fromBackingInt(@intCast(record.scheme_root)), &params);
-
-        var entries = std.ArrayListUnmanaged(static_dispatch.CheckedEvidence).empty;
-        defer entries.deinit(self.allocator);
-        try entries.ensureTotalCapacity(self.allocator, params.items.len);
-        for (params.items) |param| {
-            if (try self.evidenceForRecordParam(pairs, param, false)) |evidence| {
-                entries.appendAssumeCapacity(evidence);
-                continue;
-            }
-            if (param.path_len == 0 or param.source == .constraint_callable or param.source == .erased_row_remainder) {
-                entries.appendAssumeCapacity((try self.evidenceForRecordParam(pairs, param, true)).?);
-                continue;
-            }
-            const dispatcher_root = self.types.resolveVar(param.dispatcher_var).var_;
-            const dispatcher_var = self.pairForResolved(pairs, dispatcher_root) orelse param.dispatcher_var;
-            const dispatcher_ty = self.checked_types.rootForSourceVar(self.module, dispatcher_var) orelse
-                checkedArtifactInvariant("checked procedure-value dispatcher type was not published", .{});
-            entries.appendAssumeCapacity(.{
-                .dispatcher_ty = dispatcher_ty,
-                .runtime_dictionary = static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
-                .resolution = .from_callable,
-            });
-        }
-
-        const span = try self.appendEvidenceRefs(entries.items);
-        const subst = try self.appendSiteSubstitution(@fromBackingInt(@intCast(record.scheme_root)), pairs, &.{});
-        if (key) |shared| try self.procedure_value_spans_by_substitution.put(self.allocator, shared, .{ .refs = span, .subst = subst });
+        const spans = (try self.evidenceRefsForRecord(record_idx, .from_callable)).?;
         try self.site_seen.put(site_key, {});
         try self.site_evidence.append(self.allocator, .{
             .key = site_key,
-            .start = span.start,
-            .len = span.len,
-            .subst_start = subst.start,
-            .subst_len = subst.len,
+            .start = spans.refs.start,
+            .len = spans.refs.len,
+            .subst_start = spans.subst.start,
+            .subst_len = spans.subst.len,
         });
     }
 
@@ -21595,8 +21680,15 @@ const EvidencePass = struct {
 
         self.current_chain = chain;
         defer self.current_chain = &.{};
-        const shared = record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.shared_value_use);
-        const spans = (try self.evidenceRefsForRecord(record_idx, !shared)) orelse {
+        // A nested-function use stores the function it constructs into its
+        // containing value as data.
+        const unpinned: UnpinnedRecordEvidence = switch (@as(ModuleEnv.SchemeUseRecord.Slot, @fromBackingInt(@intCast(record.slot_kind)))) {
+            .shared_value_use => .defer_resolution,
+            .nested_function_use => .from_callable,
+            .value_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference => .commit,
+            .where_method_use => unreachable, // rejected above
+        };
+        const spans = (try self.evidenceRefsForRecord(record_idx, unpinned)) orelse {
             try self.deferred_use_sites.append(self.allocator, .{ .record_idx = record_idx, .site_key = site_key });
             return;
         };
@@ -21658,6 +21750,14 @@ const EvidencePass = struct {
         try entries.ensureTotalCapacity(self.allocator, scope_params.len);
         for (scope_params) |param| {
             if ((param.path_len > 0 and param.source != .constraint_callable) or param.source == .scheme_requirement) {
+                // A callable-derived scope's type can also reach a receiver
+                // an enclosing scope binds, which forwards to that scope.
+                if (param.source != .scheme_requirement) {
+                    if (try self.evidenceForVar(param, param.dispatcher_var, param.constraint.fn_var, false)) |evidence| {
+                        entries.appendAssumeCapacity(evidence);
+                        continue;
+                    }
+                }
                 const dispatcher_ty = self.checked_types.rootForSourceVar(self.module, param.dispatcher_var) orelse
                     checkedArtifactInvariant("checked nested-procedure evidence dispatcher type was not published", .{});
                 entries.appendAssumeCapacity(.{
@@ -21883,6 +21983,11 @@ const CheckedTemplateRefCollector = struct {
     /// Checked nested function expr -> `SchemeUseRecord` index for the
     /// construction edge that instantiated it.
     nested_function_uses: *const collections.DenseMap(u32, u32),
+    /// Checked nested function expr -> its own type variable, for each
+    /// function that owns a callable-derived scope
+    /// (`collectCallableDerivedSchemes`). A template's root function is never
+    /// one: its template's own parameters already answer for its callable.
+    callable_derived_schemes: *const collections.DenseMap(u32, Var),
     value_refs: std.ArrayList(ResolvedValueRefId),
     dispatch_refs: std.ArrayList(static_dispatch.StaticDispatchPlanId),
     iterator_refs: std.ArrayList(static_dispatch.IteratorForPlanId),
@@ -21913,6 +22018,7 @@ const CheckedTemplateRefCollector = struct {
         static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
         local_schemes: *const collections.DenseMap(u32, Var),
         nested_function_uses: *const collections.DenseMap(u32, u32),
+        callable_derived_schemes: *const collections.DenseMap(u32, Var),
     ) CheckedTemplateRefCollector {
         return .{
             .allocator = allocator,
@@ -21922,6 +22028,7 @@ const CheckedTemplateRefCollector = struct {
             .static_dispatch_plans = static_dispatch_plans,
             .local_schemes = local_schemes,
             .nested_function_uses = nested_function_uses,
+            .callable_derived_schemes = callable_derived_schemes,
             .value_refs = .empty,
             .dispatch_refs = .empty,
             .iterator_refs = .empty,
@@ -22122,7 +22229,8 @@ const CheckedTemplateRefCollector = struct {
             try self.scheme_use_scopes.append(self.allocator, self.currentScope());
         }
 
-        const local_scheme = self.local_schemes.get(raw_expr);
+        const local_scheme = self.local_schemes.get(raw_expr) orelse
+            if (self.template_root_expr != expr_id) self.callable_derived_schemes.get(raw_expr) else null;
         if (local_scheme) |scheme_var| {
             const parent = self.currentScopeId();
             const scheme_root = self.checked_types.rootForSourceVar(self.module, scheme_var) orelse
@@ -33842,11 +33950,21 @@ pub const CompileTimeRootReadTable = struct {
 /// Value identity and site of a compile-time root (design.md "Compile-Time
 /// Value Reuse Across Edits").
 pub const CompileTimeRootIdentity = value_identity.CompileTimeRootIdentity;
+/// A relocatable test observation site and its current source span.
+pub const TestReportSite = value_identity.TestReportSite;
 
 /// Every compile-time root's value identity and site, dense by root id, and
 /// the module's value context, computed when the module is published.
 pub const CompileTimeRootIdentityTable = struct {
     rows: []const CompileTimeRootIdentity = &.{},
+    /// Root semantic dependencies for outcome reuse, independent of CTFE reuse.
+    test_rows: []const CompileTimeRootIdentity = &.{},
+    /// One context digest covering checking policy, types and visible methods.
+    test_context: []const [32]u8 = &.{},
+    /// Implementation identities sorted by the producer's exact definition id.
+    test_definitions: []const value_identity.DefinitionIdentity = &.{},
+    test_report_sites: []const value_identity.TestReportSite = &.{},
+    test_declarations: []const value_identity.DeclarationIdentity = &.{},
     /// The module's value context (`value_identity.ModuleIdentities.context`):
     /// one digest in every published module, none in a table that was never
     /// computed.
@@ -33862,6 +33980,11 @@ pub const CompileTimeRootIdentityTable = struct {
 
     pub const Serialized = extern struct {
         rows: SerializedSlice(CompileTimeRootIdentity) = .{},
+        test_rows: SerializedSlice(CompileTimeRootIdentity) = .{},
+        test_context: SerializedSlice([32]u8) = .{},
+        test_definitions: SerializedSlice(value_identity.DefinitionIdentity) = .{},
+        test_report_sites: SerializedSlice(value_identity.TestReportSite) = .{},
+        test_declarations: SerializedSlice(value_identity.DeclarationIdentity) = .{},
         context: SerializedSlice([32]u8) = .{},
         exports: SerializedSlice(value_identity.ExportIdentity) = .{},
         method_requires: SerializedSlice([32]u8) = .{},
@@ -33874,6 +33997,12 @@ pub const CompileTimeRootIdentityTable = struct {
     pub fn validate(self: CompileTimeRootIdentityTable, root_count: usize) error{CorruptArtifact}!void {
         if (self.rows.len != 0 and self.rows.len != root_count) return error.CorruptArtifact;
         if (self.context.len > 1) return error.CorruptArtifact;
+        if (self.test_rows.len != 0 and self.test_rows.len != root_count) return error.CorruptArtifact;
+        if (self.test_context.len > 1) return error.CorruptArtifact;
+        for (self.test_report_sites) |site| if (site.start > site.end) return error.CorruptArtifact;
+        for (self.test_declarations, 0..) |declaration, i| {
+            if (i > 0 and @backingInt(self.test_declarations[i - 1].statement) >= @backingInt(declaration.statement)) return error.CorruptArtifact;
+        }
     }
 
     /// The module's value context, when it was computed.
@@ -34227,8 +34356,9 @@ pub const CheckedModuleArtifact = struct {
             // identity table its rows, value context, exports and method and
             // export requirements, and the portability column one more. Stored
             // function evidence keeps its target and structural payloads in
-            // two pools of their own. Template demand vectors add one.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 246);
+            // two pools of their own. Template demand vectors add one. Test outcome
+            // identities add roots, context, definition summaries, report sites and declaration identities.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 251);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -37439,6 +37569,45 @@ pub fn checkedModuleKeyFromModuleEnv(
     );
 }
 
+/// Inference admission is deliberately separate from artifact identity. The
+/// producer-owned checking scope supplies dependency facts and owner equality;
+/// the full imported implementation keys continue to key every publication.
+pub fn inferenceKeyFromModuleEnv(
+    module_env: *const ModuleEnv,
+    scope_hash: [32]u8,
+    platform_requirement_owner: ?u32,
+    explicit_roots: []const ExplicitRootRequestInput,
+    validation: can.Can.Validation,
+    source_pin_validation: [32]u8,
+    missing_public_types: []const []const u8,
+) [32]u8 {
+    var hasher = base.Sha256.init(.{});
+    hasher.update("roc-inference-inputs-v2");
+    hasher.update(&hashModuleSourceInputs(module_env));
+    hasher.update(&scope_hash);
+    hashByteSlice(&hasher, module_env.module_name);
+    hashByteSlice(&hasher, @tagName(module_env.module_kind));
+    hashByteSlice(&hasher, @tagName(module_env.module_role));
+    if (platform_requirement_owner) |owner| {
+        hasher.update(&.{1});
+        hashU32(&hasher, owner);
+    } else hasher.update(&.{0});
+    hashByteSlice(&hasher, @tagName(validation));
+    hasher.update(&source_pin_validation);
+    hashU32(&hasher, @intCast(explicit_roots.len));
+    for (explicit_roots) |root| hashExplicitRootRequestInput(&hasher, root);
+    const imports = module_env.imports.imports.items.items;
+    hashU32(&hasher, @intCast(imports.len));
+    for (imports, 0..) |name, i| {
+        hashByteSlice(&hasher, module_env.getString(name));
+        const import_idx: CIR.Import.Idx = @fromBackingInt(@as(u32, @intCast(i)));
+        hashU32(&hasher, module_env.imports.getResolvedModule(import_idx) orelse std.math.maxInt(u32));
+    }
+    hashU32(&hasher, @intCast(missing_public_types.len));
+    for (missing_public_types) |name| hashByteSlice(&hasher, name);
+    return hasher.finalResult();
+}
+
 /// Public `publishFromTypedModule` function.
 pub fn publishFromTypedModule(
     allocator: Allocator,
@@ -37768,6 +37937,7 @@ pub fn publishFromTypedModule(
         &method_registry,
         &resolved_value_refs,
         &template_iterator_refs,
+        &plan_build_data,
     );
 
     const platform_requirement_root_evidence = try allocator.alloc(
@@ -37884,13 +38054,20 @@ pub fn publishFromTypedModule(
         .names = &canonical_names,
         .types = checked_types.view(),
         .roots = compile_time_roots.roots,
+        .bodies = checked_bodies,
         .top_level_values = &top_level_values,
         .context = .{
             .checking_context = hashCheckingContextIdentity(checking_context_identity),
             .direct_import_keys = hashDirectImportArtifactKeys(direct_import_module_keys),
         },
         .own_identity = module_identity.stable_hash,
+        .imports = inputs.imports,
+        .available = inputs.available_artifacts,
+        .relations = inputs.relation_artifacts,
     });
+    defer allocator.free(module_identities.definitions);
+    defer allocator.free(module_identities.report_sites);
+    defer allocator.free(module_identities.declarations);
     var compile_time_root_identities = CompileTimeRootIdentityTable{
         .rows = module_identities.roots,
         .exports = module_identities.exports,
@@ -37899,6 +38076,38 @@ pub fn publishFromTypedModule(
     };
     errdefer compile_time_root_identities.deinit(allocator);
     compile_time_root_identities.context = try allocator.dupe([32]u8, &.{module_identities.context});
+    // Preserve checking policy and import names, but each imported value's
+    // implementation is supplied by its checked summary, not its module key.
+    const test_import_names = try allocator.dupe(ImportIdentity, checking_context_identity.imports);
+    defer allocator.free(test_import_names);
+    for (test_import_names) |*imported| imported.artifact_key = null;
+    var test_checking_context = checking_context_identity;
+    test_checking_context.imports = test_import_names;
+    const test_identities = try value_identity.compute(allocator, .{
+        .env = module.moduleEnvConst(),
+        .names = &canonical_names,
+        .types = checked_types.view(),
+        .roots = compile_time_roots.roots,
+        .bodies = checked_bodies,
+        .top_level_values = &top_level_values,
+        .context = .{
+            .checking_context = hashCheckingContextIdentity(test_checking_context),
+            .direct_import_keys = undefined, // Test identities consume explicit imported summaries.
+        },
+        .own_identity = module_identity.stable_hash,
+        .test_dependencies = true,
+        .imports = inputs.imports,
+        .available = inputs.available_artifacts,
+        .relations = inputs.relation_artifacts,
+    });
+    compile_time_root_identities.test_declarations = test_identities.declarations;
+    compile_time_root_identities.test_report_sites = test_identities.report_sites;
+    compile_time_root_identities.test_rows = test_identities.roots;
+    compile_time_root_identities.test_definitions = test_identities.definitions;
+    defer allocator.free(test_identities.exports);
+    defer allocator.free(test_identities.method_requires);
+    defer allocator.free(test_identities.export_requires);
+    compile_time_root_identities.test_context = try allocator.dupe([32]u8, &.{test_identities.context});
 
     var provided_exports = try ProvidedExportTable.fromModule(
         allocator,
@@ -40525,8 +40734,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x0F, 0xB8, 0xF9, 0x4D, 0xFB, 0x75, 0x54, 0x0E, 0xD7, 0xFC, 0x0B, 0xF5, 0x24, 0x00, 0x01, 0x45,
-        0xE1, 0x86, 0x76, 0xF2, 0x41, 0xBF, 0x8D, 0x93, 0x10, 0xA2, 0x97, 0xCC, 0x13, 0xB7, 0xA5, 0xBD,
+        0xE4, 0xD3, 0xF1, 0x91, 0xE2, 0x97, 0x1A, 0x7C, 0x15, 0xC5, 0xB5, 0x00, 0x17, 0x2C, 0xE0, 0x80,
+        0x09, 0x89, 0x12, 0x69, 0x7D, 0xA4, 0x81, 0x03, 0xC6, 0xD1, 0x13, 0xB0, 0xD4, 0x9D, 0x43, 0x14,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

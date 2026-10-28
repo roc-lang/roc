@@ -841,7 +841,10 @@ fn placementWasm(arena: std.mem.Allocator, store: *const Store, idx: Idx, ctx: C
             const is_vector = dlay.tag == .scalar and dlay.getScalar().tag == .vector;
             const class: RegClass = if (is_vector) .vector else if (is_float) .float else .integer;
             if (wasm.lowerAsDoubleI64(store, direct_idx)) {
-                // A value wider than 64 bits is passed as two i64s.
+                // A value wider than 64 bits is passed as two i64s and, since
+                // a wasm C function returns at most one value, returned
+                // through a result pointer.
+                if (ctx == .ret) return .indirect;
                 return integerPieces(arena, size, .piecewise, .none);
             }
             if (is_vector and !simd_enabled) {
@@ -1114,6 +1117,22 @@ test "lower win64: 16-byte struct is indirect, Plant is one register" {
     const dec = try lower(arena, &store, .x86_64_windows, &.{.dec}, .dec, false);
     try testing.expectEqual(Placement.indirect, dec.args[0]);
     try testing.expectEqual(Placement.indirect, dec.ret);
+}
+
+test "lower wasm32: a value wider than 64 bits is passed as two i64s and returned indirectly" {
+    var store = try Store.init(testing.allocator, .u32);
+    defer store.deinit();
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    for ([_]Target{ .wasm32, .wasm32v1 }) |target| {
+        for ([_]Idx{ .i128, .u128, .dec }) |wide| {
+            const call = try lower(arena, &store, target, &.{wide}, wide, false);
+            try testing.expectEqual(Placement.indirect, call.ret);
+            try expectRegisters(&.{ .{ .class = .integer, .offset = 0, .size = 8 }, .{ .class = .integer, .offset = 8, .size = 8 } }, call.args[0]);
+        }
+    }
 }
 
 test "lower wasm32: single-variant tag union returns payload register" {

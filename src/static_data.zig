@@ -1086,7 +1086,12 @@ const StaticInitializerMachine = struct {
     ) Allocator.Error!SymbolicAllocationId {
         if (self.string_backings.get(backing_id)) |id| return id;
         const backing = self.store().getString(backing_id);
-        const allocation = try self.addAllocation(.u8, backing.len, self.word_size, false, null);
+        // A shared blob holds a packed scalar list as well as text, so its
+        // elements may need more than a word's alignment (Dec, I128, U128).
+        // The allocation's header is padded to it (`staticDataPtrOffset`), as
+        // the dev backend's StaticStringData.build pads its own.
+        const alignment = @max(self.word_size, self.store().strings.alignment(backing_id));
+        const allocation = try self.addAllocation(.u8, backing.len, alignment, false, null);
         @memcpy(allocation.payload.bytes, backing);
         try self.string_backings.put(self.allocator(), backing_id, allocation.id);
         return allocation.id;
@@ -1490,6 +1495,7 @@ pub fn buildStaticDataForWidth(
     target_usize: @import("base").target.TargetUsize,
     options: BuildOptions,
 ) MaterializationError![]StaticDataExport {
+    @import("base").dev_diagnostics.countTestWork(.static_data, 1);
     const root = modules.root orelse {
         if (hasProvidedData(modules)) staticDataInvariant("provided data exports require a root checked module");
         if (lowered) |lowered_program| {

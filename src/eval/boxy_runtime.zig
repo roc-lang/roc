@@ -1005,6 +1005,7 @@ pub const BoxyRuntime = struct {
         source_desc: *const LirProgram.BoxyTypeDesc,
         tag_name: LIR.BoxyNameId,
     ) Error!bool {
+        builtins.stack_guard.check();
         const tag_base = self.resolveBoxyTagBaseValue(source_value, source_layout, source_desc);
         const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
         if (self.findLocalBoxyTagVariant(source_desc, tag_name)) |variant| {
@@ -1321,6 +1322,7 @@ pub const BoxyRuntime = struct {
         target: *const LirProgram.BoxyTypeDesc,
         visited: *std.AutoHashMapUnmanaged(AdapterDescMergeKey, void),
     ) Error!bool {
+        builtins.stack_guard.check();
         if (source == target) return true;
         if (source.payload_layout != target.payload_layout or
             source.contains_refcounted != target.contains_refcounted or
@@ -1402,6 +1404,7 @@ pub const BoxyRuntime = struct {
         merged: *std.AutoHashMapUnmanaged(AdapterDescMergeKey, u32),
         changed: *bool,
     ) Error!u32 {
+        builtins.stack_guard.check();
         const key = AdapterDescMergeKey{ .source = @intFromPtr(source), .target = @intFromPtr(target) };
         if (merged.get(key)) |existing| return existing;
         const result = try self.descriptor_arena.create(LirProgram.BoxyTypeDesc);
@@ -1613,6 +1616,7 @@ pub const BoxyRuntime = struct {
         desc_ref: LIR.BoxyDescRef,
         copied: *std.AutoHashMapUnmanaged(usize, u32),
     ) Error!LIR.BoxyDescRef {
+        builtins.stack_guard.check();
         switch (desc_ref) {
             .runtime => return desc_ref,
             // A closed static descriptor reaches no runtime reference.
@@ -1678,6 +1682,7 @@ pub const BoxyRuntime = struct {
         span: LIR.BoxySpan,
         copied: *std.AutoHashMapUnmanaged(usize, u32),
     ) Error!LIR.BoxySpan {
+        builtins.stack_guard.check();
         if (runtimeBoxySpanStart(span) != null) return span;
 
         const source_refs = self.requireBoxyDescRefs(span);
@@ -1786,6 +1791,7 @@ pub const BoxyRuntime = struct {
         count: u32,
         atomicity: RcAtomicity,
     ) Error!void {
+        builtins.stack_guard.check();
         const layout_val = self.layout_store.getLayout(layout_idx);
         if (desc == null) {
             self.performConcreteRc(hooks, op, layout_idx, val, count, atomicity);
@@ -2076,6 +2082,7 @@ pub const BoxyRuntime = struct {
         desc: *const LirProgram.BoxyTypeDesc,
         target_layout: layout_mod.Idx,
     ) Error!Value {
+        builtins.stack_guard.check();
         const boxed = try hooks.allocValue(target_layout);
         const payload_size = self.helper.sizeOf(desc.payload_layout);
         if (payload_size == 0) {
@@ -2136,6 +2143,7 @@ pub const BoxyRuntime = struct {
         payload_mode: LIR.BoxyTransferMode,
         target_layout: layout_mod.Idx,
     ) Error!Value {
+        builtins.stack_guard.check();
         if (payload) |payload_value| {
             switch (payload_mode) {
                 .move => {},
@@ -2325,6 +2333,7 @@ pub const BoxyRuntime = struct {
         target_layout: layout_mod.Idx,
         source_mode: LIR.BoxyTransferMode,
     ) Error!BoxyTagPayloadRead {
+        builtins.stack_guard.check();
         const tag_base = self.resolveBoxyTagBaseValue(source_value, source_layout, source_desc);
         const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
 
@@ -2488,6 +2497,7 @@ pub const BoxyRuntime = struct {
         desc: ?*const LirProgram.BoxyTypeDesc,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
+        builtins.stack_guard.check();
         if (actual_layout == expected_layout) {
             return try self.materializeLocalValue(hooks, value, expected_layout);
         }
@@ -2645,6 +2655,7 @@ pub const BoxyRuntime = struct {
         target_desc: *const LirProgram.BoxyTypeDesc,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
+        builtins.stack_guard.check();
         const actual_layout_val = self.layout_store.getLayout(actual_layout);
         const expected_layout_val = self.layout_store.getLayout(expected_layout);
         if (source_desc) |resolved_source_desc| {
@@ -2706,6 +2717,7 @@ pub const BoxyRuntime = struct {
         target_desc: *const LirProgram.BoxyTypeDesc,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
+        builtins.stack_guard.check();
         const source_list = self.valueToRocListForLayout(value, actual_layout);
         const source_elem_desc = if (source_desc) |resolved_source_desc|
             try self.boxyListElemDescForStorage(hooks, resolved_source_desc, actual_layout)
@@ -2821,6 +2833,7 @@ pub const BoxyRuntime = struct {
         target_layout: layout_mod.Idx,
         target_desc: ?*const LirProgram.BoxyTypeDesc,
     ) Error!void {
+        builtins.stack_guard.check();
         if (self.helper.sizeOf(target_layout) == 0) return;
         if (!hooks.layoutContainsRc(target_layout) and
             (target_desc == null or !target_desc.?.contains_refcounted)) return;
@@ -3154,6 +3167,7 @@ pub const BoxyRuntime = struct {
         target_layout: layout_mod.Idx,
         target_desc: ?*const LirProgram.BoxyTypeDesc,
     ) Error!void {
+        builtins.stack_guard.check();
         const source_base = if (source_desc) |desc|
             self.resolveBoxyTagBaseValue(source, source_layout, desc)
         else
@@ -3420,6 +3434,7 @@ pub const BoxyRuntime = struct {
         target_desc: *const LirProgram.BoxyTypeDesc,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
+        builtins.stack_guard.check();
         const actual_layout_val = self.layout_store.getLayout(actual_layout);
         const expected_layout_val = self.layout_store.getLayout(expected_layout);
         if (actual_layout == expected_layout and
@@ -3677,6 +3692,7 @@ pub const BoxyRuntime = struct {
         target_desc: *const LirProgram.BoxyTypeDesc,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
+        builtins.stack_guard.check();
         const present_discriminant = target_desc.presence_slot_present_discriminant orelse {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: presence-slot materialization lacked an explicit Present discriminant",
@@ -3733,6 +3749,7 @@ pub const BoxyRuntime = struct {
         target_desc: *const LirProgram.BoxyTypeDesc,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
+        builtins.stack_guard.check();
         const expected_layout_val = self.layout_store.getLayout(expected_layout);
         if (expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst or expected_layout_val.tag == .erased_box) {
             const allocation_desc = try self.boxyBoxAllocationPayloadDesc(hooks, expected_layout, target_desc) orelse {
@@ -3870,6 +3887,7 @@ pub const BoxyRuntime = struct {
         target_desc: ?*const LirProgram.BoxyTypeDesc,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
+        builtins.stack_guard.check();
         const actual_base = self.resolveBoxyTagBaseValue(value, actual_layout, source_desc);
         const source_discriminant = if (self.helper.sizeOf(actual_base.layout) == 0)
             @as(u32, 0)
@@ -4099,6 +4117,7 @@ pub const BoxyRuntime = struct {
         actual_layout: layout_mod.Idx,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
+        builtins.stack_guard.check();
         if (actual_layout == expected_layout) {
             return try self.materializeLocalValue(hooks, value, expected_layout);
         }
@@ -4288,6 +4307,7 @@ pub const BoxyRuntime = struct {
         desc: *const LirProgram.BoxyTypeDesc,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
+        builtins.stack_guard.check();
         const actual_base = self.resolveTagUnionBaseValue(value, actual_layout);
         const target = try self.allocTagValue(hooks, expected_layout);
         const discriminant = if (self.helper.sizeOf(actual_base.layout) == 0)
@@ -4346,6 +4366,7 @@ pub const BoxyRuntime = struct {
         target_desc: *const LirProgram.BoxyTypeDesc,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
+        builtins.stack_guard.check();
         if (actual_layout == expected_layout and source_desc == target_desc) {
             // Identical convention on both sides: the bytes are already in the
             // target's shape, and the surrounding RC statements account for the
@@ -4445,6 +4466,7 @@ pub const BoxyRuntime = struct {
         source_variant: LirProgram.BoxyTagVariant,
         target_variant: ?LirProgram.BoxyTagVariant,
     ) Error!void {
+        builtins.stack_guard.check();
         const actual_layout_val = self.layout_store.getLayout(actual_layout);
         const expected_layout_val = self.layout_store.getLayout(expected_layout);
         if (source_variant.payload_count == 1) {
@@ -4538,6 +4560,7 @@ pub const BoxyRuntime = struct {
         source_desc: ?*const LirProgram.BoxyTypeDesc,
         target_desc: ?*const LirProgram.BoxyTypeDesc,
     ) Error!void {
+        builtins.stack_guard.check();
         const expected_size = self.helper.sizeOf(expected_layout);
         if (expected_size == 0) return;
         const materialized = if (target_desc) |resolved_target_desc|
@@ -5584,6 +5607,7 @@ pub const BoxyRuntime = struct {
         out: *std.ArrayList(u8),
         inspected: InspectValue,
     ) Error!void {
+        builtins.stack_guard.check();
         const shapes = InspectShapes{ .runtime = self };
         switch (InspectRules.actionForShape(shapes, try self.inspectShape(hooks, inspected))) {
             .literal => |text| try out.appendSlice(self.eval_arena, text),
@@ -5642,6 +5666,7 @@ pub const BoxyRuntime = struct {
             }
 
             pub fn child(sink: *@This(), field_index: u32) Error!void {
+                builtins.stack_guard.check();
                 const runtime = sink.runtime;
                 // A field's custom inspector can instantiate more runtime
                 // descriptors, whose append-only backing table can reallocate,
@@ -5678,6 +5703,7 @@ pub const BoxyRuntime = struct {
             }
 
             pub fn child(sink: *@This(), payload_index: u32) Error!void {
+                builtins.stack_guard.check();
                 const runtime = sink.runtime;
                 const payload_desc = try runtime.requireBoxyPayloadDesc(sink.hooks, sink.variant, payload_index);
                 if (sink.variant.payload_count == 1) {
@@ -6034,6 +6060,7 @@ pub const BoxyRuntime = struct {
         copied_dicts: *std.AutoHashMapUnmanaged(u32, u32),
         copied_descs: *std.AutoHashMapUnmanaged(usize, u32),
     ) Error!u32 {
+        builtins.stack_guard.check();
         if (copied_dicts.get(@backingInt(dict_id))) |runtime_id| return runtime_id;
         const source = self.requireBoxyDict(dict_id);
         const target = try self.descriptor_arena.create(LirProgram.BoxyDict);
@@ -6088,6 +6115,7 @@ pub const BoxyRuntime = struct {
         copied_dicts: *std.AutoHashMapUnmanaged(u32, u32),
         copied_descs: *std.AutoHashMapUnmanaged(usize, u32),
     ) Error!LIR.BoxySpan {
+        builtins.stack_guard.check();
         if (runtimeBoxySpanStart(span) != null) return span;
         const source_refs = self.requireBoxyDictRefs(span);
         if (source_refs.len == 0) return .{};
@@ -7115,6 +7143,7 @@ pub const BoxyRuntime = struct {
         desc: *const LirProgram.BoxyTypeDesc,
         visited: *std.AutoHashMapUnmanaged(*const LirProgram.BoxyTypeDesc, void),
     ) Error!bool {
+        builtins.stack_guard.check();
         const entry = try visited.getOrPut(self.scratch, desc);
         if (entry.found_existing) return false;
 

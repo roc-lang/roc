@@ -1,6 +1,8 @@
 //! Build helper: copy a freshly linked macOS roc executable and remove its
 //! dyld export trie and weak-binding info (see src/cli/macho/DyldExportStrip.zig
 //! for why), then rewrite the ad-hoc code signature the edit invalidated.
+//! Fails, naming the path, if the executable loads a dylib from outside the
+//! OS or carries a run-path search entry.
 //!
 //! Usage:
 //!   strip_macho_exports <input-binary> <output-binary>
@@ -41,5 +43,17 @@ pub fn main(init: std.process.Init) !void {
         .flags = .{ .permissions = .executable_file },
     });
 
-    _ = try DyldExportStrip.stripFile(io, gpa, arena, output_path);
+    var diagnostic: DyldExportStrip.Diagnostic = .{};
+    _ = DyldExportStrip.stripFile(io, gpa, arena, output_path, &diagnostic) catch |err| switch (err) {
+        error.NonSystemDylib, error.RunPathEntry => |rejected| {
+            const what = switch (rejected) {
+                error.NonSystemDylib => "loads a dylib from outside macOS",
+                error.RunPathEntry => "has a run-path search entry",
+            };
+            const message = try std.fmt.allocPrint(arena, "{s} {s}: {s}\nEvery library the roc CLI uses beyond the OS must be linked statically (see src/cli/macho/DyldExportStrip.zig).\n", .{ input_path, what, diagnostic.path });
+            stderr_file.writeStreamingAll(io, message) catch {};
+            std.process.exit(1);
+        },
+        else => |e| return e,
+    };
 }

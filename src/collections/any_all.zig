@@ -31,7 +31,8 @@ pub fn Evaluation(comptime Leaf: type, comptime Context: type) type {
             group: Op,
         };
 
-        const Item = union(enum) {
+        /// One producer-authored leaf or nested Boolean group.
+        pub const Item = union(enum) {
             leaf: Leaf,
             /// A nested group of the `count` leaves after it.
             group: struct { op: Op, count: usize },
