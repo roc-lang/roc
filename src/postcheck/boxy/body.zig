@@ -2481,8 +2481,7 @@ pub const Builder = struct {
         const fields = try std.mem.concat(self.allocator, LocalId, &.{ words, args });
         defer self.allocator.free(fields);
         try self.emitDyn(record, .{ .record = .{ .desc = desc, .fields = try self.store.addLocalSpan(fields) } });
-        const target = try self.localOf(ret, .frame);
-        try self.emitDyn(target, .{ .call_erased = .{ .closure = closure, .args = record } });
+        const target = try self.callErased(closure, record, ret);
         try self.pushValue(try self.adaptValue(target, ret, result_ty));
     }
 
@@ -3864,6 +3863,12 @@ pub const Builder = struct {
             }
             record = local;
         }
+        return try self.callErased(closure, record, result_ty);
+    }
+
+    /// Call the erased callable `closure` with the packed argument record
+    /// `record`, for a result of `result_ty`.
+    pub fn callErased(self: *Builder, closure: LocalId, record: ?LocalId, result_ty: TypeId) Allocator.Error!LocalId {
         const target = try self.localOf(result_ty, .frame);
         try self.emitDyn(target, .{ .call_erased = .{ .closure = closure, .args = record } });
         return target;
