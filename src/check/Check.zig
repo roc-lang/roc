@@ -5091,8 +5091,6 @@ const LexicalScopePusher = struct {
     }
 
     fn reassignTarget(_: LexicalScopePusher, _: CIR.Pattern.Idx) Allocator.Error!void {}
-
-    fn returnTarget(_: LexicalScopePusher, _: CIR.Expr.Idx) Allocator.Error!void {}
 };
 
 fn collectPatternSubtree(
@@ -6226,10 +6224,6 @@ const HoistInvalidationVisitor = struct {
     fn reassignTarget(self: @This(), pattern: CIR.Pattern.Idx) Allocator.Error!void {
         try self.checker.retirePatternSubtreeMetadata(pattern);
     }
-
-    fn returnTarget(self: @This(), lambda: CIR.Expr.Idx) Allocator.Error!void {
-        try self.checker.markHoistInvalidatedExpr(lambda, self.work);
-    }
 };
 
 fn markHoistInvalidatedExprChildren(
@@ -6241,8 +6235,8 @@ fn markHoistInvalidatedExprChildren(
 }
 
 /// Visit the direct children of a statement in the source tree: each child
-/// expression, each pattern it binds, the pattern a reassignment writes, and
-/// the lambda a `return` leaves.
+/// expression, each pattern it binds, and the pattern a reassignment writes.
+/// A `return`'s lambda encloses the statement, so it is not a child.
 fn visitStatementChildren(self: *const Self, statement: CIR.Statement.Idx, visitor: anytype) Allocator.Error!void {
     switch (self.cir.store.getStatement(statement)) {
         .s_decl => |decl| {
@@ -6270,10 +6264,7 @@ fn visitStatementChildren(self: *const Self, statement: CIR.Statement.Idx, visit
             try visitor.expr(while_.cond);
             try visitor.expr(while_.body);
         },
-        .s_return => |ret| {
-            try visitor.expr(ret.expr);
-            try visitor.returnTarget(ret.lambda);
-        },
+        .s_return => |ret| try visitor.expr(ret.expr),
         .s_crash,
         .s_break,
         .s_import,
@@ -6288,7 +6279,8 @@ fn visitStatementChildren(self: *const Self, statement: CIR.Statement.Idx, visit
 }
 
 /// Visit the direct children of an expression in the source tree: each child
-/// expression, each pattern it binds, and the lambda a `return` leaves.
+/// expression and each pattern it binds. A `return`'s lambda encloses the
+/// expression, so it is not a child.
 fn visitExprChildren(self: *const Self, expr: CIR.Expr.Idx, visitor: anytype) Allocator.Error!void {
     switch (self.cir.store.getExpr(expr)) {
         .e_str => |str| for (self.cir.store.sliceExpr(str.span)) |child| try visitor.expr(child),
@@ -6367,10 +6359,7 @@ fn visitExprChildren(self: *const Self, expr: CIR.Expr.Idx, visitor: anytype) Al
         .e_dbg => |dbg| try visitor.expr(dbg.expr),
         .e_expect_err => |expect_err| try visitor.expr(expect_err.expr),
         .e_expect => |expect| try visitor.expr(expect.body),
-        .e_return => |ret| {
-            try visitor.expr(ret.expr);
-            try visitor.returnTarget(ret.lambda);
-        },
+        .e_return => |ret| try visitor.expr(ret.expr),
         .e_for => |for_| {
             try visitor.boundPattern(for_.patt);
             try visitor.expr(for_.expr);
@@ -13472,8 +13461,6 @@ fn hoistedRootReachesRejectedCode(self: *Self, root: hoist_roots.SelectedHoisted
         fn boundPattern(_: @This(), _: CIR.Pattern.Idx) Allocator.Error!void {}
 
         fn reassignTarget(_: @This(), _: CIR.Pattern.Idx) Allocator.Error!void {}
-
-        fn returnTarget(_: @This(), _: CIR.Expr.Idx) Allocator.Error!void {}
     };
     while (work.pop()) |expr| {
         if (self.rejected_instantiation_exprs.contains(expr) or self.hoistExprInvalidated(expr)) return true;
@@ -15426,10 +15413,6 @@ const KeptOperandInvalidationVisitor = struct {
     fn reassignTarget(self: @This(), pattern: CIR.Pattern.Idx) Allocator.Error!void {
         try self.checker.retireHoistBinders(pattern);
         try self.checker.retirePatternSubtreeMetadata(pattern);
-    }
-
-    fn returnTarget(self: @This(), lambda: CIR.Expr.Idx) Allocator.Error!void {
-        try self.checker.markHoistInvalidatedExpr(lambda, self.work);
     }
 };
 
