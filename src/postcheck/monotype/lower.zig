@@ -11291,7 +11291,7 @@ const Builder = struct {
             try self.completeRootTemplateEvidence(view, template_ref, template, partial_edge);
         edge.vector = try source_ctx.resolveCallableEvidenceAtNode(
             view,
-            template,
+            view.templates.evidenceParams(&template),
             edge.vector,
             request_fn_node,
             .body_lowering,
@@ -14115,7 +14115,7 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         raw_request_fn_node: NodeId,
         capture_entry_guards: []const NodeId,
-        requested_evidence: EvidenceChain,
+        unresolved_evidence: EvidenceChain,
         owned_scope: ?checked.DispatchScopeId,
         recursive_reference: bool,
         signature_relation: Ast.SignatureRelation,
@@ -14129,6 +14129,7 @@ const Builder = struct {
             source_ctx.draft.upgrade_all = true;
         }
         const request_fn_node = try source_ctx.graph.functionRequestRoot(raw_request_fn_node);
+        const requested_evidence = try source_ctx.resolveOwnScopeCallableEvidence(nested, unresolved_evidence, request_fn_node);
         const codec_contract: ?DraftCodecContractContext = switch (codec_contract_selection) {
             .inherit => source_ctx.activeCodecContractContext(),
             .independent => null,
@@ -29002,7 +29003,7 @@ const BodyContext = struct {
             );
         edge.vector = try self.resolveCallableEvidenceAtNode(
             callee_view,
-            template,
+            callee_view.templates.evidenceParams(&template),
             edge.vector,
             request_fn_node,
             .interface_summary_input,
@@ -53074,17 +53075,57 @@ const BodyContext = struct {
         }
     }
 
+    /// A nested function that owns a dispatch scope and is stored as data
+    /// carries `from_callable` entries in that scope's frame (checked site
+    /// evidence for its construction edge, or the frame retained with the
+    /// stored function). Its request resolves them, exactly as a procedure
+    /// template's request resolves its own. A nested function that owns no
+    /// scope reads its lexical parent's frame, which its enclosing function's
+    /// request already resolved.
+    fn resolveOwnScopeCallableEvidence(
+        self: *BodyContext,
+        nested: Ast.NestedFn,
+        evidence: EvidenceChain,
+        request_fn_node: NodeId,
+    ) Allocator.Error!EvidenceChain {
+        const raw_site = @backingInt(nested.site);
+        if (raw_site >= self.view.nested_proc_sites.sites.len) {
+            Common.invariant("nested function referenced a site absent from the CheckedModule procedure-site table");
+        }
+        const site = self.view.nested_proc_sites.sites[raw_site];
+        const scope_id = switch (site.lexical_scope) {
+            .root => return evidence,
+            .generalized => |scope_id| scope_id,
+        };
+        const scope = self.view.templates.dispatch_scopes[@backingInt(scope_id)];
+        if (site.checked_expr == null or scope.checked_expr != site.checked_expr.?) return evidence;
+        switch (evidence.scope.lexical) {
+            .generalized => |frame_scope| if (frame_scope != scope_id) {
+                Common.invariant("nested function that owns a dispatch scope was requested outside that scope's frame");
+            },
+            .root => Common.invariant("nested function that owns a dispatch scope was requested from its root frame"),
+        }
+        const params = self.view.templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len];
+        var resolved = evidence;
+        resolved.vector = try self.resolveCallableEvidenceAtNode(self.view, params, evidence.vector, request_fn_node, .body_lowering);
+        return resolved;
+    }
+
+    /// Resolve each `from_callable` entry of a function's evidence vector
+    /// whose component its request has determined. `params` is the function's
+    /// checked evidence-parameter row: a procedure template's, or the
+    /// dispatch scope a nested function owns. Each path is written over that
+    /// function's own callable type.
     fn resolveCallableEvidenceAtNode(
         self: *BodyContext,
         view: ModuleView,
-        template: checked.CheckedProcedureTemplate,
+        params: []const static_dispatch.EvidenceParamRecord,
         evidence: []const SpecEvidence,
         request_fn_node: NodeId,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error![]const SpecEvidence {
-        const params = view.templates.evidenceParams(&template);
         if (evidence.len != params.len) {
-            Common.invariant("callable-derived evidence length differed from its checked template");
+            Common.invariant("callable-derived evidence length differed from its checked parameters");
         }
         const Replacement = struct { index: usize, entry: SpecEvidence };
         var replacements = std.ArrayList(Replacement).empty;
