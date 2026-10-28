@@ -6407,8 +6407,8 @@ callable that captures such a binder captures the binder's slot, lowered as a
 `Box` of a one-item tuple holding the value. The tuple keeps the slot an
 allocation of its own even where a `Box` of the value would share the value's
 storage (a dynamic value or a callable). The declaring block reserves a slot
-for each captured binder, allocates it zeroed before lowering the value, and
-stores the built value into it. A worker reads the value from its captured slot
+for each captured binder, allocates it zeroed before lowering the value
+(`dyn_slot_alloc`), and stores the built value into it (`dyn_slot_store`). A worker reads the value from its captured slot
 once on entry, before any of its code runs, and keeps the slot in scope for the
 callables it builds that capture the binder too.
 
@@ -13825,6 +13825,36 @@ descriptor explicitly as an operand:
   builtin list runtime is already layout-polymorphic (element width,
   alignment, and refcount callbacks are runtime arguments), so no second set
   of list builtins exists.
+- `dyn_record_update(dst, base, base_desc, desc, names, values)` builds an
+  updated record of an open row: each named field takes its new value and
+  every other field the base's field of the same name, which only the base's
+  descriptor lists. `base` and the values are consumed.
+- `dyn_slot_alloc(dst, desc)` allocates a recursive value's slot, a zeroed
+  `Box` whose payload `desc` describes, and `dyn_slot_store(dst, slot, value,
+  desc)` moves the built value into it ("Recursive values" above).
+- `dyn_numeral(dst, desc, table)` is a numeric literal at the builtin number
+  type `desc` describes: `table` is a static `NumeralTable` holding the
+  literal's value under every builtin number type that can hold it, and the
+  program crashes when the described type cannot.
+- `dyn_desc_index(dst, desc, candidates)` is the position of the first
+  descriptor among `candidates` (a `desc_args` descriptor, whose fields are of
+  the candidate types) that describes the type `desc` describes, compared
+  structurally, or the candidate count when none does.
+
+A literal whose conversion depends on its instance never converts at
+runtime. Compile-time evaluation converts it at every instance the program's
+compile-time specialization reaches it at, as literal roots ("Per-program
+literal roots"), and records each root's value, or its failure, together with
+the concrete type it converted the literal at, for a `.boxy` runtime program.
+The literal lowers to a *literal table*: each recorded type is a candidate,
+`dyn_desc_index` selects the candidate the literal's descriptor describes, and
+the selected branch restores that candidate's stored value at its type and
+re-tags it to the literal's own type, or crashes with its failure. A literal of
+a builtin type, which no literal root converts, takes the builtin rule where no
+candidate matches: a numeral through `dyn_numeral`, a quote as the `Str` it
+spells. A literal whose type is closed in its body selects its candidate
+statically. Nominal descriptors carry a name of their own declaration, so the
+structural comparison never takes one nominal for another.
 
 A value whose type is closed inside a generic body is an ordinary local with
 an ordinary layout, lowered with the same statements `.lss` emits. The
@@ -13867,6 +13897,31 @@ target.
 A dispatch the checker resolved to a concrete target with no dictionary
 (`runtime_dictionary == false`) is a direct call; it consumes no dictionary.
 
+A dispatch through a scope's dictionary calls the method at the callable type
+its scope's requirement names, and reads the result at the dispatch's own
+type, re-tagged where the two row it differently; a dictionary filling a
+parameter is adapted to that parameter's interface. A method of a type
+declared in a function body is a local procedure of that body: its dispatch
+calls the procedure's function value at the dispatch's instantiation, and its
+dictionary is that value. A target reached through an exact procedure alias
+takes the substitution and evidence each alias's forwarded lookup recorded in
+the alias's scope, alias by alias.
+
+Evidence the checker leaves to the concrete callable (`from_callable`, a
+target `derived_from_callable`, nested `from_callable` evidence) and the
+obligations of a nominal's overrides are resolved from the dispatcher's type,
+as checking selects targets: the method the dispatcher's owner registers,
+with that method's own obligations resolved the same way; a structural
+derivation where the owner registers none; a crashing dictionary where no
+value of the dispatcher can exist; and for a scope variable, a structural
+method over its descriptor for a method descriptors carry, or else its
+scope's dictionary. A target's scheme variables its callable leaves open are
+fixed by relating each resolved obligation's method back to the obligation's
+callable. A nominal override is instantiated at its method's interface:
+`is_eq` at `T, T -> Bool`, `to_hash` at `T, Hasher -> Hasher` with the
+Builtin hasher every runtime hash threads, and `to_inspect` at `T -> Str`. A
+SIMD vector's descriptor carries its builtin `to_inspect`.
+
 #### Function Values
 
 A function value is an erased callable: one Roc refcounted allocation whose
@@ -13907,6 +13962,10 @@ content. Backends remain forbidden from reasoning about reference counting in
 any other way.
 
 #### Host ABI
+
+A platform's code is lowered at the types its app provides: each requirement
+identity variable takes the app type the app's checking solved it to
+(`PlatformRequirementSolutionTable`).
 
 Host-visible roots (`RootAbi.platform`, `RootAbi.hosted`), hosted calls, and
 provided static data use the exact checked host ABI layouts and carry no hidden
