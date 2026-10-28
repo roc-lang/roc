@@ -2894,7 +2894,10 @@ pub const Builder = struct {
     /// instantiation is, as a value, instantiated where it is used: the
     /// value captures the use's descriptors and dictionaries of its scheme.
     pub fn localProcUseValue(self: *Builder, expr_id: CheckedExprId, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
-        return try self.localProcInstanceValue(local, try self.exprType(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{});
+        // A use checking recorded no evidence for (one inside a rejected
+        // expression, evaluated only for its effects) resolves the
+        // procedure's dictionaries from its types.
+        return try self.localProcInstanceValue(local, try self.exprType(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id));
     }
 
     /// The function value of local procedure `local` used at the function
