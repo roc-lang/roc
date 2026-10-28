@@ -2192,7 +2192,7 @@ pub const Builder = struct {
             .local_param, .local_value, .pattern_binder, .local_mutable_version => |binding| {
                 return try self.pushValue(self.binders.get(binding.binder) orelse invariant("a local lookup named a binder this body never bound"));
             },
-            .top_level_const, .imported_const => |use| return try self.restoreConstUse(use, try self.constReadType(expr_id)),
+            .top_level_const, .imported_const => |use| return try self.restoreConstUse(expr_id, use, try self.constReadType(expr_id)),
             .local_proc => |local| return try self.pushValue(try self.localProcUseValue(expr_id, local)),
             .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use),
             else => |ref| invariantFmt("local lookup of a {s} is not yet lowered by Boxy", .{@tagName(ref)}),
@@ -2203,10 +2203,10 @@ pub const Builder = struct {
 
     pub fn lowerLookupExternal(self: *Builder, expr_id: CheckedExprId, resolved: checked.ResolvedValueRefId) Allocator.Error!void {
         switch (self.resolvedRef(resolved).ref) {
-            .top_level_const, .imported_const => |use| return try self.restoreConstUse(use, try self.constReadType(expr_id)),
+            .top_level_const, .imported_const => |use| return try self.restoreConstUse(expr_id, use, try self.constReadType(expr_id)),
             .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use),
             .platform_required_proc => |required| return try self.procedureValue(expr_id, required.procedure),
-            .platform_required_const => |required| return try self.restoreConstUse(required.const_use, try self.constReadType(expr_id)),
+            .platform_required_const => |required| return try self.restoreConstUse(expr_id, required.const_use, try self.constReadType(expr_id)),
             .platform_required_checked_error => return try self.crashValue("runtime error", try self.exprType(expr_id)),
             else => {},
         }
@@ -2488,16 +2488,26 @@ pub const Builder = struct {
 
     /// A read of a stored constant: its value's construction at `ty`
     /// (design.md "Compile-Time Evaluation Strategy").
-    pub fn restoreConstUse(self: *Builder, use: checked.ConstUseTemplate, ty: TypeId) Allocator.Error!void {
+    pub fn restoreConstUse(self: *Builder, expr_id: CheckedExprId, use: checked.ConstUseTemplate, ty: TypeId) Allocator.Error!void {
         const owner = self.program.moduleByKey(use.const_ref.artifact);
         const template = owner.view.const_templates.get(use.const_ref);
         switch (template.state) {
             .stored_const => |stored| try self.push(.{ .restore = .{ .module = owner.index, .node = stored.node, .ty = ty } }),
+            // A polymorphic constant compile-time evaluation did not store
+            // is its entry procedure's value at the read's instantiation.
+            .eval_template => |eval| {
+                const callee = try self.program.templateRefWorker(eval.entry_template);
+                const read_ty = try self.exprType(expr_id);
+                const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = read_ty, .effectful = false } });
+                const hidden = try self.hiddenArgsAt(callee, self.siteSubstitution(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{}, fn_ty);
+                try self.finishCall(callee, hidden, 0, read_ty);
+                self.allocator.free(hidden);
+            },
             .unimplemented => |unimplemented| {
                 self.region = unimplemented.region;
                 try self.crashValue(@import("../common.zig").unimplemented_declaration_crash, ty);
             },
-            .reserved, .eval_template => invariant("a constant read at runtime was not stored by compile-time evaluation"),
+            .reserved => invariant("a constant read at runtime was not stored by compile-time evaluation"),
         }
     }
 
