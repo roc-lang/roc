@@ -1509,6 +1509,7 @@ const boxy_sources = [_]LintSource{
     .{ .path = "boxy/codec.zig", .text = @embedFile("boxy/codec.zig") },
     .{ .path = "boxy/layouts.zig", .text = @embedFile("boxy/layouts.zig") },
     .{ .path = "boxy/lower.zig", .text = @embedFile("boxy/lower.zig") },
+    .{ .path = "boxy/match.zig", .text = @embedFile("boxy/match.zig") },
     .{ .path = "boxy/row_joins.zig", .text = @embedFile("boxy/row_joins.zig") },
     .{ .path = "boxy/static_descs.zig", .text = @embedFile("boxy/static_descs.zig") },
     .{ .path = "boxy/types.zig", .text = @embedFile("boxy/types.zig") },
@@ -1662,7 +1663,22 @@ test "one pattern walk collects bound locals" {
 test "the match compiler's stated consumers are its actual consumers" {
     // This pins the match compiler's stated consumers to the imports of both
     // lowering strategies.
-    return error.BoxyLoweringBeingReimplemented;
+    const header = sourceSliceBetween(@embedFile("match_tree.zig"), "//! Decision-tree match compiler", "\nconst std");
+    try expectContains(header, "`.lss`");
+    try expectContains(header, "`MatchTreeCtx`");
+    try expectContains(header, "`.boxy`");
+    try expectContains(header, "`boxy/match.zig`");
+    const solved = @embedFile("solved_lir_lower.zig");
+    try expectContains(solved, "@import(\"match_tree.zig\")");
+    try expectContains(solved, "match_tree.Compiler(MatchTreeCtx)");
+    const boxy_match = @embedFile("boxy/match.zig");
+    try expectContains(boxy_match, "@import(\"../match_tree.zig\")");
+    try expectContains(boxy_match, "match_tree.Compiler(Ctx)");
+    // No other Boxy source compiles matches on its own.
+    for (boxy_sources) |source| {
+        if (std.mem.eql(u8, source.path, "boxy/match.zig")) continue;
+        try expectNotContains(source.text, "match_tree.Compiler(");
+    }
 }
 
 test "post-check IR stores append spans through one implementation" {

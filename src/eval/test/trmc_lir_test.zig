@@ -505,7 +505,7 @@ fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirPro
                 try work.append(allocator, s.on_miss);
             },
             .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {},
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .dyn, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
                 try work.append(allocator, s.next);
             },
         }
@@ -1386,7 +1386,63 @@ test "tail-call proof rejects an intervening effect and a forwarding cycle" {
 }
 
 test "tail-call proof consumes the explicit boxy adapter operation" {
-    return error.BoxyLoweringBeingReimplemented;
+    // A `.boxy` call whose dynamic result the procedure returns writes it
+    // straight into the procedure's result storage, so the call is a tail
+    // site. A call whose result is adapted to another storage of its record
+    // fields (`dyn.adapt`) before it is returned is not: the adaptation is
+    // real work after the call, which the proof does not forward through.
+    const allocator = std.testing.allocator;
+    for ([_]bool{ false, true }) |adapted| {
+        var store = LirStore.init(allocator);
+        defer store.deinit();
+        var layouts = try layout.Store.init(allocator, base.target.TargetUsize.native);
+        defer layouts.deinit();
+        const dynamic = try layouts.dynamicLayout();
+        var b = ProcBuilder.init(&store);
+        defer b.deinit(allocator);
+        const desc = try b.addLocal(allocator, .opaque_ptr);
+        const other_desc = try b.addLocal(allocator, .opaque_ptr);
+        const result = try store.addLocal(.{ .layout_idx = dynamic, .dyn = .{ .desc = desc, .storage = .result } });
+        const call_target = if (adapted)
+            try store.addLocal(.{ .layout_idx = dynamic, .dyn = .{ .desc = other_desc, .storage = .frame } })
+        else
+            result;
+        const proc = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(6),
+            .args = try store.addLocalSpan(&.{ desc, other_desc }),
+            .ret_layout = dynamic,
+        }, .none);
+        var builder = lir.TailCallBuilder.init(allocator, proc);
+        defer builder.deinit();
+        store.tail_call_builder = &builder;
+        defer store.tail_call_builder = null;
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+        const after_call = if (adapted) try store.addCFStmt(.{ .dyn = .{
+            .target = result,
+            .data = try store.addStmtRow(LIR.DynOp, .{ .adapt = .{ .src = call_target, .from = other_desc, .to = desc } }),
+            .next = ret,
+        } }, .test_fixture) else ret;
+        const call = try store.addCFStmt(.{ .assign_call = .{
+            .target = call_target,
+            .proc = proc,
+            .args = try store.addLocalSpan(&.{ desc, other_desc }),
+            .next = after_call,
+        } }, .test_fixture);
+        store.setProcSpecBody(proc, call);
+        store.getProcSpecPtr(proc).dyn_result = result;
+        store.getProcSpecPtr(proc).frame_locals = try store.addLocalSpan(b.locals.items);
+        const sites = try builder.finish(&store);
+        store.tail_call_builder = null;
+        if (adapted) {
+            try std.testing.expect(sites == null);
+            try std.testing.expect(!store.getCFStmtImmediate(call).assign_call.tail_call.isSite());
+        } else {
+            try std.testing.expect(sites != null);
+            try std.testing.expectEqual(call, sites.?.head);
+            try std.testing.expect(store.getCFStmtImmediate(call).assign_call.tail_call.isSite());
+        }
+    }
 }
 
 test "tce parallel transfers preserve every small source graph" {
