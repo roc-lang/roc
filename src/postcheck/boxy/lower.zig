@@ -194,6 +194,9 @@ pub const Program = struct {
     local_scopes: std.AutoHashMapUnmanaged(ExprKey, checked.DispatchScopeId) = .empty,
     /// The lambda and closure expressions local procedures bind.
     local_procs: std.AutoHashMapUnmanaged(ExprKey, void) = .empty,
+    /// Whether each worker asked about stores a record field of its
+    /// signature in a presence slot (`signatureHasSlots`).
+    signature_slots: std.AutoHashMapUnmanaged(WorkerId, bool) = .empty,
     /// `nominalOverrides` of each nominal type asked about.
     nominal_overrides: std.AutoHashMapUnmanaged(TypeId, NominalOverrides) = .empty,
     /// The nested procedure site of each lambda and closure expression.
@@ -419,6 +422,170 @@ pub const Program = struct {
             }
         }
         return try allocator.dupe(?TypeId, bound);
+    }
+
+    /// Whether worker `id`'s parameters or result store a record field in a
+    /// presence slot, so a caller may store it differently (design.md
+    /// "Field Kinds").
+    pub fn signatureHasSlots(self: *Program, id: WorkerId) Allocator.Error!bool {
+        if (self.signature_slots.get(id)) |memo| return memo;
+        const target = self.worker(id).*;
+        var pending: std.ArrayList(TypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        var seen: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+        defer seen.deinit(self.allocator);
+        try pending.appendSlice(self.allocator, target.params);
+        try pending.append(self.allocator, target.ret);
+        const found = walk: while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
+            switch (self.store.get(ty)) {
+                .record => |record| {
+                    for (self.store.fieldSpan(record.fields)) |field| {
+                        if (field.kind == .presence_slot) break :walk true;
+                        try pending.append(self.allocator, field.ty);
+                    }
+                    if (record.ext) |ext| try pending.append(self.allocator, ext);
+                },
+                .tuple => |items| try pending.appendSlice(self.allocator, self.store.span(items)),
+                .tag_union => |tag_union| {
+                    for (self.store.tagSpan(tag_union.tags)) |tag| try pending.appendSlice(self.allocator, self.store.span(tag.payloads));
+                    if (tag_union.ext) |ext| try pending.append(self.allocator, ext);
+                },
+                .list => |elem| try pending.append(self.allocator, elem),
+                .box => |payload| try pending.append(self.allocator, payload),
+                .nominal => |nominal| try pending.appendSlice(self.allocator, self.store.nominalArgs(nominal)),
+                .function => |function| {
+                    try pending.appendSlice(self.allocator, self.store.span(function.args));
+                    try pending.append(self.allocator, function.ret);
+                },
+                .primitive, .empty_record, .variable => {},
+            }
+        } else false;
+        try self.signature_slots.put(self.allocator, id, found);
+        return found;
+    }
+
+    /// `ty` with each variable `i` replaced by `bound[i]`. A row whose
+    /// remainder becomes a row joins it.
+    pub fn substitute(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId) Allocator.Error!TypeId {
+        var done: std.AutoHashMapUnmanaged(TypeId, TypeId) = .empty;
+        defer done.deinit(allocator);
+        const Frame = struct { ty: TypeId, expanded: bool };
+        var stack: std.ArrayList(Frame) = .empty;
+        defer stack.deinit(allocator);
+        try stack.append(allocator, .{ .ty = root, .expanded = false });
+        while (stack.pop()) |frame| {
+            if (done.contains(frame.ty)) continue;
+            const node = self.store.get(frame.ty);
+            if (!frame.expanded) {
+                try stack.append(allocator, .{ .ty = frame.ty, .expanded = true });
+                switch (node) {
+                    .record => |record| {
+                        for (self.store.fieldSpan(record.fields)) |field| try stack.append(allocator, .{ .ty = field.ty, .expanded = false });
+                        if (record.ext) |ext| try stack.append(allocator, .{ .ty = ext, .expanded = false });
+                    },
+                    .tuple => |items| for (self.store.span(items)) |item| try stack.append(allocator, .{ .ty = item, .expanded = false }),
+                    .tag_union => |tag_union| {
+                        for (self.store.tagSpan(tag_union.tags)) |tag| for (self.store.span(tag.payloads)) |payload| try stack.append(allocator, .{ .ty = payload, .expanded = false });
+                        if (tag_union.ext) |ext| try stack.append(allocator, .{ .ty = ext, .expanded = false });
+                    },
+                    .list => |elem| try stack.append(allocator, .{ .ty = elem, .expanded = false }),
+                    .box => |payload| try stack.append(allocator, .{ .ty = payload, .expanded = false }),
+                    .nominal => |nominal| for (self.store.nominalArgs(nominal)) |arg| try stack.append(allocator, .{ .ty = arg, .expanded = false }),
+                    .function => |function| {
+                        for (self.store.span(function.args)) |arg| try stack.append(allocator, .{ .ty = arg, .expanded = false });
+                        try stack.append(allocator, .{ .ty = function.ret, .expanded = false });
+                    },
+                    .primitive, .empty_record, .variable => {},
+                }
+                continue;
+            }
+            const result: TypeId = switch (node) {
+                .primitive, .empty_record => frame.ty,
+                .variable => |index| if (index < bound.len) bound[index] else invariant("a substituted type names a variable past its bindings"),
+                .list => |elem| try self.store.intern(.{ .list = done.get(elem).? }),
+                .box => |payload| try self.store.intern(.{ .box = done.get(payload).? }),
+                .tuple => |items| blk: {
+                    const out = try allocator.alloc(TypeId, items.len);
+                    defer allocator.free(out);
+                    for (self.store.span(items), out) |item, *slot| slot.* = done.get(item).?;
+                    break :blk try self.store.intern(.{ .tuple = out });
+                },
+                .function => |function| blk: {
+                    const args = try allocator.alloc(TypeId, function.args.len);
+                    defer allocator.free(args);
+                    for (self.store.span(function.args), args) |arg, *slot| slot.* = done.get(arg).?;
+                    break :blk try self.store.intern(.{ .function = .{ .args = args, .ret = done.get(function.ret).?, .effectful = function.effectful } });
+                },
+                .nominal => |nominal| blk: {
+                    const args = try allocator.alloc(TypeId, nominal.args.len);
+                    defer allocator.free(args);
+                    for (self.store.nominalArgs(nominal), args) |arg, *slot| slot.* = done.get(arg).?;
+                    var copy = nominal;
+                    _ = &copy;
+                    break :blk try self.store.intern(.{ .nominal = .{ .decl = nominal.decl, .args = args, .name = nominal.name, .is_opaque = nominal.is_opaque, .builtin = nominal.builtin, .has_backing = nominal.has_backing } });
+                },
+                .record => |record| blk: {
+                    var fields: std.ArrayList(types.Field) = .empty;
+                    defer fields.deinit(allocator);
+                    for (self.store.fieldSpan(record.fields)) |field| try fields.append(allocator, .{ .name = field.name, .ty = done.get(field.ty).?, .kind = field.kind });
+                    var ext: ?TypeId = if (record.ext) |ext| done.get(ext).? else null;
+                    if (ext) |ext_ty| switch (self.store.get(ext_ty)) {
+                        .empty_record => ext = null,
+                        .record => |ext_record| {
+                            try fields.appendSlice(allocator, self.store.fieldSpan(ext_record.fields));
+                            ext = ext_record.ext;
+                        },
+                        .variable => {},
+                        else => invariant("a record row's remainder substituted to a non-record type"),
+                    };
+                    if (fields.items.len == 0 and ext == null) break :blk try self.store.emptyRecord();
+                    const store = &self.store;
+                    std.mem.sort(types.Field, fields.items, store, struct {
+                        fn lessThan(s: *types.Store, a: types.Field, b: types.Field) bool {
+                            return s.nameLessThan(a.name, b.name);
+                        }
+                    }.lessThan);
+                    break :blk try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext } });
+                },
+                .tag_union => |tag_union| blk: {
+                    var tags: std.ArrayList(types.TagInput) = .empty;
+                    defer tags.deinit(allocator);
+                    var payloads: std.ArrayList(TypeId) = .empty;
+                    defer payloads.deinit(allocator);
+                    const own = self.store.tagSpan(tag_union.tags);
+                    for (own) |tag| for (self.store.span(tag.payloads)) |payload| try payloads.append(allocator, done.get(payload).?);
+                    var at: usize = 0;
+                    for (own) |tag| {
+                        try tags.append(allocator, .{ .name = tag.name, .payloads = payloads.items[at..][0..tag.payloads.len] });
+                        at += tag.payloads.len;
+                    }
+                    var ext: ?TypeId = if (tag_union.ext) |ext| done.get(ext).? else null;
+                    if (ext) |ext_ty| switch (self.store.get(ext_ty)) {
+                        .tag_union => |ext_union| {
+                            for (self.store.tagSpan(ext_union.tags)) |tag| {
+                                const named = for (own) |known| {
+                                    if (known.name == tag.name and known.payloads.len == tag.payloads.len) break true;
+                                } else false;
+                                if (!named) try tags.append(allocator, .{ .name = tag.name, .payloads = self.store.span(tag.payloads) });
+                            }
+                            ext = ext_union.ext;
+                        },
+                        .variable => {},
+                        else => invariant("a tag row's remainder substituted to a non-tag type"),
+                    };
+                    const store = &self.store;
+                    std.mem.sort(types.TagInput, tags.items, store, struct {
+                        fn lessThan(s: *types.Store, a: types.TagInput, b: types.TagInput) bool {
+                            return s.nameLessThan(a.name, b.name);
+                        }
+                    }.lessThan);
+                    break :blk try self.store.intern(.{ .tag_union = .{ .tags = tags.items, .ext = ext } });
+                },
+            };
+            try done.put(allocator, frame.ty, result);
+        }
+        return done.get(root).?;
     }
 
     /// The override method entries a nominal type's descriptor carries, in
@@ -692,6 +859,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.by_identity.deinit(allocator);
         program.sites_by_expr.deinit(allocator);
         program.nominal_overrides.deinit(allocator);
+        program.signature_slots.deinit(allocator);
         program.omitted_defaults.deinit(allocator);
         program.codec.deinit(allocator);
         program.arena.deinit();

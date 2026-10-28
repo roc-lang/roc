@@ -65,7 +65,9 @@ pub const Task = union(enum) {
     /// Pop and drop one value.
     discard,
     /// Pop the arguments of a call to `callee` and call it.
-    finish_call: struct { callee: WorkerId, hidden: []LocalId, arg_count: u32, result: TypeId },
+    /// `adapt` is set for a callee storing record fields of its signature
+    /// in presence slots: the types its scheme takes and the arguments'.
+    finish_call: struct { callee: WorkerId, hidden: []LocalId, arg_count: u32, result: TypeId, adapt: ?Builder.CallAdapt = null },
     finish_erased_call: struct { fn_ty: TypeId, arg_count: u32, result: TypeId },
     finish_low_level: struct { op: LIR.LowLevel, arg_count: u32, result: TypeId, arg_types: []const TypeId = &.{} },
     finish_record: CheckedExprId,
@@ -1044,6 +1046,16 @@ pub const Builder = struct {
             switch (from) {
                 .record => |record| {
                     for (store.fieldSpan(to.record.fields)) |to_field| {
+                        // A closed record lacking an optional field the
+                        // destination stores gets it missing.
+                        const present = for (store.fieldSpan(record.fields)) |from_field| {
+                            if (from_field.name == to_field.name) break true;
+                        } else false;
+                        if (!present and record.ext == null and to_field.kind == .presence_slot) switch (pair.place) {
+                            .data => result = .data,
+                            .root_function => return .function,
+                            .nested_function => invariant("adapting a function value inside data is not yet lowered by Boxy"),
+                        };
                         for (store.fieldSpan(record.fields)) |from_field| {
                             if (from_field.name != to_field.name) continue;
                             if (from_field.kind != to_field.kind) switch (pair.place) {
@@ -1551,6 +1563,7 @@ pub const Builder = struct {
             .numeral_arg => |arg| try self.pushValue(try self.numeralArgument(arg.literal, arg.ty)),
             .finish_call => |call| {
                 defer self.allocator.free(call.hidden);
+                if (call.adapt) |adapt| return try self.finishAdaptedCall(call.callee, call.hidden, adapt, call.result);
                 try self.finishCall(call.callee, call.hidden, call.arg_count, call.result);
             },
             .finish_low_level => |ll| try self.finishLowLevel(ll.op, ll.arg_count, ll.result, ll.arg_types),
@@ -3080,8 +3093,39 @@ pub const Builder = struct {
             .local_param, .local_value, .pattern_binder, .local_mutable_version, .platform_required_const, .top_level_const, .imported_const => return try self.lowerValueCall(expr_id, call),
             else => |ref| invariantFmt("calls through a {s} reference are not yet lowered by Boxy", .{@tagName(ref)}),
         } else return try self.lowerValueCall(expr_id, call);
-        try self.push(.{ .finish_call = .{ .callee = callee, .hidden = try self.hiddenArgsAt(callee, self.siteSubstitution(call.func), self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{}, try self.exprType(call.func)), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
+        const subst = self.siteSubstitution(call.func);
+        const call_fn = try self.exprType(call.func);
+        var adapt: ?CallAdapt = null;
+        if (try self.program.signatureHasSlots(callee)) {
+            const arg_types = try self.program.arena.allocator().alloc(TypeId, call.args.len);
+            for (call.args, arg_types) |arg, *arg_ty| arg_ty.* = try self.exprType(arg);
+            const bound = try self.boundTypesAt(callee, subst, call_fn);
+            defer self.allocator.free(bound);
+            adapt = .{ .bound = try self.program.arena.allocator().dupe(TypeId, bound), .arg_types = arg_types };
+        }
+        try self.push(.{ .finish_call = .{ .callee = callee, .hidden = try self.hiddenArgsAt(callee, subst, self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{}, call_fn), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id), .adapt = adapt } });
         try self.pushExprsReversed(call.args);
+    }
+
+    pub const CallAdapt = struct { bound: []const TypeId, arg_types: []const TypeId };
+
+    /// A call of a worker storing record fields of its signature in
+    /// presence slots: each argument adapted to the worker's storage of its
+    /// parameter at this call's instantiation, and the result adapted back
+    /// (design.md "Field Kinds").
+    pub fn finishAdaptedCall(self: *Builder, callee: WorkerId, hidden: []const LocalId, adapt: CallAdapt, result_ty: TypeId) Allocator.Error!void {
+        const explicit = try self.popValues(@intCast(adapt.arg_types.len));
+        defer self.allocator.free(explicit);
+        const target_worker = self.program.worker(callee).*;
+        for (explicit, adapt.arg_types, target_worker.params) |*arg, arg_ty, param_ty| {
+            arg.* = try self.adaptValue(arg.*, arg_ty, try self.program.substitute(self.allocator, param_ty, adapt.bound));
+        }
+        const ret = try self.program.substitute(self.allocator, target_worker.ret, adapt.bound);
+        const args = try std.mem.concat(self.allocator, LocalId, &.{ explicit, hidden });
+        defer self.allocator.free(args);
+        const target = try self.localOf(ret, .frame);
+        try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = target_worker.proc, .args = try self.store.addLocalSpan(args), .next = undefined } });
+        try self.pushValue(try self.adaptValue(target, ret, result_ty));
     }
 
     /// A call of a function value: evaluate the function, then its
@@ -3106,14 +3150,31 @@ pub const Builder = struct {
     /// nothing, what a variable no use relates seals to.
     pub fn hiddenArgsAt(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence, call_fn: ?TypeId) Allocator.Error![]LocalId {
         const target = self.program.worker(callee).*;
-        if (subst.len != target.scheme_vars.len) invariant("a call's checked substitution differs from its target's scheme");
+        const bound = try self.boundTypesAt(callee, subst, call_fn);
+        defer self.allocator.free(bound);
         const hidden = try self.allocator.alloc(LocalId, subst.len + target.dictionary_params.len);
         errdefer self.allocator.free(hidden);
+        for (bound, hidden[0..subst.len]) |ty, *desc| desc.* = try self.descOf(ty);
+        for (target.dictionary_params, hidden[subst.len..]) |param_index, *dict| {
+            if (param_index >= evidence.len) invariant("a call's checked evidence does not cover its target's dictionaries");
+            dict.* = try self.dictionaryOf(evidence[param_index]);
+        }
+        return hidden;
+    }
+
+    /// The types the scheme variables of `callee` take at a call: the
+    /// checked substitution's, where an erroneous entry takes what the call's
+    /// function type `call_fn` relates it to, or seals.
+    pub fn boundTypesAt(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, call_fn: ?TypeId) Allocator.Error![]TypeId {
+        const target = self.program.worker(callee).*;
+        if (subst.len != target.scheme_vars.len) invariant("a call's checked substitution differs from its target's scheme");
+        const bound = try self.allocator.alloc(TypeId, subst.len);
+        errdefer self.allocator.free(bound);
         var related: ?[]?TypeId = null;
         defer if (related) |r| self.allocator.free(r);
-        for (subst, hidden[0..subst.len], 0..) |checked_ty, *desc, index| {
+        for (subst, bound, 0..) |checked_ty, *slot, index| {
             if (self.view.types().payload(checked_ty) != .err) {
-                desc.* = try self.descOf(try self.convert(checked_ty));
+                slot.* = try self.convert(checked_ty);
                 continue;
             }
             if (related == null) {
@@ -3121,13 +3182,9 @@ pub const Builder = struct {
                 related = if (call_fn) |actual| try self.relateVariablesPartial(&.{.{ formal, actual }}, target.scheme_vars.len) else try self.allocator.alloc(?TypeId, 0);
             }
             const ty = if (index < related.?.len) related.?[index] else null;
-            desc.* = try self.descOf(ty orelse try self.program.converter().sealedScheme(target.module, target.scheme_vars[index]));
+            slot.* = ty orelse try self.program.converter().sealedScheme(target.module, target.scheme_vars[index]);
         }
-        for (target.dictionary_params, hidden[subst.len..]) |param_index, *dict| {
-            if (param_index >= evidence.len) invariant("a call's checked evidence does not cover its target's dictionaries");
-            dict.* = try self.dictionaryOf(evidence[param_index]);
-        }
-        return hidden;
+        return bound;
     }
 
     /// The worker of a method target: the procedure template the target
