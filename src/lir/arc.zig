@@ -4726,7 +4726,11 @@ const Inserter = struct {
             },
             .alias => |source| {
                 if (source == target) arcInvariant("ARC dyn copy named its own source as target");
-                if (!self.isBindingBorrowed(target)) {
+                // A copy of a value with no reference-counted content is a
+                // fresh value.
+                if (!self.localContainsRefcounted(source)) {
+                    step.pre_release = if (try self.transferForFreshBind(owned, target)) self.releaseDecision(target) else null;
+                } else if (!self.isBindingBorrowed(target)) {
                     const transfer = try self.transferForAliasBind(owned, target, source, next);
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(target) else null;
                     step.retain_assign_ref_target = transfer.retain_target;

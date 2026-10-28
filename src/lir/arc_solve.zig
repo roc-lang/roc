@@ -3202,6 +3202,14 @@ fn liftDynStmtFacts(solver: *Solver, current: LIR.CFStmtId, target: ?LIR.LocalId
         },
         .alias => |source| {
             const defined = target orelse solveInvariant("ARC dyn copy had no target");
+            // A copy of a value with no reference-counted content (a closed
+            // value stored into a dynamic local) holds none either: it is a
+            // fresh value.
+            if (solver.domain.indexOf(source) == null) {
+                try solver.binding_facts.append(allocator, .{ .fresh = defined });
+                try solver.unique_facts.append(allocator, .{ .birth = defined });
+                return;
+            }
             if (defined != source) {
                 try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = defined, .source = source } });
                 try solver.binding_facts.append(allocator, .{ .alias = .{ .target = defined, .source = source } });

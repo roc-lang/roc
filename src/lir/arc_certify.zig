@@ -6358,6 +6358,12 @@ const Certifier = struct {
             .alias => |source| {
                 const defined = target.?;
                 if (defined == source) return self.fail("dyn copy into its own source {d}", .{@backingInt(source)});
+                // A copy of a value with no reference-counted content is a
+                // fresh value.
+                if (!self.isRc(source)) {
+                    if (self.isRc(defined)) _ = try self.bindFresh(state, defined, 1, &.{});
+                    return;
+                }
                 try self.bindSameValue(state, defined, source);
             },
             .construct => try self.applyAggregate(state, target.?, self.dyn_operands.items),
