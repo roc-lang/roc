@@ -429,6 +429,10 @@ const CustomCase = enum {
     watch_completed_run_refresh_reruns,
     hot_reload_dev_shim,
     hot_reload_model_boundary,
+    issue_12633_hot_reload_erased_callable_state,
+    issue_12633_hot_reload_erased_callable_same_state,
+    issue_12633_hot_reload_erased_callable_state_boxy,
+    issue_12633_hot_reload_erased_callable_same_state_boxy,
     hot_reload_default_app,
     platform_requires_checker_diagnostics,
     generated_graph_1_1,
@@ -2453,6 +2457,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check --watch reruns when completed child snapshot is stale", .skip = .{ .windows = "watch refresh race test uses a POSIX wrapper script" }, .body = .{ .custom = .watch_completed_run_refresh_reruns } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch hot reloads dev shim code", .skip = .{ .windows = "generated hot-reload test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_dev_shim } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch hot reloads app-provided Model through Box", .skip = .{ .windows = "generated hot-reload model test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_model_boundary } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12633: roc --watch rejects a State layout change the host reaches only through an erased callable", .skip = .{ .windows = "generated hot-reload erased-callable test platform uses POSIX host code" }, .body = .{ .custom = .issue_12633_hot_reload_erased_callable_state } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12633: roc --watch reloads an unchanged State the host reaches only through an erased callable", .skip = .{ .windows = "generated hot-reload erased-callable test platform uses POSIX host code" }, .body = .{ .custom = .issue_12633_hot_reload_erased_callable_same_state } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12633: boxy roc --watch rejects a State layout change the host reaches only through an erased callable", .skip = .{ .windows = "generated hot-reload erased-callable test platform uses POSIX host code" }, .body = .{ .custom = .issue_12633_hot_reload_erased_callable_state_boxy } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12633: boxy roc --watch reloads an unchanged State the host reaches only through an erased callable", .skip = .{ .windows = "generated hot-reload erased-callable test platform uses POSIX host code" }, .body = .{ .custom = .issue_12633_hot_reload_erased_callable_same_state_boxy } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch runs headerless default app", .body = .{ .custom = .hot_reload_default_app } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10307: direct dev run passes source path as argv0", .backend = .dev, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/fx-open/argv0.roc", .app_args = &.{ "first", "second" }, .file_path_mode = .relative, .stdout_exact = "test/fx-open/argv0.roc|first|second\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10307: explicit run passes source path as argv0", .backend = .dev, .body = .{ .command = .{ .args = &.{ "run", "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/argv0.roc", .app_args = &.{ "first", "second" }, .file_path_mode = .relative, .stdout_exact = "test/fx-open/argv0.roc|first|second\n" } } },
@@ -5226,6 +5234,10 @@ fn runCustomCase(
         .watch_completed_run_refresh_reruns => customWatchCompletedRunRefreshReruns(io, allocator, &env, &timer, timeout_ms),
         .hot_reload_dev_shim => customHotReloadDevShim(io, allocator, &env, &timer, timeout_ms),
         .hot_reload_model_boundary => customHotReloadModelBoundary(io, allocator, &env, &timer, timeout_ms),
+        .issue_12633_hot_reload_erased_callable_state => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .larger_state, "--specialize=yes"),
+        .issue_12633_hot_reload_erased_callable_same_state => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .same_state, "--specialize=yes"),
+        .issue_12633_hot_reload_erased_callable_state_boxy => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .larger_state, "--specialize=no"),
+        .issue_12633_hot_reload_erased_callable_same_state_boxy => customIssue12633HotReloadErasedCallableState(io, allocator, &env, &timer, timeout_ms, .same_state, "--specialize=no"),
         .hot_reload_default_app => customHotReloadDefaultApp(io, allocator, &env, &timer, timeout_ms),
         .platform_requires_checker_diagnostics => customPlatformRequiresCheckerDiagnostics(io, allocator, &env, &timer, timeout_ms),
         .generated_graph_1_1 => customGeneratedModuleGraph(io, allocator, &env, &timer, timeout_ms, .{ .roc_file_count = 1, .symbols_per_file = 1 }),
@@ -7054,6 +7066,322 @@ fn customHotReloadModelBoundary(
             std.fmt.allocPrint(allocator, "expected 1 accepted model hot reload generation, got {d}", .{accepted_count}) catch "unexpected model hot reload ack count",
         );
     }
+
+    return null;
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12633
+// The platform's entrypoints mention the app's `State` only inside a boxed closure. Changing
+// `State`'s layout changes the host interface, so `roc --watch` must reject the reload rather
+// than let a closure from the old image run against a reader from the new image. An edit that
+// keeps `State`'s layout must still reload, and the old closure then runs the new reader.
+const issue_12633_app_initial =
+    \\app [State, main] { pf: platform "./platform/main.roc" }
+    \\
+    \\State : { value : U64 }
+    \\
+    \\main = { init, value }
+    \\
+    \\init : U64 -> State
+    \\init = |seed| { value: seed }
+    \\
+    \\value : State -> U64
+    \\value = |state| state.value
+    \\
+;
+
+fn issue12633PlatformSource(allocator: Allocator, target: NativeMuslTarget) CliRunnerError![]const u8 {
+    return try std.fmt.allocPrint(
+        allocator,
+        \\platform ""
+        \\    requires {{
+        \\        [State : state] for main : {{
+        \\            init : U64 -> state,
+        \\            value : state -> U64,
+        \\        }}
+        \\    }}
+        \\    exposes []
+        \\    packages {{}}
+        \\    provides {{ "roc_capture": capture_for_host, "roc_read": read_for_host }}
+        \\    targets: {{
+        \\        inputs_dir: "targets/",
+        \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
+        \\    }}
+        \\
+        \\capture_for_host : U64 -> Box(((State -> U64) -> U64))
+        \\capture_for_host = |seed| {{
+        \\    init_fn = main.init
+        \\    state = init_fn(seed)
+        \\
+        \\    Box.box(|reader| reader(state))
+        \\}}
+        \\
+        \\read_for_host : Box(((State -> U64) -> U64)) -> U64
+        \\read_for_host = |boxed| {{
+        \\    value_fn = main.value
+        \\
+        \\    Box.unbox(boxed)(value_fn)
+        \\}}
+        \\
+    ,
+        .{target.roc_target},
+    );
+}
+
+/// The app source the host writes over the initial app, and whether the reload keeps `State`.
+const Issue12633Edit = enum {
+    larger_state,
+    same_state,
+
+    fn appSource(self: Issue12633Edit) []const u8 {
+        return switch (self) {
+            .larger_state =>
+            \\app [State, main] { pf: platform "./platform/main.roc" }
+            \\
+            \\State : { aaa : U64, value : U64 }
+            \\
+            \\main = { init, value }
+            \\
+            \\init : U64 -> State
+            \\init = |seed| { aaa: 7, value: seed }
+            \\
+            \\value : State -> U64
+            \\value = |state| state.value + 100
+            \\
+            ,
+            .same_state =>
+            \\app [State, main] { pf: platform "./platform/main.roc" }
+            \\
+            \\State : { value : U64 }
+            \\
+            \\main = { init, value }
+            \\
+            \\init : U64 -> State
+            \\init = |seed| { value: seed }
+            \\
+            \\value : State -> U64
+            \\value = |state| state.value + 100
+            \\
+            ,
+        };
+    }
+};
+
+const issue_12633_host_c_source =
+    \\#include <stdint.h>
+    \\#include <stdio.h>
+    \\#include <stdlib.h>
+    \\#include <unistd.h>
+    \\
+    \\extern void *roc_capture(uint64_t);
+    \\extern uint64_t roc_read(void *);
+    \\
+    \\void *roc_alloc(size_t length, size_t alignment) {
+    \\    if (alignment < sizeof(void *)) alignment = sizeof(void *);
+    \\    void *ptr = NULL;
+    \\    if (posix_memalign(&ptr, alignment, length == 0 ? 1 : length) != 0) return NULL;
+    \\    return ptr;
+    \\}
+    \\
+    \\void roc_dealloc(void *ptr, size_t alignment) {
+    \\    (void)alignment;
+    \\    free(ptr);
+    \\}
+    \\
+    \\void *roc_realloc(void *ptr, size_t new_length, size_t alignment) {
+    \\    (void)alignment;
+    \\    return realloc(ptr, new_length == 0 ? 1 : new_length);
+    \\}
+    \\
+    \\void roc_dbg(const unsigned char *bytes, size_t len) {
+    \\    fwrite(bytes, 1, len, stderr);
+    \\    fputc('\n', stderr);
+    \\}
+    \\
+    \\void roc_expect_failed(const unsigned char *bytes, size_t len) {
+    \\    fwrite(bytes, 1, len, stderr);
+    \\    fputc('\n', stderr);
+    \\}
+    \\
+    \\void roc_crashed(const unsigned char *bytes, size_t len) {
+    \\    fwrite(bytes, 1, len, stderr);
+    \\    fputc('\n', stderr);
+    \\    abort();
+    \\}
+    \\
+    \\// Renamed into place so `roc --watch` never rebuilds from a partially written app.
+    \\static int write_app(const char *path, const char *edit_path) {
+    \\    static char body[4096];
+    \\    FILE *edit = fopen(edit_path, "rb");
+    \\    if (edit == NULL) return 1;
+    \\    size_t len = fread(body, 1, sizeof(body) - 1, edit);
+    \\    fclose(edit);
+    \\    body[len] = 0;
+    \\    char temp_path[4096];
+    \\    int temp_len = snprintf(temp_path, sizeof(temp_path), "%s.tmp", path);
+    \\    if (temp_len < 0 || (size_t)temp_len >= sizeof(temp_path)) return 1;
+    \\    FILE *file = fopen(temp_path, "wb");
+    \\    if (file == NULL) return 1;
+    \\    if (fputs(body, file) < 0) { fclose(file); return 1; }
+    \\    if (fclose(file) != 0) return 1;
+    \\    return rename(temp_path, path) != 0;
+    \\}
+    \\
+    \\int main(int argc, char **argv) {
+    \\    if (argc < 3) {
+    \\        fprintf(stderr, "expected app path and edited app path\n");
+    \\        return 1;
+    \\    }
+    \\
+    \\    void *old = roc_capture(12);
+    \\    printf("closure-initial:%llu\n", (unsigned long long)roc_read(roc_capture(12)));
+    \\    fflush(stdout);
+    \\
+    \\    if (write_app(argv[1], argv[2])) return 1;
+    \\
+    \\    uint64_t current = 0;
+    \\    for (int i = 0; i < 150; i += 1) {
+    \\        current = roc_read(roc_capture(12));
+    \\        if (current == 112) {
+    \\            printf("closure-reload-accepted:%llu\n", (unsigned long long)current);
+    \\            printf("closure-old-reader:%llu\n", (unsigned long long)roc_read(old));
+    \\            puts("closure-done");
+    \\            fflush(stdout);
+    \\            return 0;
+    \\        }
+    \\        usleep(100000);
+    \\    }
+    \\
+    \\    printf("closure-reload-rejected:%llu\n", (unsigned long long)current);
+    \\    printf("closure-old-reader:%llu\n", (unsigned long long)roc_read(old));
+    \\    puts("closure-done");
+    \\    fflush(stdout);
+    \\    return 0;
+    \\}
+    \\
+;
+
+fn customIssue12633HotReloadErasedCallableState(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    edit: Issue12633Edit,
+    specialize_arg: []const u8,
+) ?TestResult {
+    const target = nativeMuslTarget() orelse {
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "hot-reload erased-callable integration runs only on native Linux x64/arm64 hosts" };
+    };
+
+    const platform_dir = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "platform" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform dir: {}", .{err});
+    const target_dir = std.fs.path.join(allocator, &.{ platform_dir, "targets", target.roc_target }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform target dir: {}", .{err});
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "app.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    const edited_app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "edited-app.txt" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate edited app path: {}", .{err});
+    const platform_path = std.fs.path.join(allocator, &.{ platform_dir, "main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
+    const host_c_path = std.fs.path.join(allocator, &.{ platform_dir, "host.c" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate host C path: {}", .{err});
+    const host_o_path = std.fs.path.join(allocator, &.{ target_dir, "host.o" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate host object path: {}", .{err});
+    const host_lib_path = std.fs.path.join(allocator, &.{ target_dir, "libhost.a" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate host archive path: {}", .{err});
+    const target_arg = std.fmt.allocPrint(allocator, "--target={s}", .{target.roc_target}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate target arg: {}", .{err});
+
+    std.Io.Dir.cwd().createDirPath(io, target_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create platform target dir: {}", .{err});
+    copyNativeMuslTargetFile(io, allocator, target, "crt1.o", target_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to copy crt1.o: {}", .{err});
+    copyNativeMuslTargetFile(io, allocator, target, "libc.a", target_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to copy libc.a: {}", .{err});
+    if (buildNativeMuslCompilerRtObject(io, allocator, env, timer, timeout_ms, target, target_dir)) |failure| return failure;
+
+    const platform_source = issue12633PlatformSource(allocator, target) catch |err|
+        return customInfraFailure(allocator, timer, "failed to render platform source: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = platform_path, .data = platform_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write platform source: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = host_c_path, .data = issue_12633_host_c_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write host C source: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = issue_12633_app_initial }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write app source: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = edited_app_path, .data = edit.appSource() }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write edited app source: {}", .{err});
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "cc",
+        "-target",
+        target.zig_target,
+        "-O2",
+        "-c",
+        host_c_path,
+        "-o",
+        host_o_path,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "ar",
+        "rcs",
+        host_lib_path,
+        host_o_path,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+
+    const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc --watch started");
+    const result = runRawInEnv(io, allocator, env, &.{
+        roc_binary_path,
+        "--watch",
+        "--opt=dev",
+        "--no-cache",
+        specialize_arg,
+        target_arg,
+        app_path,
+        "--",
+        app_path,
+        edited_app_path,
+    }, project_root_path, null, child_timeout_ms) catch |err|
+        return customInfraFailure(allocator, timer, "roc --watch spawn error: {}", .{err});
+
+    const expectation: CommandCase = switch (edit) {
+        .larger_state => .{
+            .args = &.{"--watch"},
+            .exit = .success,
+            .contains = &.{
+                .{ .stream = .stdout, .text = "closure-initial:12\n" },
+                .{ .stream = .stdout, .text = "closure-reload-rejected:12\n" },
+                .{ .stream = .stdout, .text = "closure-old-reader:12\n" },
+                .{ .stream = .stdout, .text = "closure-done\n" },
+                .{ .stream = .stderr, .text = "changed the platform host interface" },
+            },
+            .not_contains = &.{
+                .{ .stream = .stdout, .text = "closure-reload-accepted" },
+                .{ .stream = .stderr, .text = "accepted by host" },
+                .{ .stream = .stderr, .text = "panic" },
+            },
+        },
+        .same_state => .{
+            .args = &.{"--watch"},
+            .exit = .success,
+            .contains = &.{
+                .{ .stream = .stdout, .text = "closure-initial:12\n" },
+                .{ .stream = .stdout, .text = "closure-reload-accepted:112\n" },
+                .{ .stream = .stdout, .text = "closure-old-reader:112\n" },
+                .{ .stream = .stdout, .text = "closure-done\n" },
+            },
+            .not_contains = &.{
+                .{ .stream = .stdout, .text = "closure-reload-rejected" },
+                .{ .stream = .stderr, .text = "changed the platform host interface" },
+                .{ .stream = .stderr, .text = "panic" },
+            },
+        },
+    };
+    if (checkCommandExpectation(allocator, result, expectation)) |message| return failureFromRun(allocator, timer, result, message);
 
     return null;
 }
