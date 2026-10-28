@@ -3118,13 +3118,15 @@ pub const Builder = struct {
             .constraint => |constraint| return self.scopeDictionary(constraint.index),
             .direct => |node_id| {
                 const node = table.evidenceNode(node_id);
-                if (node.instantiation == .alias) invariant("dictionaries of targets reached through a procedure alias are not yet lowered by Boxy");
                 const target = try self.methodTargetWorker(node.target);
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
-                if (node.instantiation == .derived_from_callable) {
-                    const hidden = try self.relatedHiddenArgs(target, node.instantiation.derived_from_callable);
-                    defer self.allocator.free(hidden);
-                    return try self.composeDictionary(try self.program.methodEntryWorker(target), hidden);
+                switch (node.instantiation) {
+                    .derived_from_callable, .alias => |callable| {
+                        const hidden = try self.relatedHiddenArgs(target, callable);
+                        defer self.allocator.free(hidden);
+                        return try self.composeDictionary(try self.program.methodEntryWorker(target), hidden);
+                    },
+                    .monomorphic, .callable => {},
                 }
                 const nested: []const static_dispatch.CheckedEvidence = switch (node.nested) {
                     .resolved => table.nestedEvidence(node),
@@ -3386,14 +3388,20 @@ pub const Builder = struct {
             .direct_closed, .direct_parametric => |direct| {
                 const node = table.evidenceNode(direct.evidence);
                 const callee = try self.methodTargetWorker(node.target);
-                if (node.instantiation == .alias) invariant("dispatch targets reached through a procedure alias are not yet lowered by Boxy");
-                const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
-                const nested: []const static_dispatch.CheckedEvidence = switch (node.nested) {
-                    .resolved => table.nestedEvidence(node),
-                    .from_callable => if (self.program.worker(callee).dictionary_params.len == 0) &.{} else invariant("callable-derived call evidence is not yet lowered by Boxy"),
-                    .through_alias => invariant("alias-scope call evidence is not yet lowered by Boxy"),
+                const hidden = switch (node.instantiation) {
+                    // Reached through a procedure alias, the target takes the
+                    // instantiation the call's callable type gives it.
+                    .alias => try self.relatedHiddenArgs(callee, call_plan.callable_ty),
+                    else => blk: {
+                        const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
+                        const nested: []const static_dispatch.CheckedEvidence = switch (node.nested) {
+                            .resolved => table.nestedEvidence(node),
+                            .from_callable => if (self.program.worker(callee).dictionary_params.len == 0) &.{} else invariant("callable-derived call evidence is not yet lowered by Boxy"),
+                            .through_alias => invariant("alias-scope call evidence is not yet lowered by Boxy"),
+                        };
+                        break :blk try self.hiddenArgs(callee, subst, nested);
+                    },
                 };
-                const hidden = try self.hiddenArgs(callee, subst, nested);
                 switch (call_plan.result_mode) {
                     // A codec method is an ordinary call of its target.
                     .value, .parser_for, .encoder_for, .hash, .map, .map_effectful => {},
