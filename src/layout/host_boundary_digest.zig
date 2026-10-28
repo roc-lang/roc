@@ -383,7 +383,7 @@ fn testDigest(store: *const Store, nodes: []const TestGraph.TestNode, root: u32)
 }
 
 fn expectDistinct(lhs: Digest, rhs: Digest) error{TestUnexpectedResult}!void {
-    try std.testing.expect(!std.mem.eql(u8, &lhs, &rhs));
+    try std.testing.expect(!std.meta.eql(lhs, rhs));
 }
 
 test "host boundary digest covers a state reached only through nested erased callables" {
