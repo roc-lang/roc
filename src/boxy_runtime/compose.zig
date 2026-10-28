@@ -9,8 +9,8 @@
 //! Every constructor interns its result keyed by the constructor and the
 //! identities of its operands (descriptor addresses and name ids): composing
 //! again with the same operands returns the same pointer and allocates
-//! nothing. Descriptors and the cache live in memory allocated through
-//! `RocOps` and are never freed.
+//! nothing. Descriptors and the cache live in immortal memory
+//! (`immortalBytes`) and are never freed.
 
 const std = @import("std");
 const builtins = @import("builtins");
@@ -220,7 +220,7 @@ pub const Cache = struct {
         const old_capacity = self.capacity;
         const new_capacity: u32 = if (old_capacity == 0) 64 else old_capacity * 2;
         const bytes = @as(usize, new_capacity) * @sizeOf(Entry);
-        const fresh: [*]Entry = @ptrCast(@alignCast(ops.allocRaw(bytes, @alignOf(Entry))));
+        const fresh: [*]Entry = @ptrCast(@alignCast(immortalBytes(ops, bytes, @alignOf(Entry))));
         for (fresh[0..new_capacity]) |*entry| entry.value = null;
         self.entries = fresh;
         self.capacity = new_capacity;
@@ -228,7 +228,7 @@ pub const Cache = struct {
             for (old[0..old_capacity]) |entry| {
                 if (entry.value != null) self.place(entry);
             }
-            ops.dealloc(@ptrCast(old), @alignOf(Entry));
+            releaseImmortal(ops, @ptrCast(old), @alignOf(Entry));
         }
     }
 };
@@ -245,8 +245,37 @@ fn keyHash(key: []const u64) u64 {
 }
 
 fn immortal(comptime T: type, count: usize, ops: *RocOps) [*]T {
-    return @ptrCast(@alignCast(ops.allocRaw(@max(count, 1) * @sizeOf(T), @alignOf(T))));
+    return @ptrCast(@alignCast(immortalBytes(ops, @max(count, 1) * @sizeOf(T), @alignOf(T))));
 }
+
+/// Bytes that live as long as the process: a composed descriptor or
+/// dictionary, or the composition cache. In a platform build every `RocOps`
+/// allocation goes to the host, whose allocator owns the values a program
+/// releases, so immortal memory there comes from process-lifetime pages;
+/// elsewhere `ops` is itself an immortal allocator.
+pub fn immortalBytes(ops: *RocOps, size: usize, alignment: usize) [*]u8 {
+    if (comptime builtins.host_abi.host_role == .platform) return PlatformImmortals.alloc(ops, size, alignment);
+    return @ptrCast(ops.allocRaw(size, alignment));
+}
+
+/// Release immortal bytes a composition replaced (a grown cache's old
+/// table). Process-lifetime pages are never released.
+fn releaseImmortal(ops: *RocOps, ptr: *anyopaque, alignment: usize) void {
+    if (comptime builtins.host_abi.host_role == .platform) return;
+    ops.dealloc(ptr, alignment);
+}
+
+const PlatformImmortals = struct {
+    var lock: std.atomic.Mutex = .unlocked;
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+
+    fn alloc(ops: *RocOps, size: usize, alignment: usize) [*]u8 {
+        while (!lock.tryLock()) std.atomic.spinLoopHint();
+        defer lock.unlock();
+        return arena.allocator().rawAlloc(size, .fromByteUnits(alignment), @returnAddress()) orelse
+            ops.crash("out of memory composing a Boxy descriptor");
+    }
+};
 
 /// Temporary storage for `count` items: inline when small, otherwise
 /// allocated through `RocOps` and released by `deinit`.
@@ -704,7 +733,7 @@ fn WithEntries(comptime Entry: type) type {
 fn allocWithEntries(comptime Entry: type, count: usize, ops: *RocOps) WithEntries(Entry) {
     const entries_offset = std.mem.alignForward(usize, @sizeOf(TypeDesc), @alignOf(Entry));
     const total = entries_offset + count * @sizeOf(Entry);
-    const bytes: [*]u8 = @ptrCast(ops.allocRaw(total, @max(@alignOf(TypeDesc), @alignOf(Entry))));
+    const bytes: [*]u8 = immortalBytes(ops, total, @max(@alignOf(TypeDesc), @alignOf(Entry)));
     return .{
         .desc = @ptrCast(@alignCast(bytes)),
         .entries = @ptrCast(@alignCast(bytes + entries_offset)),

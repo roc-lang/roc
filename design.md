@@ -13910,6 +13910,9 @@ shared capture drop, and the program's name table. It has no procedure
 registry, no sidecar, no descriptor numbering, no deferred or pending calls,
 and no table a backend must renumber. Static descriptors, static dictionaries,
 static callables, and the name table are static data of the program.
+Composed descriptors and dictionaries, and the cache interning them, are
+immortal: in a platform build they come from process-lifetime pages, not from
+the host's allocator, which owns only the values a program releases.
 
 #### Lowering Implementation Constraints
 

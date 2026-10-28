@@ -323,7 +323,7 @@ pub fn dictCompose(callable_fn: erased_callable.CallableFnPtr, capture_prefix: u
 
     const capture_size = capture_prefix + captures.len * @sizeOf(usize);
     const payload_size = erased_callable.payloadSize(capture_size);
-    const bytes: [*]u8 = @ptrCast(immortal_ops.allocRaw(static_callable_header + payload_size, erased_callable.payload_alignment));
+    const bytes: [*]u8 = compose.immortalBytes(immortal_ops, static_callable_header + payload_size, erased_callable.payload_alignment);
     const data = bytes + static_callable_header;
     @as(*isize, @ptrCast(@alignCast(data - @sizeOf(isize)))).* = utils.REFCOUNT_STATIC_DATA;
     erased_callable.payloadPtr(data).* = .{ .callable_fn_ptr = callable_fn, .on_drop = null };
@@ -349,7 +349,7 @@ pub fn dictRecord(methods: []const usize, immortal_ops: *RocOps) [*]const usize 
     for (methods, key[1..]) |method, *word| word.* = method;
     if (dictionary_cache.lookup(key)) |existing| return @ptrCast(@alignCast(existing));
 
-    const record: [*]usize = @ptrCast(@alignCast(immortal_ops.allocRaw(@max(methods.len, 1) * @sizeOf(usize), @alignOf(usize))));
+    const record: [*]usize = @ptrCast(@alignCast(compose.immortalBytes(immortal_ops, @max(methods.len, 1) * @sizeOf(usize), @alignOf(usize))));
     @memcpy(record[0..methods.len], methods);
     return @ptrCast(@alignCast(dictionary_cache.intern(key, @ptrCast(@alignCast(record)), immortal_ops)));
 }
