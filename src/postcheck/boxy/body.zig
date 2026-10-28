@@ -5577,6 +5577,15 @@ pub const Builder = struct {
             }
             return try self.readSlotInto(target, LIR.RefOp.field(base_local, semantic_index), field_ty, self.structFieldLayout(base_layout, semantic_index));
         }
+        // A field of an open row ranks among the remainder's fields too, so
+        // it is addressed by name.
+        switch (self.program.store.get(try self.structuralType(ty))) {
+            .record => |record| if (record.ext != null) {
+                const name = self.program.store.fieldSpan(record.fields)[semantic_index].name;
+                return try self.emitDyn(target, .{ .field_addr_named = .{ .base = base_local, .desc = try self.descOf(ty), .name = try self.nameDesc(name) } });
+            },
+            else => {},
+        }
         try self.emitDyn(target, .{ .field_addr = .{ .base = base_local, .desc = try self.descOf(ty), .semantic_index = semantic_index } });
     }
 
