@@ -906,21 +906,25 @@ pub const Builder = struct {
                     .hosted_lambda => {
                         // A hosted procedure is an extern at its declaration's
                         // own type (design.md "Host ABI").
-                        if (worker.scheme_vars.len != 0 or worker.dictionary_params.len != 0) invariant("a hosted procedure's type is generic");
+                        if (worker.dictionary_params.len != 0) invariant("a hosted declaration has no where requirements, which checking rejects");
                         const key = worker.key.template;
                         const hosted = self.program.hosted.get(.{ .module = key.module, .template = key.template }) orelse
                             invariant("a hosted procedure has no host binding");
                         if (hosted.dispatch_index) |dispatch_index| {
-                            const proc = self.store.getProcSpecPtr(worker.proc);
-                            proc.args = try self.store.addLocalSpan(params);
-                            proc.ret_layout = ret_layout;
-                            proc.hosted = .{ .symbol = try self.store.insertString(hosted.symbol), .dispatch_index = dispatch_index };
-                            return;
+                            if (worker.scheme_vars.len == 0) {
+                                const proc = self.store.getProcSpecPtr(worker.proc);
+                                proc.args = try self.store.addLocalSpan(params);
+                                proc.ret_layout = ret_layout;
+                                proc.hosted = .{ .symbol = try self.store.insertString(hosted.symbol), .dispatch_index = dispatch_index };
+                                return;
+                            }
+                            try self.callGenericExtern(hosted.symbol, dispatch_index, params, worker.params, worker.ret);
+                        } else {
+                            // The platform's hosted section omits it: it has
+                            // no host slot, as checking reported.
+                            const message = try self.store.insertString("a hosted function the platform does not provide was called");
+                            try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = message }, .checked_error = true } });
                         }
-                        // The platform's hosted section omits it: it has no
-                        // host slot, as checking reported.
-                        const message = try self.store.insertString("a hosted function the platform does not provide was called");
-                        try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = message }, .checked_error = true } });
                     },
                     else => {
                         if (params.len != 0) invariant("a non-lambda template body has parameters");
@@ -950,6 +954,137 @@ pub const Builder = struct {
         try self.run();
 
         try self.finishProc(entry, body_start, args.items, ret_layout);
+    }
+
+    /// The body of a generic hosted worker: a direct call of the extern at
+    /// the declaration's own type. A variable slot sits inside a `Box`, a
+    /// pointer whatever the variable is, so each value crosses as the bytes
+    /// the calling Roc code holds, and the extern takes no descriptor
+    /// (design.md "Host ABI").
+    fn callGenericExtern(self: *Builder, symbol: []const u8, dispatch_index: u32, params: []const LocalId, param_types: []const TypeId, ret_ty: TypeId) Allocator.Error!void {
+        const extern_args = try self.allocator.alloc(LocalId, params.len);
+        defer self.allocator.free(extern_args);
+        const extern_params = try self.allocator.alloc(LocalId, params.len);
+        defer self.allocator.free(extern_params);
+        for (params, param_types, extern_args, extern_params) |param, param_ty, *arg, *extern_param| {
+            const abi = try self.hostAbiLayout(param_ty);
+            extern_param.* = try self.closedLocal(abi);
+            if (try self.closed(param_ty)) {
+                arg.* = param;
+                continue;
+            }
+            arg.* = try self.closedLocal(abi);
+            try self.emitDyn(arg.*, .{ .copy = .{ .src = param, .desc = try self.descOf(param_ty) } });
+        }
+        const ret_abi = try self.hostAbiLayout(ret_ty);
+        const extern_proc = try self.store.addProcSpec(.{
+            .name = self.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.programLocal("boxy.hosted_extern", @backingInt(self.worker_id)),
+            .args = try self.store.addLocalSpan(extern_params),
+            .ret_layout = ret_abi,
+            .hosted = .{ .symbol = try self.store.insertString(symbol), .dispatch_index = dispatch_index },
+        }, base.SourceLoc.none);
+        const result = try self.closedLocal(ret_abi);
+        try self.emitLinear(.{ .assign_call = .{ .target = result, .proc = extern_proc, .args = try self.store.addLocalSpan(extern_args), .next = undefined } });
+        if (try self.closed(ret_ty)) {
+            try self.pushValue(result);
+        } else {
+            const value = try self.localOf(ret_ty, .frame);
+            try self.emitDyn(value, .{ .copy = .{ .src = result, .desc = try self.descOf(ret_ty) } });
+            try self.pushValue(value);
+        }
+        try self.step(.ret);
+    }
+
+    /// The layout a hosted declaration's type `root` has at the host: its
+    /// committed layout where it is closed, and where a `Box` holds one of
+    /// the declaration's variables, the opaque box `RocBox(RocUnknown)`
+    /// (design.md "Host ABI"). The worker's own values of such a box are
+    /// dynamic locals, and each crossing copies between the two, so a local
+    /// of the opaque box is never the last owner of its allocation.
+    fn hostAbiLayout(self: *Builder, root: TypeId) Allocator.Error!layout.Idx {
+        const store = &self.program.store;
+        const layouts = &self.program.result.layouts;
+        var done: std.AutoHashMapUnmanaged(TypeId, layout.Idx) = .empty;
+        defer done.deinit(self.allocator);
+        const Frame = struct { ty: TypeId, expanded: bool };
+        var stack: std.ArrayList(Frame) = .empty;
+        defer stack.deinit(self.allocator);
+        var children: std.ArrayList(TypeId) = .empty;
+        defer children.deinit(self.allocator);
+        try stack.append(self.allocator, .{ .ty = root, .expanded = false });
+        while (stack.pop()) |frame| {
+            if (done.contains(frame.ty)) continue;
+            if (try self.closed(frame.ty)) {
+                try done.put(self.allocator, frame.ty, try self.program.layouts.layoutOf(frame.ty));
+                continue;
+            }
+            children.clearRetainingCapacity();
+            switch (store.get(frame.ty)) {
+                .box => |payload| if (!try self.closed(payload)) {
+                    try done.put(self.allocator, frame.ty, try layouts.insertBox(.opaque_ptr));
+                    continue;
+                } else try children.append(self.allocator, payload),
+                .nominal => try children.append(self.allocator, try self.program.converter().backing(frame.ty)),
+                .tuple => |items| try children.appendSlice(self.allocator, store.span(items)),
+                .record => |record| {
+                    if (record.ext != null) invariant("a hosted declaration's record row is closed, as checking requires");
+                    const fields = try self.allocator.dupe(types.Field, store.fieldSpan(record.fields));
+                    defer self.allocator.free(fields);
+                    for (fields) |field| try children.append(self.allocator, try self.program.layouts.fieldStorage(field));
+                },
+                .tag_union => |tag_union| {
+                    if (tag_union.ext != null) invariant("a hosted declaration's tag row is closed, as checking requires");
+                    const tags = try self.allocator.dupe(types.Tag, store.tagSpan(tag_union.tags));
+                    defer self.allocator.free(tags);
+                    for (tags) |tag| {
+                        const payloads = try self.allocator.dupe(TypeId, store.span(tag.payloads));
+                        defer self.allocator.free(payloads);
+                        if (try self.program.layouts.tagPayload(payloads)) |payload| try children.append(self.allocator, payload);
+                    }
+                },
+                .variable => invariant("a hosted declaration's variable appears only inside a Box, as checking requires"),
+                .list => invariant("a hosted declaration's variable inside a List is outside a Box, which checking rejects"),
+                .function, .primitive, .empty_record => unreachable, // closed
+            }
+            if (!frame.expanded) {
+                try stack.append(self.allocator, .{ .ty = frame.ty, .expanded = true });
+                for (children.items) |child| if (!done.contains(child)) try stack.append(self.allocator, .{ .ty = child, .expanded = false });
+                continue;
+            }
+            const child_layouts = try self.allocator.alloc(layout.Idx, children.items.len);
+            defer self.allocator.free(child_layouts);
+            for (children.items, child_layouts) |child, *child_layout| child_layout.* = done.get(child).?;
+            const built: layout.Idx = switch (store.get(frame.ty)) {
+                .box => try layouts.insertBox(child_layouts[0]),
+                .nominal => child_layouts[0],
+                .tuple, .record => blk: {
+                    const fields = try self.allocator.alloc(layout.StructField, child_layouts.len);
+                    defer self.allocator.free(fields);
+                    for (fields, child_layouts, 0..) |*field, child_layout, index| field.* = .{ .index = @intCast(index), .layout = child_layout };
+                    break :blk try layouts.putStructFields(fields);
+                },
+                .tag_union => |tag_union| blk: {
+                    const tags = try self.allocator.dupe(types.Tag, store.tagSpan(tag_union.tags));
+                    defer self.allocator.free(tags);
+                    const variants = try self.allocator.alloc(layout.Idx, tags.len);
+                    defer self.allocator.free(variants);
+                    var next: usize = 0;
+                    for (tags, variants) |tag, *variant| {
+                        if (tag.payloads.len == 0) {
+                            variant.* = .zst;
+                        } else {
+                            variant.* = child_layouts[next];
+                            next += 1;
+                        }
+                    }
+                    break :blk try layouts.putTagUnion(variants);
+                },
+                else => unreachable, // only the composite kinds above expand
+            };
+            try done.put(self.allocator, frame.ty, built);
+        }
+        return done.get(root).?;
     }
 
     /// Link the entry chain to the body and publish the procedure.
