@@ -2191,9 +2191,15 @@ const Gen = struct {
         const err_ty = (try requireTry(program_, ret_ty)).err;
         const optional = try self.b.allocator.alloc(?TypeId, fields.len);
         defer self.b.allocator.free(optional);
-        for (fields, slots, slot_types, names, optional) |field_info, slot, slot_ty, name_value, *missing_ok| {
+        // A defaulted field never parsed takes its default (design.md
+        // "Defaulted Fields").
+        const record_ty = try self.b.structuralType(value_ty);
+        const defaults = try self.b.allocator.alloc(?checked.CheckedFieldDefault, fields.len);
+        defer self.b.allocator.free(defaults);
+        for (fields, defaults) |field_info, *default| default.* = program_.store.field_defaults.get(.{ .record = record_ty, .name = field_info.name });
+        for (fields, slots, slot_types, names, optional, defaults) |field_info, slot, slot_ty, name_value, *missing_ok, default| {
             missing_ok.* = if (field_info.kind == .inline_slot) try missingTryOk(program_, field_info.ty) else null;
-            if (field_info.kind == .presence_slot or missing_ok.* != null) continue;
+            if (field_info.kind == .presence_slot or missing_ok.* != null or default != null) continue;
             const present_hole = try self.branchTag(slot, slot_ty, layouts_mod.missing_label);
             const missing = try self.tag(err_ty, "MissingRequiredField", &.{name_value});
             try self.failWith(missing, err_ty, on_err);
@@ -2201,10 +2207,20 @@ const Gen = struct {
         }
         const values = try self.b.allocator.alloc(LocalId, fields.len);
         defer self.b.allocator.free(values);
-        for (fields, slots, slot_types, optional, values) |field_info, slot, slot_ty, missing_ok, *value| {
+        for (fields, slots, slot_types, optional, values, defaults) |field_info, slot, slot_ty, missing_ok, *value, default| {
             if (field_info.kind == .presence_slot) {
                 // The slot is the field's own storage.
                 value.* = slot;
+                continue;
+            }
+            if (default) |field_default| {
+                const merged = try self.merge(field_info.ty);
+                const missing_hole = try self.branchTag(slot, slot_ty, layouts_mod.present_label);
+                try self.jump(merged.id, &.{merged.param}, &.{(try self.payload(slot, slot_ty, layouts_mod.present_label, 0)).value});
+                self.b.hole = missing_hole;
+                try self.jump(merged.id, &.{merged.param}, &.{try self.b.defaultValue(field_default)});
+                self.b.hole = merged.after;
+                value.* = merged.param;
                 continue;
             }
             if (missing_ok == null) {
