@@ -96,7 +96,8 @@ test "concurrent cache stores of one key use separate staging files" {
     defer allocator.free(tmp_path);
 
     const filesystem = CoreCtx.os(std.heap.page_allocator, std.heap.page_allocator, std.testing.io);
-    const config = CacheConfig{ .cache_dir = tmp_path, .roc_ctx = filesystem };
+    // Verbose output names the failing step and error if a store fails.
+    const config = CacheConfig{ .cache_dir = tmp_path, .roc_ctx = filesystem, .verbose = true };
     var first = CacheManager.init(std.heap.page_allocator, config, filesystem);
     var second = CacheManager.init(std.heap.page_allocator, config, filesystem);
 

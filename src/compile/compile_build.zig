@@ -843,7 +843,7 @@ pub const BuildEnv = struct {
             const candidate = try std.fs.path.join(gpa, &.{ current, "main.roc" });
             defer gpa.free(candidate);
 
-            if (filesystem.fileExists(candidate)) {
+            if (filesystem.fileExists(candidate) and try isExactlyMainRoc(gpa, filesystem, current, candidate)) {
                 const abs = try std.fs.path.resolve(gpa, &.{candidate});
                 gpa.free(current);
                 return abs;
@@ -861,6 +861,32 @@ pub const BuildEnv = struct {
             gpa.free(current);
             current = next;
         }
+    }
+
+    /// A case-insensitive filesystem also reports `Main.roc` as `main.roc`.
+    /// Only an entry spelled exactly `main.roc` owns its directory.
+    fn isExactlyMainRoc(gpa: Allocator, filesystem: CoreCtx, dir: []const u8, candidate: []const u8) Allocator.Error!bool {
+        const canonical = filesystem.canonicalize(candidate, gpa) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // A file whose stored spelling cannot be read, such as a virtual
+            // file, answers only to the name it was asked for.
+            error.FileNotFound, error.AccessDenied, error.IoError => return true,
+        };
+        defer gpa.free(canonical);
+        if (std.mem.eql(u8, std.fs.path.basename(canonical), "main.roc")) return true;
+        // A symlink canonicalizes to its target's name; the entry itself decides.
+        const entries = filesystem.listDirTop(dir, gpa) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.FileNotFound, error.AccessDenied, error.IoError => return false,
+        };
+        defer {
+            for (entries) |entry| gpa.free(entry.path);
+            gpa.free(entries);
+        }
+        for (entries) |entry| {
+            if (std.mem.eql(u8, std.fs.path.basename(entry.path), "main.roc")) return true;
+        }
+        return false;
     }
 
     /// Set or clear the request that cancels this environment's builds (see

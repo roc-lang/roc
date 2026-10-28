@@ -3431,7 +3431,10 @@ test "native publication allocation failures release temporary records and retai
         return err;
     };
     try fixture.publish(&.{F.excerpt(1, "code")}, &.{F.spec(1, 0)}, &.{});
-    try std.testing.checkAllAllocationFailures(F.allocator, Check.load, .{&fixture.store});
+    std.testing.checkAllAllocationFailures(F.allocator, Check.load, .{&fixture.store}) catch |err| {
+        std.debug.print("load allocation check: {}\n", .{err});
+        return err;
+    };
     var loaded = try fixture.loader();
     defer loaded.deinit();
     _ = loaded.specCacheLookup().lookup(@splat(1), .dev_code, &.{}) orelse return error.TestUnexpectedResult;

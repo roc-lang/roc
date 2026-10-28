@@ -762,6 +762,9 @@ test "mapped catalog validates growth and rejects truncation before reading reta
         try std.testing.expectEqual(@as(Value, @splat(7)), (try tx.find(.artifacts, @splat(23))).?.value);
         try std.testing.expect(index.mapped.?.memory.len > old_len);
     }
+    // Windows refuses to truncate a file below a mapped view, so no other
+    // process can shrink the catalog under this mapping there.
+    if (@import("builtin").os.tag == .windows) return;
     try index.file.setLength(io, record_size);
     try std.testing.expectError(error.CorruptCatalog, index.refresh());
     try std.testing.expect(index.mapped == null);

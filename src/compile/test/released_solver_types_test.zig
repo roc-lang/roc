@@ -221,8 +221,10 @@ fn countUnregisteredStagingFiles(gpa: std.mem.Allocator, io: std.Io, dir: std.Io
     var count: usize = 0;
     while (try walker.next(io)) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.basename, ".pending")) {
-            const path = try std.fs.path.join(gpa, &.{ root, entry.path });
+            // Store payload paths separate components with `/` on every host.
+            const path = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ root, entry.path });
             defer gpa.free(path);
+            std.mem.replaceScalar(u8, path[root.len..], '\\', '/');
             if (!try registeredPending(&store, path, null)) count += 1;
         }
     }
