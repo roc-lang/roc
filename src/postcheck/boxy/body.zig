@@ -4206,13 +4206,14 @@ pub const Builder = struct {
                             const variant = (try self.selectVariant(structural, self.ownTag(structural, name, tag.args.len))).index;
                             const committed = self.program.result.layouts.getLayout(try self.program.layouts.layoutOf(ty));
                             if (committed.tag == .tag_union and tags.len > 1) {
+                                // A switch on the discriminant, which proves
+                                // the variant its arm reads.
                                 const discriminant = try self.closedLocal(.u32);
                                 try self.emitLinear(.{ .assign_ref = .{ .target = discriminant, .op = LIR.RefOp.discriminant(item.value), .next = undefined } });
-                                const expected = try self.closedLocal(.u32);
-                                try self.emitLinear(.{ .assign_literal = .{ .target = expected, .value = .{ .i64_literal = .{ .value = @intCast(variant), .layout_idx = .u32 } }, .next = undefined } });
-                                const matches = try self.closedLocal(.bool);
-                                try self.emitLowLevel(matches, .num_is_eq, &.{ discriminant, expected });
-                                try self.branchOrMiss(matches, miss);
+                                const then = try self.newHole();
+                                const branches = try self.store.addCFSwitchBranches(&.{.{ .value = @intCast(variant), .body = then }});
+                                try self.emitTerminal(.{ .switch_stmt = .{ .cond = discriminant, .branches = branches, .default_branch = miss } });
+                                self.hole = then;
                             }
                             const payloads = self.program.store.span(tags[variant].payloads);
                             for (tag.args, 0..) |arg_pattern, arg_index| {
