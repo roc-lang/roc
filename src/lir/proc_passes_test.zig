@@ -903,6 +903,55 @@ test "LIR proc pass deletes pure definitions that only fed pruned join parameter
     try testing.expectEqual(jump, store.getCFStmtImmediate(define_kept).assign_ref.next);
 }
 
+test "LIR proc pass prunes a join parameter whose only reader is a dead definition" {
+    const LIR = core.LIR;
+    var store = core.LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    var join_ids = body_clone.JoinParamIndex.init(testing.allocator);
+    defer join_ids.deinit();
+    const join_id = join_ids.freshJoinPoint();
+
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const unread = try store.addLocal(.{ .layout_idx = .u64 });
+    const kept = try store.addLocal(.{ .layout_idx = .u64 });
+    const alias = try store.addLocal(.{ .layout_idx = .u64 });
+
+    // The join body binds `unread` to `alias`, which nothing reads, so
+    // `unread` is unread too, and both its write and the alias go.
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const write_kept = try store.addCFStmt(.{ .set_local = .{ .target = kept, .value = value, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+    const write_unread = try store.addCFStmt(.{ .set_local = .{ .target = unread, .value = value, .mode = .initialize_join_param, .next = write_kept } }, .test_fixture);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = kept } }, .test_fixture);
+    const define_alias = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = LIR.RefOp.local(unread), .next = ret } }, .test_fixture);
+    const join = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{ unread, kept }),
+        .body = define_alias,
+        .remainder = write_unread,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(0),
+        .args = try store.addLocalSpan(&.{value}),
+        .frame_locals = try store.addLocalSpan(&.{ value, unread, kept, alias }),
+        .body = join,
+        .ret_layout = .u64,
+    }, .none);
+
+    var metrics: passes.ParallelMetrics = .{};
+    try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
+
+    try testing.expectEqual(join, store.getProcSpecImmediate(proc).body.?);
+    const pruned = store.getCFStmtImmediate(join).join;
+    const params = store.getLocalSpan(pruned.params);
+    try testing.expectEqual(@as(usize, 1), params.len);
+    try testing.expectEqual(kept, core.LirStore.GuardedList.at(params, 0));
+    try testing.expectEqual(write_kept, pruned.remainder);
+    try testing.expectEqual(ret, pruned.body);
+}
+
 test "LIR proc pass keeps join parameters that are read or are procedure arguments" {
     const LIR = core.LIR;
     var store = core.LirStore.init(testing.allocator);

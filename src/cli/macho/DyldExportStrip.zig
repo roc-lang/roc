@@ -17,6 +17,17 @@
 //! produces for `-no_exported_symbols` plus hidden visibility. It applies
 //! only to executables; a dylib's exports are its interface and must stay.
 //!
+//! ## Load-command check
+//!
+//! The same walk over the load commands rejects any executable that loads a
+//! dylib from outside the operating system (anything not under `/usr/lib/` or
+//! `/System/Library/`) or carries an LC_RPATH entry. Every library roc needs
+//! beyond the OS is linked statically, so either one means a path from the
+//! build machine reached the binary, such as a package-manager libzstd
+//! (roc-lang/roc#12605); the binary would then fail to launch, or load
+//! whatever happens to sit at that path, on machines laid out differently.
+//! Rejecting it here makes the build fail instead of shipping it.
+//!
 //! ## What removing this step would take
 //!
 //! Measured with Zig 0.17.0 and the roc-bootstrap `zig-0.17.0` archives: the
@@ -88,7 +99,8 @@
 //! With all three in place, this rewrite and its re-signing could be replaced
 //! by a CI check that reads the linked executable's export trie and fails on
 //! anything beyond the symbols part 2 leaves (none, if Zig's linker can
-//! restrict exports).
+//! restrict exports). That check would also have to keep the load-command
+//! check above.
 
 const std = @import("std");
 const macho = std.macho;
@@ -101,6 +113,18 @@ pub const StripError = error{
     NotExecutable,
     TruncatedLoadCommands,
     UnsupportedDyldLayout,
+    NonSystemDylib,
+    RunPathEntry,
+};
+
+/// Directories whose dylibs every macOS installation provides.
+const system_dylib_prefixes = [_][]const u8{ "/usr/lib/", "/System/Library/" };
+
+/// Detail for a `stripHeader` or `stripFile` failure that names a path.
+pub const Diagnostic = struct {
+    /// The dylib or run-path entry behind `error.NonSystemDylib` or
+    /// `error.RunPathEntry`. Points into the bytes that were checked.
+    path: []const u8 = "",
 };
 
 /// A byte range of the stripped file whose contents are no longer referenced
@@ -126,11 +150,13 @@ pub const Summary = struct {
 
 /// Rewrite the Mach-O header and load commands at the start of `bytes`:
 /// zero the export and weak-bind ranges out of the dyld info load commands
-/// and clear MH_WEAK_DEFINES|MH_BINDS_TO_WEAK. `bytes` must hold at least
-/// the full header and load commands; the rest of the file is not needed.
-/// Idempotent: stripping an already-stripped image succeeds and reports
-/// empty ranges.
-pub fn stripHeader(bytes: []u8) StripError!Summary {
+/// and clear MH_WEAK_DEFINES|MH_BINDS_TO_WEAK. Fails with
+/// `error.NonSystemDylib` or `error.RunPathEntry` (naming the path in
+/// `diagnostic`) when the load commands fail the check described at the top
+/// of this file. `bytes` must hold at least the full header and load
+/// commands; the rest of the file is not needed. Idempotent: stripping an
+/// already-stripped image succeeds and reports empty ranges.
+pub fn stripHeader(bytes: []u8, diagnostic: *Diagnostic) StripError!Summary {
     if (bytes.len < @sizeOf(macho.mach_header_64)) return error.NotMacho64;
     const header: *align(1) macho.mach_header_64 = @ptrCast(bytes.ptr);
     if (header.magic != macho.MH_MAGIC_64) return error.NotMacho64;
@@ -177,6 +203,26 @@ pub fn stripHeader(bytes: []u8) StripError!Summary {
             // ever changes, fail the build loudly instead of shipping a
             // binary that silently keeps its launch cost.
             .DYLD_CHAINED_FIXUPS => return error.UnsupportedDyldLayout,
+            .LOAD_DYLIB,
+            .LOAD_WEAK_DYLIB,
+            .REEXPORT_DYLIB,
+            .LAZY_LOAD_DYLIB,
+            .LOAD_UPWARD_DYLIB,
+            => {
+                if (lc.cmdsize < @sizeOf(macho.dylib_command)) return error.TruncatedLoadCommands;
+                const dylib: *align(1) macho.dylib_command = @ptrCast(lc);
+                const path = try loadCommandString(bytes[offset..][0..lc.cmdsize], dylib.dylib.name, @sizeOf(macho.dylib_command));
+                if (!isSystemDylib(path)) {
+                    diagnostic.path = path;
+                    return error.NonSystemDylib;
+                }
+            },
+            .RPATH => {
+                if (lc.cmdsize < @sizeOf(macho.rpath_command)) return error.TruncatedLoadCommands;
+                const rpath: *align(1) macho.rpath_command = @ptrCast(lc);
+                diagnostic.path = try loadCommandString(bytes[offset..][0..lc.cmdsize], rpath.path, @sizeOf(macho.rpath_command));
+                return error.RunPathEntry;
+            },
             .NONE,
             .SEGMENT,
             .SYMTAB,
@@ -189,7 +235,6 @@ pub fn stripHeader(bytes: []u8) StripError!Summary {
             .FVMFILE,
             .PREPAGE,
             .DYSYMTAB,
-            .LOAD_DYLIB,
             .ID_DYLIB,
             .LOAD_DYLINKER,
             .ID_DYLINKER,
@@ -201,17 +246,12 @@ pub fn stripHeader(bytes: []u8) StripError!Summary {
             .SUB_LIBRARY,
             .TWOLEVEL_HINTS,
             .PREBIND_CKSUM,
-            .LOAD_WEAK_DYLIB,
             .SEGMENT_64,
             .ROUTINES_64,
             .UUID,
-            .RPATH,
             .CODE_SIGNATURE,
             .SEGMENT_SPLIT_INFO,
-            .REEXPORT_DYLIB,
-            .LAZY_LOAD_DYLIB,
             .ENCRYPTION_INFO,
-            .LOAD_UPWARD_DYLIB,
             .VERSION_MIN_MACOSX,
             .VERSION_MIN_IPHONEOS,
             .FUNCTION_STARTS,
@@ -237,6 +277,22 @@ pub fn stripHeader(bytes: []u8) StripError!Summary {
     return summary;
 }
 
+/// The NUL-terminated string a load command stores at `str_off` from its
+/// start, after the `fixed_size` bytes of its fixed fields.
+fn loadCommandString(cmd: []const u8, str_off: u32, fixed_size: usize) StripError![]const u8 {
+    if (str_off < fixed_size or str_off >= cmd.len) return error.TruncatedLoadCommands;
+    const tail = cmd[str_off..];
+    const len = std.mem.findScalar(u8, tail, 0) orelse return error.TruncatedLoadCommands;
+    return tail[0..len];
+}
+
+fn isSystemDylib(path: []const u8) bool {
+    for (system_dylib_prefixes) |prefix| {
+        if (std.mem.startsWith(u8, path, prefix)) return true;
+    }
+    return false;
+}
+
 /// Errors from `stripFile`.
 pub const StripFileError = StripError || AdHocResign.Error || Allocator.Error || std.Io.File.OpenError || std.Io.File.ReadPositionalError || std.Io.File.WritePositionalError || error{DeadRangeOutOfBounds};
 
@@ -244,8 +300,10 @@ pub const StripFileError = StripError || AdHocResign.Error || Allocator.Error ||
 /// commands via `stripHeader`, zero the dead byte ranges the load commands
 /// no longer reference (zeroed pages cost nothing after compression, and
 /// leftover symbol names would be misleading to inspection tools), and
-/// rewrite the ad-hoc code signature the edits invalidated.
-pub fn stripFile(io: std.Io, gpa: Allocator, arena: Allocator, path: []const u8) StripFileError!Summary {
+/// rewrite the ad-hoc code signature the edits invalidated. On a failed
+/// load-command check the file is left unmodified and `diagnostic.path`
+/// points into memory allocated from `arena`.
+pub fn stripFile(io: std.Io, gpa: Allocator, arena: Allocator, path: []const u8, diagnostic: *Diagnostic) StripFileError!Summary {
     const summary = blk: {
         var file = try std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write });
         defer file.close(io);
@@ -262,7 +320,7 @@ pub fn stripFile(io: std.Io, gpa: Allocator, arena: Allocator, path: []const u8)
         const prefix_n = try file.readPositionalAll(io, prefix, 0);
         if (prefix_n != prefix_len) return error.TruncatedLoadCommands;
 
-        const summary = try stripHeader(prefix);
+        const summary = try stripHeader(prefix, diagnostic);
         try file.writePositionalAll(io, prefix, 0);
 
         for ([_]DeadRange{ summary.export_info, summary.export_trie, summary.weak_bind_info }) |range| {
@@ -314,11 +372,30 @@ fn testImage(buf: []u8, filetype: u32, flags: u32) void {
     trie.datasize = 33;
 }
 
+/// Append a load command whose only variable field is a path string stored
+/// right after its fixed fields, as the linker lays out LC_LOAD_DYLIB and
+/// LC_RPATH, to an image built by `testImage`.
+fn appendPathCommand(buf: []u8, comptime Command: type, cmd: macho.LC, path: []const u8) void {
+    const header: *align(1) macho.mach_header_64 = @ptrCast(buf.ptr);
+    const start = @sizeOf(macho.mach_header_64) + header.sizeofcmds;
+    const cmdsize: u32 = @intCast(std.mem.alignForward(usize, @sizeOf(Command) + path.len + 1, 8));
+    @memset(buf[start..][0..cmdsize], 0);
+    const lc: *align(1) macho.load_command = @ptrCast(buf.ptr + start);
+    lc.cmd = cmd;
+    lc.cmdsize = cmdsize;
+    // Both commands store the string's offset right after cmd and cmdsize.
+    std.mem.writeInt(u32, buf[start + @sizeOf(macho.load_command) ..][0..4], @sizeOf(Command), .little);
+    @memcpy(buf[start + @sizeOf(Command) ..][0..path.len], path);
+    header.ncmds += 1;
+    header.sizeofcmds += cmdsize;
+}
+
 test "stripHeader zeroes export and weak-bind info and clears weak flags" {
     var buf: [512]u8 = undefined;
+    var diagnostic: Diagnostic = .{};
     testImage(&buf, macho.MH_EXECUTE, macho.MH_PIE | macho.MH_WEAK_DEFINES | macho.MH_BINDS_TO_WEAK);
 
-    const summary = try stripHeader(&buf);
+    const summary = try stripHeader(&buf, &diagnostic);
     try testing.expectEqual(@as(u32, 175), summary.export_info.off);
     try testing.expectEqual(@as(u32, 80), summary.export_info.size);
     try testing.expectEqual(@as(u32, 255), summary.export_trie.off);
@@ -342,10 +419,11 @@ test "stripHeader zeroes export and weak-bind info and clears weak flags" {
 
 test "stripHeader is idempotent" {
     var buf: [512]u8 = undefined;
+    var diagnostic: Diagnostic = .{};
     testImage(&buf, macho.MH_EXECUTE, macho.MH_WEAK_DEFINES | macho.MH_BINDS_TO_WEAK);
 
-    _ = try stripHeader(&buf);
-    const second = try stripHeader(&buf);
+    _ = try stripHeader(&buf, &diagnostic);
+    const second = try stripHeader(&buf, &diagnostic);
     try testing.expectEqual(@as(u32, 0), second.export_info.size);
     try testing.expectEqual(@as(u32, 0), second.export_trie.size);
     try testing.expectEqual(@as(u32, 0), second.weak_bind_info.size);
@@ -353,28 +431,87 @@ test "stripHeader is idempotent" {
 
 test "stripHeader rejects dylibs" {
     var buf: [512]u8 = undefined;
+    var diagnostic: Diagnostic = .{};
     testImage(&buf, macho.MH_DYLIB, 0);
-    try testing.expectError(error.NotExecutable, stripHeader(&buf));
+    try testing.expectError(error.NotExecutable, stripHeader(&buf, &diagnostic));
 }
 
 test "stripHeader rejects chained fixups" {
     var buf: [512]u8 = undefined;
+    var diagnostic: Diagnostic = .{};
     testImage(&buf, macho.MH_EXECUTE, 0);
     const info: *align(1) macho.load_command = @ptrCast(buf[@sizeOf(macho.mach_header_64)..].ptr);
     info.cmd = .DYLD_CHAINED_FIXUPS;
-    try testing.expectError(error.UnsupportedDyldLayout, stripHeader(&buf));
+    try testing.expectError(error.UnsupportedDyldLayout, stripHeader(&buf, &diagnostic));
 }
 
 test "stripHeader rejects non-Mach-O input" {
     var buf: [512]u8 = @splat(0);
-    try testing.expectError(error.NotMacho64, stripHeader(&buf));
-    try testing.expectError(error.NotMacho64, stripHeader(buf[0..4]));
+    var diagnostic: Diagnostic = .{};
+    try testing.expectError(error.NotMacho64, stripHeader(&buf, &diagnostic));
+    try testing.expectError(error.NotMacho64, stripHeader(buf[0..4], &diagnostic));
 }
 
 test "stripHeader rejects load commands past sizeofcmds" {
     var buf: [512]u8 = undefined;
+    var diagnostic: Diagnostic = .{};
     testImage(&buf, macho.MH_EXECUTE, 0);
     const header: *align(1) macho.mach_header_64 = @ptrCast(&buf);
     header.sizeofcmds = @sizeOf(macho.dyld_info_command); // second command now out of bounds
-    try testing.expectError(error.TruncatedLoadCommands, stripHeader(&buf));
+    try testing.expectError(error.TruncatedLoadCommands, stripHeader(&buf, &diagnostic));
+}
+
+test "stripHeader accepts dylibs the OS provides" {
+    var buf: [512]u8 = undefined;
+    var diagnostic: Diagnostic = .{};
+    testImage(&buf, macho.MH_EXECUTE, 0);
+    appendPathCommand(&buf, macho.dylib_command, .LOAD_DYLIB, "/usr/lib/libSystem.B.dylib");
+    appendPathCommand(&buf, macho.dylib_command, .LOAD_DYLIB, "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation");
+    _ = try stripHeader(&buf, &diagnostic);
+}
+
+test "stripHeader rejects a dylib from a package manager" {
+    var buf: [512]u8 = undefined;
+    var diagnostic: Diagnostic = .{};
+    testImage(&buf, macho.MH_EXECUTE, 0);
+    appendPathCommand(&buf, macho.dylib_command, .LOAD_DYLIB, "/usr/lib/libSystem.B.dylib");
+    appendPathCommand(&buf, macho.dylib_command, .LOAD_DYLIB, "/opt/homebrew/opt/zstd/lib/libzstd.1.dylib");
+    try testing.expectError(error.NonSystemDylib, stripHeader(&buf, &diagnostic));
+    try testing.expectEqualStrings("/opt/homebrew/opt/zstd/lib/libzstd.1.dylib", diagnostic.path);
+}
+
+test "stripHeader rejects a weakly loaded run-path dylib" {
+    var buf: [512]u8 = undefined;
+    var diagnostic: Diagnostic = .{};
+    testImage(&buf, macho.MH_EXECUTE, 0);
+    appendPathCommand(&buf, macho.dylib_command, .LOAD_WEAK_DYLIB, "@rpath/libzstd.1.dylib");
+    try testing.expectError(error.NonSystemDylib, stripHeader(&buf, &diagnostic));
+    try testing.expectEqualStrings("@rpath/libzstd.1.dylib", diagnostic.path);
+}
+
+test "stripHeader rejects run-path search entries" {
+    var buf: [512]u8 = undefined;
+    var diagnostic: Diagnostic = .{};
+    testImage(&buf, macho.MH_EXECUTE, 0);
+    appendPathCommand(&buf, macho.rpath_command, .RPATH, "zig-pkg/N-V-__8AAPOuPRLK1oNUw3WwQQzBRNkTOff2oOlXtnscSdOO/lib");
+    try testing.expectError(error.RunPathEntry, stripHeader(&buf, &diagnostic));
+    try testing.expectEqualStrings("zig-pkg/N-V-__8AAPOuPRLK1oNUw3WwQQzBRNkTOff2oOlXtnscSdOO/lib", diagnostic.path);
+}
+
+test "stripHeader rejects a dylib path that leaves its load command" {
+    var buf: [512]u8 = undefined;
+    var diagnostic: Diagnostic = .{};
+    testImage(&buf, macho.MH_EXECUTE, 0);
+    const header: *align(1) const macho.mach_header_64 = @ptrCast(&buf);
+    const start = @sizeOf(macho.mach_header_64) + header.sizeofcmds;
+    appendPathCommand(&buf, macho.dylib_command, .LOAD_DYLIB, "/usr/lib/libSystem.B.dylib");
+    const dylib: *align(1) macho.dylib_command = @ptrCast(buf[start..].ptr);
+
+    // No NUL before the end of the command.
+    @memset(buf[start + @sizeOf(macho.dylib_command) ..][0 .. dylib.cmdsize - @sizeOf(macho.dylib_command)], 'x');
+    try testing.expectError(error.TruncatedLoadCommands, stripHeader(&buf, &diagnostic));
+
+    // Offset past the end of the command.
+    dylib.dylib.name = dylib.cmdsize;
+    try testing.expectError(error.TruncatedLoadCommands, stripHeader(&buf, &diagnostic));
 }

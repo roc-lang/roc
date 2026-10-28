@@ -579,7 +579,7 @@ fn createUnknownFlagReport(allocator: Allocator, info: anytype) Allocator.Error!
         try report.document.addLineBreaks(2);
     }
     if (info.passes_args_to_app) {
-        const app_hint = try std.fmt.allocPrint(allocator, "To pass `{s}` to the app, write it after `--`, as in `roc{s}{s} app.roc -- {s}`.", .{ info.arg, separator, info.cmd, info.arg });
+        const app_hint = try std.fmt.allocPrint(allocator, "To pass `{s}` to the app, write it after the app's file, as in `roc{s}{s} app.roc {s}`.", .{ info.arg, separator, info.cmd, info.arg });
         defer allocator.free(app_hint);
         try report.document.addSuggestion(app_hint);
         try report.document.addLineBreak();

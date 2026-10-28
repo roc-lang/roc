@@ -814,13 +814,13 @@ pub fn buildSidecarBlob(
     return serializeGrowing(gpa, serializeSidecarInto, .{lowered});
 }
 
-/// The sidecar of a canonical dev image (design.md "Canonical Dev Images"):
+/// The sidecar of a arranged dev image (design.md "Deterministic Dev Images"):
 /// its layouts are the fixed ones, then those `order` lists, numbered as the
 /// image's code loads them, then every layout those and the Boxy tables
 /// reach, in the order a walk from them first meets each; its erased
 /// argument layouts are `order`'s runs. Which procedures this program
 /// lowered therefore changes nothing in it.
-pub fn buildCanonicalSidecarBlob(
+pub fn buildArrangedSidecarBlob(
     gpa: std.mem.Allocator,
     lowered: *const Program.Result,
     order: *const RuntimeTables.Order,
@@ -829,7 +829,7 @@ pub fn buildCanonicalSidecarBlob(
     base.dev_diagnostics.traceBoxyWork("sidecar");
     var canonical = try CanonicalLayouts.init(gpa, lowered, order);
     defer canonical.deinit(gpa);
-    return serializeGrowing(gpa, serializeCanonicalSidecarInto, .{ lowered, &canonical, order });
+    return serializeGrowing(gpa, serializeArrangedSidecarInto, .{ lowered, &canonical, order });
 }
 
 /// Serialize into a buffer that grows until the sidecar fits, then copy it
@@ -933,7 +933,7 @@ const CanonicalLayouts = struct {
     }
 };
 
-fn serializeCanonicalSidecarInto(
+fn serializeArrangedSidecarInto(
     gpa: std.mem.Allocator,
     buffer: []align(16) u8,
     lowered: *const Program.Result,
@@ -1756,7 +1756,7 @@ test "persisted image bytes do not depend on what store memory held before" {
         // Canonicalization happens in the image's copy; the store keeps its bytes.
         try std.testing.expectEqualSlices(u8, source_stmts, std.mem.sliceAsBytes(store.cf_stmts.unsafeRawItemsForView()));
 
-        // The canonical image still holds the values the store holds.
+        // The arranged image still holds the values the store holds.
         var view = try viewMappedImageWithAllocator(header, buffer.ptr, fba.end_index, .u64, gpa);
         defer view.deinit();
         try std.testing.expectEqual(local, view.store.getCFStmtImmediate(ret).ret.value);

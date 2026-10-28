@@ -389,6 +389,7 @@ const Pass = struct {
     edge_index: EdgeIndex,
     proc_args: collections.DenseMap(LocalId, void),
     attempted: collections.DenseMap(LocalId, void),
+    candidate_carriers: collections.DenseMap(LocalId, void),
     new_locals: std.ArrayList(LocalId) = .empty,
     /// `scanProc`'s work stack, visited statements, open join bodies, and
     /// the stack depth at which each open body ends.
@@ -438,6 +439,7 @@ const Pass = struct {
             .edge_index = .{ .heads = collections.DenseMap(LocalId, usize).init(allocator), .next = &.{} },
             .proc_args = collections.DenseMap(LocalId, void).init(allocator),
             .attempted = collections.DenseMap(LocalId, void).init(allocator),
+            .candidate_carriers = collections.DenseMap(LocalId, void).init(allocator),
             .scan_visited = collections.DenseMap(CFStmtId, void).init(allocator),
             .scan_active_bodies = collections.DenseMap(LIR.JoinPointId, ?usize).init(allocator),
         };
@@ -455,6 +457,7 @@ const Pass = struct {
     fn release(self: *Pass) void {
         self.resetProcState();
         self.classifier.append_kind.clearRetainingCapacity();
+        self.candidate_carriers.clearRetainingCapacity();
         self.family_parents.clearRetainingCapacity();
         self.family_members.clearRetainingCapacity();
         self.family_split.clearRetainingCapacity();
@@ -475,6 +478,7 @@ const Pass = struct {
         self.edge_index.deinit(self.allocator);
         self.proc_args.deinit();
         self.attempted.deinit();
+        self.candidate_carriers.deinit();
         self.new_locals.deinit(self.allocator);
         self.scan_stack.deinit(self.allocator);
         self.scan_visited.deinit();
@@ -1292,8 +1296,32 @@ const Pass = struct {
             try self.scanProc(self.store.getProcSpecImmediate(proc_id).body.?, scan);
             max_join_id = @max(max_join_id, scan.max_join_id);
             if (scan.edges.items.len == 0) break;
-            try self.classifyMetadataTransfers(scan, proc_id);
             try edge_index.rebuild(allocator, scan.edges.items);
+            // Metadata lifetime analysis cannot enable a rewrite when no
+            // remaining list parameter reaches any operation we can promote.
+            // This is an exact necessary condition over the scan's edges.
+            self.candidate_carriers.clearRetainingCapacity();
+            for (scan.joins.items) |info| {
+                if (!info.has_back_edge) continue;
+                const params = self.store.getLocalSpan(self.store.getCFStmtImmediate(info.stmt).join.params);
+                for (0..GuardedList.borrowLen(params)) |index| {
+                    const param = GuardedList.at(params, index);
+                    if (!self.isListLocal(param) or attempted.contains(param) or self.candidate_carriers.contains(param)) continue;
+                    _ = try edge_index.closure(allocator, scan.edges.items, param, &self.candidate_carriers);
+                }
+            }
+            const has_candidate = candidate: {
+                for (scan.edges.items) |edge| {
+                    if (!self.candidate_carriers.contains(edge.source)) continue;
+                    switch (edge.kind) {
+                        .append_call, .range_append, .le_bytes_append, .reserve_op, .set_op => break :candidate true,
+                        .param_write, .alias, .refresh_op, .unsafe_append => {},
+                    }
+                }
+                break :candidate false;
+            };
+            if (!has_candidate) break;
+            var metadata_classified = false;
             outer: for (scan.joins.items) |info| {
                 if (!info.has_back_edge) continue;
                 const join = self.store.getCFStmtImmediate(info.stmt).join;
@@ -1305,7 +1333,7 @@ const Pass = struct {
                     if (!self.isListLocal(param)) continue;
                     if (attempted.contains(param)) continue;
                     try attempted.put(param, {});
-                    if (try self.promoteParam(scan, edge_index, proc_args, info.stmt, param, &max_join_id, new_locals)) {
+                    if (try self.promoteParam(scan, edge_index, proc_args, proc_id, &metadata_classified, info.stmt, param, &max_join_id, new_locals)) {
                         promoting = true;
                         break :outer;
                     }
@@ -1333,6 +1361,8 @@ const Pass = struct {
         scan: *Scan,
         edge_index: *const EdgeIndex,
         proc_args: *collections.DenseMap(LocalId, void),
+        proc_id: LIR.LirProcSpecId,
+        metadata_classified: *bool,
         loop_stmt: CFStmtId,
         list_param: LocalId,
         max_join_id: *u32,
@@ -1448,6 +1478,30 @@ const Pass = struct {
             const tracked = scan.tracked_uses.get(source.*) orelse 0;
             if (total != tracked) return false;
         }
+
+        // All structural prerequisites hold. Only now build ordered-use
+        // topology to decide which transfers preserve metadata. Until this
+        // point carried and entry edges differ in no prerequisite above:
+        // both define the same carrier and require the same wiring.
+        if (!metadata_classified.*) {
+            try self.classifyMetadataTransfers(scan, proc_id);
+            metadata_classified.* = true;
+        }
+        rewrite_site_count = 0;
+        has_sets = false;
+        for (scan.edges.items) |*edge| {
+            edge.flow = if (!carriers.contains(edge.target)) .outside else if (carriers.contains(edge.source) and edge.preserves_metadata) .carried else .entry;
+            if (edge.flow != .carried) continue;
+            switch (edge.kind) {
+                .append_call, .range_append, .le_bytes_append, .reserve_op => rewrite_site_count += 1,
+                .set_op => {
+                    rewrite_site_count += 1;
+                    has_sets = true;
+                },
+                .param_write, .alias, .refresh_op, .unsafe_append => {},
+            }
+        }
+        if (rewrite_site_count == 0) return false;
 
         // Qualified: thread the slack.
         try self.apply(scan, &chain_defs, &chain_params, has_sets, loop_stmt, list_param, max_join_id, new_locals);
@@ -4970,7 +5024,9 @@ test "promote leaves a tainted chain alone" {
         .ret_layout = f.list,
     }, .none);
 
+    const before = @import("use_order.zig").topology_builds;
     try run(store, &f.layouts);
+    try testing.expectEqual(before, @import("use_order.zig").topology_builds);
 
     // Nothing changed: the call is still a call and the loop still has one
     // parameter.
@@ -5027,7 +5083,9 @@ test "promote ignores a join without a back edge" {
         .ret_layout = f.list,
     }, .none);
 
+    const before = @import("use_order.zig").topology_builds;
     try run(store, &f.layouts);
+    try testing.expectEqual(before, @import("use_order.zig").topology_builds);
 
     try testing.expect(store.getCFStmtImmediate(append_call).* == .assign_call);
     const unchanged = store.getCFStmtImmediate(loop).join;
@@ -5419,4 +5477,37 @@ test "promote initializes merged metadata on every incoming definition" {
     const hot = try shapeOf(store, copy.body, head.id, copy.id);
     try testing.expectEqual(@as(u32, 1), hot.jumps_to_head);
     try testing.expectEqual(@as(u32, 0), hot.jumps_to_copy);
+}
+
+test "promote skips metadata topology for a read-only loop beside an unrelated append" {
+    var f = try PromoteTest.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.store;
+    const append_proc = try f.addAppendHelper();
+    const out = try store.addLocal(.{ .layout_idx = f.list });
+    const initial = try store.addLocal(.{ .layout_idx = f.list });
+    const other = try store.addLocal(.{ .layout_idx = f.list });
+    const item = try store.addLocal(.{ .layout_idx = .u8 });
+    const appended = try store.addLocal(.{ .layout_idx = f.list });
+    const alias = try store.addLocal(.{ .layout_idx = f.list });
+    const join = f.freshJoinPointId();
+    const back = try store.addCFStmt(.{ .jump = .{ .target = join } }, .test_fixture);
+    const set_back = try store.addCFStmt(.{ .set_local = .{ .target = out, .value = alias, .mode = .initialize_join_param, .next = back } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .local(out), .next = set_back } }, .test_fixture);
+    const entry = try store.addCFStmt(.{ .jump = .{ .target = join } }, .test_fixture);
+    const initialize = try store.addCFStmt(.{ .set_local = .{ .target = out, .value = initial, .mode = .initialize_join_param, .next = entry } }, .test_fixture);
+    const append = try store.addCFStmt(.{ .assign_call = .{ .target = appended, .proc = append_proc, .args = try store.addLocalSpan(&.{ other, item }), .next = initialize } }, .test_fixture);
+    const loop = try store.addCFStmt(.{ .join = .{ .id = join, .params = try store.addLocalSpan(&.{out}), .body = body, .remainder = append } }, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(171),
+        .args = try store.addLocalSpan(&.{ initial, other, item }),
+        .body = loop,
+        .ret_layout = f.list,
+    }, .none);
+    const before = @import("use_order.zig").topology_builds;
+    try run(store, &f.layouts);
+    try testing.expectEqual(before, @import("use_order.zig").topology_builds);
+    try testing.expect(store.getCFStmtImmediate(append).* == .assign_call);
+    try testing.expectEqual(@as(usize, 1), store.getLocalSpan(store.getCFStmtImmediate(loop).join.params).len);
 }

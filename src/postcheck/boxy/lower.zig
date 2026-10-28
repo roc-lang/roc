@@ -11,6 +11,7 @@ const can = @import("can");
 const check = @import("check");
 const collections = @import("collections");
 const layout = @import("layout");
+const host_boundary = layout.host_boundary_digest;
 const lir_core = @import("lir_core");
 const types = @import("types");
 
@@ -77,6 +78,8 @@ pub const Options = struct {
     target_usize: base.target.TargetUsize = .native,
     list_in_place_map: bool = false,
     proc_debug_names: bool = false,
+    /// Record each platform entrypoint's host boundary digest.
+    host_boundary_digests: bool = false,
     observe_expects: bool = false,
 };
 
@@ -854,6 +857,86 @@ const PackedLiteralKey = struct {
     byte_len: u32,
     len: u32,
     element: layout.Idx,
+};
+
+/// The Boxy representations a host boundary digest walks. Every function
+/// value is an erased callable whose ABI is its function children.
+const BoxyHostBoundaryGraph = struct {
+    plan: *const Plan.ProgramPlan,
+    layout_plan: *const Layouts.LayoutPlan,
+    allocator: Allocator,
+
+    const Edge = host_boundary.Edge(Plan.TypeRepId);
+
+    pub fn shape(self: BoxyHostBoundaryGraph, rep_id: Plan.TypeRepId, edges: *std.ArrayList(Edge)) Allocator.Error!host_boundary.Shape(Plan.TypeRepId) {
+        const rep = self.plan.representations.items[@backingInt(rep_id)];
+        const children = self.plan.childSlice(rep.children);
+        switch (rep.kind) {
+            .in_progress => boxyLowerInvariant("in-progress representation reached a host boundary"),
+            .dynamic,
+            .primitive,
+            .bool_tag_union,
+            .generated_field,
+            .generated_field_names,
+            .generated_tag_union_spec,
+            .empty_record,
+            .empty_tag_union,
+            => return .leaf,
+            .alias => return .{ .transparent = self.childWithRole(children, .alias_backing) orelse
+                boxyLowerInvariant("alias representation had no backing") },
+            .nominal => return if (self.childWithRole(children, .nominal_backing)) |backing| .{ .transparent = backing } else .leaf,
+            .record => {
+                var position: u32 = 0;
+                for (children) |child| {
+                    if (child.role != .record_field) continue;
+                    try edges.append(self.allocator, .{ .node = child.rep, .position = position });
+                    position += 1;
+                }
+            },
+            .tuple => for (children) |child| {
+                if (child.role != .tuple_elem) continue;
+                try edges.append(self.allocator, .{ .node = child.rep, .position = child.role.tuple_elem });
+            },
+            .tag_union => {
+                // Payloads are numbered across the tags in variant order; the
+                // layout fingerprint fixes each variant's payload count.
+                var position: u32 = 0;
+                for (self.plan.tagVariantSlice(rep.tag_variants)) |variant| {
+                    for (self.plan.childSlice(variant.payloads)) |child| {
+                        try edges.append(self.allocator, .{ .node = child.rep, .position = position });
+                        position += 1;
+                    }
+                }
+            },
+            .list => try edges.append(self.allocator, .{ .node = self.childWithRole(children, .list_elem) orelse
+                boxyLowerInvariant("list representation had no element"), .position = 0 }),
+            .box => try edges.append(self.allocator, .{ .node = self.childWithRole(children, .box_payload) orelse
+                boxyLowerInvariant("box representation had no payload"), .position = 0 }),
+            .erased_callable => {
+                const query: Plan.RepQuery = .{ .plan = self.plan, .allocator = self.allocator };
+                const function = query.functionChildren(rep_id) orelse
+                    boxyLowerInvariant("erased callable representation had no function children");
+                const identity_children = self.plan.childSlice(self.plan.representations.items[@backingInt(function.rep)].children);
+                for (identity_children[function.args_start..][0..function.arg_count], 0..) |child, index| {
+                    try edges.append(self.allocator, .{ .node = child.rep, .position = @intCast(index), .layout = self.repLayout(child.rep) });
+                }
+                try edges.append(self.allocator, .{ .node = function.ret, .position = function.arg_count, .layout = self.repLayout(function.ret) });
+                return .erased;
+            },
+        }
+        return .container;
+    }
+
+    fn childWithRole(_: BoxyHostBoundaryGraph, children: []const Plan.RepChild, role: std.meta.Tag(Plan.ChildRole)) ?Plan.TypeRepId {
+        for (children) |child| {
+            if (child.role == role) return child.rep;
+        }
+        return null;
+    }
+
+    fn repLayout(self: BoxyHostBoundaryGraph, rep_id: Plan.TypeRepId) layout.Idx {
+        return self.layout_plan.rep_layouts[@backingInt(rep_id)].worker.layoutIdx();
+    }
 };
 
 const ProcedureBuilder = struct {
@@ -6723,9 +6806,54 @@ const ProcedureBuilder = struct {
             try self.result.root_procs.append(self.allocator, root_proc);
             var metadata = RootMetadata.fromCheckedRoot(root.request);
             metadata.test_plan = Common.testPlanMetadataForRoot(roots, root.request, request_index);
+            if (self.options.host_boundary_digests and root.request.abi == .platform) {
+                metadata.host_boundary_digest = try self.hostBoundaryDigest(root, root_layout, worker_layout, worker_plan);
+            }
             try self.result.root_metadata.append(self.allocator, metadata);
         }
         try self.runProcJobs();
+    }
+
+    /// The host boundary digest of a platform entrypoint: the
+    /// representations and layouts its root procedure takes and returns.
+    fn hostBoundaryDigest(
+        self: *ProcedureBuilder,
+        root: Plan.RootPlan,
+        root_layout: Layouts.RootLayouts,
+        worker_layout: Layouts.WorkerLayouts,
+        worker_plan: Plan.WorkerPlan,
+    ) Allocator.Error!host_boundary.Digest {
+        const host_wrapped = root.wrapper_kind == .host_shaped_wrapper;
+        const rep = if (host_wrapped) self.plan.hostRepFor(root.host_rep) else worker_plan.rep;
+        var values: std.ArrayList(BoxyHostBoundaryGraph.Edge) = .empty;
+        defer values.deinit(self.allocator);
+        const query: Plan.RepQuery = .{ .plan = self.plan, .allocator = self.allocator };
+        if (query.functionChildren(rep)) |function| {
+            const arg_layouts = if (host_wrapped)
+                self.layout_plan.rootLayoutSlice(root_layout.host_args)
+            else
+                self.layout_plan.workerLayoutSlice(worker_layout.args);
+            const ret_layout = (if (host_wrapped) root_layout.host_ret else worker_layout.ret) orelse
+                boxyLowerInvariant("function root had no committed return layout");
+            const arg_children = self.plan.childSlice(self.plan.representations.items[@backingInt(function.rep)].children)[function.args_start..][0..function.arg_count];
+            std.debug.assert(arg_children.len == arg_layouts.len);
+            for (arg_children, arg_layouts, 0..) |child, arg_layout, index| {
+                try values.append(self.allocator, .{ .node = child.rep, .position = @intCast(index), .layout = arg_layout.layoutIdx() });
+            }
+            try values.append(self.allocator, .{ .node = function.ret, .position = function.arg_count, .layout = ret_layout.layoutIdx() });
+        } else {
+            const value_layout = (if (host_wrapped) root_layout.host_value orelse
+                boxyLowerInvariant("host-shaped value root had no committed layout") else worker_layout.value);
+            try values.append(self.allocator, .{ .node = rep, .position = 0, .layout = value_layout.layoutIdx() });
+        }
+
+        var walk = host_boundary.Walk(Plan.TypeRepId, BoxyHostBoundaryGraph, Allocator.Error).init(self.allocator, &self.result.layouts, .{
+            .plan = self.plan,
+            .layout_plan = self.layout_plan,
+            .allocator = self.allocator,
+        });
+        defer walk.deinit();
+        return try walk.signature(values.items);
     }
 
     /// Descriptor templates remain mutable graph reservations while lowering
