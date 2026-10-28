@@ -126,7 +126,7 @@ pub const Task = union(enum) {
     finish_tuple_access: CheckedExprId,
     /// Pop a value of this type, report it through `dbg`, and push it back.
     finish_dbg: TypeId,
-    restore: struct { module: ModuleIndex, node: checked.ConstNodeId, ty: TypeId },
+    restore: struct { source: lower.ConstSource, node: checked.ConstNodeId, ty: TypeId },
     /// Push the function value a callable-eval binding stored.
     restore_callable_eval: struct { module: ModuleIndex, template: checked.CallableEvalTemplateId, ty: TypeId },
     /// Pop a restored closure's capture values and build it.
@@ -140,6 +140,9 @@ pub const Task = union(enum) {
     unreachable_value: TypeId,
     /// Push the `{}` value of a construct whose value nothing reads.
     unreachable_or_unit,
+    /// Crash with this message: a literal whose conversion failed at the
+    /// instance a literal table selects.
+    literal_failed: []const u8,
     /// Pop a generalized local procedure call's explicit arguments and call
     /// its function value with them after its own scheme's words.
     /// `params` and `ret` are the procedure's signature, `arg_types` the
@@ -1985,6 +1988,10 @@ pub const Builder = struct {
             .restore_merge => |merge| try self.restoreMerge(merge),
             .enter_merge => |merge| try self.enterMerge(merge),
             .loop_test => |loop| try self.loopTest(loop.body, loop.head, loop.exit),
+            .literal_failed => |message| {
+                const literal = try self.store.insertString(message);
+                try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal } } });
+            },
             .leave_alias_scope => {
                 const scope = self.alias_scopes.pop().?;
                 self.env = scope.saved_env;
@@ -2004,13 +2011,13 @@ pub const Builder = struct {
             },
             .finish_low_level => |ll| try self.finishLowLevel(ll.op, ll.arg_count, ll.result, ll.arg_types),
             .finish_record => |expr| try self.finishRecord(expr),
-            .restore => |restore| try self.restoreStep(restore.module, restore.node, restore.ty),
+            .restore => |restore| try self.restoreStep(restore.source, restore.node, restore.ty),
             .restore_callable_eval => |eval| {
                 const owner = self.program.module(eval.module);
                 const template = owner.view.callable_eval_templates.templates[@backingInt(eval.template)];
                 const root = owner.view.compile_time_roots.root(template.root);
                 switch (root.payload) {
-                    .fn_value => |fn_id| try self.restoreFn(eval.module, fn_id, eval.ty),
+                    .fn_value => |fn_id| try self.restoreFn(.{ .module = eval.module }, fn_id, eval.ty),
                     // No compile-time evaluation produced the value (a
                     // binding of the app a platform's roots name): its entry
                     // wrapper computes it.
@@ -2349,10 +2356,8 @@ pub const Builder = struct {
                 try self.push(.{ .expr = expect_err.expr });
             },
             .str_from_quote => |quote| {
-                if (quote.conversion_root) |root| {
-                    if (try self.restoreConversionRoot(root, try self.exprType(expr_id))) return;
-                }
-                if (quote.plan) |plan| return try self.lowerLiteralConversion(expr_id, plan, .quote);
+                if (quote.conversion_root) |root| return try self.restoreConversionRoot(root, expr_id, .quote);
+                if (quote.plan != null) return try self.lowerLiteralTable(expr_id, .quote);
                 try self.pushValue(try self.strLiteral(self.bodies().stringLiteral(quote.literal)));
             },
             .return_ => |ret| {
@@ -2435,10 +2440,8 @@ pub const Builder = struct {
     }
 
     pub fn lowerNumeral(self: *Builder, expr_id: CheckedExprId, numeral: checked.CheckedNumeralData) Allocator.Error!void {
-        if (numeral.conversion_root) |root| {
-            if (try self.restoreConversionRoot(root, try self.exprType(expr_id))) return;
-        }
-        if (numeral.plan) |plan| return try self.lowerLiteralConversion(expr_id, plan, .numeral);
+        if (numeral.conversion_root) |root| return try self.restoreConversionRoot(root, expr_id, .numeral);
+        if (numeral.plan != null) return try self.lowerLiteralTable(expr_id, .numeral);
         try self.pushValue(try self.builtinNumeral(numeral.literal, try self.exprType(expr_id)));
     }
 
@@ -2515,38 +2518,117 @@ pub const Builder = struct {
         return local;
     }
 
-    /// A literal whose conversion a compile-time root evaluated: the root's
-    /// stored value (design.md "Runtime Programs Read Stored Values").
-    /// A root no compilation evaluated yet is not restored: the literal
-    /// converts in place, and this returns false.
-    pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootId, ty: TypeId) Allocator.Error!bool {
-        switch (self.view.view.compile_time_roots.root(root_id).payload) {
-            .const_node => |node| try self.push(.{ .restore = .{ .module = self.module, .node = node, .ty = ty } }),
-            .pending, .unevaluated => return false,
-            else => |payload| invariantFmt("a literal conversion root holding {s} reached Boxy lowering", .{@tagName(payload)}),
+    /// A literal whose conversion depends on its instance: the value
+    /// compile-time evaluation converted it to at the instance it has here
+    /// (design.md "Literal Tables"). Each instance the program's
+    /// compile-time specialization converted the literal at is a candidate,
+    /// selected by comparing the literal's descriptor with each candidate
+    /// type's; the selected candidate's stored value is restored, or its
+    /// failed conversion crashes. No user conversion runs here. A literal of
+    /// a builtin type is converted by the builtin rule, which no compile-time
+    /// root runs: a numeral by its number type, a quote as a Str.
+    pub fn lowerLiteralTable(self: *Builder, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind) Allocator.Error!void {
+        const lit_ty = try self.exprType(expr_id);
+        const values = self.program.input.literal_values;
+        const indices: []const u32 = if (self.program.literal_entries.get(.{ .module = self.module, .expr = expr_id })) |list| list.items else &.{};
+        // One candidate per converted type.
+        var candidate_types: std.ArrayList(TypeId) = .empty;
+        defer candidate_types.deinit(self.allocator);
+        var candidates: std.ArrayList(u32) = .empty;
+        defer candidates.deinit(self.allocator);
+        for (indices) |index| {
+            const ty = try self.constType(.literals, values.?.entries.items[index].ty);
+            const seen = for (candidate_types.items) |existing| {
+                if (existing == ty) break true;
+            } else false;
+            if (seen) continue;
+            try candidate_types.append(self.allocator, ty);
+            try candidates.append(self.allocator, index);
         }
-        return true;
+        // A literal of a closed type converted at that type is its value.
+        if (try self.closed(lit_ty)) {
+            for (candidate_types.items, candidates.items) |ty, index| {
+                if (ty != lit_ty) continue;
+                return try self.pushLiteralOutcome(values.?.entries.items[index].outcome, ty, lit_ty);
+            }
+        }
+        if (candidates.items.len == 0) return try self.pushValue(try self.builtinLiteral(expr_id, kind, lit_ty));
+        const selected = try self.closedLocal(.u32);
+        try self.emitDyn(selected, .{ .desc_index = .{ .desc = try self.descOf(lit_ty), .candidates = try self.argsRecordDesc(candidate_types.items) } });
+        const result = try self.localOf(lit_ty, .frame);
+        const join = self.freshJoin();
+        const after = try self.declareMergeJoin(join, result, null);
+        const holes = try self.allocator.alloc(CFStmtId, candidates.items.len);
+        defer self.allocator.free(holes);
+        const branches = try self.allocator.alloc(LIR.CFSwitchBranch, candidates.items.len);
+        defer self.allocator.free(branches);
+        for (holes, branches, 0..) |*hole, *branch, position| {
+            hole.* = try self.newHole();
+            branch.* = .{ .value = position, .body = hole.* };
+        }
+        const builtin_hole = try self.newHole();
+        try self.emitTerminal(.{ .switch_stmt = .{ .cond = selected, .branches = try self.store.addCFSwitchBranches(branches), .default_branch = builtin_hole } });
+        // No candidate describes the literal's type: it is a builtin type.
+        self.hole = builtin_hole;
+        try self.emitJump(join, try self.builtinLiteral(expr_id, kind, lit_ty));
+        // Pushed in reverse execution order: each candidate's branch, then
+        // what follows the literal.
+        try self.push(.{ .push_value = result });
+        try self.push(.{ .resume_at = after });
+        var position = candidates.items.len;
+        while (position > 0) {
+            position -= 1;
+            switch (values.?.entries.items[candidates.items[position]].outcome) {
+                .value => |node| {
+                    try self.push(.{ .jump = join });
+                    try self.push(.{ .retag = .{ .from = candidate_types.items[position], .to = lit_ty } });
+                    try self.push(.{ .restore = .{ .source = .literals, .node = node, .ty = candidate_types.items[position] } });
+                },
+                .failed => |message| try self.push(.{ .literal_failed = message }),
+            }
+            try self.push(.{ .resume_at = holes[position] });
+        }
     }
 
-    /// A literal converted at runtime by its checked `from_numeral` or
-    /// `from_quote` dispatch: the conversion's `Ok` payload, or a literal
-    /// rejection carrying its error message.
-    pub fn lowerLiteralConversion(self: *Builder, expr_id: CheckedExprId, plan_id: static_dispatch.StaticDispatchPlanId, kind: LIR.LiteralRejectionKind) Allocator.Error!void {
-        const plan = self.dispatchPlan(plan_id);
-        // A numeral whose type a generic body knows only by its descriptor
-        // converts by that descriptor: its evidence carries no dictionary
-        // (design.md "Compiler-generated operands ... compose the
-        // descriptors of what they construct").
-        if (kind == .numeral and plan.resolution == .evidence_dependent) {
-            const literal = self.bodies().expr(expr_id).data.numeral.literal;
-            return try self.pushValue(try self.descriptorNumeral(literal, try self.exprType(expr_id)));
+    /// The value of a literal table's entry at the literal's type `lit_ty`,
+    /// the entry's own closed type being `ty`.
+    fn pushLiteralOutcome(self: *Builder, outcome: @import("literal_values.zig").LiteralValues.Outcome, ty: TypeId, lit_ty: TypeId) Allocator.Error!void {
+        switch (outcome) {
+            .value => |node| {
+                if (ty != lit_ty) try self.push(.{ .retag = .{ .from = ty, .to = lit_ty } });
+                try self.push(.{ .restore = .{ .source = .literals, .node = node, .ty = ty } });
+            },
+            .failed => |message| try self.crashValue(message, lit_ty),
         }
-        const try_ty = switch (self.program.store.get(try self.convert(plan.callable_ty))) {
-            .function => |function| function.ret,
-            else => invariant("a literal conversion's callable type is not a function type"),
+    }
+
+    /// A literal at the builtin type its descriptor names: a numeral by its
+    /// number type, a quote as the Str it spells.
+    fn builtinLiteral(self: *Builder, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind, lit_ty: TypeId) Allocator.Error!LocalId {
+        return switch (kind) {
+            .numeral => try self.descriptorNumeral(self.bodies().expr(expr_id).data.numeral.literal, lit_ty),
+            .quote => blk: {
+                const text = try self.strLiteral(self.bodies().stringLiteral(self.bodies().expr(expr_id).data.str_from_quote.literal));
+                const str_ty = try self.program.store.primitive(.str);
+                if (lit_ty == str_ty) break :blk text;
+                const adapted = try self.localOf(lit_ty, .frame);
+                try self.emitDyn(adapted, .{ .adapt = .{ .src = text, .from = try self.descOf(str_ty), .to = try self.descOf(lit_ty) } });
+                break :blk adapted;
+            },
+            else => invariant("a literal table holds only numerals and quotes"),
         };
-        try self.push(.{ .unwrap_literal = .{ .expr = expr_id, .try_ty = try_ty, .kind = kind } });
-        try self.lowerDispatchAt(plan_id, try_ty);
+    }
+
+    /// A literal with a conversion root of its own: the root's stored value
+    /// (design.md "Runtime Programs Read Stored Values"). A root whose type
+    /// holds a variable no evaluation requests; the program converts the
+    /// literal per instance instead, as a literal table.
+    pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootId, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind) Allocator.Error!void {
+        switch (self.view.view.compile_time_roots.root(root_id).payload) {
+            .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = try self.exprType(expr_id) } }),
+            .pending, .unevaluated => try self.lowerLiteralTable(expr_id, kind),
+            else => |payload| invariantFmt("a literal conversion root holding {s} reached runtime lowering", .{@tagName(payload)}),
+        }
     }
 
     pub fn unwrapLiteral(self: *Builder, expr_id: CheckedExprId, try_ty: TypeId, kind: LIR.LiteralRejectionKind) Allocator.Error!void {
@@ -3052,7 +3134,7 @@ pub const Builder = struct {
         const owner = self.program.moduleByKey(use.const_ref.artifact);
         const template = owner.view.const_templates.get(use.const_ref);
         switch (template.state) {
-            .stored_const => |stored| try self.push(.{ .restore = .{ .module = owner.index, .node = stored.node, .ty = ty } }),
+            .stored_const => |stored| try self.push(.{ .restore = .{ .source = .{ .module = owner.index }, .node = stored.node, .ty = ty } }),
             // A polymorphic constant compile-time evaluation did not store
             // is its entry procedure's value at the read's instantiation.
             .eval_template => |eval| {
@@ -3073,8 +3155,8 @@ pub const Builder = struct {
 
     /// Restore stored constant `node` of `module` at `ty`, pushing tasks for
     /// its components first.
-    pub fn restoreStep(self: *Builder, module_index: ModuleIndex, node: checked.ConstNodeId, raw_ty: TypeId) Allocator.Error!void {
-        const const_store = self.program.module(module_index).view.const_store;
+    pub fn restoreStep(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, raw_ty: TypeId) Allocator.Error!void {
+        const const_store = self.program.constStore(source);
         const store = &self.program.store;
         if (!store.isClosed(raw_ty)) invariant("restoring a constant at an open type is not yet lowered by Boxy");
         const ty = try self.structuralType(raw_ty);
@@ -3108,14 +3190,14 @@ pub const Builder = struct {
                 try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal }, .checked_error = true } });
                 try self.pushValue(try self.localOf(raw_ty, .frame));
             },
-            .nominal => |nominal| try self.push(.{ .restore = .{ .module = module_index, .node = nominal.backing, .ty = ty } }),
+            .nominal => |nominal| try self.push(.{ .restore = .{ .source = source, .node = nominal.backing, .ty = ty } }),
             .box => |child| {
                 const payload = switch (store.get(ty)) {
                     .box => |payload| payload,
                     else => invariant("a stored box restored at a non-Box type"),
                 };
                 try self.push(.{ .finish_low_level = .{ .op = .box_box, .arg_count = 1, .result = raw_ty } });
-                try self.push(.{ .restore = .{ .module = module_index, .node = child, .ty = payload } });
+                try self.push(.{ .restore = .{ .source = source, .node = child, .ty = payload } });
             },
             .tuple, .record => |children| {
                 const component_types: []const TypeId = switch (store.get(ty)) {
@@ -3136,7 +3218,7 @@ pub const Builder = struct {
                 var index = children.len;
                 while (index > 0) {
                     index -= 1;
-                    try self.push(.{ .restore = .{ .module = module_index, .node = children[index], .ty = component_types[index] } });
+                    try self.push(.{ .restore = .{ .source = source, .node = children[index], .ty = component_types[index] } });
                 }
             },
             .tag => |tag| {
@@ -3154,7 +3236,7 @@ pub const Builder = struct {
                 var index = tag.payloads.len;
                 while (index > 0) {
                     index -= 1;
-                    try self.push(.{ .restore = .{ .module = module_index, .node = tag.payloads[index], .ty = payload_types[index] } });
+                    try self.push(.{ .restore = .{ .source = source, .node = tag.payloads[index], .ty = payload_types[index] } });
                 }
             },
             .list => |list| {
@@ -3168,7 +3250,7 @@ pub const Builder = struct {
                         var index = nodes.len;
                         while (index > 0) {
                             index -= 1;
-                            try self.push(.{ .restore = .{ .module = module_index, .node = nodes[index], .ty = elem } });
+                            try self.push(.{ .restore = .{ .source = source, .node = nodes[index], .ty = elem } });
                         }
                     },
                     .empty => try self.finishRestoreList(raw_ty, 0),
@@ -3197,7 +3279,7 @@ pub const Builder = struct {
                     },
                 }
             },
-            .fn_value => |fn_id| try self.restoreFn(module_index, fn_id, raw_ty),
+            .fn_value => |fn_id| try self.restoreFn(source, fn_id, raw_ty),
         }
     }
 
@@ -3205,8 +3287,8 @@ pub const Builder = struct {
     /// an erased callable.
     /// Restore a function value compile-time evaluation stored, used at the
     /// closed function type `fn_ty`.
-    pub fn restoreFn(self: *Builder, module_index: ModuleIndex, fn_id: check.ConstStore.ConstFnId, fn_ty: TypeId) Allocator.Error!void {
-        const const_store = self.program.module(module_index).view.const_store;
+    pub fn restoreFn(self: *Builder, source: lower.ConstSource, fn_id: check.ConstStore.ConstFnId, fn_ty: TypeId) Allocator.Error!void {
+        const const_store = self.program.constStore(source);
         const stored = const_store.getFn(fn_id);
         switch (stored.fn_def) {
             .local_template, .imported_template => |ref| {
@@ -3271,7 +3353,7 @@ pub const Builder = struct {
                         if (std.meta.eql(candidate.id, capture.capture_id)) break candidate;
                     } else invariant("a stored closure lacks one of its site's captures");
                     if (stored_capture.kind != .lexical) invariant("restoring a closure capturing its own recursive binding is not yet lowered by Boxy");
-                    try relations.append(self.allocator, .{ capture_ty.*, try self.constType(module_index, stored_capture.ty) });
+                    try relations.append(self.allocator, .{ capture_ty.*, try self.constType(source, stored_capture.ty) });
                 }
                 // A scheme variable neither the value's type nor its captures
                 // mention reaches no value of the restored closure from
@@ -3324,10 +3406,10 @@ pub const Builder = struct {
                 var index = captures.len;
                 while (index > 0) {
                     index -= 1;
-                    try self.push(.{ .restore = .{ .module = module_index, .node = stored_captures[index].value, .ty = concrete_capture_types[index] } });
+                    try self.push(.{ .restore = .{ .source = source, .node = stored_captures[index].value, .ty = concrete_capture_types[index] } });
                 }
             },
-            inline .parser_runtime, .encoder_for_runtime => |runtime| try Codec.restoreRuntime(self, module_index, fn_id, runtime.owner, runtime.expr, fn_ty),
+            inline .parser_runtime, .encoder_for_runtime => |runtime| try Codec.restoreRuntime(self, source, fn_id, runtime.owner, runtime.expr, fn_ty),
             else => invariantFmt("restoring stored {s} function values is not yet lowered by Boxy", .{@tagName(stored.fn_def)}),
         }
     }
@@ -4161,11 +4243,10 @@ pub const Builder = struct {
     }
 
     /// The Boxy type of a stored constant's type evidence `root` in the
-    /// constant store of `module_index`.
-    pub fn constType(self: *Builder, module_index: ModuleIndex, root: check.ConstStore.ConstTypeId) Allocator.Error!TypeId {
-        const view = self.program.module(module_index);
-        const const_types = &view.view.const_store.type_store;
-        const names = view.nameStore();
+    /// constant store of `source`.
+    pub fn constType(self: *Builder, source: lower.ConstSource, root: check.ConstStore.ConstTypeId) Allocator.Error!TypeId {
+        const const_types = &self.program.constStore(source).type_store;
+        const names = self.program.constNames(source);
         const store = &self.program.store;
         var done: std.AutoHashMapUnmanaged(check.ConstStore.ConstTypeId, TypeId) = .empty;
         defer done.deinit(self.allocator);

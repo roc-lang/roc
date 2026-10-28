@@ -8728,6 +8728,12 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitBoxyRuntimeCall(.tag_discriminant_of);
             try self.bindReturnedScalar(dst, .i32);
         },
+        .desc_index => |d| {
+            try self.emitProcLocal(d.desc);
+            try self.emitProcLocal(d.candidates);
+            try self.emitBoxyRuntimeCall(.index);
+            try self.bindReturnedScalar(dst, .i32);
+        },
         .tag_payload_addr => |t| {
             try self.emitProcLocal(t.desc);
             try self.emitBytesAddress(t.base);

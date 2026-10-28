@@ -46,6 +46,7 @@ pub fn ownership(op: DynOp) Ownership {
         .desc_recursive_open,
         .desc_recursive_close,
         .tag_discriminant_of,
+        .desc_index,
         => .none,
         // A dictionary is an immortal erased callable built from its
         // captures, which it holds as an aggregate holds its fields.
@@ -158,6 +159,10 @@ pub const Operands = struct {
             .tag_discriminant_of => |tag| {
                 result.single(tag.desc);
                 result.single(tag.name);
+            },
+            .desc_index => |index| {
+                result.single(index.desc);
+                result.single(index.candidates);
             },
             .tag_payload_addr => |payload| {
                 result.single(payload.base);
@@ -333,6 +338,7 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
         .box_payload_addr => |payload| .{ .box_payload_addr = .{ .box = try Remap.one(context, payload.box), .desc = try Remap.one(context, payload.desc) } },
         .tag_discriminant => |tag| .{ .tag_discriminant = .{ .base = try Remap.one(context, tag.base), .desc = try Remap.one(context, tag.desc) } },
         .tag_discriminant_of => |tag| .{ .tag_discriminant_of = .{ .desc = try Remap.one(context, tag.desc), .name = try Remap.one(context, tag.name) } },
+        .desc_index => |index| .{ .desc_index = .{ .desc = try Remap.one(context, index.desc), .candidates = try Remap.one(context, index.candidates) } },
         .tag_payload_addr => |payload| .{ .tag_payload_addr = .{
             .base = try Remap.one(context, payload.base),
             .desc = try Remap.one(context, payload.desc),

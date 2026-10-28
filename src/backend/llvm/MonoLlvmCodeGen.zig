@@ -11706,6 +11706,11 @@ pub const MonoLlvmCodeGen = struct {
                 try self.prepareLocalWrite(target);
                 try self.storeLocalInt(target, discriminant, self.localLayout(target));
             },
+            .desc_index => |d| {
+                const index = try self.callBoxyRuntime("roc_desc_index", .i32, &.{ ptr_ty, ptr_ty }, &.{ try self.wordValue(d.desc), try self.wordValue(d.candidates) });
+                try self.prepareLocalWrite(target);
+                try self.storeLocalInt(target, index, self.localLayout(target));
+            },
             .tag_payload_addr => |t| try self.bindComponentAddress(target, try self.callBoxyRuntime("roc_desc_tag_payload_addr", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, .i32 }, &.{
                 try self.wordValue(t.desc),
                 try self.bytesAddress(t.base),

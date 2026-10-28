@@ -17323,6 +17323,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBoxyRuntime(&builder, "roc_desc_tag_discriminant_of");
                     try self.bindReturnedScalar(dst_local, 4);
                 },
+                .desc_index => |d| {
+                    try self.addWordArg(&builder, d.desc);
+                    try self.addWordArg(&builder, d.candidates);
+                    try self.callBoxyRuntime(&builder, "roc_desc_index");
+                    try self.bindReturnedScalar(dst_local, 4);
+                },
                 .tag_payload_addr => |t| {
                     try self.addWordArg(&builder, t.desc);
                     try self.addBytesArg(&builder, t.base);

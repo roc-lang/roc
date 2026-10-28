@@ -297,6 +297,10 @@ pub const LiteralRootPlan = struct {
     site: LIR.LiteralRejectionSite,
     proc: LIR.LirProcSpecId,
     ret_layout: layout.Idx,
+    /// The Monotype representation of the converted value, in
+    /// `Result.const_types`: the concrete type this root converts the
+    /// literal at, which a `.boxy` runtime program keys the value by.
+    ret_type: const_store.ConstTypeId,
     plan: ConstPlanId,
     /// Every consumer that reads a literal root reads it from this slot.
     value_slot: LIR.StaticDataId,

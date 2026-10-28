@@ -4895,6 +4895,7 @@ const Lowerer = struct {
                 .site = root.site,
                 .proc = try self.markReachableFn(root.fn_id),
                 .ret_layout = ret_layout,
+                .ret_type = try self.constTypeOfType(entry.ret),
                 .plan = try self.constPlanOfType(entry.ret),
                 .value_slot = try self.comptimeValueSlot(.{ .module = root.module, .root = .{ .literal = id }, .const_locator = null }, entry.ret, ret_layout),
             });

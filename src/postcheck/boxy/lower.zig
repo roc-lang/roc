@@ -49,6 +49,9 @@ pub const Input = struct {
     /// Allow `List.map` to reuse a unique input list's allocation (see
     /// `SolvedLirLower.Options.list_in_place_map`).
     list_in_place_map: bool = false,
+    /// The values compile-time evaluation converted the program's
+    /// instance-dependent literals to, when the program was evaluated.
+    literal_values: ?*const @import("literal_values.zig").LiteralValues = null,
 };
 
 /// The lowered program and the static data it carries.
@@ -103,6 +106,10 @@ pub const WorkerKey = union(enum) {
 
 /// Why a dictionary slot's method crashes.
 pub const CrashDictionary = enum { checked_error, unreachable_value };
+
+/// Where a stored constant lives: a checked module's constant store, or the
+/// program's converted literal values (`Input.literal_values`).
+pub const ConstSource = union(enum) { module: ModuleIndex, literals };
 
 /// An exported procedure binding's identity within its module.
 pub const ExportedBindingKey = struct { module: ModuleIndex, def: @FieldType(checked.ImportedProcedureBindingRef, "def"), pattern: checked.CheckedPatternId };
@@ -246,6 +253,9 @@ pub const Program = struct {
     lowering_module_ids: []LIR.LoweringModuleId = &.{},
     /// Modules by the checker's `module_idx`.
     by_module_idx: std.AutoHashMapUnmanaged(u32, ModuleIndex) = .empty,
+    /// The converted values of each instance-dependent literal, by the
+    /// literal: indices into `Input.literal_values.entries`.
+    literal_entries: std.AutoHashMapUnmanaged(ExprKey, std.ArrayList(u32)) = .empty,
     /// The Builtin `Hasher` type, once asked for (`defaultHasher`).
     default_hasher: ?TypeId = null,
     /// Each module's callable-eval templates, by their binding pattern.
@@ -283,6 +293,22 @@ pub const Program = struct {
 
     pub fn module(self: *const Program, index: ModuleIndex) *const types.ModuleView {
         return self.modules.get(index);
+    }
+
+    /// The constant store of `source`.
+    pub fn constStore(self: *const Program, source: ConstSource) *const check.ConstStore.ConstStore {
+        return switch (source) {
+            .module => |index| self.module(index).view.const_store,
+            .literals => &(self.input.literal_values orelse invariant("a literal table names values no evaluation converted")).store,
+        };
+    }
+
+    /// The names `source`'s stored types intern.
+    pub fn constNames(self: *const Program, source: ConstSource) *const canonical.CanonicalNameStore {
+        return switch (source) {
+            .module => |index| self.module(index).nameStore(),
+            .literals => &(self.input.literal_values orelse invariant("a literal table names values no evaluation converted")).names,
+        };
     }
 
     pub fn moduleByKey(self: *const Program, key: checked.ModuleId) *const types.ModuleView {
@@ -1261,6 +1287,11 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.by_module_idx.deinit(allocator);
         program.exported_bindings.deinit(allocator);
         program.callable_eval_by_pattern.deinit(allocator);
+        {
+            var entries = program.literal_entries.valueIterator();
+            while (entries.next()) |list| list.deinit(allocator);
+            program.literal_entries.deinit(allocator);
+        }
         program.wrapper_by_root.deinit(allocator);
         program.hosted.deinit(allocator);
         program.local_scopes.deinit(allocator);
@@ -1297,6 +1328,13 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
         for (view.view.entry_wrappers.wrappers.items) |wrapper| {
             try program.wrapper_by_root.put(allocator, .{ .module = view.index, .root = wrapper.root }, wrapper.template);
+        }
+    }
+    if (input.literal_values) |values| {
+        for (values.entries.items, 0..) |entry, index| {
+            const slot = try program.literal_entries.getOrPut(allocator, .{ .module = program.moduleByKey(entry.module).index, .expr = entry.expr });
+            if (!slot.found_existing) slot.value_ptr.* = .empty;
+            try slot.value_ptr.append(allocator, @intCast(index));
         }
     }
     try seedSourceFiles(&program);

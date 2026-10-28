@@ -196,6 +196,10 @@ pub const Store = struct {
 
     name_texts: std.ArrayList([]const u8) = .empty,
     name_ids: std.StringHashMapUnmanaged(NameId) = .empty,
+    /// Each nominal declaration's name, its own whatever its text: a
+    /// descriptor compares nominals by name, and two declarations can share
+    /// a name's text.
+    decl_name_ids: std.AutoHashMapUnmanaged(DeclRef, NameId) = .empty,
     name_arena: std.heap.ArenaAllocator,
 
     /// Converted closed checked types, by module and checked id.
@@ -257,6 +261,7 @@ pub const Store = struct {
         self.scratch_key.deinit(self.allocator);
         self.name_texts.deinit(self.allocator);
         self.name_ids.deinit(self.allocator);
+        self.decl_name_ids.deinit(self.allocator);
         self.name_arena.deinit();
         self.closed_memo.deinit(self.allocator);
         self.backing_memo.deinit(self.allocator);
@@ -285,6 +290,16 @@ pub const Store = struct {
         const id: NameId = @fromBackingInt(@intCast(self.name_texts.items.len));
         try self.name_texts.append(self.allocator, owned);
         try self.name_ids.put(self.allocator, owned, id);
+        return id;
+    }
+
+    /// The name of nominal declaration `decl`, whose text is `text`.
+    pub fn internDeclName(self: *Store, decl: DeclRef, text: []const u8) Allocator.Error!NameId {
+        if (self.decl_name_ids.get(decl)) |existing| return existing;
+        const owned = try self.name_arena.allocator().dupe(u8, text);
+        const id: NameId = @fromBackingInt(@intCast(self.name_texts.items.len));
+        try self.name_texts.append(self.allocator, owned);
+        try self.decl_name_ids.put(self.allocator, decl, id);
         return id;
     }
 
@@ -911,10 +926,11 @@ pub const Converter = struct {
                     else => {},
                 }
                 const decl = try self.declarationRef(view, nominal);
+                const decl_ref = decl orelse DeclRef{ .module = module, .decl = @fromBackingInt(std.math.maxInt(u32)) };
                 return try self.store.intern(.{ .nominal = .{
-                    .decl = decl orelse .{ .module = module, .decl = @fromBackingInt(std.math.maxInt(u32)) },
+                    .decl = decl_ref,
                     .args = children,
-                    .name = try self.store.internName(name_store.typeNameText(nominal.name)),
+                    .name = if (decl != null) try self.store.internDeclName(decl_ref, name_store.typeNameText(nominal.name)) else try self.store.internName(name_store.typeNameText(nominal.name)),
                     .is_opaque = nominal.is_opaque,
                     .builtin = nominal.builtin,
                     .has_backing = decl != null,

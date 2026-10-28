@@ -197,6 +197,19 @@ pub const Writer = struct {
         );
     }
 
+    /// Preserve the concrete type a literal root converted its literal at.
+    pub fn storeLiteralType(
+        self: *Writer,
+        root: LirProgram.LiteralRootPlan,
+    ) Error!const_store.ConstTypeId {
+        return self.store.type_store.cloneTypeFromTranslated(
+            &self.program.const_types,
+            &self.program.const_type_names,
+            self.typeNames(),
+            root.ret_type,
+        );
+    }
+
     /// One value to store or scan.
     const ValueRequest = struct {
         plan: LirProgram.ConstPlanId,

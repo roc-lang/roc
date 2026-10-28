@@ -690,9 +690,9 @@ pub fn dispatch(b: *Builder, call_plan: static_dispatch.StaticDispatchCallPlan, 
 /// Restore a stored generated runtime: its family's runtime callable over
 /// the stored encoding and renamed names. Compile-time evaluation numbered
 /// those captures in the family's name order after the encoding.
-pub fn restoreRuntime(b: *Builder, module_index: ModuleIndex, fn_id: check.ConstStore.ConstFnId, owner: check.CheckedNames.ProcTemplate, expr: checked.CheckedExprId, fn_ty: TypeId) Allocator.Error!void {
+pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.ConstStore.ConstFnId, owner: check.CheckedNames.ProcTemplate, expr: checked.CheckedExprId, fn_ty: TypeId) Allocator.Error!void {
     const program = b.program;
-    const stored = program.module(module_index).view.const_store.getFn(fn_id);
+    const stored = program.constStore(source).getFn(fn_id);
     const owner_view = program.moduleByKey(.{ .bytes = owner.artifact.bytes });
     const plan_id = switch (owner_view.bodies().expr(expr).data) {
         .dispatch_call, .type_dispatch_call => |maybe| maybe orelse invariant("a stored generated codec runtime's dispatch has no plan"),
@@ -734,7 +734,7 @@ pub fn restoreRuntime(b: *Builder, module_index: ModuleIndex, fn_id: check.Const
             if (capture.id == needle) break capture.value;
         } else null;
         if (node) |stored_node| {
-            try b.push(.{ .restore = .{ .module = module_index, .node = stored_node, .ty = captures[index] } });
+            try b.push(.{ .restore = .{ .source = source, .node = stored_node, .ty = captures[index] } });
         } else if (index == 0 and try program.layouts.layoutOf(captures[0]) == .zst) {
             // Compile-time evaluation stores no zero-sized encoding.
             try b.push(.{ .push_value = try b.unitValue() });

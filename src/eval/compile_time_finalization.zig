@@ -134,6 +134,9 @@ pub const Options = struct {
     /// Where evaluation records the values of literal roots that have value
     /// identities. Set by `finalizeProgram`.
     literal_capture: ?*LiteralCapture = null,
+    /// Where evaluation records every literal root's converted value or
+    /// failure, for a `.boxy` runtime program. Set by `finalizeProgram`.
+    boxy_literals: ?*lir.CheckedPipeline.BoxyLiteralValues = null,
     /// Set by an embedder that abandons the compilation. Finalization reads
     /// it between its phases and between evaluation levels, and fails with
     /// `error.Canceled` once it is set.
@@ -579,6 +582,9 @@ pub const ProgramSession = struct {
     /// The position of each runtime request in the specialized program's root
     /// plan.
     runtime_positions: []u32,
+    /// For a `.boxy` runtime consumer: the values evaluation converted the
+    /// program's instance-dependent literals to.
+    boxy_literals: ?*lir.CheckedPipeline.BoxyLiteralValues = null,
 
     /// Where a runtime consumer reads completed values from.
     pub const RuntimeStages = union(enum) {
@@ -600,6 +606,10 @@ pub const ProgramSession = struct {
             .respecialized => |*stages| if (stages.*) |*owned| owned.deinit(),
         }
         if (self.runtime_prepared) |*prepared| prepared.deinit();
+        if (self.boxy_literals) |values| {
+            values.deinit();
+            self.allocator.destroy(values);
+        }
         self.allocator.free(self.runtime_positions);
         self.allocator.free(self.modules.root.relation_modules);
         self.allocator.free(self.modules.imports);
@@ -651,7 +661,7 @@ pub const ProgramSession = struct {
             } else if (expected != actual) finalizationInvariant("runtime request policy differs from the declared consumer");
         }
         self.runtime_target = null;
-        if (target.specialization_strategy == .boxy) return lowerBoxyRuntime(allocator, self.modules, roots, target);
+        if (target.specialization_strategy == .boxy) return lowerBoxyRuntime(allocator, self.modules, roots, target, self.boxy_literals);
         if (self.runtime_prepared) |prepared| {
             self.runtime_prepared = null;
             var owned = prepared;
@@ -1225,7 +1235,20 @@ pub fn finalizeProgram(
 
     var stored_demand = StoredRootSet{};
     defer stored_demand.deinit(allocator);
-    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, runtime_target, options, &debug_events, &stored_demand, true, lss_runtime, demand_driven);
+    // A `.boxy` runtime program reads the values evaluation converts its
+    // instance-dependent literals to.
+    const boxy_literals: ?*lir.CheckedPipeline.BoxyLiteralValues = if (runtime_target != null and runtime_target.?.specialization_strategy == .boxy) blk: {
+        const values = try allocator.create(lir.CheckedPipeline.BoxyLiteralValues);
+        values.* = lir.CheckedPipeline.BoxyLiteralValues.init(allocator);
+        break :blk values;
+    } else null;
+    errdefer if (boxy_literals) |values| {
+        values.deinit();
+        allocator.destroy(values);
+    };
+    var evaluation_options = options;
+    evaluation_options.boxy_literals = boxy_literals;
+    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, runtime_target, evaluation_options, &debug_events, &stored_demand, true, lss_runtime, demand_driven);
     errdefer specialized.deinit();
     var runtime_stages: ProgramSession.RuntimeStages = .evaluation;
     errdefer switch (runtime_stages) {
@@ -1319,6 +1342,7 @@ pub fn finalizeProgram(
         .runtime_stages = runtime_stages,
         .runtime_prepared = runtime_prepared,
         .runtime_positions = runtime_positions,
+        .boxy_literals = boxy_literals,
     };
 }
 
@@ -1724,10 +1748,11 @@ pub fn lowerBoxyRuntime(
     modules: lir.CheckedPipeline.CheckedModuleSet,
     roots: lir.CheckedPipeline.RootRequestSet,
     target: lir.CheckedPipeline.TargetConfig,
+    literal_values: ?*const lir.CheckedPipeline.BoxyLiteralValues,
 ) RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
     std.debug.assert(target.specialization_strategy == .boxy);
     try lir.CheckedPipeline.requireHostedProceduresBound(modules, target);
-    var prepared = try lir.CheckedPipeline.prepareBoxyCheckedModules(allocator, modules, roots, target);
+    var prepared = try lir.CheckedPipeline.prepareBoxyCheckedModules(allocator, modules, roots, target, literal_values);
     defer prepared.deinit();
     return prepared.lower(target);
 }
@@ -3599,6 +3624,7 @@ fn evalInterpreterLiteralRoot(
             error.OutOfMemory => return error.OutOfMemory,
             error.RuntimeError => finalizationInvariant("a literal root's value held an unresolvable callable"),
         };
+        try recordBoxyLiteralValue(options, lowered, plan, result.value);
         break :evaluated null;
     };
     // A failure that read a member of its group not yet evaluated
@@ -3613,6 +3639,7 @@ fn evalInterpreterLiteralRoot(
     }
     const failed = failure orelse return true;
     try recordLiteralRootFailure(allocator, owners, lowered, plan, failed);
+    try recordBoxyLiteralFailure(options, lowered, plan, failed.message);
     if (options.publish_shared_slots) {
         try program.slotEnvironment().publishFailureOrigin(plan.site.owner, producer, .{ .loc = failed.loc, .region = failed.region }, &lowered.lir_result);
         try program.slotEnvironment().publishFailure(lowered, plan.site.owner, producer, .{ .message = failed.message, .kind = .crash }, .{ .resolve = InterpreterProgram.resolveFunction });
@@ -3679,16 +3706,49 @@ fn evalDevLiteralRoot(
         .crashed => {},
     };
     const failed = failure orelse {
+        try recordBoxyLiteralValue(options, lowered, plan, .{ .ptr = ret_buf.ptr });
         if (options.publish_shared_slots) try native.publishRoot(lowered, plan.site.owner, producer, plan.shape(), .{ .ptr = ret_buf.ptr });
         if (options.publish_shared_slots) try native.publishFailure(lowered, plan.site.owner, producer, null);
         return true;
     };
     try recordLiteralRootFailure(allocator, owners, lowered, plan, failed);
+    try recordBoxyLiteralFailure(options, lowered, plan, failed.message);
     if (options.publish_shared_slots) {
         try native.slots.publishFailureOrigin(plan.site.owner, producer, .{ .loc = failed.loc, .region = failed.region }, &lowered.lir_result);
         try native.publishFailure(lowered, plan.site.owner, producer, .{ .message = failed.message, .kind = .crash });
     }
     return true;
+}
+
+/// Record a literal root's converted value, and the type it converted the
+/// literal at, for a `.boxy` runtime program.
+fn recordBoxyLiteralValue(options: Options, lowered: *const lir.CheckedPipeline.LoweredProgram, plan: LirProgram.LiteralRootPlan, value: Value) Allocator.Error!void {
+    const values = options.boxy_literals orelse return;
+    var writer = ConstStoreWriter.Writer.initStore(values.allocator, &values.store, &values.names, &lowered.lir_result);
+    defer writer.deinit();
+    const node = writer.storeLiteral(plan.plan, plan.ret_layout, value) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.RuntimeError => finalizationInvariant("a literal root's value held an unresolvable callable"),
+    };
+    const ty = writer.storeLiteralType(plan) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.RuntimeError => finalizationInvariant("a literal root's type could not be stored"),
+    };
+    try values.entries.append(values.allocator, .{ .module = plan.module, .expr = @fromBackingInt(plan.site.checked_expr), .ty = ty, .outcome = .{ .value = node } });
+}
+
+/// Record a literal root's failed conversion, for a `.boxy` runtime program.
+fn recordBoxyLiteralFailure(options: Options, lowered: *const lir.CheckedPipeline.LoweredProgram, plan: LirProgram.LiteralRootPlan, message: []const u8) Allocator.Error!void {
+    const values = options.boxy_literals orelse return;
+    var writer = ConstStoreWriter.Writer.initStore(values.allocator, &values.store, &values.names, &lowered.lir_result);
+    defer writer.deinit();
+    const ty = writer.storeLiteralType(plan) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.RuntimeError => finalizationInvariant("a literal root's type could not be stored"),
+    };
+    const owned = try values.allocator.dupe(u8, message);
+    errdefer values.allocator.free(owned);
+    try values.entries.append(values.allocator, .{ .module = plan.module, .expr = @fromBackingInt(plan.site.checked_expr), .ty = ty, .outcome = .{ .failed = owned } });
 }
 
 fn recordLiteralRootFailure(

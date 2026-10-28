@@ -8755,6 +8755,10 @@ pub const Interpreter = struct {
                 const found = try self.variantNamed(try self.descAt(frame, t.desc), try self.nameAt(frame, t.name));
                 try self.setScalarTarget(frame, stmt_id, target, u32, found.variant.discriminant);
             },
+            .desc_index => |d| {
+                const index = boxy.compiled.descIndex(try self.descAt(frame, d.desc), try self.descAt(frame, d.candidates), &self.roc_ops);
+                try self.setScalarTarget(frame, stmt_id, target, u32, index);
+            },
             .tag_payload_addr => |t| {
                 const found = try self.variantNamed(try self.descAt(frame, t.desc), try self.nameAt(frame, t.name));
                 const offset = try self.variantPayloadOffset(found.variant, t.payload_index);

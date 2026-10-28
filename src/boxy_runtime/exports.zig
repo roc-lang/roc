@@ -171,6 +171,10 @@ pub fn roc_desc_tag_discriminant_of(desc: *const TypeDesc, name: *const Name) ca
     return compiled.tagDiscriminantOf(desc, name, ops());
 }
 
+pub fn roc_desc_index(desc: *const TypeDesc, candidates: *const TypeDesc) callconv(.c) u32 {
+    return compiled.descIndex(desc, candidates, ops());
+}
+
 pub fn roc_desc_tag_payload_addr(desc: *const TypeDesc, base: ?[*]u8, name: *const Name, payload_index: u32) callconv(.c) [*]u8 {
     return compiled.tagPayloadAddr(desc, valuePtr(base), name, payload_index, ops());
 }
