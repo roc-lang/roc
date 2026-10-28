@@ -2024,13 +2024,17 @@ pub const Builder = struct {
                 const root = owner.view.compile_time_roots.root(template.root);
                 switch (root.payload) {
                     .fn_value => |fn_id| try self.restoreFn(.{ .module = eval.module }, fn_id, eval.ty),
+                    // Evaluation stored a value that is not a function: the
+                    // crash a rejected binding is.
+                    .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = node, .ty = eval.ty } }),
                     // No compile-time evaluation produced the value (a
-                    // binding of the app a platform's roots name): its entry
-                    // wrapper computes it.
-                    .pending, .unevaluated => {
-                        const wrapper = owner.view.entry_wrappers.lookupByRoot(template.root) orelse
+                    // binding of the app a platform's roots name, or one
+                    // whose evaluation failed where it was guarded): its
+                    // entry wrapper computes it.
+                    .pending, .unevaluated, .runtime => {
+                        const wrapper = self.program.wrapper_by_root.get(.{ .module = eval.module, .root = template.root }) orelse
                             invariant("a callable-eval binding's root has no entry wrapper");
-                        const callee = try self.program.templateRefWorker(wrapper.template);
+                        const callee = try self.program.templateRefWorker(wrapper);
                         const callee_worker = self.program.worker(callee).*;
                         if (callee_worker.params.len != 0 or callee_worker.dictionary_params.len != 0) invariant("a callable-eval entry wrapper takes arguments");
                         const bound = try self.relateVariables(callee_worker.ret, eval.ty, callee_worker.scheme_vars.len);
@@ -2040,7 +2044,7 @@ pub const Builder = struct {
                         for (bound, hidden) |ty, *desc| desc.* = try self.descOf(ty);
                         try self.finishCall(callee, hidden, 0, eval.ty);
                     },
-                    else => invariantFmt("a callable-eval binding whose root holds {s} is not yet lowered by Boxy", .{@tagName(root.payload)}),
+                    .discarded, .expect => invariant("a callable-eval binding's root holds a value, which no expect or discarded root does"),
                 }
             },
             .finish_restore_closure => |closure| {
