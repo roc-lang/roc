@@ -11654,6 +11654,22 @@ the template with it and widening afterwards would rewrite cells that other
 types share, such as an indexed nominal backing, while the body still read
 the narrower row.
 
+The rule asks only whether the result alone determines the variable, so
+the variable may be flex or rigid, with or without a row default, and may
+be the whole error type (`Try(Str, err)`, or `Try(Str, _)` whose hole
+generalizes). The one exception is a constraint that closing a row does
+not discharge (anything beyond `is_eq` and `to_hash`). Such a constraint
+can be a producer, like `parser_for`, whose behavior depends on the row,
+so a wider row would run code the checker never checked. The checker
+gives the same constraint to the use's row variable when it unifies the
+two, so that variable does not seal to its row default either. The use
+then never counts as closed, and the call keeps its own row and is
+widened by a `row_widen`. The template side and the use side apply the
+same discharge rule (`row_default_discharges_constraints`, which the
+checked artifact records for flex and rigid variables alike).
+Specialization therefore never meets a request wider than a template
+that cannot take it.
+
 The set of positions a use may WIDEN is kept within the row coercion's reach
 by construction rather than by a second rule that could drift: polarity's
 per-use opening is withheld at generation time from every position outside
