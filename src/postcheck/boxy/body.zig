@@ -1534,14 +1534,14 @@ pub const Builder = struct {
             // every field's slot as missing.
             .empty_record => try self.push(.{ .finish_record = expr_id }),
             .record => |record| {
-                if (record.ext != null) invariant("record update is not yet lowered by Boxy");
-                if (record.unsets.len != 0) invariant("unset record fields are not yet lowered by Boxy");
                 try self.push(.{ .finish_record = expr_id });
                 var index = record.fields.len;
                 while (index > 0) {
                     index -= 1;
                     try self.push(.{ .expr = record.fields[index].value });
                 }
+                // An update evaluates its base first.
+                if (record.ext) |base_expr| try self.push(.{ .expr = base_expr });
             },
             .tuple => |items| {
                 try self.push(.{ .finish_tuple = expr_id });
@@ -3261,6 +3261,7 @@ pub const Builder = struct {
         const ty = try self.exprType(expr_id);
         const values = try self.popValues(@intCast(record.fields.len));
         defer self.allocator.free(values);
+        const update_base: ?LocalId = if (record.ext != null) self.popValue() else null;
         const record_ty = switch (self.program.store.get(try self.structuralType(ty))) {
             .record => |value| value,
             .empty_record => return try self.pushValue(try self.unitValue()),
@@ -3284,6 +3285,41 @@ pub const Builder = struct {
                 .inline_slot => value,
                 .presence_slot => try self.buildTag(try self.program.layouts.presenceSlot(fields[semantic].ty), try self.program.store.internName(@import("layouts.zig").present_label), &.{value}),
             };
+        }
+        // Unset fields (`name: _`) are missing.
+        for (record.unsets) |label| {
+            const name = try self.program.store.internName(name_store.recordFieldLabelText(label));
+            for (fields, ordered) |field, *slot| {
+                if (field.name != name) continue;
+                if (field.kind != .presence_slot) invariant("an unset field is not optional");
+                slot.* = try self.buildTag(try self.program.layouts.presenceSlot(field.ty), try self.program.store.internName(@import("layouts.zig").missing_label), &.{});
+            }
+        }
+        // An update copies the fields it does not mention from its base.
+        if (update_base) |base_value| {
+            if (record_ty.ext != null) invariant("updating a record of an open row is not yet lowered by Boxy");
+            const base_ty = try self.structuralType(try self.exprType(record.ext.?));
+            const base_record = switch (self.program.store.get(base_ty)) {
+                .record => |value| value,
+                else => invariant("a record update's base is not a record"),
+            };
+            const base_fields = try self.allocator.dupe(types.Field, self.program.store.fieldSpan(base_record.fields));
+            defer self.allocator.free(base_fields);
+            for (fields, ordered) |field, *slot| {
+                if (slot.* != null) continue;
+                const storage = try self.program.layouts.fieldStorage(field);
+                const base_index = for (base_fields, 0..) |candidate, index| {
+                    if (candidate.name == field.name) break index;
+                } else null;
+                if (base_index) |index| {
+                    slot.* = try self.readField(base_ty, base_value, @intCast(index), storage);
+                } else {
+                    if (base_record.ext == null) invariant("a record update's field is absent from its base");
+                    const local = try self.localOf(storage, .view);
+                    try self.emitDyn(local, .{ .field_addr_named = .{ .base = base_value, .desc = try self.descOf(base_ty), .name = try self.nameDesc(field.name) } });
+                    slot.* = local;
+                }
+            }
         }
         const slots = try self.allocator.alloc(LocalId, fields.len);
         defer self.allocator.free(slots);
