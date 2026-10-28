@@ -40,8 +40,6 @@ fn invalidSummary(comptime line: u32) error{InvalidSummary} {
     return error.InvalidSummary;
 }
 
-/// Encode only the immutable graph reachable from the settled relation. The
-/// context supplies exact checked module addresses for runtime defaults.
 /// Whether every placeholder open node is the slot of a field kind the
 /// summary records. An undetermined field kind's slot stays a placeholder
 /// until relation freeze selects its kind, and instantiation recreates it as
@@ -65,6 +63,8 @@ fn placeholdersAreFieldKindSlots(allocator: Allocator, c: Constraints) Allocator
     return true;
 }
 
+/// Encode only the immutable graph reachable from the settled relation. The
+/// context supplies exact checked module addresses for runtime defaults.
 pub fn encode(allocator: Allocator, types: *Type.Store, ns: *const names.NameStore, leaves: []const Type.TypeId, summary: Summary, context: anytype) EncodeError![]u8 {
     return encodeWithStats(allocator, types, ns, leaves, summary, context, null);
 }
