@@ -427,6 +427,8 @@ const CustomCase = enum {
     watch_completed_run_refresh_reruns,
     hot_reload_dev_shim,
     hot_reload_model_boundary,
+    hot_reload_retired_static_str,
+    hot_reload_retired_static_data,
     hot_reload_default_app,
     platform_requires_checker_diagnostics,
     generated_graph_1_1,
@@ -2443,6 +2445,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc check --watch reruns when completed child snapshot is stale", .skip = .{ .windows = "watch refresh race test uses a POSIX wrapper script" }, .body = .{ .custom = .watch_completed_run_refresh_reruns } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch hot reloads dev shim code", .skip = .{ .windows = "generated hot-reload test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_dev_shim } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch hot reloads app-provided Model through Box", .skip = .{ .windows = "generated hot-reload model test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_model_boundary } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc --watch keeps retired image static Str alive for a live value", .skip = .{ .windows = "generated hot-reload static-string test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_retired_static_str } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc --watch keeps retired image static lists and boxed closures alive and reuses unchanged static data", .skip = .{ .windows = "generated hot-reload static-data test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_retired_static_data } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch runs headerless default app", .body = .{ .custom = .hot_reload_default_app } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10307: direct dev run passes source path as argv0", .backend = .dev, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/fx-open/argv0.roc", .app_args = &.{ "first", "second" }, .file_path_mode = .relative, .stdout_exact = "test/fx-open/argv0.roc|first|second\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10307: explicit run passes source path as argv0", .backend = .dev, .body = .{ .command = .{ .args = &.{ "run", "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/argv0.roc", .app_args = &.{ "first", "second" }, .file_path_mode = .relative, .stdout_exact = "test/fx-open/argv0.roc|first|second\n" } } },
@@ -5211,6 +5215,8 @@ fn runCustomCase(
         .watch_completed_run_refresh_reruns => customWatchCompletedRunRefreshReruns(io, allocator, &env, &timer, timeout_ms),
         .hot_reload_dev_shim => customHotReloadDevShim(io, allocator, &env, &timer, timeout_ms),
         .hot_reload_model_boundary => customHotReloadModelBoundary(io, allocator, &env, &timer, timeout_ms),
+        .hot_reload_retired_static_str => customHotReloadRetiredStaticStr(io, allocator, &env, &timer, timeout_ms),
+        .hot_reload_retired_static_data => customHotReloadRetiredStaticData(io, allocator, &env, &timer, timeout_ms),
         .hot_reload_default_app => customHotReloadDefaultApp(io, allocator, &env, &timer, timeout_ms),
         .platform_requires_checker_diagnostics => customPlatformRequiresCheckerDiagnostics(io, allocator, &env, &timer, timeout_ms),
         .generated_graph_1_1 => customGeneratedModuleGraph(io, allocator, &env, &timer, timeout_ms, .{ .roc_file_count = 1, .symbols_per_file = 1 }),
@@ -7037,6 +7043,566 @@ fn customHotReloadModelBoundary(
     }
 
     return null;
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12634
+// A host keeps a `Box(Model)` from generation 1 whose `label` is a Str literal longer
+// than the small-string limit. After three reloads, reading the kept label must still
+// return the generation-1 text.
+const hot_reload_static_str_app_initial =
+    \\app [Model, main] { pf: platform "./platform/main.roc" }
+    \\
+    \\Model : { label : Str, value : U64 }
+    \\
+    \\main = { init, label }
+    \\
+    \\init : U64 -> Model
+    \\init = |seed| { label: "generation-1 LABEL, longer than 23 bytes", value: seed }
+    \\
+    \\label : Model -> Str
+    \\label = |model| model.label
+    \\
+;
+
+fn hotReloadStaticStrPlatformSource(allocator: Allocator, target: NativeMuslTarget) CliRunnerError![]const u8 {
+    return try std.fmt.allocPrint(
+        allocator,
+        \\platform ""
+        \\    requires {{
+        \\        [Model : model] for main : {{ init : U64 -> model, label : model -> Str }}
+        \\    }}
+        \\    exposes []
+        \\    packages {{}}
+        \\    provides {{ "roc_init": init_for_host, "roc_label": label_for_host }}
+        \\    targets: {{
+        \\        inputs_dir: "targets/",
+        \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
+        \\    }}
+        \\
+        \\init_for_host : U64 -> Box(Model)
+        \\init_for_host = |seed| {{
+        \\    init_fn = main.init
+        \\
+        \\    Box.box(init_fn(seed))
+        \\}}
+        \\
+        \\label_for_host : Box(Model) -> Str
+        \\label_for_host = |boxed| {{
+        \\    label_fn = main.label
+        \\
+        \\    label_fn(Box.unbox(boxed))
+        \\}}
+        \\
+    ,
+        .{target.roc_target},
+    );
+}
+
+const hot_reload_static_str_host_c_source =
+    \\#include <stdint.h>
+    \\#include <stdio.h>
+    \\#include <stdlib.h>
+    \\#include <string.h>
+    \\#include <unistd.h>
+    \\
+    \\typedef struct { char *bytes; size_t cap; size_t len; } RocStr;
+    \\
+    \\extern void *roc_init(uint64_t);
+    \\extern RocStr roc_label(void *);
+    \\
+    \\void *roc_alloc(size_t length, size_t alignment) {
+    \\    if (alignment < sizeof(void *)) alignment = sizeof(void *);
+    \\    void *ptr = NULL;
+    \\    if (posix_memalign(&ptr, alignment, length == 0 ? 1 : length) != 0) return NULL;
+    \\    return ptr;
+    \\}
+    \\
+    \\void roc_dealloc(void *ptr, size_t alignment) {
+    \\    (void)alignment;
+    \\    free(ptr);
+    \\}
+    \\
+    \\void *roc_realloc(void *ptr, size_t new_length, size_t alignment) {
+    \\    (void)alignment;
+    \\    return realloc(ptr, new_length == 0 ? 1 : new_length);
+    \\}
+    \\
+    \\void roc_dbg(const unsigned char *bytes, size_t len) {
+    \\    fwrite(bytes, 1, len, stderr);
+    \\    fputc('\n', stderr);
+    \\}
+    \\
+    \\void roc_expect_failed(const unsigned char *bytes, size_t len) {
+    \\    fwrite(bytes, 1, len, stderr);
+    \\    fputc('\n', stderr);
+    \\}
+    \\
+    \\void roc_crashed(const unsigned char *bytes, size_t len) {
+    \\    fwrite(bytes, 1, len, stderr);
+    \\    fputc('\n', stderr);
+    \\    abort();
+    \\}
+    \\
+    \\static void print_label(const char *tag, RocStr s) {
+    \\    if ((intptr_t)s.len < 0) {
+    \\        unsigned char *raw = (unsigned char *)&s;
+    \\        printf("%s:%.*s\n", tag, (int)(raw[sizeof(RocStr) - 1] & 0x7f), (char *)raw);
+    \\    } else {
+    \\        printf("%s:%.*s\n", tag, (int)s.len, s.bytes);
+    \\    }
+    \\    fflush(stdout);
+    \\}
+    \\
+    \\// Renamed into place rather than truncated in place so `roc --watch` never hashes a
+    \\// partially written app and rebuilds from it.
+    \\static int write_app(const char *path, int generation) {
+    \\    char temp_path[4096];
+    \\    int temp_len = snprintf(temp_path, sizeof(temp_path), "%s.tmp", path);
+    \\    if (temp_len < 0 || (size_t)temp_len >= sizeof(temp_path)) return 1;
+    \\    FILE *file = fopen(temp_path, "wb");
+    \\    if (file == NULL) {
+    \\        perror("fopen app");
+    \\        return 1;
+    \\    }
+    \\    fprintf(file,
+    \\        "app [Model, main] { pf: platform \"./platform/main.roc\" }\n\n"
+    \\        "Model : { label : Str, value : U64 }\n\n"
+    \\        "main = { init, label }\n\n"
+    \\        "init : U64 -> Model\n"
+    \\        "init = |seed| { label: \"generation-%d LABEL, longer than 23 bytes\", value: seed }\n\n"
+    \\        "label : Model -> Str\n"
+    \\        "label = |model| model.label\n", generation);
+    \\    if (fclose(file) != 0) {
+    \\        perror("fclose app");
+    \\        return 1;
+    \\    }
+    \\    if (rename(temp_path, path) != 0) {
+    \\        perror("rename app");
+    \\        return 1;
+    \\    }
+    \\    return 0;
+    \\}
+    \\
+    \\static int wait_for_generation(int generation) {
+    \\    char want[32];
+    \\    snprintf(want, sizeof(want), "generation-%d ", generation);
+    \\    for (int i = 0; i < 150; i += 1) {
+    \\        RocStr s = roc_label(roc_init(0));
+    \\        if ((intptr_t)s.len >= 0 && s.len > strlen(want) && memcmp(s.bytes, want, strlen(want)) == 0) {
+    \\            print_label("fresh", s);
+    \\            return 0;
+    \\        }
+    \\        usleep(100000);
+    \\    }
+    \\    fprintf(stderr, "timed out waiting for generation %d\n", generation);
+    \\    return 1;
+    \\}
+    \\
+    \\int main(int argc, char **argv) {
+    \\    if (argc < 2) {
+    \\        fprintf(stderr, "expected app path\n");
+    \\        return 1;
+    \\    }
+    \\
+    \\    void *kept = roc_init(1);
+    \\    print_label("gen1-fresh", roc_label(roc_init(1)));
+    \\    for (int generation = 2; generation <= 4; generation += 1) {
+    \\        if (write_app(argv[1], generation)) return 1;
+    \\        if (wait_for_generation(generation)) return 1;
+    \\        usleep(500000);
+    \\    }
+    \\    print_label("kept-from-gen1", roc_label(kept));
+    \\    puts("done");
+    \\    fflush(stdout);
+    \\    return 0;
+    \\}
+    \\
+;
+
+fn customHotReloadRetiredStaticStr(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    return runHotReloadStaticDataCase(io, allocator, env, timer, timeout_ms, hot_reload_static_str_app_initial, hotReloadStaticStrPlatformSource, hot_reload_static_str_host_c_source, .{
+        .args = &.{"--watch"},
+        .exit = .success,
+        .contains = &.{
+            .{ .stream = .stdout, .text = "gen1-fresh:generation-1 LABEL, longer than 23 bytes\n" },
+            .{ .stream = .stdout, .text = "fresh:generation-2 LABEL, longer than 23 bytes\n" },
+            .{ .stream = .stdout, .text = "fresh:generation-3 LABEL, longer than 23 bytes\n" },
+            .{ .stream = .stdout, .text = "fresh:generation-4 LABEL, longer than 23 bytes\n" },
+            .{ .stream = .stdout, .text = "kept-from-gen1:generation-1 LABEL, longer than 23 bytes\n" },
+            .{ .stream = .stdout, .text = "done\n" },
+        },
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "timed out waiting" },
+            .{ .stream = .stderr, .text = "panic" },
+        },
+    });
+}
+
+/// Stage an app, its platform, and a C host that drives `roc --watch` through
+/// reloads, then run it and check `command` against the result.
+fn runHotReloadStaticDataCase(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    app_source: []const u8,
+    platformSource: *const fn (Allocator, NativeMuslTarget) CliRunnerError![]const u8,
+    host_c_source: []const u8,
+    command: CommandCase,
+) ?TestResult {
+    const target = nativeMuslTarget() orelse {
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "hot-reload static data integration runs only on native Linux x64/arm64 hosts" };
+    };
+
+    const platform_dir = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "platform" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform dir: {}", .{err});
+    const target_dir = std.fs.path.join(allocator, &.{ platform_dir, "targets", target.roc_target }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform target dir: {}", .{err});
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "app.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    const platform_path = std.fs.path.join(allocator, &.{ platform_dir, "main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
+    const host_c_path = std.fs.path.join(allocator, &.{ platform_dir, "host.c" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate host C path: {}", .{err});
+    const host_o_path = std.fs.path.join(allocator, &.{ target_dir, "host.o" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate host object path: {}", .{err});
+    const host_lib_path = std.fs.path.join(allocator, &.{ target_dir, "libhost.a" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate host archive path: {}", .{err});
+    const target_arg = std.fmt.allocPrint(allocator, "--target={s}", .{target.roc_target}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate target arg: {}", .{err});
+
+    std.Io.Dir.cwd().createDirPath(io, target_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create platform target dir: {}", .{err});
+    copyNativeMuslTargetFile(io, allocator, target, "crt1.o", target_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to copy crt1.o: {}", .{err});
+    copyNativeMuslTargetFile(io, allocator, target, "libc.a", target_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to copy libc.a: {}", .{err});
+    if (buildNativeMuslCompilerRtObject(io, allocator, env, timer, timeout_ms, target, target_dir)) |failure| return failure;
+
+    const platform_source = platformSource(allocator, target) catch |err|
+        return customInfraFailure(allocator, timer, "failed to render platform source: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = platform_path, .data = platform_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write platform source: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = host_c_path, .data = host_c_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write host C source: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = app_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write app source: {}", .{err});
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "cc",
+        "-target",
+        target.zig_target,
+        "-O2",
+        "-c",
+        host_c_path,
+        "-o",
+        host_o_path,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{
+        "zig",
+        "ar",
+        "rcs",
+        host_lib_path,
+        host_o_path,
+    }, project_root_path, .{ .args = &.{} })) |failure| return failure;
+
+    const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before roc --watch started");
+    const result = runRawInEnv(io, allocator, env, &.{
+        roc_binary_path,
+        "--watch",
+        "--opt=dev",
+        "--no-cache",
+        target_arg,
+        app_path,
+        "--",
+        app_path,
+    }, project_root_path, null, child_timeout_ms) catch |err|
+        return customInfraFailure(allocator, timer, "roc --watch spawn error: {}", .{err});
+
+    if (checkCommandExpectation(allocator, result, command)) |message| return failureFromRun(allocator, timer, result, message);
+
+    return null;
+}
+
+// A host keeps a `Box(Model)` from generation 1 holding a list literal and a
+// boxed closure from static data, and reads both after three reloads. A string
+// constant every generation shares must come back at the same address.
+const hot_reload_static_data_app_initial =
+    \\app [Model, main] { pf: platform "./platform/main.roc" }
+    \\
+    \\Model : { label : Str, items : List(Str), step : Box(U64 -> U64) }
+    \\
+    \\main = { init, describe, apply, shared }
+    \\
+    \\shared_text : Str
+    \\shared_text = "shared by every generation, longer than 23 bytes"
+    \\
+    \\items : List(Str)
+    \\items = ["generation-1 ITEM, longer than 23 bytes", "second item, also longer than 23 bytes"]
+    \\
+    \\step : Box(U64 -> U64)
+    \\step = Box.box(|x| x + 1)
+    \\
+    \\init : U64 -> Model
+    \\init = |_seed| { label: "generation-1 LABEL, longer than 23 bytes", items, step }
+    \\
+    \\describe : Model -> Str
+    \\describe = |model| Str.join_with(List.concat([model.label], model.items), "|")
+    \\
+    \\apply : Model -> U64
+    \\apply = |model| {
+    \\    f = Box.unbox(model.step)
+    \\
+    \\    f(10)
+    \\}
+    \\
+    \\shared : U64 -> Str
+    \\shared = |_| shared_text
+    \\
+;
+
+fn hotReloadStaticDataPlatformSource(allocator: Allocator, target: NativeMuslTarget) CliRunnerError![]const u8 {
+    return try std.fmt.allocPrint(
+        allocator,
+        \\platform ""
+        \\    requires {{
+        \\        [Model : model] for main : {{
+        \\            init : U64 -> model,
+        \\            describe : model -> Str,
+        \\            apply : model -> U64,
+        \\            shared : U64 -> Str,
+        \\        }}
+        \\    }}
+        \\    exposes []
+        \\    packages {{}}
+        \\    provides {{
+        \\        "roc_init": init_for_host,
+        \\        "roc_describe": describe_for_host,
+        \\        "roc_apply": apply_for_host,
+        \\        "roc_shared": shared_for_host,
+        \\    }}
+        \\    targets: {{
+        \\        inputs_dir: "targets/",
+        \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
+        \\    }}
+        \\
+        \\init_for_host : U64 -> Box(Model)
+        \\init_for_host = |seed| {{
+        \\    init_fn = main.init
+        \\
+        \\    Box.box(init_fn(seed))
+        \\}}
+        \\
+        \\describe_for_host : Box(Model) -> Str
+        \\describe_for_host = |boxed| {{
+        \\    describe_fn = main.describe
+        \\
+        \\    describe_fn(Box.unbox(boxed))
+        \\}}
+        \\
+        \\apply_for_host : Box(Model) -> U64
+        \\apply_for_host = |boxed| {{
+        \\    apply_fn = main.apply
+        \\
+        \\    apply_fn(Box.unbox(boxed))
+        \\}}
+        \\
+        \\shared_for_host : U64 -> Str
+        \\shared_for_host = |seed| {{
+        \\    shared_fn = main.shared
+        \\
+        \\    shared_fn(seed)
+        \\}}
+        \\
+    ,
+        .{target.roc_target},
+    );
+}
+
+const hot_reload_static_data_host_c_source =
+    \\#include <stdint.h>
+    \\#include <stdio.h>
+    \\#include <stdlib.h>
+    \\#include <string.h>
+    \\#include <unistd.h>
+    \\
+    \\typedef struct { char *bytes; size_t cap; size_t len; } RocStr;
+    \\
+    \\extern void *roc_init(uint64_t);
+    \\extern RocStr roc_describe(void *);
+    \\extern uint64_t roc_apply(void *);
+    \\extern RocStr roc_shared(uint64_t);
+    \\
+    \\void *roc_alloc(size_t length, size_t alignment) {
+    \\    if (alignment < sizeof(void *)) alignment = sizeof(void *);
+    \\    void *ptr = NULL;
+    \\    if (posix_memalign(&ptr, alignment, length == 0 ? 1 : length) != 0) return NULL;
+    \\    return ptr;
+    \\}
+    \\
+    \\void roc_dealloc(void *ptr, size_t alignment) {
+    \\    (void)alignment;
+    \\    free(ptr);
+    \\}
+    \\
+    \\void *roc_realloc(void *ptr, size_t new_length, size_t alignment) {
+    \\    (void)alignment;
+    \\    return realloc(ptr, new_length == 0 ? 1 : new_length);
+    \\}
+    \\
+    \\void roc_dbg(const unsigned char *bytes, size_t len) {
+    \\    fwrite(bytes, 1, len, stderr);
+    \\    fputc('\n', stderr);
+    \\}
+    \\
+    \\void roc_expect_failed(const unsigned char *bytes, size_t len) {
+    \\    fwrite(bytes, 1, len, stderr);
+    \\    fputc('\n', stderr);
+    \\}
+    \\
+    \\void roc_crashed(const unsigned char *bytes, size_t len) {
+    \\    fwrite(bytes, 1, len, stderr);
+    \\    fputc('\n', stderr);
+    \\    abort();
+    \\}
+    \\
+    \\static int is_small(RocStr s) {
+    \\    return (intptr_t)s.len < 0;
+    \\}
+    \\
+    \\static void print_str(const char *tag, RocStr s) {
+    \\    if (is_small(s)) {
+    \\        unsigned char *raw = (unsigned char *)&s;
+    \\        printf("%s:%.*s\n", tag, (int)(raw[sizeof(RocStr) - 1] & 0x7f), (char *)raw);
+    \\    } else {
+    \\        printf("%s:%.*s\n", tag, (int)s.len, s.bytes);
+    \\    }
+    \\    fflush(stdout);
+    \\}
+    \\
+    \\// Renamed into place rather than truncated in place so `roc --watch` never hashes a
+    \\// partially written app and rebuilds from it.
+    \\static int write_app(const char *path, int generation) {
+    \\    char temp_path[4096];
+    \\    int temp_len = snprintf(temp_path, sizeof(temp_path), "%s.tmp", path);
+    \\    if (temp_len < 0 || (size_t)temp_len >= sizeof(temp_path)) return 1;
+    \\    FILE *file = fopen(temp_path, "wb");
+    \\    if (file == NULL) {
+    \\        perror("fopen app");
+    \\        return 1;
+    \\    }
+    \\    fprintf(file,
+    \\        "app [Model, main] { pf: platform \"./platform/main.roc\" }\n\n"
+    \\        "Model : { label : Str, items : List(Str), step : Box(U64 -> U64) }\n\n"
+    \\        "main = { init, describe, apply, shared }\n\n"
+    \\        "shared_text : Str\n"
+    \\        "shared_text = \"shared by every generation, longer than 23 bytes\"\n\n"
+    \\        "items : List(Str)\n"
+    \\        "items = [\"generation-%d ITEM, longer than 23 bytes\", \"second item, also longer than 23 bytes\"]\n\n"
+    \\        "step : Box(U64 -> U64)\n"
+    \\        "step = Box.box(|x| x + %d)\n\n"
+    \\        "init : U64 -> Model\n"
+    \\        "init = |_seed| { label: \"generation-%d LABEL, longer than 23 bytes\", items, step }\n\n"
+    \\        "describe : Model -> Str\n"
+    \\        "describe = |model| Str.join_with(List.concat([model.label], model.items), \"|\")\n\n"
+    \\        "apply : Model -> U64\n"
+    \\        "apply = |model| {\n"
+    \\        "    f = Box.unbox(model.step)\n\n"
+    \\        "    f(10)\n"
+    \\        "}\n\n"
+    \\        "shared : U64 -> Str\n"
+    \\        "shared = |_| shared_text\n", generation, generation, generation);
+    \\    if (fclose(file) != 0) {
+    \\        perror("fclose app");
+    \\        return 1;
+    \\    }
+    \\    if (rename(temp_path, path) != 0) {
+    \\        perror("rename app");
+    \\        return 1;
+    \\    }
+    \\    return 0;
+    \\}
+    \\
+    \\static int wait_for_generation(int generation) {
+    \\    char want[32];
+    \\    snprintf(want, sizeof(want), "generation-%d ", generation);
+    \\    for (int i = 0; i < 150; i += 1) {
+    \\        RocStr s = roc_describe(roc_init(0));
+    \\        if (!is_small(s) && s.len > strlen(want) && memcmp(s.bytes, want, strlen(want)) == 0) {
+    \\            print_str("fresh", s);
+    \\            printf("fresh-apply:%llu\n", (unsigned long long)roc_apply(roc_init(0)));
+    \\            fflush(stdout);
+    \\            return 0;
+    \\        }
+    \\        usleep(100000);
+    \\    }
+    \\    fprintf(stderr, "timed out waiting for generation %d\n", generation);
+    \\    return 1;
+    \\}
+    \\
+    \\int main(int argc, char **argv) {
+    \\    if (argc < 2) {
+    \\        fprintf(stderr, "expected app path\n");
+    \\        return 1;
+    \\    }
+    \\
+    \\    // Each call consumes the box it is given, so every kept box is used once.
+    \\    void *kept_for_describe = roc_init(1);
+    \\    void *kept_for_apply = roc_init(1);
+    \\    RocStr first_shared = roc_shared(0);
+    \\    print_str("gen1-describe", roc_describe(roc_init(1)));
+    \\    for (int generation = 2; generation <= 4; generation += 1) {
+    \\        if (write_app(argv[1], generation)) return 1;
+    \\        if (wait_for_generation(generation)) return 1;
+    \\        usleep(500000);
+    \\    }
+    \\    print_str("kept-describe", roc_describe(kept_for_describe));
+    \\    printf("kept-apply:%llu\n", (unsigned long long)roc_apply(kept_for_apply));
+    \\    RocStr last_shared = roc_shared(0);
+    \\    print_str("last-shared", last_shared);
+    \\    printf("shared-reused:%s\n", !is_small(first_shared) && first_shared.bytes == last_shared.bytes ? "yes" : "no");
+    \\    puts("done");
+    \\    fflush(stdout);
+    \\    return 0;
+    \\}
+    \\
+;
+
+fn customHotReloadRetiredStaticData(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    return runHotReloadStaticDataCase(io, allocator, env, timer, timeout_ms, hot_reload_static_data_app_initial, hotReloadStaticDataPlatformSource, hot_reload_static_data_host_c_source, .{
+        .args = &.{"--watch"},
+        .exit = .success,
+        .contains = &.{
+            .{ .stream = .stdout, .text = "gen1-describe:generation-1 LABEL, longer than 23 bytes|generation-1 ITEM, longer than 23 bytes|second item, also longer than 23 bytes\n" },
+            .{ .stream = .stdout, .text = "fresh:generation-4 LABEL, longer than 23 bytes|generation-4 ITEM, longer than 23 bytes|second item, also longer than 23 bytes\n" },
+            .{ .stream = .stdout, .text = "fresh-apply:14\n" },
+            .{ .stream = .stdout, .text = "kept-describe:generation-1 LABEL, longer than 23 bytes|generation-1 ITEM, longer than 23 bytes|second item, also longer than 23 bytes\n" },
+            .{ .stream = .stdout, .text = "kept-apply:11\n" },
+            .{ .stream = .stdout, .text = "last-shared:shared by every generation, longer than 23 bytes\n" },
+            .{ .stream = .stdout, .text = "shared-reused:yes\n" },
+            .{ .stream = .stdout, .text = "done\n" },
+        },
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "timed out waiting" },
+            .{ .stream = .stderr, .text = "panic" },
+        },
+    });
 }
 
 const hot_reload_default_app_source =

@@ -4358,6 +4358,8 @@ const HotReloadDescriptorTracker = struct {
     descriptors: std.ArrayList(usize) = .empty,
     free_descriptor_slots: std.ArrayList(HotReloadDescriptorSlot) = .empty,
     free_regions: std.ArrayList(HotReloadFreeRegion) = .empty,
+    /// Static pool chunks of accepted images, which are never reclaimed.
+    static_pool_chunks: std.ArrayList(HotReloadFreeRegion) = .empty,
     descriptor_floor: usize = 0,
     next_descriptor_offset: usize = 0,
 
@@ -4365,6 +4367,7 @@ const HotReloadDescriptorTracker = struct {
         self.descriptors.deinit(gpa);
         self.free_descriptor_slots.deinit(gpa);
         self.free_regions.deinit(gpa);
+        self.static_pool_chunks.deinit(gpa);
     }
 };
 
@@ -4752,6 +4755,10 @@ fn hotReloadValidAllocation(
     if (snapshot.image_offset >= snapshot.allocation_end) return false;
     if (snapshot.image_size <= snapshot.image_offset) return false;
     if (snapshot.image_size > snapshot.allocation_end) return false;
+    if (snapshot.static_pool_end != snapshot.static_pool_start) {
+        if (snapshot.static_pool_start <= snapshot.image_offset) return false;
+        if (snapshot.static_pool_end != snapshot.allocation_end) return false;
+    }
     return true;
 }
 
@@ -4883,6 +4890,34 @@ fn hotReloadUsedSizeIncludingFreeRegions(tracker: *const HotReloadDescriptorTrac
     return high_water;
 }
 
+/// Link an accepted image's static pool chunk into the session pool. Values the
+/// host keeps may point into it from now on, so it is never reclaimed.
+fn hotReloadAdoptStaticPoolChunk(
+    gpa: Allocator,
+    control: *ipc.hot_reload.Control,
+    shm_handle: SharedMemoryHandle,
+    tracker: *HotReloadDescriptorTracker,
+    snapshot: ipc.hot_reload.ImageDescriptorSnapshot,
+) CliMainError!void {
+    if (snapshot.static_pool_end == snapshot.static_pool_start) return;
+    for (tracker.static_pool_chunks.items) |chunk| {
+        if (chunk.start == snapshot.static_pool_start) return;
+    }
+    try tracker.static_pool_chunks.ensureUnusedCapacity(gpa, 1);
+
+    const Chunk = backend.RunImage.StaticDataPool.Chunk;
+    if (snapshot.static_pool_start % @alignOf(Chunk) != 0) return error.InvalidSharedMemory;
+    if (snapshot.static_pool_end - snapshot.static_pool_start < @sizeOf(Chunk)) return error.InvalidSharedMemory;
+    const chunk: *Chunk = @ptrCast(@alignCast(hotReloadBasePtr(shm_handle) + snapshot.static_pool_start));
+    if (chunk.magic != backend.RunImage.StaticDataPool.CHUNK_MAGIC) return error.InvalidSharedMemory;
+    chunk.next_chunk_offset = ipc.hot_reload.staticPoolHead(control);
+    ipc.hot_reload.setStaticPoolHead(control, snapshot.static_pool_start);
+    tracker.static_pool_chunks.appendAssumeCapacity(.{
+        .start = snapshot.static_pool_start,
+        .end = snapshot.static_pool_end,
+    });
+}
+
 fn hotReloadSweepImageDescriptors(
     gpa: Allocator,
     control: *ipc.hot_reload.Control,
@@ -4902,6 +4937,7 @@ fn hotReloadSweepImageDescriptors(
         if (!hotReloadValidAllocation(shm_handle, reusable_boundary, snapshot)) {
             return error.InvalidSharedMemory;
         }
+        if (snapshot.accepted) try hotReloadAdoptStaticPoolChunk(gpa, control, shm_handle, tracker, snapshot);
 
         const is_current = current != null and
             current.?.descriptor_offset == descriptor_offset and
@@ -4919,13 +4955,18 @@ fn hotReloadSweepImageDescriptors(
 
         if (snapshot.refs == 0) {
             ipc.hot_reload.markDescriptorReclaimed(descriptor);
+            // An accepted image's static pool chunk outlives the rest of it.
+            const reclaimed_end = if (snapshot.accepted and snapshot.static_pool_end != snapshot.static_pool_start)
+                snapshot.static_pool_start
+            else
+                snapshot.allocation_end;
             try hotReloadAddFreeRegion(
                 gpa,
                 tracker,
                 shm_handle,
                 reusable_boundary,
                 snapshot.allocation_start,
-                snapshot.allocation_end,
+                reclaimed_end,
             );
             try hotReloadReleaseDescriptorSlot(gpa, tracker, descriptor_offset, true);
             _ = tracker.descriptors.swapRemove(i);
@@ -4935,6 +4976,11 @@ fn hotReloadSweepImageDescriptors(
             try hotReloadSubtractFreeRegion(gpa, tracker, snapshot.allocation_start, snapshot.allocation_end);
             i += 1;
         }
+    }
+
+    for (tracker.static_pool_chunks.items) |chunk| {
+        used_size = @max(used_size, chunk.end);
+        try hotReloadSubtractFreeRegion(gpa, tracker, chunk.start, chunk.end);
     }
 
     used_size = hotReloadUsedSizeIncludingFreeRegions(tracker, used_size);
@@ -5351,6 +5397,34 @@ fn testingPrepareHotReloadDescriptor(
         image_bound,
         allocation_start,
         allocation_end,
+        0,
+        0,
+        true,
+    );
+    return descriptor;
+}
+
+fn testingPrepareHotReloadDescriptorWithStaticPool(
+    shm: *SharedMemoryAllocator,
+    generation: u64,
+    descriptor_offset: usize,
+    image_offset: usize,
+    allocation_start: usize,
+    static_pool_start: usize,
+    allocation_end: usize,
+) CliMainError!*ipc.hot_reload.ImageDescriptor {
+    const chunk: *backend.RunImage.StaticDataPool.Chunk = @ptrCast(@alignCast(shm.base_ptr + static_pool_start));
+    chunk.* = .{ .entries_offset = 0, .entry_count = 0, .relocations_offset = 0, .relocation_count = 0 };
+    const descriptor = try testingHotReloadDescriptor(shm, descriptor_offset);
+    ipc.hot_reload.prepareDescriptor(
+        descriptor,
+        generation,
+        image_offset,
+        allocation_end,
+        allocation_start,
+        allocation_end,
+        static_pool_start,
+        allocation_end,
         true,
     );
     return descriptor;
@@ -5658,6 +5732,52 @@ test "hot reload allocation can use reclaimed region when append has no room" {
     try std.testing.expectEqual(@as(usize, 512), allocation.region_start);
     try std.testing.expectEqual(@as(usize, 4096), allocation.region_end);
     try std.testing.expectEqual(desc1_offset, allocation.append_offset);
+}
+
+test "hot reload sweep keeps an accepted image's static pool chunk" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    const desc0_offset = try hotReloadInitialDescriptorOffset(handle);
+    const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
+    const desc2_offset = hotReloadPreviousDescriptorOffset(desc1_offset).?;
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    const desc0 = try testingPrepareHotReloadDescriptorWithStaticPool(&shm, 1, desc0_offset, 512, 512, 2048, 4096);
+    ipc.hot_reload.init(control, desc0_offset, desc0);
+    ipc.hot_reload.markDescriptorAccepted(desc0);
+
+    // Never accepted, so nothing can point into its chunk.
+    const desc1 = try testingPrepareHotReloadDescriptorWithStaticPool(&shm, 2, desc1_offset, 4096, 4096, 6144, 8192);
+    ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
+
+    const desc2 = try testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 8192, 12288, 8192, 12288);
+    ipc.hot_reload.publishDescriptor(control, 3, desc2_offset, desc2);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 12288);
+
+    var tracker = HotReloadDescriptorTracker{};
+    defer tracker.deinit(std.testing.allocator);
+    try testingInitHotReloadDescriptorTracker(&tracker, desc0_offset, desc2_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc0_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc1_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc2_offset);
+
+    try hotReloadSweepImageDescriptors(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker);
+    try hotReloadSweepImageDescriptors(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker);
+
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.reclaimed, ipc.hot_reload.descriptorSnapshot(desc0).state);
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.reclaimed, ipc.hot_reload.descriptorSnapshot(desc1).state);
+    try std.testing.expectEqual(@as(usize, 2048), ipc.hot_reload.staticPoolHead(control));
+    const chunk: *const backend.RunImage.StaticDataPool.Chunk = @ptrCast(@alignCast(shm.base_ptr + 2048));
+    try std.testing.expectEqual(@as(u64, 0), chunk.next_chunk_offset);
+    try std.testing.expectEqual(@as(usize, 1), tracker.static_pool_chunks.items.len);
+    try std.testing.expectEqual(@as(usize, 2), tracker.free_regions.items.len);
+    try std.testing.expectEqual(@as(usize, 512), tracker.free_regions.items[0].start);
+    try std.testing.expectEqual(@as(usize, 2048), tracker.free_regions.items[0].end);
+    try std.testing.expectEqual(@as(usize, 4096), tracker.free_regions.items[1].start);
+    try std.testing.expectEqual(@as(usize, 8192), tracker.free_regions.items[1].end);
 }
 
 /// Counts of checker diagnostics preserved until the command determines its
@@ -6211,7 +6331,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
     }
 
     const lowered = &lowered_result.lowered;
-    _ = try writeDevRunImageToSharedMemory(
+    _ = writeDevRunImageToSharedMemory(
         ctx,
         &shm,
         selected_target,
@@ -6228,7 +6348,17 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
             .append_offset = args.append_offset,
             .preserve_descriptor_refs = args.preserve_descriptor_refs,
         },
-    );
+    ) catch |err| switch (err) {
+        // Reported where they were raised.
+        error.UnsupportedTarget, error.WriteFailed => return err,
+        else => {
+            try ctx.io.stderr().print(
+                "Error: hot reload could not write the rebuilt program into shared memory ({s}); the previous version stays active.\n",
+                .{@errorName(err)},
+            );
+            return err;
+        },
+    };
     shm.updateHeader();
 }
 
@@ -6443,12 +6573,19 @@ fn writeDevRunImageToSharedMemory(
         const original_total_size = shm.total_size;
         defer shm.total_size = original_total_size;
 
+        // A hot-reload image records its reusable static data in a chunk for
+        // later images, and reuses what earlier images already recorded.
+        var static_plan = try backend.RunImage.StaticDataPool.Plan.init(ctx.gpa, readonly_data.items, hot_reload_allocation != null);
+        defer static_plan.deinit();
+
         if (hot_reload_allocation) |allocation| {
             const reusable_capacity = if (allocation.region_end > allocation.region_start)
                 allocation.region_end - allocation.region_start
             else
                 0;
-            const required_bound = try backend.RunImage.requiredCapacityFromOffset(
+            // Reusing pool entries only shrinks the image, so the image laid
+            // out without reuse bounds where it will be placed.
+            const unpooled_bound = try backend.RunImage.requiredCapacityFromOffset(
                 ctx.gpa,
                 shm.page_size,
                 allocation.region_start,
@@ -6458,9 +6595,10 @@ fn writeDevRunImageToSharedMemory(
                 codegen.getSymbolNames(),
                 relocations,
                 readonly_data.items,
+                &static_plan,
                 sidecar_bytes,
             );
-            const required_capacity = required_bound - allocation.region_start;
+            const required_capacity = unpooled_bound - allocation.region_start;
 
             descriptor = try hotReloadDescriptorForWrite(shm, allocation.descriptor_offset);
             descriptor_offset = allocation.descriptor_offset;
@@ -6477,6 +6615,16 @@ fn writeDevRunImageToSharedMemory(
                 shm.total_size = allocation.image_limit;
                 allocation_start = allocation.append_offset;
             }
+
+            try static_plan.reusePool(
+                readonly_data.items,
+                .{
+                    .mapping = shm.base_ptr[0..original_total_size],
+                    .head_offset = ipc.hot_reload.staticPoolHead(ipc.hot_reload.controlFromBase(shm.base_ptr)),
+                },
+                allocation_start,
+                try std.math.add(usize, allocation_start, required_capacity),
+            );
         }
 
         const header = try backend.RunImage.writeToSharedMemory(
@@ -6490,6 +6638,7 @@ fn writeDevRunImageToSharedMemory(
             codegen.getSymbolNames(),
             relocations,
             readonly_data.items,
+            &static_plan,
             sidecar_bytes,
             sidecar_desc,
         );
@@ -6497,6 +6646,7 @@ fn writeDevRunImageToSharedMemory(
         const image_bound: usize = @intCast(header.image_size);
         if (hot_reload_allocation) |allocation| {
             allocation_end = image_bound;
+            const static_pool_start: usize = @intCast(header.static_pool.offset);
             ipc.hot_reload.prepareDescriptor(
                 descriptor.?,
                 allocation.generation,
@@ -6504,6 +6654,8 @@ fn writeDevRunImageToSharedMemory(
                 image_bound,
                 allocation_start,
                 allocation_end,
+                static_pool_start,
+                static_pool_start + @as(usize, @intCast(header.static_pool.len)),
                 reset_descriptor_refs,
             );
             try shm.resetToUsedSize(@max(allocation.append_offset, allocation_end));
