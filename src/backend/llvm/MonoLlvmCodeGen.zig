@@ -14275,7 +14275,10 @@ pub const MonoLlvmCodeGen = struct {
         if (!std.mem.eql(u8, self.store.getString(hosted.symbol), shim_symbols.roc_default_echo_line)) return false;
 
         switch (self.target.os.tag) {
-            .linux, .macos, .windows, .freebsd, .netbsd => {},
+            .linux, .freebsd, .netbsd => {},
+            // Without a system call ABI to inline, the line goes through the
+            // `roc_default_echo_line` the default platform's runtime exports.
+            .macos, .windows => return false,
             .freestanding, .wiiu, .@"switch", .gba, .psx, .tios, .ashetos, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .plan9, .rtems, .serenity, .dragonfly, .openbsd, .driverkit, .ios, .maccatalyst, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => return error.CompilationFailed,
         }
         if (arg_ptrs.len != 1 or arg_layouts.len != 1 or arg_layouts[0] != .str or ret_layout != .zst) {
@@ -14317,33 +14320,9 @@ pub const MonoLlvmCodeGen = struct {
         switch (self.target.os.tag) {
             .linux => try self.emitLinuxWriteStdout(ptr, len),
             .freebsd, .netbsd => try self.emitX86_64WriteStdout(ptr, len, 4),
-            .macos, .windows => try self.emitCWriteStdout(ptr, len),
+            .macos, .windows => unreachable, // emitDefaultPlatformHostedCall leaves these to the hosted call
             .freestanding, .wiiu, .@"switch", .gba, .psx, .tios, .ashetos, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .plan9, .rtems, .serenity, .dragonfly, .openbsd, .driverkit, .ios, .maccatalyst, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => return error.CompilationFailed,
         }
-    }
-
-    fn emitCWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
-        const builder, const wip = try self.builderAndWip();
-        const ptr_ty = try self.ptrType();
-        const len_ty: LlvmBuilder.Type = if (self.target.os.tag == .windows) .i32 else self.ptrSizedIntType();
-        const ret_ty: LlvmBuilder.Type = if (self.target.os.tag == .windows) .i32 else self.ptrSizedIntType();
-        const symbol = if (self.target.os.tag == .windows) "_write" else "write";
-        const fn_ty = builder.fnType(ret_ty, &.{ .i32, ptr_ty, len_ty }, .normal) catch return error.OutOfMemory;
-        const write_fn = try self.declareExternSymbol(symbol, fn_ty);
-
-        _ = wip.call(
-            .normal,
-            .ccc,
-            .none,
-            fn_ty,
-            write_fn.toValue(builder),
-            &.{
-                builder.intValue(.i32, 1) catch return error.OutOfMemory,
-                ptr,
-                try self.coerceScalar(len, len_ty, false),
-            },
-            "",
-        ) catch return error.OutOfMemory;
     }
 
     fn emitLinuxWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {

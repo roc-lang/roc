@@ -11014,6 +11014,7 @@ fn compileLlvmAppObject(
         },
         .pic = pic,
         .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
+        .private_runtime = true,
     };
 
     const success = try builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, compile_config);
