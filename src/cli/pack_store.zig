@@ -357,7 +357,7 @@ test "a pack evicted between listing its directory and reading it is a miss, not
         fn openFile(context: ?*anyopaque, dir: std.Io.Dir, path: []const u8, options: std.Io.Dir.OpenFileOptions) std.Io.File.OpenError!std.Io.File {
             const self: *@This() = @ptrCast(@alignCast(context.?));
             if (self.deleted == 0 and std.mem.endsWith(u8, path, "a-evicted.rpk")) {
-                std.testing.io.vtable.dirDeleteFile(std.testing.io.userdata, dir, path) catch unreachable;
+                std.testing.io.vtable.dirDeleteFile(std.testing.io.userdata, dir, path) catch unreachable; // the fixture wrote this pack and only this hook deletes it, once
                 self.deleted += 1;
             }
             return std.testing.io.vtable.dirOpenFile(std.testing.io.userdata, dir, path, options);
