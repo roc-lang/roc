@@ -2305,6 +2305,12 @@ pub const Builder = struct {
                 try self.push(.{ .expr = if_.branches[0].cond });
             },
             .match_ => |match| {
+                // A match on a layout-resolved low-level whose answer is
+                // known here is the branch that answer selects.
+                if (try self.layoutResolvedBranch(match.cond, match.branches)) |value| {
+                    try self.destination_types.put(self.allocator, value, try self.exprType(expr_id));
+                    return try self.push(.{ .expr = value });
+                }
                 try self.push(.{ .match_start = expr_id });
                 try self.push(.{ .expr = match.cond });
             },
@@ -4519,13 +4525,81 @@ pub const Builder = struct {
         try self.pushValue(target);
     }
 
-    /// Whether `List.map` may reuse its input's allocation: the input and
-    /// output element layouts must be interchangeable in one allocation (the
-    /// same rule `.lss` applies), per pointer width, before the runtime
-    /// uniqueness check decides. Elements of open types have no committed
-    /// layout to compare, so their lists are never reused.
-    pub fn listMapCanReuse(self: *Builder, args: []const LocalId, arg_types: []const TypeId, result_ty: TypeId) Allocator.Error!LocalId {
-        if (args.len != 2) invariant("list_map_can_reuse takes a list and a transform");
+    /// The branch of a match on `cond` that a layout-resolved low-level's
+    /// statically known answer selects (as `.lss` folds it): `cond` calls a
+    /// Builtin wrapper of `list_map_can_reuse` with local arguments, every
+    /// branch tests an integer literal or nothing, and the answer is the
+    /// same on every pointer width.
+    fn layoutResolvedBranch(self: *Builder, cond: CheckedExprId, branches: []const checked.CheckedMatchBranch) Allocator.Error!?CheckedExprId {
+        const call = switch (self.bodies().expr(cond).data) {
+            .call => |call| call,
+            else => return null,
+        };
+        const resolved = switch (self.bodies().expr(call.func).data) {
+            .lookup_external => |r| r orelse return null,
+            .lookup_local => |lookup| lookup.resolved orelse return null,
+            else => return null,
+        };
+        const use = switch (self.resolvedRef(resolved).ref) {
+            .top_level_proc, .imported_proc => |use| use,
+            else => return null,
+        };
+        const binding = self.program.procedureBinding(use.binding);
+        const template_ref = switch (binding.body) {
+            .direct_template => |direct| Program.directTemplate(direct.template),
+            else => return null,
+        };
+        const owner = self.program.moduleByKey(.{ .bytes = template_ref.artifact.bytes });
+        const op = (owner.view.checked_procedure_templates.templates.items[@backingInt(template_ref.template)].provided_low_level orelse return null).layoutResolved() orelse return null;
+        for (call.args) |arg| switch (self.bodies().expr(arg).data) {
+            .lookup_local => {},
+            else => return null,
+        };
+        for (branches) |branch| {
+            if (branch.guard != null) return null;
+            for (branch.patternsSlice(self.bodies())) |pattern| switch (self.bodies().pattern(pattern.pattern).data) {
+                .underscore => {},
+                .numeral_literal => |numeral| if (numeral.guard != null) return null,
+                else => return null,
+            };
+        }
+        const arg_types = try self.allocator.alloc(TypeId, call.args.len);
+        defer self.allocator.free(arg_types);
+        for (call.args, arg_types) |arg, *ty| ty.* = try self.exprType(arg);
+        const answer: u8 = switch (op) {
+            .list_map_can_reuse => blk: {
+                const decision = try self.listMapInterchangeable(arg_types);
+                if (decision.open) return null;
+                break :blk if (!decision.widths.get(.u32) and !decision.widths.get(.u64)) 0 else return null;
+            },
+            // Its answer is computed where it runs.
+            .list_item_size_at_most => return null,
+        };
+        for (branches) |branch| {
+            for (branch.patternsSlice(self.bodies())) |pattern| switch (self.bodies().pattern(pattern.pattern).data) {
+                .underscore => return branch.value,
+                .numeral_literal => |numeral| {
+                    const bits = checked.exact_numeral.intBits(self.view.view.module_env.exactNumeral(numeral.literal), .u8) orelse continue;
+                    const value: i128 = switch (bits) {
+                        .i128 => |value| value,
+                        .u128 => |value| @bitCast(value),
+                    };
+                    if (value == answer) return branch.value;
+                },
+                else => unreachable, // only literal and wildcard branches reach here
+            };
+        }
+        return null;
+    }
+
+    /// Per pointer width, whether a `List.map` over a list of `arg_types[0]`
+    /// with the transform `arg_types[1]` may reuse its input's allocation:
+    /// never when the optimization is disabled or an element type is open
+    /// (`open`: no committed layout to compare where this body is lowered),
+    /// otherwise when the element layouts are interchangeable on that width.
+    fn listMapInterchangeable(self: *Builder, arg_types: []const TypeId) Allocator.Error!struct { widths: layout.WidthValues(bool), output_elem: ?layout.Idx, open: bool = false } {
+        const none = layout.WidthValues(bool).both(false, false);
+        if (!self.program.list_in_place_map) return .{ .widths = none, .output_elem = null };
         const store = &self.program.store;
         const in_elem = switch (store.get(try self.structuralType(arg_types[0]))) {
             .list => |elem| elem,
@@ -4535,24 +4609,36 @@ pub const Builder = struct {
             .function => |function| function.ret,
             else => invariant("list_map_can_reuse's transform is not a function"),
         };
-        const target = try self.localOf(result_ty, .frame);
-        if (!try self.closed(in_elem) or !try self.closed(out_elem)) {
-            try self.emitLinear(.{ .assign_literal = .{ .target = target, .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u8 } }, .next = undefined } });
-            return target;
-        }
+        if (!try self.closed(in_elem) or !try self.closed(out_elem)) return .{ .widths = none, .output_elem = null, .open = true };
         const layouts = &self.program.result.layouts;
         const in_idx = layouts.runtimeRepresentationLayoutIdx(try self.program.layouts.layoutOf(in_elem));
         const out_idx = layouts.runtimeRepresentationLayoutIdx(try self.program.layouts.layoutOf(out_elem));
+        return .{ .widths = layout.WidthValues(bool).both(
+            layouts.listItemsInterchangeableAt(in_idx, out_idx, .u32),
+            layouts.listItemsInterchangeableAt(in_idx, out_idx, .u64),
+        ), .output_elem = out_idx };
+    }
+
+    /// Whether `List.map` may reuse its input's allocation: the input and
+    /// output element layouts must be interchangeable in one allocation (the
+    /// same rule `.lss` applies), per pointer width, before the runtime
+    /// uniqueness check decides. Elements of open types have no committed
+    /// layout to compare, so their lists are never reused.
+    pub fn listMapCanReuse(self: *Builder, args: []const LocalId, arg_types: []const TypeId, result_ty: TypeId) Allocator.Error!LocalId {
+        if (args.len != 2) invariant("list_map_can_reuse takes a list and a transform");
+        const target = try self.localOf(result_ty, .frame);
+        const decision = try self.listMapInterchangeable(arg_types);
+        if (!decision.widths.get(.u32) and !decision.widths.get(.u64)) {
+            try self.emitLinear(.{ .assign_literal = .{ .target = target, .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u8 } }, .next = undefined } });
+            return target;
+        }
         try self.emitLinear(.{ .assign_low_level = .{
             .target = target,
             .op = .list_map_can_reuse,
             .rc_effect = try self.store.addRcEffect(LIR.LowLevel.list_map_can_reuse.rcEffect()),
             .extra = try self.store.addStmtRow(LIR.LowLevelExtra, .{
-                .interchangeable = layout.WidthValues(bool).both(
-                    layouts.listItemsInterchangeableAt(in_idx, out_idx, .u32),
-                    layouts.listItemsInterchangeableAt(in_idx, out_idx, .u64),
-                ),
-                .map_output_elem = out_idx,
+                .interchangeable = decision.widths,
+                .map_output_elem = decision.output_elem.?,
             }),
             .args = try self.store.addLocalSpan(args),
             .next = undefined,

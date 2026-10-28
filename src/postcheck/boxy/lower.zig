@@ -45,6 +45,9 @@ pub const Input = struct {
     /// Name each procedure in the LIR store by the kind of worker it is,
     /// for dumps and tests that read the program.
     proc_debug_names: bool = false,
+    /// Allow `List.map` to reuse a unique input list's allocation (see
+    /// `SolvedLirLower.Options.list_in_place_map`).
+    list_in_place_map: bool = false,
 };
 
 /// The lowered program and the static data it carries.
@@ -220,6 +223,7 @@ pub const Program = struct {
     /// Each module's exported procedure bindings, by their definition.
     exported_bindings: std.AutoHashMapUnmanaged(ExportedBindingKey, *const checked.ImportedProcedureBindingView) = .empty,
     observe_expects: bool,
+    list_in_place_map: bool,
     arena: std.heap.ArenaAllocator,
     /// The host binding of each hosted procedure template.
     hosted: std.AutoHashMapUnmanaged(TemplateKey, HostedEntry) = .empty,
@@ -959,6 +963,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         .result = try LirProgram.Result.init(allocator, input.target_usize),
         .static_descs = undefined,
         .observe_expects = input.roots.test_plan_metadata.len != 0,
+        .list_in_place_map = input.list_in_place_map,
         .arena = std.heap.ArenaAllocator.init(allocator),
     };
     defer {
@@ -1065,9 +1070,17 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
 
     if (input.proc_debug_names) {
         for (program.workers.items) |worker| {
+            // A template's worker carries its procedure's source name.
             const name: []const u8 = switch (worker.key) {
                 .codec => |piece| switch (program.codec.pieces.items[piece].kind) {
                     inline else => |kind| "boxy.codec." ++ @tagName(kind),
+                },
+                .template => |key| blk: {
+                    const view = program.module(key.module);
+                    const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+                    const names = view.nameStore();
+                    const export_name = names.procBase(template.proc_base).export_name orelse break :blk "boxy.template";
+                    break :blk names.exportNameText(export_name);
                 },
                 inline else => |_, kind| "boxy." ++ @tagName(kind),
             };
