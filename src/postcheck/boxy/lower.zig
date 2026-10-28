@@ -452,6 +452,14 @@ pub const Program = struct {
         return id;
     }
 
+    /// Bool's tags: the tag union `[False, True]` it is.
+    pub fn boolUnion(self: *Program) Allocator.Error!TypeId {
+        return try self.store.intern(.{ .tag_union = .{ .tags = &.{
+            .{ .name = try self.store.internName("False"), .payloads = &.{} },
+            .{ .name = try self.store.internName("True"), .payloads = &.{} },
+        }, .ext = null } });
+    }
+
     /// The relation of `relateVariablesAll`, leaving variables the types do
     /// not relate null.
     pub fn relateVariablesPartial(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize) Allocator.Error![]?TypeId {
@@ -485,6 +493,9 @@ pub const Program = struct {
                     try pending.append(allocator, .{ pair[0], try self.converter().backing(pair[1]) });
                 } else if (formal == .nominal and formal.nominal.has_backing and other != .nominal) {
                     try pending.append(allocator, .{ try self.converter().backing(pair[0]), pair[1] });
+                } else if (formal == .tag_union and other == .primitive and other.primitive == .bool) {
+                    // Bool is the tag union `[False, True]`.
+                    try pending.append(allocator, .{ pair[0], try self.boolUnion() });
                 }
                 continue;
             }
