@@ -300,6 +300,15 @@ pub const Builder = struct {
         return own;
     }
 
+    /// The type a read of a stored constant restores its value at: the
+    /// read's own, closed type, which a destination with an open row joins
+    /// (design.md "Row Joins"), or else the type `exprType` gives it.
+    pub fn constReadType(self: *Builder, expr: CheckedExprId) Allocator.Error!TypeId {
+        const own = try self.convert(self.bodies().expr(expr).ty);
+        if (self.program.store.isClosed(own)) return own;
+        return try self.exprType(expr);
+    }
+
     pub fn patternType(self: *Builder, pattern: CheckedPatternId) Allocator.Error!TypeId {
         return self.convert(self.bodies().pattern(pattern).ty);
     }
@@ -2183,7 +2192,7 @@ pub const Builder = struct {
             .local_param, .local_value, .pattern_binder, .local_mutable_version => |binding| {
                 return try self.pushValue(self.binders.get(binding.binder) orelse invariant("a local lookup named a binder this body never bound"));
             },
-            .top_level_const, .imported_const => |use| return try self.restoreConstUse(use, try self.exprType(expr_id)),
+            .top_level_const, .imported_const => |use| return try self.restoreConstUse(use, try self.constReadType(expr_id)),
             .local_proc => |local| return try self.pushValue(try self.localProcUseValue(expr_id, local)),
             .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use),
             else => |ref| invariantFmt("local lookup of a {s} is not yet lowered by Boxy", .{@tagName(ref)}),
@@ -2194,10 +2203,10 @@ pub const Builder = struct {
 
     pub fn lowerLookupExternal(self: *Builder, expr_id: CheckedExprId, resolved: checked.ResolvedValueRefId) Allocator.Error!void {
         switch (self.resolvedRef(resolved).ref) {
-            .top_level_const, .imported_const => |use| return try self.restoreConstUse(use, try self.exprType(expr_id)),
+            .top_level_const, .imported_const => |use| return try self.restoreConstUse(use, try self.constReadType(expr_id)),
             .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use),
             .platform_required_proc => |required| return try self.procedureValue(expr_id, required.procedure),
-            .platform_required_const => |required| return try self.restoreConstUse(required.const_use, try self.exprType(expr_id)),
+            .platform_required_const => |required| return try self.restoreConstUse(required.const_use, try self.constReadType(expr_id)),
             .platform_required_checked_error => return try self.crashValue("runtime error", try self.exprType(expr_id)),
             else => {},
         }
