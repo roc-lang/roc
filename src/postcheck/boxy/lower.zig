@@ -87,7 +87,7 @@ pub const WorkerKey = union(enum) {
 };
 
 /// The structural methods a dictionary can denote.
-pub const StructuralMethod = enum { is_eq, to_hash };
+pub const StructuralMethod = enum { is_eq, to_hash, to_inspect };
 
 pub const WorkerId = enum(u32) { _ };
 
@@ -145,6 +145,17 @@ pub const LocalScheme = struct {
     per_call: bool,
 };
 
+/// A nominal method override: its dictionary entry, the types the method's
+/// scheme variables take, and its dictionaries: each the structural method
+/// over the type its constraint dispatches on, which honors that type's own
+/// overrides through its descriptor.
+pub const NominalOverride = struct { entry: WorkerId, bound: []const TypeId, dicts: []const StructuralDict };
+
+pub const StructuralDict = struct { method: StructuralMethod, ty: TypeId };
+
+/// The overrides of a nominal type, in `Methods` order.
+pub const NominalOverrides = [3]?NominalOverride;
+
 /// A field a record construction omits.
 pub const OmittedField = struct { module: ModuleIndex, expr: checked.CheckedExprId, name: types.NameId };
 
@@ -183,6 +194,8 @@ pub const Program = struct {
     local_scopes: std.AutoHashMapUnmanaged(ExprKey, checked.DispatchScopeId) = .empty,
     /// The lambda and closure expressions local procedures bind.
     local_procs: std.AutoHashMapUnmanaged(ExprKey, void) = .empty,
+    /// `nominalOverrides` of each nominal type asked about.
+    nominal_overrides: std.AutoHashMapUnmanaged(TypeId, NominalOverrides) = .empty,
     /// The nested procedure site of each lambda and closure expression.
     sites_by_expr: std.AutoHashMapUnmanaged(ExprKey, u32) = .empty,
     /// Modules by their stable identity hash.
@@ -328,6 +341,151 @@ pub const Program = struct {
         return id;
     }
 
+    /// The relation of `relateVariablesAll`, leaving variables the types do
+    /// not relate null.
+    pub fn relateVariablesPartial(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize) Allocator.Error![]?TypeId {
+        const store = &self.store;
+        const bound = try allocator.alloc(?TypeId, count);
+        defer allocator.free(bound);
+        @memset(bound, null);
+        var pending: std.ArrayList([2]TypeId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.appendSlice(allocator, roots);
+        while (pending.pop()) |pair| {
+            const formal = store.get(pair[0]);
+            if (formal == .variable) {
+                bound[formal.variable] = pair[1];
+                continue;
+            }
+            const other = store.get(pair[1]);
+            if (std.meta.activeTag(formal) != std.meta.activeTag(other)) {
+                // A nominal shares its backing's representation: relate a
+                // structural position through the other side's backing.
+                if (other == .nominal and other.nominal.has_backing and formal != .nominal) {
+                    try pending.append(allocator, .{ pair[0], try self.converter().backing(pair[1]) });
+                } else if (formal == .nominal and formal.nominal.has_backing and other != .nominal) {
+                    try pending.append(allocator, .{ try self.converter().backing(pair[0]), pair[1] });
+                }
+                continue;
+            }
+            switch (formal) {
+                .list => |elem| try pending.append(allocator, .{ elem, other.list }),
+                .box => |payload| try pending.append(allocator, .{ payload, other.box }),
+                .tuple => |items| for (store.span(items), store.span(other.tuple)) |a, b| try pending.append(allocator, .{ a, b }),
+                .function => |function| {
+                    for (store.span(function.args), store.span(other.function.args)) |a, b| try pending.append(allocator, .{ a, b });
+                    try pending.append(allocator, .{ function.ret, other.function.ret });
+                },
+                .nominal => |nominal| for (store.nominalArgs(nominal), store.nominalArgs(other.nominal)) |a, b| try pending.append(allocator, .{ a, b }),
+                .record => |record| {
+                    var residual: std.ArrayList(types.Field) = .empty;
+                    defer residual.deinit(allocator);
+                    for (store.fieldSpan(other.record.fields)) |candidate| {
+                        var named = false;
+                        for (store.fieldSpan(record.fields)) |field| {
+                            if (candidate.name == field.name) {
+                                named = true;
+                                try pending.append(allocator, .{ field.ty, candidate.ty });
+                            }
+                        }
+                        if (!named) try residual.append(allocator, candidate);
+                    }
+                    if (record.ext) |ext| {
+                        const remainder = if (residual.items.len == 0 and other.record.ext == null)
+                            try store.emptyRecord()
+                        else
+                            try store.intern(.{ .record = .{ .fields = residual.items, .ext = other.record.ext } });
+                        try pending.append(allocator, .{ ext, remainder });
+                    }
+                },
+                .tag_union => |tag_union| {
+                    var residual: std.ArrayList(types.TagInput) = .empty;
+                    defer residual.deinit(allocator);
+                    for (store.tagSpan(other.tag_union.tags)) |candidate| {
+                        var named = false;
+                        for (store.tagSpan(tag_union.tags)) |tag| {
+                            if (candidate.name == tag.name and candidate.payloads.len == tag.payloads.len) {
+                                named = true;
+                                for (store.span(tag.payloads), store.span(candidate.payloads)) |a, b| try pending.append(allocator, .{ a, b });
+                            }
+                        }
+                        if (!named) try residual.append(allocator, .{ .name = candidate.name, .payloads = store.span(candidate.payloads) });
+                    }
+                    // An open formal row's remainder is the actual row's
+                    // tags it does not name.
+                    if (tag_union.ext) |ext| try pending.append(allocator, .{ ext, try store.intern(.{ .tag_union = .{ .tags = residual.items, .ext = other.tag_union.ext } }) });
+                },
+                .primitive, .empty_record, .variable => {},
+            }
+        }
+        return try allocator.dupe(?TypeId, bound);
+    }
+
+    /// The override method entries a nominal type's descriptor carries, in
+    /// `Methods` order (`is_eq`, `to_hash`, `to_inspect`): each method's
+    /// dictionary entry and the types its scheme takes at `nominal_ty`.
+    pub fn nominalOverrides(self: *Program, nominal_ty: TypeId) Allocator.Error!NominalOverrides {
+        if (self.nominal_overrides.get(nominal_ty)) |memo| return memo;
+        const nominal = switch (self.store.get(nominal_ty)) {
+            .nominal => |value| value,
+            else => invariant("asked for the overrides of a non-nominal type"),
+        };
+        var result: NominalOverrides = .{ null, null, null };
+        if (nominal.has_backing) {
+            const view = self.module(nominal.decl.module);
+            const declaration = view.types().nominalDeclarationById(nominal.decl.decl);
+            const owner: static_dispatch.MethodOwner = if (nominal.builtin) |builtin| (if (builtin == .try_)
+                .{ .nominal = declaration.nominal }
+            else
+                .{ .builtin = static_dispatch.builtinOwnerForCheckedBuiltin(builtin) }) else .{ .nominal = declaration.nominal };
+            const registry = view.view.method_registry;
+            const names = view.nameStore();
+            const method_names = [_][]const u8{ "is_eq", "to_hash", "to_inspect" };
+            for (method_names, &result) |method_name, *slot| {
+                const method = names.lookupMethodName(method_name) orelse continue;
+                const key: static_dispatch.MethodKey = .{ .owner = owner, .method = method };
+                // Inspection calls only an eligible `to_inspect`.
+                const target = if (std.mem.eql(u8, method_name, "to_inspect"))
+                    (registry.inspectOverride(key) orelse continue).target
+                else switch (registry.lookup(key) orelse continue) {
+                    .rejected => continue,
+                    .target => |found| found,
+                };
+                const template = switch (target.kind) {
+                    .procedure => |procedure| procedure.template,
+                    .local_proc, .structural => continue,
+                };
+                const worker_id = try self.templateRefWorker(template);
+                const target_worker = self.worker(worker_id).*;
+                if (target_worker.params.len == 0) invariant("a nominal method override takes no arguments");
+                const related = try self.relateVariablesPartial(self.allocator, &.{.{ target_worker.params[0], nominal_ty }}, target_worker.scheme_vars.len);
+                defer self.allocator.free(related);
+                const bound = try self.arena.allocator().alloc(TypeId, related.len);
+                for (related, bound, target_worker.scheme_vars) |ty, *out, variable| out.* = ty orelse try self.converter().sealedScheme(target_worker.module, variable);
+                const dicts = try self.arena.allocator().alloc(StructuralDict, target_worker.dictionary_params.len);
+                if (dicts.len != 0) {
+                    const target_view = self.module(target_worker.module);
+                    const target_key = target_worker.key.template;
+                    const templates = target_view.view.checked_procedure_templates;
+                    const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(target_key.template)].evidence_params);
+                    const env: types.Env = .{ .module = target_worker.module, .vars = target_worker.scheme_vars, .bound = bound };
+                    for (target_worker.dictionary_params, dicts) |param_index, *dict| {
+                        const param = params[param_index];
+                        const method_text = target_view.nameStore().methodNameText(param.method);
+                        dict.* = .{
+                            .method = std.meta.stringToEnum(StructuralMethod, method_text) orelse
+                                invariantFmt("a nominal method override constrained by {s} is not yet lowered by Boxy", .{method_text}),
+                            .ty = try self.converter().convert(target_worker.module, param.dispatcher_ty, env),
+                        };
+                    }
+                }
+                slot.* = .{ .entry = try self.methodEntryWorker(worker_id), .bound = bound, .dicts = dicts };
+            }
+        }
+        try self.nominal_overrides.put(self.allocator, nominal_ty, result);
+        return result;
+    }
+
     /// The worker of an adapter function value (see `WorkerKey.adapter`).
     pub fn adapterWorker(self: *Program, outer: WorkerId, from: TypeId, to: TypeId) Allocator.Error!WorkerId {
         const key: WorkerKey = .{ .adapter = .{ .outer = outer, .from = from, .to = to } };
@@ -450,6 +608,7 @@ pub const Program = struct {
                 const hasher = try self.store.primitive(.u64);
                 break :blk .{ try self.arena.allocator().dupe(TypeId, &.{ a, hasher }), hasher };
             },
+            .to_inspect => .{ try self.arena.allocator().dupe(TypeId, &.{a}), try self.store.primitive(.str) },
         };
         const scheme_vars = try self.arena.allocator().alloc(checked.CheckedTypeId, 1);
         scheme_vars[0] = @fromBackingInt(std.math.maxInt(u32));
@@ -532,6 +691,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.local_procs.deinit(allocator);
         program.by_identity.deinit(allocator);
         program.sites_by_expr.deinit(allocator);
+        program.nominal_overrides.deinit(allocator);
         program.omitted_defaults.deinit(allocator);
         program.codec.deinit(allocator);
         program.arena.deinit();

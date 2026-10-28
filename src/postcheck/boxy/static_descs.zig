@@ -17,6 +17,7 @@ const lir_core = @import("lir_core");
 const boxy_runtime = @import("boxy_runtime");
 const types = @import("types.zig");
 const Layouts = @import("layouts.zig").Layouts;
+const lower = @import("lower.zig");
 
 const Allocator = std.mem.Allocator;
 const LIR = lir_core.LIR;
@@ -41,6 +42,10 @@ pub const StaticDescs = struct {
     name_slots: std.AutoHashMapUnmanaged(NameId, Reserved) = .empty,
     pending: std.ArrayList(Pending) = .empty,
     opaque_word: ?LIR.StaticDataId = null,
+    null_word: ?LIR.StaticDataId = null,
+    /// How many dictionary callables static callables have captured, which
+    /// names each one's node.
+    extra_nodes: u32 = 0,
     numeral_tables: std.StringHashMapUnmanaged(LIR.StaticDataId) = .empty,
 
     /// A descriptor's identity: a type, or the recursion box around one.
@@ -108,6 +113,15 @@ pub const StaticDescs = struct {
         return reserved.slot;
     }
 
+    /// The static-data slot holding a null pointer.
+    pub fn nullWordSlot(self: *StaticDescs) Allocator.Error!LIR.StaticDataId {
+        if (self.null_word) |slot| return slot;
+        const slot = try self.addSlot();
+        _ = try self.addExport(try LirProgram.staticDataSymbolName(self.allocator, slot), self.ptrSize(), self.ptrSize(), slot);
+        self.null_word = slot;
+        return slot;
+    }
+
     /// The static-data slot pointing at a numeric literal's
     /// `NumeralTable` with contents `table`.
     pub fn numeralTableSlot(self: *StaticDescs, table: []const u8) Allocator.Error!LIR.StaticDataId {
@@ -163,7 +177,7 @@ pub const StaticDescs = struct {
     }
 
     /// One pointer inside a node: at `offset`, the address of `target`.
-    const Pointer = struct { offset: u32, target: ExportIndex };
+    const Pointer = struct { offset: u32, target: ExportIndex, addend: u32 = 0 };
 
     fn setRelocations(self: *StaticDescs, owner: ExportIndex, pointers: []const Pointer) Allocator.Error!void {
         const relocations = try self.allocator.alloc(StaticDataRelocation, pointers.len);
@@ -173,11 +187,93 @@ pub const StaticDescs = struct {
                 .offset = pointer.offset,
                 .target_symbol_name = self.exports.items[pointer.target].symbol_name,
                 .target = .{ .data_symbol = @fromBackingInt(pointer.target) },
+                .addend = pointer.addend,
             };
         }
         const item = &self.exports.items[owner];
         self.allocator.free(item.relocations);
         item.relocations = relocations;
+    }
+
+    fn program(self: *StaticDescs) *lower.Program {
+        return @fieldParentPtr("static_descs", self);
+    }
+
+    /// The `Methods` node of the closed nominal type `ty`'s overrides, or
+    /// null when it has none: each override an immortal static callable of
+    /// the method's dictionary entry, capturing the descriptors of the types
+    /// the method's scheme takes.
+    fn methodsNode(self: *StaticDescs, ty: TypeId) Allocator.Error!?ExportIndex {
+        const overrides = try self.program().nominalOverrides(ty);
+        if (overrides[0] == null and overrides[1] == null and overrides[2] == null) return null;
+        const owner = @backingInt(self.desc_slots.get(.{ .ty = ty, .recursive_box = false }).?.slot);
+        const methods_layout = desc_format.Methods.layout(self.width);
+        const methods = try self.addExport(try LirProgram.staticDataNodeSymbolName(self.allocator, owner, 3), methods_layout.size, self.ptrSize(), null);
+        var pointers: std.ArrayList(Pointer) = .empty;
+        defer pointers.deinit(self.allocator);
+        const fields = [_]std.meta.FieldEnum(desc_format.Methods){ .is_eq, .to_hash, .to_inspect };
+        inline for (fields, 0..) |field, index| if (overrides[index]) |override| {
+            const callable = try self.staticCallable(owner, @intCast(4 + index), override);
+            try pointers.append(self.allocator, .{ .offset = methods_layout.of(field), .target = callable, .addend = static_callable_header });
+        };
+        try self.setRelocations(methods, pointers.items);
+        return methods;
+    }
+
+    /// Bytes before a static callable's payload: alignment padding, then the
+    /// zero (static) refcount word immediately before the payload.
+    const static_callable_header: u32 = @intCast(boxy_runtime.compiled.static_callable_header);
+
+    /// One word a static callable captures: a descriptor, or a structural
+    /// dictionary over one.
+    const CaptureWord = union(enum) { desc: TypeId, dict: lower.StructuralDict };
+
+    /// An immortal erased callable of `override`'s entry whose capture is
+    /// the descriptors of its scheme's types then its dictionaries, one word
+    /// each.
+    fn staticCallable(self: *StaticDescs, owner: u32, index: u32, override: lower.NominalOverride) Allocator.Error!ExportIndex {
+        const words = try self.allocator.alloc(CaptureWord, override.bound.len + override.dicts.len);
+        defer self.allocator.free(words);
+        for (override.bound, words[0..override.bound.len]) |ty, *word| word.* = .{ .desc = ty };
+        for (override.dicts, words[override.bound.len..]) |dict, *word| word.* = .{ .dict = dict };
+        const entry = self.program().worker(override.entry).*;
+        return try self.staticCallableOf(owner, index, entry.module, entry.proc, words);
+    }
+
+    fn staticCallableOf(self: *StaticDescs, owner: u32, index: u32, module: types.ModuleIndex, proc: LIR.LirProcSpecId, words: []const CaptureWord) Allocator.Error!ExportIndex {
+        const ptr = self.ptrSize();
+        const capture_offset = std.mem.alignForward(u32, 2 * ptr, static_callable_header);
+        const size = static_callable_header + capture_offset + @as(u32, @intCast(words.len)) * ptr;
+        const node = try self.addExport(try LirProgram.staticDataNodeSymbolName(self.allocator, owner, index), size, static_callable_header, null);
+        const relocations = try self.allocator.alloc(StaticDataRelocation, 1 + words.len);
+        errdefer self.allocator.free(relocations);
+        relocations[0] = .{
+            .offset = static_callable_header,
+            .target_symbol_name = try std.fmt.allocPrint(self.allocator, "roc__boxy_entry_{d}", .{@backingInt(proc)}),
+            .owns_target_symbol_name = true,
+            .kind = .function_pointer,
+            .procedure = proc,
+            .callable_capture_offset = capture_offset,
+        };
+        for (words, relocations[1..], 0..) |word, *relocation, position| {
+            const target, const addend = switch (word) {
+                .desc => |ty| .{ (try self.reserveDescriptor(.{ .ty = self.layouts.joins.representative(ty), .recursive_box = false })).node, 0 },
+                .dict => |dict| blk: {
+                    const structural = try self.program().structuralWorker(module, dict.method);
+                    // Each node index past the slot's own names one callable.
+                    self.extra_nodes += 1;
+                    break :blk .{ try self.staticCallableOf(owner, 16 + self.extra_nodes, module, self.program().worker(structural).proc, &.{.{ .desc = dict.ty }}), static_callable_header };
+                },
+            };
+            relocation.* = .{
+                .offset = static_callable_header + capture_offset + @as(u32, @intCast(position)) * ptr,
+                .target_symbol_name = self.exports.items[target].symbol_name,
+                .target = .{ .data_symbol = @fromBackingInt(target) },
+                .addend = addend,
+            };
+        }
+        self.exports.items[node].relocations = relocations;
+        return node;
     }
 
     fn reserveName(self: *StaticDescs, name: NameId) Allocator.Error!Reserved {
@@ -322,6 +418,7 @@ pub const StaticDescs = struct {
                     const backing_node = (try self.reserveDescriptor(.{ .ty = self.layouts.joins.representative(backing), .recursive_box = false })).node;
                     try pointers.append(self.allocator, .{ .offset = desc_layout.of(.child), .target = backing_node });
                     try pointers.append(self.allocator, .{ .offset = desc_layout.of(.name), .target = (try self.reserveName(nominal.name)).node });
+                    if (try self.methodsNode(ty)) |methods| try pointers.append(self.allocator, .{ .offset = desc_layout.of(.methods), .target = methods });
                 }
             },
             .variable => types.invariant("a type variable reached static descriptor emission"),

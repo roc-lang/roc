@@ -268,7 +268,7 @@ const dict_record_tag: u64 = 2;
 
 /// Bytes before a static callable's payload: alignment padding, then the
 /// refcount word immediately before the payload.
-const static_callable_header: usize = erased_callable.capture_alignment;
+pub const static_callable_header: usize = erased_callable.capture_alignment;
 
 /// An immortal erased callable whose function is `callable_fn` (a worker's
 /// erased-record entry) and whose capture bytes are `capture_prefix` zero

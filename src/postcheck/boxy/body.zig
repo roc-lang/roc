@@ -666,7 +666,7 @@ pub const Builder = struct {
                 break :blk .{ .desc_nominal = .{
                     .backing = self.type_descs.get(try self.program.converter().backing(ty)).?,
                     .name = try self.nameDesc(nominal.name),
-                    .methods = null,
+                    .methods = try self.composedMethods(ty),
                     .inspect_opaque = nominal.is_opaque,
                 } };
             },
@@ -674,6 +674,32 @@ pub const Builder = struct {
         };
         try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, op), .next = undefined } });
         return local;
+    }
+
+    /// The `Methods` record of the nominal type `ty`'s overrides, composed
+    /// at runtime from the descriptors of the types each method's scheme
+    /// takes, or null when it has none.
+    pub fn composedMethods(self: *Builder, ty: TypeId) Allocator.Error!?LocalId {
+        const overrides = try self.program.nominalOverrides(ty);
+        if (overrides[0] == null and overrides[1] == null and overrides[2] == null) return null;
+        var callables: [3]LocalId = undefined;
+        for (overrides, &callables) |maybe, *callable| {
+            const override = maybe orelse {
+                callable.* = try self.closedLocal(.opaque_ptr);
+                try self.emitEntry(.{ .assign_literal = .{ .target = callable.*, .value = .{ .static_data = .{ .id = try self.program.static_descs.nullWordSlot() } }, .next = undefined } });
+                continue;
+            };
+            const hidden = try self.allocator.alloc(LocalId, override.bound.len + override.dicts.len);
+            defer self.allocator.free(hidden);
+            for (override.bound, hidden[0..override.bound.len]) |bound_ty, *desc| desc.* = try self.descOf(bound_ty);
+            for (override.dicts, hidden[override.bound.len..]) |dict, *local| {
+                local.* = try self.composeDictionary(try self.program.structuralWorker(self.module, dict.method), &.{try self.descOf(dict.ty)});
+            }
+            callable.* = try self.composeDictionary(override.entry, hidden);
+        }
+        const methods = try self.closedLocal(.opaque_ptr);
+        try self.emitEntry(.{ .dyn = .{ .target = methods, .data = try self.store.addStmtRow(LIR.DynOp, .{ .dict_record = .{ .methods = try self.store.addLocalSpan(&callables) } }), .next = undefined } });
+        return methods;
     }
 
     // -- Body --
@@ -1343,6 +1369,7 @@ pub const Builder = struct {
                 switch (method) {
                     .is_eq => try self.emitDyn(target, .{ .eq = .{ .lhs = values[0], .rhs = values[1], .desc = self.var_descs[0] } }),
                     .to_hash => try self.emitDyn(target, .{ .hash = .{ .hasher = values[1], .value = values[0], .desc = self.var_descs[0] } }),
+                    .to_inspect => try self.emitDyn(target, .{ .inspect = .{ .value = values[0], .desc = self.var_descs[0] } }),
                 }
                 break :blk target;
             },
@@ -3212,81 +3239,7 @@ pub const Builder = struct {
     /// The relation of `relateVariablesAll`, leaving variables the types do
     /// not relate null.
     pub fn relateVariablesPartial(self: *Builder, roots: []const [2]TypeId, count: usize) Allocator.Error![]?TypeId {
-        const store = &self.program.store;
-        const bound = try self.allocator.alloc(?TypeId, count);
-        defer self.allocator.free(bound);
-        @memset(bound, null);
-        var pending: std.ArrayList([2]TypeId) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.appendSlice(self.allocator, roots);
-        while (pending.pop()) |pair| {
-            const formal = store.get(pair[0]);
-            if (formal == .variable) {
-                bound[formal.variable] = pair[1];
-                continue;
-            }
-            const other = store.get(pair[1]);
-            if (std.meta.activeTag(formal) != std.meta.activeTag(other)) {
-                // A nominal shares its backing's representation: relate a
-                // structural position through the other side's backing.
-                if (other == .nominal and other.nominal.has_backing and formal != .nominal) {
-                    try pending.append(self.allocator, .{ pair[0], try self.program.converter().backing(pair[1]) });
-                } else if (formal == .nominal and formal.nominal.has_backing and other != .nominal) {
-                    try pending.append(self.allocator, .{ try self.program.converter().backing(pair[0]), pair[1] });
-                }
-                continue;
-            }
-            switch (formal) {
-                .list => |elem| try pending.append(self.allocator, .{ elem, other.list }),
-                .box => |payload| try pending.append(self.allocator, .{ payload, other.box }),
-                .tuple => |items| for (store.span(items), store.span(other.tuple)) |a, b| try pending.append(self.allocator, .{ a, b }),
-                .function => |function| {
-                    for (store.span(function.args), store.span(other.function.args)) |a, b| try pending.append(self.allocator, .{ a, b });
-                    try pending.append(self.allocator, .{ function.ret, other.function.ret });
-                },
-                .nominal => |nominal| for (store.nominalArgs(nominal), store.nominalArgs(other.nominal)) |a, b| try pending.append(self.allocator, .{ a, b }),
-                .record => |record| {
-                    var residual: std.ArrayList(types.Field) = .empty;
-                    defer residual.deinit(self.allocator);
-                    for (store.fieldSpan(other.record.fields)) |candidate| {
-                        var named = false;
-                        for (store.fieldSpan(record.fields)) |field| {
-                            if (candidate.name == field.name) {
-                                named = true;
-                                try pending.append(self.allocator, .{ field.ty, candidate.ty });
-                            }
-                        }
-                        if (!named) try residual.append(self.allocator, candidate);
-                    }
-                    if (record.ext) |ext| {
-                        const remainder = if (residual.items.len == 0 and other.record.ext == null)
-                            try store.emptyRecord()
-                        else
-                            try store.intern(.{ .record = .{ .fields = residual.items, .ext = other.record.ext } });
-                        try pending.append(self.allocator, .{ ext, remainder });
-                    }
-                },
-                .tag_union => |tag_union| {
-                    var residual: std.ArrayList(types.TagInput) = .empty;
-                    defer residual.deinit(self.allocator);
-                    for (store.tagSpan(other.tag_union.tags)) |candidate| {
-                        var named = false;
-                        for (store.tagSpan(tag_union.tags)) |tag| {
-                            if (candidate.name == tag.name and candidate.payloads.len == tag.payloads.len) {
-                                named = true;
-                                for (store.span(tag.payloads), store.span(candidate.payloads)) |a, b| try pending.append(self.allocator, .{ a, b });
-                            }
-                        }
-                        if (!named) try residual.append(self.allocator, .{ .name = candidate.name, .payloads = store.span(candidate.payloads) });
-                    }
-                    // An open formal row's remainder is the actual row's
-                    // tags it does not name.
-                    if (tag_union.ext) |ext| try pending.append(self.allocator, .{ ext, try store.intern(.{ .tag_union = .{ .tags = residual.items, .ext = other.tag_union.ext } }) });
-                },
-                .primitive, .empty_record, .variable => {},
-            }
-        }
-        return try self.allocator.dupe(?TypeId, bound);
+        return try self.program.relateVariablesPartial(self.allocator, roots, count);
     }
 
     pub fn composeDictionary(self: *Builder, entry: WorkerId, captures: []const LocalId) Allocator.Error!LocalId {
