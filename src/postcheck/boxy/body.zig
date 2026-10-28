@@ -183,6 +183,9 @@ pub const Builder = struct {
     dict_locals: []LocalId = &.{},
     type_descs: std.AutoHashMapUnmanaged(TypeId, LocalId) = .empty,
     opaque_word_desc: ?LocalId = null,
+    /// Expressions whose value is built at a row coercion's destination
+    /// type rather than their own (design.md "Row Coercion Primitive").
+    destination_types: std.AutoHashMapUnmanaged(CheckedExprId, TypeId) = .empty,
     name_locals: std.AutoHashMapUnmanaged(types.NameId, LocalId) = .empty,
     entry_hole: CFStmtId = undefined,
     hole: ?CFStmtId = null,
@@ -221,6 +224,7 @@ pub const Builder = struct {
         self.name_locals.deinit(self.allocator);
         self.join_points.deinit(self.allocator);
         self.join_infos.deinit(self.allocator);
+        self.destination_types.deinit(self.allocator);
         self.merges.deinit(self.allocator);
         self.loops.deinit(self.allocator);
         self.values.deinit(self.allocator);
@@ -267,7 +271,14 @@ pub const Builder = struct {
     }
 
     pub fn exprType(self: *Builder, expr: CheckedExprId) Allocator.Error!TypeId {
-        return self.convert(self.bodies().expr(expr).ty);
+        const own = try self.convert(self.bodies().expr(expr).ty);
+        // A value flowing to a destination of the same shape is built at the
+        // destination's type; a diverging value's own type can differ in
+        // shape, and it builds nothing.
+        if (self.destination_types.get(expr)) |destination| {
+            if (try @import("row_joins.zig").compatible(self.allocator, &self.program.store, own, destination)) return destination;
+        }
+        return own;
     }
 
     pub fn patternType(self: *Builder, pattern: CheckedPatternId) Allocator.Error!TypeId {
@@ -692,6 +703,9 @@ pub const Builder = struct {
                         if (lambda.args.len != params.len) invariant("a template's lambda arity differs from its signature");
                         for (lambda.args, params, worker.params) |pattern, param, param_ty| try self.bindIrrefutable(pattern, param, param_ty);
                         try self.tasks.append(self.allocator, .ret);
+                        // The body's value is built at the function's result
+                        // type, which its rows join (design.md "Row Joins").
+                        try self.destination_types.put(self.allocator, lambda.body, worker.ret);
                         try self.tasks.append(self.allocator, .{ .expr = lambda.body });
                     },
                     .hosted_lambda => {
@@ -866,6 +880,7 @@ pub const Builder = struct {
             try self.bindIrrefutable(pattern, value, param_ty);
         }
         try self.tasks.append(self.allocator, .ret);
+        try self.destination_types.put(self.allocator, lambda.body, worker.ret);
         try self.tasks.append(self.allocator, .{ .expr = lambda.body });
         try self.run();
         try args.append(self.allocator, capture_ptr);
@@ -1450,6 +1465,7 @@ pub const Builder = struct {
 
     pub fn stepExpr(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
         const expr = self.bodies().expr(expr_id);
+        if (self.destination_types.get(expr_id)) |destination| try self.passDestination(expr.data, destination);
         self.region = expr.source_region;
         switch (expr.data) {
             .numeral => |numeral| try self.lowerNumeral(expr_id, numeral),
@@ -1526,7 +1542,12 @@ pub const Builder = struct {
             },
             .lambda => try self.lowerClosure(expr_id, expr_id, &.{}),
             .closure => |closure| try self.lowerClosure(expr_id, closure.lambda, closure.captures),
-            .row_coerce => |coerce| try self.push(.{ .expr = coerce.value }),
+            .row_coerce => |coerce| {
+                // The coerced value is built straight at its destination's
+                // row (design.md "Row Coercion Primitive").
+                try self.destination_types.put(self.allocator, coerce.value, try self.exprType(expr_id));
+                try self.push(.{ .expr = coerce.value });
+            },
             .structural_eq => |eq| {
                 if (eq.discriminant) |discriminant| {
                     try self.push(.{ .finish_discriminant_eq = .{ .value_ty = try self.exprType(discriminant.value), .tag = discriminant.tag, .negated = eq.negated } });
@@ -1596,6 +1617,7 @@ pub const Builder = struct {
                 // is unreachable.
                 try self.push(.{ .unreachable_value = try self.exprType(expr_id) });
                 try self.push(.ret);
+                try self.destination_types.put(self.allocator, ret.expr, self.currentWorker().ret);
                 try self.push(.{ .expr = ret.expr });
             },
             .unary_not => |operand| {
@@ -1603,6 +1625,22 @@ pub const Builder = struct {
                 try self.push(.{ .expr = operand });
             },
             else => invariantFmt("checked expression {s} is not yet lowered by Boxy", .{@tagName(expr.data)}),
+        }
+    }
+
+    /// Hand an expression's destination type to the subexpressions whose
+    /// value is its value.
+    pub fn passDestination(self: *Builder, data: checked.CheckedExprData, destination: TypeId) Allocator.Error!void {
+        switch (data) {
+            .block => |block| try self.destination_types.put(self.allocator, block.final_expr, destination),
+            .if_ => |if_| {
+                for (if_.branches) |branch| try self.destination_types.put(self.allocator, branch.body, destination);
+                try self.destination_types.put(self.allocator, if_.final_else, destination);
+            },
+            .match_ => |match| for (match.branches) |branch| try self.destination_types.put(self.allocator, branch.value, destination),
+            .nominal => |nominal| try self.destination_types.put(self.allocator, nominal.backing_expr, try self.structuralType(destination)),
+            .dbg => |inner| try self.destination_types.put(self.allocator, inner, destination),
+            else => {},
         }
     }
 
@@ -2657,7 +2695,16 @@ pub const Builder = struct {
                 continue;
             }
             const other = store.get(pair[1]);
-            if (std.meta.activeTag(formal) != std.meta.activeTag(other)) continue;
+            if (std.meta.activeTag(formal) != std.meta.activeTag(other)) {
+                // A nominal shares its backing's representation: relate a
+                // structural position through the other side's backing.
+                if (other == .nominal and other.nominal.has_backing and formal != .nominal) {
+                    try pending.append(self.allocator, .{ pair[0], try self.program.converter().backing(pair[1]) });
+                } else if (formal == .nominal and formal.nominal.has_backing and other != .nominal) {
+                    try pending.append(self.allocator, .{ try self.program.converter().backing(pair[0]), pair[1] });
+                }
+                continue;
+            }
             switch (formal) {
                 .list => |elem| try pending.append(self.allocator, .{ elem, other.list }),
                 .box => |payload| try pending.append(self.allocator, .{ payload, other.box }),
@@ -3577,7 +3624,16 @@ pub const Builder = struct {
                             if (field.name == name) break index;
                         } else null;
                         if (semantic) |index| {
-                            if (fields[index].kind != .inline_slot) invariant("destructuring optional record fields is not yet lowered by Boxy");
+                            if (fields[index].kind == .presence_slot) {
+                                // An optional field destructures to its
+                                // presence as `Try(value, [MissingField])`.
+                                const slot_ty = try self.program.layouts.presenceSlot(fields[index].ty);
+                                const slot = try self.readField(ty, item.value, @intCast(index), slot_ty);
+                                const try_ty = try self.patternType(sub);
+                                const presence = try self.presenceTry(slot, slot_ty, try_ty);
+                                try pending.append(self.allocator, .{ .pattern = sub, .value = presence, .ty = try_ty });
+                                continue;
+                            }
                             const local = try self.readField(ty, item.value, @intCast(index), fields[index].ty);
                             try pending.append(self.allocator, .{ .pattern = sub, .value = local, .ty = fields[index].ty });
                         } else {
@@ -3627,6 +3683,27 @@ pub const Builder = struct {
         try self.branchOrMiss(matches, miss);
     }
 
+    /// The `Try(value, [MissingField])` of type `try_ty` a presence slot
+    /// holds: `Ok` of its payload, or `Err(MissingField)`.
+    pub fn presenceTry(self: *Builder, slot: LocalId, slot_ty: TypeId, try_ty: TypeId) Allocator.Error!LocalId {
+        const store = &self.program.store;
+        const present = try store.internName(@import("layouts.zig").present_label);
+        const try_union = try self.structuralType(try_ty);
+        const result = try self.localOf(try_ty, .frame);
+        const join = self.freshJoin();
+        const after = try self.declareMergeJoin(join, result, null);
+        const missing_hole = try self.newHole();
+        try self.branchOnTag(slot, slot_ty, present, missing_hole);
+        const payload = try self.tagPayloadValue(slot, slot_ty, present, 0);
+        try self.emitJump(join, try self.buildTag(try_union, try store.internName("Ok"), &.{payload.value}));
+        self.hole = missing_hole;
+        const err_payload_ty = (try self.closedVariant(try_union, try store.internName("Err"))).payloads[0];
+        const missing = try self.buildTag(try self.structuralType(err_payload_ty), try store.internName("MissingField"), &.{});
+        try self.emitJump(join, try self.buildTag(try_union, try store.internName("Err"), &.{missing}));
+        self.hole = after;
+        return result;
+    }
+
     /// Whether a tag union value holds the payload-free tag `label`: the
     /// checker's discriminant-only equality.
     pub fn finishDiscriminantEq(self: *Builder, value_ty: TypeId, label: check.CheckedNames.TagLabelId, negated: bool) Allocator.Error!void {
@@ -3670,8 +3747,22 @@ pub const Builder = struct {
         const access = self.bodies().expr(expr_id).data.field_access;
         var value = self.popValue();
         var record_ty = try self.exprType(access.receiver);
+        var misses: std.ArrayList(CFStmtId) = .empty;
+        defer misses.deinit(self.allocator);
+        const present = try self.program.store.internName(@import("layouts.zig").present_label);
+        // A path with a `.?` segment is one flat `Try(value, [MissingField])`,
+        // which every exit of the path delivers to one join.
+        const optional = for (access.segments) |segment| {
+            if (segment.mode == .optional) break true;
+        } else false;
+        var result_join: ?struct { join: LIR.JoinPointId, after: CFStmtId, result: LocalId } = null;
+        if (optional) {
+            const result = try self.localOf(try self.exprType(expr_id), .frame);
+            const join = self.freshJoin();
+            const after = try self.declareMergeJoin(join, result, null);
+            result_join = .{ .join = join, .after = after, .result = result };
+        }
         for (access.segments) |segment| {
-            if (segment.mode != .required) invariant("optional field access is not yet lowered by Boxy");
             const name = try self.program.store.internName(self.view.nameStore().recordFieldLabelText(segment.field_name));
             const structural = try self.structuralType(record_ty);
             const record = switch (self.program.store.get(structural)) {
@@ -3683,20 +3774,54 @@ pub const Builder = struct {
                 if (field.name == name) break index;
             } else null;
             const field_ty = try self.convert(segment.success_ty);
-            if (record.ext != null) {
-                // An open row: the field's position is known only to the
-                // record's descriptor.
-                const local = try self.localOf(field_ty, .view);
-                try self.emitDyn(local, .{ .field_addr_named = .{ .base = value, .desc = try self.descOf(structural), .name = try self.nameDesc(name) } });
-                value = local;
+            // The stored type of the field: its value, or for an optional
+            // segment its presence slot.
+            const slot_ty = switch (segment.mode) {
+                .required => field_ty,
+                .optional => try self.program.layouts.presenceSlot(field_ty),
+            };
+            var stored: LocalId = undefined;
+            if (record.ext != null and semantic == null) {
+                // A field of an open row's remainder: only the record's
+                // descriptor knows where it is.
+                stored = try self.localOf(slot_ty, .view);
+                try self.emitDyn(stored, .{ .field_addr_named = .{ .base = value, .desc = try self.descOf(structural), .name = try self.nameDesc(name) } });
             } else {
                 const index = semantic orelse invariant("a field access's field is absent from its record type");
-                if (fields[index].kind != .inline_slot) invariant("required access to an optional field reached Boxy");
-                value = try self.readField(structural, value, @intCast(index), field_ty);
+                const expected_kind: types.FieldKind = switch (segment.mode) {
+                    .required => .inline_slot,
+                    .optional => .presence_slot,
+                };
+                if (fields[index].kind != expected_kind) invariant("a field access's mode differs from its field's kind");
+                stored = try self.readField(structural, value, @intCast(index), slot_ty);
+            }
+            switch (segment.mode) {
+                .required => value = stored,
+                .optional => {
+                    // `.?`: a missing field ends the path with an error.
+                    const miss = try self.newHole();
+                    try self.branchOnTag(stored, slot_ty, present, miss);
+                    try misses.append(self.allocator, miss);
+                    value = (try self.tagPayloadValue(stored, slot_ty, present, 0)).value;
+                },
             }
             record_ty = field_ty;
         }
-        try self.pushValue(value);
+        const exit = result_join orelse return try self.pushValue(value);
+        const join = exit.join;
+        const try_union = try self.structuralType(try self.exprType(expr_id));
+        const store = &self.program.store;
+        const ok = try self.buildTag(try_union, try store.internName("Ok"), &.{value});
+        try self.emitJump(join, ok);
+        const err_payload_ty = (try self.closedVariant(try_union, try store.internName("Err"))).payloads[0];
+        for (misses.items) |miss| {
+            self.hole = miss;
+            const missing = try self.buildTag(try self.structuralType(err_payload_ty), try store.internName("MissingField"), &.{});
+            const err = try self.buildTag(try_union, try store.internName("Err"), &.{missing});
+            try self.emitJump(join, err);
+        }
+        self.hole = exit.after;
+        try self.pushValue(exit.result);
     }
 
     /// The stored types of a record's or tuple's components, by semantic

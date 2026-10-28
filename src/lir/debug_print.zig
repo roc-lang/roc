@@ -465,6 +465,7 @@ const Printer = struct {
                 try writer.writeAll(") payloads(");
                 try self.writeLocals(desc.payloads, writer);
                 try writer.writeAll(")");
+                if (desc.ext) |ext| try writer.print(" ext(l{d})", .{@backingInt(ext)});
                 return;
             },
             .dict_compose => |dict| try writer.print(" p{d}", .{@backingInt(dict.worker)}),
