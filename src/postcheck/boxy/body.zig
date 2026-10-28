@@ -1112,9 +1112,11 @@ pub const Builder = struct {
     pub fn storageDifference(self: *Builder, from_root: TypeId, to_root: TypeId) Allocator.Error!StorageDifference {
         if (from_root == to_root) return .none;
         const store = &self.program.store;
-        // Where a pair sits: in data, in the root function's signature, or
-        // in a function type inside data.
-        const Place = enum { data, root_function, nested_function };
+        // Where a pair sits: in data, in the signature of the root function
+        // or of a function its signature passes (each adapted by its own
+        // adapter), in data such a signature passes, or in a function type
+        // inside data.
+        const Place = enum { data, root_function, signature_data, nested_function };
         const Pair = struct { from: TypeId, to: TypeId, place: Place };
         var pending: std.ArrayList(Pair) = .empty;
         defer pending.deinit(self.allocator);
@@ -1134,6 +1136,8 @@ pub const Builder = struct {
                 }
                 continue;
             }
+            // The place of a component of a non-function type.
+            const inner: Place = if (pair.place == .root_function) .signature_data else pair.place;
             switch (from) {
                 .record => |record| {
                     for (store.fieldSpan(to.record.fields)) |to_field| {
@@ -1144,36 +1148,40 @@ pub const Builder = struct {
                         } else false;
                         if (!present and record.ext == null and to_field.kind == .presence_slot) switch (pair.place) {
                             .data => result = .data,
-                            .root_function => return .function,
+                            .root_function, .signature_data => return .function,
                             .nested_function => invariant("adapting a function value inside data is not yet lowered by Boxy"),
                         };
                         for (store.fieldSpan(record.fields)) |from_field| {
                             if (from_field.name != to_field.name) continue;
                             if (from_field.kind != to_field.kind) switch (pair.place) {
                                 .data => result = .data,
-                                .root_function => return .function,
+                                .root_function, .signature_data => return .function,
                                 .nested_function => invariant("adapting a function value inside data is not yet lowered by Boxy"),
                             };
-                            try pending.append(self.allocator, .{ .from = from_field.ty, .to = to_field.ty, .place = pair.place });
+                            try pending.append(self.allocator, .{ .from = from_field.ty, .to = to_field.ty, .place = inner });
                         }
                     }
-                    if (record.ext != null and to.record.ext != null) try pending.append(self.allocator, .{ .from = record.ext.?, .to = to.record.ext.?, .place = pair.place });
+                    if (record.ext != null and to.record.ext != null) try pending.append(self.allocator, .{ .from = record.ext.?, .to = to.record.ext.?, .place = inner });
                 },
-                .tuple => |items| for (store.span(items), store.span(to.tuple)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = pair.place }),
+                .tuple => |items| for (store.span(items), store.span(to.tuple)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = inner }),
                 .tag_union => |tag_union| {
                     for (store.tagSpan(to.tag_union.tags)) |to_tag| {
                         for (store.tagSpan(tag_union.tags)) |from_tag| {
                             if (from_tag.name != to_tag.name or from_tag.payloads.len != to_tag.payloads.len) continue;
-                            for (store.span(from_tag.payloads), store.span(to_tag.payloads)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = pair.place });
+                            for (store.span(from_tag.payloads), store.span(to_tag.payloads)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = inner });
                         }
                     }
-                    if (tag_union.ext != null and to.tag_union.ext != null) try pending.append(self.allocator, .{ .from = tag_union.ext.?, .to = to.tag_union.ext.?, .place = pair.place });
+                    if (tag_union.ext != null and to.tag_union.ext != null) try pending.append(self.allocator, .{ .from = tag_union.ext.?, .to = to.tag_union.ext.?, .place = inner });
                 },
-                .list => |elem| try pending.append(self.allocator, .{ .from = elem, .to = to.list, .place = pair.place }),
-                .box => |payload| try pending.append(self.allocator, .{ .from = payload, .to = to.box, .place = pair.place }),
-                .nominal => |nominal| for (store.nominalArgs(nominal), store.nominalArgs(to.nominal)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = pair.place }),
+                .list => |elem| try pending.append(self.allocator, .{ .from = elem, .to = to.list, .place = inner }),
+                .box => |payload| try pending.append(self.allocator, .{ .from = payload, .to = to.box, .place = inner }),
+                .nominal => |nominal| for (store.nominalArgs(nominal), store.nominalArgs(to.nominal)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = inner }),
                 .function => |function| {
-                    const place: Place = if (pair.place == .data and pair.from == from_root) .root_function else .nested_function;
+                    const place: Place = switch (pair.place) {
+                        .data => if (pair.from == from_root) .root_function else .nested_function,
+                        .root_function => .root_function,
+                        .signature_data, .nested_function => .nested_function,
+                    };
                     for (store.span(function.args), store.span(to.function.args)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = place });
                     try pending.append(self.allocator, .{ .from = function.ret, .to = to.function.ret, .place = place });
                 },
@@ -3356,10 +3364,21 @@ pub const Builder = struct {
                     .from_callable => if (self.program.worker(target).dictionary_params.len == 0) &.{} else invariant("callable-derived dictionary evidence is not yet lowered by Boxy"),
                     .through_alias => invariant("alias-scope dictionary evidence is not yet lowered by Boxy"),
                 };
-                const hidden = try self.hiddenArgsAt(target, subst, nested, try self.instantiationCallable(node.instantiation));
+                const callable = try self.instantiationCallable(node.instantiation);
+                const hidden = try self.hiddenArgsAt(target, subst, nested, callable);
                 defer self.allocator.free(hidden);
                 const entry = try self.program.methodEntryWorker(target);
-                return try self.composeDictionary(entry, hidden);
+                const dictionary = try self.composeDictionary(entry, hidden);
+                // A method storing record fields of its signature in presence
+                // slots is adapted to the storage its consumers call it with
+                // (design.md "Field Kinds").
+                const expected = callable orelse return dictionary;
+                if (!try self.program.signatureHasSlots(target)) return dictionary;
+                const target_worker = self.program.worker(target).*;
+                const bound = try self.boundTypesAt(target, subst, callable);
+                defer self.allocator.free(bound);
+                const own_fn = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
+                return try self.adaptValue(dictionary, try self.program.substitute(self.allocator, own_fn, bound), expected);
             },
             .structural => |structural| {
                 const method: lower.StructuralMethod = switch (structural.derivation) {

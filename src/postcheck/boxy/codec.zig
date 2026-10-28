@@ -1118,18 +1118,40 @@ const Gen = struct {
                     .resolved => table.nestedEvidence(node),
                     .from_callable, .through_alias => invariant("a generated codec call's evidence is not resolved"),
                 };
+                const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
                 const hidden = switch (node.instantiation) {
                     .alias => invariant("generated codec calls of targets reached through a procedure alias are not yet lowered by Boxy"),
                     .derived_from_callable => |callable_ty| try b.relatedHiddenArgs(callee, callable_ty),
-                    .callable, .monomorphic => try b.hiddenArgsAt(callee, table.site_substitutions[node.subst.start..][0..node.subst.len], nested, callable.fn_ty),
+                    .callable, .monomorphic => try b.hiddenArgsAt(callee, subst, nested, callable.fn_ty),
                 };
                 defer b.allocator.free(hidden);
-                const all = try std.mem.concat(b.allocator, LocalId, &.{ args, hidden });
-                defer b.allocator.free(all);
                 const ret_ty = fnRet(program_, callable.fn_ty);
-                const target = try self.local(ret_ty);
-                try b.emitLinear(.{ .assign_call = .{ .target = target, .proc = program_.worker(callee).proc, .args = try b.store.addLocalSpan(all), .next = undefined } });
-                return .{ .value = target, .ty = ret_ty };
+                // A target storing record fields of its signature in presence
+                // slots is called at its own storage, adapting the arguments
+                // and the result (design.md "Field Kinds").
+                const bound: ?[]TypeId = if (!try program_.signatureHasSlots(callee)) null else switch (node.instantiation) {
+                    .alias => unreachable, // rejected above
+                    .derived_from_callable => |callable_ty| try b.relateVariables(
+                        try program_.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } }),
+                        try b.convert(callable_ty),
+                        target_worker.scheme_vars.len,
+                    ),
+                    .callable, .monomorphic => try b.boundTypesAt(callee, subst, callable.fn_ty),
+                };
+                defer if (bound) |types_| b.allocator.free(types_);
+                const call_args = try b.allocator.dupe(LocalId, args);
+                defer b.allocator.free(call_args);
+                if (bound) |types_| {
+                    for (call_args, fnArgs(program_, callable.fn_ty), target_worker.params) |*arg, arg_ty, param_ty| {
+                        arg.* = try b.adaptValue(arg.*, arg_ty, try program_.substitute(b.allocator, param_ty, types_));
+                    }
+                }
+                const own_ret = if (bound) |types_| try program_.substitute(b.allocator, target_worker.ret, types_) else ret_ty;
+                const all = try std.mem.concat(b.allocator, LocalId, &.{ call_args, hidden });
+                defer b.allocator.free(all);
+                const target = try self.local(own_ret);
+                try b.emitLinear(.{ .assign_call = .{ .target = target, .proc = target_worker.proc, .args = try b.store.addLocalSpan(all), .next = undefined } });
+                return .{ .value = try b.adaptValue(target, own_ret, ret_ty), .ty = ret_ty };
             },
         }
     }
