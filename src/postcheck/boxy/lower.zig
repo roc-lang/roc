@@ -1358,6 +1358,21 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             const name = try program.store.internName(view.nameStore().recordFieldLabelText(omitted.field_name));
             try program.omitted_defaults.put(allocator, .{ .module = view.index, .expr = omitted.expr, .name = name }, omitted.default);
         }
+        // A method of a type declared in a function body is a local
+        // procedure its dispatches call, each at its own instantiation.
+        for (view.view.method_registry.entries) |entry| {
+            const target = entry.target orelse continue;
+            switch (target.kind) {
+                .local_proc => |local| {
+                    try program.local_procs.put(allocator, .{ .module = view.index, .expr = local.expr }, {});
+                    switch (bodies.expr(local.expr).data) {
+                        .closure => |closure| try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {}),
+                        else => {},
+                    }
+                },
+                .procedure, .structural => {},
+            }
+        }
         // A local procedure's uses all reach it through its binding, so its
         // own scheme's arguments are passed per call.
         for (view.view.resolved_value_refs.records) |record| {

@@ -2872,6 +2872,13 @@ pub const Builder = struct {
     /// instantiation is, as a value, instantiated where it is used: the
     /// value captures the use's descriptors and dictionaries of its scheme.
     pub fn localProcUseValue(self: *Builder, expr_id: CheckedExprId, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
+        return try self.localProcInstanceValue(local, try self.exprType(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{});
+    }
+
+    /// The function value of local procedure `local` used at the function
+    /// type `use_ty`, whose own scheme's dictionaries `evidence` supplies
+    /// (or, when null, each dispatcher's type resolves).
+    pub fn localProcInstanceValue(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence) Allocator.Error!LocalId {
         const lambda_expr = switch (self.bodies().expr(local.expr).data) {
             .lambda => local.expr,
             .closure => |closure| closure.lambda,
@@ -2894,7 +2901,7 @@ pub const Builder = struct {
         const generic_fn = try self.program.converter().convert(self.module, lambda_ty, .{ .module = self.module, .vars = vars, .bound = generic_bound });
         // The procedure's own variables take the types the use's
         // instantiation gives them.
-        const related = try self.relateVariablesPartial(&.{.{ generic_fn, try self.exprType(expr_id) }}, vars.len);
+        const related = try self.relateVariablesPartial(&.{.{ generic_fn, use_ty }}, vars.len);
         defer self.allocator.free(related);
         scheme.per_call = false;
         const callee = try self.program.lambdaWorker(scope_worker, lambda_expr, per_call_worker.captures, per_call_worker.capture_types, generic_fn, scheme);
@@ -2907,7 +2914,6 @@ pub const Builder = struct {
         }
         var declaring_dicts: usize = 0;
         for (declaring.dict_scopes) |dict_scope| declaring_dicts += dict_scope.len;
-        const evidence = self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{};
         const descs = try self.allocator.alloc(LocalId, vars.len);
         defer self.allocator.free(descs);
         @memcpy(descs[0..outer_count], self.var_descs[0..outer_count]);
@@ -2921,8 +2927,20 @@ pub const Builder = struct {
         defer self.allocator.free(dicts);
         const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
         for (scheme.dictionaries, dicts[0..scheme.dictionaries.len]) |param_index, *dict| {
-            if (param_index >= evidence.len) invariant("a local procedure use's evidence does not cover its dictionaries");
-            dict.* = try self.paramDictionary(evidence, param_index, context);
+            if (evidence) |entries| {
+                if (param_index >= entries.len) invariant("a local procedure use's evidence does not cover its dictionaries");
+                dict.* = try self.paramDictionary(entries, param_index, context);
+            } else {
+                const param = context.params[param_index];
+                const converter = self.program.converter();
+                dict.* = try self.dictionaryFromType(.{
+                    .module = context.module,
+                    .method = param.method,
+                    .structural = param.structural,
+                    .dispatcher = try converter.convert(context.module, param.dispatcher_ty, context.env),
+                    .callable = try converter.convert(context.module, param.callable_ty, context.env),
+                });
+            }
         }
         @memcpy(dicts[scheme.dictionaries.len..], self.dict_locals[self.dict_locals.len - declaring_dicts ..]);
         const closure = if (try self.allClosed(per_call_worker.capture_types))
@@ -2935,7 +2953,27 @@ pub const Builder = struct {
         for (use_bound[0..outer_count], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
         for (use_bound[outer_count..], related[outer_count..], scheme.scheme_vars) |*slot, ty, variable| slot.* = ty orelse try self.program.converter().sealedScheme(self.module, variable);
         const procedure_ty = try self.program.converter().convert(self.module, lambda_ty, .{ .module = self.module, .vars = vars, .bound = use_bound });
-        return try self.adaptValue(closure, procedure_ty, try self.exprType(expr_id));
+        return try self.adaptValue(closure, procedure_ty, use_ty);
+    }
+
+    /// The function value of the local procedure a dispatch edge `node`
+    /// selected, at the function type `fn_ty`. A method of a type declared
+    /// in a function body is a local procedure of that body, which this
+    /// body is, or is nested in.
+    pub fn localMethodValue(self: *Builder, node: static_dispatch.EvidenceNode, fn_ty: TypeId) Allocator.Error!LocalId {
+        const target = switch (node.target.kind) {
+            .local_proc => |target| target,
+            else => invariant("a local method value names a procedure that is not local"),
+        };
+        if (self.program.moduleByIdx(node.target.module_idx).index != self.module) invariant("a method declared in a function body is dispatched outside its module");
+        const local: checked.LocalProcedureBinding = .{ .binder = target.binder, .expr = target.expr, .dispatch_scope = target.dispatch_scope };
+        const table = self.view.view.static_dispatch_plans;
+        const evidence: ?[]const static_dispatch.CheckedEvidence = switch (node.nested) {
+            .resolved => table.nestedEvidence(node),
+            .from_callable => null,
+            .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
+        };
+        return try self.localProcInstanceValue(local, fn_ty, evidence);
     }
 
     /// The worker that declares local procedure `local` (this worker or one
@@ -3856,7 +3894,7 @@ pub const Builder = struct {
     pub fn methodTargetWorker(self: *Builder, target: static_dispatch.MethodTarget) Allocator.Error!WorkerId {
         return switch (target.kind) {
             .procedure => |procedure| try self.program.templateRefWorker(procedure.template),
-            .local_proc => invariant("dispatch to a local procedure is not yet lowered by Boxy"),
+            .local_proc => invariant("a method declared in a function body is a local procedure, called through its function value, never as a worker"),
             .structural => invariant("a structural method reached a procedure dispatch"),
         };
     }
@@ -3869,6 +3907,10 @@ pub const Builder = struct {
             .constraint => |constraint| return self.scopeDictionary(constraint.index),
             .direct => |node_id| {
                 const node = table.evidenceNode(node_id);
+                if (node.target.kind == .local_proc) {
+                    const fn_ty = (try self.instantiationCallable(node.instantiation)) orelse try self.convert(node.target.callable_ty);
+                    return try self.localMethodValue(node, fn_ty);
+                }
                 const target = try self.methodTargetWorker(node.target);
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
                 switch (node.instantiation) {
@@ -4498,6 +4540,26 @@ pub const Builder = struct {
         switch (call_plan.resolution) {
             .direct_closed, .direct_parametric => |direct| {
                 const node = table.evidenceNode(direct.evidence);
+                if (node.target.kind == .local_proc) {
+                    // A method declared in a function body is a call of
+                    // its local procedure's function value.
+                    const fn_ty = try self.convert(call_plan.callable_ty);
+                    const value = try self.localMethodValue(node, fn_ty);
+                    switch (call_plan.result_mode) {
+                        .value, .parser_for, .encoder_for, .hash, .map, .map_effectful => {},
+                        .equality => |equality| if (equality.negated) {
+                            try self.push(.{ .finish_low_level = .{ .op = .bool_not, .arg_count = 1, .result = result_ty } });
+                        },
+                    }
+                    try self.push(.{ .finish_erased_call = .{ .fn_ty = fn_ty, .arg_count = @intCast(operands.len), .result = if (call_plan.result_mode == .equality) try self.program.store.primitive(.bool) else result_ty } });
+                    var index = operands.len;
+                    while (index > 0) {
+                        index -= 1;
+                        try self.pushOperand(operands[index], operand_types[index]);
+                    }
+                    try self.pushValue(value);
+                    return;
+                }
                 const callee = try self.methodTargetWorker(node.target);
                 const hidden = switch (node.instantiation) {
                     // Reached through a procedure alias, the target takes the
@@ -6235,6 +6297,10 @@ pub const Builder = struct {
         switch (resolution) {
             .direct_closed, .direct_parametric => |direct| {
                 const node = table.evidenceNode(direct.evidence);
+                if (node.target.kind == .local_proc) {
+                    const fn_ty = try self.convert(callable_ty);
+                    return try self.emitErasedCall(try self.localMethodValue(node, fn_ty), fn_ty, args, result_ty);
+                }
                 const callee = try self.methodTargetWorker(node.target);
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
                 const call_fn = try self.convert(callable_ty);
