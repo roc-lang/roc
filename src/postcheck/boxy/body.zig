@@ -24,6 +24,7 @@ const lir_core = @import("lir_core");
 const types = @import("types.zig");
 const lower = @import("lower.zig");
 const Codec = @import("codec.zig");
+const Match = @import("match.zig");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
@@ -147,11 +148,11 @@ pub const Task = union(enum) {
     short_circuit: struct { is_and: bool, rhs: CheckedExprId, join: LIR.JoinPointId },
     /// Pop the scrutinee of a match and compile its branches.
     match_start: CheckedExprId,
-    /// Test branch `index` of a match against the scrutinee.
-    match_branch: struct { expr: CheckedExprId, index: u32, scrutinee: LocalId, join: ?LIR.JoinPointId },
-    /// Pop a branch guard and continue into the branch's body or the next
-    /// branch.
-    match_guard: struct { expr: CheckedExprId, index: u32, scrutinee: LocalId, join: ?LIR.JoinPointId, miss: CFStmtId },
+    /// Continue a match's decision-tree emission with the statement that
+    /// answers its outstanding request (null on its first step).
+    match_advance: struct { state: *Match.State, input: ?CFStmtId },
+    /// Pop a match guard's value into `cond`, continuing at `next`.
+    match_guard_done: struct { cond: LocalId, next: CFStmtId },
 };
 
 /// A control-flow construct's merge of the binders it reassigns (a checked
@@ -204,6 +205,9 @@ pub const Builder = struct {
     tail_calls: lir_core.TailCallBuilder,
     /// The statement emitted last, while nothing follows it.
     last_stmt: ?CFStmtId = null,
+    /// How many branching statements (terminals and joins) this body has
+    /// emitted.
+    branch_count: u32 = 0,
     name_locals: std.AutoHashMapUnmanaged(types.NameId, LocalId) = .empty,
     entry_hole: CFStmtId = undefined,
     hole: ?CFStmtId = null,
@@ -362,6 +366,7 @@ pub const Builder = struct {
         const hole = try self.currentHole();
         try self.fill(hole, stmt, .source);
         self.hole = null;
+        self.branch_count += 1;
     }
 
     pub fn emitEntry(self: *Builder, stmt: LIR.CFStmt) Allocator.Error!void {
@@ -472,6 +477,7 @@ pub const Builder = struct {
     /// Declare join `id` with `params` here; continue in its remainder, and
     /// return the hole of its body.
     pub fn declareJoin(self: *Builder, id: LIR.JoinPointId, params: []const LocalId) Allocator.Error!CFStmtId {
+        self.branch_count += 1;
         const hole = try self.currentHole();
         const body = try self.newHole();
         const remainder = try self.newHole();
@@ -1666,8 +1672,12 @@ pub const Builder = struct {
             .if_test => |test_| try self.ifTest(test_.expr, test_.index, test_.join, test_.merge),
             .match_start => |expr| try self.matchStart(expr),
             .short_circuit => |sc| try self.shortCircuit(sc.is_and, sc.rhs, sc.join),
-            .match_branch => |branch| try self.matchBranch(branch.expr, branch.index, branch.scrutinee, branch.join),
-            .match_guard => |guard| try self.matchGuard(guard.expr, guard.index, guard.scrutinee, guard.join, guard.miss),
+            .match_advance => |advance| try self.matchAdvance(advance.state, advance.input),
+            .match_guard_done => |done| {
+                const value = self.popValue();
+                try self.fill(try self.currentHole(), .{ .assign_ref = .{ .target = done.cond, .op = LIR.RefOp.local(value), .next = done.next } }, .source);
+                self.hole = null;
+            },
         }
     }
 
@@ -4145,128 +4155,173 @@ pub const Builder = struct {
     pub fn matchStart(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
         const scrutinee = self.popValue();
         const match = self.bodies().expr(expr_id).data.match_;
-        if (self.tail_exprs.contains(expr_id)) {
+        const scrutinee_ty = try self.exprType(match.cond);
+        const tail = self.tail_exprs.contains(expr_id);
+        const state = try self.program.arena.allocator().create(Match.State);
+        state.* = .{
+            .arena = std.heap.ArenaAllocator.init(self.allocator),
+            .done = self.freshJoin(),
+            .tail = tail,
+            .merge = null,
+            .remainder = undefined,
+        };
+        if (tail) {
+            // Each branch returns; nothing reads the construct's own value.
             for (match.branches) |branch| try self.tail_exprs.put(self.allocator, branch.value, {});
             try self.push(.unreachable_or_unit);
-            try self.push(.{ .match_branch = .{ .expr = expr_id, .index = 0, .scrutinee = scrutinee, .join = null } });
-            return;
+        } else {
+            const result = try self.localOf(try self.exprType(expr_id), .frame);
+            state.merge = try self.beginMerge(if (match.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{});
+            const after = try self.declareMergeJoin(state.done, result, state.merge);
+            try self.push(.{ .push_value = result });
+            if (state.merge) |m| try self.push(.{ .enter_merge = m });
+            try self.push(.{ .resume_at = after });
         }
-        const result = try self.localOf(try self.exprType(expr_id), .frame);
+        state.remainder = try self.currentHole();
+        self.hole = null;
+
+        // Every pattern of a branch is a row of the decision tree; rows of
+        // one branch share its one lowered body.
+        const arena = state.arena.allocator();
+        const ctx: Match.Ctx = .{ .b = self, .state = state };
+        var rows: std.ArrayList(Match.Compiler.Branch) = .empty;
+        for (match.branches, 0..) |branch, index| {
+            const patterns = branch.patternsSlice(self.bodies());
+            try state.alternatives.put(arena, branch.value, @intCast(patterns.len));
+            for (patterns) |alternative| try rows.append(arena, .{
+                .pat = alternative.pattern,
+                .guard = branch.guard,
+                .body = branch.value,
+                .branch_index = @intCast(index),
+            });
+        }
+        try ctx.noteScrutinee(scrutinee, scrutinee_ty);
+        const built = try Match.Compiler.build(arena, ctx, scrutinee_ty, rows.items);
+        state.emitter = try Match.Compiler.Emitter.begin(arena, ctx, built, scrutinee, state.done);
+        try self.push(.{ .match_advance = .{ .state = state, .input = null } });
+    }
+
+    /// Continue a match's decision-tree emission: lower the body, guard, or
+    /// literal guard it asks for into a fresh hole, or link the finished
+    /// tree into the match's place.
+    pub fn matchAdvance(self: *Builder, state: *Match.State, input: ?CFStmtId) Allocator.Error!void {
+        switch (try state.emitter.advance(input)) {
+            .request => |request| switch (request) {
+                .body => |requested| {
+                    const shared = (state.alternatives.get(requested.body) orelse 1) > 1;
+                    if (shared) {
+                        if (state.shared_bodies.get(requested.body)) |join| {
+                            const jump = try self.store.addCFStmt(.{ .jump = .{ .target = join } }, self.origin(.lowering_glue));
+                            return try self.push(.{ .match_advance = .{ .state = state, .input = jump } });
+                        }
+                    }
+                    const body_hole = try self.newHole();
+                    var answer = body_hole;
+                    if (shared) {
+                        // Several patterns' rows share the one lowering:
+                        // each jumps to it, its binders bound on every path.
+                        const join = self.freshJoin();
+                        try state.shared_bodies.put(state.arena.allocator(), requested.body, join);
+                        try state.shared_joins.append(state.arena.allocator(), .{ .id = join, .body = body_hole });
+                        answer = try self.store.addCFStmt(.{ .jump = .{ .target = join } }, self.origin(.lowering_glue));
+                    }
+                    try self.push(.{ .match_advance = .{ .state = state, .input = answer } });
+                    try self.pushBranchEnd(if (state.tail) null else state.done);
+                    try self.push(.{ .expr = requested.body });
+                    if (state.merge) |m| try self.push(.{ .restore_merge = m });
+                    try self.push(.{ .resume_at = body_hole });
+                },
+                .guard => |guard| {
+                    const guard_hole = try self.newHole();
+                    try self.push(.{ .match_advance = .{ .state = state, .input = guard_hole } });
+                    try self.push(.{ .match_guard_done = .{ .cond = guard.cond, .next = guard.next } });
+                    try self.push(.{ .expr = guard.guard });
+                    if (state.merge) |m| try self.push(.{ .restore_merge = m });
+                    try self.push(.{ .resume_at = guard_hole });
+                },
+                .literal_guard => |guard| {
+                    // The literal's checked equality reads the matched value
+                    // through the pattern's binder.
+                    const binder = self.bodies().pattern_binder_by_pattern[@backingInt(guard.pat)].get() orelse
+                        invariant("a converted literal pattern has no binder for its guard");
+                    try self.binders.put(self.allocator, binder, guard.value);
+                    const expr = switch (self.bodies().pattern(guard.pat).data) {
+                        .numeral_literal => |numeral| numeral.guard.?,
+                        .str_literal => |literal| literal.guard.?,
+                        else => invariant("a literal guard was asked of a non-literal pattern"),
+                    };
+                    const guard_hole = try self.newHole();
+                    try self.push(.{ .match_advance = .{ .state = state, .input = guard_hole } });
+                    try self.push(.{ .match_guard_done = .{ .cond = guard.cond, .next = guard.next } });
+                    try self.push(.{ .expr = expr });
+                    try self.push(.{ .resume_at = guard_hole });
+                },
+                // Checked branches bind nothing beyond their patterns.
+                .bindings => |bindings| try self.push(.{ .match_advance = .{ .state = state, .input = bindings.next } }),
+            },
+            .done => |tree| {
+                var head = tree;
+                for (state.shared_joins.items) |shared| head = try self.addJoinStmt(shared.id, &.{}, shared.body, head);
+                try self.fill(state.remainder, self.store.getCFStmt(head), .lowering_glue);
+                state.arena.deinit();
+            },
+        }
+    }
+
+    /// A join statement of this body, registered among its join points.
+    pub fn addJoinStmt(self: *Builder, id: LIR.JoinPointId, params: []const LocalId, body: CFStmtId, remainder: CFStmtId) Allocator.Error!CFStmtId {
+        const span = try self.store.addLocalSpan(params);
+        try self.join_points.append(self.allocator, .{ .id = id, .params = span, .body = body });
+        return try self.store.addCFStmt(.{ .join = .{ .id = id, .params = span, .body = body, .remainder = remainder } }, self.origin(.lowering_glue));
+    }
+
+    /// Start emitting statements front to back for a caller that gives
+    /// their successor afterward (`endBackward`).
+    pub fn beginBackward(self: *Builder) Allocator.Error!Backward {
+        const saved: Backward = .{ .start = try self.newHole(), .hole = self.hole, .last_stmt = self.last_stmt, .branches = self.branch_count };
+        self.hole = saved.start;
+        self.last_stmt = null;
+        return saved;
+    }
+
+    /// End statements begun by `beginBackward` at `next`: the first of them,
+    /// or `next` itself when none was emitted. A straight-line run links its
+    /// last statement to `next`; one that branched reaches `next` through a
+    /// join.
+    pub fn endBackward(self: *Builder, saved: Backward, next: CFStmtId) Allocator.Error!CFStmtId {
+        defer {
+            self.hole = saved.hole;
+            self.last_stmt = saved.last_stmt;
+        }
+        const end_hole = self.hole orelse return saved.start;
+        if (end_hole == saved.start) return next;
+        if (self.branch_count == saved.branches) {
+            const last = self.last_stmt orelse invariant("a straight-line statement run recorded no last statement");
+            var stmt = self.store.getCFStmt(last);
+            setNext(&stmt, next);
+            try self.store.replaceCFStmt(last, stmt, self.store.stmtOrigin(last));
+            return saved.start;
+        }
         const join = self.freshJoin();
-        const merge = try self.beginMerge(if (match.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{});
-        const after = try self.declareMergeJoin(join, result, merge);
-        try self.push(.{ .push_value = result });
-        if (merge) |m| try self.push(.{ .enter_merge = m });
-        try self.push(.{ .resume_at = after });
-        try self.push(.{ .match_branch = .{ .expr = expr_id, .index = 0, .scrutinee = scrutinee, .join = join } });
+        try self.fill(end_hole, .{ .jump = .{ .target = join } }, .lowering_glue);
+        return try self.addJoinStmt(join, &.{}, next, saved.start);
     }
 
-    pub fn matchBranch(self: *Builder, expr_id: CheckedExprId, index: u32, scrutinee: LocalId, join: ?LIR.JoinPointId) Allocator.Error!void {
-        const match = self.bodies().expr(expr_id).data.match_;
-        if (index >= match.branches.len) {
-            // Exhaustive by checking: no value reaches past the last branch.
-            try self.emitTerminal(.runtime_error);
-            return;
-        }
-        const branch = match.branches[index];
-        if (join) |id| if (self.join_infos.items[@backingInt(id)].merge) |m| try self.restoreMerge(m);
-        const patterns = branch.patternsSlice(self.bodies());
-        if (patterns.len != 1) return try self.matchAlternatives(expr_id, index, scrutinee, join);
-        const miss = try self.newHole();
-        try self.testPattern(patterns[0].pattern, scrutinee, try self.exprType(match.cond), miss);
-        if (branch.guard) |guard| {
-            try self.push(.{ .match_guard = .{ .expr = expr_id, .index = index, .scrutinee = scrutinee, .join = join, .miss = miss } });
-            try self.push(.{ .expr = guard });
-            return;
-        }
-        try self.push(.{ .match_branch = .{ .expr = expr_id, .index = index + 1, .scrutinee = scrutinee, .join = join } });
-        try self.push(.{ .resume_at = miss });
-        try self.pushBranchEnd(join);
-        try self.push(.{ .expr = branch.value });
+    /// End statements begun by `beginBackward` that ended in a terminal:
+    /// the first of them.
+    pub fn endBackwardTerminal(self: *Builder, saved: Backward) CFStmtId {
+        if (self.hole != null) invariant("a statement run expected to end in a terminal falls through");
+        self.hole = saved.hole;
+        self.last_stmt = saved.last_stmt;
+        return saved.start;
     }
 
-    /// A branch of alternative patterns: each alternative that matches
-    /// jumps to the branch's one body with the values it bound, and the last
-    /// one's miss continues to the next branch.
-    pub fn matchAlternatives(self: *Builder, expr_id: CheckedExprId, index: u32, scrutinee: LocalId, join: ?LIR.JoinPointId) Allocator.Error!void {
-        const match = self.bodies().expr(expr_id).data.match_;
-        const branch = match.branches[index];
-        if (branch.guard != null) invariant("guarded match branches with alternative patterns are not yet lowered by Boxy");
-        const patterns = branch.patternsSlice(self.bodies());
-        const scrutinee_ty = try self.exprType(match.cond);
-        var bound: std.ArrayList(BoundBinder) = .empty;
-        defer bound.deinit(self.allocator);
-        try self.patternBinders(patterns[0].pattern, &bound);
-        const params = try self.allocator.alloc(LocalId, bound.items.len);
-        defer self.allocator.free(params);
-        for (bound.items, params) |binder, *param| param.* = try self.localOf(try self.patternType(binder.pattern), .frame);
-        const body_join = self.freshJoin();
-        const body_hole = try self.declareJoin(body_join, params);
-        for (patterns) |alternative| {
-            const miss = try self.newHole();
-            try self.testPattern(alternative.pattern, scrutinee, scrutinee_ty, miss);
-            for (bound.items, params) |binder, param| {
-                const value = self.binders.get(binder.binder) orelse invariant("an alternative pattern does not bind a binder its branch binds");
-                try self.emitLinear(.{ .set_local = .{ .target = param, .value = value, .mode = .initialize_join_param, .next = undefined } });
-            }
-            try self.emitTerminal(.{ .jump = .{ .target = body_join } });
-            self.hole = miss;
-        }
-        const next_branch = self.hole.?;
-        self.hole = body_hole;
-        for (bound.items, params) |binder, param| try self.binders.put(self.allocator, binder.binder, param);
-        try self.push(.{ .match_branch = .{ .expr = expr_id, .index = index + 1, .scrutinee = scrutinee, .join = join } });
-        try self.push(.{ .resume_at = next_branch });
-        try self.pushBranchEnd(join);
-        try self.push(.{ .expr = branch.value });
-    }
-
-    pub const BoundBinder = struct { binder: checked.PatternBinderId, pattern: CheckedPatternId };
-
-    /// The binders a pattern binds, with the patterns that bind them.
-    pub fn patternBinders(self: *Builder, root: CheckedPatternId, out: *std.ArrayList(BoundBinder)) Allocator.Error!void {
-        var pending: std.ArrayList(CheckedPatternId) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, root);
-        while (pending.pop()) |pattern_id| {
-            switch (self.bodies().pattern(pattern_id).data) {
-                .assign => |binder| try out.append(self.allocator, .{ .binder = binder, .pattern = pattern_id }),
-                .as => |as| {
-                    try out.append(self.allocator, .{ .binder = as.binder, .pattern = pattern_id });
-                    try pending.append(self.allocator, as.pattern);
-                },
-                .applied_tag => |tag| try pending.appendSlice(self.allocator, tag.args),
-                .nominal => |nominal| try pending.append(self.allocator, nominal.backing_pattern),
-                .record_destructure => |destructs| for (destructs) |destruct| switch (destruct.kind) {
-                    inline else => |sub| try pending.append(self.allocator, sub),
-                },
-                .list => |list| {
-                    try pending.appendSlice(self.allocator, list.patterns);
-                    if (list.rest) |rest| if (rest.pattern) |sub| try pending.append(self.allocator, sub);
-                },
-                .tuple => |items| try pending.appendSlice(self.allocator, items),
-                .str_interpolation => |interpolation| for (interpolation.steps) |piece| if (piece.capture) |sub| try pending.append(self.allocator, sub),
-                .numeral_literal, .str_literal, .underscore, .runtime_error, .pending => {},
-            }
-        }
-    }
-
-    pub fn matchGuard(self: *Builder, expr_id: CheckedExprId, index: u32, scrutinee: LocalId, join: ?LIR.JoinPointId, miss: CFStmtId) Allocator.Error!void {
-        const match = self.bodies().expr(expr_id).data.match_;
-        try self.branchOrMiss(self.popValue(), miss);
-        try self.push(.{ .match_branch = .{ .expr = expr_id, .index = index + 1, .scrutinee = scrutinee, .join = join } });
-        try self.push(.{ .resume_at = miss });
-        try self.pushBranchEnd(join);
-        try self.push(.{ .expr = match.branches[index].value });
-    }
+    pub const Backward = struct { start: CFStmtId, hole: ?CFStmtId, last_stmt: ?CFStmtId, branches: u32 };
 
     /// Emit tests that `value` matches `pattern`, branching to `miss` when it
-    /// does not, and bind the pattern's binders. Continues in the matched
-    /// path.
-    /// Test `root_value`, of type `root_ty`, against a pattern, binding its
-    /// binders. Every sub-value takes its type from the value it is read
-    /// from: a pattern's own checked type can be a narrower row than the
-    /// value's.
+    /// does not, and bind the pattern's binders: a destructuring pattern
+    /// outside a match (a parameter, a declaration, a loop's pattern).
+    /// Continues in the matched path.
     pub fn testPattern(self: *Builder, root_pattern: CheckedPatternId, root_value: LocalId, root_ty: TypeId, miss: CFStmtId) Allocator.Error!void {
         var pending: std.ArrayList(PatternItem) = .empty;
         defer pending.deinit(self.allocator);
@@ -4655,18 +4710,22 @@ pub const Builder = struct {
     /// Field `semantic_index` (of type `field_ty`) of the record or tuple
     /// `base` of type `ty`, as a borrowed read.
     pub fn readField(self: *Builder, ty: TypeId, base_local: LocalId, semantic_index: u32, field_ty: TypeId) Allocator.Error!LocalId {
+        const local = try self.localOf(field_ty, if (try self.closed(ty)) .frame else .view);
+        try self.readFieldInto(local, ty, base_local, semantic_index, field_ty);
+        return local;
+    }
+
+    /// `readField` into `target`.
+    pub fn readFieldInto(self: *Builder, target: LocalId, ty: TypeId, base_local: LocalId, semantic_index: u32, field_ty: TypeId) Allocator.Error!void {
         if (try self.closed(ty)) {
             const base_layout = self.store.getLocal(base_local).layout_idx;
             if (self.program.result.layouts.getLayout(base_layout).tag != .struct_) {
-                const local = try self.localOf(field_ty, .frame);
-                try self.emitLinear(.{ .assign_ref = .{ .target = local, .op = LIR.RefOp.field(base_local, semantic_index), .next = undefined } });
-                return local;
+                try self.emitLinear(.{ .assign_ref = .{ .target = target, .op = LIR.RefOp.field(base_local, semantic_index), .next = undefined } });
+                return;
             }
-            return try self.readSlot(LIR.RefOp.field(base_local, semantic_index), field_ty, self.structFieldLayout(base_layout, semantic_index));
+            return try self.readSlotInto(target, LIR.RefOp.field(base_local, semantic_index), field_ty, self.structFieldLayout(base_layout, semantic_index));
         }
-        const local = try self.localOf(field_ty, .view);
-        try self.emitDyn(local, .{ .field_addr = .{ .base = base_local, .desc = try self.descOf(ty), .semantic_index = semantic_index } });
-        return local;
+        try self.emitDyn(target, .{ .field_addr = .{ .base = base_local, .desc = try self.descOf(ty), .semantic_index = semantic_index } });
     }
 
     /// Test that the dynamic tag union `value` holds tag `name`, and queue
@@ -4988,28 +5047,39 @@ pub const Builder = struct {
     /// Read the component at `op`, stored at `slot`, as a value of `ty`:
     /// unboxed when the slot is a recursion box.
     pub fn readSlot(self: *Builder, op: LIR.RefOp, ty: TypeId, slot: layout.Idx) Allocator.Error!LocalId {
+        const local = try self.localOf(ty, .frame);
+        try self.readSlotInto(local, op, ty, slot);
+        return local;
+    }
+
+    /// `readSlot` into `target`.
+    pub fn readSlotInto(self: *Builder, target: LocalId, op: LIR.RefOp, ty: TypeId, slot: layout.Idx) Allocator.Error!void {
         if (!try self.isRecursionBox(slot, ty)) {
-            const local = try self.localOf(ty, .frame);
-            try self.emitLinear(.{ .assign_ref = .{ .target = local, .op = op, .next = undefined } });
-            return local;
+            try self.emitLinear(.{ .assign_ref = .{ .target = target, .op = op, .next = undefined } });
+            return;
         }
         const boxed = try self.closedLocal(slot);
         try self.emitLinear(.{ .assign_ref = .{ .target = boxed, .op = op, .next = undefined } });
-        const local = try self.localOf(ty, .frame);
-        try self.emitLowLevel(local, .box_unbox, &.{boxed});
-        return local;
+        try self.emitLowLevel(target, .box_unbox, &.{boxed});
     }
 
     /// Payload `index` of variant `variant` (with payload types `payloads`)
     /// of the closed tag union `value` of type `union_ty`.
     pub fn readTagPayload(self: *Builder, value: LocalId, union_ty: TypeId, variant: usize, payloads: []const TypeId, index: usize) Allocator.Error!LocalId {
+        const local = try self.localOf(payloads[index], .frame);
+        try self.readTagPayloadInto(local, value, union_ty, variant, payloads, index);
+        return local;
+    }
+
+    /// `readTagPayload` into `target`.
+    pub fn readTagPayloadInto(self: *Builder, target: LocalId, value: LocalId, union_ty: TypeId, variant: usize, payloads: []const TypeId, index: usize) Allocator.Error!void {
         const payload_layout = try self.variantPayloadLayout(union_ty, variant);
         const whole = LIR.RefOp.tagPayloadStruct(value, @intCast(variant), @intCast(variant));
-        if (payloads.len == 1) return try self.readSlot(whole, payloads[0], payload_layout);
+        if (payloads.len == 1) return try self.readSlotInto(target, whole, payloads[0], payload_layout);
         const payload_struct = try self.closedLocal(payload_layout);
         try self.emitLinear(.{ .assign_ref = .{ .target = payload_struct, .op = whole, .next = undefined } });
         const field_layout = self.structFieldLayout(payload_layout, @intCast(index));
-        return try self.readSlot(LIR.RefOp.field(payload_struct, @intCast(index)), payloads[index], field_layout);
+        try self.readSlotInto(target, LIR.RefOp.field(payload_struct, @intCast(index)), payloads[index], field_layout);
     }
 
     /// The committed layout of field `index` (by semantic index) of the

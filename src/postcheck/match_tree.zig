@@ -1,8 +1,9 @@
 //! Decision-tree match compiler for LIR lowering.
 //!
 //! The direct solved-to-LIR lowering (`.lss`) reads Lambda Solved patterns
-//! through its `MatchTreeCtx`. A lowerer gets the sharing invariant and the
-//! statement-count lint below.
+//! through its `MatchTreeCtx`, and `.boxy` lowering reads checked patterns
+//! through its `Ctx` (`boxy/match.zig`). A lowerer gets the sharing
+//! invariant and the statement-count lint below.
 //!
 //! This module turns a `match` (a list of branches, each a pattern plus an
 //! optional guard and a body) into an explicit decision tree that the host

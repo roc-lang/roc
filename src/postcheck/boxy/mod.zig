@@ -7,6 +7,7 @@ pub const RowJoins = @import("row_joins.zig");
 pub const Layouts = @import("layouts.zig");
 pub const StaticDescs = @import("static_descs.zig");
 pub const Body = @import("body.zig");
+pub const Match = @import("match.zig");
 
 pub const run = Lower.run;
 pub const Input = Lower.Input;
