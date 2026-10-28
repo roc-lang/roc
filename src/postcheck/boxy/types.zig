@@ -103,6 +103,9 @@ pub const FieldKind = enum(u8) {
     presence_slot,
 };
 
+/// A field of a record type, by the record's type and the field's name.
+pub const FieldDefaultKey = struct { record: TypeId, name: NameId };
+
 pub const Field = struct {
     name: NameId,
     ty: TypeId,
@@ -199,6 +202,9 @@ pub const Store = struct {
     closed_memo: std.AutoHashMapUnmanaged(ClosedKey, TypeId) = .empty,
     /// The backing of each instantiated nominal node.
     backing_memo: std.AutoHashMapUnmanaged(TypeId, TypeId) = .empty,
+    /// The `??` default identity of each defaulted field of a record type
+    /// conversion produced (design.md "Defaulted Fields").
+    field_defaults: std.AutoHashMapUnmanaged(FieldDefaultKey, checked.CheckedFieldDefault) = .empty,
     /// `Converter.representationClosed` of each type asked about.
     representation_closed: std.AutoHashMapUnmanaged(TypeId, bool) = .empty,
     /// Each module's nominal declarations by nominal key, filled once per
@@ -255,6 +261,7 @@ pub const Store = struct {
         self.closed_memo.deinit(self.allocator);
         self.backing_memo.deinit(self.allocator);
         self.representation_closed.deinit(self.allocator);
+        self.field_defaults.deinit(self.allocator);
         self.decl_by_key.deinit(self.allocator);
         self.decl_keys_indexed.deinit(self.allocator);
     }
@@ -722,16 +729,20 @@ pub const Converter = struct {
             .record => |record| {
                 var fields: std.ArrayList(Field) = .empty;
                 defer fields.deinit(allocator);
+                var defaults: std.ArrayList(struct { name: NameId, default: checked.CheckedFieldDefault }) = .empty;
+                defer defaults.deinit(allocator);
                 var child_index: usize = 0;
                 var current_fields = record.fields;
                 var current = record.ext;
                 while (true) {
                     for (current_fields) |field| {
+                        const field_name = try self.store.internName(name_store.recordFieldLabelText(field.name));
                         try fields.append(allocator, .{
-                            .name = try self.store.internName(name_store.recordFieldLabelText(field.name)),
+                            .name = field_name,
                             .ty = children[child_index],
                             .kind = self.fieldKind(field.kind),
                         });
+                        if (field.kind.tag == .defaulted) try defaults.append(allocator, .{ .name = field_name, .default = field.kind.default });
                         child_index += 1;
                     }
                     current_fields = &.{};
@@ -765,7 +776,9 @@ pub const Converter = struct {
                         return s.nameLessThan(a.name, b.name);
                     }
                 }.lessThan);
-                return try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext } });
+                const record_ty = try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext } });
+                for (defaults.items) |entry| try self.store.field_defaults.put(allocator, .{ .record = record_ty, .name = entry.name }, entry.default);
+                return record_ty;
             },
             .tag_union => |tag_union| {
                 var tags: std.ArrayList(TagInput) = .empty;

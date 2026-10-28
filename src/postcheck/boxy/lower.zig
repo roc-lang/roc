@@ -54,6 +54,9 @@ pub const Output = struct {
 pub const WorkerKey = union(enum) {
     /// A procedure template.
     template: struct { module: ModuleIndex, template: canonical.CheckedProcedureTemplateId },
+    /// The `??` default expression `expr` of `module`, evaluated where a
+    /// construction omits its field (design.md "Defaulted Fields").
+    default: struct { module: ModuleIndex, expr: checked.CheckedExprId },
     /// A lambda or closure expression of the worker `outer`, whose scope
     /// (its type variables and their descriptors) it shares through its
     /// captures.
@@ -137,6 +140,9 @@ pub const LocalScheme = struct {
     per_call: bool,
 };
 
+/// A field a record construction omits.
+pub const OmittedField = struct { module: ModuleIndex, expr: checked.CheckedExprId, name: types.NameId };
+
 /// A checked expression by its module in this lowering.
 pub const ExprKey = struct { module: ModuleIndex, expr: checked.CheckedExprId };
 
@@ -172,6 +178,10 @@ pub const Program = struct {
     local_scopes: std.AutoHashMapUnmanaged(ExprKey, checked.DispatchScopeId) = .empty,
     /// The lambda and closure expressions local procedures bind.
     local_procs: std.AutoHashMapUnmanaged(ExprKey, void) = .empty,
+    /// Modules by their stable identity hash.
+    by_identity: std.AutoHashMapUnmanaged([32]u8, ModuleIndex) = .empty,
+    /// The default a record construction that omits a field materializes.
+    omitted_defaults: std.AutoHashMapUnmanaged(OmittedField, checked.CheckedFieldDefault) = .empty,
     /// The generated codec families and their workers.
     codec: Codec.State = .{},
 
@@ -311,6 +321,33 @@ pub const Program = struct {
         return id;
     }
 
+    /// The worker evaluating default expression `expr` of `module_index`.
+    pub fn defaultWorker(self: *Program, module_index: ModuleIndex, expr: checked.CheckedExprId) Allocator.Error!WorkerId {
+        const key: WorkerKey = .{ .default = .{ .module = module_index, .expr = expr } };
+        if (self.worker_ids.get(key)) |existing| return existing;
+        const view = self.module(module_index);
+        const ret = try self.converter().convert(module_index, view.bodies().expr(expr).ty, .{ .module = module_index, .vars = &.{}, .bound = &.{} });
+        const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
+        const proc = try self.result.store.addProcSpec(.{
+            .name = self.result.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.programLocal("boxy.default", @backingInt(id)),
+            .args = .empty(),
+            .ret_layout = .zst,
+        }, base.SourceLoc.none);
+        try self.workers.append(self.allocator, .{
+            .key = key,
+            .proc = proc,
+            .module = module_index,
+            .scheme_vars = &.{},
+            .dictionary_params = &.{},
+            .params = &.{},
+            .ret = ret,
+        });
+        try self.worker_ids.put(self.allocator, key, id);
+        try self.worklist.append(self.allocator, id);
+        return id;
+    }
+
     /// The wrapper of root request `index` (see `WorkerKey.root`).
     pub fn rootWorker(self: *Program, index: u32, request: checked.RootRequest, module_index: ModuleIndex) Allocator.Error!WorkerId {
         const key: WorkerKey = .{ .root = index };
@@ -442,6 +479,8 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.hosted.deinit(allocator);
         program.local_scopes.deinit(allocator);
         program.local_procs.deinit(allocator);
+        program.by_identity.deinit(allocator);
+        program.omitted_defaults.deinit(allocator);
         program.codec.deinit(allocator);
         program.arena.deinit();
     }
@@ -473,6 +512,11 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                 .closure => |closure| try program.local_scopes.put(allocator, .{ .module = view.index, .expr = closure.lambda }, id),
                 else => {},
             }
+        }
+        try program.by_identity.put(allocator, view.view.module_identity.stable_hash, view.index);
+        for (bodies.record_omitted_defaults) |omitted| {
+            const name = try program.store.internName(view.nameStore().recordFieldLabelText(omitted.field_name));
+            try program.omitted_defaults.put(allocator, .{ .module = view.index, .expr = omitted.expr, .name = name }, omitted.default);
         }
         // A local procedure's uses all reach it through its binding, so its
         // own scheme's arguments are passed per call.

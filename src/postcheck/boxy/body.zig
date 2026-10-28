@@ -666,6 +666,7 @@ pub const Builder = struct {
             .method_entry => |target| return try self.lowerMethodEntry(target),
             .structural => |method| return try self.lowerStructuralMethod(method),
             .root => return try self.lowerRootWrapper(),
+            .default => |key| return try self.lowerDefaultBody(key.expr),
             .codec => |piece| return try Codec.lowerPiece(self, piece),
         };
         // Signature: explicit parameters, then hidden descriptors and
@@ -1074,6 +1075,36 @@ pub const Builder = struct {
         }
         try self.run();
         try self.finishProc(entry, body_start, params, ret_layout);
+    }
+
+    /// A default expression's worker: the expression, in no scope.
+    pub fn lowerDefaultBody(self: *Builder, expr: CheckedExprId) Allocator.Error!void {
+        const worker = self.currentWorker().*;
+        self.entry_hole = try self.newHole();
+        const entry = self.entry_hole;
+        self.var_descs = &.{};
+        self.dict_locals = &.{};
+        const ret_layout = try self.program.layouts.layoutOf(worker.ret);
+        const body_start = try self.newHole();
+        self.hole = body_start;
+        try self.tasks.append(self.allocator, .ret);
+        try self.tasks.append(self.allocator, .{ .expr = expr });
+        try self.run();
+        try self.finishProc(entry, body_start, &.{}, ret_layout);
+    }
+
+    /// The value of the `??` default `default`: its declaring module's
+    /// default expression, evaluated now.
+    pub fn defaultValue(self: *Builder, default: checked.CheckedFieldDefault) Allocator.Error!LocalId {
+        const origin_module = default.origin() orelse invariant("a field default has no declaring module");
+        const module_index = self.program.by_identity.get(self.view.nameStore().moduleIdentityBytes(origin_module).*) orelse
+            invariant("a field default's declaring module is not in this lowering");
+        const expr = self.program.module(module_index).bodies().defaultExpr(default.expr_node) orelse
+            invariant("a field default's expression was not archived");
+        const worker = try self.program.defaultWorker(module_index, expr);
+        const target = try self.localOf(self.program.worker(worker).ret, .frame);
+        try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(worker).proc, .args = LIR.LocalSpan.empty(), .next = undefined } });
+        return target;
     }
 
     pub fn lowerMethodEntry(self: *Builder, target: WorkerId) Allocator.Error!void {
@@ -3259,7 +3290,8 @@ pub const Builder = struct {
         for (fields, ordered, slots) |field, value, *slot| {
             slot.* = value orelse switch (field.kind) {
                 .presence_slot => try self.buildTag(try self.program.layouts.presenceSlot(field.ty), try self.program.store.internName(@import("layouts.zig").missing_label), &.{}),
-                .inline_slot => invariant("record construction omitting a defaulted field is not yet lowered by Boxy"),
+                .inline_slot => try self.defaultValue(self.program.omitted_defaults.get(.{ .module = self.module, .expr = expr_id, .name = field.name }) orelse
+                    invariant("a record construction omits a field it has no default for")),
             };
         }
         try self.pushValue(try self.buildStruct(ty, slots));
