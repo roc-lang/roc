@@ -5959,12 +5959,16 @@ pub const Builder = struct {
     }
 
     /// The committed layout of field `index` (by semantic index) of the
-    /// struct layout `struct_layout`.
+    /// struct layout `struct_layout`. Every field of a zero-sized struct is
+    /// zero-sized.
     pub fn structFieldLayout(self: *Builder, struct_layout: layout.Idx, index: u32) layout.Idx {
         const layouts = &self.program.result.layouts;
         const committed = layouts.getLayout(struct_layout);
-        if (committed.tag != .struct_) invariant("a component read names a field of a non-struct layout");
-        return layouts.getStructFieldLayoutByOriginalIndex(committed.getStruct().idx, index);
+        return switch (committed.tag) {
+            .struct_ => layouts.getStructFieldLayoutByOriginalIndex(committed.getStruct().idx, index),
+            .zst => .zst,
+            else => invariant("a component read names a field of a layout that is neither a struct nor zero-sized"),
+        };
     }
 
     /// Field `name` of the record `value`.
