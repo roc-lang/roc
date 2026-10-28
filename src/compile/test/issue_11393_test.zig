@@ -38,6 +38,8 @@ fn runNavigate(lowered: *const lir.CheckedPipeline.LoweredProgram) HostRunError!
     host_ops.hosted_fns = .{ .count = 1, .fns = &hosted_fns };
 
     const program = &lowered.lir_result;
+    var static_data = try harness.interpreterStaticData(lowered);
+    defer if (static_data) |*data| data.deinit();
     var static_strings = try eval.LirInterpreter.buildStaticStrings(std.testing.allocator, &program.store);
     defer static_strings.deinit();
     var interpreter = try eval.LirInterpreter.init(
@@ -48,6 +50,10 @@ fn runNavigate(lowered: *const lir.CheckedPipeline.LoweredProgram) HostRunError!
         host_ops,
     );
     defer interpreter.deinit();
+    if (static_data) |*data| {
+        data.install(&interpreter);
+        data.ownByInterpreter(&interpreter);
+    }
 
     try std.testing.expectEqual(@as(usize, 1), program.root_procs.items.len);
     const root_id = program.root_procs.items[0];

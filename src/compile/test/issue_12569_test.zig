@@ -27,10 +27,16 @@ fn inspect(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLi
     try std.testing.expect(erased_workers != 0);
     var host = eval.RuntimeHostEnv.init(std.testing.allocator);
     defer host.deinit();
+    var static_data = try harness.interpreterStaticData(lowered);
+    defer if (static_data) |*data| data.deinit();
     var strings = try eval.LirInterpreter.buildStaticStrings(std.testing.allocator, &result.store);
     defer strings.deinit();
     var interpreter = try eval.LirInterpreter.init(std.testing.allocator, &result.store, &result.layouts, strings.view(), host.get_ops());
     defer interpreter.deinit();
+    if (static_data) |*data| {
+        data.install(&interpreter);
+        data.ownByInterpreter(&interpreter);
+    }
     const root_id = result.root_procs.items[0];
     const root = result.store.getProcSpec(root_id);
     const args = result.store.getLocalSpan(root.args);

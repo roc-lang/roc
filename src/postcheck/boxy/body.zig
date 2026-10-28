@@ -856,6 +856,7 @@ pub const Builder = struct {
             .adapter => |key| return try self.lowerAdapterBody(key.from),
             .method_entry => |target| return try self.lowerMethodEntry(target),
             .structural => |method| return try self.lowerStructuralMethod(method),
+            .structural_map => |map| return try self.lowerStructuralMap(map),
             .root => return try self.lowerRootWrapper(),
             .default => |key| return try self.lowerDefaultBody(key.expr),
             .codec => |piece| return try Codec.lowerPiece(self, piece),
@@ -1511,6 +1512,67 @@ pub const Builder = struct {
         try self.runErasedBody(&start, worker.params, worker.ret, .{ .structural = method });
     }
 
+    /// A derived map over the tag union its first captured descriptor
+    /// describes: the selected variant's payloads are read, its selected
+    /// payload transformed, and the variant rebuilt under the output
+    /// union's descriptor; any other variant is re-tagged by name, its
+    /// payloads unchanged.
+    pub fn lowerStructuralMap(self: *Builder, map: lower.StructuralMap) Allocator.Error!void {
+        const worker = self.currentWorker().*;
+        const field_layouts = try self.allocator.alloc(layout.Idx, worker.structural_descs);
+        defer self.allocator.free(field_layouts);
+        @memset(field_layouts, .opaque_ptr);
+        var start = try self.beginErasedWorker(field_layouts);
+        defer self.allocator.free(start.captures);
+        self.var_descs = try self.program.arena.allocator().dupe(LocalId, start.captures);
+        try self.runErasedBody(&start, worker.params, worker.ret, .{ .structural_map = map });
+    }
+
+    /// The two branches of a derived map over `input` (of the structural
+    /// type parameter `input_ty`) with `transform`: each returns the
+    /// worker's result of type `output_ty`.
+    fn structuralMapBranches(self: *Builder, map: lower.StructuralMap, input: LocalId, transform: LocalId, input_ty: TypeId, output_ty: TypeId) Allocator.Error!void {
+        const store = &self.program.store;
+        const input_desc = self.var_descs[0];
+        const output_desc = self.var_descs[1];
+        const name = try self.nameDesc(map.name);
+        const discriminant = try self.closedLocal(.u32);
+        try self.emitDyn(discriminant, .{ .tag_discriminant = .{ .base = input, .desc = input_desc } });
+        const selected = try self.closedLocal(.u32);
+        try self.emitDyn(selected, .{ .tag_discriminant_of = .{ .desc = input_desc, .name = name } });
+        const is_selected = try self.closedLocal(.bool);
+        try self.emitLowLevel(is_selected, .num_is_eq, &.{ discriminant, selected });
+        const holes = try self.emitBoolSwitch(is_selected);
+
+        self.hole = holes.then;
+        const payloads = try self.allocator.alloc(LocalId, map.arity);
+        defer self.allocator.free(payloads);
+        for (payloads, 0..) |*payload, index| {
+            const payload_ty = try store.variable(@intCast(2 + index));
+            const view = try self.localOf(payload_ty, .view);
+            try self.emitDyn(view, .{ .tag_payload_addr = .{ .base = input, .desc = input_desc, .name = name, .payload_index = @intCast(index) } });
+            const copy = try self.localOf(payload_ty, .frame);
+            try self.emitDyn(copy, .{ .copy = .{ .src = view, .desc = self.var_descs[2 + index] } });
+            payload.* = copy;
+        }
+        const transform_ty = try store.intern(.{ .function = .{
+            .args = &.{try store.variable(2 + map.payload_index)},
+            .ret = try store.variable(2 + map.arity),
+            .effectful = map.effectful,
+        } });
+        payloads[map.payload_index] = try self.emitErasedCall(transform, transform_ty, &.{payloads[map.payload_index]}, try store.variable(2 + map.arity));
+        const mapped = try self.localOf(output_ty, .frame);
+        try self.emitDyn(mapped, .{ .tag = .{ .desc = output_desc, .name = name, .payloads = try self.store.addLocalSpan(payloads) } });
+        try self.pushValue(mapped);
+        try self.step(.ret);
+
+        self.hole = holes.otherwise;
+        const unchanged = try self.localOf(output_ty, .frame);
+        try self.emitDyn(unchanged, .{ .adapt = .{ .src = input, .from = try self.descOf(input_ty), .to = output_desc } });
+        try self.pushValue(unchanged);
+        try self.step(.ret);
+    }
+
     /// A crashing dictionary method: it crashes as the dispatch it stands
     /// for would.
     pub fn lowerCrashDictionary(self: *Builder, kind: lower.CrashDictionary) Allocator.Error!void {
@@ -1545,6 +1607,7 @@ pub const Builder = struct {
     pub const ErasedBody = union(enum) {
         call: struct { target: WorkerId, hidden: []const LocalId },
         structural: lower.StructuralMethod,
+        structural_map: lower.StructuralMap,
     };
 
     pub fn runErasedBody(self: *Builder, start: *ErasedStart, params: []const TypeId, ret: TypeId, body: ErasedBody) Allocator.Error!void {
@@ -1568,7 +1631,7 @@ pub const Builder = struct {
         const values = try self.allocator.alloc(LocalId, params.len);
         defer self.allocator.free(values);
         for (values, params, 0..) |*value, param_ty, index| value.* = try self.argsRecordField(params, record.?, @intCast(index), param_ty);
-        const result = switch (body) {
+        const result: ?LocalId = switch (body) {
             .call => |call| blk: {
                 const all = try std.mem.concat(self.allocator, LocalId, &.{ values, call.hidden });
                 defer self.allocator.free(all);
@@ -1585,9 +1648,15 @@ pub const Builder = struct {
                 }
                 break :blk target;
             },
+            .structural_map => |map| blk: {
+                try self.structuralMapBranches(map, values[0], values[1], params[0], ret);
+                break :blk null;
+            },
         };
-        try self.pushValue(result);
-        try self.step(.ret);
+        if (result) |value| {
+            try self.pushValue(value);
+            try self.step(.ret);
+        }
         try args.append(self.allocator, start.capture_ptr);
         try self.finishProc(start.entry, body_start, args.items, ret_layout);
         const proc = self.store.getProcSpecPtr(worker.proc);
@@ -3542,7 +3611,7 @@ pub const Builder = struct {
                     .equality => .is_eq,
                     .hash => .to_hash,
                     .parser, .encoder => return try Codec.dictionary(self, structural),
-                    else => invariantFmt("structural {s} dictionaries are not yet lowered by Boxy", .{@tagName(structural.derivation)}),
+                    .map, .map_effectful => |plan| return try self.structuralMapDictionary(plan, structural.derivation == .map_effectful, try self.convert(structural.callable_ty)),
                 };
                 const entry = try self.program.structuralWorker(self.module, method);
                 const desc = try self.descOf(try self.convert(structural.dispatcher_ty));
@@ -3552,6 +3621,44 @@ pub const Builder = struct {
             .unreachable_value => return try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .unreachable_value), &.{}),
             else => invariantFmt("{s} dictionary evidence is not yet lowered by Boxy", .{@tagName(evidence.resolution)}),
         }
+    }
+
+    /// The dictionary of a derived map with the checked selection `plan`,
+    /// at the function type `fn_ty` (`input, transform -> output`): its
+    /// worker captures the descriptors of the input and output unions, of
+    /// the selected variant's payloads, and of the transformed payload.
+    pub fn structuralMapDictionary(self: *Builder, plan: static_dispatch.DerivedMapPlan, effectful: bool, fn_ty: TypeId) Allocator.Error!LocalId {
+        const store = &self.program.store;
+        const function = switch (store.get(fn_ty)) {
+            .function => |value| value,
+            else => invariant("a derived map's callable type is not a function type"),
+        };
+        const args = try self.allocator.dupe(TypeId, store.span(function.args));
+        defer self.allocator.free(args);
+        if (args.len != 2) invariant("a derived map does not take a value and a transform");
+        const transform = switch (store.get(args[1])) {
+            .function => |value| value,
+            else => invariant("a derived map's transform is not a function"),
+        };
+        const mapped = transform.ret;
+        const name = try store.internName(self.view.nameStore().tagLabelText(plan.tag));
+        const input_union = switch (store.get(try self.structuralType(args[0]))) {
+            .tag_union => |value| value,
+            else => invariant("a derived map's input is not a tag union"),
+        };
+        const payload_types: []const TypeId = for (store.tagSpan(input_union.tags)) |tag| {
+            if (tag.name == name) break try self.allocator.dupe(TypeId, store.span(tag.payloads));
+        } else invariant("a derived map's selected tag is not in its input row");
+        defer self.allocator.free(payload_types);
+        if (plan.payload_index >= payload_types.len) invariant("a derived map's selected payload is past its tag's payloads");
+        const map: lower.StructuralMap = .{ .name = name, .payload_index = plan.payload_index, .arity = @intCast(payload_types.len), .effectful = effectful };
+        const descs = try self.allocator.alloc(LocalId, 3 + payload_types.len);
+        defer self.allocator.free(descs);
+        descs[0] = try self.descOf(args[0]);
+        descs[1] = try self.descOf(function.ret);
+        for (payload_types, descs[2..][0..payload_types.len]) |ty, *desc| desc.* = try self.descOf(ty);
+        descs[2 + payload_types.len] = try self.descOf(mapped);
+        return try self.composeDictionary(try self.program.structuralMapWorker(self.module, map), descs);
     }
 
     /// The hidden descriptors of a target the checker instantiated by
@@ -3843,7 +3950,18 @@ pub const Builder = struct {
                     try self.push(.{ .expr = lhs });
                 },
                 .parser, .encoder => try Codec.dispatch(self, call_plan, operands, operand_types, result_ty),
-                else => invariantFmt("structural {s} dispatch is not yet lowered by Boxy", .{@tagName(derivation)}),
+                .map, .map_effectful => |plan| {
+                    // A derived map is a call of its dictionary.
+                    const fn_ty = try self.convert(call_plan.callable_ty);
+                    const dict = try self.structuralMapDictionary(plan, derivation == .map_effectful, fn_ty);
+                    try self.push(.{ .finish_erased_call = .{ .fn_ty = fn_ty, .arg_count = @intCast(operands.len), .result = result_ty } });
+                    var index = operands.len;
+                    while (index > 0) {
+                        index -= 1;
+                        try self.pushOperand(operands[index], operand_types[index]);
+                    }
+                    try self.pushValue(dict);
+                },
             },
             .evidence_dependent => |dependent| {
                 const dict = self.scopeDictionary(dependent.index);

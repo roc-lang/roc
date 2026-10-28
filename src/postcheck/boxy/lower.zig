@@ -80,6 +80,10 @@ pub const WorkerKey = union(enum) {
     /// A compiler-derived structural method over the descriptor its
     /// dictionary captures.
     structural: StructuralMethod,
+    /// A derived `map`/`map!` over the tag union its dictionary describes:
+    /// the variant `name` of `arity` payloads has payload `payload_index`
+    /// transformed, every other value is re-tagged unchanged.
+    structural_map: StructuralMap,
     /// The host-visible wrapper of root request `index`: it takes the
     /// root's checked arguments, supplies the static descriptors and
     /// dictionaries the root's instantiation names, and calls its target
@@ -98,6 +102,11 @@ pub const CrashDictionary = enum { checked_error, unreachable_value };
 
 /// The structural methods a dictionary can denote.
 pub const StructuralMethod = enum { is_eq, to_hash, to_inspect };
+
+/// A derived map's checked payload selection. Its worker's descriptors are
+/// the input union's, the output union's, the selected variant's `arity`
+/// input payloads', and the transformed payload's output type's.
+pub const StructuralMap = struct { name: types.NameId, payload_index: u32, arity: u32, effectful: bool };
 
 pub const WorkerId = enum(u32) { _ };
 
@@ -134,6 +143,10 @@ pub const Worker = struct {
     /// dictionaries of its own scope its argument record carries before its
     /// explicit arguments (they vary per call, unlike its captures).
     own_descs: u32 = 0,
+    /// For a structural worker: how many descriptors its dictionary captures,
+    /// each standing for a structural type parameter (`types.Store.variable`
+    /// by position) rather than a checked scheme variable.
+    structural_descs: u32 = 0,
     own_dicts: u32 = 0,
 
     /// The dictionaries a lambda worker captures: every scope's but its own.
@@ -813,9 +826,24 @@ pub const Program = struct {
             },
             .to_inspect => .{ try self.arena.allocator().dupe(TypeId, &.{a}), try self.store.primitive(.str) },
         };
-        const scheme_vars = try self.arena.allocator().alloc(checked.CheckedTypeId, 1);
-        scheme_vars[0] = @fromBackingInt(std.math.maxInt(u32));
-        return try self.addErasedWorker(key, module_index, scheme_vars, params, ret, "boxy.structural");
+        const id = try self.addErasedWorker(key, module_index, &.{}, params, ret, "boxy.structural");
+        self.worker(id).structural_descs = 1;
+        return id;
+    }
+
+    /// The worker of a derived map with the checked selection `map`.
+    pub fn structuralMapWorker(self: *Program, module_index: ModuleIndex, map: StructuralMap) Allocator.Error!WorkerId {
+        const key: WorkerKey = .{ .structural_map = map };
+        if (self.worker_ids.get(key)) |existing| return existing;
+        const input = try self.store.variable(0);
+        const output = try self.store.variable(1);
+        const selected = try self.store.variable(2 + map.payload_index);
+        const mapped = try self.store.variable(2 + map.arity);
+        const transform = try self.store.intern(.{ .function = .{ .args = &.{selected}, .ret = mapped, .effectful = map.effectful } });
+        const params = try self.arena.allocator().dupe(TypeId, &.{ input, transform });
+        const id = try self.addErasedWorker(key, module_index, &.{}, params, output, "boxy.structural_map");
+        self.worker(id).structural_descs = 3 + map.arity;
+        return id;
     }
 
     /// The method of a crashing dictionary slot (see
