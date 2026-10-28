@@ -3181,10 +3181,10 @@ pub const Builder = struct {
         const target = self.program.worker(callee).*;
         const bound = try self.boundTypesAt(callee, subst, call_fn);
         defer self.allocator.free(bound);
-        const hidden = try self.allocator.alloc(LocalId, subst.len + target.dictionary_params.len);
+        const hidden = try self.allocator.alloc(LocalId, bound.len + target.dictionary_params.len);
         errdefer self.allocator.free(hidden);
-        for (bound, hidden[0..subst.len]) |ty, *desc| desc.* = try self.descOf(ty);
-        for (target.dictionary_params, hidden[subst.len..]) |param_index, *dict| {
+        for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
+        for (target.dictionary_params, hidden[bound.len..]) |param_index, *dict| {
             if (param_index >= evidence.len) invariant("a call's checked evidence does not cover its target's dictionaries");
             dict.* = try self.dictionaryOf(evidence[param_index]);
         }
@@ -3205,13 +3205,17 @@ pub const Builder = struct {
     /// function type `call_fn` relates it to, or seals.
     pub fn boundTypesAt(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, call_fn: ?TypeId) Allocator.Error![]TypeId {
         const target = self.program.worker(callee).*;
-        if (subst.len != target.scheme_vars.len) invariant("a call's checked substitution differs from its target's scheme");
-        const bound = try self.allocator.alloc(TypeId, subst.len);
+        // A use the checker recorded no instantiation for (a platform's use
+        // of a procedure the app provides) takes every variable from the
+        // call's function type.
+        const recorded = subst.len != 0;
+        if (recorded and subst.len != target.scheme_vars.len) invariant("a call's checked substitution differs from its target's scheme");
+        const bound = try self.allocator.alloc(TypeId, target.scheme_vars.len);
         errdefer self.allocator.free(bound);
         // A row variable takes its open row's remainder of the call's row
         // representative, whose layout the caller's values have (design.md
         // "Row Joins").
-        const row_vars = try self.allocator.alloc(bool, subst.len);
+        const row_vars = try self.allocator.alloc(bool, target.scheme_vars.len);
         defer self.allocator.free(row_vars);
         @memset(row_vars, false);
         const related: []?TypeId = if (call_fn) |actual| blk: {
@@ -3219,14 +3223,14 @@ pub const Builder = struct {
             break :blk try self.program.relateVariablesRows(self.allocator, &.{.{ formal, actual }}, target.scheme_vars.len, row_vars);
         } else try self.allocator.alloc(?TypeId, 0);
         defer self.allocator.free(related);
-        for (subst, bound, 0..) |checked_ty, *slot, index| {
+        for (bound, 0..) |*slot, index| {
             const ty = if (index < related.len) related[index] else null;
             if (row_vars[index] and ty != null) {
                 slot.* = ty.?;
                 continue;
             }
-            if (self.view.types().payload(checked_ty) != .err) {
-                slot.* = try self.convert(checked_ty);
+            if (recorded and self.view.types().payload(subst[index]) != .err) {
+                slot.* = try self.convert(subst[index]);
                 continue;
             }
             slot.* = ty orelse try self.program.converter().sealedScheme(target.module, target.scheme_vars[index]);

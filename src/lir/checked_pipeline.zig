@@ -2128,6 +2128,7 @@ pub const PreparedBoxy = struct {
                 .run => .run,
                 .omit => .omit,
             },
+            .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
         });
         boxy_timing_scope.end();
         var lowered: struct {

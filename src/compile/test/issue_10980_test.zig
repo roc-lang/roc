@@ -28,14 +28,14 @@ fn expectNoBoxyDictThunks(
     defer codegen.deinit();
     codegen.layout_store = &lowered.lir_result.layouts;
 
-    var generated = codegen.generateEntrypointModule("issue_10980", &.{}) catch |err| switch (err) {
+    var ir: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer ir.deinit();
+    codegen.printEntrypointModule("issue_10980", &.{}, &ir.writer) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.TestUnexpectedResult,
     };
-    defer generated.deinit();
-
-    // The emitted module must also hold no dictionary-dispatch thunks.
-    return error.BoxyLoweringBeingReimplemented;
+    // The emitted module holds no dictionary-dispatch thunks.
+    try std.testing.expect(std.mem.find(u8, ir.written(), "dict_thunk") == null);
 }
 
 test "issue 10980: handing a closure to the host emits no boxy dictionary thunks" {

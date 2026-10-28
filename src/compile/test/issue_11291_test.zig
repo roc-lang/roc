@@ -56,9 +56,10 @@ test "issue 11291: nested and recursive nominal plans preserve positional backin
         \\value = { left: "left", right: Next(42, End) }
         \\main! = |_args| if Chain.first(Pair.right(value)) == Ok(42) Ok({}) else Err(Exit(1))
     ;
-    try harness.expectLowersToLirWithOptions(source, .{ .specialization_strategy = .lss });
-    // `.boxy` must carry every nominal's complete backing substitutions.
-    return error.BoxyLoweringBeingReimplemented;
+    // `.boxy` carries every nominal's complete backing substitutions.
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        try harness.expectLowersToLirWithOptions(source, .{ .specialization_strategy = strategy });
+    }
 }
 
 test "issue 11291: imported nominal methods preserve backing arguments" {

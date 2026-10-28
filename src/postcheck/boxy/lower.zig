@@ -42,6 +42,9 @@ pub const Input = struct {
     roots: Common.RootRequests,
     target_usize: base.target.TargetUsize,
     inline_expects: enum { run, omit } = .run,
+    /// Name each procedure in the LIR store by the kind of worker it is,
+    /// for dumps and tests that read the program.
+    proc_debug_names: bool = false,
 };
 
 /// The lowered program and the static data it carries.
@@ -962,6 +965,17 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     }
     if (input.roots.static_data_requests.len != 0) invariant("static data requests are not yet lowered by Boxy");
 
+    if (input.proc_debug_names) {
+        for (program.workers.items) |worker| {
+            const name: []const u8 = switch (worker.key) {
+                .codec => |piece| switch (program.codec.pieces.items[piece].kind) {
+                    inline else => |kind| "boxy.codec." ++ @tagName(kind),
+                },
+                inline else => |_, kind| "boxy." ++ @tagName(kind),
+            };
+            try program.result.store.setProcDebugName(worker.proc, name);
+        }
+    }
     program.result.finishExpectSites();
     return .{
         .lir_result = program.result,

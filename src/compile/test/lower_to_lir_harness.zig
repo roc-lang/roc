@@ -115,9 +115,6 @@ pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
     eval.BuiltinModules.InitError ||
     std.Thread.SpawnError ||
     error{
-        /// A test asserts internals of `.boxy` lowering, which is being
-        /// reimplemented (design.md "`.boxy` Runtime Lowering").
-        BoxyLoweringBeingReimplemented,
         BuiltinLowLevelAnnotationMustBeFunction,
         DownloadFailed,
         ExpectedPlatformString,
