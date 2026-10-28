@@ -9237,6 +9237,49 @@ and ordinary value flow expose a known iterator constructor, SpecConstr can:
 - supply each reachable `continue` edge with the scalar leaves required by the
   loop fixed point.
 
+A clone that admits only productive direct inlines (every clone outside
+`.none`'s fusion pass) inlines a direct call only when the copied body pays for
+itself. Three kinds of call always qualify: the checker-stamped iterator
+protocol (`IteratorProcedureId`), a wrapper whose body does less work than its
+call (the definition solved inline analysis uses, shared in `wrapper_body.zig`),
+and a call whose captures the context substituted, which cannot stay residual.
+Any other call qualifies only when inlining lets a known value meet a consumer
+that gains from it:
+
+- a `match` on a known tag, a call of a known callable, or a loop entered with
+  a known constructor, reached by a known part of an argument or capture;
+- a part of the result that the callee constructs on every path that returns,
+  where the caller matches, calls, enters a loop with, projects a field or item
+  from, or places into a constructor operand or its own result. A projected
+  result is read without building the aggregate, and a placed one is built in
+  its destination, where box and erased-callable reuse can use its storage.
+  A projected or placed argument gains nothing from inlining, since the
+  call-pattern worker already takes a known argument apart and the caller
+  already built it where it is written.
+
+A known argument is one the clone holds as a constructor, callable, or known
+local at the consumed path, or a nested direct call whose callee constructs
+that part on every path or always passes it through from a known argument.
+Storing a known value, reading an unrelated field, or computing a scalar result
+is not a reason to copy a body: a callee that only stores a `Bool` literal it
+is passed stays a call.
+
+`inline_productivity.zig` derives this before any clone runs, as summaries of
+source bodies. For each function it records how the body consumes each part of
+each parameter and capture, either directly or by placing it in the function's
+result, and which result parts the body constructs or passes through on every
+path that returns; it records each call's demand on its result too. Demand
+flows from consumers to the values that reach them through bindings,
+projections, constructors, branches, loops, join points, and calls, including
+a function value's captures when the value may be called. Parts are paths of
+field, item, and tag-payload steps. A value's parts recur only through a tag
+payload, so a path that repeats a payload step folds to that step's first
+occurrence, and every path is bounded by the program's labels. Each summary
+only grows, so the interprocedural fixed point ends without a round limit. The
+clone resolves a call's result demand against the demand on the result of the
+innermost call it is inlining, and checks the arguments it knows against the
+callee's summaries; it never reanalyzes a body.
+
 When the continuation never observes a tuple loop result whole, SpecConstr
 gives the loop an exit ABI of the components it reads, dropping any it cannot
 observe, without narrowing its back-edge state. A result whose every component
