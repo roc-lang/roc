@@ -178,8 +178,11 @@ const InterpreterRocEnv = struct {
     /// running out of memory.
     fn recordCrash(self: *InterpreterRocEnv, msg: []const u8) void {
         self.crashed = true;
+        // A crash an erased callable re-delivers carries the recorded
+        // message itself, so the copy is made before the old one is freed.
+        const copy = self.allocator.dupe(u8, msg) catch null;
         if (self.crash_message) |old| self.allocator.free(old);
-        self.crash_message = self.allocator.dupe(u8, msg) catch null;
+        self.crash_message = copy;
     }
 
     fn clearExpectFailures(self: *InterpreterRocEnv) void {

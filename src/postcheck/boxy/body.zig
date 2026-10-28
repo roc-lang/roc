@@ -66,6 +66,9 @@ pub const Task = union(enum) {
     bind: struct { pattern: CheckedPatternId, ty: TypeId },
     /// Pop and drop one value.
     discard,
+    /// Crash as a dispatch that cannot run does; its value is of type
+    /// `result`.
+    dispatch_crash: struct { kind: lower.CrashDictionary, result: TypeId },
     /// Crash with a checked runtime error, whose value is of this type, or
     /// of no type when the checker gave it the erroneous type.
     runtime_error: ?TypeId,
@@ -1472,6 +1475,16 @@ pub const Builder = struct {
         self.var_descs = &.{};
         const body_start = try self.newHole();
         self.hole = body_start;
+        try self.emitDispatchCrash(kind);
+        try self.finishProc(start.entry, body_start, &.{start.capture_ptr}, .zst);
+        const proc = self.store.getProcSpecPtr(worker.proc);
+        proc.erased_capture_arg = start.capture_ptr;
+        proc.abi = .erased_record;
+    }
+
+    /// The crash of a dispatch that cannot run: a rejected one is checked-
+    /// error code, an unreachable one an ordinary crash.
+    pub fn emitDispatchCrash(self: *Builder, kind: lower.CrashDictionary) Allocator.Error!void {
         switch (kind) {
             .checked_error => {
                 const literal = try self.store.insertString("method dispatch failed to check");
@@ -1482,10 +1495,6 @@ pub const Builder = struct {
                 try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal } } });
             },
         }
-        try self.finishProc(start.entry, body_start, &.{start.capture_ptr}, .zst);
-        const proc = self.store.getProcSpecPtr(worker.proc);
-        proc.erased_capture_arg = start.capture_ptr;
-        proc.abi = .erased_record;
     }
 
     pub const ErasedBody = union(enum) {
@@ -1636,6 +1645,10 @@ pub const Builder = struct {
             .bind => |bind| try self.bindIrrefutable(bind.pattern, self.popValue(), bind.ty),
             .discard => _ = self.popValue(),
             .runtime_error => |ty| try self.runtimeErrorValue(ty),
+            .dispatch_crash => |crash| {
+                try self.emitDispatchCrash(crash.kind);
+                try self.pushValue(try self.localOf(crash.result, .frame));
+            },
             .push_value => |local| try self.pushValue(local),
             .unreachable_value => |ty| try self.pushValue(try self.localOf(ty, .frame)),
             .unreachable_or_unit => try self.pushValue(try self.unitValue()),
@@ -3766,12 +3779,20 @@ pub const Builder = struct {
                 }
                 try self.pushValue(dict);
             },
-            .checked_error => {
-                const literal = try self.store.insertString("runtime error");
-                try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal }, .checked_error = true } });
-                try self.pushValue(try self.localOf(result_ty, .frame));
+            // A dispatch that cannot run evaluates its operands, each for its
+            // effects, then crashes.
+            .checked_error, .@"unreachable" => {
+                try self.push(.{ .dispatch_crash = .{
+                    .kind = if (call_plan.resolution == .checked_error) .checked_error else .unreachable_value,
+                    .result = result_ty,
+                } });
+                var index = operands.len;
+                while (index > 0) {
+                    index -= 1;
+                    try self.push(.discard);
+                    try self.pushOperand(operands[index], operand_types[index]);
+                }
             },
-            .@"unreachable" => try self.crashValue("unreachable dispatch", result_ty),
             else => invariantFmt("dispatch resolution {s} is not yet lowered by Boxy", .{@tagName(call_plan.resolution)}),
         }
     }
@@ -5302,12 +5323,10 @@ pub const Builder = struct {
             .evidence_dependent => |dependent| {
                 return try self.emitErasedCall(self.scopeDictionary(dependent.index), try self.convert(callable_ty), args, result_ty);
             },
-            .checked_error => {
-                const literal = try self.store.insertString("method dispatch failed to check");
-                try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal }, .checked_error = true } });
+            .checked_error, .@"unreachable" => {
+                try self.emitDispatchCrash(if (resolution == .checked_error) .checked_error else .unreachable_value);
                 return try self.localOf(result_ty, .frame);
             },
-            .@"unreachable" => return try self.crashLocal("dispatch on a value that can never exist", result_ty),
             else => invariantFmt("iterator dispatch resolution {s} is not yet lowered by Boxy", .{@tagName(resolution)}),
         }
     }

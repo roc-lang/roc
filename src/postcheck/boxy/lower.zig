@@ -646,7 +646,12 @@ pub const Program = struct {
                 const target = if (std.mem.eql(u8, method_name, "to_inspect"))
                     (registry.inspectOverride(key) orelse continue).target
                 else switch (registry.lookup(key) orelse continue) {
-                    .rejected => continue,
+                    // A type whose method checking rejected compares and
+                    // hashes as checked-error code.
+                    .rejected => {
+                        slot.* = .{ .entry = try self.crashDictionaryWorker(nominal.decl.module, .checked_error), .bound = &.{}, .dicts = &.{} };
+                        continue;
+                    },
                     .target => |found| found,
                 };
                 const template = switch (target.kind) {
