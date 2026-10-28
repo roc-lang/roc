@@ -168,7 +168,6 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
             .site_code_keys = true,
             .tag_reachability = false,
             .prove_ranges = false,
-            .scalarize_joins = false,
             .reuse_boxes = false,
             .thread_confined_rc = false,
             .proc_debug_names = true,

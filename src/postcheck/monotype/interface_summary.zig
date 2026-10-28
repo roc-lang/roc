@@ -42,6 +42,29 @@ fn invalidSummary(comptime line: u32) error{InvalidSummary} {
 
 /// Encode only the immutable graph reachable from the settled relation. The
 /// context supplies exact checked module addresses for runtime defaults.
+/// Whether every placeholder open node is the slot of a field kind the
+/// summary records. An undetermined field kind's slot stays a placeholder
+/// until relation freeze selects its kind, and instantiation recreates it as
+/// one, exactly as an in-memory summary does; any other placeholder is
+/// unfinished solver state.
+fn placeholdersAreFieldKindSlots(allocator: Allocator, c: Constraints) Allocator.Error!bool {
+    var slots = try std.DynamicBitSetUnmanaged.initEmpty(allocator, c.open_nodes.len);
+    defer slots.deinit(allocator);
+    for (c.kinds) |kind| {
+        const cells = kind.cells orelse continue;
+        const index: usize = @backingInt(cells.slot);
+        if (index >= c.nodes.len) continue;
+        switch (c.nodes[index]) {
+            .open => |open| if (open < c.open_nodes.len) slots.set(open),
+            .mono => {},
+        }
+    }
+    for (c.open_nodes, 0..) |node, index| {
+        if (node.content == .unresolved and node.content.unresolved.origin == .placeholder and !slots.isSet(index)) return false;
+    }
+    return true;
+}
+
 pub fn encode(allocator: Allocator, types: *Type.Store, ns: *const names.NameStore, leaves: []const Type.TypeId, summary: Summary, context: anytype) EncodeError![]u8 {
     return encodeWithStats(allocator, types, ns, leaves, summary, context, null);
 }
@@ -55,6 +78,9 @@ pub fn encodeWithStats(allocator: Allocator, types: *Type.Store, ns: *const name
     defer writer.leaf_buckets.deinit(allocator);
     defer writer.leaf_next.deinit(allocator);
     if (summary != .unchanged) try writer.indexLeaves();
+    if (summary == .constraints and !try placeholdersAreFieldKindSlots(allocator, summary.constraints)) {
+        invariant("settled interface contains a placeholder that is no field kind's slot", .{});
+    }
     try writer.bytes.appendSlice(allocator, magic);
     const counts: [3]u32 = switch (summary) {
         .unchanged => .{ 0, 0, 0 },
@@ -122,6 +148,7 @@ pub fn decodeForRequest(arena: Allocator, types: *Type.Store, ns: *names.NameSto
                     (node.content.unresolved.numeric_default_phase != null or node.content.unresolved.row_default != null)) return invalidSummary(@src().line);
                 if (node.related_group != .none and @backingInt(node.related_group) >= c.open_nodes.len) return invalidSummary(@src().line);
             }
+            if (!try placeholdersAreFieldKindSlots(scratch.allocator(), c)) return invalidSummary(@src().line);
         },
     }
     try validateTypeGraph(scratch.allocator(), leaves.len, summary, nodes);
@@ -636,9 +663,8 @@ fn Writer(comptime Context: type) type {
                 return self.write(u32, try self.reference(value));
             }
             if (T == Solve.InstNode) {
-                // An undetermined field kind's slot is a placeholder until its
-                // relation is frozen; replay instantiates it as one, exactly as
-                // an in-memory summary does.
+                // A placeholder is checked against the summary's field kinds
+                // before writing (`placeholdersAreFieldKindSlots`).
                 if (value == .redirect or value == .leaf) invariant("settled interface contains unfinished solver state", .{});
             }
             if (T == Type.MaybeTypeId) return self.write(?Type.TypeId, value.get());

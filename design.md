@@ -9215,7 +9215,13 @@ The explicit `InlineMode` controls the optional specialization work:
   separately compiled callers the same inline decisions.
 - `.procedures` retains standalone procedures rather than substituting their
   bodies. Dev builds and compile-time evaluation select it so unchanged
-  procedures remain eligible for early native-code reuse. Like `.none`, it
+  procedures remain eligible for early native-code reuse. The one exception
+  is a wrapper whose body the compiler provides: a specialization of a
+  Builtin template whose body is its checked provided low-level operation
+  (`FnTemplate.provides_low_level`). Substituting it makes no caller's code
+  depend on another procedure's source, and leaves its operation visible to
+  the LIR rewrites that bound list copying (`while !$done` tests the
+  `bool_not` low-level that known-tag jump threading reads). Like `.none`, it
   runs only iterator fusion, without general SpecConstr normalization,
   specialization, or procedure-usage collection for an empty inline plan.
   The LIR passes that bound list copying still run.
@@ -9911,6 +9917,7 @@ consumes it, and a list in it is copied each iteration. The rewrite is exact:
   every statement in the run has exactly one structural predecessor;
 - each join it passes through has ordinary parameters only, and its body
   consists of local aliases, discriminant reads, field reads, literals,
+  descriptor-free struct builds,
   `bool_not` of a known two-variant tag (which selects the other variant; `!`
   is `Bool.not`, which is the `bool_not` low-level, so `while !$done` tests
   this), join declarations, and writes of the next join's parameters before
@@ -9926,8 +9933,13 @@ consumes it, and a list in it is copied each iteration. The rewrite is exact:
 - that exit join (or, for an arm, its switch) lexically encloses the edge,
   so the new jump is in scope;
 - nothing the exit executes, following its jumps into join bodies, reads a
-  definition the threaded path skips or a parameter the edge would have
-  changed. Parameters the edge passes their own current value are unchanged.
+  definition the threaded path skips or observes a value that differs because
+  a parameter the edge would have changed does. Parameters the edge passes
+  their own current value are unchanged. A pure alias, field read, or
+  descriptor-free struct build only carries a differing value into its
+  target, field by field for a struct, so an exit that packs the loop state
+  into a tuple and reads back the unchanged field observes nothing; every
+  other statement observes what it reads.
 
 The rewritten edge keeps its statements except the parameter writes and the
 definitions no remaining statement reads, then jumps to the exit. Any other
@@ -21080,9 +21092,24 @@ write is a use of its value, so when an entry passes the same value to a
 consuming call first, ARC must retain it for the call and the call copies a
 value that is never read again.
 
-Between direct LIR lowering and ARC insertion, in every optimization mode, one
-normalization removes each join parameter that no reachable statement reads
-and whose only writes are explicit `set_local` statements. The parameter
+Between direct LIR lowering and ARC insertion, in every optimization mode and
+after join scalarization, one normalization removes each join parameter that
+no live statement reads and whose only writes are explicit `set_local`
+statements. Lowering often carries the variables and the construct's result
+together in one struct-typed join parameter; scalarization has by then split
+it into one parameter per field, so each variable is a parameter of its own.
+Join scalarization therefore runs in every mode: it is what lets an unread
+variable be removed, which bounds list copying rather than shaving constant
+factors.
+
+A pure definition (`assign_ref`, `assign_literal`, `assign_list`, or a
+descriptor-free `assign_struct` or `assign_tag`) whose target has exactly one
+definition and no live reader is dead, and its own reads are not live. A join
+body that binds an unread variable's value to a local nothing uses leaves the
+variable unread. In a procedure with join parameters, every round deletes the
+dead definitions, whether or not a parameter qualifies: a dead alias of a value is still a read ARC keeps the
+value alive for, so left in place it keeps a list shared across a consuming
+call exactly as a write would. The parameter
 leaves its join, and each of its writes is deleted by routing the write's
 incoming edges to its successor; copying a successor over a deleted statement
 would duplicate any join it copied. Reads outside operand positions keep a
@@ -21104,9 +21131,6 @@ non-operand reads that keep a parameter keep a definition. A written value
 that is itself a join parameter becomes a candidate for the next round, so the
 pass repeats to a fixed point. Only procedures with join parameters change.
 
-Where lowering carries the variables and the construct's result together in
-one struct-typed join parameter, the unread variable is a struct field rather
-than a parameter, and this pass does not remove it.
 
 ### List.prefetched
 

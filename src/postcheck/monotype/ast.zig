@@ -341,6 +341,12 @@ pub const FnTemplate = struct {
     /// whose closed types commit the same layouts share one procedure
     /// (design.md "Layout-Keyed Builtin Procedures").
     procedure_keyed_by_layout: bool = false,
+    /// Set for a specialization of a Builtin template whose body is its
+    /// checked provided low-level operation
+    /// (`CheckedProcedureTemplate.provided_low_level`). The compiler defines
+    /// that body, so a caller that substitutes it at a call depends on no
+    /// source but its own.
+    provides_low_level: bool = false,
     /// The checked template is called at exactly one site of its module's
     /// source and from nowhere else (`templateHasSingleSourceCall`), stamped
     /// when Monotype finalizes the program. Dev inline analysis decides

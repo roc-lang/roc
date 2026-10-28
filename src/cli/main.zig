@@ -14557,7 +14557,6 @@ fn checkedRuntimeLoweringConfig(
             .owned_proc_signatures = opt == .dev,
             .tag_reachability = tagReachabilityForOpt(opt),
             .prove_ranges = proveRangesForOpt(opt),
-            .scalarize_joins = optimizeLirForOpt(opt),
             .reuse_boxes = optimizeLirForOpt(opt),
             .thread_confined_rc = optimizeLirForOpt(opt),
             .proc_debug_names = proc_debug_names or dev_diagnostics.isSet(.pack_trace),

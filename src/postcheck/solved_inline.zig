@@ -13,7 +13,10 @@ const GuardedList = collections.GuardedList;
 /// Post-check inline analysis mode.
 pub const Mode = enum {
     none,
-    /// Retain standalone procedures, with iterator fusion in SpecConstr.
+    /// Retain standalone procedures, with iterator fusion in SpecConstr. Only
+    /// wrappers whose bodies the compiler provides (`provides_low_level`) are
+    /// inlined, since substituting them makes no caller's code depend on
+    /// another procedure's source.
     procedures,
     /// Inline wrappers, and bodies the whole program calls exactly once.
     wrappers,
@@ -110,7 +113,8 @@ pub fn analyze(
     keep_keyed_specializations: bool,
 ) std.mem.Allocator.Error!OwnedPlan {
     return switch (mode) {
-        .none, .procedures => OwnedPlan.empty(allocator),
+        .none => OwnedPlan.empty(allocator),
+        .procedures => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .provided_low_level),
         .wrappers => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .program),
         .wrappers_and_source_single_use => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .source),
     };
@@ -127,7 +131,10 @@ const Candidate = struct {
     kind: InlineKind,
 };
 
-const SingleUseRule = enum { program, source };
+/// Which bodies are candidates: wrappers and bodies used once by the whole
+/// program's calls or by their module's source, or only wrappers of
+/// compiler-provided low-level templates, which needs no use information.
+const CandidateRule = enum { program, source, provided_low_level };
 
 const MaterializationState = enum {
     unknown,
@@ -143,18 +150,16 @@ const InlineAnalyzer = struct {
     solved_types: SolvedType.Store.View,
     decisions: []Decision,
     keep_keyed_specializations: bool,
-    /// How a body qualifies as used once: by the whole program's calls, or
-    /// by its module's source.
-    single_use: SingleUseRule,
+    rule: CandidateRule,
 
     fn run(
         allocator: std.mem.Allocator,
         procedure_usage: SpecConstr.ProcedureUsage,
         solved: *const Solved.Program,
         keep_keyed_specializations: bool,
-        single_use: SingleUseRule,
+        rule: CandidateRule,
     ) std.mem.Allocator.Error!OwnedPlan {
-        if (procedure_usage.items.len != solved.lifted.fnCount()) {
+        if (rule != .provided_low_level and procedure_usage.items.len != solved.lifted.fnCount()) {
             Common.invariant("optimized inline analysis requires exact use information for every lifted function");
         }
         const decisions = try allocator.alloc(Decision, solved.lifted.fnCount());
@@ -168,7 +173,7 @@ const InlineAnalyzer = struct {
             .solved_types = solved.types.view(),
             .decisions = decisions,
             .keep_keyed_specializations = keep_keyed_specializations,
-            .single_use = single_use,
+            .rule = rule,
         };
         try analyzer.decideCandidates();
 
@@ -205,9 +210,13 @@ const InlineAnalyzer = struct {
     }
 
     fn inlineCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Candidate {
+        if (self.rule == .provided_low_level) {
+            if (!(self.solved.lifted.getFn(fn_id).source orelse return null).provides_low_level) return null;
+            return if (try self.wrapperCandidate(fn_id)) |body| .{ .body = body, .kind = .wrapper } else null;
+        }
         // A pack program inlines a wrapper exactly as any program does.
         if (try self.wrapperCandidate(fn_id)) |body| return .{ .body = body, .kind = .wrapper };
-        if (self.single_use == .source) {
+        if (self.rule == .source) {
             if (self.sourceSingleUseCandidate(fn_id)) |body| return .{ .body = body, .kind = .source_single_use };
             return null;
         }

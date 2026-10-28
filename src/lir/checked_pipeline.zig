@@ -241,10 +241,8 @@ pub const TargetConfig = struct {
     /// other arms keep is live across the producer, so a list the producer
     /// appends to is copied once per loop iteration.
     fuse_tag_cases: bool = true,
-    /// The rewrites that exist only to make the produced program faster:
-    /// join scalarization and box reuse. `--opt=dev` skips them, since it
-    /// trades program speed for compile speed.
-    scalarize_joins: bool = true,
+    /// Box reuse exists only to make the produced program faster, so
+    /// `--opt=dev` skips it, since it trades program speed for compile speed.
     reuse_boxes: bool = true,
     /// Let ARC prove allocations the host can never touch and give them
     /// single-threaded count updates. Optimized builds enable this; dev
@@ -1144,7 +1142,6 @@ pub const LirPolicy = struct {
     keep_specialization_procs: bool,
     promote_loop_appends: base.TestSwitch(true),
     fuse_tag_cases: bool,
-    scalarize_joins: bool,
     reuse_boxes: bool,
     thread_confined_rc: bool,
     layout_request_const_plans: bool,
@@ -2022,11 +2019,11 @@ fn finishLoweredOutput(
         }
     }
     // Every mode: a join parameter nothing reads still keeps its written
-    // value alive past any consuming call on the entry path.
+    // value alive past any consuming call on the entry path. Scalarization
+    // first gives each variable carried out of a construct with its result
+    // its own parameter, so pruning can remove it.
+    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize);
     try runProcedurePass(allocator, &lowered.lir_result, pass_target, .prune_join_params);
-    if (target.scalarize_joins) {
-        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize);
-    }
     if (target.promote_loop_appends.enabled()) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .loop_append);
     }

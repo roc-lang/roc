@@ -1125,7 +1125,6 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
         // callables reserve the hot-reload prefix; an interpreted evaluation
         // reserves none.
         .erased_capture_prefix = if (compilerHostMustUseInterpreterForCtfe()) 0 else builtins.erased_callable.hot_reload_capture_prefix_size,
-        .scalarize_joins = false,
         .reuse_boxes = false,
         // Specialization records procedure names for every consumer of the
         // program; a runtime consumer's diagnostics read them.
