@@ -116,6 +116,8 @@ pub const Task = union(enum) {
     /// Pop a loop condition: enter the body or leave the loop.
     loop_test: struct { body: CheckedExprId, head: LIR.JoinPointId, exit: LIR.JoinPointId },
     end_loop,
+    /// Leave the innermost scheme alias scope (`Builder.alias_scopes`).
+    leave_alias_scope,
     /// Continue emitting at `hole`.
     resume_at: CFStmtId,
     finish_field_access: CheckedExprId,
@@ -199,6 +201,11 @@ pub const PatternItem = struct { pattern: CheckedPatternId, value: LocalId, ty: 
 /// opened with, which its close repeats.
 const OpenMember = struct { key: LocalId, vars: LIR.LocalSpan };
 
+/// A scheme alias's scope as one use instantiates it: the canonical evidence
+/// parameters its dictionaries stand for, those dictionaries, and the
+/// environment it extends.
+const AliasScope = struct { params: []const u32, dicts: []const LocalId, saved_env: types.Env };
+
 pub const Builder = struct {
     program: *Program,
     allocator: Allocator,
@@ -213,6 +220,10 @@ pub const Builder = struct {
     var_descs: []LocalId = &.{},
     /// The dictionaries in scope (`Worker.scope_dictionary_indices` order).
     dict_locals: []LocalId = &.{},
+    /// The scheme alias scopes entered while lowering an alias's right-hand
+    /// side at one of its uses, innermost last. Each is a generalized scope
+    /// nested inside the worker's own scopes.
+    alias_scopes: std.ArrayList(AliasScope) = .empty,
     type_descs: std.AutoHashMapUnmanaged(TypeId, LocalId) = .empty,
     /// The recursive components whose members' descriptors this body has
     /// begun composing.
@@ -270,6 +281,7 @@ pub const Builder = struct {
     pub fn deinit(self: *Builder) void {
         self.frame_locals.deinit(self.allocator);
         self.binders.deinit(self.allocator);
+        self.alias_scopes.deinit(self.allocator);
         self.type_descs.deinit(self.allocator);
         self.opened_components.deinit(self.allocator);
         self.open_members.deinit(self.allocator);
@@ -1960,6 +1972,10 @@ pub const Builder = struct {
             .restore_merge => |merge| try self.restoreMerge(merge),
             .enter_merge => |merge| try self.enterMerge(merge),
             .loop_test => |loop| try self.loopTest(loop.body, loop.head, loop.exit),
+            .leave_alias_scope => {
+                const scope = self.alias_scopes.pop().?;
+                self.env = scope.saved_env;
+            },
             .end_loop => {
                 // A loop nothing leaves never reaches what follows it.
                 const loop = self.loops.pop().?;
@@ -2678,13 +2694,58 @@ pub const Builder = struct {
             // A local binding compile-time evaluation hoisted is read as the
             // constant it stored.
             .selected_hoisted_const => |selected| return try self.restoreConstUse(expr_id, selected.const_use, try self.constReadType(expr_id)),
-            .local_proc => |local| return try self.pushValue(try self.localProcUseValue(expr_id, local)),
+            .local_proc => |local| {
+                if (local.is_alias) return try self.lowerAliasUse(expr_id, local);
+                return try self.pushValue(try self.localProcUseValue(expr_id, local));
+            },
             .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use),
             .platform_required_proc => |required| return try self.procedureValue(expr_id, required.procedure),
             .platform_required_const => |required| return try self.restoreConstUse(expr_id, required.const_use, try self.constReadType(expr_id)),
             .platform_required_checked_error => return try self.crashValue("runtime error", try self.exprType(expr_id)),
             .platform_required_declaration => invariant("a platform requirement reached lowering unpaired with its app binding"),
         }
+    }
+
+    /// A use `expr_id` of a scheme alias: the value its declaration bound,
+    /// or, for an alias with a generalized scheme, its right-hand side
+    /// lowered in the alias's scope as this use instantiates it (its
+    /// variables bound to the use's types, its dictionaries to the use's
+    /// evidence).
+    fn lowerAliasUse(self: *Builder, expr_id: CheckedExprId, local: checked.LocalProcedureBinding) Allocator.Error!void {
+        if (self.binders.get(local.binder)) |value| return try self.pushValue(value);
+        const scope_id = local.dispatch_scope orelse invariant("an alias without a generalized scheme is bound where it is declared");
+        const scheme = try self.localScheme(scope_id);
+        const outer_count = self.env.vars.len;
+        const vars = try std.mem.concat(self.program.arena.allocator(), checked.CheckedTypeId, &.{ scheme.scheme_vars, self.env.vars });
+        const generic_bound = try self.allocator.alloc(TypeId, vars.len);
+        defer self.allocator.free(generic_bound);
+        for (generic_bound[0..scheme.scheme_vars.len], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(outer_count + index));
+        for (generic_bound[scheme.scheme_vars.len..], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
+        const alias_ty = self.bodies().expr(local.expr).ty;
+        const generic_fn = try self.program.converter().convert(self.module, alias_ty, .{ .module = self.module, .vars = vars, .bound = generic_bound });
+        const related = try self.relateVariablesPartial(&.{.{ generic_fn, try self.exprType(expr_id) }}, outer_count + scheme.scheme_vars.len);
+        defer self.allocator.free(related);
+        const bound = try self.program.arena.allocator().alloc(TypeId, vars.len);
+        // A variable the use's type does not relate takes the use's checked
+        // instantiation of it, or, the checker having fixed none, seals as a
+        // variable no use relates.
+        const subst = self.siteSubstitution(expr_id);
+        for (bound[0..scheme.scheme_vars.len], related[outer_count..], scheme.scheme_vars, 0..) |*slot, ty, variable, index| slot.* = ty orelse
+            if (index < subst.len and self.view.types().payload(subst[index]) != .err)
+                try self.convert(subst[index])
+            else
+                try self.program.converter().sealedScheme(self.module, variable);
+        @memcpy(bound[scheme.scheme_vars.len..], self.env.bound);
+        const evidence = self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{};
+        const dicts = try self.program.arena.allocator().alloc(LocalId, scheme.dictionaries.len);
+        for (scheme.dictionaries, dicts) |param_index, *dict| {
+            if (param_index >= evidence.len) invariant("an alias use's evidence does not cover its dictionaries");
+            dict.* = try self.dictionaryOf(evidence[param_index]);
+        }
+        try self.alias_scopes.append(self.allocator, .{ .params = scheme.dictionaries, .dicts = dicts, .saved_env = self.env });
+        self.env = .{ .module = self.module, .vars = vars, .bound = bound };
+        try self.push(.leave_alias_scope);
+        try self.push(.{ .expr = local.expr });
     }
 
     /// The function value a use `expr_id` of a local procedure denotes. A
@@ -2701,7 +2762,6 @@ pub const Builder = struct {
             return try self.localProcValue(local);
         var scheme = try self.localScheme(scope_id);
         if (!scheme.per_call or (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0)) return try self.localProcValue(local);
-        if (local.is_alias) invariant("local procedure aliases are not yet lowered by Boxy");
         const scope_worker, const per_call = try self.localProcWorker(local);
         const declaring = self.program.worker(scope_worker).*;
         const per_call_worker = self.program.worker(per_call).*;
@@ -2800,8 +2860,8 @@ pub const Builder = struct {
     /// bound, or, inside the procedure's own body, the same closure rebuilt
     /// from the captures the body received.
     pub fn localProcValue(self: *Builder, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
-        if (local.is_alias) invariant("local procedure aliases are not yet lowered by Boxy");
         if (self.binders.get(local.binder)) |value| return value;
+        if (local.is_alias) invariant("an alias is used only after its declaration binds it");
         // Referenced inside its own body or a nested function: rebuild the
         // procedure's function value from its captures, which the checker
         // makes visible wherever the procedure is, and the scope it was
@@ -3536,6 +3596,7 @@ pub const Builder = struct {
                 },
             },
             .local_proc => |local| {
+                if (local.is_alias) return try self.lowerValueCall(expr_id, call);
                 if (local.dispatch_scope) |scope_id| {
                     const scheme = try self.localScheme(scope_id);
                     if (scheme.scheme_vars.len != 0 or scheme.dictionaries.len != 0) return try self.lowerGeneralizedLocalCall(expr_id, call, local, scheme);
@@ -3914,12 +3975,23 @@ pub const Builder = struct {
     }
 
     /// The dictionary in scope for canonical evidence parameter `index`.
+    /// Depth 0 is the innermost scope: an entered scheme alias's, then the
+    /// worker's own.
     pub fn scopeDictionary(self: *Builder, index: static_dispatch.EvidenceChainIndex) LocalId {
+        const aliases = self.alias_scopes.items;
+        if (index.depth < aliases.len) {
+            const scope = aliases[aliases.len - 1 - index.depth];
+            for (scope.params, scope.dicts) |param_index, dict| {
+                if (param_index == index.index) return dict;
+            }
+            invariant("evidence named a dictionary parameter its alias scope does not have");
+        }
+        const depth = index.depth - aliases.len;
         const scopes = self.currentWorker().dict_scopes;
-        if (index.depth >= scopes.len) invariant("evidence named a generalized scope outside its worker's scopes");
+        if (depth >= scopes.len) invariant("evidence named a generalized scope outside its worker's scopes");
         var offset: usize = 0;
-        for (scopes[0..index.depth]) |scope| offset += scope.len;
-        for (scopes[index.depth], 0..) |param_index, position| {
+        for (scopes[0..depth]) |scope| offset += scope.len;
+        for (scopes[depth], 0..) |param_index, position| {
             if (param_index == index.index) return self.dict_locals[offset + position];
         }
         invariant("evidence named a dictionary parameter its scope does not have");
@@ -5270,6 +5342,17 @@ pub const Builder = struct {
         switch (stmt.data) {
             .decl => |decl| {
                 if (decl.recursive) invariant("recursive value declarations are not yet lowered by Boxy");
+                // A scheme alias with a generalized scheme binds nothing:
+                // each use lowers its right-hand side at the use's
+                // instantiation (`lowerAliasUse`).
+                if (self.bodies().pattern_binder_by_pattern[@backingInt(decl.pattern)].get()) |binder| {
+                    if (self.bodies().patternBinder(binder).is_scheme_alias) {
+                        if (self.program.local_scopes.get(.{ .module = self.module, .expr = decl.expr })) |scope_id| {
+                            const scheme = try self.localScheme(scope_id);
+                            if (scheme.scheme_vars.len != 0 or scheme.dictionaries.len != 0) return;
+                        }
+                    }
+                }
                 // A value that diverges binds nothing.
                 if (self.bodies().exprDiverges(decl.expr, self.inlineExpectMode())) {
                     try self.push(.discard);
