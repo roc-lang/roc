@@ -64,7 +64,7 @@ pub fn ownership(op: DynOp) Ownership {
         .tag_payload_addr => |payload| .{ .borrow_component = payload.base },
         .view => |view| .{ .borrow_component = view.address },
         .tag_discriminant, .eq, .hash, .inspect, .numeral, .adapt => .borrow_operands,
-        .record, .tag, .list, .box, .closure => .construct,
+        .record, .record_update, .tag, .list, .box, .closure => .construct,
         .call_erased => .call_erased,
     };
 }
@@ -173,6 +173,13 @@ pub const Operands = struct {
                 result.single(record.desc);
                 result.span(record.fields);
             },
+            .record_update => |update| {
+                result.single(update.base);
+                result.single(update.base_desc);
+                result.single(update.desc);
+                result.span(update.names);
+                result.span(update.values);
+            },
             .tag => |tag| {
                 result.single(tag.desc);
                 result.single(tag.name);
@@ -242,6 +249,10 @@ pub const Operands = struct {
 pub fn constructedValues(store: *const LirStore, allocator: std.mem.Allocator, op: DynOp, out: *std.ArrayList(LocalId)) std.mem.Allocator.Error!void {
     switch (op) {
         .record => |record| try appendSpan(store, allocator, record.fields, out),
+        .record_update => |update| {
+            try out.append(allocator, update.base);
+            try appendSpan(store, allocator, update.values, out);
+        },
         .tag => |tag| try appendSpan(store, allocator, tag.payloads, out),
         .list => |list| try appendSpan(store, allocator, list.elems, out),
         .box => |box| try out.append(allocator, box.payload),
@@ -346,6 +357,13 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
             .payload_index = payload.payload_index,
         } },
         .record => |record| .{ .record = .{ .desc = try Remap.one(context, record.desc), .fields = try Remap.span(store, context, record.fields) } },
+        .record_update => |update| .{ .record_update = .{
+            .base = try Remap.one(context, update.base),
+            .base_desc = try Remap.one(context, update.base_desc),
+            .desc = try Remap.one(context, update.desc),
+            .names = try Remap.span(store, context, update.names),
+            .values = try Remap.span(store, context, update.values),
+        } },
         .tag => |tag| .{ .tag = .{ .desc = try Remap.one(context, tag.desc), .name = try Remap.one(context, tag.name), .payloads = try Remap.span(store, context, tag.payloads) } },
         .list => |list| .{ .list = .{ .elem_desc = try Remap.one(context, list.elem_desc), .elems = try Remap.span(store, context, list.elems) } },
         .box => |box| .{ .box = .{ .desc = try Remap.one(context, box.desc), .payload = try Remap.one(context, box.payload) } },

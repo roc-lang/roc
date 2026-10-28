@@ -5116,7 +5116,28 @@ pub const Builder = struct {
         }
         // An update copies the fields it does not mention from its base.
         if (update_base) |base_value| {
-            if (record_ty.ext != null) invariant("updating a record of an open row is not yet lowered by Boxy");
+            // A record of an open row takes the fields its update names and
+            // the rest of its base's, which only its descriptor lists.
+            if (record_ty.ext != null) {
+                var names: std.ArrayList(LocalId) = .empty;
+                defer names.deinit(self.allocator);
+                var updated: std.ArrayList(LocalId) = .empty;
+                defer updated.deinit(self.allocator);
+                for (fields, ordered) |field, value| {
+                    const local = value orelse continue;
+                    try names.append(self.allocator, try self.nameDesc(field.name));
+                    try updated.append(self.allocator, local);
+                }
+                const result = try self.localOf(ty, .frame);
+                try self.emitDyn(result, .{ .record_update = .{
+                    .base = base_value,
+                    .base_desc = try self.descOf(try self.exprType(record.ext.?)),
+                    .desc = try self.descOf(ty),
+                    .names = try self.store.addLocalSpan(names.items),
+                    .values = try self.store.addLocalSpan(updated.items),
+                } });
+                return try self.pushValue(result);
+            }
             const base_ty = try self.structuralType(try self.exprType(record.ext.?));
             const base_record = switch (self.program.store.get(base_ty)) {
                 .record => |value| value,

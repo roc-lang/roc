@@ -11726,6 +11726,19 @@ pub const MonoLlvmCodeGen = struct {
                     fields,
                 });
             },
+            .record_update => |u| {
+                const names = try self.dynLocalArray(u.names, .words);
+                const values = try self.dynLocalArray(u.values, .bytes);
+                _ = try self.callBoxyRuntime("roc_desc_update_record", .void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty, ptr_ty }, &.{
+                    try self.wordValue(u.base_desc),
+                    try self.bytesAddress(u.base),
+                    try self.wordValue(u.desc),
+                    try self.targetAddress(target),
+                    try self.intValue(.i32, u.values.len),
+                    names,
+                    values,
+                });
+            },
             .tag => |t| {
                 const payloads = try self.dynLocalArray(t.payloads, .bytes);
                 _ = try self.callBoxyRuntime("roc_desc_build_tag", .void, &.{ ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty }, &.{

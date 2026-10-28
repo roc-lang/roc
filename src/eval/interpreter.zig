@@ -8775,6 +8775,22 @@ pub const Interpreter = struct {
                 }
                 try self.finishResultStorage(frame, stmt_id, target, dst);
             },
+            .record_update => |u| {
+                const names_span = self.store.getLocalSpan(u.names);
+                const values_span = self.store.getLocalSpan(u.values);
+                const names = try self.allocator.alloc(*const boxy.desc.Name, names_span.len);
+                defer self.allocator.free(names);
+                const values = try self.allocator.alloc([*]const u8, values_span.len);
+                defer self.allocator.free(values);
+                for (names, values, 0..) |*name, *value, i| {
+                    name.* = try self.nameAt(frame, GuardedList.at(names_span, i));
+                    value.* = try self.localBytes(frame, GuardedList.at(values_span, i));
+                }
+                const desc = try self.descAt(frame, u.desc);
+                const dst = try self.targetStorage(frame, target);
+                boxy.compiled.updateRecord(try self.descAt(frame, u.base_desc), try self.localBytes(frame, u.base), desc, dst, names, values, &self.roc_ops);
+                try self.finishResultStorage(frame, stmt_id, target, dst);
+            },
             .tag => |t| {
                 const found = try self.variantNamed(try self.descAt(frame, t.desc), try self.nameAt(frame, t.name));
                 const payloads = self.store.getLocalSpan(t.payloads);

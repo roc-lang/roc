@@ -156,6 +156,33 @@ pub fn buildRecord(desc: *const TypeDesc, dst: [*]u8, fields: []const [*]const u
     }
 }
 
+/// Build the record `desc` describes at `dst` from the record `base`
+/// (described by `base_desc`): each field named in `names` takes the value
+/// at the corresponding one of `values`, moved in, and every other field
+/// `base`'s field of the same name, shared. `base` is released.
+pub fn updateRecord(base_desc: *const TypeDesc, base: [*]u8, desc: *const TypeDesc, dst: [*]u8, names: []const *const Name, values: []const [*]const u8, ops: *RocOps) void {
+    const record = recordOf(desc, ops);
+    const base_record = recordOf(base_desc, ops);
+    @memset(dst[0..record.size], 0);
+    for (record.fields()) |*field| {
+        if (field.is_padding != 0) continue;
+        const name = field.name orelse invariant(ops, "an updated record has an unnamed field");
+        const updated = for (names, values) |candidate, value| {
+            if (candidate.id == name.id) break value;
+        } else null;
+        if (updated) |value| {
+            writeComponent(field.desc, dst + field.offset, value, ops);
+            continue;
+        }
+        const source = for (base_record.fields()) |*candidate| {
+            if (candidate.name != null and candidate.name.?.id == name.id) break candidate;
+        } else invariant(ops, "an updated record's field is absent from its base");
+        @memcpy(dst[field.offset..][0..field.desc.size], base[source.offset..][0..field.desc.size]);
+        walk.incref(field.desc, dst + field.offset, 1, ops);
+    }
+    walk.decref(base_desc, base, ops);
+}
+
 pub fn buildTag(desc: *const TypeDesc, name: *const Name, dst: [*]u8, payloads: []const [*]const u8, ops: *RocOps) void {
     const found = variantNamed(desc, name, ops);
     if (payloads.len != found.variant.payload_count) invariant(ops, "a tag built with a different number of arguments than its descriptor has");

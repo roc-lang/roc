@@ -8752,6 +8752,20 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitBoxyRuntimeCall(.build_record);
             try self.finishTarget(dst, t);
         },
+        .record_update => |u| {
+            const names = try self.emitLocalArray(u.names, .words);
+            const values = try self.emitLocalArray(u.values, .bytes);
+            const t = try self.dynTarget(dst);
+            try self.emitProcLocal(u.base_desc);
+            try self.emitBytesAddress(u.base);
+            try self.emitProcLocal(u.desc);
+            try self.emitTargetAddress(t);
+            try self.emitI32Const(@intCast(self.store.getLocalSpan(u.values).len));
+            try self.emitLocalGet(names);
+            try self.emitLocalGet(values);
+            try self.emitBoxyRuntimeCall(.update_record);
+            try self.finishTarget(dst, t);
+        },
         .tag => |tag| {
             const payloads = try self.emitLocalArray(tag.payloads, .bytes);
             const t = try self.dynTarget(dst);

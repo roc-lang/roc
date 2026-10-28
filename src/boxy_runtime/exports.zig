@@ -183,6 +183,10 @@ pub fn roc_desc_build_record(desc: *const TypeDesc, dst: ?[*]u8, count: u32, fie
     compiled.buildRecord(desc, valuePtr(dst), items([*]const u8, count, fields), ops());
 }
 
+pub fn roc_desc_update_record(base_desc: *const TypeDesc, base: ?[*]u8, desc: *const TypeDesc, dst: ?[*]u8, count: u32, names: ?[*]const *const Name, values: ?[*]const [*]const u8) callconv(.c) void {
+    compiled.updateRecord(base_desc, valuePtr(base), desc, valuePtr(dst), items(*const Name, count, names), items([*]const u8, count, values), ops());
+}
+
 pub fn roc_desc_build_tag(desc: *const TypeDesc, name: *const Name, dst: ?[*]u8, count: u32, payloads: ?[*]const [*]const u8) callconv(.c) void {
     compiled.buildTag(desc, name, valuePtr(dst), items([*]const u8, count, payloads), ops());
 }

@@ -1399,6 +1399,11 @@ pub const DynOp = union(enum) {
     /// Build the record or tuple `desc` describes from `fields`, given in
     /// semantic index order.
     record: struct { desc: LocalId, fields: LocalSpan },
+    /// Build the record `desc` describes from the record `base`, which
+    /// `base_desc` describes: each field named in `names` takes the
+    /// corresponding one of `values`, and every other field `base`'s field
+    /// of the same name. `base` and `values` are consumed.
+    record_update: struct { base: LocalId, base_desc: LocalId, desc: LocalId, names: LocalSpan, values: LocalSpan },
     /// Build tag `name` of the tag union `desc` describes from `payloads`.
     tag: struct { desc: LocalId, name: LocalId, payloads: LocalSpan },
     /// Build a list of `elems`, whose elements `elem_desc` describes.

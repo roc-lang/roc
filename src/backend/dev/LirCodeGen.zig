@@ -17347,6 +17347,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBoxyRuntime(&builder, "roc_desc_build_record");
                     try self.finishTarget(dst_local, dst);
                 },
+                .record_update => |u| {
+                    const names = try self.emitLocalArray(u.names, .words);
+                    const values = try self.emitLocalArray(u.values, .bytes);
+                    const dst = try self.dynTarget(dst_local);
+                    try self.addWordArg(&builder, u.base_desc);
+                    try self.addBytesArg(&builder, u.base);
+                    try self.addWordArg(&builder, u.desc);
+                    try addTargetArg(&builder, dst);
+                    try builder.addImmArg(@intCast(self.store.getLocalSpan(u.values).len));
+                    try builder.addLeaArg(frame_ptr, names);
+                    try builder.addLeaArg(frame_ptr, values);
+                    try self.callBoxyRuntime(&builder, "roc_desc_update_record");
+                    try self.finishTarget(dst_local, dst);
+                },
                 .tag => |t| {
                     const payloads = try self.emitLocalArray(t.payloads, .bytes);
                     const dst = try self.dynTarget(dst_local);
