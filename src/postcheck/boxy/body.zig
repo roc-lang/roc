@@ -66,6 +66,10 @@ pub const Task = union(enum) {
     bind: struct { pattern: CheckedPatternId, ty: TypeId },
     /// Pop and drop one value.
     discard,
+    /// After a divergent statement: no statement is reached, and the value
+    /// of its block, of this type or of no type when the checker gave it
+    /// one holding the erroneous type, is never produced.
+    diverged: ?TypeId,
     /// Crash as a dispatch that cannot run does; its value is of type
     /// `result`.
     dispatch_crash: struct { kind: lower.CrashDictionary, result: TypeId },
@@ -284,6 +288,14 @@ pub const Builder = struct {
 
     pub fn bodies(self: *const Builder) checked.CheckedBodyStoreView {
         return self.view.bodies();
+    }
+
+    /// The inline-expect mode the program's divergence facts are read in.
+    pub fn inlineExpectMode(self: *const Builder) checked.InlineExpectMode {
+        return switch (self.program.input.inline_expects) {
+            .run => .run,
+            .omit => .omit,
+        };
     }
 
     // -- Locals --
@@ -952,8 +964,9 @@ pub const Builder = struct {
     }
 
     /// Crash with a checked runtime error; the value of type `ty` it stands
-    /// for is never produced. An erroneous value has no type of its own,
-    /// and no reachable statement reads the zero-sized local standing for it.
+    /// for is never produced. A value whose type holds the erroneous type
+    /// has no type of its own, and no reachable statement reads the
+    /// zero-sized local standing for it.
     pub fn runtimeErrorValue(self: *Builder, ty: ?TypeId) Allocator.Error!void {
         const literal = try self.store.insertString("runtime error");
         try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal }, .checked_error = true } });
@@ -1645,6 +1658,10 @@ pub const Builder = struct {
             .bind => |bind| try self.bindIrrefutable(bind.pattern, self.popValue(), bind.ty),
             .discard => _ = self.popValue(),
             .runtime_error => |ty| try self.runtimeErrorValue(ty),
+            .diverged => |ty| {
+                if (self.hole != null) try self.emitTerminal(.runtime_error);
+                try self.pushValue(if (ty) |value_ty| try self.localOf(value_ty, .frame) else try self.closedLocal(.zst));
+            },
             .dispatch_crash => |crash| {
                 try self.emitDispatchCrash(crash.kind);
                 try self.pushValue(try self.localOf(crash.result, .frame));
@@ -1898,8 +1915,20 @@ pub const Builder = struct {
             .lookup_required => |resolved| try self.lowerLookupExternal(expr_id, resolved orelse invariant("a platform requirement lookup had no resolved reference")),
             .block => |block| {
                 if (self.tail_exprs.contains(expr_id)) try self.tail_exprs.put(self.allocator, block.final_expr, {});
-                var index = block.statements.len;
-                try self.push(.{ .expr = block.final_expr });
+                // A divergent statement leaves the rest of the block
+                // unreachable: nothing after it is lowered, and the block's
+                // value is never produced.
+                const mode = self.inlineExpectMode();
+                const reached = for (block.statements, 0..) |stmt, position| {
+                    if (self.bodies().statementDiverges(stmt, mode)) break position + 1;
+                } else block.statements.len;
+                var index = reached;
+                if (reached == block.statements.len) {
+                    try self.push(.{ .expr = block.final_expr });
+                } else {
+                    const block_ty = self.bodies().expr(expr_id).ty;
+                    try self.push(.{ .diverged = if (try self.program.converter().hasError(self.module, block_ty)) null else try self.exprType(expr_id) });
+                }
                 while (index > 0) {
                     index -= 1;
                     try self.push(.{ .stmt = block.statements[index] });
@@ -1983,7 +2012,7 @@ pub const Builder = struct {
                 // A retired expression evaluates the operands it still
                 // evaluates, each for its effects, then crashes.
                 const checked_ty = self.bodies().expr(expr_id).ty;
-                try self.push(.{ .runtime_error = if (self.view.types().payload(checked_ty) == .err) null else try self.exprType(expr_id) });
+                try self.push(.{ .runtime_error = if (try self.program.converter().hasError(self.module, checked_ty)) null else try self.exprType(expr_id) });
                 var index = runtime_error.evaluated.len;
                 while (index > 0) {
                     index -= 1;
@@ -4960,11 +4989,20 @@ pub const Builder = struct {
         switch (stmt.data) {
             .decl => |decl| {
                 if (decl.recursive) invariant("recursive value declarations are not yet lowered by Boxy");
-                try self.push(.{ .bind = .{ .pattern = decl.pattern, .ty = try self.exprType(decl.expr) } });
+                // A value that diverges binds nothing.
+                if (self.bodies().exprDiverges(decl.expr, self.inlineExpectMode())) {
+                    try self.push(.discard);
+                } else {
+                    try self.push(.{ .bind = .{ .pattern = decl.pattern, .ty = try self.exprType(decl.expr) } });
+                }
                 try self.push(.{ .expr = decl.expr });
             },
             .var_ => |var_| {
-                try self.push(.{ .bind = .{ .pattern = var_.pattern, .ty = try self.exprType(var_.expr) } });
+                if (self.bodies().exprDiverges(var_.expr, self.inlineExpectMode())) {
+                    try self.push(.discard);
+                } else {
+                    try self.push(.{ .bind = .{ .pattern = var_.pattern, .ty = try self.exprType(var_.expr) } });
+                }
                 try self.push(.{ .expr = var_.expr });
             },
             .reassign => |reassign| {

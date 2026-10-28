@@ -625,6 +625,41 @@ pub const Converter = struct {
         };
     }
 
+    /// Whether the checked type `root` holds the erroneous type anywhere:
+    /// the type of a value checking rejected, which no lowering converts.
+    pub fn hasError(self: Converter, module: ModuleIndex, root: checked.CheckedTypeId) Allocator.Error!bool {
+        const allocator = self.store.allocator;
+        const types = self.modules.get(module).types();
+        var seen: std.AutoHashMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        defer seen.deinit(allocator);
+        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+            switch (types.payload(ty)) {
+                .err => return true,
+                .alias => |alias| try pending.append(allocator, alias.backing),
+                .record => |record| {
+                    for (record.fields) |field| try pending.append(allocator, field.ty);
+                    try pending.append(allocator, record.ext);
+                },
+                .tuple => |items| try pending.appendSlice(allocator, items),
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(types));
+                    try pending.append(allocator, tag_union.ext);
+                },
+                .function => |function| {
+                    try pending.appendSlice(allocator, function.args);
+                    try pending.append(allocator, function.ret);
+                },
+                .nominal => |nominal| try pending.appendSlice(allocator, nominal.args),
+                .pending, .flex, .rigid, .empty_record, .empty_tag_union => {},
+            }
+        }
+        return false;
+    }
+
     /// A variable the converting scope does not bind: it seals to its row
     /// default or its numeric default (`CheckedTypePayload.variableSealsToRowDefault`).
     fn sealVariable(self: Converter, variable: checked.CheckedTypeVariable) Allocator.Error!TypeId {
