@@ -536,6 +536,12 @@ pub const Converter = struct {
     /// `required` (a generated codec contract's snapshot, whose kinds no
     /// caller can pin), rather than keeping its presence-slot representation.
     seal_undetermined_kinds: bool = false,
+    /// The program's solution of each platform requirement identity
+    /// variable: the app type the platform's requirement takes it to be.
+    platform_identities: ?*const std.AutoHashMapUnmanaged(IdentityKey, TypeId) = null,
+
+    /// A checked type of a module.
+    pub const IdentityKey = struct { module: ModuleIndex, ty: checked.CheckedTypeId };
 
     /// The variable a seeding conversion gives a scheme variable.
     pub const seed_variable_index: u32 = std.math.maxInt(u32);
@@ -606,6 +612,9 @@ pub const Converter = struct {
     /// The node for `ty` when it needs no children converted first.
     fn leaf(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env) Allocator.Error!?TypeId {
         if (env.lookup(module, ty)) |bound| return bound;
+        if (self.platform_identities) |identities| {
+            if (identities.get(.{ .module = module, .ty = ty })) |solved| return solved;
+        }
         const view = self.modules.get(module);
         if (!self.seal_undetermined_kinds and !rootHasIdentityVariables(view, ty)) {
             if (self.store.closed_memo.get(.{ .module = module, .ty = ty })) |memo| return memo;

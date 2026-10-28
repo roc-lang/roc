@@ -36193,6 +36193,12 @@ pub const ImportedModuleView = struct {
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
+    /// A platform's requirement identity variables (empty for any other
+    /// module).
+    platform_type_inputs: *const PlatformTypeInputs = &empty_platform_type_inputs,
+    /// An app's solutions of its platform's requirement identity variables
+    /// (empty for any other module).
+    platform_requirement_solutions: *const PlatformRequirementSolutionTable = &empty_platform_requirement_solutions,
     callable_eval_templates: CallableEvalTemplateTableView,
     hoisted_constants: *const HoistedConstTable,
     const_templates: *const ConstTemplateTable,
@@ -36219,6 +36225,9 @@ pub const LoweringModuleView = struct {
 };
 
 /// Public `importedView` function.
+const empty_platform_type_inputs: PlatformTypeInputs = .{};
+const empty_platform_requirement_solutions: PlatformRequirementSolutionTable = .{};
+
 pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
     return .{
         .code_generation_key = if (artifact.pairing_arena != null) artifact.codeGenerationKey() else null,
@@ -36251,6 +36260,8 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
         .platform_required_declarations = &artifact.platform_required_declarations,
         .platform_required_bindings = &artifact.platform_required_bindings,
+        .platform_type_inputs = &artifact.platform_type_inputs,
+        .platform_requirement_solutions = &artifact.platform_requirement_solutions,
         .callable_eval_templates = artifact.callable_eval_templates.view(),
         .hoisted_constants = &artifact.hoisted_constants,
         .const_templates = &artifact.const_templates,

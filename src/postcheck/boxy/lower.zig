@@ -264,6 +264,9 @@ pub const Program = struct {
     /// The converted values of each instance-dependent literal, by the
     /// literal: indices into `Input.literal_values.entries`.
     literal_entries: std.AutoHashMapUnmanaged(ExprKey, std.ArrayList(u32)) = .empty,
+    /// The app type each platform requirement identity variable takes
+    /// (`types.Converter.platform_identities`).
+    platform_identities: std.AutoHashMapUnmanaged(types.Converter.IdentityKey, TypeId) = .empty,
     /// The Builtin `Hasher` type, once asked for (`defaultHasher`).
     default_hasher: ?TypeId = null,
     /// Each module's callable-eval templates, by their binding pattern.
@@ -296,7 +299,7 @@ pub const Program = struct {
     codec: Codec.State = .{},
 
     pub fn converter(self: *Program) types.Converter {
-        return .{ .store = &self.store, .modules = &self.modules };
+        return .{ .store = &self.store, .modules = &self.modules, .platform_identities = &self.platform_identities };
     }
 
     pub fn module(self: *const Program, index: ModuleIndex) *const types.ModuleView {
@@ -1319,6 +1322,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.by_module_idx.deinit(allocator);
         program.exported_bindings.deinit(allocator);
         program.callable_eval_by_pattern.deinit(allocator);
+        program.platform_identities.deinit(allocator);
         {
             var entries = program.literal_entries.valueIterator();
             while (entries.next()) |list| list.deinit(allocator);
@@ -1369,6 +1373,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             try slot.value_ptr.append(allocator, @intCast(index));
         }
     }
+    try solvePlatformIdentities(&program);
     try seedSourceFiles(&program);
     try initHosted(&program);
     for (program.modules.views.items) |*view| {
@@ -1598,6 +1603,29 @@ fn initHosted(program: *Program) Allocator.Error!void {
         }
     }.lessThan);
     for (ordered.items, 0..) |item, index| program.hosted.getPtr(item.key).?.dispatch_index = @intCast(index);
+}
+
+/// Bind each platform requirement identity variable to the app type the
+/// app's checking solved it to: the platform's code is lowered at the types
+/// the app provides for its requirements.
+fn solvePlatformIdentities(program: *Program) Allocator.Error!void {
+    const platform = for (program.modules.views.items) |*view| {
+        if (view.view.platform_type_inputs.requirements.len != 0) break view;
+    } else return;
+    for (program.modules.views.items) |*app| {
+        const table = app.view.platform_requirement_solutions;
+        for (table.solutions) |solution| {
+            if (solution.requires_idx >= platform.view.platform_type_inputs.requirements.len) invariant("an app solves a requirement its platform does not declare");
+            const requirement = platform.view.platform_type_inputs.requirements[solution.requires_idx];
+            const formals = platform.view.platform_type_inputs.identities[requirement.identities.start..][0..requirement.identities.len];
+            const solved = table.identity_solutions[solution.identity_start..][0..solution.identity_len];
+            if (formals.len != solved.len) invariant("an app's requirement solution differs from its requirement's identity variables");
+            for (formals, solved) |formal, app_ty| {
+                const ty = try program.converter().convert(app.index, app_ty, .{ .module = app.index, .vars = &.{}, .bound = &.{} });
+                try program.platform_identities.put(program.allocator, .{ .module = platform.index, .ty = formal }, ty);
+            }
+        }
+    }
 }
 
 fn lowerRoot(program: *Program, request: checked.RootRequest, index: u32, source_module: ModuleIndex) Allocator.Error!LIR.LirProcSpecId {
