@@ -46,7 +46,10 @@ pub fn ownership(op: DynOp) Ownership {
         => .none,
         // A dictionary is an immortal erased callable built from its
         // captures, which it holds as an aggregate holds its fields.
-        .dict_compose, .dict_record => .construct,
+        .dict_compose => .construct,
+        // A dictionary record copies the words of its callables, which are
+        // immortal, into an immortal record of its own.
+        .dict_record => .borrow_operands,
         // A dictionary's callables are immortal; the target borrows from it.
         .dict_method => |method| .{ .borrow_component = method.dict },
         .copy => |copy| .{ .alias = copy.src },
@@ -224,23 +227,23 @@ pub fn constructedValues(store: *const LirStore, allocator: std.mem.Allocator, o
         .list => |list| try appendSpan(store, allocator, list.elems, out),
         .box => |box| try out.append(allocator, box.payload),
         .dict_compose => |dict| try appendSpan(store, allocator, dict.captures, out),
-        .dict_record => |dict| try appendSpan(store, allocator, dict.methods, out),
         .closure => |closure| try out.append(allocator, closure.capture),
         else => unreachable, // only construct operations consume value operands
     }
 }
 
-/// The value operands a `borrow_operands` operation reads.
-pub fn borrowedValues(op: DynOp) struct { locals: [2]LocalId, len: u8 } {
-    return switch (op) {
-        .tag_discriminant => |tag| .{ .locals = .{ tag.base, undefined }, .len = 1 },
-        .eq => |eq| .{ .locals = .{ eq.lhs, eq.rhs }, .len = 2 },
-        .hash => |hash| .{ .locals = .{ hash.hasher, hash.value }, .len = 2 },
-        .inspect => |inspect| .{ .locals = .{ inspect.value, undefined }, .len = 1 },
-        .numeral => .{ .locals = undefined, .len = 0 },
-        .adapt => |adapt| .{ .locals = .{ adapt.src, undefined }, .len = 1 },
+/// The value operands a `borrow_operands` operation reads, in order.
+pub fn borrowedValues(store: *const LirStore, allocator: std.mem.Allocator, op: DynOp, out: *std.ArrayList(LocalId)) std.mem.Allocator.Error!void {
+    switch (op) {
+        .tag_discriminant => |tag| try out.append(allocator, tag.base),
+        .eq => |eq| try out.appendSlice(allocator, &.{ eq.lhs, eq.rhs }),
+        .hash => |hash| try out.appendSlice(allocator, &.{ hash.hasher, hash.value }),
+        .inspect => |inspect| try out.append(allocator, inspect.value),
+        .numeral => {},
+        .adapt => |adapt| try out.append(allocator, adapt.src),
+        .dict_record => |dict| try appendSpan(store, allocator, dict.methods, out),
         else => unreachable, // only borrow_operands operations borrow value operands
-    };
+    }
 }
 
 fn appendSpan(store: *const LirStore, allocator: std.mem.Allocator, span: LocalSpan, out: *std.ArrayList(LocalId)) std.mem.Allocator.Error!void {
