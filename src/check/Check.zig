@@ -819,6 +819,9 @@ widen_closed_rows_only: bool = false,
 /// Scratch for `widenedReachCopy`: one row's tags, gathered along its
 /// extension chain.
 widened_use_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty,
+/// Scratch for `widenedReachCopy`: each copy of an open row that kept the
+/// row's own tail, paired with that row (`liftKeptTailSources`).
+widened_kept_tail_rows: std.ArrayListUnmanaged(KeptTailRow) = .empty,
 /// Every row a use's widening copy re-opened, paired with the value's row it
 /// copies (`WidenedUseRow`). A value's row can still gain tags after a use
 /// copied it (a generated codec's validation adds its error tags during
@@ -1583,6 +1586,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .widened_use_copies = .scratch,
     .widen_closed_rows_only = .lexical,
     .widened_use_tags = .scratch,
+    .widened_kept_tail_rows = .scratch,
     .occurs_scratch = .scratch,
     .seen_annos = .scratch,
     .env_pool = .input,
@@ -21988,12 +21992,15 @@ fn appendWidenedReachChildren(self: *Self, var_: Var, children: *std.ArrayListUn
 
 /// A reached tag union's copy: every tag on its extension chain, each payload
 /// copied through the reach, under a fresh open extension. A row whose chain
-/// ends in a rigid is not the value's to widen and is shared.
+/// ends in a rigid, or in a tail that is still open, is not the value's to
+/// re-open: the copy keeps that tail, and is the row itself unless a payload's
+/// copy widens.
 fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!Var {
     const tags_start = self.widened_use_tags.items.len;
     defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
     var current = row;
     var at_head = true;
+    var kept_tail: ?Var = null;
     while (true) {
         const resolved = self.types.resolveVar(current);
         if (at_head) {
@@ -22019,10 +22026,14 @@ fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, regi
                 // it; only a row that cannot gain a tag needs its own re-opened
                 // copy: a closed one, or one an annotation bounds (an annotated
                 // value's row, which closes when its module finishes).
-                if (self.widen_closed_rows_only and !resolved.desc.flags.bounded_row_ext) return self.types.resolveVar(row).var_;
+                if (self.widen_closed_rows_only and !resolved.desc.flags.bounded_row_ext) kept_tail = resolved.var_;
                 break;
             },
-            .rigid, .err, .field_presence => return self.types.resolveVar(row).var_,
+            .rigid => {
+                kept_tail = resolved.var_;
+                break;
+            },
+            .err, .field_presence => return self.types.resolveVar(row).var_,
         }
     }
     // A row with no tags asserts that no value has it (design.md "Polarity"
@@ -22034,11 +22045,25 @@ fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, regi
     // payload's own copy was built before this row's (`widenedReachCopy`).
     const tags = try self.gpa.dupe(types_mod.Tag, self.widened_use_tags.items[tags_start..]);
     defer self.gpa.free(tags);
+    var payload_widened = false;
     for (tags) |*tag| {
         const args = try self.gpa.dupe(Var, self.types.sliceVars(tag.args));
         defer self.gpa.free(args);
-        for (args) |*arg| arg.* = self.widenedCopyOf(arg.*);
+        for (args) |*arg| {
+            const arg_copy = self.widenedCopyOf(arg.*);
+            payload_widened = payload_widened or arg_copy != self.types.resolveVar(arg.*).var_;
+            arg.* = arg_copy;
+        }
         tag.* = try self.types.mkTag(tag.name, args);
+    }
+    // A kept tail is shared with the value's own row, so every tag either
+    // row gains through it is the other's too, and the copy re-opens no row
+    // of its own to record.
+    if (kept_tail) |tail| {
+        if (!payload_widened) return self.types.resolveVar(row).var_;
+        const copy = try self.freshFromContent(try self.types.mkTagUnion(tags, tail), env, region);
+        try self.widened_kept_tail_rows.append(self.gpa, .{ .source = self.types.resolveVar(row).var_, .copy = copy });
+        return copy;
     }
     const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
     const copy = try self.freshFromContent(try self.types.mkTagUnion(tags, ext), env, region);
@@ -22053,6 +22078,7 @@ fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, regi
 fn widenedClosedRowsCopy(self: *Self, value_var: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
     try self.computeCoercionReach(value_var);
     self.widened_use_copies.clearRetainingCapacity();
+    self.widened_kept_tail_rows.clearRetainingCapacity();
     self.widen_closed_rows_only = true;
     defer self.widen_closed_rows_only = false;
     const copy = try self.widenedReachCopy(value_var, use_expr, env, region);
@@ -22091,6 +22117,47 @@ fn widenResultValue(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env) std.mem.Allo
         .rows_start = rows_start,
         .rows_end = @intCast(self.widened_use_rows.items.len),
     };
+}
+
+/// An open row the widening copy kept the tail of, and that copy.
+const KeptTailRow = struct {
+    source: Var,
+    copy: Var,
+};
+
+/// A row coercion never changes a value's nominal identity (design.md "Row
+/// Subsumption"): a kept-tail copy the relation lifted into a nominal has a
+/// source that is the same construction, so the source lifts into that
+/// nominal at its own arguments. The coercion then relates the nominal at
+/// the value's arguments to the nominal at the result's. Returns whether
+/// every source lifted.
+fn liftKeptTailSources(self: *Self, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!bool {
+    for (self.widened_kept_tail_rows.items) |kept| {
+        const nominal = self.resolvedNominalOrNull(kept.copy) orelse continue;
+        if (self.resolvedNominalOrNull(kept.source) != null) continue;
+        const arg_count = self.types.sliceNominalArgs(nominal).len;
+        const region = self.getRegionAt(kept.source);
+        const args = try self.gpa.alloc(Var, arg_count);
+        defer self.gpa.free(args);
+        for (args) |*arg| arg.* = try self.fresh(env, region);
+        var lifted = nominal;
+        lifted.args = try self.types.appendVars(args);
+        const target = try self.freshFromContent(.{ .structure = .{ .nominal_type = lifted } }, env, region);
+        if (!(try self.runUnify(kept.source, target, env, unifyOptionsForContext(ctx, .write_no_report))).isAccepted()) return false;
+    }
+    return true;
+}
+
+/// The nominal type `var_` resolves to through aliases, or null.
+fn resolvedNominalOrNull(self: *const Self, var_: Var) ?types_mod.NominalType {
+    var current = var_;
+    while (true) {
+        switch (self.types.resolveVar(current).desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| return if (flat == .nominal_type) flat.nominal_type else null,
+            .flex, .rigid, .field_presence, .err => return null,
+        }
+    }
 }
 
 /// The relation admitted the widened value: the expression flows into its
@@ -43325,7 +43392,9 @@ fn relateResultValue(
 /// a row coercion. Null when the value reaches no closed row, or when the
 /// widened relation is rejected: the copy only re-opens rows the value's own
 /// type closes, so whatever rejected it rejects the value's own type too, and
-/// the caller relates and reports that type.
+/// the caller relates and reports that type. A value whose own row cannot lift
+/// into a nominal its copy lifted into (`liftKeptTailSources`) is reported
+/// here as the mismatch.
 fn relateWidenedResultValue(
     self: *Self,
     expected: Var,
@@ -43335,12 +43404,25 @@ fn relateWidenedResultValue(
 ) std.mem.Allocator.Error!?unifier.Result {
     const widening = try self.widenResultValue(actual_expr, env) orelse return null;
     const result = try self.runUnify(expected, widening.wide_var, env, unifyOptionsForContext(ctx, .write_no_report));
-    if (result.isAccepted()) {
+    if (!result.isAccepted()) {
+        self.discardResultWidening(widening);
+        return null;
+    }
+    if (try self.liftKeptTailSources(env, ctx)) {
         try self.recordResultWidening(widening);
         return result;
     }
+    // The result admitted the copy, but the value's own row cannot lift into
+    // the nominal the copy did, so the value's own type is the mismatch.
     self.discardResultWidening(widening);
-    return null;
+    const actual = ModuleEnv.varFrom(actual_expr);
+    const result_expr = self.resultValueExpr(actual_expr);
+    const problem_idx = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual));
+    self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
+    self.types.assertNoSavepointActive();
+    try self.types.poisonOnMismatch(expected, actual);
+    try self.markErroneousValueExpr(result_expr);
+    return .{ .problem = problem_idx };
 }
 
 /// Relate one return contribution to the result it flows into. That result is
@@ -58041,7 +58123,7 @@ fn checkBranchBodyAgainstExpected(
         defer if (!committed) commit_probe.rollback();
 
         const result = try commit_probe.unifyInContext(if (widening) |w| w.wide_var else body_var, acc, ctx);
-        if (result.isAccepted()) {
+        if (result.isAccepted() and (widening == null or try self.liftKeptTailSources(env, ctx))) {
             committed = true;
             try commit_probe.commit();
             if (widening) |w| try self.recordResultWidening(w);

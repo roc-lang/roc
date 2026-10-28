@@ -5101,8 +5101,9 @@ anonymous side carries the mark, so the verdict does not depend on which
 relation reached the structure first. The rejected side is pinned in
 `src/check/test/type_checking_integration.zig` for a tag payload, a record
 field, a generalized constructor helper, an annotated structural parameter
-that feeds a backing, and an imported backing; the accepted control keeps a
-structural payload and a nominal payload side by side in one backing.
+that feeds a backing, and an imported backing; the accepted controls keep a
+structural payload and a nominal payload side by side in one backing, and
+pass a structural value through a forwarding parameter that feeds it.
 
 ### Settled-State Re-Decision
 
@@ -10982,8 +10983,19 @@ body, a branch of an `if` or `match` in result position, the value of a
 `return`—and whose type reaches a closed tag union that is not a host-boundary
 row (the reach is fixed below) relates to the result through a copy of its type in which each such closed row
 is re-opened (`Check.widenedClosedRowsCopy`), with every open row and every
-position outside the reach shared with the value. The expression keeps its own
-type. Checking records it with the copy (`ModuleEnv.RowCoercedResult`), and
+position outside the reach shared with the value. An open row whose payload
+reaches a closed row—the open row a construction mints, as in `Err(x)` with a
+closed parameter `x`—is copied with its own tail kept: the copy lists the
+re-opened payload, and every tag either row gains through that shared tail is
+the other's too. A coercion never changes a value's nominal identity, so
+when the relation lifts such a copy into a nominal (the `Try` of an annotated
+result, or a user nominal), the value's own row lifts into the same nominal at
+its own arguments (`Check.liftKeptTailSources`), and the coercion relates the
+nominal at the value's arguments to the nominal at the result's. A user
+nominal's arguments are outside the reach, so its backing then relates to the
+value's payloads exactly as an uncoerced value's would. A forwarding
+construction is then interchangeable with one that builds the same payload
+wherever the reach widens. The expression keeps its own type. Checking records it with the copy (`ModuleEnv.RowCoercedResult`), and
 checked-body construction keeps the expression's own node and adds a
 `row_coerce` of it at the copy's type, which is the node the expression's
 parent refers to (Row Coercion Primitive, below); every consumer keyed by the
@@ -11613,10 +11625,13 @@ request itself is formed at the widened row: a direct call whose result flows
 into a wider row, through a row coercion or a lambda body whose composed `?`
 result is wider than its own, is lowered at that row's cell, and a callee
 request whose row includes the callee's closed row widens it
-(`stepCallExprAtNode`, `coercedValueTakesRow`). A value that is not such a
-call—a read of a value, whose row every use shares, or a call through a
-function value—keeps its own row and is widened into the destination by a
-`row_widen`, which Lambda Solved joins (Row Joins). Only two positions widen,
+(`stepCallExprAtNode`, `coercedValueTakesRow`). A construction builds only
+its own row: each payload whose type is not already the destination's slot
+for it must take that slot by the same rule, so `Err(tag)` forwarding a
+parameter whose row the `?` result widens is not lowered at the result's
+cell. A value that is not such a call—a read of a value, whose row every use
+shares, or a call through a function value—keeps its own row and is widened
+into the destination by a `row_widen`, which Lambda Solved joins (Row Joins). Only two positions widen,
 the template's DIRECT result row and the ERROR row of a `Try` result; a
 `Try`'s ok row and every nested row relate exactly. The graph may present
 either side as a bare row or as the `Try` nominal, and the empty row's node
