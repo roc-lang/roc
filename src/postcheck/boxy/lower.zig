@@ -11,6 +11,7 @@
 const std = @import("std");
 const base = @import("base");
 const check = @import("check");
+const can = @import("can");
 const layout = @import("layout");
 const lir_core = @import("lir_core");
 
@@ -245,6 +246,8 @@ pub const Program = struct {
     lowering_module_ids: []LIR.LoweringModuleId = &.{},
     /// Modules by the checker's `module_idx`.
     by_module_idx: std.AutoHashMapUnmanaged(u32, ModuleIndex) = .empty,
+    /// The Builtin `Hasher` type, once asked for (`defaultHasher`).
+    default_hasher: ?TypeId = null,
     /// Each module's callable-eval templates, by their binding pattern.
     callable_eval_by_pattern: std.AutoHashMapUnmanaged(struct { module: ModuleIndex, pattern: checked.CheckedPatternId }, checked.CallableEvalTemplateId) = .empty,
     /// Each module's entry wrappers, by the compile-time root they wrap.
@@ -697,7 +700,7 @@ pub const Program = struct {
             const registry = view.view.method_registry;
             const names = view.nameStore();
             const method_names = [_][]const u8{ "is_eq", "to_hash", "to_inspect" };
-            for (method_names, &result) |method_name, *slot| {
+            for (method_names, &result, 0..) |method_name, *slot, method_index| {
                 const method = names.lookupMethodName(method_name) orelse continue;
                 const key: static_dispatch.MethodKey = .{ .owner = owner, .method = method };
                 // Inspection calls only an eligible `to_inspect`.
@@ -718,13 +721,57 @@ pub const Program = struct {
                 };
                 const worker_id = try self.templateRefWorker(template);
                 const target_worker = self.worker(worker_id).*;
-                if (target_worker.params.len == 0) invariant("a nominal method override takes no arguments");
-                const instance = try self.instantiateTarget(worker_id, target_worker.params[0], nominal_ty);
+                const formal = try self.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
+                const instance = try self.instantiateTarget(worker_id, formal, try self.overrideInterface(method_index, nominal_ty));
                 slot.* = .{ .entry = try self.methodEntryWorker(worker_id), .bound = instance.bound, .dicts = instance.obligations };
             }
         }
         try self.nominal_overrides.put(self.allocator, nominal_ty, result);
         return result;
+    }
+
+    /// The Builtin `Hasher`: the hasher every runtime `hash` operation
+    /// threads (its state is the `u64` the structural `to_hash` worker takes),
+    /// and so the hasher a nominal's `to_hash` override is called with. It
+    /// is the nominal its declaring module names `Builtin.Hasher`, as
+    /// checking's builtin type table names it.
+    pub fn defaultHasher(self: *Program) Allocator.Error!TypeId {
+        if (self.default_hasher) |known| return known;
+        const qualified = can.CIR.builtinTypeSpec("hasher_type").qualified_name;
+        for (self.modules.views.items) |*view| {
+            const env = view.view.module_env;
+            const ident = env.common.findIdent(qualified) orelse continue;
+            for (view.types().nominal_declarations) |declaration| {
+                if (declaration.source_statement >= env.store.nodes.len()) continue;
+                const node: can.CIR.Node.Idx = @fromBackingInt(@intCast(declaration.source_statement));
+                if (env.store.nodes.get(node).tag != .statement_nominal_decl) continue;
+                const statement_idx: can.CIR.Statement.Idx = @fromBackingInt(@intCast(declaration.source_statement));
+                const header = switch (env.store.getStatement(statement_idx)) {
+                    .s_nominal_decl => |decl| decl.header,
+                    else => continue,
+                };
+                if (!env.store.getTypeHeader(header).name.eql(ident)) continue;
+                const hasher = try self.converter().convert(view.index, declaration.declaration_root, .{ .module = view.index, .vars = &.{}, .bound = &.{} });
+                self.default_hasher = hasher;
+                return hasher;
+            }
+        }
+        invariant("no module of the program declares Builtin.Hasher, which every program imports");
+    }
+
+    /// The type a nominal method override is called at: `is_eq` compares
+    /// two values to a Bool, `to_hash` feeds one into the Builtin hasher,
+    /// and `to_inspect` renders one as a Str.
+    fn overrideInterface(self: *Program, method_index: usize, nominal_ty: TypeId) Allocator.Error!TypeId {
+        return switch (method_index) {
+            0 => try self.store.intern(.{ .function = .{ .args = &.{ nominal_ty, nominal_ty }, .ret = try self.store.primitive(.bool), .effectful = false } }),
+            1 => blk: {
+                const hasher = try self.defaultHasher();
+                break :blk try self.store.intern(.{ .function = .{ .args = &.{ nominal_ty, hasher }, .ret = hasher, .effectful = false } });
+            },
+            2 => try self.store.intern(.{ .function = .{ .args = &.{nominal_ty}, .ret = try self.store.primitive(.str), .effectful = false } }),
+            else => unreachable, // `Methods` has three overrides
+        };
     }
 
     /// `target` (a template's worker) whose scheme takes `bound`, with the
