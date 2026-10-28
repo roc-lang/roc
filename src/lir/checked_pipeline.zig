@@ -135,11 +135,9 @@ pub const WorkMetrics = struct {
     lir_continuations: u32 = 0,
 };
 
-/// The inlining a dev build specializes under. The object cache links dev
-/// procedures into other programs, so dev decides inlining from source alone,
-/// the same in every program; compile-time evaluation specializes under it
-/// too, so its code is the code a dev build compiles.
-pub const dev_inline_mode: InlineMode = .wrappers_and_source_single_use;
+/// Dev keeps standalone procedures eligible for reuse in other programs.
+/// Compile-time evaluation uses the same source-independent policy.
+pub const dev_inline_mode: InlineMode = .procedures;
 
 /// SpecConstr's clone-inlining scope for dev builds and compile-time
 /// evaluation.
@@ -164,6 +162,9 @@ pub const TargetConfig = struct {
     /// compile-time roots it demands (design.md "Demand-Driven Compile-Time
     /// Evaluation").
     demand_driven_comptime_roots: bool = false,
+    /// A test/check command still validates every initializer. A prior silent
+    /// successful validation permits deferring its value until a reader needs it.
+    validated_comptime_roots: ?*const std.AutoHashMapUnmanaged(ComptimeDemandRoot, void) = null,
     /// This program's specializations may be written to the object cache, so
     /// Monotype records what each one reads of compile-time evaluation
     /// (`SpecComptimeReads`).
@@ -178,6 +179,9 @@ pub const TargetConfig = struct {
     /// a literal root that evaluation runs to verify the stored value.
     verify_literal_values: bool = false,
     inline_mode: InlineMode = .none,
+    /// Optional ARC mode specialization belongs to the consumer's optimization
+    /// policy, independently of whether source wrappers are inlined.
+    specialize_arc_modes: bool = false,
     /// Direct-call inlining scope for SpecConstr's value-aware clones.
     /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
     /// so post-check time and emitted program size stay bounded. Consulted
@@ -201,6 +205,10 @@ pub const TargetConfig = struct {
     list_in_place_map: bool = false,
     /// Preserve source-level procedure names in LIR for runtime diagnostics.
     proc_debug_names: bool = false,
+    /// Record each platform entrypoint's host boundary digest in its root
+    /// metadata. Only consumers that compare host interfaces across hot
+    /// reload generations ask for it.
+    host_boundary_digests: bool = false,
     /// The object cache Monotype asks for closed specializations.
     spec_cache: ?postcheck.Common.SpecCacheLookup = null,
     /// Give every procedure whose identity names its template by site a code
@@ -213,6 +221,9 @@ pub const TargetConfig = struct {
     /// procedures' signatures freely. Required whenever `spec_cache` serves
     /// the program.
     site_code_keys: bool = false,
+    /// Keep the dev procedure ownership ABI independent of caller demand.
+    /// Optimized consumers leave this off and infer their base signatures.
+    owned_proc_signatures: bool = false,
     /// Keep every keyed specialization procedure through compaction; a pack
     /// program offers them from its manifest whether or not its export
     /// wrappers inlined their calls.
@@ -234,10 +245,8 @@ pub const TargetConfig = struct {
     /// other arms keep is live across the producer, so a list the producer
     /// appends to is copied once per loop iteration.
     fuse_tag_cases: bool = true,
-    /// The rewrites that exist only to make the produced program faster:
-    /// join scalarization and box reuse. `--opt=dev` skips them, since it
-    /// trades program speed for compile speed.
-    scalarize_joins: bool = true,
+    /// Box reuse exists only to make the produced program faster, so
+    /// `--opt=dev` skips it, since it trades program speed for compile speed.
     reuse_boxes: bool = true,
     /// Let ARC prove allocations the host can never touch and give them
     /// single-threaded count updates. Optimized builds enable this; dev
@@ -1031,6 +1040,8 @@ pub const CodeProvision = enum {
     source_bodies,
     /// Native dev emission with a splice source for CTFE's declared native procedure domain.
     host_dev_objects,
+    /// Native tests splice only observation-compatible host procedures.
+    host_test_dev_objects,
     /// Native dev emission with its own target-specific splice source.
     target_dev_objects,
     /// As `host_dev_objects`, emitted as an object file that is linked, so the
@@ -1060,6 +1071,7 @@ pub const CodeProvision = enum {
     pub fn specCacheTakes(self: CodeProvision) postcheck.Common.SpecCacheTakes {
         return switch (self) {
             .source_bodies, .host_dev_objects, .target_dev_objects => .dev_code,
+            .host_test_dev_objects => .test_dev_code,
             .host_dev_objects_beside_linked => .dev_code_beside_linked_objects,
             .host_linked_dev_objects, .target_linked_dev_objects => .dev_code_and_linked_objects,
             .target_linked_objects => .linked_objects,
@@ -1073,6 +1085,9 @@ pub const CodeProvision = enum {
     /// evaluation runs code in process, where nothing is linked.
     pub fn sharedDomain(self: CodeProvision, other: CodeProvision) CodeProvision {
         if (!self.hostDomain() or !other.hostDomain()) return .source_bodies;
+        if (self == .host_test_dev_objects or other == .host_test_dev_objects) {
+            return if (self.linksObjects() or other.linksObjects()) .source_bodies else .host_test_dev_objects;
+        }
         return if (self.linksObjects() or other.linksObjects()) .host_dev_objects_beside_linked else .host_dev_objects;
     }
 
@@ -1081,13 +1096,13 @@ pub const CodeProvision = enum {
     fn linksObjects(self: CodeProvision) bool {
         return switch (self) {
             .host_linked_dev_objects, .host_dev_objects_beside_linked, .target_linked_dev_objects, .target_linked_objects => true,
-            .source_bodies, .host_dev_objects, .target_dev_objects => false,
+            .source_bodies, .host_dev_objects, .host_test_dev_objects, .target_dev_objects => false,
         };
     }
 
     fn hostDomain(self: CodeProvision) bool {
         return switch (self) {
-            .host_dev_objects, .host_linked_dev_objects, .host_dev_objects_beside_linked => true,
+            .host_dev_objects, .host_test_dev_objects, .host_linked_dev_objects, .host_dev_objects_beside_linked => true,
             .source_bodies, .target_dev_objects, .target_linked_dev_objects, .target_linked_objects => false,
         };
     }
@@ -1119,17 +1134,19 @@ pub const SolvedPolicy = struct {
 /// The settings one consumer's LIR generation, procedure passes and ARC run
 /// under. A consumer continuing a shared Solved program brings its own.
 pub const LirPolicy = struct {
+    specialize_arc_modes: bool,
     consume_dead_boxes: bool,
     zero_dict_seed: bool,
     list_in_place_map: bool,
     proc_debug_names: bool,
+    host_boundary_digests: bool,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
     site_code_keys: bool,
+    owned_proc_signatures: bool,
     code_provision: CodeProvision,
     keep_specialization_procs: bool,
     promote_loop_appends: base.TestSwitch(true),
     fuse_tag_cases: bool,
-    scalarize_joins: bool,
     reuse_boxes: bool,
     thread_confined_rc: bool,
     layout_request_const_plans: bool,
@@ -1446,6 +1463,8 @@ pub const ComptimeRootRead = postcheck.Common.ComptimeRootRead;
 pub const ComptimeDemandRoot = postcheck.Monotype.Solve.EntryRoot;
 /// A root of a prepared Monotype program.
 pub const MonotypeRoot = postcheck.Monotype.Ast.Root;
+/// Source identity of a literal demand, before the producer is released.
+pub const MonotypeLiteralRoot = postcheck.Monotype.Ast.LiteralRoot;
 
 /// Lower checked modules and explicit roots directly into an ARC-ready LIR program.
 pub fn lowerCheckedModulesToLir(
@@ -1515,6 +1534,7 @@ pub fn prepareCheckedModulesMonotype(
                 timing.addDemand(.{ .monotype = demand_counters });
             }
         }
+        base.dev_diagnostics.countTestWork(.specialization, 1);
         if (target.work_metrics) |metrics| metrics.monotype_runs += 1;
         break :monotype try postcheck.Monotype.Lower.run(
             allocator,
@@ -1523,11 +1543,13 @@ pub fn prepareCheckedModulesMonotype(
             .{
                 .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
                 .spec_cache = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
+                .interface_cache = if (target.spec_cache) |cache| cache.interfaces else null,
                 .spec_cache_takes = target.code_provision.specCacheTakes(),
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
                 .demand_driven_comptime_roots = target.demand_driven_comptime_roots,
+                .validated_comptime_roots = target.validated_comptime_roots,
                 .comptime_demand_out = if (target.comptime_value_reads) &comptime_demand else null,
                 .spec_comptime_reads_out = if (target.spec_comptime_reads) &spec_comptime_reads else null,
                 .spec_key_aliases_out = &spec_key_aliases,
@@ -1553,10 +1575,21 @@ pub fn prepareCheckedModulesMonotype(
     if (!target.demand_driven_comptime_roots and root_count != roots.requests.len) {
         checkedPipelineInvariant("Monotype lowering published a root count different from its requests");
     }
+    if (target.demand_driven_comptime_roots) {
+        // Only compile-time requests are removed, all from the prefix. Test
+        // reporting retains its original source/result identity while its
+        // execution position follows the producer's selected root prefix.
+        const omitted: u32 = @intCast(roots.requests.len - root_count);
+        for (test_plan_metadata) |*metadata| metadata.request_index -= omitted;
+    }
+    // The validation set is borrowed only by Monotype production, never by
+    // its retained consumers after the coordinator's finalization returns.
+    var retained_target = target;
+    retained_target.validated_comptime_roots = null;
     return .{
         .allocator = allocator,
         .program = mono,
-        .target = target,
+        .target = retained_target,
         .root_count = root_count,
         .test_plan_metadata = test_plan_metadata,
         .comptime_demand = if (target.comptime_value_reads) comptime_demand else null,
@@ -1566,12 +1599,13 @@ pub fn prepareCheckedModulesMonotype(
 }
 
 test "shared producer native provision requires every consumer in the host dev domain" {
-    const host_domain = [_]CodeProvision{ .host_dev_objects, .host_linked_dev_objects, .host_dev_objects_beside_linked };
+    const host_domain = [_]CodeProvision{ .host_dev_objects, .host_test_dev_objects, .host_linked_dev_objects, .host_dev_objects_beside_linked };
     for (std.enums.values(CodeProvision)) |host| {
         for (std.enums.values(CodeProvision)) |runtime| {
             const both_host = std.mem.findScalar(CodeProvision, &host_domain, host) != null and std.mem.findScalar(CodeProvision, &host_domain, runtime) != null;
-            const either_linked = host != .host_dev_objects or runtime != .host_dev_objects;
-            const expected: CodeProvision = if (!both_host) .source_bodies else if (either_linked) .host_dev_objects_beside_linked else .host_dev_objects;
+            const either_linked = host.linksObjects() or runtime.linksObjects();
+            const tests = host == .host_test_dev_objects or runtime == .host_test_dev_objects;
+            const expected: CodeProvision = if (!both_host or (tests and either_linked)) .source_bodies else if (tests) .host_test_dev_objects else if (either_linked) .host_dev_objects_beside_linked else .host_dev_objects;
             try std.testing.expectEqual(expected, host.sharedDomain(runtime));
             try std.testing.expectEqual(expected, runtime.sharedDomain(host));
         }
@@ -1618,7 +1652,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         .executor = target.post_check_executor,
         .metrics_out = spec_constr_metrics,
     };
-    var procedure_usage = if (target.inline_mode != .none) blk: {
+    var procedure_usage = if (target.inline_mode != .none and target.inline_mode != .procedures) blk: {
         var spec_constr_timing_scope = PipelineStageScope.begin(target.timing, .spec_constr);
         defer spec_constr_timing_scope.end();
         const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsageWithOptions(allocator, &lifted, target.spec_constr_clone_inlining, spec_constr_options);
@@ -1643,7 +1677,11 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     const lifted_input = lifted;
     lifted_owned = false;
     lifted = undefined;
-    var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted_input);
+    const analysis_cache = if (base.dev_diagnostics.isSet(.lambda_analysis_cache))
+        (if (target.spec_cache) |cache| cache.interfaces else null)
+    else
+        null;
+    var solved = try postcheck.LambdaSolved.Solve.runWithCache(allocator, lifted_input, analysis_cache);
     errdefer solved.deinit();
     lambda_solve_timing_scope.end();
 
@@ -1839,6 +1877,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .spec_cache = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
         .spec_cache_takes = target.code_provision.specCacheTakes(),
         .site_code_keys = target.site_code_keys,
+        .owned_proc_signatures = target.owned_proc_signatures,
         .inline_plan = prepared.inline_plan.view(),
         .keep_specialization_procs = target.keep_specialization_procs,
         .post_check_executor = target.post_check_executor,
@@ -1846,6 +1885,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .list_in_place_map = target.list_in_place_map,
         .dict_seed_mode = if (target.zero_dict_seed) .comptime_zero else .runtime,
         .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+        .host_boundary_digests = target.host_boundary_digests,
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,
         .parallel_metrics = parallel_metrics,
@@ -1985,11 +2025,11 @@ fn finishLoweredOutput(
         }
     }
     // Every mode: a join parameter nothing reads still keeps its written
-    // value alive past any consuming call on the entry path.
+    // value alive past any consuming call on the entry path. Scalarization
+    // first gives each variable carried out of a construct with its result
+    // its own parameter, so pruning can remove it.
+    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize);
     try runProcedurePass(allocator, &lowered.lir_result, pass_target, .prune_join_params);
-    if (target.scalarize_joins) {
-        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize);
-    }
     if (target.promote_loop_appends.enabled()) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .loop_append);
     }
@@ -2040,7 +2080,7 @@ fn finishLoweredOutput(
     }
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = arc_roots.items,
-        .specialize = target.inline_mode != .none,
+        .specialize = target.specialize_arc_modes,
         .consume_dead_boxes = target.consume_dead_boxes,
         .thread_confined_rc = target.thread_confined_rc,
         .post_check_executor = if (target.post_check_executor) |*executor| executor else null,
@@ -2132,6 +2172,7 @@ pub const PreparedBoxy = struct {
                 .target_usize = target.target_usize,
                 .list_in_place_map = target.list_in_place_map,
                 .proc_debug_names = target.proc_debug_names,
+                .host_boundary_digests = target.host_boundary_digests,
                 .observe_expects = self.roots.test_plan_metadata.len != 0,
             },
         );
@@ -2368,6 +2409,17 @@ fn checkedPipelineInvariant(comptime message: []const u8) noreturn {
     base.invariant("checked pipeline invariant violated: {s}", .{message});
 }
 
+test "LIR ownership policy survives shared consumer continuation without a cache" {
+    for ([_]bool{ false, true }) |owned| {
+        const producer: TargetConfig = .{ .owned_proc_signatures = owned };
+        const policy = LirPolicy.fromTarget(producer);
+        var consumer: TargetConfig = .{ .owned_proc_signatures = !owned };
+        policy.applyTo(&consumer);
+        try std.testing.expectEqual(owned, consumer.owned_proc_signatures);
+        try std.testing.expect(consumer.spec_cache == null);
+    }
+}
+
 test "checked pipeline declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
@@ -2403,7 +2455,11 @@ const LirDump = if (!base.dev_diagnostics.available) struct {
             DebugPrint.writeProc(store.allocator, store, layouts, proc_id, &buffer.writer) catch |err| switch (err) {
                 error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
             };
-            std.debug.print("=== LIR {s} (p{d}) ===\n{s}\n", .{ name orelse "<unnamed>", index, buffer.written() });
+            const proc = store.getProcSpecImmediate(proc_id);
+            const fingerprint = DebugPrint.procFingerprint(store.allocator, store, layouts, proc_id) catch |err| switch (err) {
+                error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
+            };
+            std.debug.print("=== LIR {s} (p{d}, identity={x}, fingerprint={x:0>16}, borrowed={x}, ret_borrowed={}, unique={}) ===\n{s}\n", .{ name orelse "<unnamed>", index, proc.identity.bytes, fingerprint, proc.rc_borrowed_params, proc.rc_ret_borrowed, proc.rc_ret_unique, buffer.written() });
         }
     }
 };

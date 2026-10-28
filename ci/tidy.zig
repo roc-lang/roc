@@ -1664,3 +1664,21 @@ fn cut(str: []const u8, delimiter: []const u8) ?struct { []const u8, []const u8 
     const index = std.mem.find(u8, str, delimiter) orelse return null;
     return .{ str[0..index], str[index + delimiter.len ..] };
 }
+
+// test/echo/all_syntax_test.roc is the language's all-syntax example, so it
+// must not contain TODO notes; unimplemented syntax is tracked in issues.
+test "all-syntax example contains no TODO notes" {
+    const path = "test/echo/all_syntax_test.roc";
+    const text = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, std.testing.allocator, .limited(1024 * 1024));
+    defer std.testing.allocator.free(text);
+
+    var line_number: usize = 0;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        line_number += 1;
+        if (std.mem.find(u8, line, "TODO") != null) {
+            std.debug.print("{s}:{d}: {s}\n", .{ path, line_number, line });
+            return error.TodoInAllSyntaxExample;
+        }
+    }
+}

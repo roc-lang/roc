@@ -241,6 +241,8 @@ pub const Store = struct {
     /// Advances on every write that can change a variable's meaning, so a
     /// result derived from the store can tell whether it is still current.
     mutation_epoch: u64 = 0,
+    /// Exact semantic writes; compression preserves every dependency.
+    analysis_changes: @import("../proofs.zig").Changes(TypeVarId) = .{},
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -269,6 +271,7 @@ pub const Store = struct {
         self.erased_payloads.deinit(self.allocator);
         self.named_payloads.deinit(self.allocator);
         self.vars.deinit(self.allocator);
+        self.analysis_changes.deinit(self.allocator);
     }
 
     /// The node storing `content`, appending a named or erased payload to its
@@ -320,9 +323,11 @@ pub const Store = struct {
         if (self.vars.items.len >= @backingInt(MaybeTypeVarId.none)) return error.OutOfMemory;
         const id: TypeVarId = @fromBackingInt(@as(u32, @intCast(self.vars.items.len)));
         try self.vars.ensureUnusedCapacity(self.allocator, 1);
+        try self.analysis_changes.ensureUnusedCapacity(self.allocator, 1);
         try self.owned_named_backings.ensureUnusedCapacity(self.allocator, 1);
         self.vars.appendAssumeCapacity(try self.storeNode(content, null));
         self.owned_named_backings.appendAssumeCapacity(false);
+        self.analysis_changes.appendAssumeCapacity();
         return id;
     }
 
@@ -330,17 +335,24 @@ pub const Store = struct {
         if (content == .link) return self.setLink(id, content.link);
         const node = try self.storeNode(content, self.vars.items[@backingInt(id)]);
         self.mutation_epoch +%= 1;
+        self.analysis_changes.mark(id);
         self.vars.items[@backingInt(id)] = node;
     }
 
     /// Link `id` to `target`, carrying an owned named backing to its root.
     pub fn setLink(self: *Store, id: TypeVarId, target: TypeVarId) void {
         self.mutation_epoch +%= 1;
+        self.analysis_changes.mark(id);
         if (self.owned_named_backings.items[@backingInt(id)]) {
             const target_root = self.root(target);
             self.owned_named_backings.items[@backingInt(target_root)] = true;
         }
         self.vars.items[@backingInt(id)] = .{ .link = target };
+    }
+
+    /// Visit exactly the identities changed since a proof observer last ran.
+    pub fn proofChanges(self: *Store) *@import("../proofs.zig").Changes(TypeVarId) {
+        return &self.analysis_changes;
     }
 
     pub fn markNamedBacking(self: *Store, id: TypeVarId) void {
@@ -375,15 +387,15 @@ pub const Store = struct {
         const root_id = self.root(id);
         // Path compression preserves every variable's meaning, so it is not a
         // mutation observers must see.
-        const epoch = self.mutation_epoch;
-        defer self.mutation_epoch = epoch;
         var current = id;
         while (current != root_id) {
             const next = switch (self.vars.items[@backingInt(current)]) {
                 .link => |target| target,
                 .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .hole, .mono => break,
             };
-            self.setLink(current, root_id);
+            // Existing links already transferred backing ownership. Compression
+            // only shortens that exact path, without changing any dependency.
+            self.vars.items[@backingInt(current)] = .{ .link = root_id };
             current = next;
         }
 
