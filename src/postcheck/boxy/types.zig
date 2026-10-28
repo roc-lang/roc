@@ -831,7 +831,34 @@ pub const Converter = struct {
                 }.lessThan);
                 return try self.store.intern(.{ .tag_union = .{ .tags = tags.items, .ext = ext } });
             },
+            .nominal => |nominal| return try self.nominalNode(module, nominal, children),
+            .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => unreachable, // `leaf` answers these
+        }
+    }
+
+    /// The type of the nominal `ty` of `module` names (through aliases),
+    /// applied to `args` rather than to its own arguments.
+    pub fn nominalAt(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, args: []const TypeId) Allocator.Error!TypeId {
+        const types = self.modules.get(module).types();
+        var current = ty;
+        while (true) switch (types.payload(current)) {
+            .alias => |alias| current = alias.backing,
             .nominal => |nominal| {
+                if (nominal.representation == .builtin) switch (checked.builtinRuntimeEncoding(nominal.representation.builtin)) {
+                    .primitive => |prim| return try self.store.primitive(prim),
+                    else => {},
+                };
+                return try self.nominalNode(module, nominal, args);
+            },
+            else => invariant("a stored named type's occurrence is not a nominal type"),
+        };
+    }
+
+    fn nominalNode(self: Converter, module: ModuleIndex, nominal: @FieldType(checked.CheckedTypePayload, "nominal"), children: []const TypeId) Allocator.Error!TypeId {
+        const view = self.modules.get(module);
+        const name_store = view.nameStore();
+        {
+            {
                 switch (nominal.representation) {
                     .builtin => |builtin_nominal| switch (checked.builtinRuntimeEncoding(builtin_nominal)) {
                         .list => return try self.store.intern(.{ .list = children[0] }),
@@ -857,8 +884,7 @@ pub const Converter = struct {
                     .builtin = nominal.builtin,
                     .has_backing = decl != null,
                 } });
-            },
-            .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => unreachable, // `leaf` answers these
+            }
         }
     }
 

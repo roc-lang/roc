@@ -178,6 +178,8 @@ pub const Program = struct {
     local_scopes: std.AutoHashMapUnmanaged(ExprKey, checked.DispatchScopeId) = .empty,
     /// The lambda and closure expressions local procedures bind.
     local_procs: std.AutoHashMapUnmanaged(ExprKey, void) = .empty,
+    /// The nested procedure site of each lambda and closure expression.
+    sites_by_expr: std.AutoHashMapUnmanaged(ExprKey, u32) = .empty,
     /// Modules by their stable identity hash.
     by_identity: std.AutoHashMapUnmanaged([32]u8, ModuleIndex) = .empty,
     /// The default a record construction that omits a field materializes.
@@ -319,6 +321,18 @@ pub const Program = struct {
         try self.worker_ids.put(self.allocator, key, id);
         try self.worklist.append(self.allocator, id);
         return id;
+    }
+
+    /// What the function value of lambda or closure expression `expr`
+    /// captures: the binders of enclosing bodies whose values it needs,
+    /// which are its own captures and those of the local procedures its
+    /// body uses (`NestedProcSite.runtime_captures`).
+    pub fn siteCaptures(self: *const Program, module_index: ModuleIndex, expr: checked.CheckedExprId) []const checked.CheckedCapture {
+        const site_index = self.sites_by_expr.get(.{ .module = module_index, .expr = expr }) orelse
+            invariant("a lambda or closure has no nested procedure site");
+        const table = self.module(module_index).view.nested_proc_sites;
+        const span = table.sites[site_index].runtime_captures;
+        return table.runtime_captures[span.start..][0..span.len];
     }
 
     /// The worker evaluating default expression `expr` of `module_index`.
@@ -480,6 +494,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.local_scopes.deinit(allocator);
         program.local_procs.deinit(allocator);
         program.by_identity.deinit(allocator);
+        program.sites_by_expr.deinit(allocator);
         program.omitted_defaults.deinit(allocator);
         program.codec.deinit(allocator);
         program.arena.deinit();
@@ -514,6 +529,10 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             }
         }
         try program.by_identity.put(allocator, view.view.module_identity.stable_hash, view.index);
+        for (view.view.nested_proc_sites.sites, 0..) |site, site_index| {
+            const site_expr = site.checked_expr orelse continue;
+            try program.sites_by_expr.put(allocator, .{ .module = view.index, .expr = site_expr }, @intCast(site_index));
+        }
         for (bodies.record_omitted_defaults) |omitted| {
             const name = try program.store.internName(view.nameStore().recordFieldLabelText(omitted.field_name));
             try program.omitted_defaults.put(allocator, .{ .module = view.index, .expr = omitted.expr, .name = name }, omitted.default);

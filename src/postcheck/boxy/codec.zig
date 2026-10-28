@@ -652,6 +652,15 @@ pub fn dictionary(b: *Builder, structural: static_dispatch.StructuralEvidence) A
     return try b.composeDictionary(try constructorWorker(b.program, family), descs);
 }
 
+/// The dictionary of generated derivation `id` of `module_index` at the
+/// method callable type `callable`.
+pub fn dictionaryAt(b: *Builder, module_index: ModuleIndex, id: static_dispatch.GeneratedCodecDerivationId, callable: TypeId) Allocator.Error!LocalId {
+    const family = try familyFor(b.program, module_index, id);
+    const descs = try familyDescs(b, family, b.program.codec.families.items[family].constructor_fn, callable);
+    defer b.allocator.free(descs);
+    return try b.composeDictionary(try constructorWorker(b.program, family), descs);
+}
+
 /// The descriptors of a family's variables at a use whose type `actual`
 /// instantiates the family's `formal` type.
 fn familyDescs(b: *Builder, family: u32, formal: TypeId, actual: TypeId) Allocator.Error![]LocalId {
@@ -695,7 +704,7 @@ pub fn restoreRuntime(b: *Builder, module_index: ModuleIndex, fn_id: check.Const
     const worker = try runtimeWorker(program, family);
     const captures = try runtimeCaptures(program, family);
     const descs = try familyDescs(b, family, program.codec.families.items[family].runtime_fn, fn_ty);
-    try b.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = try program.arena.allocator().dupe(LocalId, descs), .capture_types = captures } });
+    try b.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = try program.arena.allocator().dupe(LocalId, descs), .dicts = &.{}, .capture_types = captures } });
     b.allocator.free(descs);
     var index = captures.len;
     while (index > 0) {

@@ -104,7 +104,7 @@ pub const Task = union(enum) {
     /// Push the function value a callable-eval binding stored.
     restore_callable_eval: struct { module: ModuleIndex, template: checked.CallableEvalTemplateId, ty: TypeId },
     /// Pop a restored closure's capture values and build it.
-    finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const LocalId, capture_types: []const TypeId },
+    finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const LocalId, dicts: []const LocalId, capture_types: []const TypeId },
     finish_restore_struct: struct { ty: TypeId, count: u32 },
     finish_restore_tag: struct { ty: TypeId, name: types.NameId, count: u32 },
     finish_restore_list: struct { ty: TypeId, count: u32 },
@@ -1370,9 +1370,9 @@ pub const Builder = struct {
                 defer self.allocator.free(values);
                 const worker = self.program.worker(closure.worker).*;
                 if (try self.allClosed(worker.capture_types)) {
-                    try self.pushValue(try self.packClosure(closure.worker, values, worker.capture_types, closure.descs, &.{}));
+                    try self.pushValue(try self.packClosure(closure.worker, values, worker.capture_types, closure.descs, closure.dicts));
                 } else {
-                    try self.pushValue(try self.packDynamicClosure(closure.worker, values, closure.capture_types, closure.descs, &.{}));
+                    try self.pushValue(try self.packDynamicClosure(closure.worker, values, closure.capture_types, closure.descs, closure.dicts));
                 }
             },
             .finish_restore_struct => |restore| {
@@ -1571,8 +1571,8 @@ pub const Builder = struct {
                     else => try self.push(.{ .expr = nominal.backing_expr }),
                 }
             },
-            .lambda => try self.lowerClosure(expr_id, expr_id, &.{}),
-            .closure => |closure| try self.lowerClosure(expr_id, closure.lambda, closure.captures),
+            .lambda => try self.lowerClosure(expr_id, expr_id, self.program.siteCaptures(self.module, expr_id)),
+            .closure => |closure| try self.lowerClosure(expr_id, closure.lambda, self.program.siteCaptures(self.module, expr_id)),
             .row_coerce => |coerce| {
                 // The coerced value is built straight at its destination's
                 // row (design.md "Row Coercion Primitive").
@@ -1966,7 +1966,7 @@ pub const Builder = struct {
                 return try self.pushValue(self.binders.get(binding.binder) orelse invariant("a local lookup named a binder this body never bound"));
             },
             .top_level_const, .imported_const => |use| return try self.restoreConstUse(use, try self.exprType(expr_id)),
-            .local_proc => |local| return try self.pushValue(try self.localProcValue(local)),
+            .local_proc => |local| return try self.pushValue(try self.localProcUseValue(expr_id, local)),
             .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use),
             else => |ref| invariantFmt("local lookup of a {s} is not yet lowered by Boxy", .{@tagName(ref)}),
         };
@@ -1986,6 +1986,108 @@ pub const Builder = struct {
         invariantFmt("external value lookups ({s}) are not yet lowered by Boxy outside calls", .{@tagName(self.resolvedRef(resolved).ref)});
     }
 
+    /// The function value a use `expr_id` of a local procedure denotes. A
+    /// generalized local procedure whose calls pass its own scheme's
+    /// instantiation is, as a value, instantiated where it is used: the
+    /// value captures the use's descriptors and dictionaries of its scheme.
+    pub fn localProcUseValue(self: *Builder, expr_id: CheckedExprId, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
+        const lambda_expr = switch (self.bodies().expr(local.expr).data) {
+            .lambda => local.expr,
+            .closure => |closure| closure.lambda,
+            else => invariant("a local procedure's expression is not a lambda or closure"),
+        };
+        const scope_id = self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }) orelse
+            return try self.localProcValue(local);
+        var scheme = try self.localScheme(scope_id);
+        if (!scheme.per_call or (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0)) return try self.localProcValue(local);
+        if (local.is_alias) invariant("local procedure aliases are not yet lowered by Boxy");
+        const scope_worker, const per_call = try self.localProcWorker(local);
+        const declaring = self.program.worker(scope_worker).*;
+        const per_call_worker = self.program.worker(per_call).*;
+        const outer_count = declaring.scheme_vars.len;
+        const vars = try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ declaring.scheme_vars, scheme.scheme_vars });
+        defer self.allocator.free(vars);
+        const generic_bound = try self.allocator.alloc(TypeId, vars.len);
+        defer self.allocator.free(generic_bound);
+        for (generic_bound, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
+        const lambda_ty = self.bodies().expr(lambda_expr).ty;
+        const generic_fn = try self.program.converter().convert(self.module, lambda_ty, .{ .module = self.module, .vars = vars, .bound = generic_bound });
+        // The procedure's own variables take the types the use's
+        // instantiation gives them.
+        const related = try self.relateVariablesPartial(&.{.{ generic_fn, try self.exprType(expr_id) }}, vars.len);
+        defer self.allocator.free(related);
+        scheme.per_call = false;
+        const callee = try self.program.lambdaWorker(scope_worker, lambda_expr, per_call_worker.captures, per_call_worker.capture_types, generic_fn, scheme);
+        const values = try self.allocator.alloc(LocalId, per_call_worker.captures.len);
+        defer self.allocator.free(values);
+        for (per_call_worker.captures, values) |capture, *value| {
+            const binder = self.bodies().pattern_binder_by_pattern[@backingInt(capture.pattern)].get() orelse
+                invariant("a closure capture named a pattern without a binder");
+            value.* = self.binders.get(binder) orelse invariant("a local procedure's capture is not visible where the procedure is used");
+        }
+        var declaring_dicts: usize = 0;
+        for (declaring.dict_scopes) |dict_scope| declaring_dicts += dict_scope.len;
+        const evidence = self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{};
+        const descs = try self.allocator.alloc(LocalId, vars.len);
+        defer self.allocator.free(descs);
+        @memcpy(descs[0..outer_count], self.var_descs[0..outer_count]);
+        for (descs[outer_count..], related[outer_count..], scheme.scheme_vars) |*desc, ty, variable| {
+            desc.* = try self.descOf(ty orelse try self.program.converter().sealedScheme(self.module, variable));
+        }
+        const dicts = try self.allocator.alloc(LocalId, scheme.dictionaries.len + declaring_dicts);
+        defer self.allocator.free(dicts);
+        for (scheme.dictionaries, dicts[0..scheme.dictionaries.len]) |param_index, *dict| {
+            if (param_index >= evidence.len) invariant("a local procedure use's evidence does not cover its dictionaries");
+            dict.* = try self.dictionaryOf(evidence[param_index]);
+        }
+        @memcpy(dicts[scheme.dictionaries.len..], self.dict_locals[self.dict_locals.len - declaring_dicts ..]);
+        if (try self.allClosed(per_call_worker.capture_types)) {
+            return try self.packClosure(callee, values, per_call_worker.capture_types, descs, dicts);
+        }
+        return try self.packDynamicClosure(callee, values, per_call_worker.capture_types, descs, dicts);
+    }
+
+    /// The worker that declares local procedure `local` (this worker or one
+    /// it is nested in) and the procedure's worker there. A procedure whose
+    /// declaring body never ran here (it ran at compile time, and a closure
+    /// it built was stored) gets its worker now.
+    pub fn localProcWorker(self: *Builder, local: checked.LocalProcedureBinding) Allocator.Error!struct { WorkerId, WorkerId } {
+        const closure_expr = self.bodies().expr(local.expr);
+        const lambda_expr = switch (closure_expr.data) {
+            .lambda => local.expr,
+            .closure => |closure| closure.lambda,
+            else => invariant("a local procedure's expression is not a lambda or closure"),
+        };
+        const captures = self.program.siteCaptures(self.module, local.expr);
+        var scope_worker = self.worker_id;
+        while (true) {
+            if (self.program.worker_ids.get(.{ .lambda = .{ .module = self.module, .expr = lambda_expr, .outer = scope_worker } })) |id| return .{ scope_worker, id };
+            switch (self.program.worker(scope_worker).key) {
+                .lambda => |key| scope_worker = key.outer,
+                else => break,
+            }
+        }
+        // No body of the chain declared it: the chain is a stored closure
+        // restored in its procedure's scope, and the procedure is declared
+        // in that scope's body, which ran at compile time.
+        const scope = self.program.worker(scope_worker).*;
+        const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr })) |scope_id| blk: {
+            const scheme = try self.localScheme(scope_id);
+            break :blk if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) null else scheme;
+        } else null;
+        const vars = if (own) |scheme| try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ scope.scheme_vars, scheme.scheme_vars }) else try self.allocator.dupe(checked.CheckedTypeId, scope.scheme_vars);
+        defer self.allocator.free(vars);
+        const bound = try self.allocator.alloc(TypeId, vars.len);
+        defer self.allocator.free(bound);
+        for (bound, 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
+        const env: types.Env = .{ .module = self.module, .vars = vars, .bound = bound };
+        const fn_ty = try self.program.converter().convert(self.module, closure_expr.ty, env);
+        const capture_types = try self.allocator.alloc(TypeId, captures.len);
+        defer self.allocator.free(capture_types);
+        for (captures, capture_types) |capture, *capture_ty| capture_ty.* = try self.program.converter().convert(self.module, self.bodies().pattern(capture.pattern).ty, env);
+        return .{ scope_worker, try self.program.lambdaWorker(scope_worker, lambda_expr, captures, capture_types, fn_ty, own) };
+    }
+
     /// The function value of a local procedure: the closure its declaration
     /// bound, or, inside the procedure's own body, the same closure rebuilt
     /// from the captures the body received.
@@ -2001,14 +2103,8 @@ pub const Builder = struct {
             .closure => |closure| closure.lambda,
             else => invariant("a local procedure's expression is not a lambda or closure"),
         };
-        var scope_worker = self.worker_id;
-        const target = while (true) {
-            if (self.program.worker_ids.get(.{ .lambda = .{ .module = self.module, .expr = lambda_expr, .outer = scope_worker } })) |id| break id;
-            scope_worker = switch (self.program.worker(scope_worker).key) {
-                .lambda => |key| key.outer,
-                else => invariant("a local procedure was referenced outside the scope that declares it"),
-            };
-        };
+        _ = lambda_expr;
+        const scope_worker, const target = try self.localProcWorker(local);
         const declaring = self.program.worker(scope_worker).*;
         const target_worker = self.program.worker(target).*;
         const values = try self.allocator.alloc(LocalId, target_worker.captures.len);
@@ -2286,30 +2382,32 @@ pub const Builder = struct {
             .local_template, .imported_template => |ref| {
                 const target = try self.program.templateRefWorker(ref);
                 const target_worker = self.program.worker(target).*;
-                if (target_worker.dictionary_params.len != 0) invariant("restoring stored procedure values that take dictionaries is not yet lowered by Boxy");
                 const formal = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
                 const bound = try self.relateVariables(formal, fn_ty, target_worker.scheme_vars.len);
                 defer self.allocator.free(bound);
-                const descs = try self.allocator.alloc(LocalId, bound.len);
-                defer self.allocator.free(descs);
-                for (bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
+                const dicts = try self.storedDictionaries(stored, target, bound);
+                defer self.allocator.free(dicts);
+                const hidden = try self.allocator.alloc(LocalId, bound.len + dicts.len);
+                defer self.allocator.free(hidden);
+                for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
+                @memcpy(hidden[bound.len..], dicts);
                 const entry = try self.program.methodEntryWorker(target);
-                try self.pushValue(try self.composeDictionary(entry, descs));
+                try self.pushValue(try self.composeDictionary(entry, hidden));
             },
             .nested => |nested| {
                 if (nested.default_root != null) invariant("restoring default-root closures is not yet lowered by Boxy");
                 const owner_worker = try self.program.templateRefScope(nested.owner);
                 const owner = self.program.worker(owner_worker).*;
-                if (owner.dictionary_params.len != 0) invariant("restoring closures of procedures that take dictionaries is not yet lowered by Boxy");
                 const owner_view = self.program.module(owner.module);
                 const site = owner_view.view.nested_proc_sites.sites[@backingInt(nested.site)];
                 const site_expr = site.checked_expr orelse invariant("a stored closure's site has no checked expression");
                 const expr = owner_view.bodies().expr(site_expr);
-                const lambda_expr, const captures: []const checked.CheckedCapture = switch (expr.data) {
-                    .lambda => .{ site_expr, &.{} },
-                    .closure => |closure| .{ closure.lambda, closure.captures },
+                const lambda_expr = switch (expr.data) {
+                    .lambda => site_expr,
+                    .closure => |closure| closure.lambda,
                     else => invariant("a stored closure's site is not a lambda or closure"),
                 };
+                const captures = owner_view.view.nested_proc_sites.runtime_captures[site.runtime_captures.start..][0..site.runtime_captures.len];
                 // The closure in its owner's scope (and, for a generalized
                 // lambda, its own scheme's), whose variables the stored
                 // value's type instantiates; the value captures them all.
@@ -2363,7 +2461,15 @@ pub const Builder = struct {
                 const worker = try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, own);
                 const descs = try self.program.arena.allocator().alloc(LocalId, bound.len);
                 for (bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
-                try self.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = descs, .capture_types = try self.program.arena.allocator().dupe(TypeId, concrete_capture_types) } });
+                const dicts = try self.storedDictionaries(stored, owner_worker, bound[0..owner.scheme_vars.len]);
+                defer self.allocator.free(dicts);
+                try self.push(.{ .finish_restore_closure = .{
+                    .worker = worker,
+                    .count = @intCast(captures.len),
+                    .descs = descs,
+                    .dicts = try self.program.arena.allocator().dupe(LocalId, dicts),
+                    .capture_types = try self.program.arena.allocator().dupe(TypeId, concrete_capture_types),
+                } });
                 var index = captures.len;
                 while (index > 0) {
                     index -= 1;
@@ -2373,6 +2479,187 @@ pub const Builder = struct {
             inline .parser_runtime, .encoder_for_runtime => |runtime| try Codec.restoreRuntime(self, module_index, fn_id, runtime.owner, runtime.expr, fn_ty),
             else => invariantFmt("restoring stored {s} function values is not yet lowered by Boxy", .{@tagName(stored.fn_def)}),
         }
+    }
+
+    /// The dictionaries a stored function value's procedure was
+    /// instantiated with: for each of the worker `owner`'s dictionary
+    /// parameters, the dictionary its stored evidence denotes, with the
+    /// owner's scheme variables bound to `bound`.
+    pub fn storedDictionaries(self: *Builder, stored: check.ConstStore.ConstFn, owner: WorkerId, bound: []const TypeId) Allocator.Error![]LocalId {
+        const owner_worker = self.program.worker(owner).*;
+        const dicts = try self.allocator.alloc(LocalId, owner_worker.dictionary_params.len);
+        errdefer self.allocator.free(dicts);
+        if (dicts.len == 0) return dicts;
+        // The procedure's evidence is the outermost frame's roots.
+        var frame_index = stored.evidence_frame_head orelse invariant("a stored function value with dictionaries has no evidence");
+        while (stored.evidence_frames[frame_index].parent) |parent| frame_index = parent;
+        const frame = stored.evidence_frames[frame_index];
+        if (frame.scope() != .root) invariant("a stored function value's outermost evidence frame is not its procedure's");
+        const roots = try self.storedEvidenceTrees(stored.evidence, frame.roots_start, frame.roots_len, owner, bound);
+        defer self.allocator.free(roots);
+        for (owner_worker.dictionary_params, dicts) |param_index, *dict| {
+            dict.* = roots[param_index] orelse invariant("a stored dictionary's evidence denotes no dictionary");
+        }
+        return dicts;
+    }
+
+    /// A template worker's evidence parameters.
+    pub fn templateEvidenceParams(self: *Builder, worker_id: WorkerId) []const static_dispatch.EvidenceParamRecord {
+        const key = switch (self.program.worker(worker_id).key) {
+            .template => |key| key,
+            else => invariant("evidence parameters of a worker that is not a procedure template's"),
+        };
+        const view = self.program.module(key.module).view;
+        const template = view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+        return lower.poolSlice(static_dispatch.EvidenceParamRecord, view.checked_procedure_templates.evidence_params_pool, template.evidence_params);
+    }
+
+    /// The dictionaries of the stored evidence trees of `owner`'s evidence
+    /// parameters, `count` pre-order trees starting at `start`: a target's
+    /// nested vector is the evidence of the target's own parameters, and
+    /// each entry's callable contracts, which no dictionary reads, follow
+    /// it. A target takes the instantiation its parameter's callable type,
+    /// bound by its owner's instantiation, relates it to.
+    pub fn storedEvidenceTrees(self: *Builder, evidence: check.ConstStore.ConstFnEvidenceVector, start: u32, count: u32, owner: WorkerId, owner_bound: []const TypeId) Allocator.Error![]?LocalId {
+        const Parsed = struct {
+            node: u32,
+            /// The parsed target whose nested vector holds this entry and
+            /// the entry's position there; null for a root.
+            parent: ?u32,
+            position: u32,
+            /// Whether the entry is a callable contract.
+            contract: bool = false,
+            children: std.ArrayList(u32) = .empty,
+            target: ?WorkerId = null,
+            bound: []const TypeId = &.{},
+        };
+        var parsed: std.ArrayList(Parsed) = .empty;
+        defer {
+            for (parsed.items) |*entry| {
+                entry.children.deinit(self.allocator);
+                self.allocator.free(entry.bound);
+            }
+            parsed.deinit(self.allocator);
+        }
+        // An open vector: its entries left to read and read so far, and the
+        // parsed target whose nested evidence it is; contracts and roots
+        // have no owner.
+        const Open = struct { remaining: u32, read: u32 = 0, owner: ?u32, contracts: bool };
+        var open: std.ArrayList(Open) = .empty;
+        defer open.deinit(self.allocator);
+        var roots: std.ArrayList(u32) = .empty;
+        defer roots.deinit(self.allocator);
+        try open.append(self.allocator, .{ .remaining = count, .owner = null, .contracts = false });
+        var cursor: u32 = start;
+        while (open.items.len > 0) {
+            const top = &open.items[open.items.len - 1];
+            if (top.remaining == 0) {
+                _ = open.pop();
+                continue;
+            }
+            top.remaining -= 1;
+            const position = top.read;
+            top.read += 1;
+            const contracts_vector = top.contracts;
+            const parent = top.owner;
+            const is_root = open.items.len == 1;
+            if (cursor >= evidence.nodes.len) invariant("stored evidence ended before its declared vector length");
+            const node = evidence.nodes[cursor];
+            cursor += 1;
+            const index: u32 = @intCast(parsed.items.len);
+            if (contracts_vector) {
+                try parsed.append(self.allocator, .{ .node = cursor - 1, .parent = null, .position = 0, .contract = true });
+            } else {
+                try parsed.append(self.allocator, .{ .node = cursor - 1, .parent = parent, .position = position });
+                if (parent) |owner_index| try parsed.items[owner_index].children.append(self.allocator, index);
+                if (is_root) try roots.append(self.allocator, index);
+            }
+            const contracts = evidence.callableContracts(node);
+            if (contracts != 0) try open.append(self.allocator, .{ .remaining = contracts, .owner = null, .contracts = true });
+            switch (node) {
+                .target => |target| switch (evidence.target(target).nested) {
+                    .resolved => |nested| if (nested.count != 0) try open.append(self.allocator, .{ .remaining = nested.count, .owner = index, .contracts = false }),
+                    .from_callable => {},
+                },
+                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+            }
+        }
+        // Parents precede their children: bind each target's scheme from
+        // its parameter's callable type at its parent's instantiation.
+        const callables = try self.allocator.alloc(?TypeId, parsed.items.len);
+        defer self.allocator.free(callables);
+        const dispatchers = try self.allocator.alloc(?TypeId, parsed.items.len);
+        defer self.allocator.free(dispatchers);
+        for (parsed.items, callables, dispatchers) |*entry, *callable, *dispatcher| {
+            callable.* = null;
+            dispatcher.* = null;
+            if (entry.contract) continue;
+            const param_owner = if (entry.parent) |p| parsed.items[p].target.? else owner;
+            const param_bound = if (entry.parent) |p| parsed.items[p].bound else owner_bound;
+            const params = self.templateEvidenceParams(param_owner);
+            if (entry.position >= params.len) invariant("stored evidence has more entries than its owner has evidence parameters");
+            const param = params[entry.position];
+            const owner_record = self.program.worker(param_owner).*;
+            const env: types.Env = .{ .module = owner_record.module, .vars = owner_record.scheme_vars, .bound = param_bound };
+            callable.* = try self.program.converter().convert(owner_record.module, param.callable_ty, env);
+            dispatcher.* = try self.program.converter().convert(owner_record.module, param.dispatcher_ty, env);
+            switch (evidence.nodes[entry.node]) {
+                .target => |target_index| {
+                    const stored = evidence.target(target_index).*;
+                    const target = try self.methodTargetWorker(stored.method);
+                    const target_worker = self.program.worker(target).*;
+                    const formal = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
+                    entry.target = target;
+                    entry.bound = try self.relateVariables(formal, callable.*.?, target_worker.scheme_vars.len);
+                },
+                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+            }
+        }
+        // Children follow their parents, so the reverse order builds every
+        // nested dictionary before the dictionary that captures it.
+        const dicts = try self.allocator.alloc(?LocalId, parsed.items.len);
+        defer self.allocator.free(dicts);
+        @memset(dicts, null);
+        var index = parsed.items.len;
+        while (index > 0) {
+            index -= 1;
+            const entry = parsed.items[index];
+            if (callables[index] == null) continue;
+            dicts[index] = switch (evidence.nodes[entry.node]) {
+                .target => blk: {
+                    const target_worker = self.program.worker(entry.target.?).*;
+                    const hidden = try self.allocator.alloc(LocalId, entry.bound.len + target_worker.dictionary_params.len);
+                    defer self.allocator.free(hidden);
+                    for (entry.bound, hidden[0..entry.bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
+                    for (target_worker.dictionary_params, hidden[entry.bound.len..]) |param_index, *dict| {
+                        if (param_index >= entry.children.items.len) invariant("stored method evidence does not cover its target's dictionaries");
+                        dict.* = dicts[entry.children.items[param_index]] orelse invariant("a stored dictionary's evidence denotes no dictionary");
+                    }
+                    break :blk try self.composeDictionary(try self.program.methodEntryWorker(entry.target.?), hidden);
+                },
+                .structural => |structural_index| try self.storedStructuralDictionary(evidence.structural(structural_index).*, dispatchers[index].?, callables[index].?),
+                // Evidence no dictionary reads restores to none.
+                .from_callable, .from_scheme, .unreachable_value, .checked_error => null,
+            };
+        }
+        const result = try self.allocator.alloc(?LocalId, roots.items.len);
+        for (roots.items, result) |root, *dict| dict.* = dicts[root];
+        return result;
+    }
+
+    pub fn storedStructuralDictionary(self: *Builder, stored: check.ConstStore.ConstFnStructuralEvidence, dispatcher: TypeId, callable: TypeId) Allocator.Error!?LocalId {
+        const method: lower.StructuralMethod = switch (stored.derivation) {
+            .equality => .is_eq,
+            .hash => .to_hash,
+            .parser, .encoder => {
+                const recorded = stored.checked orelse invariant("stored structural codec evidence records no checked edge");
+                const view = self.program.moduleByKey(.{ .bytes = recorded.view.bytes });
+                const id = recorded.generated_codec_derivation orelse invariant("stored structural codec evidence names no generated derivation");
+                return try Codec.dictionaryAt(self, view.index, id, callable);
+            },
+            else => invariantFmt("structural {s} dictionaries are not yet lowered by Boxy", .{@tagName(stored.derivation)}),
+        };
+        return try self.composeDictionary(try self.program.structuralWorker(self.module, method), &.{try self.descOf(dispatcher)});
     }
 
     pub fn finishRestoreList(self: *Builder, ty: TypeId, count: u32) Allocator.Error!void {
@@ -2625,7 +2912,8 @@ pub const Builder = struct {
                         for (const_types.typeSpan(func.args)) |child| try stack.append(self.allocator, .{ .id = child, .expanded = false });
                         try stack.append(self.allocator, .{ .id = func.ret, .expanded = false });
                     },
-                    .primitive, .named, .erased, .zst => {},
+                    .named => |named| for (const_types.typeSpan(named.args)) |child| try stack.append(self.allocator, .{ .id = child, .expanded = false }),
+                    .primitive, .erased, .zst => {},
                 }
                 continue;
             }
@@ -2681,9 +2969,14 @@ pub const Builder = struct {
                     for (const_types.typeSpan(func.args), args) |child, *arg| arg.* = done.get(child).?;
                     break :blk try store.intern(.{ .function = .{ .args = args, .ret = done.get(func.ret).?, .effectful = false } });
                 },
+                // The occurrence names the nominal; the stored arguments are
+                // what it is applied to.
                 .named => |named| blk: {
                     const owner = self.program.moduleByKey(.{ .bytes = named.named_type.ty_module.bytes });
-                    break :blk try self.program.converter().convert(owner.index, named.named_type.ty, .{ .module = owner.index, .vars = &.{}, .bound = &.{} });
+                    const args = try self.allocator.alloc(TypeId, named.args.len);
+                    defer self.allocator.free(args);
+                    for (const_types.typeSpan(named.args), args) |child, *arg| arg.* = done.get(child).?;
+                    break :blk try self.program.converter().nominalAt(owner.index, named.named_type.ty, args);
                 },
                 .erased => invariant("restoring a stored capture of erased function type is not yet lowered by Boxy"),
             };
@@ -4085,8 +4378,8 @@ pub const Builder = struct {
             },
             .dbg => |expr| {
                 try self.push(.discard);
+                try self.push(.{ .finish_dbg = try self.exprType(expr) });
                 try self.push(.{ .expr = expr });
-                invariant("dbg statements are not yet lowered by Boxy");
             },
             .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias => {},
             .promoted_proc => {},
