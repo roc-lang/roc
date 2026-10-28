@@ -940,6 +940,7 @@ pub const Builder = struct {
         proc.body = proc_body;
         proc.shapes = self.store.shapes;
         self.store.shapes = .{};
+        if (self.has_dynamic_frame) self.tail_calls.self_calls = .replace_frame;
         proc.tail_calls = try self.tail_calls.finish(self.store);
     }
 

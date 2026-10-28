@@ -19,6 +19,13 @@ proofs: collections.DenseMap(LIR.CFStmtId, Proof),
 path: std.ArrayList(LIR.CFStmtId) = .empty,
 next_join: u32 = 0,
 published: bool = false,
+/// How a proven call to the procedure itself is published: as a self-tail
+/// site that TCE turns into a loop jump, or, like a tail call to any other
+/// procedure, as a call that returns its value directly and so replaces the
+/// frame. A `.boxy` procedure with a dynamic frame region takes the second:
+/// its next call's dynamic arguments live in that region, which a loop
+/// iteration would allocate again while they are still read.
+self_calls: enum { loop, replace_frame } = .loop,
 
 /// Start recording one exact procedure identity.
 pub fn init(allocator: std.mem.Allocator, proc: LIR.LirProcSpecId) Self {
@@ -54,6 +61,7 @@ pub fn reset(self: *Self, proc: LIR.LirProcSpecId) void {
     self.path.clearRetainingCapacity();
     self.next_join = 0;
     self.published = false;
+    self.self_calls = .loop;
 }
 
 /// Called by the statement producer, including when filling a placeholder.
@@ -126,7 +134,7 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
         if (call.tail_call.isSite()) continue;
         const returned = try self.returnedLocal(store, call.next) orelse continue;
         if (returned != call.target) continue;
-        if (call.proc == proc) {
+        if (call.proc == proc and self.self_calls == .loop) {
             store.getCFStmtPtr(id).assign_call.tail_call = .site(head);
             head = id;
         } else if (store.getCFStmtImmediate(call.next).* != .ret and store.getLocal(call.target).layout_idx == ret_layout) {
