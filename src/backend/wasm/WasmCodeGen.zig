@@ -8761,6 +8761,15 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitBoxyRuntimeCall(.hash);
             try self.bindReturnedScalar(dst, .i64);
         },
+        .adapt => |a| {
+            const t = try self.dynTarget(dst);
+            try self.emitProcLocal(a.from);
+            try self.emitProcLocal(a.to);
+            try self.emitTargetAddress(t);
+            try self.emitBytesAddress(a.src);
+            try self.emitBoxyRuntimeCall(.adapt);
+            try self.finishTarget(dst, t);
+        },
         .numeral => |n| {
             const t = try self.dynTarget(dst);
             try self.emitProcLocal(n.desc);

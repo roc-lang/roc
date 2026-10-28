@@ -82,7 +82,7 @@ pub fn zeroSizedPtr() [*]u8 {
 
 /// A last-in, first-out work stack, inline while small and grown through
 /// `RocOps` after.
-fn Stack(comptime T: type, comptime inline_count: usize) type {
+pub fn Stack(comptime T: type, comptime inline_count: usize) type {
     return struct {
         inline_items: [inline_count]T = undefined,
         heap: ?[*]T = null,
@@ -95,13 +95,13 @@ fn Stack(comptime T: type, comptime inline_count: usize) type {
             return self.heap orelse &self.inline_items;
         }
 
-        fn push(self: *Self, item: T, ops: *RocOps) void {
+        pub fn push(self: *Self, item: T, ops: *RocOps) void {
             if (self.len == self.capacity) self.grow(ops);
             self.items()[self.len] = item;
             self.len += 1;
         }
 
-        fn pop(self: *Self) ?T {
+        pub fn pop(self: *Self) ?T {
             if (self.len == 0) return null;
             self.len -= 1;
             return self.items()[self.len];
@@ -126,7 +126,7 @@ fn Stack(comptime T: type, comptime inline_count: usize) type {
             self.capacity = new_capacity;
         }
 
-        fn deinit(self: *Self, ops: *RocOps) void {
+        pub fn deinit(self: *Self, ops: *RocOps) void {
             if (self.heap) |heap| ops.dealloc(@ptrCast(heap), @alignOf(T));
         }
     };

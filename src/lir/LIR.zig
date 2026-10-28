@@ -1411,6 +1411,13 @@ pub const DynOp = union(enum) {
     /// `NumeralTable` of the Boxy runtime) holds, at the number type `desc`
     /// describes; the program crashes when the literal does not fit it.
     numeral: struct { desc: LocalId, table: LocalId },
+    /// The value `src` (borrowed), which `from` describes, rebuilt as the
+    /// owned value `to` describes. The descriptors describe one type whose
+    /// record fields may differ in storage (design.md "Field Kinds"): a
+    /// field `to` stores in a presence slot is wrapped `#Present`, and a
+    /// presence slot `to` stores inline is unwrapped; the program crashes
+    /// when that slot is `#Missing`.
+    adapt: struct { src: LocalId, from: LocalId, to: LocalId },
 };
 
 /// The fields of `CFStmt.decref_if_initialized` other than its condition,

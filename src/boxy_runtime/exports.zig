@@ -97,6 +97,10 @@ pub fn roc_desc_numeral(desc: *const TypeDesc, table: [*]const u8, dst: ?[*]u8) 
     walk.numeral(desc, table, valuePtr(dst), ops());
 }
 
+pub fn roc_desc_adapt(from: *const TypeDesc, to: *const TypeDesc, dst: ?[*]u8, src: ?[*]u8) callconv(.c) void {
+    compiled.adapt(from, to, valuePtr(dst), valuePtr(src), ops());
+}
+
 pub fn roc_desc_copy(desc: *const TypeDesc, dst: ?[*]u8, src: ?[*]u8) callconv(.c) void {
     walk.copy(desc, valuePtr(dst), valuePtr(src));
 }

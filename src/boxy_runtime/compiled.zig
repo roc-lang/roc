@@ -162,6 +162,101 @@ pub fn buildBox(desc: *const TypeDesc, dst: *usize, payload: [*]const u8, ops: *
     dst.* = @intFromPtr(data);
 }
 
+// Representation adaptation.
+
+/// One value of an adaptation: the source bytes `from` describes, rebuilt at
+/// `dst` as `to` describes.
+const AdaptWork = struct { from: *const TypeDesc, to: *const TypeDesc, src: [*]const u8, dst: [*]u8 };
+
+/// Rebuild the value `src` (borrowed), which `from` describes, at `dst` as
+/// the owned value `to` describes. The two descriptors describe one type
+/// whose record fields may differ in storage (design.md "Field Kinds"): a
+/// field `from` stores inline and `to` in a presence slot is wrapped
+/// `#Present`, and a presence slot `to` stores inline is unwrapped, which a
+/// `#Missing` slot cannot be. Lists and boxes whose contents change storage
+/// are rebuilt; everything else is copied and retained.
+pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]const u8, ops: *RocOps) void {
+    var stack: walk.Stack(AdaptWork, 16) = .{};
+    defer stack.deinit(ops);
+    stack.push(.{ .from = from, .to = to, .src = src, .dst = dst }, ops);
+    while (stack.pop()) |work| {
+        const f = work.from;
+        const t = work.to;
+        if (f == t) {
+            @memcpy(work.dst[0..t.size], work.src[0..t.size]);
+            walk.incref(t, work.dst, 1, ops);
+            continue;
+        }
+        if (t.flags.presence_slot and !f.flags.presence_slot) {
+            // Wrap: `#Present` is the slot's second variant.
+            const present = &t.variants()[1];
+            @memset(work.dst[0..t.size], 0);
+            writeDiscriminant(t, work.dst, present.discriminant);
+            stack.push(.{ .from = f, .to = present.payload, .src = work.src, .dst = work.dst }, ops);
+            continue;
+        }
+        if (f.flags.presence_slot and !t.flags.presence_slot) {
+            const present = &f.variants()[1];
+            if (f.readDiscriminant(work.src) != present.discriminant) ops.crash("an optional record field that is missing reached a position that requires it");
+            stack.push(.{ .from = present.payload, .to = t, .src = work.src, .dst = work.dst }, ops);
+            continue;
+        }
+        if (f.kind != t.kind) invariant(ops, "adapted descriptors describe different kinds of value");
+        switch (t.kind) {
+            .zst, .scalar, .str, .bool, .erased_callable, .opaque_unknown => {
+                @memcpy(work.dst[0..t.size], work.src[0..t.size]);
+                walk.incref(t, work.dst, 1, ops);
+            },
+            .nominal => stack.push(.{ .from = f.child.?, .to = t.child.?, .src = work.src, .dst = work.dst }, ops),
+            .record, .tuple => {
+                if (f.count != t.count) invariant(ops, "adapted records have different fields");
+                @memset(work.dst[0..t.size], 0);
+                for (0..t.count) |index| {
+                    const from_field = f.fieldBySemanticIndex(@intCast(index));
+                    const to_field = t.fieldBySemanticIndex(@intCast(index));
+                    if (to_field.is_padding != 0) continue;
+                    stack.push(.{ .from = from_field.desc, .to = to_field.desc, .src = work.src + from_field.offset, .dst = work.dst + to_field.offset }, ops);
+                }
+            },
+            .tag_union => {
+                if (f.count != t.count) invariant(ops, "adapted tag unions have different variants");
+                const discriminant = f.readDiscriminant(work.src);
+                @memset(work.dst[0..t.size], 0);
+                writeDiscriminant(t, work.dst, discriminant);
+                stack.push(.{ .from = f.variants()[discriminant].payload, .to = t.variants()[discriminant].payload, .src = work.src, .dst = work.dst }, ops);
+            },
+            .list => {
+                const source: *const RocList = @ptrCast(@alignCast(work.src));
+                const target: *RocList = @ptrCast(@alignCast(work.dst));
+                const from_elem = f.child.?;
+                const to_elem = t.child.?;
+                const len = source.len();
+                if (len == 0 or to_elem.size == 0) {
+                    target.* = zstList(len);
+                    continue;
+                }
+                const data = utils.allocateWithRefcount(to_elem.size * len, to_elem.alignment, to_elem.flags.contains_refcounted, ops);
+                target.* = .{ .bytes = data, .length = len, .capacity_or_alloc_ptr = RocList.encodeCapacity(len) };
+                for (0..len) |index| {
+                    stack.push(.{ .from = from_elem, .to = to_elem, .src = source.bytes.? + index * from_elem.size, .dst = data + index * to_elem.size }, ops);
+                }
+            },
+            .box, .recursive_box => {
+                const payload_to = t.child.?;
+                const target: *usize = @ptrCast(@alignCast(work.dst));
+                if (payload_to.size == 0) {
+                    target.* = 0;
+                    continue;
+                }
+                const word = @as(*const usize, @ptrCast(@alignCast(work.src))).* & ~utils.DATA_PTR_TAG_MASK;
+                const data = utils.allocateWithRefcount(payload_to.size, payload_to.alignment, payload_to.flags.contains_refcounted, ops);
+                target.* = @intFromPtr(data);
+                stack.push(.{ .from = f.child.?, .to = payload_to, .src = @ptrFromInt(word), .dst = data }, ops);
+            },
+        }
+    }
+}
+
 // Dictionaries.
 
 /// Dictionary callables and dictionary records, interned by constructor and

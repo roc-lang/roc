@@ -8739,6 +8739,17 @@ pub const Interpreter = struct {
                 try self.setLocalChecked(frame, stmt_id, target, try self.rocStrToValue(rendered, self.store.getLocal(target).layout_idx), false);
             },
             .view => |v| try self.setComponentTarget(frame, stmt_id, target, @ptrFromInt(try self.localWord(frame, v.address))),
+            .adapt => |a| {
+                const from = try self.descAt(frame, a.from);
+                const to = try self.descAt(frame, a.to);
+                const src = try self.localBytes(frame, a.src);
+                const dst = try self.targetStorage(frame, target);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                if (crash_boundary.set() != 0) return self.crashError();
+                boxy.compiled.adapt(from, to, dst, src, &self.roc_ops);
+                try self.finishResultStorage(frame, stmt_id, target, dst);
+            },
             .numeral => |n| {
                 const desc = try self.descAt(frame, n.desc);
                 const table: [*]const u8 = @ptrFromInt(try self.localWord(frame, n.table));

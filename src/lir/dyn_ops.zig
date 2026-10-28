@@ -56,7 +56,7 @@ pub fn ownership(op: DynOp) Ownership {
         .box_payload_addr => |payload| .{ .borrow_component = payload.box },
         .tag_payload_addr => |payload| .{ .borrow_component = payload.base },
         .view => |view| .{ .borrow_component = view.address },
-        .tag_discriminant, .eq, .hash, .inspect, .numeral => .borrow_operands,
+        .tag_discriminant, .eq, .hash, .inspect, .numeral, .adapt => .borrow_operands,
         .record, .tag, .list, .box, .closure => .construct,
         .call_erased => .call_erased,
     };
@@ -188,6 +188,11 @@ pub const Operands = struct {
                 result.single(numeral.desc);
                 result.single(numeral.table);
             },
+            .adapt => |adapt| {
+                result.single(adapt.src);
+                result.single(adapt.from);
+                result.single(adapt.to);
+            },
         }
         return result;
     }
@@ -233,6 +238,7 @@ pub fn borrowedValues(op: DynOp) struct { locals: [2]LocalId, len: u8 } {
         .hash => |hash| .{ .locals = .{ hash.hasher, hash.value }, .len = 2 },
         .inspect => |inspect| .{ .locals = .{ inspect.value, undefined }, .len = 1 },
         .numeral => .{ .locals = undefined, .len = 0 },
+        .adapt => |adapt| .{ .locals = .{ adapt.src, undefined }, .len = 1 },
         else => unreachable, // only borrow_operands operations borrow value operands
     };
 }
@@ -319,6 +325,7 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
         .closure => |closure| .{ .closure = .{ .proc = closure.proc, .capture = try Remap.one(context, closure.capture) } },
         .view => |view| .{ .view = .{ .address = try Remap.one(context, view.address) } },
         .numeral => |numeral| .{ .numeral = .{ .desc = try Remap.one(context, numeral.desc), .table = try Remap.one(context, numeral.table) } },
+        .adapt => |adapt| .{ .adapt = .{ .src = try Remap.one(context, adapt.src), .from = try Remap.one(context, adapt.from), .to = try Remap.one(context, adapt.to) } },
     };
 }
 
