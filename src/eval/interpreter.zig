@@ -398,6 +398,10 @@ pub const Interpreter = struct {
     /// An erased call a deferred tail call left for whoever awaits its
     /// procedure's result. It owns one reference to its closure.
     pending_erased: ?PendingErasedCall = null,
+    /// A dynamic erased call a deferred tail call left pending, as the
+    /// native runtime records one: its closure, one reference to which it
+    /// owns, and an owned copy of its argument record.
+    pending_dyn: ?PendingDynCall = null,
     /// Set while an erased call is entering its callee, so that callee can
     /// tell this caller, which makes pending calls, from any other.
     erased_caller_drives: bool = false,
@@ -913,6 +917,9 @@ pub const Interpreter = struct {
         self.failed_call_stack.deinit(self.allocator);
         self.call_stack.deinit(self.allocator);
         self.pending_erased_storage.deinit(self.allocator);
+        if (self.pending_dyn) |pending| {
+            if (pending.args) |args| self.allocator.free(args);
+        }
         self.tail_call_storage.deinit(self.allocator);
         self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
@@ -2207,8 +2214,9 @@ pub const Interpreter = struct {
                 if (frame.dyn_result) |result_storage| {
                     // The result is the caller's storage, which receives the
                     // returned bytes unless the procedure built them there.
+                    // A procedure that left a call pending returns no value.
                     const returned = try self.localBytes(&frame, ret_local);
-                    if (returned != result_storage) {
+                    if (returned != result_storage and !self.hasPendingCall()) {
                         boxy.walk.copy(try self.localDesc(&frame, proc_spec.dyn_result.?), result_storage, returned);
                     }
                     break :blk .{ .result = .{ .value = Value.zst, .layout = proc_spec.ret_layout } };
@@ -2217,7 +2225,7 @@ pub const Interpreter = struct {
                 const raw_layout = self.store.getLocal(ret_local).layout_idx;
                 // A procedure that left a call pending returns no value; the
                 // pending call produces the result.
-                if (self.pending_erased != null) break :blk .{ .result = .{
+                if (self.hasPendingCall()) break :blk .{ .result = .{
                     .value = try self.poisonUninitializedValue(raw_layout),
                     .layout = raw_layout,
                 } };
@@ -2447,21 +2455,24 @@ pub const Interpreter = struct {
                     const call_region = self.activeStmtRegion();
                     const call_inline_scope = self.activeStmtInlineScope();
                     self.pending_dyn_result = result_storage;
-                    var result = self.evalProcById(assign.proc, arg_values, arg_layouts) catch |err| {
+                    const result = self.evalProcById(assign.proc, arg_values, arg_layouts) catch |err| {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
                     };
-                    if (self.pending_erased != null) {
+                    if (self.hasPendingCall()) {
                         if (!drivesHere(frame, extra.drive)) {
                             // The pending call produces this statement's
                             // value; this procedure returns to whoever makes
                             // it without reading the value.
-                            frame.setLocal(assign.target, result.value);
+                            if (self.store.getLocal(assign.target).dyn == null) frame.setLocal(assign.target, result.value);
                             current = assign.next;
                             continue;
                         }
-                        const driven = (try self.drivePendingErasedCalls()).?;
-                        result = .{ .value = driven.value, .layout = driven.layout };
+                        const storage = try self.targetStorage(frame, assign.target);
+                        try self.drivePendingInto(storage, try self.targetSize(frame, assign.target));
+                        try self.finishResultStorage(frame, current, assign.target, storage);
+                        current = assign.next;
+                        continue;
                     }
                     if (result_storage) |storage| {
                         try self.finishResultStorage(frame, current, assign.target, storage);
@@ -2495,7 +2506,7 @@ pub const Interpreter = struct {
                     const call_inline_scope = self.activeStmtInlineScope();
                     const target_layout = self.store.getLocal(assign_stmt.target).layout_idx;
                     const result = if (assign.deferred) deferred: {
-                        if (self.pending_erased != null) {
+                        if (self.hasPendingCall()) {
                             return self.invariantFailedError(
                                 "LIR/interpreter invariant violated: deferred an erased call while another was pending",
                                 .{},
@@ -2514,10 +2525,10 @@ pub const Interpreter = struct {
                             current = assign_stmt.next;
                             continue;
                         }
-                        break :deferred (self.drivePendingErasedCalls() catch |err| {
+                        break :deferred self.drivePendingValue(target_layout) catch |err| {
                             self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                             return err;
-                        }).?;
+                        };
                     } else self.evalErasedCall(
                         frame,
                         assign.closure,
@@ -2981,31 +2992,82 @@ pub const Interpreter = struct {
         };
     }
 
+    /// A dynamic erased call left pending (`pending_dyn`).
+    const PendingDynCall = struct {
+        closure: [*]u8,
+        args: ?[]align(16) u8,
+    };
+
+    /// Whether an erased call is pending.
+    fn hasPendingCall(self: *const LirInterpreter) bool {
+        return self.pending_erased != null or self.pending_dyn != null;
+    }
+
+    /// The size of a statement target's bytes.
+    fn targetSize(self: *LirInterpreter, frame: *const Frame, target: LocalId) Error!usize {
+        if (self.store.getLocal(target).dyn != null) return (try self.localDesc(frame, target)).size;
+        return self.helper.sizeOf(self.store.getLocal(target).layout_idx);
+    }
+
     /// Make every pending erased call in turn, each exactly as its statement
-    /// wrote it. The call that leaves none pending produces the result.
-    fn drivePendingErasedCalls(self: *LirInterpreter) Error!?ErasedCallResult {
-        var result: ?ErasedCallResult = null;
+    /// wrote it, and leave the result of the one that leaves none pending in
+    /// a fresh value of `layout`.
+    fn drivePendingValue(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!ErasedCallResult {
+        const size = self.helper.sizeOf(layout_idx);
+        if (size == 0) {
+            try self.drivePendingInto(null, 0);
+            return .{ .value = Value.zst, .layout = layout_idx };
+        }
+        const value = try self.alloc(layout_idx);
+        try self.drivePendingInto(value.ptr, size);
+        return .{ .value = value, .layout = layout_idx };
+    }
+
+    /// Make every pending erased call in turn, each exactly as its statement
+    /// wrote it. The call that leaves none pending writes its result, of
+    /// `ret_size` bytes, to `ret`; a dynamic call writes it there itself.
+    fn drivePendingInto(self: *LirInterpreter, ret: ?[*]u8, ret_size: usize) Error!void {
         // Only the last call of a chain produces the result, so each call
         // that leaves another pending leaves nothing in scratch the next
         // needs.
         const chain_mark = self.scratch.mark();
-        while (self.pending_erased) |owned| {
+        while (self.hasPendingCall()) {
             self.scratch.restore(chain_mark);
+            if (self.pending_dyn) |pending| {
+                self.pending_dyn = null;
+                defer if (pending.args) |args| self.allocator.free(args);
+                try self.invokeErasedInto(pending.closure, if (ret_size == 0) null else ret, if (pending.args) |args| args.ptr else null);
+                // ARC explicitly transferred this reference to the pending call.
+                builtins.erased_callable.decref(pending.closure, &self.roc_ops);
+                continue;
+            }
             // The call may leave another pending, which replaces the owned
             // copy, so this one is read from scratch.
-            const call = try self.copyPendingErasedCall(owned, self.evalAllocator());
+            const call = try self.copyPendingErasedCall(self.pending_erased.?, self.evalAllocator());
             self.pending_erased = null;
             const raw = try self.evalErasedCallOnce(call.closure, null, call.args, call.arg_layouts, call.arg_plan, call.site_layout, false);
-            if (self.pending_erased == null) {
+            if (!self.hasPendingCall()) {
                 try self.checkCallResultLayout(raw.layout, call.site_layout);
-                result = .{ .value = raw.value, .layout = call.site_layout };
+                if (ret_size != 0) @memcpy(ret.?[0..ret_size], raw.value.ptr[0..ret_size]);
             }
             const closure_ptr = self.readBoxedDataPointer(call.closure) orelse
                 return self.invariantFailedError("LIR/interpreter invariant violated: pending erased call had a null closure", .{});
             // ARC explicitly transferred this reference to the pending call.
             builtins.erased_callable.decref(closure_ptr, &self.roc_ops);
         }
-        return result;
+    }
+
+    /// Call the erased callable `closure` in the uniform erased-callable
+    /// ABI, as the native erased-call runtime does: an interpreted callee
+    /// learns that its caller makes the calls it leaves pending.
+    fn invokeErasedInto(self: *LirInterpreter, closure: [*]u8, ret: ?[*]u8, args: ?[*]const u8) Error!void {
+        var out_desc: ?*const anyopaque = null;
+        if (interpretedCallable(closure)) |callable| {
+            self.erased_caller_drives = true;
+            try self.callInterpreterErasedCallable(callable, &self.roc_ops, ret, args, null, &out_desc);
+        } else {
+            builtins.erased_callable.payloadPtr(closure).callable_fn_ptr(&self.roc_ops, ret, args, builtins.erased_callable.capturePtr(closure), null, &out_desc);
+        }
     }
 
     /// Copy the values a deferred erased call reads into storage that
@@ -3530,7 +3592,8 @@ pub const Interpreter = struct {
         }
         const closure_value = try self.getLocalChecked(frame, closure_local);
         const first = try self.evalErasedCallOnce(closure_value, closure_local, args, arg_layouts, arg_plan, ret_layout, reuse_closure);
-        return try self.drivePendingErasedCalls() orelse first;
+        if (!self.hasPendingCall()) return first;
+        return try self.drivePendingValue(ret_layout);
     }
 
     fn evalErasedCallOnce(
@@ -8264,7 +8327,8 @@ pub const Interpreter = struct {
         }
         const result = try self.evalProcById(proc_id, proc_args, proc_arg_layouts);
         const ret_size = self.helper.sizeOf(proc_spec.ret_layout);
-        if (ret_size > 0) {
+        // A procedure that left a call pending returns no value.
+        if (ret_size > 0 and !self.hasPendingCall()) {
             const ret_ptr = ret orelse return self.invariantFailedError(
                 "LIR/interpreter invariant violated: erased_record proc {d} returned a non-ZST result without result storage",
                 .{@backingInt(proc_id)},
@@ -8835,12 +8899,28 @@ pub const Interpreter = struct {
                 const closure: [*]u8 = @ptrFromInt(closure_word);
                 const args: ?[*]const u8 = if (c.args) |args_local| try self.localBytes(frame, args_local) else null;
                 const ret = try self.targetStorage(frame, target);
-                var out_desc: ?*const anyopaque = null;
-                if (interpretedCallable(closure)) |callable| {
-                    try self.callInterpreterErasedCallable(callable, &self.roc_ops, ret, args, null, &out_desc);
+                const ret_size = try self.targetSize(frame, target);
+                if (c.deferred) {
+                    if (self.hasPendingCall()) {
+                        return self.invariantFailedError("LIR/interpreter invariant violated: deferred an erased call while another was pending", .{});
+                    }
+                    const owned_args: ?[]align(16) u8 = if (c.args) |args_local| owned: {
+                        const size = try self.targetSize(frame, args_local);
+                        const copy = try self.allocator.alignedAlloc(u8, .@"16", @max(size, 1));
+                        @memcpy(copy[0..size], args.?[0..size]);
+                        break :owned copy;
+                    } else null;
+                    self.pending_dyn = .{ .closure = closure, .args = owned_args };
+                    // The target holds no value until whoever makes the
+                    // pending call writes it.
+                    if (!drivesHere(frame, c.drive)) {
+                        if (self.store.getLocal(target).dyn == null) frame.setLocal(target, try self.poisonUninitializedValue(self.store.getLocal(target).layout_idx));
+                        return;
+                    }
                 } else {
-                    builtins.erased_callable.payloadPtr(closure).callable_fn_ptr(&self.roc_ops, ret, args, builtins.erased_callable.capturePtr(closure), null, &out_desc);
+                    try self.invokeErasedInto(closure, if (ret_size == 0) null else ret, args);
                 }
+                if (self.hasPendingCall()) try self.drivePendingInto(ret, ret_size);
                 try self.finishResultStorage(frame, stmt_id, target, ret);
             },
         }

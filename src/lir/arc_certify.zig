@@ -6325,7 +6325,8 @@ const Certifier = struct {
     /// construction moves one unit per refcounted operand into its fresh
     /// target; an operand-borrowing operation produces a fresh target; and
     /// `call_erased` consumes its argument record and produces a fresh
-    /// result while its callable is only read. Descriptor, name, and
+    /// result while its callable is only read, unless the call is deferred,
+    /// which takes one reference to the callable. Descriptor, name, and
     /// dictionary operands are never refcounted.
     fn applyDyn(self: *Certifier, state: *State, target: ?LIR.LocalId, op: LIR.DynOp) CertifyError!void {
         self.dyn_operands.clearRetainingCapacity();
@@ -6373,6 +6374,9 @@ const Certifier = struct {
             },
             .call_erased => {
                 const call = op.call_erased;
+                // A deferred call keeps one reference to its closure until
+                // whoever makes the call releases it.
+                if (call.deferred and self.isRc(call.closure)) try self.consumeUnit(state, state.valueOf(call.closure), call.closure);
                 if (call.args) |args| {
                     if (self.isRc(args)) try self.consumeUnit(state, state.valueOf(args), args);
                 }

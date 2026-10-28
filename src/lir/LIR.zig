@@ -1411,7 +1411,18 @@ pub const DynOp = union(enum) {
     /// `args` is the packed argument record (a closed struct local or a
     /// dynamic local), or null for no arguments; the result is written to the
     /// target.
-    call_erased: struct { closure: LocalId, args: ?LocalId },
+    call_erased: struct {
+        closure: LocalId,
+        args: ?LocalId,
+        /// Set by ARC emission on a call whose value the procedure returns:
+        /// the call is left pending instead of made, owning one reference to
+        /// `closure` and the argument record (design.md "Deferred Erased
+        /// Calls"). The target holds no value until a `drive` replaces it.
+        deferred: bool = false,
+        /// Set by the tail-drive pass: where calls pending after this
+        /// statement are run.
+        drive: PendingDrive = .none,
+    },
     /// An erased callable of `proc` (an `erased_record` procedure) whose
     /// capture is the dynamic record `capture`, consumed. The record's first
     /// word is its own descriptor; the callable's `on_drop` is the runtime's

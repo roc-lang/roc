@@ -106,6 +106,13 @@ pub fn run(
                     .stmt = stmt_id,
                     .returns = returnOf(store, join_bodies.items, stmt.assign_call_erased.target, stmt.assign_call_erased.next),
                 });
+            } else if (stmt == .dyn) {
+                const op = store.stmtRow(stmt.dyn.data);
+                if (op == .call_erased and op.call_erased.deferred) try deferred_calls.append(allocator, .{
+                    .caller = @intCast(proc_index),
+                    .stmt = stmt_id,
+                    .returns = returnOf(store, join_bodies.items, stmt.dyn.target.?, stmt.dyn.next),
+                });
             } else if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
                 outside.set(@backingInt(stmt.assign_literal.value.proc_ref));
             }
@@ -136,10 +143,19 @@ pub fn run(
 
     for (deferred_calls.items) |deferred| {
         const drive = driveAfter(store, &outside, deferred.caller, deferred.returns != .no);
-        const updated = &store.getCFStmtPtr(deferred.stmt).assign_call_erased;
-        var data = store.stmtRow(updated.data);
-        data.drive = drive;
-        updated.data = try store.addStmtRow(LIR.ErasedCallData, data);
+        switch (store.getCFStmtPtr(deferred.stmt).*) {
+            .assign_call_erased => |*updated| {
+                var data = store.stmtRow(updated.data);
+                data.drive = drive;
+                updated.data = try store.addStmtRow(LIR.ErasedCallData, data);
+            },
+            .dyn => |*updated| {
+                var op = store.stmtRow(updated.data);
+                op.call_erased.drive = drive;
+                updated.data = try store.addStmtRow(LIR.DynOp, op);
+            },
+            else => unreachable, // only erased calls are collected as deferred
+        }
         if (drive == .unless_caller_drives) store.getProcSpecPtr(@fromBackingInt(deferred.caller)).reads_caller_drives = true;
     }
     for (direct_calls.items) |call| {
@@ -161,9 +177,7 @@ const HandsUp = enum { never, always, when_runtime_called };
 fn handsUp(store: *const LirStore, outside: *const std.bit_set.DynamicBitSetUnmanaged, proc_index: u32) HandsUp {
     const proc = store.getProcSpecImmediate(@fromBackingInt(proc_index));
     return switch (proc.abi) {
-        .erased_callable => .when_runtime_called,
-        // A `.boxy` erased worker leaves no call pending.
-        .erased_record => .never,
+        .erased_callable, .erased_record => .when_runtime_called,
         .roc => if (outside.isSet(proc_index)) .never else .always,
     };
 }

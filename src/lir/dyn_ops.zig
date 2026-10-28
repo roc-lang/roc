@@ -346,7 +346,12 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
         .eq => |eq| .{ .eq = .{ .lhs = try Remap.one(context, eq.lhs), .rhs = try Remap.one(context, eq.rhs), .desc = try Remap.one(context, eq.desc) } },
         .hash => |hash| .{ .hash = .{ .hasher = try Remap.one(context, hash.hasher), .value = try Remap.one(context, hash.value), .desc = try Remap.one(context, hash.desc) } },
         .inspect => |inspect| .{ .inspect = .{ .value = try Remap.one(context, inspect.value), .desc = try Remap.one(context, inspect.desc) } },
-        .call_erased => |call| .{ .call_erased = .{ .closure = try Remap.one(context, call.closure), .args = try Remap.opt(context, call.args) } },
+        .call_erased => |call| .{ .call_erased = .{
+            .closure = try Remap.one(context, call.closure),
+            .args = try Remap.opt(context, call.args),
+            .deferred = call.deferred,
+            .drive = call.drive,
+        } },
         .closure => |closure| .{ .closure = .{ .proc = closure.proc, .capture = try Remap.one(context, closure.capture) } },
         .view => |view| .{ .view = .{ .address = try Remap.one(context, view.address) } },
         .numeral => |numeral| .{ .numeral = .{ .desc = try Remap.one(context, numeral.desc), .table = try Remap.one(context, numeral.table) } },

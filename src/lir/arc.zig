@@ -2392,6 +2392,15 @@ const Inserter = struct {
             },
             .dyn => |dyn_stmt| blk: {
                 const op = self.store.stmtRow(dyn_stmt.data);
+                if (step.replaces_frame) {
+                    var deferred = op;
+                    deferred.call_erased.deferred = true;
+                    break :blk try self.store.addCFStmt(.{ .dyn = .{
+                        .target = dyn_stmt.target,
+                        .data = try self.store.addStmtRow(LIR.DynOp, deferred),
+                        .next = next,
+                    } }, origin);
+                }
                 switch (DynOps.ownership(op)) {
                     .none, .borrow_operands, .call_erased => {},
                     .borrow_component, .alias => if (step.retain_assign_ref_target) {
@@ -3207,6 +3216,32 @@ const Inserter = struct {
             if (stmt == .ret) {
                 if (stmt.ret.value != call.target) return false;
                 return self.store.getLocal(call.target).layout_idx == caller.ret_layout;
+            }
+            if (stmt != .jump) return false;
+            if (jumps == joins.len) return false;
+            jumps += 1;
+            current = for (joins) |join| {
+                if (join.id == stmt.jump.target) break join.body;
+            } else return false;
+        }
+    }
+
+    /// Whether a dynamic erased call writing `target` is deferred: its value
+    /// is the procedure's whole result, reached through jumps into join
+    /// bodies alone, and the procedure is not a hosted one.
+    fn dynErasedCallIsDeferred(self: *const Inserter, target: LIR.LocalId, call_next: LIR.CFStmtId) bool {
+        const caller = self.store.getProcSpec(self.current_proc);
+        if (caller.hosted != null) return false;
+        const joins = self.solution.joinBodiesOf(self.current_source_proc);
+        var current: LIR.CFStmtId = call_next;
+        // A join body that jumps back to its own join never returns, so more
+        // jumps than joins is such a cycle.
+        var jumps: usize = 0;
+        while (true) {
+            const stmt = self.store.getCFStmt(current);
+            if (stmt == .ret) {
+                if (stmt.ret.value != target) return false;
+                return self.store.getLocal(target).layout_idx == caller.ret_layout;
             }
             if (stmt != .jump) return false;
             if (jumps == joins.len) return false;
@@ -4761,6 +4796,17 @@ const Inserter = struct {
                 try self.placeCallResultUnit(owned, target, .owned);
                 step.pre_release = if (release_old_target) self.releaseDecision(target) else null;
                 self.death_scratch.clearRetainingCapacity();
+                if (self.dynErasedCallIsDeferred(target, next)) {
+                    // The call is left pending and made after this frame
+                    // returns. It keeps one reference to its closure, retained
+                    // here; everything else the frame owns ends first.
+                    try self.appendStepRetain(step, .{ .local = call.closure, .reason = .closure_call_capture });
+                    try self.releaseTailCallerFrame(owned, target, self.death_scratch);
+                    try step.pre_release_extra.append(ReleaseDecision, self.solve_allocator, &self.arc_plans.releases, self.death_scratch.items);
+                    step.pre_release_extra_reason = .tail_call_frame;
+                    step.replaces_frame = true;
+                    return;
+                }
                 try self.noteCallResultDeathIfUnused(owned, target, .owned, next, self.death_scratch);
                 try self.postStmtDeaths(owned, operands, null, next, self.death_scratch);
                 try self.copyDeathScratchToStep(step);

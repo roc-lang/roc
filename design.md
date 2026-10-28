@@ -19177,8 +19177,9 @@ callee can return with a call pending, and on each deferred call:
   than returning it, and every tail position in a procedure something other
   than Roc code or the erased-call runtime can enter: a root, a dictionary
   worker, a procedure whose address is taken.
-- `unless_caller_drives`: in an erased-callable procedure, which reads at
-  entry whether the erased-call runtime invoked it. A host that calls an
+- `unless_caller_drives`: in an erased-callable procedure or a `.boxy`
+  erased worker, which reads at entry whether the erased-call runtime invoked
+  it. A host that calls an
   erased callable directly does not make pending calls, so then the
   procedure makes them itself. The runtime names the callable it is invoking
   by its function pointer and the procedure asks with its own, so a value no
@@ -19213,6 +19214,12 @@ later call in the chain is stored as the first call's statement stores it
 (its site layout and result descriptor) before the chain's first conversion
 applies, since the in-between conversions it skipped end at that site. The caller's own result descriptor applies last, as it would
 have to the value its callee returned.
+
+A `.boxy` erased call through a dynamic function value (`call_erased`) is
+deferred and driven the same way. Its packed argument record is copied into
+the pending call at its descriptor's size, and whoever makes the call passes
+its own result storage, which the callee writes in the one representation
+both sides share.
 
 Backends follow these marks and nothing else: a deferred call becomes a call
 to the runtime's record function, a drive becomes a call to its drive
