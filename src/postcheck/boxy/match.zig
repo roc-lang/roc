@@ -366,8 +366,9 @@ pub const Ctx = struct {
         return switch (self.pattern(pat).data) {
             .applied_tag => try self.tagVariant(pat, ty),
             // A numeral matched where a body knows its number type only by
-            // descriptor is identified by its exact value.
-            .numeral_literal => if (!try self.b.closed(try self.b.structuralType(ty))) try self.exactKey(pat) else switch (self.literalPrimitive(ty)) {
+            // descriptor, or through its checked conversion guard, is
+            // identified by its exact value.
+            .numeral_literal => |numeral| if (numeral.guard != null or !try self.b.closed(try self.b.structuralType(ty))) try self.exactKey(pat) else switch (self.literalPrimitive(ty)) {
                 .dec => @bitCast((try checked.exact_numeral.decBits(self.arena(), self.exactNumeral(pat))) orelse
                     invariant("a numeral pattern does not fit its Dec type")),
                 // IEEE `==`: +0.0 and -0.0 are one constructor.
