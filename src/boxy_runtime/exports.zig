@@ -61,6 +61,14 @@ pub fn roc_desc_recursive_box(payload: *const TypeDesc) callconv(.c) *const Type
     return compose.recursiveBox(cache(), composeOps(), payload);
 }
 
+pub fn roc_desc_recursive_open(key: *const u8, count: u32, vars: ?[*]const *const TypeDesc) callconv(.c) *const TypeDesc {
+    return compose.recursiveOpen(cache(), composeOps(), key, items(*const TypeDesc, count, vars));
+}
+
+pub fn roc_desc_recursive_close(shell: *const TypeDesc, desc: *const TypeDesc, key: *const u8, count: u32, vars: ?[*]const *const TypeDesc) callconv(.c) *const TypeDesc {
+    return compose.recursiveClose(cache(), composeOps(), shell, desc, key, items(*const TypeDesc, count, vars));
+}
+
 pub fn roc_desc_record(count: u32, fields: ?[*]const compose.FieldInput) callconv(.c) *const TypeDesc {
     return compose.record(cache(), composeOps(), items(compose.FieldInput, count, fields));
 }

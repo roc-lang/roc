@@ -38,6 +38,7 @@ const CFStmtId = LIR.CFStmtId;
 const TypeId = types.TypeId;
 const ModuleIndex = types.ModuleIndex;
 const Program = lower.Program;
+const Layouts = @import("layouts.zig").Layouts;
 const WorkerId = lower.WorkerId;
 const invariant = types.invariant;
 const invariantFmt = types.invariantFmt;
@@ -180,6 +181,10 @@ pub const LoopExit = struct { join: LIR.JoinPointId, reached: bool };
 
 pub const PatternItem = struct { pattern: CheckedPatternId, value: LocalId, ty: TypeId };
 
+/// The key and variable descriptors a recursive member's placeholder was
+/// opened with, which its close repeats.
+const OpenMember = struct { key: LocalId, vars: LIR.LocalSpan };
+
 pub const Builder = struct {
     program: *Program,
     allocator: Allocator,
@@ -195,6 +200,14 @@ pub const Builder = struct {
     /// The dictionaries in scope (`Worker.scope_dictionary_indices` order).
     dict_locals: []LocalId = &.{},
     type_descs: std.AutoHashMapUnmanaged(TypeId, LocalId) = .empty,
+    /// The recursive components whose members' descriptors this body has
+    /// begun composing.
+    opened_components: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// The recursive members whose placeholder descriptor this body has
+    /// opened and not yet closed.
+    open_members: std.AutoHashMapUnmanaged(TypeId, OpenMember) = .empty,
+    /// The recursion box over each descriptor local that has one.
+    recursive_boxes: std.AutoHashMapUnmanaged(LocalId, LocalId) = .empty,
     opaque_word_desc: ?LocalId = null,
     /// Expressions whose value is built at a row coercion's destination
     /// type rather than their own (design.md "Row Coercion Primitive").
@@ -244,6 +257,9 @@ pub const Builder = struct {
         self.frame_locals.deinit(self.allocator);
         self.binders.deinit(self.allocator);
         self.type_descs.deinit(self.allocator);
+        self.opened_components.deinit(self.allocator);
+        self.open_members.deinit(self.allocator);
+        self.recursive_boxes.deinit(self.allocator);
         self.name_locals.deinit(self.allocator);
         self.join_points.deinit(self.allocator);
         self.join_infos.deinit(self.allocator);
@@ -524,43 +540,106 @@ pub const Builder = struct {
     /// for a scope variable, and a composition of its components'
     /// descriptors otherwise (design.md "Type Descriptors"). Components are
     /// composed before the types that contain them, with an explicit stack.
+    /// The members of a recursive type that its layout's boxed slots point
+    /// at are opened as placeholders first, and each is closed once its own
+    /// components are composed.
     pub fn descOf(self: *Builder, root: TypeId) Allocator.Error!LocalId {
         if (self.type_descs.get(root)) |existing| return existing;
-        var pending: std.ArrayList(struct { ty: TypeId, expanded: bool }) = .empty;
+        const Step = enum { fresh, expanded, close_fresh, close_expanded };
+        var pending: std.ArrayList(struct { ty: TypeId, step: Step }) = .empty;
         defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, .{ .ty = root, .expanded = false });
+        var expanding: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+        defer expanding.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .ty = root, .step = .fresh });
         while (pending.items.len > 0) {
             const top = &pending.items[pending.items.len - 1];
             const ty = top.ty;
-            if (self.type_descs.contains(ty)) {
-                _ = pending.pop();
-                continue;
-            }
-            if (try self.leafDesc(ty)) |local| {
-                try self.type_descs.put(self.allocator, ty, local);
-                _ = pending.pop();
-                continue;
-            }
-            const children = try self.descComponents(ty);
-            defer self.allocator.free(children);
-            if (!top.expanded) {
-                top.expanded = true;
-                for (children) |child| {
-                    if (!self.type_descs.contains(child)) {
-                        if (child == ty) invariant("a type's descriptor composition reached itself");
-                        try pending.append(self.allocator, .{ .ty = child, .expanded = false });
+            switch (top.step) {
+                .fresh, .close_fresh => {
+                    if (top.step == .fresh) {
+                        if (self.type_descs.contains(ty)) {
+                            _ = pending.pop();
+                            continue;
+                        }
+                        if (try self.leafDesc(ty)) |local| {
+                            try self.type_descs.put(self.allocator, ty, local);
+                            _ = pending.pop();
+                            continue;
+                        }
+                        if (try self.program.layouts.recursiveComponent(ty)) |component| {
+                            if (!self.opened_components.contains(component)) {
+                                try self.opened_components.put(self.allocator, component, {});
+                                const targets = self.program.layouts.componentTargets(component);
+                                for (targets) |target| try self.openRecursiveMember(target);
+                                for (targets) |target| try pending.append(self.allocator, .{ .ty = target, .step = .close_fresh });
+                                continue;
+                            }
+                        }
                     }
-                }
-                continue;
+                    top.step = if (top.step == .fresh) .expanded else .close_expanded;
+                    try expanding.put(self.allocator, ty, {});
+                    const children = try self.descComponents(ty);
+                    defer self.allocator.free(children);
+                    for (children) |child| {
+                        if (self.type_descs.contains(child)) continue;
+                        if (expanding.contains(child)) invariant("a descriptor composition reached a type it is composing outside its layout's boxed slots");
+                        try pending.append(self.allocator, .{ .ty = child, .step = .fresh });
+                    }
+                },
+                .expanded => {
+                    _ = expanding.remove(ty);
+                    const local = try self.composeDesc(ty);
+                    try self.type_descs.put(self.allocator, ty, local);
+                    _ = pending.pop();
+                },
+                .close_expanded => {
+                    _ = expanding.remove(ty);
+                    const desc = try self.composeDesc(ty);
+                    const open = self.open_members.fetchRemove(ty).?.value;
+                    const closed_local = try self.closedLocal(.opaque_ptr);
+                    try self.emitEntry(.{ .dyn = .{ .target = closed_local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_recursive_close = .{
+                        .shell = self.type_descs.get(ty).?,
+                        .desc = desc,
+                        .key = open.key,
+                        .vars = open.vars,
+                    } }), .next = undefined } });
+                    _ = pending.pop();
+                },
             }
-            for (children) |child| {
-                if (!self.type_descs.contains(child)) invariant("composing the descriptor of a recursive generic type is not yet lowered by Boxy");
-            }
-            const local = try self.composeDesc(ty);
-            try self.type_descs.put(self.allocator, ty, local);
-            _ = pending.pop();
         }
         return self.type_descs.get(root).?;
+    }
+
+    /// Open the placeholder descriptor of the recursive member `ty`, which
+    /// stands for `ty`'s descriptor until `descOf` closes it.
+    fn openRecursiveMember(self: *Builder, ty: TypeId) Allocator.Error!void {
+        const key = try self.closedLocal(.opaque_ptr);
+        try self.emitEntry(.{ .assign_literal = .{ .target = key, .value = .{ .static_data = .{ .id = try self.program.static_descs.recursionKeySlot(ty) } }, .next = undefined } });
+        const vars = try self.program.layouts.memberVars(ty);
+        const var_descs = try self.allocator.alloc(LocalId, vars.len);
+        defer self.allocator.free(var_descs);
+        for (vars, var_descs) |var_ty, *desc| desc.* = try self.leafDesc(var_ty) orelse invariant("a recursive member's variable has no descriptor in scope");
+        const vars_span = try self.store.addLocalSpan(var_descs);
+        const shell = try self.closedLocal(.opaque_ptr);
+        try self.emitEntry(.{ .dyn = .{ .target = shell, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_recursive_open = .{ .key = key, .vars = vars_span } }), .next = undefined } });
+        try self.type_descs.put(self.allocator, ty, shell);
+        try self.open_members.put(self.allocator, ty, .{ .key = key, .vars = vars_span });
+    }
+
+    /// The descriptor a composition of `parent` stores for its inline
+    /// component `edge`: the component's own, or the recursion box around it
+    /// in a slot `parent`'s committed layout boxes.
+    fn slotDesc(self: *Builder, parent: TypeId, edge: Layouts.InlineEdge) Allocator.Error!LocalId {
+        const child = self.type_descs.get(edge.child).?;
+        if (try self.program.layouts.boxedEdge(parent, edge)) {
+            if (self.recursive_boxes.get(child)) |existing| return existing;
+            const boxed = try self.closedLocal(.opaque_ptr);
+            try self.emitEntry(.{ .dyn = .{ .target = boxed, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_recursive_box = .{ .payload = child } }), .next = undefined } });
+            try self.recursive_boxes.put(self.allocator, child, boxed);
+            return boxed;
+        }
+        if (self.open_members.contains(edge.child)) invariant("a descriptor composition stores an open recursive member outside a boxed slot");
+        return child;
     }
 
     /// A descriptor needing no component descriptors: a static descriptor,
@@ -625,7 +704,7 @@ pub const Builder = struct {
             try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_presence_slot = .{
                 .missing = try self.nameDesc(try store.internName(@import("layouts.zig").missing_label)),
                 .present = try self.nameDesc(try store.internName(@import("layouts.zig").present_label)),
-                .payload = self.type_descs.get(payload).?,
+                .payload = try self.slotDesc(ty, .{ .child = payload, .slot = .payload }),
             } }), .next = undefined } });
             return local;
         }
@@ -633,10 +712,11 @@ pub const Builder = struct {
             .list => |elem| .{ .desc_list = .{ .elem = self.type_descs.get(elem).? } },
             .box => |payload| .{ .desc_box = .{ .payload = self.type_descs.get(payload).? } },
             .tuple => |items_span| blk: {
-                const items = store.span(items_span);
+                const items = try self.allocator.dupe(TypeId, store.span(items_span));
+                defer self.allocator.free(items);
                 const descs = try self.allocator.alloc(LocalId, items.len);
                 defer self.allocator.free(descs);
-                for (items, descs) |item, *desc| desc.* = self.type_descs.get(item).?;
+                for (items, descs) |item, *desc| desc.* = try self.slotDesc(ty, .{ .child = item, .slot = .field });
                 break :blk .{ .desc_tuple = .{ .elems = try self.store.addLocalSpan(descs) } };
             },
             .record => |record| blk: {
@@ -648,7 +728,7 @@ pub const Builder = struct {
                 defer self.allocator.free(descs);
                 for (fields, names, descs) |field, *name, *desc| {
                     name.* = try self.nameDesc(field.name);
-                    desc.* = self.type_descs.get(try self.program.layouts.fieldStorage(field)).?;
+                    desc.* = try self.slotDesc(ty, .{ .child = try self.program.layouts.fieldStorage(field), .slot = .field });
                 }
                 break :blk .{ .desc_record = .{
                     .names = try self.store.addLocalSpan(names),
@@ -667,9 +747,13 @@ pub const Builder = struct {
                 defer payloads.deinit(self.allocator);
                 for (tags) |tag| {
                     try names.append(self.allocator, try self.nameDesc(tag.name));
-                    const tag_payloads = store.span(tag.payloads);
+                    const tag_payloads = try self.allocator.dupe(TypeId, store.span(tag.payloads));
+                    defer self.allocator.free(tag_payloads);
                     try counts.append(self.allocator, @intCast(tag_payloads.len));
-                    for (tag_payloads) |payload| try payloads.append(self.allocator, self.type_descs.get(payload).?);
+                    for (tag_payloads) |payload| try payloads.append(self.allocator, try self.slotDesc(ty, .{
+                        .child = payload,
+                        .slot = if (tag_payloads.len == 1) .payload else .field,
+                    }));
                 }
                 break :blk .{ .desc_tag_union = .{
                     .names = try self.store.addLocalSpan(names.items),
@@ -681,7 +765,7 @@ pub const Builder = struct {
             .nominal => |nominal| blk: {
                 if (nominal.builtin == .bool) invariant("Bool is never an open type");
                 break :blk .{ .desc_nominal = .{
-                    .backing = self.type_descs.get(try self.program.converter().backing(ty)).?,
+                    .backing = try self.slotDesc(ty, .{ .child = try self.program.converter().backing(ty), .slot = .backing }),
                     .name = try self.nameDesc(nominal.name),
                     .methods = try self.composedMethods(ty),
                     .inspect_opaque = nominal.is_opaque,

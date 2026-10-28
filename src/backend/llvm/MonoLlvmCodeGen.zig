@@ -11587,6 +11587,15 @@ pub const MonoLlvmCodeGen = struct {
             .frame_alloc => unreachable, // handled above
             .desc_list => |d| try self.bindWord(target, try self.callBoxyRuntime("roc_desc_list", ptr_ty, &.{ptr_ty}, &.{try self.wordValue(d.elem)})),
             .desc_box => |d| try self.bindWord(target, try self.callBoxyRuntime("roc_desc_box", ptr_ty, &.{ptr_ty}, &.{try self.wordValue(d.payload)})),
+            .desc_recursive_box => |d| try self.bindWord(target, try self.callBoxyRuntime("roc_desc_recursive_box", ptr_ty, &.{ptr_ty}, &.{try self.wordValue(d.payload)})),
+            .desc_recursive_open => |d| {
+                const vars = try self.dynLocalArray(d.vars, .words);
+                try self.bindWord(target, try self.callBoxyRuntime("roc_desc_recursive_open", ptr_ty, &.{ ptr_ty, .i32, ptr_ty }, &.{ try self.wordValue(d.key), try self.intValue(.i32, d.vars.len), vars }));
+            },
+            .desc_recursive_close => |d| {
+                const vars = try self.dynLocalArray(d.vars, .words);
+                try self.bindWord(target, try self.callBoxyRuntime("roc_desc_recursive_close", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty }, &.{ try self.wordValue(d.shell), try self.wordValue(d.desc), try self.wordValue(d.key), try self.intValue(.i32, d.vars.len), vars }));
+            },
             .desc_presence_slot => |d| try self.bindWord(target, try self.callBoxyRuntime("roc_desc_presence_slot", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty }, &.{ try self.wordValue(d.missing), try self.wordValue(d.present), try self.wordValue(d.payload) })),
             .desc_record => |d| {
                 const names = self.store.getLocalSpan(d.names);

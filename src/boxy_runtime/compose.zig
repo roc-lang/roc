@@ -279,6 +279,7 @@ const KeyTag = enum(u64) {
     args,
     nominal,
     presence_slot,
+    recursive,
 };
 
 const no_name: u64 = std.math.maxInt(u64);
@@ -313,9 +314,49 @@ pub fn box(cache: *Cache, ops: *RocOps, payload: *const TypeDesc) *const TypeDes
     return container(cache, ops, .box, payload, payload.size != 0);
 }
 
-/// The implicit box a layout inserts to break a recursive type.
+/// The implicit box a layout inserts to break a recursive type. Its payload
+/// may be a recursive member's open placeholder, which is never zero-sized.
 pub fn recursiveBox(cache: *Cache, ops: *RocOps, payload: *const TypeDesc) *const TypeDesc {
     return container(cache, ops, .recursive_box, payload, payload.size != 0);
+}
+
+/// The `size` of a recursive member's placeholder until it is closed.
+const open_size = std.math.maxInt(u32);
+
+/// The key words of a recursive member: `key` names its type and `vars`
+/// are its type variables' descriptors. Caller deinits the scratch.
+fn recursiveKey(scratch: *Scratch(u64, 16), ops: *RocOps, key: *const u8, vars: []const *const TypeDesc) []const u64 {
+    const words = scratch.get(2 + vars.len, ops);
+    words[0] = @backingInt(KeyTag.recursive);
+    words[1] = ptrWord(key);
+    for (vars, words[2..]) |desc, *word| word.* = ptrWord(desc);
+    return words;
+}
+
+/// Begin composing a recursive member's descriptor: the finished descriptor
+/// interned under `key` and `vars`, or a placeholder for its components'
+/// recursive boxes to point at until `recursiveClose` fills it.
+pub fn recursiveOpen(cache: *Cache, ops: *RocOps, key: *const u8, vars: []const *const TypeDesc) *const TypeDesc {
+    var scratch: Scratch(u64, 16) = .{};
+    defer scratch.deinit(ops);
+    if (cache.lookup(recursiveKey(&scratch, ops, key, vars))) |existing| return existing;
+    const shell = immortal(TypeDesc, 1, ops);
+    shell[0] = leaf(.zst, .u8, 0, 1, .align_1, false);
+    shell[0].size = open_size;
+    return &shell[0];
+}
+
+/// Fill the placeholder `shell` with the member's composed descriptor
+/// `desc` and intern it, unless `recursiveOpen` returned it finished.
+pub fn recursiveClose(cache: *Cache, ops: *RocOps, shell: *const TypeDesc, desc: *const TypeDesc, key: *const u8, vars: []const *const TypeDesc) *const TypeDesc {
+    if (shell.size != open_size) return shell;
+    if (desc.size == open_size) invariant(ops, "a recursive member's composed descriptor is itself an open placeholder");
+    const filled: *TypeDesc = @constCast(shell);
+    filled.* = desc.*;
+    var scratch: Scratch(u64, 16) = .{};
+    defer scratch.deinit(ops);
+    _ = cache.intern(recursiveKey(&scratch, ops, key, vars), shell, ops);
+    return shell;
 }
 
 fn container(cache: *Cache, ops: *RocOps, comptime kind: Kind, child: *const TypeDesc, contains_refcounted: bool) *const TypeDesc {

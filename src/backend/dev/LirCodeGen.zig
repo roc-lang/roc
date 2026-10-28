@@ -17090,6 +17090,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBoxyRuntime(&builder, "roc_desc_box");
                     try self.bindReturnedScalar(dst_local, 8);
                 },
+                .desc_recursive_box => |d| {
+                    try self.addWordArg(&builder, d.payload);
+                    try self.callBoxyRuntime(&builder, "roc_desc_recursive_box");
+                    try self.bindReturnedScalar(dst_local, 8);
+                },
+                .desc_recursive_open => |d| {
+                    const vars = try self.emitLocalArray(d.vars, .words);
+                    try self.addWordArg(&builder, d.key);
+                    try builder.addImmArg(@intCast(self.store.getLocalSpan(d.vars).len));
+                    try builder.addLeaArg(frame_ptr, vars);
+                    try self.callBoxyRuntime(&builder, "roc_desc_recursive_open");
+                    try self.bindReturnedScalar(dst_local, 8);
+                },
+                .desc_recursive_close => |d| {
+                    const vars = try self.emitLocalArray(d.vars, .words);
+                    try self.addWordArg(&builder, d.shell);
+                    try self.addWordArg(&builder, d.desc);
+                    try self.addWordArg(&builder, d.key);
+                    try builder.addImmArg(@intCast(self.store.getLocalSpan(d.vars).len));
+                    try builder.addLeaArg(frame_ptr, vars);
+                    try self.callBoxyRuntime(&builder, "roc_desc_recursive_close");
+                    try self.bindReturnedScalar(dst_local, 8);
+                },
                 .desc_presence_slot => |d| {
                     try self.addWordArg(&builder, d.missing);
                     try self.addWordArg(&builder, d.present);

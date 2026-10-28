@@ -54,9 +54,24 @@ fn payloadOffset(variant: *const Variant, index: u32) u32 {
     return variant.payload.fieldBySemanticIndex(index).offset;
 }
 
-fn payloadSize(variant: *const Variant, index: u32) u32 {
-    if (variant.payload_count == 1) return variant.payload.size;
-    return variant.payload.fieldBySemanticIndex(index).desc.size;
+fn payloadDesc(variant: *const Variant, index: u32) *const TypeDesc {
+    if (variant.payload_count == 1) return variant.payload;
+    return variant.payload.fieldBySemanticIndex(index).desc;
+}
+
+/// The address of the value a component slot `desc` describes holds: the
+/// slot itself, or the payload of the box a recursive type's layout puts
+/// in the slot.
+pub fn componentAddr(desc: *const TypeDesc, slot: [*]u8) [*]u8 {
+    if (desc.kind != .recursive_box) return slot;
+    return boxPayloadAddr(desc.child.?, @ptrCast(@alignCast(slot)));
+}
+
+/// Move the value at `src` into the component slot `desc` describes,
+/// boxing it when the slot is a recursive type's box.
+fn writeComponent(desc: *const TypeDesc, slot: [*]u8, src: [*]const u8, ops: *RocOps) void {
+    if (desc.kind == .recursive_box) return buildBox(desc.child.?, @ptrCast(@alignCast(slot)), src, ops);
+    @memcpy(slot[0..desc.size], src[0..desc.size]);
 }
 
 fn writeDiscriminant(desc: *const TypeDesc, bytes: [*]u8, discriminant: u32) void {
@@ -76,14 +91,15 @@ fn writeDiscriminant(desc: *const TypeDesc, bytes: [*]u8, discriminant: u32) voi
 pub fn fieldAddr(desc: *const TypeDesc, base: [*]u8, semantic_index: u32, ops: *RocOps) [*]u8 {
     const record = recordOf(desc, ops);
     if (semantic_index >= record.count) invariant(ops, "a field index past its record's fields");
-    return base + record.fieldBySemanticIndex(semantic_index).offset;
+    const field = record.fieldBySemanticIndex(semantic_index);
+    return componentAddr(field.desc, base + field.offset);
 }
 
 pub fn fieldAddrNamed(desc: *const TypeDesc, base: [*]u8, name: *const Name, ops: *RocOps) [*]u8 {
     const record = recordOf(desc, ops);
     for (record.fields()) |*field| {
         const field_name = field.name orelse continue;
-        if (field_name.id == name.id) return base + field.offset;
+        if (field_name.id == name.id) return componentAddr(field.desc, base + field.offset);
     }
     invariant(ops, "a field name that is not in its record's descriptor");
 }
@@ -101,7 +117,7 @@ pub fn tagDiscriminantOf(desc: *const TypeDesc, name: *const Name, ops: *RocOps)
 pub fn tagPayloadAddr(desc: *const TypeDesc, base: [*]u8, name: *const Name, payload_index: u32, ops: *RocOps) [*]u8 {
     const variant = variantNamed(desc, name, ops).variant;
     if (payload_index >= variant.payload_count) invariant(ops, "a tag argument index past its tag's arguments");
-    return base + payloadOffset(variant, payload_index);
+    return componentAddr(payloadDesc(variant, payload_index), base + payloadOffset(variant, payload_index));
 }
 
 pub fn listElemAddr(elem: *const TypeDesc, roc_list: *const RocList, index: u64) [*]u8 {
@@ -125,7 +141,7 @@ pub fn buildRecord(desc: *const TypeDesc, dst: [*]u8, fields: []const [*]const u
     @memset(dst[0..record.size], 0);
     for (fields, 0..) |src, index| {
         const field = record.fieldBySemanticIndex(@intCast(index));
-        @memcpy((dst + field.offset)[0..field.desc.size], src[0..field.desc.size]);
+        writeComponent(field.desc, dst + field.offset, src, ops);
     }
 }
 
@@ -134,8 +150,7 @@ pub fn buildTag(desc: *const TypeDesc, name: *const Name, dst: [*]u8, payloads: 
     if (payloads.len != found.variant.payload_count) invariant(ops, "a tag built with a different number of arguments than its descriptor has");
     @memset(dst[0..found.union_desc.size], 0);
     for (payloads, 0..) |src, index| {
-        const size = payloadSize(found.variant, @intCast(index));
-        @memcpy((dst + payloadOffset(found.variant, @intCast(index)))[0..size], src[0..size]);
+        writeComponent(payloadDesc(found.variant, @intCast(index)), dst + payloadOffset(found.variant, @intCast(index)), src, ops);
     }
     writeDiscriminant(found.union_desc, dst, found.variant.discriminant);
 }

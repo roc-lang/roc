@@ -8407,6 +8407,27 @@ pub const Interpreter = struct {
         return variant.payload.fieldBySemanticIndex(index).offset;
     }
 
+    fn variantPayloadDesc(variant: *const boxy.Variant, index: u32) *const TypeDesc {
+        if (variant.payload_count == 1) return variant.payload;
+        return variant.payload.fieldBySemanticIndex(index).desc;
+    }
+
+    /// Move the value at `src` into the component slot `desc` describes,
+    /// boxing it when the slot is a recursive type's box.
+    fn writeComponent(self: *LirInterpreter, desc: *const TypeDesc, slot: [*]u8, src: [*]const u8) Error!void {
+        if (desc.kind != .recursive_box) {
+            @memcpy(slot[0..desc.size], src[0..desc.size]);
+            return;
+        }
+        const payload = desc.child.?;
+        const word: usize = if (payload.size == 0) 0 else blk: {
+            const data = try self.allocRocDataWithRc(payload.size, payload.alignment, payload.containsRefcounted());
+            @memcpy(data[0..payload.size], src[0..payload.size]);
+            break :blk @intFromPtr(data);
+        };
+        @as(*align(1) usize, @ptrCast(slot)).* = word;
+    }
+
     fn writeDiscriminant(desc: *const TypeDesc, bytes: [*]u8, discriminant: u32) void {
         const at = bytes + desc.discriminant_offset;
         switch (desc.discriminant_size) {
@@ -8577,6 +8598,25 @@ pub const Interpreter = struct {
                 const desc = boxy.compose.nominal(immortals.composeCache(), &immortals.ops, backing, name, methods, d.inspect_opaque);
                 try self.setWordTarget(frame, stmt_id, target, @intFromPtr(desc));
             },
+            .desc_recursive_box => |d| {
+                const immortals = try self.boxyImmortals();
+                const desc = boxy.compose.recursiveBox(immortals.composeCache(), &immortals.ops, try self.descAt(frame, d.payload));
+                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(desc));
+            },
+            .desc_recursive_open => |d| {
+                const key: *const u8 = @ptrFromInt(try self.localWord(frame, d.key));
+                const vars = try self.descsAt(frame, d.vars);
+                const immortals = try self.boxyImmortals();
+                const desc = boxy.compose.recursiveOpen(immortals.composeCache(), &immortals.ops, key, vars);
+                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(desc));
+            },
+            .desc_recursive_close => |d| {
+                const key: *const u8 = @ptrFromInt(try self.localWord(frame, d.key));
+                const vars = try self.descsAt(frame, d.vars);
+                const immortals = try self.boxyImmortals();
+                const desc = boxy.compose.recursiveClose(immortals.composeCache(), &immortals.ops, try self.descAt(frame, d.shell), try self.descAt(frame, d.desc), key, vars);
+                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(desc));
+            },
             .dict_compose => |d| {
                 const captures = self.store.getLocalSpan(d.captures);
                 const key = try self.evalAllocator().alloc(u64, 2 + captures.len);
@@ -8609,7 +8649,7 @@ pub const Interpreter = struct {
             },
             .field_addr => |f| {
                 const field = try self.fieldBySemanticIndex(try self.descAt(frame, f.desc), f.semantic_index);
-                try self.setComponentTarget(frame, stmt_id, target, (try self.localBytes(frame, f.base)) + field.offset);
+                try self.setComponentTarget(frame, stmt_id, target, boxy.compiled.componentAddr(field.desc, (try self.localBytes(frame, f.base)) + field.offset));
             },
             .field_addr_named => |f| {
                 const record = try self.recordFields(try self.descAt(frame, f.desc));
@@ -8619,7 +8659,7 @@ pub const Interpreter = struct {
                         if (field_name.id == name.id) break field;
                     }
                 } else return self.invariantFailedError("LIR/interpreter invariant violated: field {s} is not in its record's descriptor", .{name.text()});
-                try self.setComponentTarget(frame, stmt_id, target, (try self.localBytes(frame, f.base)) + field.offset);
+                try self.setComponentTarget(frame, stmt_id, target, boxy.compiled.componentAddr(field.desc, (try self.localBytes(frame, f.base)) + field.offset));
             },
             .list_elem_addr => |e| {
                 const elem = try self.descAt(frame, e.elem_desc);
@@ -8651,7 +8691,7 @@ pub const Interpreter = struct {
             .tag_payload_addr => |t| {
                 const found = try self.variantNamed(try self.descAt(frame, t.desc), try self.nameAt(frame, t.name));
                 const offset = try self.variantPayloadOffset(found.variant, t.payload_index);
-                try self.setComponentTarget(frame, stmt_id, target, (try self.localBytes(frame, t.base)) + offset);
+                try self.setComponentTarget(frame, stmt_id, target, boxy.compiled.componentAddr(variantPayloadDesc(found.variant, t.payload_index), (try self.localBytes(frame, t.base)) + offset));
             },
             .record => |r| {
                 const record = try self.recordFields(try self.descAt(frame, r.desc));
@@ -8660,7 +8700,7 @@ pub const Interpreter = struct {
                 @memset(dst[0..record.size], 0);
                 for (0..fields.len) |i| {
                     const field = try self.fieldBySemanticIndex(record, @intCast(i));
-                    @memcpy((dst + field.offset)[0..field.desc.size], (try self.localBytes(frame, GuardedList.at(fields, i)))[0..field.desc.size]);
+                    try self.writeComponent(field.desc, dst + field.offset, try self.localBytes(frame, GuardedList.at(fields, i)));
                 }
                 try self.finishResultStorage(frame, stmt_id, target, dst);
             },
@@ -8674,8 +8714,7 @@ pub const Interpreter = struct {
                 @memset(dst[0..found.union_desc.size], 0);
                 for (0..payloads.len) |i| {
                     const offset = try self.variantPayloadOffset(found.variant, @intCast(i));
-                    const size = if (found.variant.payload_count == 1) found.variant.payload.size else found.variant.payload.fieldBySemanticIndex(@intCast(i)).desc.size;
-                    @memcpy((dst + offset)[0..size], (try self.localBytes(frame, GuardedList.at(payloads, i)))[0..size]);
+                    try self.writeComponent(variantPayloadDesc(found.variant, @intCast(i)), dst + offset, try self.localBytes(frame, GuardedList.at(payloads, i)));
                 }
                 writeDiscriminant(found.union_desc, dst, found.variant.discriminant);
                 try self.finishResultStorage(frame, stmt_id, target, dst);

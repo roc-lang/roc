@@ -47,6 +47,8 @@ pub const StaticDescs = struct {
     /// names each one's node.
     extra_nodes: u32 = 0,
     numeral_tables: std.StringHashMapUnmanaged(LIR.StaticDataId) = .empty,
+    /// The key word of each recursive member type composed at runtime.
+    recursion_keys: std.AutoHashMapUnmanaged(TypeId, LIR.StaticDataId) = .empty,
 
     /// A descriptor's identity: a type, or the recursion box around one.
     const Key = struct { ty: TypeId, recursive_box: bool };
@@ -81,6 +83,7 @@ pub const StaticDescs = struct {
         var tables = self.numeral_tables.keyIterator();
         while (tables.next()) |key| self.allocator.free(key.*);
         self.numeral_tables.deinit(self.allocator);
+        self.recursion_keys.deinit(self.allocator);
         self.pending.deinit(self.allocator);
     }
 
@@ -112,6 +115,22 @@ pub const StaticDescs = struct {
         self.opaque_word = reserved.slot;
         return reserved.slot;
     }
+
+    /// The static-data slot pointing at the word that names the open
+    /// recursive member type `ty` in the runtime's interning of its composed
+    /// descriptors. The word holds `ty`'s id, so no two members' words are
+    /// identical data.
+    pub fn recursionKeySlot(self: *StaticDescs, ty: TypeId) Allocator.Error!LIR.StaticDataId {
+        if (self.recursion_keys.get(ty)) |slot| return slot;
+        const reserved = try self.addSlotWithNode(8, 4);
+        const bytes = @constCast(self.exports.items[reserved.node].bytes);
+        writeU32(bytes, 0, recursion_key_mark);
+        writeU32(bytes, 4, @backingInt(ty));
+        try self.recursion_keys.put(self.allocator, ty, reserved.slot);
+        return reserved.slot;
+    }
+
+    const recursion_key_mark: u32 = 0x5245_4359;
 
     /// The static-data slot holding a null pointer.
     pub fn nullWordSlot(self: *StaticDescs) Allocator.Error!LIR.StaticDataId {

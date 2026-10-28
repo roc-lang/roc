@@ -42,6 +42,9 @@ pub fn ownership(op: DynOp) Ownership {
         .desc_tag_union,
         .desc_args,
         .desc_nominal,
+        .desc_recursive_box,
+        .desc_recursive_open,
+        .desc_recursive_close,
         .tag_discriminant_of,
         => .none,
         // A dictionary is an immortal erased callable built from its
@@ -111,6 +114,17 @@ pub const Operands = struct {
                 result.single(desc.backing);
                 result.single(desc.name);
                 if (desc.methods) |methods| result.single(methods);
+            },
+            .desc_recursive_box => |desc| result.single(desc.payload),
+            .desc_recursive_open => |desc| {
+                result.single(desc.key);
+                result.span(desc.vars);
+            },
+            .desc_recursive_close => |desc| {
+                result.single(desc.shell);
+                result.single(desc.desc);
+                result.single(desc.key);
+                result.span(desc.vars);
             },
             .dict_compose => |dict| result.span(dict.captures),
             .dict_record => |dict| result.span(dict.methods),
@@ -300,6 +314,14 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
             .name = try Remap.one(context, desc.name),
             .methods = try Remap.opt(context, desc.methods),
             .inspect_opaque = desc.inspect_opaque,
+        } },
+        .desc_recursive_box => |desc| .{ .desc_recursive_box = .{ .payload = try Remap.one(context, desc.payload) } },
+        .desc_recursive_open => |desc| .{ .desc_recursive_open = .{ .key = try Remap.one(context, desc.key), .vars = try Remap.span(store, context, desc.vars) } },
+        .desc_recursive_close => |desc| .{ .desc_recursive_close = .{
+            .shell = try Remap.one(context, desc.shell),
+            .desc = try Remap.one(context, desc.desc),
+            .key = try Remap.one(context, desc.key),
+            .vars = try Remap.span(store, context, desc.vars),
         } },
         .dict_compose => |dict| .{ .dict_compose = .{ .worker = dict.worker, .captures = try Remap.span(store, context, dict.captures) } },
         .dict_record => |dict| .{ .dict_record = .{ .methods = try Remap.span(store, context, dict.methods) } },

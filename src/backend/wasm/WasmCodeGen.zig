@@ -8547,6 +8547,29 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitBoxyRuntimeCall(.box);
             try self.bindReturnedScalar(dst, .i32);
         },
+        .desc_recursive_box => |d| {
+            try self.emitProcLocal(d.payload);
+            try self.emitBoxyRuntimeCall(.recursive_box);
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .desc_recursive_open => |d| {
+            const vars = try self.emitLocalArray(d.vars, .words);
+            try self.emitProcLocal(d.key);
+            try self.emitI32Const(@intCast(self.store.getLocalSpan(d.vars).len));
+            try self.emitLocalGet(vars);
+            try self.emitBoxyRuntimeCall(.recursive_open);
+            try self.bindReturnedScalar(dst, .i32);
+        },
+        .desc_recursive_close => |d| {
+            const vars = try self.emitLocalArray(d.vars, .words);
+            try self.emitProcLocal(d.shell);
+            try self.emitProcLocal(d.desc);
+            try self.emitProcLocal(d.key);
+            try self.emitI32Const(@intCast(self.store.getLocalSpan(d.vars).len));
+            try self.emitLocalGet(vars);
+            try self.emitBoxyRuntimeCall(.recursive_close);
+            try self.bindReturnedScalar(dst, .i32);
+        },
         .desc_record => |d| {
             const names = self.store.getLocalSpan(d.names);
             const descs = self.store.getLocalSpan(d.descs);

@@ -1341,6 +1341,20 @@ pub const DynOp = union(enum) {
     /// A nominal type over `backing`. `methods` is null or a local holding a
     /// `Methods` record of override callables.
     desc_nominal: struct { backing: LocalId, name: LocalId, methods: ?LocalId, inspect_opaque: bool },
+    /// The box a recursive type's committed layout puts around a component
+    /// that leads back into the type, over the component's descriptor.
+    desc_recursive_box: struct { payload: LocalId },
+    /// Begin composing the descriptor of a member of a recursive type: the
+    /// descriptor interned under `key` (a static word naming the member's
+    /// type) and the descriptors `vars` of its type variables, when an
+    /// earlier composition finished it, and otherwise a placeholder that the
+    /// member's components refer to, only through `desc_recursive_box`,
+    /// until `desc_recursive_close` fills it.
+    desc_recursive_open: struct { key: LocalId, vars: LocalSpan },
+    /// Fill the placeholder `shell` (a `desc_recursive_open` target) with the
+    /// member's composed descriptor `desc` and intern it under `key` and
+    /// `vars`, unless the open found it finished. Target: `shell`'s value.
+    desc_recursive_close: struct { shell: LocalId, desc: LocalId, key: LocalId, vars: LocalSpan },
 
     // -- Dictionaries (targets: `opaque_ptr`, except `dict_method`) --
 
