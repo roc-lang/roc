@@ -704,7 +704,7 @@ pub fn restoreRuntime(b: *Builder, module_index: ModuleIndex, fn_id: check.Const
     const worker = try runtimeWorker(program, family);
     const captures = try runtimeCaptures(program, family);
     const descs = try familyDescs(b, family, program.codec.families.items[family].runtime_fn, fn_ty);
-    try b.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = try program.arena.allocator().dupe(LocalId, descs), .dicts = &.{}, .capture_types = captures } });
+    try b.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = try program.arena.allocator().dupe(LocalId, descs), .dicts = &.{}, .capture_types = captures, .worker_ty = fn_ty, .ty = fn_ty } });
     b.allocator.free(descs);
     var index = captures.len;
     while (index > 0) {

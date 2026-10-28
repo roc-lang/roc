@@ -104,7 +104,9 @@ pub const Task = union(enum) {
     /// Push the function value a callable-eval binding stored.
     restore_callable_eval: struct { module: ModuleIndex, template: checked.CallableEvalTemplateId, ty: TypeId },
     /// Pop a restored closure's capture values and build it.
-    finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const LocalId, dicts: []const LocalId, capture_types: []const TypeId },
+    /// `worker_ty` is the closure's type as its worker stores it, and `ty`
+    /// the restored value's.
+    finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const LocalId, dicts: []const LocalId, capture_types: []const TypeId, worker_ty: TypeId, ty: TypeId },
     finish_restore_struct: struct { ty: TypeId, count: u32 },
     finish_restore_tag: struct { ty: TypeId, name: types.NameId, count: u32 },
     finish_restore_list: struct { ty: TypeId, count: u32 },
@@ -114,7 +116,9 @@ pub const Task = union(enum) {
     unreachable_or_unit,
     /// Pop a generalized local procedure call's explicit arguments and call
     /// its function value with them after its own scheme's words.
-    finish_local_call: struct { closure: LocalId, words: []const LocalId, params: []const TypeId, result: TypeId },
+    /// `params` and `ret` are the procedure's signature, `arg_types` the
+    /// call's arguments' types and `result` its result's.
+    finish_local_call: struct { closure: LocalId, words: []const LocalId, params: []const TypeId, ret: TypeId, arg_types: []const TypeId, result: TypeId },
     /// Push an interpolation's literal segments as the `List(Str)` of `ty`.
     segments_arg: struct { expr: CheckedExprId, ty: TypeId },
     /// Pop an interpolation's assembler and call it with the interpolated
@@ -663,6 +667,7 @@ pub const Builder = struct {
         const template = switch (worker.key) {
             .template => |key| self.view.view.checked_procedure_templates.templates.items[@backingInt(key.template)],
             .lambda => |key| return try self.lowerLambdaBody(key.expr),
+            .adapter => |key| return try self.lowerAdapterBody(key.from),
             .method_entry => |target| return try self.lowerMethodEntry(target),
             .structural => |method| return try self.lowerStructuralMethod(method),
             .root => return try self.lowerRootWrapper(),
@@ -889,6 +894,156 @@ pub const Builder = struct {
         const proc = self.store.getProcSpecPtr(worker.proc);
         proc.erased_capture_arg = capture_ptr;
         proc.abi = .erased_record;
+    }
+
+    /// An adapter's body (`WorkerKey.adapter`): each argument adapted to the
+    /// called function's storage, the call, and its result adapted back.
+    pub fn lowerAdapterBody(self: *Builder, from: TypeId) Allocator.Error!void {
+        const worker = self.currentWorker().*;
+        self.entry_hole = try self.newHole();
+        const entry = self.entry_hole;
+        const capture_ptr = try self.closedLocal(.opaque_ptr);
+        const descs = worker.scheme_vars.len;
+        self.var_descs = try self.program.arena.allocator().alloc(LocalId, descs);
+        self.dict_locals = &.{};
+        const capture_layout = try self.captureLayout(worker.capture_types, descs, 0);
+        const record = try self.closedLocal(capture_layout);
+        try self.emitEntry(.{ .assign_low_level = .{
+            .target = record,
+            .op = .erased_capture_load,
+            .rc_effect = try self.store.addRcEffect(LIR.LowLevel.erased_capture_load.rcEffect()),
+            .args = try self.store.addLocalSpan(&.{capture_ptr}),
+            .next = undefined,
+        } });
+        const inner = try self.closedLocal(try self.erasedLayout());
+        try self.emitEntry(.{ .assign_ref = .{ .target = inner, .op = LIR.RefOp.field(record, 0), .next = undefined } });
+        for (self.var_descs, 0..) |*desc, index| {
+            desc.* = try self.closedLocal(.opaque_ptr);
+            try self.emitEntry(.{ .assign_ref = .{ .target = desc.*, .op = LIR.RefOp.field(record, @intCast(1 + index)), .next = undefined } });
+        }
+        var args: std.ArrayList(LocalId) = .empty;
+        defer args.deinit(self.allocator);
+        const record_param: ?LocalId = if (worker.params.len != 0) try self.argsRecordLocal(worker.params, .param) else null;
+        if (record_param) |param| try args.append(self.allocator, param);
+        var ret_layout: layout.Idx = undefined;
+        if (try self.closed(worker.ret)) {
+            ret_layout = try self.program.layouts.layoutOf(worker.ret);
+        } else {
+            ret_layout = try self.program.result.layouts.dynamicLayout();
+            self.result_local = try self.localOf(worker.ret, .result);
+        }
+        const body_start = try self.newHole();
+        self.hole = body_start;
+        const signature = switch (self.program.store.get(from)) {
+            .function => |function| function,
+            else => invariant("an adapted function value's type is not a function type"),
+        };
+        const from_params = try self.allocator.dupe(TypeId, self.program.store.span(signature.args));
+        defer self.allocator.free(from_params);
+        const adapted = try self.allocator.alloc(LocalId, worker.params.len);
+        defer self.allocator.free(adapted);
+        for (worker.params, from_params, adapted, 0..) |param_ty, from_ty, *value, index| {
+            const arg = try self.argsRecordField(worker.params, record_param.?, @intCast(index), param_ty);
+            value.* = try self.adaptValue(arg, param_ty, from_ty);
+        }
+        const result = try self.emitErasedCall(inner, from, adapted, signature.ret);
+        try self.pushValue(try self.adaptValue(result, signature.ret, worker.ret));
+        try self.tasks.append(self.allocator, .ret);
+        try self.run();
+        try args.append(self.allocator, capture_ptr);
+        try self.finishProc(entry, body_start, args.items, ret_layout);
+        const proc = self.store.getProcSpecPtr(worker.proc);
+        proc.erased_capture_arg = capture_ptr;
+        proc.abi = .erased_record;
+    }
+
+    /// Where two types of one value differ in the storage of record fields
+    /// (design.md "Field Kinds"): nowhere, in data, or inside the function
+    /// type the value has.
+    pub const StorageDifference = enum { none, data, function };
+
+    pub fn storageDifference(self: *Builder, from_root: TypeId, to_root: TypeId) Allocator.Error!StorageDifference {
+        if (from_root == to_root) return .none;
+        const store = &self.program.store;
+        // Where a pair sits: in data, in the root function's signature, or
+        // in a function type inside data.
+        const Place = enum { data, root_function, nested_function };
+        const Pair = struct { from: TypeId, to: TypeId, place: Place };
+        var pending: std.ArrayList(Pair) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .from = from_root, .to = to_root, .place = .data });
+        var result: StorageDifference = .none;
+        while (pending.pop()) |pair| {
+            if (pair.from == pair.to) continue;
+            const from = store.get(pair.from);
+            const to = store.get(pair.to);
+            if (from == .variable or to == .variable) continue;
+            if (std.meta.activeTag(from) != std.meta.activeTag(to)) {
+                // A nominal shares its backing's representation.
+                if (from == .nominal and from.nominal.has_backing) {
+                    try pending.append(self.allocator, .{ .from = try self.program.converter().backing(pair.from), .to = pair.to, .place = pair.place });
+                } else if (to == .nominal and to.nominal.has_backing) {
+                    try pending.append(self.allocator, .{ .from = pair.from, .to = try self.program.converter().backing(pair.to), .place = pair.place });
+                }
+                continue;
+            }
+            switch (from) {
+                .record => |record| {
+                    for (store.fieldSpan(to.record.fields)) |to_field| {
+                        for (store.fieldSpan(record.fields)) |from_field| {
+                            if (from_field.name != to_field.name) continue;
+                            if (from_field.kind != to_field.kind) switch (pair.place) {
+                                .data => result = .data,
+                                .root_function => return .function,
+                                .nested_function => invariant("adapting a function value inside data is not yet lowered by Boxy"),
+                            };
+                            try pending.append(self.allocator, .{ .from = from_field.ty, .to = to_field.ty, .place = pair.place });
+                        }
+                    }
+                    if (record.ext != null and to.record.ext != null) try pending.append(self.allocator, .{ .from = record.ext.?, .to = to.record.ext.?, .place = pair.place });
+                },
+                .tuple => |items| for (store.span(items), store.span(to.tuple)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = pair.place }),
+                .tag_union => |tag_union| {
+                    for (store.tagSpan(to.tag_union.tags)) |to_tag| {
+                        for (store.tagSpan(tag_union.tags)) |from_tag| {
+                            if (from_tag.name != to_tag.name or from_tag.payloads.len != to_tag.payloads.len) continue;
+                            for (store.span(from_tag.payloads), store.span(to_tag.payloads)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = pair.place });
+                        }
+                    }
+                    if (tag_union.ext != null and to.tag_union.ext != null) try pending.append(self.allocator, .{ .from = tag_union.ext.?, .to = to.tag_union.ext.?, .place = pair.place });
+                },
+                .list => |elem| try pending.append(self.allocator, .{ .from = elem, .to = to.list, .place = pair.place }),
+                .box => |payload| try pending.append(self.allocator, .{ .from = payload, .to = to.box, .place = pair.place }),
+                .nominal => |nominal| for (store.nominalArgs(nominal), store.nominalArgs(to.nominal)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = pair.place }),
+                .function => |function| {
+                    const place: Place = if (pair.place == .data and pair.from == from_root) .root_function else .nested_function;
+                    for (store.span(function.args), store.span(to.function.args)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = place });
+                    try pending.append(self.allocator, .{ .from = function.ret, .to = to.function.ret, .place = place });
+                },
+                .primitive, .empty_record, .variable => {},
+            }
+        }
+        return result;
+    }
+
+    /// The value `value` of type `from` at type `to`, a type of the same
+    /// value whose record fields may be stored differently (design.md
+    /// "Field Kinds"): itself where the storage agrees, rebuilt where data
+    /// differs, and a function value adapting the calls where a function's
+    /// signature does.
+    pub fn adaptValue(self: *Builder, value: LocalId, from: TypeId, to: TypeId) Allocator.Error!LocalId {
+        switch (try self.storageDifference(from, to)) {
+            .none => return value,
+            .data => {
+                const target = try self.localOf(to, .frame);
+                try self.emitDyn(target, .{ .adapt = .{ .src = value, .from = try self.descOf(from), .to = try self.descOf(to) } });
+                return target;
+            },
+            .function => {
+                const adapter = try self.program.adapterWorker(self.worker_id, from, to);
+                return try self.packClosure(adapter, &.{value}, &.{from}, self.var_descs, &.{});
+            },
+        }
     }
 
     /// Read a dynamic capture record at `capture_ptr`: its descriptor word,
@@ -1300,7 +1455,7 @@ pub const Builder = struct {
                 const list = try self.buildList(call.values_ty, values);
                 try self.pushValue(try self.emitErasedCall(call.assembler, call.assembler_ty, &.{list}, call.result));
             },
-            .finish_local_call => |call| try self.finishLocalCall(call.closure, call.words, call.params, call.result),
+            .finish_local_call => |call| try self.finishLocalCall(call.closure, call.words, call.params, call.ret, call.arg_types, call.result),
             .finish_hash => |hash| {
                 const hasher = self.popValue();
                 const value = self.popValue();
@@ -1369,11 +1524,11 @@ pub const Builder = struct {
                 const values = try self.popValues(closure.count);
                 defer self.allocator.free(values);
                 const worker = self.program.worker(closure.worker).*;
-                if (try self.allClosed(worker.capture_types)) {
-                    try self.pushValue(try self.packClosure(closure.worker, values, worker.capture_types, closure.descs, closure.dicts));
-                } else {
-                    try self.pushValue(try self.packDynamicClosure(closure.worker, values, closure.capture_types, closure.descs, closure.dicts));
-                }
+                const packed_closure = if (try self.allClosed(worker.capture_types))
+                    try self.packClosure(closure.worker, values, worker.capture_types, closure.descs, closure.dicts)
+                else
+                    try self.packDynamicClosure(closure.worker, values, closure.capture_types, closure.descs, closure.dicts);
+                try self.pushValue(try self.adaptValue(packed_closure, closure.worker_ty, closure.ty));
             },
             .finish_restore_struct => |restore| {
                 const values = try self.popValues(restore.count);
@@ -2041,10 +2196,17 @@ pub const Builder = struct {
             dict.* = try self.dictionaryOf(evidence[param_index]);
         }
         @memcpy(dicts[scheme.dictionaries.len..], self.dict_locals[self.dict_locals.len - declaring_dicts ..]);
-        if (try self.allClosed(per_call_worker.capture_types)) {
-            return try self.packClosure(callee, values, per_call_worker.capture_types, descs, dicts);
-        }
-        return try self.packDynamicClosure(callee, values, per_call_worker.capture_types, descs, dicts);
+        const closure = if (try self.allClosed(per_call_worker.capture_types))
+            try self.packClosure(callee, values, per_call_worker.capture_types, descs, dicts)
+        else
+            try self.packDynamicClosure(callee, values, per_call_worker.capture_types, descs, dicts);
+        // The procedure's type at this use, in this worker's variables.
+        const use_bound = try self.allocator.alloc(TypeId, vars.len);
+        defer self.allocator.free(use_bound);
+        for (use_bound[0..outer_count], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
+        for (use_bound[outer_count..], related[outer_count..], scheme.scheme_vars) |*slot, ty, variable| slot.* = ty orelse try self.program.converter().sealedScheme(self.module, variable);
+        const procedure_ty = try self.program.converter().convert(self.module, lambda_ty, .{ .module = self.module, .vars = vars, .bound = use_bound });
+        return try self.adaptValue(closure, procedure_ty, try self.exprType(expr_id));
     }
 
     /// The worker that declares local procedure `local` (this worker or one
@@ -2181,12 +2343,14 @@ pub const Builder = struct {
         @memcpy(bound[0..own_types.len], own_types);
         for (bound[own_types.len..], 0..) |*slot, index| slot.* = try self.program.store.variable(@intCast(index));
         const fn_ty = try self.program.converter().convert(self.module, lambda_ty, .{ .module = self.module, .vars = vars, .bound = bound });
-        const params = switch (self.program.store.get(fn_ty)) {
-            .function => |function| try self.allocator.dupe(TypeId, self.program.store.span(function.args)),
+        const params, const ret = switch (self.program.store.get(fn_ty)) {
+            .function => |function| .{ try self.allocator.dupe(TypeId, self.program.store.span(function.args)), function.ret },
             else => invariant("a local procedure's type is not a function type"),
         };
         defer self.allocator.free(params);
         if (params.len != call.args.len) invariant("a local procedure call's arity differs from its type");
+        const arg_types = try self.program.arena.allocator().alloc(TypeId, call.args.len);
+        for (call.args, arg_types) |arg, *arg_ty| arg_ty.* = try self.exprType(arg);
         const own_words = scheme.scheme_vars.len + scheme.dictionaries.len;
         const words = try self.allocator.alloc(LocalId, own_words);
         defer self.allocator.free(words);
@@ -2199,14 +2363,19 @@ pub const Builder = struct {
             .closure = closure,
             .words = try self.program.arena.allocator().dupe(LocalId, words),
             .params = try self.program.arena.allocator().dupe(TypeId, params),
+            .ret = ret,
+            .arg_types = arg_types,
             .result = try self.exprType(expr_id),
         } });
         try self.pushExprsReversed(call.args);
     }
 
-    pub fn finishLocalCall(self: *Builder, closure: LocalId, words: []const LocalId, params: []const TypeId, result_ty: TypeId) Allocator.Error!void {
+    pub fn finishLocalCall(self: *Builder, closure: LocalId, words: []const LocalId, params: []const TypeId, ret: TypeId, arg_types: []const TypeId, result_ty: TypeId) Allocator.Error!void {
         const args = try self.popValues(@intCast(params.len));
         defer self.allocator.free(args);
+        // The procedure stores record fields its own way where its kinds
+        // are its own scheme's (design.md "Field Kinds").
+        for (args, arg_types, params) |*arg, arg_ty, param_ty| arg.* = try self.adaptValue(arg.*, arg_ty, param_ty);
         const word = try self.opaqueWordDesc();
         const elems = try self.allocator.alloc(LocalId, words.len + params.len);
         defer self.allocator.free(elems);
@@ -2219,9 +2388,9 @@ pub const Builder = struct {
         const fields = try std.mem.concat(self.allocator, LocalId, &.{ words, args });
         defer self.allocator.free(fields);
         try self.emitDyn(record, .{ .record = .{ .desc = desc, .fields = try self.store.addLocalSpan(fields) } });
-        const target = try self.localOf(result_ty, .frame);
+        const target = try self.localOf(ret, .frame);
         try self.emitDyn(target, .{ .call_erased = .{ .closure = closure, .args = record } });
-        try self.pushValue(target);
+        try self.pushValue(try self.adaptValue(target, ret, result_ty));
     }
 
     /// A procedure used as a function value: an immortal callable of its
@@ -2469,6 +2638,8 @@ pub const Builder = struct {
                     .descs = descs,
                     .dicts = try self.program.arena.allocator().dupe(LocalId, dicts),
                     .capture_types = try self.program.arena.allocator().dupe(TypeId, concrete_capture_types),
+                    .worker_ty = try self.program.converter().convert(owner.module, expr.ty, concrete),
+                    .ty = fn_ty,
                 } });
                 var index = captures.len;
                 while (index > 0) {

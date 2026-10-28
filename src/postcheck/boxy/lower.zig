@@ -54,6 +54,11 @@ pub const Output = struct {
 pub const WorkerKey = union(enum) {
     /// A procedure template.
     template: struct { module: ModuleIndex, template: canonical.CheckedProcedureTemplateId },
+    /// A function value of type `to` calling one of type `from`, which differ
+    /// in the storage of record fields (design.md "Field Kinds"); both are
+    /// in the variable space of the worker `outer`, whose descriptors the
+    /// value captures after the called function.
+    adapter: struct { outer: WorkerId, from: TypeId, to: TypeId },
     /// The `??` default expression `expr` of `module`, evaluated where a
     /// construction omits its field (design.md "Defaulted Fields").
     default: struct { module: ModuleIndex, expr: checked.CheckedExprId },
@@ -317,6 +322,38 @@ pub const Program = struct {
             .dict_scopes = if (own) |scheme| try std.mem.concat(self.arena.allocator(), []const u32, &.{ &.{scheme.dictionaries}, outer_worker.dict_scopes }) else outer_worker.dict_scopes,
             .own_descs = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.scheme_vars.len) else 0) else 0,
             .own_dicts = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.dictionaries.len) else 0) else 0,
+        });
+        try self.worker_ids.put(self.allocator, key, id);
+        try self.worklist.append(self.allocator, id);
+        return id;
+    }
+
+    /// The worker of an adapter function value (see `WorkerKey.adapter`).
+    pub fn adapterWorker(self: *Program, outer: WorkerId, from: TypeId, to: TypeId) Allocator.Error!WorkerId {
+        const key: WorkerKey = .{ .adapter = .{ .outer = outer, .from = from, .to = to } };
+        if (self.worker_ids.get(key)) |existing| return existing;
+        const outer_worker = self.worker(outer).*;
+        const signature = switch (self.store.get(to)) {
+            .function => |function| function,
+            else => invariant("an adapted function value's type is not a function type"),
+        };
+        const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
+        const proc = try self.result.store.addProcSpec(.{
+            .name = self.result.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.programLocal("boxy.adapter", @backingInt(id)),
+            .args = .empty(),
+            .ret_layout = .zst,
+            .abi = .erased_record,
+        }, base.SourceLoc.none);
+        try self.workers.append(self.allocator, .{
+            .key = key,
+            .proc = proc,
+            .module = outer_worker.module,
+            .scheme_vars = outer_worker.scheme_vars,
+            .dictionary_params = &.{},
+            .params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args)),
+            .ret = signature.ret,
+            .capture_types = try self.arena.allocator().dupe(TypeId, &.{from}),
         });
         try self.worker_ids.put(self.allocator, key, id);
         try self.worklist.append(self.allocator, id);
