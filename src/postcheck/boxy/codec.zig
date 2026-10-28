@@ -699,8 +699,28 @@ pub fn restoreRuntime(b: *Builder, module_index: ModuleIndex, fn_id: check.Const
         else => invariant("a stored generated codec runtime does not name a dispatch"),
     };
     const plan = owner_view.view.static_dispatch_plans.plans[@backingInt(plan_id)];
-    const derivation = plan.generated_codec_derivation orelse invariant("a stored generated codec runtime's dispatch names no derivation");
-    const family = try familyFor(program, owner_view.index, derivation);
+    // A dispatch on a constrained variable reaches its derivation through
+    // the evidence the stored value's procedure was instantiated with.
+    const derivation_module, const derivation = if (plan.generated_codec_derivation) |id| .{ owner_view.index, id } else switch (plan.resolution) {
+        .evidence_dependent => |dependent| blk: {
+            var frame_index = stored.evidence_frame_head orelse invariant("a stored generated codec runtime has no evidence");
+            for (0..dependent.index.depth) |_| frame_index = stored.evidence_frames[frame_index].parent orelse
+                invariant("a stored generated codec runtime's evidence has fewer frames than its dispatch names");
+            const frame = stored.evidence_frames[frame_index];
+            if (dependent.index.index >= frame.roots_len) invariant("a stored generated codec runtime's evidence frame lacks its dispatch's parameter");
+            const roots = try b.storedEvidenceRoots(stored.evidence, frame.roots_start, frame.roots_len);
+            defer b.allocator.free(roots);
+            const structural = switch (stored.evidence.nodes[roots[dependent.index.index]]) {
+                .structural => |index| stored.evidence.structural(index).*,
+                else => invariant("a stored generated codec runtime's evidence is not a structural derivation"),
+            };
+            const recorded = structural.checked orelse invariant("stored structural codec evidence records no checked edge");
+            break :blk .{ program.moduleByKey(.{ .bytes = recorded.view.bytes }).index, recorded.generated_codec_derivation orelse
+                invariant("stored structural codec evidence names no generated derivation") };
+        },
+        else => invariant("a stored generated codec runtime's dispatch names no derivation"),
+    };
+    const family = try familyFor(program, derivation_module, derivation);
     const worker = try runtimeWorker(program, family);
     const captures = try runtimeCaptures(program, family);
     const descs = try familyDescs(b, family, program.codec.families.items[family].runtime_fn, fn_ty);

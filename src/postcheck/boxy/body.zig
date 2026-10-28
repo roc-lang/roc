@@ -2737,6 +2737,46 @@ pub const Builder = struct {
         return dicts;
     }
 
+    /// The node indices of `count` stored evidence trees starting at
+    /// `start`: each tree's root, skipping its nested evidence and callable
+    /// contracts.
+    pub fn storedEvidenceRoots(self: *Builder, evidence: check.ConstStore.ConstFnEvidenceVector, start: u32, count: u32) Allocator.Error![]u32 {
+        const roots = try self.allocator.alloc(u32, count);
+        errdefer self.allocator.free(roots);
+        // Entries left to read in each open vector; the outermost is the
+        // roots.
+        var open: std.ArrayList(u32) = .empty;
+        defer open.deinit(self.allocator);
+        try open.append(self.allocator, count);
+        var cursor: u32 = start;
+        var root_count: u32 = 0;
+        while (open.items.len > 0) {
+            const top = &open.items[open.items.len - 1];
+            if (top.* == 0) {
+                _ = open.pop();
+                continue;
+            }
+            top.* -= 1;
+            if (open.items.len == 1) {
+                roots[root_count] = cursor;
+                root_count += 1;
+            }
+            if (cursor >= evidence.nodes.len) invariant("stored evidence ended before its declared vector length");
+            const node = evidence.nodes[cursor];
+            cursor += 1;
+            const contracts = evidence.callableContracts(node);
+            if (contracts != 0) try open.append(self.allocator, contracts);
+            switch (node) {
+                .target => |target| switch (evidence.target(target).nested) {
+                    .resolved => |nested| if (nested.count != 0) try open.append(self.allocator, nested.count),
+                    .from_callable => {},
+                },
+                .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+            }
+        }
+        return roots;
+    }
+
     /// A template worker's evidence parameters.
     pub fn templateEvidenceParams(self: *Builder, worker_id: WorkerId) []const static_dispatch.EvidenceParamRecord {
         const key = switch (self.program.worker(worker_id).key) {
