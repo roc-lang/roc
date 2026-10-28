@@ -2986,22 +2986,29 @@ const Certifier = struct {
             if (position >= receipts.len or receipts[position].value == no_value) {
                 return self.fail("outcome refinement lacked argument receipt {d}", .{position});
             }
+            // Each mutation is undone as a change, not a snapshot: a later
+            // argument of the same call can claim a sibling field of the
+            // same container, and those changes commute with this one's.
             const mutations = receipts[position].mutations;
             var mutation_index = mutations.len;
             while (mutation_index > 0) {
                 mutation_index -= 1;
                 switch (mutations[mutation_index]) {
                     .balance => |mutation| {
-                        if (state.balanceOf(mutation.value) != mutation.after) {
+                        if (state.balanceOf(mutation.value) + mutation.before - mutation.after < 0) {
                             return self.fail("outcome restitution argument {d} balance changed before refinement", .{position});
                         }
                         try state.addBalance(mutation.value, mutation.before - mutation.after);
                     },
                     .claims => |mutation| {
-                        if (!state.claimsOf(mutation.value).eql(mutation.after)) {
+                        const arena = self.state_arena.allocator();
+                        const added = try mutation.after.withoutAll(arena, mutation.before);
+                        const removed = try mutation.before.withoutAll(arena, mutation.after);
+                        const current = state.claimsOf(mutation.value);
+                        if (!current.containsAll(added) or current.intersects(removed)) {
                             return self.fail("outcome restitution argument {d} field claims changed before refinement", .{position});
                         }
-                        try state.setClaims(mutation.value, mutation.before);
+                        try state.setClaims(mutation.value, try (try current.withoutAll(arena, added)).withAll(arena, removed));
                     },
                 }
             }
@@ -4062,7 +4069,10 @@ const Certifier = struct {
                     try stack.append(self.allocator, .{ .stmt = join_stmt.remainder, .region = region });
                     continue;
                 },
-                .ret => |ret_stmt| try self.noteProcLocal(ret_stmt.value),
+                .ret => |ret_stmt| {
+                    try self.noteProcLocal(ret_stmt.value);
+                    try self.noteRestitutedParams();
+                },
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteProcLocal(message),
                 .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
             }
@@ -4305,6 +4315,14 @@ const Certifier = struct {
             const current = self.store.getCFStmtImmediate(stmt);
             var exposed: ExposedReads = .{ .certifier = self, .reads = &node_reads };
             try body_clone.tryForEachStmtRead(self.store, current.*, &exposed, ExposedReads.note);
+            if (current.* == .ret) {
+                const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(self.current_proc).args);
+                const restituted = self.restitutableParams();
+                for (0..GuardedList.borrowLen(params)) |position| {
+                    const bit = arc_sig.paramBit(position) orelse break;
+                    if ((restituted & bit) != 0) try exposed.note(GuardedList.at(params, position));
+                }
+            }
             if (body_clone.definedTarget(current.*)) |target| self.setReadBeforeRebindDef(&graph, node_index, target);
             switch (current.*) {
                 .assign_call_erased => |inline_s| blk_s: {
@@ -5044,6 +5062,26 @@ const Certifier = struct {
         const mentions = self.mention_enters.items[self.mention_starts.items[dense]..self.mention_starts.items[dense + 1]];
         if (mentions.len == 0) return false;
         return mentions[0] >= self.region_enter.items[slot] and mentions[mentions.len - 1] <= self.region_exit.items[slot];
+    }
+
+    /// The parameters some outcome of the current procedure restitutes. A
+    /// return hands each back to the caller, so it reads them: their units
+    /// stay live up to it even when nothing else names them. Every outcome's
+    /// parameters count, since which outcome a return takes is not known
+    /// where reads are collected.
+    fn restitutableParams(self: *const Certifier) arc_sig.ParamMask {
+        var restituted: arc_sig.ParamMask = 0;
+        for (self.sigs.outcomesOf(self.current_sig)) |outcome| restituted |= outcome.restituted_params;
+        return restituted;
+    }
+
+    fn noteRestitutedParams(self: *Certifier) Allocator.Error!void {
+        const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(self.current_proc).args);
+        const restituted = self.restitutableParams();
+        for (0..GuardedList.borrowLen(params)) |position| {
+            const bit = arc_sig.paramBit(position) orelse break;
+            if ((restituted & bit) != 0) try self.noteProcLocal(GuardedList.at(params, position));
+        }
     }
 
     fn noteProcLocalSpan(self: *Certifier, span: LIR.LocalSpan) Allocator.Error!void {

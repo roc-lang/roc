@@ -35,8 +35,8 @@ test "issue 11214 - pruning hoisted roots resolves an imported associated lookup
     defer helper_env.deinit();
     try helper_env.assertNoErrors();
 
-    // Pruning walks Helper.negate!'s body, including its resolved lookup of
-    // Builtin.Bool.not, to decide whether the selected call can be stored.
+    // Helper publishes negate!'s eligibility using its own resolved lookup of
+    // Builtin.Bool.not; pruning consumes that fact in Main's import scope.
     const main_source =
         \\import Helper
         \\
