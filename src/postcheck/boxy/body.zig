@@ -2694,10 +2694,10 @@ pub const Builder = struct {
                 // The closure in its owner's scope (and, for a generalized
                 // lambda, its own scheme's), whose variables the stored
                 // value's type instantiates; the value captures them all.
-                const own: ?lower.LocalScheme = if (self.program.local_scopes.get(.{ .module = owner.module, .expr = lambda_expr })) |scope_id| blk: {
+                const own_scope = self.program.local_scopes.get(.{ .module = owner.module, .expr = lambda_expr });
+                const own: ?lower.LocalScheme = if (own_scope) |scope_id| blk: {
                     var scheme = try self.localSchemeIn(owner_view, scope_id);
                     if (scheme.scheme_vars.len == 0 and scheme.dictionaries.len == 0) break :blk null;
-                    if (scheme.dictionaries.len != 0) invariant("restoring stored generalized lambdas that take dictionaries is not yet lowered by Boxy");
                     scheme.per_call = false;
                     break :blk scheme;
                 } else null;
@@ -2744,7 +2744,26 @@ pub const Builder = struct {
                 const worker = try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, own);
                 const descs = try self.program.arena.allocator().alloc(LocalId, bound.len);
                 for (bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
-                const dicts = try self.storedDictionaries(stored, owner_worker, bound[0..owner.scheme_vars.len]);
+                const owner_dicts = try self.storedDictionaries(stored, owner_worker, bound[0..owner.scheme_vars.len]);
+                defer self.allocator.free(owner_dicts);
+                // A generalized lambda's own dictionaries are the stored
+                // evidence's innermost frame, its own scope's, ahead of its
+                // owner's.
+                const own_dicts: []LocalId = if (own) |scheme| own: {
+                    if (scheme.dictionaries.len == 0) break :own try self.allocator.alloc(LocalId, 0);
+                    const head = stored.evidence_frame_head orelse invariant("a stored generalized lambda with dictionaries has no evidence");
+                    const frame = stored.evidence_frames[head];
+                    if (frame.scope() == .root) invariant("a stored generalized lambda's innermost evidence frame is its procedure's");
+                    const templates = owner_view.view.checked_procedure_templates;
+                    const params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.dispatch_scopes[@backingInt(own_scope.?)].evidence_params);
+                    const roots = try self.storedEvidenceTrees(stored.evidence, frame.roots_start, frame.roots_len, params, concrete);
+                    defer self.allocator.free(roots);
+                    const out = try self.allocator.alloc(LocalId, scheme.dictionaries.len);
+                    for (scheme.dictionaries, out) |param_index, *dict| dict.* = roots[param_index] orelse invariant("a stored dictionary's evidence denotes no dictionary");
+                    break :own out;
+                } else try self.allocator.alloc(LocalId, 0);
+                defer self.allocator.free(own_dicts);
+                const dicts = try std.mem.concat(self.allocator, LocalId, &.{ own_dicts, owner_dicts });
                 defer self.allocator.free(dicts);
                 try self.push(.{ .finish_restore_closure = .{
                     .worker = worker,
@@ -2780,7 +2799,8 @@ pub const Builder = struct {
         while (stored.evidence_frames[frame_index].parent) |parent| frame_index = parent;
         const frame = stored.evidence_frames[frame_index];
         if (frame.scope() != .root) invariant("a stored function value's outermost evidence frame is not its procedure's");
-        const roots = try self.storedEvidenceTrees(stored.evidence, frame.roots_start, frame.roots_len, owner, bound);
+        const owner_record = self.program.worker(owner).*;
+        const roots = try self.storedEvidenceTrees(stored.evidence, frame.roots_start, frame.roots_len, self.templateEvidenceParams(owner), .{ .module = owner_record.module, .vars = owner_record.scheme_vars, .bound = bound });
         defer self.allocator.free(roots);
         for (owner_worker.dictionary_params, dicts) |param_index, *dict| {
             dict.* = roots[param_index] orelse invariant("a stored dictionary's evidence denotes no dictionary");
@@ -2845,7 +2865,7 @@ pub const Builder = struct {
     /// each entry's callable contracts, which no dictionary reads, follow
     /// it. A target takes the instantiation its parameter's callable type,
     /// bound by its owner's instantiation, relates it to.
-    pub fn storedEvidenceTrees(self: *Builder, evidence: check.ConstStore.ConstFnEvidenceVector, start: u32, count: u32, owner: WorkerId, owner_bound: []const TypeId) Allocator.Error![]?LocalId {
+    pub fn storedEvidenceTrees(self: *Builder, evidence: check.ConstStore.ConstFnEvidenceVector, start: u32, count: u32, root_params: []const static_dispatch.EvidenceParamRecord, root_env: types.Env) Allocator.Error![]?LocalId {
         const Parsed = struct {
             node: u32,
             /// The parsed target whose nested vector holds this entry and
@@ -2919,15 +2939,15 @@ pub const Builder = struct {
             callable.* = null;
             dispatcher.* = null;
             if (entry.contract) continue;
-            const param_owner = if (entry.parent) |p| parsed.items[p].target.? else owner;
-            const param_bound = if (entry.parent) |p| parsed.items[p].bound else owner_bound;
-            const params = self.templateEvidenceParams(param_owner);
+            const params, const env: types.Env = if (entry.parent) |p| blk: {
+                const parent = parsed.items[p];
+                const owner_record = self.program.worker(parent.target.?).*;
+                break :blk .{ self.templateEvidenceParams(parent.target.?), .{ .module = owner_record.module, .vars = owner_record.scheme_vars, .bound = parent.bound } };
+            } else .{ root_params, root_env };
             if (entry.position >= params.len) invariant("stored evidence has more entries than its owner has evidence parameters");
             const param = params[entry.position];
-            const owner_record = self.program.worker(param_owner).*;
-            const env: types.Env = .{ .module = owner_record.module, .vars = owner_record.scheme_vars, .bound = param_bound };
-            callable.* = try self.program.converter().convert(owner_record.module, param.callable_ty, env);
-            dispatcher.* = try self.program.converter().convert(owner_record.module, param.dispatcher_ty, env);
+            callable.* = try self.program.converter().convert(env.module, param.callable_ty, env);
+            dispatcher.* = try self.program.converter().convert(env.module, param.dispatcher_ty, env);
             switch (evidence.nodes[entry.node]) {
                 .target => |target_index| {
                     const stored = evidence.target(target_index).*;
