@@ -243,23 +243,77 @@ pub const StaticDescs = struct {
     /// zero (static) refcount word immediately before the payload.
     const static_callable_header: u32 = @intCast(boxy_runtime.compiled.static_callable_header);
 
-    /// One word a static callable captures: a descriptor, or a structural
-    /// dictionary over one.
-    const CaptureWord = union(enum) { desc: TypeId, dict: lower.StructuralDict };
+    /// One word a static callable captures: a descriptor, or another static
+    /// callable (a dictionary).
+    const CaptureWord = union(enum) { desc: TypeId, callable: ExportIndex };
 
     /// An immortal erased callable of `override`'s entry whose capture is
     /// the descriptors of its scheme's types then its dictionaries, one word
-    /// each.
+    /// each. Each dictionary is resolved from its dispatcher's closed type
+    /// (`Program.resolveObligation`) into a static callable of its own,
+    /// with an explicit stack for the obligations of the method targets
+    /// that resolve them.
     fn staticCallable(self: *StaticDescs, owner: u32, index: u32, override: lower.NominalOverride) Allocator.Error!ExportIndex {
-        const words = try self.allocator.alloc(CaptureWord, override.bound.len + override.dicts.len);
-        defer self.allocator.free(words);
-        for (override.bound, words[0..override.bound.len]) |ty, *word| word.* = .{ .desc = ty };
-        for (override.dicts, words[override.bound.len..]) |dict, *word| word.* = .{ .dict = dict };
-        const entry = self.program().worker(override.entry).*;
-        return try self.staticCallableOf(owner, index, entry.module, entry.proc, words);
+        const Frame = struct {
+            proc: LIR.LirProcSpecId,
+            module: types.ModuleIndex,
+            obligations: []const lower.DictObligation,
+            words: std.ArrayList(CaptureWord),
+            next: usize,
+        };
+        var frames: std.ArrayList(Frame) = .empty;
+        defer {
+            for (frames.items) |*frame| frame.words.deinit(self.allocator);
+            frames.deinit(self.allocator);
+        }
+        const program_ = self.program();
+        const root_entry = program_.worker(override.entry).*;
+        try frames.append(self.allocator, .{ .proc = root_entry.proc, .module = root_entry.module, .obligations = override.dicts, .words = .empty, .next = 0 });
+        for (override.bound) |ty| try frames.items[0].words.append(self.allocator, .{ .desc = ty });
+        while (true) {
+            const frame = &frames.items[frames.items.len - 1];
+            if (frame.next == frame.obligations.len) {
+                var done = frames.pop().?;
+                defer done.words.deinit(self.allocator);
+                // Each node index past the slot's own names one callable.
+                const node_index: u32 = if (frames.items.len == 0) index else blk: {
+                    self.extra_nodes += 1;
+                    break :blk 16 + self.extra_nodes;
+                };
+                const callable = try self.staticCallableOf(owner, node_index, done.proc, done.words.items);
+                if (frames.items.len == 0) return callable;
+                try frames.items[frames.items.len - 1].words.append(self.allocator, .{ .callable = callable });
+                continue;
+            }
+            const obligation = frame.obligations[frame.next];
+            frame.next += 1;
+            const module = frame.module;
+            switch (try program_.resolveObligation(obligation)) {
+                .structural => |structural| {
+                    self.extra_nodes += 1;
+                    const worker = program_.worker(try program_.structuralWorker(module, structural.method)).*;
+                    const callable = try self.staticCallableOf(owner, 16 + self.extra_nodes, worker.proc, &.{.{ .desc = structural.over }});
+                    try frames.items[frames.items.len - 1].words.append(self.allocator, .{ .callable = callable });
+                },
+                .crash => |kind| {
+                    self.extra_nodes += 1;
+                    const worker = program_.worker(try program_.crashDictionaryWorker(module, kind)).*;
+                    const callable = try self.staticCallableOf(owner, 16 + self.extra_nodes, worker.proc, &.{});
+                    try frames.items[frames.items.len - 1].words.append(self.allocator, .{ .callable = callable });
+                },
+                .scope_variable => types.invariant("a closed nominal's override names a scope variable"),
+                .target => |target| {
+                    const instance = try program_.targetAt(target, obligation.callable);
+                    const entry = program_.worker(try program_.methodEntryWorker(target)).*;
+                    var words: std.ArrayList(CaptureWord) = .empty;
+                    for (instance.bound) |ty| try words.append(self.allocator, .{ .desc = ty });
+                    try frames.append(self.allocator, .{ .proc = entry.proc, .module = entry.module, .obligations = instance.obligations, .words = words, .next = 0 });
+                },
+            }
+        }
     }
 
-    fn staticCallableOf(self: *StaticDescs, owner: u32, index: u32, module: types.ModuleIndex, proc: LIR.LirProcSpecId, words: []const CaptureWord) Allocator.Error!ExportIndex {
+    fn staticCallableOf(self: *StaticDescs, owner: u32, index: u32, proc: LIR.LirProcSpecId, words: []const CaptureWord) Allocator.Error!ExportIndex {
         const ptr = self.ptrSize();
         const capture_offset = std.mem.alignForward(u32, 2 * ptr, static_callable_header);
         const size = static_callable_header + capture_offset + @as(u32, @intCast(words.len)) * ptr;
@@ -279,12 +333,7 @@ pub const StaticDescs = struct {
         for (words, relocations[1..], 0..) |word, *relocation, position| {
             const target, const addend = switch (word) {
                 .desc => |ty| .{ (try self.reserveDescriptor(.{ .ty = self.layouts.joins.representative(ty), .recursive_box = false })).node, 0 },
-                .dict => |dict| blk: {
-                    const structural = try self.program().structuralWorker(module, dict.method);
-                    // Each node index past the slot's own names one callable.
-                    self.extra_nodes += 1;
-                    break :blk .{ try self.staticCallableOf(owner, 16 + self.extra_nodes, module, self.program().worker(structural).proc, &.{.{ .desc = dict.ty }}), static_callable_header };
-                },
+                .callable => |callable| .{ callable, static_callable_header },
             };
             relocation.* = .{
                 .offset = static_callable_header + capture_offset + @as(u32, @intCast(position)) * ptr,

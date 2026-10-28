@@ -180,12 +180,37 @@ pub const LocalScheme = struct {
 };
 
 /// A nominal method override: its dictionary entry, the types the method's
-/// scheme variables take, and its dictionaries: each the structural method
-/// over the type its constraint dispatches on, which honors that type's own
-/// overrides through its descriptor.
-pub const NominalOverride = struct { entry: WorkerId, bound: []const TypeId, dicts: []const StructuralDict };
+/// scheme variables take, and the obligations its dictionaries resolve.
+pub const NominalOverride = struct { entry: WorkerId, bound: []const TypeId, dicts: []const DictObligation };
 
-pub const StructuralDict = struct { method: StructuralMethod, ty: TypeId };
+/// A dispatch obligation resolved from its dispatcher's type: the method
+/// named `method` (of module `module`'s names) on `dispatcher`, at the
+/// interface `callable`, with the structural derivation checking permits
+/// where the dispatcher registers no method.
+pub const DictObligation = struct {
+    module: ModuleIndex,
+    method: @FieldType(static_dispatch.EvidenceParamRecord, "method"),
+    structural: ?static_dispatch.StructuralKind,
+    dispatcher: TypeId,
+    callable: TypeId,
+};
+
+/// What resolves a `DictObligation`.
+pub const ObligationResolution = union(enum) {
+    /// The method a template implements; its own obligations remain.
+    target: WorkerId,
+    /// A structural method over a type's descriptor, which honors the
+    /// type's own overrides.
+    structural: struct { method: StructuralMethod, over: TypeId },
+    /// A dictionary that crashes as the dispatch would.
+    crash: CrashDictionary,
+    /// The dictionary a body's scope holds for scope variable `index`.
+    scope_variable: u32,
+};
+
+/// A method target instantiated at an obligation's callable: the types its
+/// scheme takes and the obligations of its dictionaries.
+pub const TargetInstance = struct { bound: []const TypeId, obligations: []const DictObligation };
 
 /// The overrides of a nominal type, in `Methods` order.
 pub const NominalOverrides = [3]?NominalOverride;
@@ -220,6 +245,10 @@ pub const Program = struct {
     lowering_module_ids: []LIR.LoweringModuleId = &.{},
     /// Modules by the checker's `module_idx`.
     by_module_idx: std.AutoHashMapUnmanaged(u32, ModuleIndex) = .empty,
+    /// Each module's callable-eval templates, by their binding pattern.
+    callable_eval_by_pattern: std.AutoHashMapUnmanaged(struct { module: ModuleIndex, pattern: checked.CheckedPatternId }, checked.CallableEvalTemplateId) = .empty,
+    /// Each module's entry wrappers, by the compile-time root they wrap.
+    wrapper_by_root: std.AutoHashMapUnmanaged(struct { module: ModuleIndex, root: checked.ComptimeRootId }, canonical.ProcedureTemplateRef) = .empty,
     /// Each module's exported procedure bindings, by their definition.
     exported_bindings: std.AutoHashMapUnmanaged(ExportedBindingKey, *const checked.ImportedProcedureBindingView) = .empty,
     observe_expects: bool,
@@ -690,32 +719,239 @@ pub const Program = struct {
                 const worker_id = try self.templateRefWorker(template);
                 const target_worker = self.worker(worker_id).*;
                 if (target_worker.params.len == 0) invariant("a nominal method override takes no arguments");
-                const related = try self.relateVariablesPartial(self.allocator, &.{.{ target_worker.params[0], nominal_ty }}, target_worker.scheme_vars.len);
-                defer self.allocator.free(related);
-                const bound = try self.arena.allocator().alloc(TypeId, related.len);
-                for (related, bound, target_worker.scheme_vars) |ty, *out, variable| out.* = ty orelse try self.converter().sealedScheme(target_worker.module, variable);
-                const dicts = try self.arena.allocator().alloc(StructuralDict, target_worker.dictionary_params.len);
-                if (dicts.len != 0) {
-                    const target_view = self.module(target_worker.module);
-                    const target_key = target_worker.key.template;
-                    const templates = target_view.view.checked_procedure_templates;
-                    const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(target_key.template)].evidence_params);
-                    const env: types.Env = .{ .module = target_worker.module, .vars = target_worker.scheme_vars, .bound = bound };
-                    for (target_worker.dictionary_params, dicts) |param_index, *dict| {
-                        const param = params[param_index];
-                        const method_text = target_view.nameStore().methodNameText(param.method);
-                        dict.* = .{
-                            .method = std.meta.stringToEnum(StructuralMethod, method_text) orelse
-                                invariantFmt("a nominal method override constrained by {s} is not yet lowered by Boxy", .{method_text}),
-                            .ty = try self.converter().convert(target_worker.module, param.dispatcher_ty, env),
-                        };
-                    }
-                }
-                slot.* = .{ .entry = try self.methodEntryWorker(worker_id), .bound = bound, .dicts = dicts };
+                const instance = try self.instantiateTarget(worker_id, target_worker.params[0], nominal_ty);
+                slot.* = .{ .entry = try self.methodEntryWorker(worker_id), .bound = instance.bound, .dicts = instance.obligations };
             }
         }
         try self.nominal_overrides.put(self.allocator, nominal_ty, result);
         return result;
+    }
+
+    /// `target` (a template's worker) whose scheme takes `bound`, with the
+    /// obligations of its dictionaries at those types.
+    pub fn targetObligations(self: *Program, target: WorkerId, bound: []const TypeId) Allocator.Error!TargetInstance {
+        const target_worker = self.worker(target).*;
+        const obligations = try self.arena.allocator().alloc(DictObligation, target_worker.dictionary_params.len);
+        if (obligations.len == 0) return .{ .bound = bound, .obligations = obligations };
+        const key = switch (target_worker.key) {
+            .template => |key| key,
+            else => invariant("a worker with dictionary parameters is not a template's"),
+        };
+        const templates = self.module(key.module).view.checked_procedure_templates;
+        const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
+        const env: types.Env = .{ .module = key.module, .vars = target_worker.scheme_vars, .bound = bound };
+        for (target_worker.dictionary_params, obligations) |param_index, *obligation| {
+            const param = params[param_index];
+            obligation.* = .{
+                .module = key.module,
+                .method = param.method,
+                .structural = param.structural,
+                .dispatcher = try self.converter().convert(key.module, param.dispatcher_ty, env),
+                .callable = try self.converter().convert(key.module, param.callable_ty, env),
+            };
+        }
+        return .{ .bound = bound, .obligations = obligations };
+    }
+
+    /// `target` instantiated at the callable `callable` its obligation
+    /// names (`instantiateTarget`).
+    pub fn targetAt(self: *Program, target: WorkerId, callable: TypeId) Allocator.Error!TargetInstance {
+        const target_worker = self.worker(target).*;
+        const formal = try self.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
+        return try self.instantiateTarget(target, formal, callable);
+    }
+
+    /// Where placeholder variables start: a variable at or past this index
+    /// stands for a target's scheme variable `instantiateTarget` has not yet
+    /// determined, never for a worker's scope variable.
+    const placeholder_base: u32 = 1 << 30;
+
+    /// `target` (a template's worker) instantiated by relating its type
+    /// `formal` (over its scheme variables) to `actual`, as checking relates
+    /// a selected target's scheme to the callable it is used at. A variable
+    /// `actual` leaves unrelated is one the target's own obligations fix: an
+    /// obligation whose dispatcher is determined resolves to a method whose
+    /// own type, related back to the obligation's callable, determines the
+    /// variables that callable names, until no obligation determines more.
+    /// A variable nothing determines seals as a variable no use relates.
+    pub fn instantiateTarget(self: *Program, target: WorkerId, formal: TypeId, actual: TypeId) Allocator.Error!TargetInstance {
+        const target_worker = self.worker(target).*;
+        const count = target_worker.scheme_vars.len;
+        const related = try self.relateVariablesPartial(self.allocator, &.{.{ formal, actual }}, count);
+        defer self.allocator.free(related);
+        if (target_worker.dictionary_params.len != 0) {
+            const key = switch (target_worker.key) {
+                .template => |key| key,
+                else => invariant("a worker with dictionary parameters is not a template's"),
+            };
+            const templates = self.module(key.module).view.checked_procedure_templates;
+            const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
+            const partial = try self.allocator.alloc(TypeId, count);
+            defer self.allocator.free(partial);
+            const own = try self.allocator.alloc(TypeId, count);
+            defer self.allocator.free(own);
+            for (own, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
+            const own_env: types.Env = .{ .module = key.module, .vars = target_worker.scheme_vars, .bound = own };
+            var changed = true;
+            while (changed) {
+                changed = false;
+                for (related, partial, 0..) |ty, *slot, index| slot.* = ty orelse try self.store.variable(placeholder_base + @as(u32, @intCast(index)));
+                const env: types.Env = .{ .module = key.module, .vars = target_worker.scheme_vars, .bound = partial };
+                for (target_worker.dictionary_params) |param_index| {
+                    const param = params[param_index];
+                    const dispatcher = try self.converter().convert(key.module, param.dispatcher_ty, env);
+                    if (try self.mentionsPlaceholder(dispatcher)) continue;
+                    const callable = try self.converter().convert(key.module, param.callable_ty, env);
+                    const method_target = switch (try self.resolveObligation(.{ .module = key.module, .method = param.method, .structural = param.structural, .dispatcher = dispatcher, .callable = callable })) {
+                        .target => |method_target| method_target,
+                        .structural, .crash, .scope_variable => continue,
+                    };
+                    // The method's own type at the obligation's callable:
+                    // its variables the callable determines take those
+                    // types, the rest stay placeholders.
+                    const method_worker = self.worker(method_target).*;
+                    const method_formal = try self.store.intern(.{ .function = .{ .args = method_worker.params, .ret = method_worker.ret, .effectful = false } });
+                    const method_related = try self.relateVariablesPartial(self.allocator, &.{.{ method_formal, callable }}, method_worker.scheme_vars.len);
+                    defer self.allocator.free(method_related);
+                    const method_bound = try self.allocator.alloc(TypeId, method_related.len);
+                    defer self.allocator.free(method_bound);
+                    for (method_related, method_bound, 0..) |ty, *slot, index| slot.* = ty orelse try self.store.variable(placeholder_base + @as(u32, @intCast(count + index)));
+                    const method_ty = try self.substitute(self.allocator, method_formal, method_bound);
+                    const back = try self.relateVariablesPartial(self.allocator, &.{.{ try self.converter().convert(key.module, param.callable_ty, own_env), method_ty }}, count);
+                    defer self.allocator.free(back);
+                    for (related, back) |*slot, determined| {
+                        if (slot.* != null) continue;
+                        const ty = determined orelse continue;
+                        if (try self.mentionsPlaceholder(ty)) continue;
+                        slot.* = ty;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        const bound = try self.arena.allocator().alloc(TypeId, count);
+        for (related, bound, target_worker.scheme_vars) |ty, *slot, variable| slot.* = ty orelse try self.converter().sealedScheme(target_worker.module, variable);
+        return try self.targetObligations(target, bound);
+    }
+
+    /// Whether `root` names a placeholder variable (`placeholder_base`).
+    fn mentionsPlaceholder(self: *Program, root: TypeId) Allocator.Error!bool {
+        var visited: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+        defer visited.deinit(self.allocator);
+        var stack: std.ArrayList(TypeId) = .empty;
+        defer stack.deinit(self.allocator);
+        try stack.append(self.allocator, root);
+        while (stack.pop()) |ty| {
+            if ((try visited.getOrPut(self.allocator, ty)).found_existing) continue;
+            switch (self.store.get(ty)) {
+                .variable => |index| if (index >= placeholder_base) return true,
+                .primitive, .empty_record => {},
+                .record => |record| {
+                    for (self.store.fieldSpan(record.fields)) |field| try stack.append(self.allocator, field.ty);
+                    if (record.ext) |ext| try stack.append(self.allocator, ext);
+                },
+                .tuple => |items| try stack.appendSlice(self.allocator, self.store.span(items)),
+                .tag_union => |tag_union| {
+                    for (self.store.tagSpan(tag_union.tags)) |tag| try stack.appendSlice(self.allocator, self.store.span(tag.payloads));
+                    if (tag_union.ext) |ext| try stack.append(self.allocator, ext);
+                },
+                .list => |elem| try stack.append(self.allocator, elem),
+                .box => |payload| try stack.append(self.allocator, payload),
+                .nominal => |nominal| try stack.appendSlice(self.allocator, self.store.nominalArgs(nominal)),
+                .function => |function| {
+                    try stack.appendSlice(self.allocator, self.store.span(function.args));
+                    try stack.append(self.allocator, function.ret);
+                },
+            }
+        }
+        return false;
+    }
+
+    /// What resolves `obligation`, seen from the module that states it: the
+    /// method its dispatcher's owner registers; a structural derivation
+    /// where the owner registers none; a crash where no value of the
+    /// dispatcher can exist; and for a scope variable, a structural method
+    /// over its descriptor for a method descriptors carry, or else its
+    /// scope's dictionary.
+    pub fn resolveObligation(self: *Program, obligation: DictObligation) Allocator.Error!ObligationResolution {
+        const method_text = self.module(obligation.module).nameStore().methodNameText(obligation.method);
+        switch (self.store.get(obligation.dispatcher)) {
+            .variable => |index| return if (std.meta.stringToEnum(StructuralMethod, method_text)) |method|
+                .{ .structural = .{ .method = method, .over = obligation.dispatcher } }
+            else
+                .{ .scope_variable = index },
+            else => {},
+        }
+        if (self.methodOwner(obligation.dispatcher)) |owned| {
+            if (self.registeredMethod(obligation.module, owned.module, owned.owner, method_text)) |found| switch (found) {
+                .rejected => return .{ .crash = .checked_error },
+                .target => |target| switch (target.kind) {
+                    .procedure => |procedure| return .{ .target = try self.templateRefWorker(procedure.template) },
+                    .structural => |kind| return .{ .structural = .{ .method = structuralMethodOf(kind), .over = obligation.dispatcher } },
+                    .local_proc => invariant("a method a local procedure implements belongs to a type declared in a function body, which no type-resolved obligation outside that body names"),
+                },
+            };
+        }
+        var structural_ty = obligation.dispatcher;
+        while (self.store.get(structural_ty) == .nominal) structural_ty = try self.converter().backing(structural_ty);
+        const uninhabited = switch (self.store.get(structural_ty)) {
+            .tag_union => |tag_union| tag_union.tags.len == 0 and tag_union.ext == null,
+            else => false,
+        };
+        if (uninhabited) return switch (static_dispatch.unpinnedDispatchResolution(obligation.structural)) {
+            .structural => .{ .structural = .{ .method = structuralMethodOf(obligation.structural.?), .over = obligation.dispatcher } },
+            .unreachable_value => .{ .crash = .unreachable_value },
+        };
+        const kind = obligation.structural orelse invariant("a type-resolved obligation's dispatcher has no method and no structural derivation, which checking rejects");
+        return .{ .structural = .{ .method = structuralMethodOf(kind), .over = obligation.dispatcher } };
+    }
+
+    /// The structural method of derivation `kind`. Derived codecs and maps
+    /// are selected by checking at the dispatch they serve, so an obligation
+    /// resolved from a type alone compares or hashes.
+    fn structuralMethodOf(kind: static_dispatch.StructuralKind) StructuralMethod {
+        return switch (kind) {
+            .equality => .is_eq,
+            .hash => .to_hash,
+            .parser, .encoder, .map, .map_effectful => invariant("a structural codec or map obligation resolved from a type alone, which checking records at its dispatch"),
+        };
+    }
+
+    /// The method owner of `ty`, with the module whose names the owner is
+    /// expressed in (a builtin owner names no module's).
+    fn methodOwner(self: *Program, ty: TypeId) ?struct { module: ?ModuleIndex, owner: static_dispatch.MethodOwner } {
+        return switch (self.store.get(ty)) {
+            .primitive => |primitive| .{ .module = null, .owner = .{ .builtin = checked.builtinOwnerForPrimitive(primitive) } },
+            .list => .{ .module = null, .owner = .{ .builtin = .list } },
+            .box => .{ .module = null, .owner = .{ .builtin = .box } },
+            .nominal => |nominal| blk: {
+                const view = self.module(nominal.decl.module);
+                const declaration = view.types().nominalDeclarationById(nominal.decl.decl);
+                break :blk .{ .module = nominal.decl.module, .owner = if (nominal.builtin) |builtin| (if (builtin == .try_)
+                    .{ .nominal = declaration.nominal }
+                else
+                    .{ .builtin = static_dispatch.builtinOwnerForCheckedBuiltin(builtin) }) else .{ .nominal = declaration.nominal } };
+            },
+            else => null,
+        };
+    }
+
+    /// The registration of `owner.method_text` visible from `scope_module`:
+    /// its own registry, then the modules its method lookup reaches.
+    fn registeredMethod(self: *Program, scope_module: ModuleIndex, owner_module: ?ModuleIndex, owner: static_dispatch.MethodOwner, method_text: []const u8) ?static_dispatch.CheckedMethodLookup {
+        const scope = self.module(scope_module);
+        const owner_names = self.module(owner_module orelse scope_module).nameStore();
+        if (methodIn(scope, owner_names, owner, method_text)) |found| return found;
+        for (scope.view.method_lookup_scope) |module_id| {
+            if (methodIn(self.moduleByKey(module_id), owner_names, owner, method_text)) |found| return found;
+        }
+        return null;
+    }
+
+    fn methodIn(view: *const types.ModuleView, owner_names: anytype, owner: static_dispatch.MethodOwner, method_text: []const u8) ?static_dispatch.CheckedMethodLookup {
+        const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, view.nameStore(), owner) orelse return null;
+        const method = view.nameStore().lookupMethodName(method_text) orelse return null;
+        return view.view.method_registry.lookup(.{ .owner = view_owner, .method = method });
     }
 
     /// The worker of an adapter function value (see `WorkerKey.adapter`).
@@ -977,6 +1213,8 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.worklist.deinit(allocator);
         program.by_module_idx.deinit(allocator);
         program.exported_bindings.deinit(allocator);
+        program.callable_eval_by_pattern.deinit(allocator);
+        program.wrapper_by_root.deinit(allocator);
         program.hosted.deinit(allocator);
         program.local_scopes.deinit(allocator);
         program.local_procs.deinit(allocator);
@@ -1006,6 +1244,12 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         try program.by_module_idx.put(allocator, view.view.module_identity.module_idx, view.index);
         for (view.view.exported_procedure_bindings.bindings) |*binding| {
             try program.exported_bindings.put(allocator, .{ .module = view.index, .def = binding.binding.def, .pattern = binding.binding.pattern }, binding);
+        }
+        for (view.view.callable_eval_templates.templates) |template| {
+            try program.callable_eval_by_pattern.put(allocator, .{ .module = view.index, .pattern = template.pattern }, template.id);
+        }
+        for (view.view.entry_wrappers.wrappers.items) |wrapper| {
+            try program.wrapper_by_root.put(allocator, .{ .module = view.index, .root = wrapper.root }, wrapper.template);
         }
     }
     try seedSourceFiles(&program);
