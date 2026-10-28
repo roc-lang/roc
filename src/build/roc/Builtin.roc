@@ -4717,7 +4717,8 @@ Builtin :: [].{
 		## If given a unique list, [List.keep_if] will mutate it in place to assemble the appropriate list.
 		## If that happens, this function will not allocate any new memory on the heap.
 		## If all items in the list end up being kept, Roc will return the original
-		## list unaltered.
+		## list unaltered. Otherwise, a shared list is copied into one new list with
+		## the original's length as its capacity.
 		##
 		keep_if : List(a), (a -> Bool) -> List(a)
 		keep_if = |list, predicate| {
@@ -4733,7 +4734,9 @@ Builtin :: [].{
 					var $index = 0
 					while $index < len {
 						if predicate(list_get_unsafe($out, $index)) {
-							$out = list_swap_unsafe($out, $kept, $index)
+							if $kept != $index {
+								$out = list_swap_unsafe($out, $kept, $index)
+							}
 							$kept = $kept + 1
 						}
 						$index = $index + 1
@@ -4749,20 +4752,14 @@ Builtin :: [].{
 					if $first_dropped == len {
 						prepared
 					} else {
-						# Copy the kept items. The items before $first_dropped were
-						# already tested, and the copy is allocated only when the first
-						# kept item needs a place, so keeping nothing allocates nothing.
-						var $new_list = []
-						var $index = 0
+						# The items before $first_dropped were already tested and kept,
+						# so copy them in one step and test only the items after it.
+						var $new_list = list_append_sublist(List.with_capacity(len), prepared, 0, $first_dropped)
+						var $index = $first_dropped + 1
 						while $index < len {
 							item = list_get_unsafe(prepared, $index)
-							if $index < $first_dropped or ($index > $first_dropped and predicate(item)) {
-								reserved = if $new_list.is_empty() {
-									List.with_capacity(len)
-								} else {
-									$new_list
-								}
-								$new_list = list_append_unsafe(reserved, item)
+							if predicate(item) {
+								$new_list = list_append_unsafe($new_list, item)
 							}
 							$index = $index + 1
 						}

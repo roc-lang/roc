@@ -1736,8 +1736,8 @@ const core_tests = [_]TestCase{
         .source = "List.keep_if(List.drop_first(List.concat([1], [2]), 2), |_| True)",
         .expected = .{ .inspect_str = "[]" },
     },
-    // A unique seamless slice must not be compacted in place, because its
-    // buffer points into the middle of an allocation.
+    // list_owned_unique answers 0 for a seamless slice at runtime, so this
+    // usually takes the copy path; either path must give the same result.
     .{
         .name = "inspect: List.keep_if over unique seamless slice",
         .source = "List.keep_if(List.sublist(List.concat([1, 2], [3, 4]), { start: 1, len: 3 }), |x| x != 3)",
@@ -1816,7 +1816,7 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "([\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"], [], [])" },
     },
     // Two list literals and the concat allocate. Keeping every item of the
-    // shared list returns it, and keeping none allocates nothing.
+    // shared list returns it, and keeping none copies into one allocation.
     .{
         .name = "allocation - List.keep_if over shared list keeping all or none",
         .source =
@@ -1833,7 +1833,7 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .allocations_at_most = .{
             .output = "ok",
-            .max_allocations = 3,
+            .max_allocations = 4,
         } },
     },
     .{

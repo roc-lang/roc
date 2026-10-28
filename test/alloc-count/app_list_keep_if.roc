@@ -4,8 +4,8 @@ import pf.Host
 
 # List.keep_if and List.drop_if compact a uniquely owned list in place, so
 # they allocate nothing. A shared list, and keep_oks, whose item type
-# changes, build their result in one allocation, and allocate nothing when
-# they keep nothing. A shared list that keeps every item comes back as it is.
+# changes, build their result in one allocation. keep_oks allocates nothing
+# when it keeps nothing. A shared list that keeps every item comes back as it is.
 numbers : U64 -> List(U64)
 numbers = |offset| {
 	var $list = List.with_capacity(8)
