@@ -66,6 +66,9 @@ pub const Task = union(enum) {
     bind: struct { pattern: CheckedPatternId, ty: TypeId },
     /// Pop and drop one value.
     discard,
+    /// Crash with a checked runtime error, whose value is of this type, or
+    /// of no type when the checker gave it the erroneous type.
+    runtime_error: ?TypeId,
     /// Pop the arguments of a call to `callee` and call it.
     /// `adapt` is set for a callee storing record fields of its signature
     /// in presence slots: the types its scheme takes and the arguments'.
@@ -816,6 +819,7 @@ pub const Builder = struct {
             .root => return try self.lowerRootWrapper(),
             .default => |key| return try self.lowerDefaultBody(key.expr),
             .codec => |piece| return try Codec.lowerPiece(self, piece),
+            .crash_dictionary => |kind| return try self.lowerCrashDictionary(kind),
         };
         // Signature: explicit parameters, then hidden descriptors and
         // dictionaries.
@@ -942,6 +946,15 @@ pub const Builder = struct {
         self.store.shapes = .{};
         if (self.has_dynamic_frame) self.tail_calls.self_calls = .replace_frame;
         proc.tail_calls = try self.tail_calls.finish(self.store);
+    }
+
+    /// Crash with a checked runtime error; the value of type `ty` it stands
+    /// for is never produced. An erroneous value has no type of its own,
+    /// and no reachable statement reads the zero-sized local standing for it.
+    pub fn runtimeErrorValue(self: *Builder, ty: ?TypeId) Allocator.Error!void {
+        const literal = try self.store.insertString("runtime error");
+        try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal }, .checked_error = true } });
+        try self.pushValue(if (ty) |value_ty| try self.localOf(value_ty, .frame) else try self.closedLocal(.zst));
     }
 
     /// A lambda worker in the uniform erased-callable ABI: its one argument
@@ -1450,6 +1463,31 @@ pub const Builder = struct {
         try self.runErasedBody(&start, worker.params, worker.ret, .{ .structural = method });
     }
 
+    /// A crashing dictionary method: it crashes as the dispatch it stands
+    /// for would.
+    pub fn lowerCrashDictionary(self: *Builder, kind: lower.CrashDictionary) Allocator.Error!void {
+        const worker = self.currentWorker().*;
+        const start = try self.beginErasedWorker(&.{});
+        defer self.allocator.free(start.captures);
+        self.var_descs = &.{};
+        const body_start = try self.newHole();
+        self.hole = body_start;
+        switch (kind) {
+            .checked_error => {
+                const literal = try self.store.insertString("method dispatch failed to check");
+                try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal }, .checked_error = true } });
+            },
+            .unreachable_value => {
+                const literal = try self.store.insertString("dispatch on a value that can never exist");
+                try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal } } });
+            },
+        }
+        try self.finishProc(start.entry, body_start, &.{start.capture_ptr}, .zst);
+        const proc = self.store.getProcSpecPtr(worker.proc);
+        proc.erased_capture_arg = start.capture_ptr;
+        proc.abi = .erased_record;
+    }
+
     pub const ErasedBody = union(enum) {
         call: struct { target: WorkerId, hidden: []const LocalId },
         structural: lower.StructuralMethod,
@@ -1597,6 +1635,7 @@ pub const Builder = struct {
             .stmt => |stmt| try self.stepStmt(stmt),
             .bind => |bind| try self.bindIrrefutable(bind.pattern, self.popValue(), bind.ty),
             .discard => _ = self.popValue(),
+            .runtime_error => |ty| try self.runtimeErrorValue(ty),
             .push_value => |local| try self.pushValue(local),
             .unreachable_value => |ty| try self.pushValue(try self.localOf(ty, .frame)),
             .unreachable_or_unit => try self.pushValue(try self.unitValue()),
@@ -1928,10 +1967,16 @@ pub const Builder = struct {
             },
             .crash => |literal| try self.crashValue(self.bodies().stringLiteral(literal), try self.exprType(expr_id)),
             .runtime_error => |runtime_error| {
-                if (runtime_error.evaluated.len != 0) invariant("runtime errors with evaluated operands are not yet lowered by Boxy");
-                const literal = try self.store.insertString("runtime error");
-                try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal }, .checked_error = true } });
-                try self.pushValue(try self.localOf(try self.exprType(expr_id), .frame));
+                // A retired expression evaluates the operands it still
+                // evaluates, each for its effects, then crashes.
+                const checked_ty = self.bodies().expr(expr_id).ty;
+                try self.push(.{ .runtime_error = if (self.view.types().payload(checked_ty) == .err) null else try self.exprType(expr_id) });
+                var index = runtime_error.evaluated.len;
+                while (index > 0) {
+                    index -= 1;
+                    try self.push(.discard);
+                    try self.push(.{ .expr = runtime_error.evaluated[index] });
+                }
             },
             .if_ => |if_| {
                 if (self.tail_exprs.contains(expr_id)) {
@@ -1982,7 +2027,9 @@ pub const Builder = struct {
                 try self.push(.{ .expr = expect_err.expr });
             },
             .str_from_quote => |quote| {
-                if (quote.conversion_root) |root| return try self.restoreConversionRoot(root, try self.exprType(expr_id));
+                if (quote.conversion_root) |root| {
+                    if (try self.restoreConversionRoot(root, try self.exprType(expr_id))) return;
+                }
                 if (quote.plan) |plan| return try self.lowerLiteralConversion(expr_id, plan, .quote);
                 try self.pushValue(try self.strLiteral(self.bodies().stringLiteral(quote.literal)));
             },
@@ -2051,7 +2098,9 @@ pub const Builder = struct {
     }
 
     pub fn lowerNumeral(self: *Builder, expr_id: CheckedExprId, numeral: checked.CheckedNumeralData) Allocator.Error!void {
-        if (numeral.conversion_root) |root| return try self.restoreConversionRoot(root, try self.exprType(expr_id));
+        if (numeral.conversion_root) |root| {
+            if (try self.restoreConversionRoot(root, try self.exprType(expr_id))) return;
+        }
         if (numeral.plan) |plan| return try self.lowerLiteralConversion(expr_id, plan, .numeral);
         try self.pushValue(try self.builtinNumeral(numeral.literal, try self.exprType(expr_id)));
     }
@@ -2131,11 +2180,15 @@ pub const Builder = struct {
 
     /// A literal whose conversion a compile-time root evaluated: the root's
     /// stored value (design.md "Runtime Programs Read Stored Values").
-    pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootId, ty: TypeId) Allocator.Error!void {
+    /// A root no compilation evaluated yet is not restored: the literal
+    /// converts in place, and this returns false.
+    pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootId, ty: TypeId) Allocator.Error!bool {
         switch (self.view.view.compile_time_roots.root(root_id).payload) {
             .const_node => |node| try self.push(.{ .restore = .{ .module = self.module, .node = node, .ty = ty } }),
+            .pending, .unevaluated => return false,
             else => |payload| invariantFmt("a literal conversion root holding {s} reached Boxy lowering", .{@tagName(payload)}),
         }
+        return true;
     }
 
     /// A literal converted at runtime by its checked `from_numeral` or
@@ -2309,6 +2362,9 @@ pub const Builder = struct {
                 return try self.pushValue(self.binders.get(binding.binder) orelse invariant("a local lookup named a binder this body never bound"));
             },
             .top_level_const, .imported_const => |use| return try self.restoreConstUse(expr_id, use, try self.constReadType(expr_id)),
+            // A local binding compile-time evaluation hoisted is read as the
+            // constant it stored.
+            .selected_hoisted_const => |selected| return try self.restoreConstUse(expr_id, selected.const_use, try self.constReadType(expr_id)),
             .local_proc => |local| return try self.pushValue(try self.localProcUseValue(expr_id, local)),
             .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use),
             else => |ref| invariantFmt("local lookup of a {s} is not yet lowered by Boxy", .{@tagName(ref)}),
@@ -3391,6 +3447,8 @@ pub const Builder = struct {
                 const desc = try self.descOf(try self.convert(structural.dispatcher_ty));
                 return try self.composeDictionary(entry, &.{desc});
             },
+            .checked_error => return try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .checked_error), &.{}),
+            .unreachable_value => return try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .unreachable_value), &.{}),
             else => invariantFmt("{s} dictionary evidence is not yet lowered by Boxy", .{@tagName(evidence.resolution)}),
         }
     }
@@ -4924,6 +4982,10 @@ pub const Builder = struct {
                 const message = try self.store.insertString(self.bodies().stringLiteral(literal));
                 try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = message } } });
             },
+            .runtime_error => {
+                const literal = try self.store.insertString("runtime error");
+                try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal }, .checked_error = true } });
+            },
             .dbg => |expr| {
                 try self.push(.discard);
                 try self.push(.{ .finish_dbg = try self.exprType(expr) });
@@ -5240,6 +5302,12 @@ pub const Builder = struct {
             .evidence_dependent => |dependent| {
                 return try self.emitErasedCall(self.scopeDictionary(dependent.index), try self.convert(callable_ty), args, result_ty);
             },
+            .checked_error => {
+                const literal = try self.store.insertString("method dispatch failed to check");
+                try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal }, .checked_error = true } });
+                return try self.localOf(result_ty, .frame);
+            },
+            .@"unreachable" => return try self.crashLocal("dispatch on a value that can never exist", result_ty),
             else => invariantFmt("iterator dispatch resolution {s} is not yet lowered by Boxy", .{@tagName(resolution)}),
         }
     }

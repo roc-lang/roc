@@ -87,7 +87,14 @@ pub const WorkerKey = union(enum) {
     root: u32,
     /// A worker of a generated codec family (`Codec.Piece`, by index).
     codec: u32,
+    /// The method of a dictionary whose checked evidence resolves its slot
+    /// to a crash: a dispatch checking rejected, or one no value can reach
+    /// (design.md "Static Dispatch"). Calling it crashes.
+    crash_dictionary: CrashDictionary,
 };
+
+/// Why a dictionary slot's method crashes.
+pub const CrashDictionary = enum { checked_error, unreachable_value };
 
 /// The structural methods a dictionary can denote.
 pub const StructuralMethod = enum { is_eq, to_hash, to_inspect };
@@ -804,6 +811,15 @@ pub const Program = struct {
         const scheme_vars = try self.arena.allocator().alloc(checked.CheckedTypeId, 1);
         scheme_vars[0] = @fromBackingInt(std.math.maxInt(u32));
         return try self.addErasedWorker(key, module_index, scheme_vars, params, ret, "boxy.structural");
+    }
+
+    /// The method of a crashing dictionary slot (see
+    /// `WorkerKey.crash_dictionary`). It reads no arguments and never
+    /// returns.
+    pub fn crashDictionaryWorker(self: *Program, module_index: ModuleIndex, kind: CrashDictionary) Allocator.Error!WorkerId {
+        const key: WorkerKey = .{ .crash_dictionary = kind };
+        if (self.worker_ids.get(key)) |existing| return existing;
+        return try self.addErasedWorker(key, module_index, &.{}, &.{}, try self.store.emptyRecord(), "boxy.crash_dictionary");
     }
 
     fn addErasedWorker(self: *Program, key: WorkerKey, module_index: ModuleIndex, scheme_vars: []const checked.CheckedTypeId, params: []const TypeId, ret: TypeId, role: []const u8) Allocator.Error!WorkerId {
