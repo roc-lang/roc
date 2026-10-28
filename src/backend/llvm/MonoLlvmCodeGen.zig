@@ -4678,7 +4678,9 @@ pub const MonoLlvmCodeGen = struct {
             _ = wip.brCond(caller_drives, done_block.?, drive_block, .none) catch return error.OutOfMemory;
             wip.cursor = .{ .block = drive_block };
         }
-        const ret_ptr = if (self.slot(target).size == 0)
+        const ret_ptr = if (self.localDyn(target) != null)
+            try self.targetAddress(target)
+        else if (self.slot(target).size == 0)
             builder.nullValue(ptr_ty) catch return error.OutOfMemory
         else
             self.slot(target).ptr;
@@ -11772,11 +11774,28 @@ pub const MonoLlvmCodeGen = struct {
                 const fn_ptr = try self.loadPointer(closure_ptr);
                 const capture_ptr = try self.offsetPtr(closure_ptr, builtins.erased_callable.capture_offset);
                 const args_ptr = if (c.args) |args| try self.bytesAddress(args) else try self.nullPtr();
-                const ret_ptr = if (self.localDyn(target) == null and self.layoutByteSize(self.localLayout(target)) == 0)
-                    try self.nullPtr()
-                else
-                    try self.targetAddress(target);
-                try self.callBuiltinVoid(.native_callable_call, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{ fn_ptr, ret_ptr, args_ptr, capture_ptr, try self.nullPtr() });
+                if (c.deferred) {
+                    // The pending call owns the closure reference ARC
+                    // retained for it and a copy of the argument record.
+                    const usize_ty = self.ptrSizedIntType();
+                    const args_len = if (c.args) |args|
+                        if (self.localDyn(args)) |dyn|
+                            try self.loadDescField(try self.wordValue(dyn.desc), desc_size_offset)
+                        else
+                            try self.intValue(usize_ty, self.layoutByteSize(self.localLayout(args)))
+                    else
+                        try self.intValue(usize_ty, 0);
+                    try self.callBuiltinVoid(.native_callable_defer, &.{ ptr_ty, ptr_ty, ptr_ty, usize_ty }, &.{ fn_ptr, closure_ptr, args_ptr, args_len });
+                } else {
+                    const ret_ptr = if (self.localDyn(target) == null and self.layoutByteSize(self.localLayout(target)) == 0)
+                        try self.nullPtr()
+                    else
+                        try self.targetAddress(target);
+                    // The runtime makes every call the callee leaves pending
+                    // before it returns.
+                    try self.callBuiltinVoid(.native_callable_call, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{ fn_ptr, ret_ptr, args_ptr, capture_ptr, try self.nullPtr() });
+                }
+                try self.emitDrivePending(c.drive, target);
             },
             .closure => |c| {
                 const worker = self.proc_registry.get(@backingInt(c.proc)) orelse return error.CompilationFailed;

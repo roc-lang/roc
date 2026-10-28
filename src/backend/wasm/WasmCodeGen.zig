@@ -7241,8 +7241,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         .assign_call => |assign| if (self.store.stmtRowOrDefault(assign.extra).replaces_frame) {
             try self.generateFrameReplacingCall(assign.proc, assign.args);
         } else if (self.callIsDynamic(assign.proc, assign.target)) {
-            if (self.store.stmtRowOrDefault(assign.extra).drive.canDriveHere()) wasmInvariantFmt("WASM/codegen invariant violated: a call with dynamic operands drives pending erased calls", .{});
-            try self.generateDynCall(assign.proc, assign.args, assign.target);
+            try self.generateDynCall(assign.proc, assign.args, assign.target, self.store.stmtRowOrDefault(assign.extra).drive);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         } else {
             const extra = self.store.stmtRowOrDefault(assign.extra);
@@ -8351,8 +8350,9 @@ fn callIsDynamic(self: *const Self, proc_id: LIR.LirProcSpecId, target: ProcLoca
 
 /// A direct call with dynamic operands. A dynamic parameter receives the
 /// address of its argument's bytes; a dynamic result is written to the
-/// target's storage, whose address follows the explicit arguments.
-fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan, target: ProcLocalId) Allocator.Error!void {
+/// target's storage, whose address follows the explicit arguments. Calls the
+/// callee leaves pending are run into the target's storage as `drive` says.
+fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan, target: ProcLocalId, drive: LIR.PendingDrive) Allocator.Error!void {
     const callee = self.store.getProcSpec(proc_id);
     if (callee.hosted != null or callee.c_abi_entry) wasmInvariantFmt("WASM/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
     const arg_refs = self.store.getLocalSpan(args);
@@ -8389,9 +8389,13 @@ fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan,
 
     if (result_target) |t| {
         self.currentCode().append(self.allocator, Op.drop) catch return error.OutOfMemory;
+        try self.emitDriveInto(drive, dynTargetAddressLocal(t));
         return self.finishTarget(target, t);
     }
-    if (self.localDyn(target) == null) return self.bindAssignedLocal(target);
+    if (self.localDyn(target) == null) {
+        try self.emitDrivePending(drive, self.procLocalLayoutIdx(target));
+        return self.bindAssignedLocal(target);
+    }
 
     // A closed result written to a dynamic target's storage.
     const ret_layout = self.runtimeRepresentationLayoutIdx(callee.ret_layout);
@@ -8405,6 +8409,7 @@ fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan,
     } else {
         try self.emitStoreToMemSized(dst, 0, try self.resolveValType(ret_layout), size);
     }
+    try self.emitDriveInto(drive, if (size == 0) null else dst);
 }
 
 /// Copy the bytes of every argument a frame-replacing call passes to a
@@ -8828,13 +8833,36 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             const t = try self.dynTarget(dst);
             try self.emitLocalGet(payload);
             try self.emitLoadOpSized(.i32, 4, 0);
-            try self.emitTargetAddress(t);
-            if (c.args) |args| try self.emitBytesAddress(args) else try self.emitI32Const(0);
-            try self.emitLocalGet(payload);
-            try self.emitI32Const(@intCast(builtins.erased_callable.capture_offset));
-            try self.emitOps(.{Op.i32_add});
-            try self.emitI32Const(0);
-            try self.emitBuiltinCall(.native_callable_call);
+            if (c.deferred) {
+                // Recorded as pending with the closure reference and argument
+                // record ARC transferred to it; the target holds no value
+                // until a drive writes it.
+                try self.emitLocalGet(payload);
+                if (c.args) |args| {
+                    try self.emitBytesAddress(args);
+                    if (self.localDyn(args)) |dyn| {
+                        try self.emitProcLocal(dyn.desc);
+                        try self.emitLoadOp(.i32, desc_size_offset);
+                    } else {
+                        try self.emitI32Const(@intCast(try self.layoutStorageByteSize(self.runtimeRepresentationLayoutIdx(self.procLocalLayoutIdx(args)))));
+                    }
+                } else {
+                    try self.emitNullPtr();
+                    try self.emitI32Const(0);
+                }
+                try self.emitBuiltinCall(.native_callable_defer);
+                try self.emitDriveInto(c.drive, dynTargetAddressLocal(t));
+            } else {
+                // The runtime makes every call the callee leaves pending.
+                if (c.drive != .none) wasmInvariantFmt("WASM/codegen invariant violated: a made erased call carries drive {s}", .{@tagName(c.drive)});
+                try self.emitTargetAddress(t);
+                if (c.args) |args| try self.emitBytesAddress(args) else try self.emitI32Const(0);
+                try self.emitLocalGet(payload);
+                try self.emitI32Const(@intCast(builtins.erased_callable.capture_offset));
+                try self.emitOps(.{Op.i32_add});
+                try self.emitI32Const(0);
+                try self.emitBuiltinCall(.native_callable_call);
+            }
             try self.finishTarget(dst, t);
         },
     }
@@ -9170,10 +9198,15 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
         if (c.reuse_closure) try self.emitLocalGet(payload_ptr) else try self.emitNullPtr();
         try self.emitBuiltinCall(.native_callable_call);
     }
-    if (ret_size == 0 or c.deferred) {
+    if (ret_size == 0) {
         try self.emitZeroValue(try self.resolveValType(c.ret_layout));
     } else if (try self.isCompositeLayout(c.ret_layout)) {
+        // A deferred call's target holds no value, but its address still
+        // names storage of the target's size, which a copy made before the
+        // pending call runs may read.
         try self.emitFpOffset(ret_offset.?);
+    } else if (c.deferred) {
+        try self.emitZeroValue(try self.resolveValType(c.ret_layout));
     } else {
         try self.emitFpOffset(ret_offset.?);
         try self.emitLoadOpSized(try self.resolveValType(c.ret_layout), ret_size, 0);
@@ -9207,6 +9240,23 @@ fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx
         try self.emitStoreToMemSized(slot, 0, val_type, ret_size);
         slot_local = slot;
     }
+    try self.emitDriveInto(drive, slot_local);
+    if (ret_size == 0) {
+        try self.emitZeroValue(val_type);
+    } else if (composite) {
+        try self.emitLocalGet(slot_local.?);
+    } else {
+        try self.emitLocalGet(slot_local.?);
+        try self.emitLoadOpSized(val_type, ret_size, 0);
+    }
+}
+
+/// Run the erased calls pending after a statement marked `drive`, writing
+/// the last one's result to the storage whose address `slot_local` holds
+/// (none for a zero-sized result). Under `.unless_caller_drives` this
+/// happens only when the erased-call runtime did not invoke the procedure.
+fn emitDriveInto(self: *Self, drive: LIR.PendingDrive, slot_local: ?u32) Allocator.Error!void {
+    if (!drive.canDriveHere()) return;
     if (drive == .unless_caller_drives) {
         const flag = self.caller_drives_local orelse
             wasmInvariantFmt("WASM/codegen invariant violated: procedure reads a caller-drives flag it never recorded", .{});
@@ -9220,14 +9270,15 @@ fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx
     if (drive == .unless_caller_drives) {
         self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     }
-    if (ret_size == 0) {
-        try self.emitZeroValue(val_type);
-    } else if (composite) {
-        try self.emitLocalGet(slot_local.?);
-    } else {
-        try self.emitLocalGet(slot_local.?);
-        try self.emitLoadOpSized(val_type, ret_size, 0);
-    }
+}
+
+/// The local holding the address of a dynamic statement's target storage,
+/// or null when the target has no bytes.
+fn dynTargetAddressLocal(t: DynTarget) ?u32 {
+    return switch (t) {
+        .dynamic, .closed => |address| address,
+        .zero_sized => null,
+    };
 }
 
 fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {

@@ -13661,7 +13661,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// the address of its argument's bytes (a dynamic argument's storage,
         /// or a closed argument's slot); a dynamic result is written to the
         /// target's storage, whose address follows the explicit arguments.
-        fn generateDynCall(self: *Self, proc_id: lir.LIR.LirProcSpecId, args: LocalSpan, target_local: LocalId) Allocator.Error!void {
+        fn generateDynCall(self: *Self, proc_id: lir.LIR.LirProcSpecId, args: LocalSpan, target_local: LocalId, drive: lir.LIR.PendingDrive) Allocator.Error!void {
             try self.spillAllVectorLocals();
             const callee = self.store.getProcSpec(proc_id);
             if (callee.hosted != null or callee.c_abi_entry) base.invariant("LIR/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
@@ -13724,17 +13724,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const proc = try self.compiledProcForId(proc_id);
             const value_loc = try self.generateCallToCompiledProc(proc, arg_locs, arg_layouts, callee.ret_layout);
-            if (result_target) |dst| return self.finishTarget(target_local, dst);
-            if (self.localDyn(target_local) == null) return self.bindCallResult(target_local, value_loc, .none);
+            if (result_target) |dst| {
+                try self.emitDriveInto(drive, dst);
+                return self.finishCallTarget(target_local, dst, drive);
+            }
+            if (self.localDyn(target_local) == null) {
+                const driven_loc = try self.emitDrivePending(drive, value_loc, self.localLayout(target_local));
+                return self.bindCallResult(target_local, driven_loc, drive);
+            }
 
-            // A closed result written to a dynamic target's storage.
+            // A closed result written to a dynamic target's storage, where
+            // pending calls then write theirs.
             const size = self.getLayoutSize(callee.ret_layout);
-            if (size == 0) return;
-            const offset = try self.ensureOnStack(value_loc, size);
-            const to, const temp = try self.allocTempGenerals(2);
-            try self.emitLoad(.w64, to, frame_ptr, self.localSlot(target_local));
-            try self.copyChunked(temp, frame_ptr, offset, to, 0, size);
-            self.freeGenerals(.{ temp, to });
+            if (size != 0) {
+                const offset = try self.ensureOnStack(value_loc, size);
+                const to, const temp = try self.allocTempGenerals(2);
+                try self.emitLoad(.w64, to, frame_ptr, self.localSlot(target_local));
+                try self.copyChunked(temp, frame_ptr, offset, to, 0, size);
+                self.freeGenerals(.{ temp, to });
+            }
+            try self.emitDriveInto(drive, .{ .dynamic = self.localSlot(target_local) });
         }
 
         /// Replace this procedure's frame with a call to `call.proc`, whose
@@ -14125,6 +14134,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return if (ret_size == 0) .{ .immediate_i64 = 0 } else self.stackLocationForLayout(runtime_ret_layout, ret_buffer_offset);
         }
 
+        /// Record in `caller_drives_slot` whether the erased-call runtime
+        /// invoked this procedure, which then makes the calls left pending
+        /// after it returns. Read before anything else can make an erased
+        /// call: the runtime's answer describes only this invocation. The
+        /// runtime names the callable it invokes by the function pointer
+        /// callable values hold, which is this procedure's address.
+        fn emitRecordCallerDrives(self: *Self, proc_id: lir.LIR.LirProcSpecId) Allocator.Error!void {
+            const slot = self.codegen.allocStackSlot(8);
+            const own_addr = try self.allocTempGeneral();
+            const own = try self.compiledProcForId(proc_id);
+            if (own.code_start == unresolved_proc_code_start)
+                try self.emitPendingProcAddress(proc_id, own_addr)
+            else
+                try self.emitInternalCodeAddress(.{ .proc = own.id }, own.code_start, own_addr);
+            try self.emitStore(.w64, frame_ptr, slot, own_addr);
+            self.codegen.freeGeneral(own_addr);
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            defer builder.deinit();
+            try builder.addMemArg(frame_ptr, slot);
+            try self.callBuiltin(&builder, .native_callable_caller_drives);
+            try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+            self.caller_drives_slot = slot;
+        }
+
         /// Run the erased calls a callee left pending, as the tail-drive pass
         /// marked this statement. The statement's own result is replaced by
         /// the last pending call's; with none pending it is unchanged.
@@ -14140,11 +14173,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout)).size;
             const result_slot = if (size == 0) 0 else self.codegen.allocStackSlot(size);
             if (size > 0) try self.copyBytesToStackOffset(result_slot, value_loc, size);
+            try self.emitDriveInto(drive, if (size == 0) .zero_sized else .{ .closed = result_slot });
 
+            return if (size == 0)
+                .{ .immediate_i64 = 0 }
+            else
+                self.stackLocationForLayout(runtime_layout, result_slot);
+        }
+
+        /// Run the erased calls pending after a statement marked `drive`,
+        /// writing the last one's result to `ret`. Nothing is emitted for a
+        /// statement that never makes pending calls itself.
+        fn emitDriveInto(self: *Self, drive: lir.LIR.PendingDrive, ret: DynTarget) Allocator.Error!void {
+            if (!drive.canDriveHere()) return;
+            try self.spillAllVectorLocals();
             var skip_patch: ?usize = null;
             if (drive == .unless_caller_drives) {
                 const flag_slot = self.caller_drives_slot orelse
-                    std.debug.panic("Dev/codegen invariant violated: procedure reads a caller-drives flag it never recorded", .{});
+                    base.invariant("Dev/codegen invariant violated: procedure reads a caller-drives flag it never recorded", .{});
                 const flag_reg = try self.allocTempGeneral();
                 // The runtime returns one byte; the rest of the slot is unspecified.
                 try self.emitLoadW8(flag_reg, frame_ptr, flag_slot);
@@ -14154,18 +14200,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            if (size == 0) {
-                try builder.addImmArg(0);
-            } else {
-                try builder.addLeaArg(frame_ptr, result_slot);
-            }
+            if (ret == .zero_sized) try builder.addImmArg(0) else try addTargetArg(&builder, ret);
             try self.callBuiltin(&builder, .native_callable_drive);
             if (skip_patch) |patch| try self.codegen.patchJump(patch, self.codegen.currentOffset());
-
-            return if (size == 0)
-                .{ .immediate_i64 = 0 }
-            else
-                self.stackLocationForLayout(runtime_layout, result_slot);
         }
 
         fn generatePackedErasedFn(
@@ -16903,6 +16940,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        /// `finishTarget` for a call marked `drive`: while the call can leave
+        /// another pending, the target may hold no value, so nothing is
+        /// asserted about it.
+        fn finishCallTarget(self: *Self, dst_local: LocalId, t: DynTarget, drive: lir.LIR.PendingDrive) Allocator.Error!void {
+            switch (t) {
+                .dynamic => {},
+                .closed => |offset| try self.bindCallResult(dst_local, self.stackLocationForLayout(self.localLayout(dst_local), offset), drive),
+                .zero_sized => try self.bindCallResult(dst_local, .{ .immediate_i64 = 0 }, drive),
+            }
+        }
+
         /// Bind a closed target to the `size`-byte result in the return
         /// register.
         fn bindReturnedScalar(self: *Self, dst_local: LocalId, size: u32) Allocator.Error!void {
@@ -17419,13 +17467,43 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitStore(.w64, frame_ptr, fn_slot, reg);
                     self.codegen.freeGeneral(reg);
                     const dst = try self.dynTarget(dst_local);
-                    try builder.addMemArg(frame_ptr, fn_slot);
-                    if (dst == .zero_sized) try builder.addImmArg(0) else try addTargetArg(&builder, dst);
-                    if (c.args) |args| try self.addBytesArg(&builder, args) else try builder.addImmArg(0);
-                    try builder.addMemArg(frame_ptr, capture_slot);
-                    try builder.addImmArg(0);
-                    try self.callBuiltin(&builder, .native_callable_call);
-                    try self.finishTarget(dst_local, dst);
+                    if (c.deferred) {
+                        // The pending call copies the argument record, whose
+                        // size a dynamic record's descriptor holds.
+                        const args_size_slot = self.codegen.allocStackSlot(8);
+                        if (c.args) |args| {
+                            const size_reg = try self.allocTempGeneral();
+                            if (self.localDyn(args)) |dyn| {
+                                try self.emitLoad(.w64, size_reg, frame_ptr, self.localSlot(dyn.desc));
+                                try self.emitLoad(.w32, size_reg, size_reg, desc_size_offset);
+                            } else {
+                                try self.codegen.emitLoadImm(size_reg, self.getLayoutSize(self.localLayout(args)));
+                            }
+                            try self.emitStore(.w64, frame_ptr, args_size_slot, size_reg);
+                            self.codegen.freeGeneral(size_reg);
+                        }
+                        try builder.addMemArg(frame_ptr, fn_slot);
+                        try builder.addMemArg(frame_ptr, closure_slot);
+                        if (c.args) |args| {
+                            try self.addBytesArg(&builder, args);
+                            try builder.addMemArg(frame_ptr, args_size_slot);
+                        } else {
+                            try builder.addImmArg(0);
+                            try builder.addImmArg(0);
+                        }
+                        try self.callBuiltin(&builder, .native_callable_defer);
+                        try self.emitDriveInto(c.drive, dst);
+                        try self.finishCallTarget(dst_local, dst, c.drive);
+                    } else {
+                        if (c.drive != .none) base.invariant("LIR/codegen invariant violated: an erased call that is made carries a pending-call drive", .{});
+                        try builder.addMemArg(frame_ptr, fn_slot);
+                        if (dst == .zero_sized) try builder.addImmArg(0) else try addTargetArg(&builder, dst);
+                        if (c.args) |args| try self.addBytesArg(&builder, args) else try builder.addImmArg(0);
+                        try builder.addMemArg(frame_ptr, capture_slot);
+                        try builder.addImmArg(0);
+                        try self.callBuiltin(&builder, .native_callable_call);
+                        try self.finishTarget(dst_local, dst);
+                    }
                 },
             }
         }
@@ -18145,31 +18223,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.codegen.emitStoreStack(.w64, self.ret_ptr_slot.?, ret_ptr_reg);
                 try self.bindErasedCallableAdapterParams(proc, proc.erased_call_args orelse base.invariant("LIR/codegen invariant violated: erased-callable proc has no erased call args", .{}));
                 hot_reload_code_ref_slot = try self.emitHotReloadEnterForHostCallable();
-                if (proc.reads_caller_drives) {
-                    // Read before anything else can make an erased call: the
-                    // runtime's answer describes only this invocation.
-                    // The runtime names the callable it invokes by the
-                    // function pointer callable values hold, which is this
-                    // procedure's address.
-                    const slot = self.codegen.allocStackSlot(8);
-                    const own_addr = try self.allocTempGeneral();
-                    const own = try self.compiledProcForId(proc_id);
-                    if (own.code_start == unresolved_proc_code_start)
-                        try self.emitPendingProcAddress(proc_id, own_addr)
-                    else
-                        try self.emitInternalCodeAddress(.{ .proc = own.id }, own.code_start, own_addr);
-                    try self.emitStore(.w64, frame_ptr, slot, own_addr);
-                    self.codegen.freeGeneral(own_addr);
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    defer builder.deinit();
-                    try builder.addMemArg(frame_ptr, slot);
-                    try self.callBuiltin(&builder, .native_callable_caller_drives);
-                    try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
-                    self.caller_drives_slot = slot;
-                }
+                if (proc.reads_caller_drives) try self.emitRecordCallerDrives(proc_id);
             } else if (proc.abi == .erased_record) {
                 try self.bindErasedRecordParams(proc);
                 hot_reload_code_ref_slot = try self.emitHotReloadEnterForHostCallable();
+                if (proc.reads_caller_drives) try self.emitRecordCallerDrives(proc_id);
             } else {
                 if (needs_ret_ptr) {
                     self.ret_ptr_slot = self.codegen.allocStackSlot(8);
@@ -19996,8 +20054,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             });
                         } else if (self.callIsDynamic(assign.proc, assign.target)) {
                             const extra = self.store.stmtRowOrDefault(assign.extra);
-                            if (extra.drive.canDriveHere()) base.invariant("LIR/codegen invariant violated: a call with dynamic operands drives pending erased calls", .{});
-                            try self.generateDynCall(assign.proc, assign.args, assign.target);
+                            try self.generateDynCall(assign.proc, assign.args, assign.target, extra.drive);
                             try work.append(wa, .{ .node = assign.next });
                         } else {
                             const extra = self.store.stmtRowOrDefault(assign.extra);
