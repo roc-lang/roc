@@ -5928,6 +5928,10 @@ pub const Builder = struct {
         self.region = stmt.source_region;
         switch (stmt.data) {
             .decl => |decl| {
+                // An annotation-only declaration (a method requesting its
+                // derivation) has no value, and every use of it resolves to
+                // what it requests.
+                if (self.bodies().expr(decl.expr).data == .anno_only) return;
                 if (decl.recursive) invariant("recursive value declarations are not yet lowered by Boxy");
                 // A scheme alias with a generalized scheme binds nothing:
                 // each use lowers its right-hand side at the use's
