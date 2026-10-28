@@ -49,6 +49,7 @@ fn hasTerminalCheckedError(store: *const lir.LirStore) bool {
                 .decref,
                 .decref_if_initialized,
                 .free,
+                .dyn,
                 => |stmt| current = stmt.next,
                 .expect_err, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret => break,
             }

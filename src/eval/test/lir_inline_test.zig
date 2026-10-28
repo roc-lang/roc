@@ -757,6 +757,7 @@ fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) Deb
             .expect => counts.expect += 1,
             .init_uninitialized,
             .assign_ref,
+            .dyn,
             .assign_literal,
             .assign_call,
             .assign_call_erased,
@@ -4415,6 +4416,7 @@ test "LIR statements and procs carry resolved source locations" {
 
             .init_uninitialized,
             .assign_ref,
+            .dyn,
             .assign_literal,
             .assign_call,
             .assign_call_erased,

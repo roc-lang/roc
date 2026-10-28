@@ -114,6 +114,7 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
                     .jump,
                     .ret,
                     .crash,
+                    .dyn,
                     => {},
                 }
             }

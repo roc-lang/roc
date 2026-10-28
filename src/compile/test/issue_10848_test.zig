@@ -101,6 +101,7 @@ fn expectCallBuiltRecordListSetHasNoRetain(
                     try stack.append(allocator, .{ .stmt = join_stmt.remainder });
                 },
                 inline .assign_ref,
+                .dyn,
                 .assign_literal,
                 .init_uninitialized,
                 .assign_call_erased,

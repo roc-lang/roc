@@ -78,6 +78,7 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
                     try stack.append(allocator, .{ .stmt = join_stmt.remainder });
                 },
                 inline .assign_ref,
+                .dyn,
                 .assign_literal,
                 .init_uninitialized,
                 .assign_call_erased,
@@ -148,6 +149,7 @@ fn retainReachesListSetCall(
                 current = rc.next;
             },
             inline .assign_ref,
+            .dyn,
             .assign_literal,
             .init_uninitialized,
             .assign_call_erased,

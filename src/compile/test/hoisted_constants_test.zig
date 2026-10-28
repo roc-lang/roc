@@ -2717,6 +2717,7 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             },
             .init_uninitialized,
             .assign_ref,
+            .dyn,
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,

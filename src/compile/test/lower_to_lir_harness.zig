@@ -261,6 +261,15 @@ pub fn expectAppPathLirInspection(app_path: []const u8, inspect: LirInspectFn) L
 /// Lower an app at `app_path` to LIR with explicit lowering options, then run
 /// a focused invariant check against the whole lowered program, for tests that
 /// drive a backend over the result.
+/// The static data a lowered `.boxy` program's interpreter reads (its
+/// descriptors, dictionaries, and name table), or null for a program that
+/// froze none. The caller installs it on its interpreter and deinitializes it
+/// after the interpreter.
+pub fn interpreterStaticData(lowered: *const lir.CheckedPipeline.LoweredProgram) std.mem.Allocator.Error!?eval.InterpreterStaticData {
+    const frozen = lowered.frozen_static_data orelse return null;
+    return try eval.InterpreterStaticData.init(std.testing.allocator, frozen.exports, lowered.lir_result.static_data_values.items.len);
+}
+
 pub fn runAppPathLoweredInspection(
     app_path: []const u8,
     opts: LirLoweringOptions,

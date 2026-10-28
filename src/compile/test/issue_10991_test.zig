@@ -80,6 +80,7 @@ const ProcScan = struct {
                     try stack.append(allocator, join_stmt.remainder);
                 },
                 inline .assign_ref,
+                .dyn,
                 .assign_literal,
                 .init_uninitialized,
                 .assign_packed_erased_fn,

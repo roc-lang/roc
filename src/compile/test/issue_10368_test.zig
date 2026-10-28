@@ -67,6 +67,10 @@ fn retainReachesPrepare(
                 if (assign.target == retained_alias) return false;
                 current = assign.next;
             },
+            .dyn => |assign| {
+                if (assign.target == retained_alias) return false;
+                current = assign.next;
+            },
             inline .store_struct,
             .store_tag,
             .debug,
