@@ -100,6 +100,9 @@ pub const WorkerKey = union(enum) {
 /// Why a dictionary slot's method crashes.
 pub const CrashDictionary = enum { checked_error, unreachable_value };
 
+/// An exported procedure binding's identity within its module.
+pub const ExportedBindingKey = struct { module: ModuleIndex, def: @FieldType(checked.ImportedProcedureBindingRef, "def"), pattern: checked.CheckedPatternId };
+
 /// The structural methods a dictionary can denote.
 pub const StructuralMethod = enum { is_eq, to_hash, to_inspect };
 
@@ -209,6 +212,8 @@ pub const Program = struct {
     lowering_module_ids: []LIR.LoweringModuleId = &.{},
     /// Modules by the checker's `module_idx`.
     by_module_idx: std.AutoHashMapUnmanaged(u32, ModuleIndex) = .empty,
+    /// Each module's exported procedure bindings, by their definition.
+    exported_bindings: std.AutoHashMapUnmanaged(ExportedBindingKey, *const checked.ImportedProcedureBindingView) = .empty,
     observe_expects: bool,
     arena: std.heap.ArenaAllocator,
     /// The host binding of each hosted procedure template.
@@ -883,6 +888,39 @@ pub const Program = struct {
     }
 
     /// The worker of a template reference, which names its module by digest.
+    /// The body of the procedure binding a use names, and the module that
+    /// owns it. A hosted binding is its hosted template's direct body.
+    pub fn procedureBinding(self: *const Program, binding: checked.ProcedureBindingRef) struct { module: ModuleIndex, body: checked.ProcedureBindingBody } {
+        return switch (binding) {
+            .top_level => |top| blk: {
+                const owner = self.moduleByKey(top.artifact);
+                break :blk .{ .module = owner.index, .body = owner.view.top_level_procedure_bindings.bindings.items[@backingInt(top.binding)].body };
+            },
+            .imported => |imported| blk: {
+                const owner = self.moduleByKey(imported.artifact);
+                const exported = self.exported_bindings.get(.{ .module = owner.index, .def = imported.def, .pattern = imported.pattern }) orelse
+                    invariant("an imported procedure binding is not exported by its module");
+                break :blk .{ .module = owner.index, .body = exported.body };
+            },
+            .platform_required => |required| blk: {
+                const owner = self.moduleByKey(required.artifact);
+                break :blk .{ .module = owner.index, .body = owner.view.top_level_procedure_bindings.bindings.items[@backingInt(required.procedure_binding)].body };
+            },
+            .hosted => |hosted| .{ .module = self.moduleByIdx(hosted.module_idx).index, .body = .{ .direct_template = .{ .proc_value = hosted.proc, .template = .{ .checked = hosted.template } } } },
+        };
+    }
+
+    /// The checked template a binding's direct body names. Checking binds
+    /// every procedure to a checked template or a synthetic one wrapping it;
+    /// lifted templates exist only after post-check lifting.
+    pub fn directTemplate(template: canonical.CallableProcedureTemplateRef) canonical.ProcedureTemplateRef {
+        return switch (template) {
+            .checked => |ref| ref,
+            .synthetic => |synthetic| synthetic.template,
+            .lifted => invariant("a checked procedure binding names a lifted template, which only post-check lifting creates"),
+        };
+    }
+
     pub fn templateRefWorker(self: *Program, ref: canonical.ProcedureTemplateRef) Allocator.Error!WorkerId {
         const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
         return try self.templateWorker(view.index, ref.template);
@@ -926,6 +964,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.worker_ids.deinit(allocator);
         program.worklist.deinit(allocator);
         program.by_module_idx.deinit(allocator);
+        program.exported_bindings.deinit(allocator);
         program.hosted.deinit(allocator);
         program.local_scopes.deinit(allocator);
         program.local_procs.deinit(allocator);
@@ -953,6 +992,9 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     for (input.modules.root.relation_modules) |view| _ = try program.modules.add(view);
     for (program.modules.views.items) |view| {
         try program.by_module_idx.put(allocator, view.view.module_identity.module_idx, view.index);
+        for (view.view.exported_procedure_bindings.bindings) |*binding| {
+            try program.exported_bindings.put(allocator, .{ .module = view.index, .def = binding.binding.def, .pattern = binding.binding.pattern }, binding);
+        }
     }
     try seedSourceFiles(&program);
     try initHosted(&program);
@@ -1167,10 +1209,7 @@ fn lowerRoot(program: *Program, request: checked.RootRequest, index: u32, source
     const direct: ?canonical.ProcedureTemplateRef = if (request.procedure_template) |template|
         template
     else if (request.procedure_binding) |binding| switch (program.module(source_module).view.top_level_procedure_bindings.bindings.items[@backingInt(binding)].body) {
-        .direct_template => |direct| switch (direct.template) {
-            .checked => |ref| ref,
-            .lifted, .synthetic => invariant("lifted and synthetic procedure templates are not yet lowered by Boxy"),
-        },
+        .direct_template => |direct| Program.directTemplate(direct.template),
         .callable_eval_template => null,
         .checked_error => invariant("a root names a rejected procedure binding"),
     } else null;

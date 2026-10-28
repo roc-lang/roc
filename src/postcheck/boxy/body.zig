@@ -1546,10 +1546,7 @@ pub const Builder = struct {
         const callee: Callee = if (request.procedure_template) |template|
             .{ .worker = try self.program.templateRefWorker(template) }
         else if (request.procedure_binding) |binding| switch (self.view.view.top_level_procedure_bindings.bindings.items[@backingInt(binding)].body) {
-            .direct_template => |direct| switch (direct.template) {
-                .checked => |ref| .{ .worker = try self.program.templateRefWorker(ref) },
-                .lifted, .synthetic => invariant("lifted and synthetic procedure templates are not yet lowered by Boxy"),
-            },
+            .direct_template => |direct| .{ .worker = try self.program.templateRefWorker(Program.directTemplate(direct.template)) },
             .callable_eval_template => |template| .{ .callable_eval = .{ .module = self.module, .template = template } },
             .checked_error => invariant("a root names a rejected procedure binding"),
         } else if (request.procedure_use) |use|
@@ -2662,7 +2659,18 @@ pub const Builder = struct {
     }
 
     pub fn lowerLookupLocal(self: *Builder, expr_id: CheckedExprId, pattern: CheckedPatternId, resolved: ?checked.ResolvedValueRefId) Allocator.Error!void {
-        if (resolved) |id| switch (self.resolvedRef(id).ref) {
+        if (resolved) |id| return try self.lowerResolvedValue(expr_id, self.resolvedRef(id).ref);
+        const binder = self.bodies().pattern_binder_by_pattern[@backingInt(pattern)].get() orelse invariant("a local lookup named a pattern without a binder");
+        try self.pushValue(self.binders.get(binder) orelse invariant("a local lookup named a binder this body never bound"));
+    }
+
+    pub fn lowerLookupExternal(self: *Builder, expr_id: CheckedExprId, resolved: checked.ResolvedValueRefId) Allocator.Error!void {
+        try self.lowerResolvedValue(expr_id, self.resolvedRef(resolved).ref);
+    }
+
+    /// The value a lookup `expr_id` resolved to `ref` reads.
+    fn lowerResolvedValue(self: *Builder, expr_id: CheckedExprId, ref: checked.ResolvedValueRef) Allocator.Error!void {
+        switch (ref) {
             .local_param, .local_value, .pattern_binder, .local_mutable_version => |binding| {
                 return try self.pushValue(self.binders.get(binding.binder) orelse invariant("a local lookup named a binder this body never bound"));
             },
@@ -2671,23 +2679,12 @@ pub const Builder = struct {
             // constant it stored.
             .selected_hoisted_const => |selected| return try self.restoreConstUse(expr_id, selected.const_use, try self.constReadType(expr_id)),
             .local_proc => |local| return try self.pushValue(try self.localProcUseValue(expr_id, local)),
-            .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use),
-            else => |ref| invariantFmt("local lookup of a {s} is not yet lowered by Boxy", .{@tagName(ref)}),
-        };
-        const binder = self.bodies().pattern_binder_by_pattern[@backingInt(pattern)].get() orelse invariant("a local lookup named a pattern without a binder");
-        try self.pushValue(self.binders.get(binder) orelse invariant("a local lookup named a binder this body never bound"));
-    }
-
-    pub fn lowerLookupExternal(self: *Builder, expr_id: CheckedExprId, resolved: checked.ResolvedValueRefId) Allocator.Error!void {
-        switch (self.resolvedRef(resolved).ref) {
-            .top_level_const, .imported_const => |use| return try self.restoreConstUse(expr_id, use, try self.constReadType(expr_id)),
-            .top_level_proc, .imported_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use),
+            .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |use| return try self.procedureValue(expr_id, use),
             .platform_required_proc => |required| return try self.procedureValue(expr_id, required.procedure),
             .platform_required_const => |required| return try self.restoreConstUse(expr_id, required.const_use, try self.constReadType(expr_id)),
             .platform_required_checked_error => return try self.crashValue("runtime error", try self.exprType(expr_id)),
-            else => {},
+            .platform_required_declaration => invariant("a platform requirement reached lowering unpaired with its app binding"),
         }
-        invariantFmt("external value lookups ({s}) are not yet lowered by Boxy outside calls", .{@tagName(self.resolvedRef(resolved).ref)});
     }
 
     /// The function value a use `expr_id` of a local procedure denotes. A
@@ -3487,65 +3484,37 @@ pub const Builder = struct {
     };
 
     pub fn procedureUseCallee(self: *Builder, use: checked.ProcedureUseTemplate) Allocator.Error!Callee {
-        var current = use;
+        var binding = use.binding;
         while (true) {
-            // A platform requirement names the app's top-level binding.
-            switch (current.binding) {
-                .platform_required => |required| current.binding = .{ .top_level = .{ .artifact = required.artifact, .binding = required.procedure_binding } },
-                else => {},
-            }
-            switch (current.binding) {
-                .top_level => |top| {
-                    const owner = self.program.moduleByKey(top.artifact);
-                    const binding = owner.view.top_level_procedure_bindings.bindings.items[@backingInt(top.binding)];
-                    switch (binding.body) {
-                        .callable_eval_template => |template_id| {
-                            const template = owner.view.callable_eval_templates.templates[@backingInt(template_id)];
-                            const forwarded = template.forwarded_lookup orelse
-                                return .{ .callable_eval = .{ .module = owner.index, .template = template_id } };
-                            // An exact procedure alias calls what it names.
-                            const ref_id = owner.view.resolved_value_refs.by_checked_expr[@backingInt(forwarded)].get() orelse
-                                invariant("a procedure alias's lookup has no resolved reference");
-                            current = switch (owner.view.resolved_value_refs.records[@backingInt(ref_id)].ref) {
-                                .top_level_proc, .imported_proc, .promoted_top_level_proc => |next| next,
-                                else => |ref| invariantFmt("procedure aliases of a {s} are not yet lowered by Boxy", .{@tagName(ref)}),
-                            };
-                            continue;
+            const resolved = self.program.procedureBinding(binding);
+            switch (resolved.body) {
+                .direct_template => |direct| return .{ .worker = try self.program.templateRefWorker(Program.directTemplate(direct.template)) },
+                .checked_error => invariant("a call reached a rejected procedure binding"),
+                .callable_eval_template => |template_id| {
+                    const owner = self.program.module(resolved.module);
+                    const template = owner.view.callable_eval_templates.templates[@backingInt(template_id)];
+                    const forwarded = template.forwarded_lookup orelse
+                        return .{ .callable_eval = .{ .module = resolved.module, .template = template_id } };
+                    // An exact procedure alias calls what it names.
+                    const ref_id = owner.view.resolved_value_refs.by_checked_expr[@backingInt(forwarded)].get() orelse
+                        invariant("a procedure alias's lookup has no resolved reference");
+                    var ref = owner.view.resolved_value_refs.records[@backingInt(ref_id)].ref;
+                    while (true) switch (ref) {
+                        .local_proc => |local| {
+                            if (!local.is_alias) invariant("a top-level procedure alias names a top-level procedure, as checking forwards only those");
+                            const final = local.alias_target orelse invariant("a callable alias has no published target");
+                            ref = owner.view.resolved_value_refs.records[@backingInt(final)].ref;
                         },
-                        else => {},
-                    }
+                        else => break,
+                    };
+                    binding = switch (ref) {
+                        .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |next| next.binding,
+                        .platform_required_proc => |required| required.procedure.binding,
+                        else => invariant("a procedure alias forwards only to a procedure, as checking requires"),
+                    };
                 },
-                else => {},
             }
-            return .{ .worker = try self.procedureUseWorker(current) };
         }
-    }
-
-    pub fn procedureUseWorker(self: *Builder, use: checked.ProcedureUseTemplate) Allocator.Error!WorkerId {
-        return switch (use.binding) {
-            .top_level => |top| blk: {
-                const owner = self.program.moduleByKey(top.artifact);
-                const binding = owner.view.top_level_procedure_bindings.bindings.items[@backingInt(top.binding)];
-                break :blk switch (binding.body) {
-                    .direct_template => |direct| switch (direct.template) {
-                        .checked => |ref| try self.program.templateRefWorker(ref),
-                        .lifted, .synthetic => invariant("lifted and synthetic procedure templates are not yet lowered by Boxy"),
-                    },
-                    .callable_eval_template => invariant("callable values evaluated at compile time are not yet lowered by Boxy"),
-                    .checked_error => invariant("a call reached a rejected procedure binding"),
-                };
-            },
-            .imported => |imported| blk: {
-                const owner = self.program.moduleByKey(imported.artifact);
-                const exported = owner.view.exported_procedure_bindings;
-                _ = exported;
-                const template = owner.view.checked_procedure_templates.lookupByDef(imported.def) orelse
-                    invariant("an imported procedure binding has no template");
-                break :blk try self.program.templateRefWorker(template);
-            },
-            .hosted => invariant("hosted calls are not yet lowered by Boxy"),
-            .platform_required => invariant("platform-required procedures are not yet lowered by Boxy"),
-        };
     }
 
     pub fn lowerCall(self: *Builder, expr_id: CheckedExprId, call: @FieldType(checked.CheckedExprData, "call")) Allocator.Error!void {
@@ -3557,7 +3526,7 @@ pub const Builder = struct {
             else => null,
         };
         const callee: WorkerId = if (resolved) |id| switch (self.resolvedRef(id).ref) {
-            inline .top_level_proc, .imported_proc, .promoted_top_level_proc, .platform_required_proc => |ref, tag| switch (try self.procedureUseCallee(if (tag == .platform_required_proc) ref.procedure else ref)) {
+            inline .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc, .platform_required_proc => |ref, tag| switch (try self.procedureUseCallee(if (tag == .platform_required_proc) ref.procedure else ref)) {
                 .worker => |worker_id| worker_id,
                 .callable_eval => |eval| {
                     try self.push(.{ .finish_erased_call = .{ .fn_ty = try self.exprType(call.func), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id) } });
@@ -3573,8 +3542,8 @@ pub const Builder = struct {
                 }
                 return try self.lowerValueCall(expr_id, call);
             },
-            .local_param, .local_value, .pattern_binder, .local_mutable_version, .platform_required_const, .top_level_const, .imported_const => return try self.lowerValueCall(expr_id, call),
-            else => |ref| invariantFmt("calls through a {s} reference are not yet lowered by Boxy", .{@tagName(ref)}),
+            .local_param, .local_value, .pattern_binder, .local_mutable_version, .platform_required_const, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_checked_error => return try self.lowerValueCall(expr_id, call),
+            .platform_required_declaration => invariant("a platform requirement reached lowering unpaired with its app binding"),
         } else return try self.lowerValueCall(expr_id, call);
         const subst = self.siteSubstitution(call.func);
         const call_fn = try self.exprType(call.func);
