@@ -10,10 +10,6 @@ const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
 const BuildEnv = compile_build.BuildEnv;
 
-const BuildTestError = compile_build.InitError || compile_build.BuildRootError ||
-    std.Io.Dir.WriteFileError || std.Io.Dir.RealPathFileAllocError ||
-    error{ TestExpectedEqual, TestUnexpectedResult };
-
 const repro_module =
     \\Repro := [].{}
     \\
