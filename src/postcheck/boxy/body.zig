@@ -244,6 +244,10 @@ pub const Builder = struct {
     /// "Recursive values"): a `Box` of a one-item tuple holding the value,
     /// which callables capture in place of the value.
     recursive_slots: std.AutoHashMapUnmanaged(checked.PatternBinderId, LocalId) = .empty,
+    /// What each lambda this body declares captured where it was declared:
+    /// a `var`'s value then, whatever the `var` holds where the procedure is
+    /// later used.
+    declared_captures: std.AutoHashMapUnmanaged(CheckedExprId, []const LocalId) = .empty,
     /// While lowering an exact procedure alias's forwarded lookup in the
     /// alias's own module (`aliasTargetHidden`): where that alias's scopes
     /// start in `alias_scopes`. Its lookup reaches no scope outside them.
@@ -307,6 +311,7 @@ pub const Builder = struct {
         self.binders.deinit(self.allocator);
         self.alias_scopes.deinit(self.allocator);
         self.recursive_slots.deinit(self.allocator);
+        self.declared_captures.deinit(self.allocator);
         self.type_descs.deinit(self.allocator);
         self.opened_components.deinit(self.allocator);
         self.open_members.deinit(self.allocator);
@@ -2924,8 +2929,9 @@ pub const Builder = struct {
         const callee = try self.program.lambdaWorker(scope_worker, lambda_expr, per_call_worker.captures, per_call_worker.capture_types, generic_fn, scheme);
         const values = try self.allocator.alloc(LocalId, per_call_worker.captures.len);
         defer self.allocator.free(values);
-        for (per_call_worker.captures, values) |capture, *value| {
-            value.* = self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is used");
+        const declared = self.declared_captures.get(lambda_expr);
+        for (per_call_worker.captures, values, 0..) |capture, *value, index| {
+            value.* = if (declared) |captured| captured[index] else self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is used");
         }
         var declaring_dicts: usize = 0;
         for (declaring.dict_scopes) |dict_scope| declaring_dicts += dict_scope.len;
@@ -3158,8 +3164,9 @@ pub const Builder = struct {
         const target_worker = self.program.worker(target).*;
         const values = try self.allocator.alloc(LocalId, target_worker.captures.len);
         defer self.allocator.free(values);
-        for (target_worker.captures, values) |capture, *value| {
-            value.* = self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is referenced");
+        const declared = self.declared_captures.get(target_worker.key.lambda.expr);
+        for (target_worker.captures, values, 0..) |capture, *value, index| {
+            value.* = if (declared) |captured| captured[index] else self.capturedValue(capture.pattern) orelse invariant("a local procedure's capture is not visible where the procedure is referenced");
         }
         var declaring_dicts: usize = 0;
         for (declaring.dict_scopes) |scope| declaring_dicts += scope.len;
@@ -4997,6 +5004,7 @@ pub const Builder = struct {
             capture_ty.* = try self.capturedType(capture.pattern, try self.patternType(capture.pattern));
             values[index] = self.capturedValue(capture.pattern) orelse invariant("a closure captured a binder this body never bound");
         }
+        try self.declared_captures.put(self.allocator, lambda_expr, try self.program.arena.allocator().dupe(LocalId, values[0..captures.len]));
         const callee = try self.program.lambdaWorker(self.worker_id, lambda_expr, captures, capture_types, fn_ty, generalized);
         // A generalized lambda that is not a local procedure is instantiated
         // where it is constructed: its function value captures its own
