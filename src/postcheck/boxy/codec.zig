@@ -149,10 +149,6 @@ pub const State = struct {
 
 // -- Families --
 
-fn emptyEnv(module: ModuleIndex) types.Env {
-    return .{ .module = module, .vars = &.{}, .bound = &.{} };
-}
-
 /// A contract type: its variables are the family's type variables, and its
 /// undetermined field kinds commit to `required`, as no caller pins them.
 fn convertIn(program: *Program, env: types.Env, ty: checked.CheckedTypeId) Allocator.Error!TypeId {
@@ -161,9 +157,12 @@ fn convertIn(program: *Program, env: types.Env, ty: checked.CheckedTypeId) Alloc
     return converter.convert(env.module, ty, env);
 }
 
-/// The type variables of a derivation: those its constructor type mentions,
-/// in first-visit order, each bound to the family's variable at its index.
-fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.CheckedTypeId) Allocator.Error!types.Env {
+/// The type variables of a derivation: those its constructor type mentions
+/// outside the value shape, in first-visit order, each bound to the family's
+/// variable at its index. The shape's own variables (an uninhabited payload,
+/// say) seal to their defaults: the shape is the contract's, and only the
+/// results' rows vary with a use.
+fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.CheckedTypeId, shape_ty: checked.CheckedTypeId) Allocator.Error!types.Env {
     const allocator = program.allocator;
     const store = program.module(module).types();
     var vars: std.ArrayList(checked.CheckedTypeId) = .empty;
@@ -172,12 +171,16 @@ fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.C
     defer seen.deinit(allocator);
     var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
     defer pending.deinit(allocator);
+    // The shape's types are visited first and contribute no variables.
     try pending.append(allocator, constructor_ty);
+    try pending.append(allocator, shape_ty);
+    var shape_done = false;
     while (pending.pop()) |ty| {
+        if (!shape_done and pending.items.len == 0 and ty == constructor_ty) shape_done = true;
         if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
         const start = pending.items.len;
         switch (store.payload(ty)) {
-            .flex, .rigid => try vars.append(allocator, ty),
+            .flex, .rigid => if (shape_done) try vars.append(allocator, ty),
             .alias => |alias| try pending.append(allocator, alias.backing),
             .record => |record| {
                 for (record.fields) |field| try pending.append(allocator, field.ty);
@@ -233,7 +236,7 @@ pub fn familyFor(program: *Program, module: ModuleIndex, id: DerivationId) Alloc
     const key: FamilyKey = .{ .kind = kind, .digest = derivation.content.bytes };
     if (state.family_ids.get(key)) |existing| return existing;
 
-    const env = try contractEnv(program, module, derivation.constructor_ty);
+    const env = try contractEnv(program, module, derivation.constructor_ty, derivation.shape_ty);
     const constructor_fn = try convertIn(program, env, derivation.constructor_ty);
     if (fnArgs(program, constructor_fn).len != 1) invariant("a generated codec constructor does not take one encoding");
     const encoding_ty = fnArgs(program, constructor_fn)[0];
@@ -595,10 +598,6 @@ fn pieceWorker(program: *Program, module: ModuleIndex, piece: Piece, params: []c
     return id;
 }
 
-fn familyModule(program: *Program, family_index: u32) ModuleIndex {
-    return program.codec.families.items[family_index].module;
-}
-
 fn constructorWorker(program: *Program, family_index: u32) Allocator.Error!WorkerId {
     const family = program.codec.families.items[family_index];
     return pieceWorker(program, family.module, .{ .family = family_index, .kind = .constructor }, fnArgs(program, family.constructor_fn), family.runtime_fn, &.{}, true);
@@ -759,12 +758,12 @@ pub fn lowerPiece(b: *Builder, index: u32) Allocator.Error!void {
         .parse_helper => try gen.lowerParseHelper(@fromBackingInt(piece.a), @fromBackingInt(piece.b)),
         .record_body => try gen.lowerRecordBody(@fromBackingInt(piece.a)),
         .tuple_body => try gen.lowerTupleBody(@fromBackingInt(piece.a)),
-        .list_body => try gen.lowerListBody(@fromBackingInt(piece.a), .list),
-        .dict_body => try gen.lowerListBody(@fromBackingInt(piece.a), .dict),
+        .list_body => try gen.lowerListBody(.list),
+        .dict_body => try gen.lowerListBody(.dict),
         .tag_body => try gen.lowerTagBody(@fromBackingInt(piece.a), @fromBackingInt(piece.b)),
         .value_thunk => try gen.lowerValueThunk(@fromBackingInt(piece.a)),
         .key_thunk => try gen.lowerKeyThunk(@fromBackingInt(piece.a)),
-        .tag_spec => try gen.lowerTagSpec(@fromBackingInt(piece.a), @fromBackingInt(piece.b)),
+        .tag_spec => try gen.lowerTagSpec(@fromBackingInt(piece.a)),
         .field_names_step => try gen.lowerFieldNamesStep(@fromBackingInt(piece.a)),
     }
 }
@@ -1388,7 +1387,6 @@ const Gen = struct {
             return try self.local(ret_ty);
         }
         const merged = try self.merge(ret_ty);
-        const str = try self.strTy();
         for (inhabited.items, 0..) |tag_info, index| {
             const miss: ?CFStmtId = if (index + 1 < inhabited.items.len) blk: {
                 const hole = try self.b.newHole();
@@ -1401,7 +1399,6 @@ const Gen = struct {
             defer self.b.allocator.free(payloads);
             for (payloads, 0..) |*slot, payload_index| slot.* = (try self.b.tagPayloadValue(value, union_ty, tag_info.name, @intCast(payload_index))).value;
             const tag_name = try self.b.strLiteral(program_.store.nameText(tag_info.name));
-            _ = str;
             const count = try self.u64Value(payload_types.len);
             const written = try self.encodeContainer("encode_tag", union_ty, .tag_body, @backingInt(union_ty), @backingInt(tag_info.name), payloads, payload_types, &.{ state, tag_name, count }, ret_ty);
             try self.jump(merged.id, &.{merged.param}, &.{written});
@@ -1460,11 +1457,7 @@ const Gen = struct {
             // A field that may be missing is written only when present.
             const state_ty = self.b.currentWorker().params[0];
             const merged = try self.merge(state_ty);
-            const present_text, const missing_hole_text = if (field_info.kind == .presence_slot)
-                .{ layouts_mod.present_label, layouts_mod.missing_label }
-            else
-                .{ "Ok", "Err" };
-            _ = missing_hole_text;
+            const present_text = if (field_info.kind == .presence_slot) layouts_mod.present_label else "Ok";
             const missing_hole = try self.branchTag(stored, storage, present_text);
             const present = try self.payload(stored, storage, present_text, 0);
             const written = try self.writeItem(body, state, &.{name_value}, present.value, present.ty);
@@ -1492,12 +1485,10 @@ const Gen = struct {
     }
 
     fn lowerTagBody(self: *Gen, union_ty: TypeId, tag_name: NameId) Allocator.Error!void {
-        const program_ = self.program();
         const body = try self.beginBody();
         const variant = try self.b.closedVariant(union_ty, tag_name);
         const payload_types = try self.b.allocator.dupe(TypeId, variant.payloads);
         defer self.b.allocator.free(payload_types);
-        _ = program_;
         var state = body.state;
         for (payload_types, body.values) |payload_ty, payload_value| {
             state = try self.writeItem(body, state, &.{}, payload_value, payload_ty);
@@ -1508,7 +1499,7 @@ const Gen = struct {
     const ListKind = enum { list, dict };
 
     /// A list's or dict's body: one writer call per element, in a loop.
-    fn lowerListBody(self: *Gen, container_ty: TypeId, kind: ListKind) Allocator.Error!void {
+    fn lowerListBody(self: *Gen, kind: ListKind) Allocator.Error!void {
         const program_ = self.program();
         const body = try self.beginBody();
         const list = body.values[0];
@@ -1517,7 +1508,6 @@ const Gen = struct {
             .list => |elem| elem,
             else => invariant("a generated list encoder's elements are not a list"),
         };
-        _ = container_ty;
         const len = try self.lowLevelLayout(.list_len, &.{list}, .u64);
         const head = self.b.freshJoin();
         const index = try self.b.closedLocal(.u64);
@@ -1731,7 +1721,7 @@ const Gen = struct {
                     .checked_error => |fn_ty| fn_ty,
                     .structural => invariant("parse_tag_union resolved to a structural derivation"),
                 };
-                const worker = try callbackWorker(program_, self.family, .{ .family = self.family, .kind = .tag_spec, .a = @backingInt(union_ty), .b = @backingInt(method_fn) }, try self.specType(union_ty, method_fn), &.{});
+                const worker = try callbackWorker(program_, self.family, .{ .family = self.family, .kind = .tag_spec, .a = @backingInt(union_ty), .b = @backingInt(method_fn) }, try self.specType(method_fn), &.{});
                 const spec = try self.packCallback(worker, &.{}, &.{});
                 const result = try self.callResolved(resolved, &.{ self.encoding, spec, state });
                 try self.ret(try self.injectTry(result.value, result.ty, ret_ty));
@@ -2106,7 +2096,7 @@ const Gen = struct {
 
         // The loop head: finish, or read the next field event.
         const step_hole = try self.branchIf(try self.finished(done, counted, remaining));
-        try self.finishRecord(record_ty, value_ty, fields, slots, slot_types, names, cursor, ret_ty, on_err);
+        try self.finishRecord(value_ty, fields, slots, slot_types, names, cursor, ret_ty, on_err);
         b.hole = step_hole;
         const step = try self.callResolved(field_call, &.{ self.encoding, field_set, cursor });
         const event = try self.unwrap(step.value, step.ty, on_err);
@@ -2188,7 +2178,6 @@ const Gen = struct {
     /// is consumed.
     fn finishRecord(
         self: *Gen,
-        record_ty: TypeId,
         value_ty: TypeId,
         fields: []const types.Field,
         slots: []const LocalId,
@@ -2231,7 +2220,6 @@ const Gen = struct {
             self.b.hole = merged.after;
             value.* = merged.param;
         }
-        _ = record_ty;
         try self.ret(try self.parsedOk(ret_ty, try self.b.buildStruct(value_ty, values), rest));
     }
 
@@ -2258,7 +2246,7 @@ const Gen = struct {
     /// The function type of a union's spec: the options record of
     /// `ParseTagUnionSpec.parse` at the format method's encoding, state,
     /// and error row, to the parse result.
-    fn specType(self: *Gen, union_ty: TypeId, method_fn: TypeId) Allocator.Error!TypeId {
+    fn specType(self: *Gen, method_fn: TypeId) Allocator.Error!TypeId {
         const program_ = self.program();
         const encoding_ty = fnArgs(program_, method_fn)[0];
         const state_ty = fnArgs(program_, method_fn)[2];
@@ -2283,14 +2271,12 @@ const Gen = struct {
             }
         }.lessThan);
         const options = try self.store().intern(.{ .record = .{ .fields = &fields, .ext = null } });
-        _ = union_ty;
         return self.store().intern(.{ .function = .{ .args = &.{options}, .ret = result_ty, .effectful = false } });
     }
 
     /// A union's spec: match the tag name the format read, then parse that
     /// tag's payloads between the format's payload callbacks.
-    fn lowerTagSpec(self: *Gen, union_ty: TypeId, method_fn: TypeId) Allocator.Error!void {
-        _ = method_fn;
+    fn lowerTagSpec(self: *Gen, union_ty: TypeId) Allocator.Error!void {
         const program_ = self.program();
         const frame = try self.beginErased();
         _ = self.bindCallbackCaptures(frame.captures);
