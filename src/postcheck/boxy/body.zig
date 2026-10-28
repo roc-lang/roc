@@ -1581,9 +1581,10 @@ pub const Builder = struct {
                     const owner = self.program.moduleByKey(span.checked_module);
                     if (owner.index != self.module) invariant("a root's evidence was recorded by another module");
                     const evidence = owner.view.static_dispatch_plans.evidence_refs[span.span.start..][0..span.span.len];
+                    const context = self.templateParamContext(target, bound);
                     for (target_worker.dictionary_params, hidden[bound.len..]) |param_index, *dict| {
                         if (param_index >= evidence.len) invariant("a root's evidence does not cover its target's dictionaries");
-                        dict.* = try self.dictionaryOf(evidence[param_index]);
+                        dict.* = try self.paramDictionary(evidence, param_index, context);
                     }
                 }
                 for (params) |param| try self.pushValue(param);
@@ -2738,9 +2739,10 @@ pub const Builder = struct {
         @memcpy(bound[scheme.scheme_vars.len..], self.env.bound);
         const evidence = self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{};
         const dicts = try self.program.arena.allocator().alloc(LocalId, scheme.dictionaries.len);
+        const context: ParamContext = .{ .module = self.module, .params = self.scopeParams(scope_id), .env = .{ .module = self.module, .vars = vars, .bound = bound } };
         for (scheme.dictionaries, dicts) |param_index, *dict| {
             if (param_index >= evidence.len) invariant("an alias use's evidence does not cover its dictionaries");
-            dict.* = try self.dictionaryOf(evidence[param_index]);
+            dict.* = try self.paramDictionary(evidence, param_index, context);
         }
         try self.alias_scopes.append(self.allocator, .{ .params = scheme.dictionaries, .dicts = dicts, .saved_env = self.env });
         self.env = .{ .module = self.module, .vars = vars, .bound = bound };
@@ -2792,14 +2794,18 @@ pub const Builder = struct {
         const descs = try self.allocator.alloc(LocalId, vars.len);
         defer self.allocator.free(descs);
         @memcpy(descs[0..outer_count], self.var_descs[0..outer_count]);
-        for (descs[outer_count..], related[outer_count..], scheme.scheme_vars) |*desc, ty, variable| {
-            desc.* = try self.descOf(ty orelse try self.program.converter().sealedScheme(self.module, variable));
+        const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
+        defer self.allocator.free(own_types);
+        for (descs[outer_count..], own_types, related[outer_count..], scheme.scheme_vars) |*desc, *own_ty, ty, variable| {
+            own_ty.* = ty orelse try self.program.converter().sealedScheme(self.module, variable);
+            desc.* = try self.descOf(own_ty.*);
         }
         const dicts = try self.allocator.alloc(LocalId, scheme.dictionaries.len + declaring_dicts);
         defer self.allocator.free(dicts);
+        const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
         for (scheme.dictionaries, dicts[0..scheme.dictionaries.len]) |param_index, *dict| {
             if (param_index >= evidence.len) invariant("a local procedure use's evidence does not cover its dictionaries");
-            dict.* = try self.dictionaryOf(evidence[param_index]);
+            dict.* = try self.paramDictionary(evidence, param_index, context);
         }
         @memcpy(dicts[scheme.dictionaries.len..], self.dict_locals[self.dict_locals.len - declaring_dicts ..]);
         const closure = if (try self.allClosed(per_call_worker.capture_types))
@@ -2911,6 +2917,7 @@ pub const Builder = struct {
         return .{
             .scheme_vars = lower.poolSlice(checked.CheckedTypeId, templates.scheme_vars_pool, scope.scheme_vars),
             .dictionaries = dictionaries.items,
+            .params = evidence_params,
             .per_call = self.program.local_procs.contains(.{ .module = view.index, .expr = scope.checked_expr }),
         };
     }
@@ -2969,9 +2976,11 @@ pub const Builder = struct {
         const words = try self.allocator.alloc(LocalId, own_words);
         defer self.allocator.free(words);
         for (own_types, words[0..own_types.len]) |ty, *desc| desc.* = try self.descOf(ty);
+        const scope_id = local.dispatch_scope orelse invariant("a generalized local procedure has no checked scheme scope");
+        const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
         for (scheme.dictionaries, words[own_types.len..]) |param_index, *dict| {
             if (param_index >= evidence.len) invariant("a local procedure call's evidence does not cover its dictionaries");
-            dict.* = try self.dictionaryOf(evidence[param_index]);
+            dict.* = try self.paramDictionary(evidence, param_index, context);
         }
         try self.push(.{ .finish_local_call = .{
             .closure = closure,
@@ -3668,9 +3677,12 @@ pub const Builder = struct {
         const hidden = try self.allocator.alloc(LocalId, bound.len + target.dictionary_params.len);
         errdefer self.allocator.free(hidden);
         for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
-        for (target.dictionary_params, hidden[bound.len..]) |param_index, *dict| {
-            if (param_index >= evidence.len) invariant("a call's checked evidence does not cover its target's dictionaries");
-            dict.* = try self.dictionaryOf(evidence[param_index]);
+        if (target.dictionary_params.len != 0) {
+            const context = self.templateParamContext(callee, bound);
+            for (target.dictionary_params, hidden[bound.len..]) |param_index, *dict| {
+                if (param_index >= evidence.len) invariant("a call's checked evidence does not cover its target's dictionaries");
+                dict.* = try self.paramDictionary(evidence, param_index, context);
+            }
         }
         return hidden;
     }
@@ -3750,13 +3762,12 @@ pub const Builder = struct {
                     },
                     .monomorphic, .callable => {},
                 }
-                const nested: []const static_dispatch.CheckedEvidence = switch (node.nested) {
-                    .resolved => table.nestedEvidence(node),
-                    .from_callable => if (self.program.worker(target).dictionary_params.len == 0) &.{} else invariant("callable-derived dictionary evidence is not yet lowered by Boxy"),
-                    .through_alias => invariant("alias-scope dictionary evidence is not yet lowered by Boxy"),
-                };
                 const callable = try self.instantiationCallable(node.instantiation);
-                const hidden = try self.hiddenArgsAt(target, subst, nested, callable);
+                const hidden = switch (node.nested) {
+                    .resolved => try self.hiddenArgsAt(target, subst, table.nestedEvidence(node), callable),
+                    .from_callable => try self.callableDerivedHidden(target, subst, callable),
+                    .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
+                };
                 defer self.allocator.free(hidden);
                 const entry = try self.program.methodEntryWorker(target);
                 const dictionary = try self.composeDictionary(entry, hidden);
@@ -3784,8 +3795,253 @@ pub const Builder = struct {
             },
             .checked_error => return try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .checked_error), &.{}),
             .unreachable_value => return try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .unreachable_value), &.{}),
-            else => invariantFmt("{s} dictionary evidence is not yet lowered by Boxy", .{@tagName(evidence.resolution)}),
+            .from_callable => invariant("callable-derived evidence is resolved with the parameter it stands for (`paramDictionary`)"),
+            .from_scheme => invariant("an abstract scheme requirement reached executable code without its use's evidence"),
         }
+    }
+
+    /// The evidence parameters a dictionary vector stands for, and the types
+    /// their scheme takes where the vector is built.
+    pub const ParamContext = struct {
+        module: ModuleIndex,
+        params: []const static_dispatch.EvidenceParamRecord,
+        env: types.Env,
+    };
+
+    /// The parameter context of template worker `callee` whose scheme takes
+    /// `bound`.
+    fn templateParamContext(self: *Builder, callee: WorkerId, bound: []const TypeId) ParamContext {
+        const target = self.program.worker(callee).*;
+        const key = switch (target.key) {
+            .template => |key| key,
+            else => invariant("a worker with dictionary parameters is not a template's"),
+        };
+        const templates = self.program.module(key.module).view.checked_procedure_templates;
+        return .{
+            .module = key.module,
+            .params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params),
+            .env = .{ .module = key.module, .vars = target.scheme_vars, .bound = bound },
+        };
+    }
+
+    fn scopeParams(self: *Builder, scope_id: checked.DispatchScopeId) []const static_dispatch.EvidenceParamRecord {
+        const templates = self.view.view.checked_procedure_templates;
+        return lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.dispatch_scopes[@backingInt(scope_id)].evidence_params);
+    }
+
+    /// The parameter context of generalized-local scope `scope_id` whose own
+    /// variables `vars` take `own_types`, inside this body's scope.
+    fn scopeParamContext(self: *Builder, scope_id: checked.DispatchScopeId, vars: []const checked.CheckedTypeId, own_types: []const TypeId) Allocator.Error!ParamContext {
+        const arena = self.program.arena.allocator();
+        return .{
+            .module = self.module,
+            .params = self.scopeParams(scope_id),
+            .env = .{
+                .module = self.module,
+                .vars = try std.mem.concat(arena, checked.CheckedTypeId, &.{ vars, self.env.vars }),
+                .bound = try std.mem.concat(arena, TypeId, &.{ own_types, self.env.bound }),
+            },
+        };
+    }
+
+    /// The dictionary for evidence parameter `index` of `context`. An entry
+    /// the checker left to the concrete callable (`from_callable`) is the
+    /// dictionary of the parameter's dispatcher at the types the context
+    /// binds.
+    pub fn paramDictionary(self: *Builder, evidence: []const static_dispatch.CheckedEvidence, index: u32, context: ParamContext) Allocator.Error!LocalId {
+        if (evidence[index].resolution != .from_callable) return try self.dictionaryOf(evidence[index]);
+        if (index >= context.params.len) invariant("callable-derived evidence names a parameter its scheme does not have");
+        const param = context.params[index];
+        const converter = self.program.converter();
+        return try self.dictionaryFromType(.{
+            .module = context.module,
+            .method = param.method,
+            .structural = param.structural,
+            .dispatcher = try converter.convert(context.module, param.dispatcher_ty, context.env),
+            .callable = try converter.convert(context.module, param.callable_ty, context.env),
+        });
+    }
+
+    /// A dispatch obligation resolved from its dispatcher's type: the method
+    /// named `method` (of module `module`'s names) on `dispatcher`, at the
+    /// interface `callable`.
+    const TypeObligation = struct {
+        module: ModuleIndex,
+        method: @FieldType(static_dispatch.EvidenceParamRecord, "method"),
+        structural: ?static_dispatch.StructuralKind,
+        dispatcher: TypeId,
+        callable: TypeId,
+    };
+
+    /// The dictionary of `root`: the method its dispatcher's owner registers,
+    /// with that method's own obligations resolved the same way; a structural
+    /// derivation where the owner registers none; and a crash where no value
+    /// of the dispatcher can exist. Nested obligations are resolved with an
+    /// explicit stack.
+    fn dictionaryFromType(self: *Builder, root: TypeObligation) Allocator.Error!LocalId {
+        const Frame = struct {
+            target: WorkerId,
+            callable: TypeId,
+            context: ParamContext,
+            hidden: std.ArrayList(LocalId),
+            next: usize,
+        };
+        var frames: std.ArrayList(Frame) = .empty;
+        defer {
+            for (frames.items) |*frame| frame.hidden.deinit(self.allocator);
+            frames.deinit(self.allocator);
+        }
+        var pending: ?TypeObligation = root;
+        var delivered: ?LocalId = null;
+        while (true) {
+            if (pending) |obligation| {
+                pending = null;
+                switch (try self.obligationTarget(obligation)) {
+                    .dictionary => |dictionary| delivered = dictionary,
+                    .target => |target| {
+                        const target_worker = self.program.worker(target).*;
+                        const formal = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
+                        const related = try self.relateVariablesPartial(&.{.{ formal, obligation.callable }}, target_worker.scheme_vars.len);
+                        defer self.allocator.free(related);
+                        const bound = try self.program.arena.allocator().alloc(TypeId, related.len);
+                        for (related, bound, target_worker.scheme_vars) |ty, *slot, variable| slot.* = ty orelse try self.program.converter().sealedScheme(target_worker.module, variable);
+                        var hidden: std.ArrayList(LocalId) = .empty;
+                        for (bound) |ty| try hidden.append(self.allocator, try self.descOf(ty));
+                        try frames.append(self.allocator, .{
+                            .target = target,
+                            .callable = obligation.callable,
+                            .context = self.templateParamContext(target, bound),
+                            .hidden = hidden,
+                            .next = 0,
+                        });
+                    },
+                }
+            }
+            if (delivered) |dictionary| {
+                delivered = null;
+                if (frames.items.len == 0) return dictionary;
+                try frames.items[frames.items.len - 1].hidden.append(self.allocator, dictionary);
+            }
+            const frame = &frames.items[frames.items.len - 1];
+            const target_worker = self.program.worker(frame.target).*;
+            if (frame.next < target_worker.dictionary_params.len) {
+                const param = frame.context.params[target_worker.dictionary_params[frame.next]];
+                frame.next += 1;
+                const converter = self.program.converter();
+                pending = .{
+                    .module = frame.context.module,
+                    .method = param.method,
+                    .structural = param.structural,
+                    .dispatcher = try converter.convert(frame.context.module, param.dispatcher_ty, frame.context.env),
+                    .callable = try converter.convert(frame.context.module, param.callable_ty, frame.context.env),
+                };
+                continue;
+            }
+            var done = frames.pop().?;
+            defer done.hidden.deinit(self.allocator);
+            const dictionary = try self.composeDictionary(try self.program.methodEntryWorker(done.target), done.hidden.items);
+            const own_fn = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
+            delivered = try self.adaptValue(dictionary, try self.program.substitute(self.allocator, own_fn, done.context.env.bound), done.callable);
+        }
+    }
+
+    /// What resolves `obligation` from its dispatcher's type: a method
+    /// target whose own obligations remain, or a finished dictionary.
+    fn obligationTarget(self: *Builder, obligation: TypeObligation) Allocator.Error!union(enum) { target: WorkerId, dictionary: LocalId } {
+        const store = &self.program.store;
+        const method_text = self.program.module(obligation.module).nameStore().methodNameText(obligation.method);
+        switch (store.get(obligation.dispatcher)) {
+            // A variable of this body's scope dispatches through the
+            // dictionary its scope holds for that variable and method.
+            .variable => |index| return .{ .dictionary = self.variableDictionary(index, method_text) },
+            else => {},
+        }
+        if (try self.methodOwner(obligation.dispatcher)) |owned| {
+            if (self.registeredMethod(owned.module, owned.owner, method_text)) |found| switch (found) {
+                .rejected => return .{ .dictionary = try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .checked_error), &.{}) },
+                .target => |target| switch (target.kind) {
+                    .procedure => |procedure| return .{ .target = try self.program.templateRefWorker(procedure.template) },
+                    .structural => |kind| return .{ .dictionary = try self.structuralDictionaryOf(kind, obligation.dispatcher) },
+                    .local_proc => invariant("a method a local procedure implements belongs to a type declared in a function body, which no callable-derived obligation outside that body names"),
+                },
+            };
+        }
+        const uninhabited = switch (store.get(try self.structuralType(obligation.dispatcher))) {
+            .tag_union => |tag_union| tag_union.tags.len == 0 and tag_union.ext == null,
+            else => false,
+        };
+        if (uninhabited) return .{ .dictionary = switch (static_dispatch.unpinnedDispatchResolution(obligation.structural)) {
+            .structural => try self.structuralDictionaryOf(obligation.structural.?, obligation.dispatcher),
+            .unreachable_value => try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .unreachable_value), &.{}),
+        } };
+        const kind = obligation.structural orelse invariant("a callable-derived obligation's dispatcher has no method and no structural derivation, which checking rejects");
+        return .{ .dictionary = try self.structuralDictionaryOf(kind, obligation.dispatcher) };
+    }
+
+    /// The dictionary this body's scopes hold for method `method_text` on
+    /// scope variable `index`.
+    fn variableDictionary(self: *Builder, index: u32, method_text: []const u8) LocalId {
+        const worker = self.currentWorker().*;
+        if (index >= worker.scheme_vars.len) invariant("a dispatcher variable is outside its worker's scope");
+        const variable = worker.scheme_vars[index];
+        const names = self.view.nameStore();
+        var offset: usize = 0;
+        for (worker.dict_scopes, worker.dict_scope_params) |scope, params| {
+            for (scope, 0..) |param_index, position| {
+                const param = params[param_index];
+                if (param.dispatcher_ty == variable and std.mem.eql(u8, names.methodNameText(param.method), method_text)) return self.dict_locals[offset + position];
+            }
+            offset += scope.len;
+        }
+        invariant("a scope variable's method obligation has no dictionary in its scope, which checking requires");
+    }
+
+    /// The structural dictionary of `kind` over `dispatcher`. Derived codecs
+    /// and maps are selected by checking at the dispatch they serve, so an
+    /// obligation resolved from a type alone compares or hashes.
+    fn structuralDictionaryOf(self: *Builder, kind: static_dispatch.StructuralKind, dispatcher: TypeId) Allocator.Error!LocalId {
+        const method: lower.StructuralMethod = switch (kind) {
+            .equality => .is_eq,
+            .hash => .to_hash,
+            .parser, .encoder, .map, .map_effectful => invariant("a structural codec or map obligation resolved from a type alone, which checking records at its dispatch"),
+        };
+        return try self.composeDictionary(try self.program.structuralWorker(self.module, method), &.{try self.descOf(dispatcher)});
+    }
+
+    /// The method owner of `ty`, with the module whose names the owner is
+    /// expressed in.
+    fn methodOwner(self: *Builder, ty: TypeId) Allocator.Error!?struct { module: ModuleIndex, owner: static_dispatch.MethodOwner } {
+        return switch (self.program.store.get(ty)) {
+            .primitive => |primitive| .{ .module = self.module, .owner = .{ .builtin = checked.builtinOwnerForPrimitive(primitive) } },
+            .list => .{ .module = self.module, .owner = .{ .builtin = .list } },
+            .box => .{ .module = self.module, .owner = .{ .builtin = .box } },
+            .nominal => |nominal| blk: {
+                const view = self.program.module(nominal.decl.module);
+                const declaration = view.types().nominalDeclarationById(nominal.decl.decl);
+                break :blk .{ .module = nominal.decl.module, .owner = if (nominal.builtin) |builtin| (if (builtin == .try_)
+                    .{ .nominal = declaration.nominal }
+                else
+                    .{ .builtin = static_dispatch.builtinOwnerForCheckedBuiltin(builtin) }) else .{ .nominal = declaration.nominal } };
+            },
+            else => null,
+        };
+    }
+
+    /// The registration of `owner.method_text` visible from this module: its
+    /// own registry, then the modules its method lookup reaches.
+    fn registeredMethod(self: *Builder, owner_module: ModuleIndex, owner: static_dispatch.MethodOwner, method_text: []const u8) ?static_dispatch.CheckedMethodLookup {
+        const owner_names = self.program.module(owner_module).nameStore();
+        if (methodIn(self.view, owner_names, owner, method_text)) |found| return found;
+        for (self.view.view.method_lookup_scope) |module_id| {
+            if (methodIn(self.program.moduleByKey(module_id), owner_names, owner, method_text)) |found| return found;
+        }
+        return null;
+    }
+
+    fn methodIn(view: *const types.ModuleView, owner_names: anytype, owner: static_dispatch.MethodOwner, method_text: []const u8) ?static_dispatch.CheckedMethodLookup {
+        const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, view.nameStore(), owner) orelse return null;
+        const method = view.nameStore().lookupMethodName(method_text) orelse return null;
+        return view.view.method_registry.lookup(.{ .owner = view_owner, .method = method });
     }
 
     /// The dictionary of a derived map with the checked selection `plan`,
@@ -3830,13 +4086,34 @@ pub const Builder = struct {
     /// relating its scheme to `callable` (an edge with no recorded
     /// substitution, `EvidenceTargetInstantiation.derived_from_callable`).
     pub fn relatedHiddenArgs(self: *Builder, callee: WorkerId, callable: checked.CheckedTypeId) Allocator.Error![]LocalId {
+        return try self.callableDerivedHidden(callee, &.{}, try self.convert(callable));
+    }
+
+    /// The hidden arguments of `callee` instantiated at `subst` (or, with
+    /// none recorded, at what `call_fn` relates its variables to), its
+    /// dictionaries derived from those types: each obligation dispatches on
+    /// its dispatcher's type at the instantiation, as checking selects
+    /// targets.
+    pub fn callableDerivedHidden(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, call_fn: ?TypeId) Allocator.Error![]LocalId {
         const target = self.program.worker(callee).*;
-        if (target.dictionary_params.len != 0) invariant("a callable-derived target with dictionaries is not yet lowered by Boxy");
-        const target_fn = try self.program.store.intern(.{ .function = .{ .args = target.params, .ret = target.ret, .effectful = false } });
-        const bound = try self.relateVariables(target_fn, try self.convert(callable), target.scheme_vars.len);
+        const bound = try self.boundTypesAt(callee, subst, call_fn);
         defer self.allocator.free(bound);
-        const hidden = try self.allocator.alloc(LocalId, bound.len);
-        for (bound, hidden) |ty, *desc| desc.* = try self.descOf(ty);
+        const hidden = try self.allocator.alloc(LocalId, bound.len + target.dictionary_params.len);
+        errdefer self.allocator.free(hidden);
+        for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
+        if (target.dictionary_params.len == 0) return hidden;
+        const context = self.templateParamContext(callee, try self.program.arena.allocator().dupe(TypeId, bound));
+        const converter = self.program.converter();
+        for (target.dictionary_params, hidden[bound.len..]) |param_index, *dict| {
+            const param = context.params[param_index];
+            dict.* = try self.dictionaryFromType(.{
+                .module = context.module,
+                .method = param.method,
+                .structural = param.structural,
+                .dispatcher = try converter.convert(context.module, param.dispatcher_ty, context.env),
+                .callable = try converter.convert(context.module, param.callable_ty, context.env),
+            });
+        }
         return hidden;
     }
 
@@ -4078,12 +4355,11 @@ pub const Builder = struct {
                     .alias => try self.relatedHiddenArgs(callee, call_plan.callable_ty),
                     else => blk: {
                         const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
-                        const nested: []const static_dispatch.CheckedEvidence = switch (node.nested) {
-                            .resolved => table.nestedEvidence(node),
-                            .from_callable => if (self.program.worker(callee).dictionary_params.len == 0) &.{} else invariant("callable-derived call evidence is not yet lowered by Boxy"),
-                            .through_alias => invariant("alias-scope call evidence is not yet lowered by Boxy"),
+                        break :blk switch (node.nested) {
+                            .resolved => try self.hiddenArgsAt(callee, subst, table.nestedEvidence(node), try self.convert(call_plan.callable_ty)),
+                            .from_callable => try self.callableDerivedHidden(callee, subst, try self.convert(call_plan.callable_ty)),
+                            .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
                         };
-                        break :blk try self.hiddenArgsAt(callee, subst, nested, try self.convert(call_plan.callable_ty));
                     },
                 };
                 switch (call_plan.result_mode) {
@@ -4328,10 +4604,17 @@ pub const Builder = struct {
             if (subst.len != scheme.scheme_vars.len) invariant("a generalized lambda's construction substitution differs from its scheme");
             const evidence = self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{};
             try own_descs.appendSlice(self.allocator, self.var_descs);
-            for (subst) |checked_ty| try own_descs.append(self.allocator, try self.descOf(try self.convert(checked_ty)));
+            const own_types = try self.allocator.alloc(TypeId, subst.len);
+            defer self.allocator.free(own_types);
+            for (subst, own_types) |checked_ty, *own_ty| {
+                own_ty.* = try self.convert(checked_ty);
+                try own_descs.append(self.allocator, try self.descOf(own_ty.*));
+            }
+            const scope_id = self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }).?;
+            const context = try self.scopeParamContext(scope_id, scheme.scheme_vars, own_types);
             for (scheme.dictionaries) |param_index| {
                 if (param_index >= evidence.len) invariant("a generalized lambda's construction evidence does not cover its dictionaries");
-                try own_dicts.append(self.allocator, try self.dictionaryOf(evidence[param_index]));
+                try own_dicts.append(self.allocator, try self.paramDictionary(evidence, param_index, context));
             }
             try own_dicts.appendSlice(self.allocator, self.dict_locals);
             descs = own_descs.items;
@@ -5706,15 +5989,16 @@ pub const Builder = struct {
         switch (resolution) {
             .direct_closed, .direct_parametric => |direct| {
                 const node = table.evidenceNode(direct.evidence);
-                if (node.instantiation == .alias) invariant("dispatch targets reached through a procedure alias are not yet lowered by Boxy");
                 const callee = try self.methodTargetWorker(node.target);
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
-                const nested: []const static_dispatch.CheckedEvidence = switch (node.nested) {
-                    .resolved => table.nestedEvidence(node),
-                    .from_callable => if (self.program.worker(callee).dictionary_params.len == 0) &.{} else invariant("callable-derived call evidence is not yet lowered by Boxy"),
-                    .through_alias => invariant("alias-scope call evidence is not yet lowered by Boxy"),
+                const call_fn = try self.convert(callable_ty);
+                // Reached through a procedure alias, the target takes the
+                // instantiation the call's callable type gives it.
+                const hidden = if (node.instantiation == .alias) try self.relatedHiddenArgs(callee, callable_ty) else switch (node.nested) {
+                    .resolved => try self.hiddenArgsAt(callee, subst, table.nestedEvidence(node), call_fn),
+                    .from_callable => try self.callableDerivedHidden(callee, subst, call_fn),
+                    .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
                 };
-                const hidden = try self.hiddenArgsAt(callee, subst, nested, try self.convert(callable_ty));
                 defer self.allocator.free(hidden);
                 const all = try std.mem.concat(self.allocator, LocalId, &.{ args, hidden });
                 defer self.allocator.free(all);

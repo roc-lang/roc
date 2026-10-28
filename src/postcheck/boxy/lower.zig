@@ -142,6 +142,9 @@ pub const Worker = struct {
     /// own scope; a lambda shares its outer worker's scopes; a generalized
     /// local procedure has its own scope inside its outer worker's.
     dict_scopes: []const []const u32 = &.{},
+    /// Each of `dict_scopes`' scopes' evidence-parameter records, by
+    /// parameter index.
+    dict_scope_params: []const []const static_dispatch.EvidenceParamRecord = &.{},
     /// For a generalized local procedure: how many descriptors and
     /// dictionaries of its own scope its argument record carries before its
     /// explicit arguments (they vary per call, unlike its captures).
@@ -165,6 +168,8 @@ pub const Worker = struct {
 pub const LocalScheme = struct {
     scheme_vars: []const checked.CheckedTypeId,
     dictionaries: []const u32,
+    /// The scope's evidence-parameter records, by parameter index.
+    params: []const static_dispatch.EvidenceParamRecord = &.{},
     /// Whether each call passes the scheme's descriptors and dictionaries (a
     /// local procedure's), or the function value captures them at its
     /// construction (any other generalized lambda's).
@@ -317,6 +322,7 @@ pub const Program = struct {
             .params = params,
             .ret = signature.ret,
             .dict_scopes = try self.arena.allocator().dupe([]const u32, &.{dictionary_params.items}),
+            .dict_scope_params = try self.arena.allocator().dupe([]const static_dispatch.EvidenceParamRecord, &.{evidence_params}),
         });
         try self.worker_ids.put(self.allocator, key, id);
         return id;
@@ -364,6 +370,7 @@ pub const Program = struct {
             .captures = try self.arena.allocator().dupe(checked.CheckedCapture, captures),
             .capture_types = try self.arena.allocator().dupe(TypeId, capture_types),
             .dict_scopes = if (own) |scheme| try std.mem.concat(self.arena.allocator(), []const u32, &.{ &.{scheme.dictionaries}, outer_worker.dict_scopes }) else outer_worker.dict_scopes,
+            .dict_scope_params = if (own) |scheme| try std.mem.concat(self.arena.allocator(), []const static_dispatch.EvidenceParamRecord, &.{ &.{scheme.params}, outer_worker.dict_scope_params }) else outer_worker.dict_scope_params,
             .own_descs = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.scheme_vars.len) else 0) else 0,
             .own_dicts = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.dictionaries.len) else 0) else 0,
         });
