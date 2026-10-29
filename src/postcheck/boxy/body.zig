@@ -85,7 +85,7 @@ pub const Task = union(enum) {
     /// Pop the arguments of a call to `callee` and call it.
     /// `adapt` is set for a callee storing record fields of its signature
     /// in presence slots: the types its scheme takes and the arguments'.
-    finish_call: struct { callee: WorkerId, hidden: []LocalId, arg_count: u32, result: TypeId, adapt: ?Builder.CallAdapt = null },
+    finish_call: struct { callee: WorkerId, hidden: []LocalId, arg_count: u32, ret: TypeId, result: TypeId, adapt: ?Builder.CallAdapt = null },
     finish_erased_call: struct { fn_ty: TypeId, arg_count: u32, result: TypeId },
     finish_low_level: struct { op: LIR.LowLevel, arg_count: u32, result: TypeId, arg_types: []const TypeId = &.{} },
     finish_record: CheckedExprId,
@@ -404,17 +404,17 @@ pub const Builder = struct {
         // (`retagTarget`).
         if (self.destination_types.get(expr)) |destination| {
             if (try self.retagTarget(expr, own) != null) return own;
-            if (try @import("row_joins.zig").compatible(self.allocator, &self.program.store, own, destination)) return destination;
+            if (try types.compatible(self.allocator, &self.program.store, own, destination)) return destination;
         }
         return own;
     }
 
     /// The destination a value of expression `expr` (of its own type `own`)
-    /// is re-tagged into: an expression that produces its value rather than
+    /// is converted into: an expression that produces its value rather than
     /// building it (a read or a call) has the representation of its own
-    /// type, which differs from its destination's where a row the
-    /// destination widens is closed in it (design.md "Row Coercion
-    /// Primitive").
+    /// type, which differs from its destination's where the destination
+    /// widens a row of it (design.md "Row Coercion Primitive", "Sealed
+    /// Result Rows").
     pub fn retagTarget(self: *Builder, expr: CheckedExprId, own: TypeId) Allocator.Error!?TypeId {
         const destination = self.destination_types.get(expr) orelse return null;
         if (destination == own) return null;
@@ -422,14 +422,14 @@ pub const Builder = struct {
             .block, .if_, .match_, .nominal, .dbg, .tag, .zero_argument_tag, .record, .empty_record, .tuple, .list, .empty_list, .numeral, .str_from_quote, .str_segment, .str, .interpolation, .lambda, .closure, .runtime_error, .crash, .return_ => return null,
             .pending, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .call, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .expect_err, .expect, .ellipsis, .anno_only, .break_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
-        // Two closed types of one join share a layout.
-        if (try self.closed(own) and try self.closed(destination) and self.program.joins.representative(own) == self.program.joins.representative(destination)) return null;
+        // Two closed types committing one layout need no conversion.
+        if (try self.closed(own) and try self.closed(destination) and try self.program.layouts.layoutOf(own) == try self.program.layouts.layoutOf(destination)) return null;
         return destination;
     }
 
     /// The type a read of a stored constant restores its value at: the
-    /// read's own, closed type, which a destination with an open row joins
-    /// (design.md "Row Joins"), or else the type `exprType` gives it.
+    /// read's own, closed type, converted into its destination where that
+    /// widens it, or else the type `exprType` gives it.
     pub fn constReadType(self: *Builder, expr: CheckedExprId) Allocator.Error!TypeId {
         const own = try self.convert(self.bodies().expr(expr).ty);
         if (self.program.store.isClosed(own)) return own;
@@ -1047,6 +1047,7 @@ pub const Builder = struct {
             .default => |key| return try self.lowerDefaultBody(key.expr),
             .codec => |piece| return try Codec.lowerPiece(self, piece),
             .crash_dictionary => |kind| return try self.lowerCrashDictionary(kind),
+            .convert => |key| return try self.lowerConvertBody(key.from, key.to),
         };
         // Signature: explicit parameters, then hidden descriptors and
         // dictionaries.
@@ -1168,6 +1169,7 @@ pub const Builder = struct {
         const extern_proc = try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.programLocal("boxy.hosted_extern", @backingInt(self.worker_id)),
+            .emission_unit = .isolated,
             .args = try self.store.addLocalSpan(extern_params),
             .ret_layout = ret_abi,
             .hosted = .{ .symbol = try self.store.insertString(symbol), .dispatch_index = dispatch_index },
@@ -1496,10 +1498,12 @@ pub const Builder = struct {
         proc.abi = .erased_record;
     }
 
-    /// Where two types of one value differ in the storage of record fields
-    /// (design.md "Field Kinds"): nowhere, in data, or inside the function
+    /// Where two types of one value differ: nowhere; only in the tags of
+    /// rows, one widening the other along the coercion's reach (design.md
+    /// "Sealed Result Rows"); in the storage of record fields (design.md
+    /// "Field Kinds"), with or without such rows; or inside the function
     /// type the value has.
-    pub const StorageDifference = enum { none, data, function };
+    pub const StorageDifference = enum { none, rows, slots, function };
 
     /// A function value inside data is outside every row widening's reach
     /// (design.md "Row Coercion Primitive") and function types relate
@@ -1546,14 +1550,14 @@ pub const Builder = struct {
                             if (from_field.name == to_field.name) break true;
                         } else false;
                         if (!present and record.ext == null and to_field.kind == .presence_slot) switch (pair.place) {
-                            .data => result = .data,
+                            .data => result = .slots,
                             .root_function, .signature_data => return .function,
                             .nested_function => invariant(nested_function_storage),
                         };
                         for (store.fieldSpan(record.fields)) |from_field| {
                             if (from_field.name != to_field.name) continue;
                             if (from_field.kind != to_field.kind) switch (pair.place) {
-                                .data => result = .data,
+                                .data => result = .slots,
                                 .root_function, .signature_data => return .function,
                                 .nested_function => invariant(nested_function_storage),
                             };
@@ -1565,9 +1569,11 @@ pub const Builder = struct {
                 .tuple => |items| for (store.span(items), store.span(to.tuple)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = inner }),
                 .tag_union => |tag_union| {
                     // A row the destination widens holds its tags under
-                    // other discriminants: the value is re-tagged.
+                    // other discriminants: the value is converted.
                     if (tag_union.tags.len != to.tag_union.tags.len or (tag_union.ext == null) != (to.tag_union.ext == null)) switch (pair.place) {
-                        .data => result = .data,
+                        .data => if (result == .none) {
+                            result = .rows;
+                        },
                         .root_function, .signature_data => return .function,
                         .nested_function => invariant(nested_function_storage),
                     };
@@ -1598,14 +1604,23 @@ pub const Builder = struct {
     }
 
     /// The value `value` of type `from` at type `to`, a type of the same
-    /// value whose record fields may be stored differently (design.md
-    /// "Field Kinds"): itself where the storage agrees, rebuilt where data
-    /// differs, and a function value adapting the calls where a function's
-    /// signature does.
+    /// value whose rows may be wider (design.md "Sealed Result Rows") or
+    /// whose record fields may be stored differently (design.md "Field
+    /// Kinds"): itself where the representations agree; converted between
+    /// two closed types whose rows alone differ by the module's conversion
+    /// worker; rebuilt by the descriptor-driven `adapt` where a row the
+    /// body opens or a field's storage differs; and a function value
+    /// adapting the calls where a function's signature does.
     pub fn adaptValue(self: *Builder, value: LocalId, from: TypeId, to: TypeId) Allocator.Error!LocalId {
         switch (try self.storageDifference(from, to)) {
             .none => return value,
-            .data => {
+            .rows => {
+                if (try self.closed(from) and try self.closed(to)) return try self.convertRows(value, from, to);
+                const target = try self.localOf(to, .frame);
+                try self.emitDyn(target, .{ .adapt = .{ .src = value, .from = try self.descOf(from), .to = try self.descOf(to) } });
+                return target;
+            },
+            .slots => {
                 const target = try self.localOf(to, .frame);
                 try self.emitDyn(target, .{ .adapt = .{ .src = value, .from = try self.descOf(from), .to = try self.descOf(to) } });
                 return target;
@@ -1615,6 +1630,105 @@ pub const Builder = struct {
                 return try self.packClosure(adapter, &.{value}, &.{from}, self.var_descs, &.{});
             },
         }
+    }
+
+    /// `value` of the closed type `from` converted to the closed type `to`,
+    /// whose rows widen `from`'s (design.md "Sealed Result Rows"): itself
+    /// when the two types commit one layout, otherwise the result of this
+    /// module's conversion worker for the pair.
+    pub fn convertRows(self: *Builder, value: LocalId, from: TypeId, to: TypeId) Allocator.Error!LocalId {
+        if (try self.program.layouts.layoutOf(from) == try self.program.layouts.layoutOf(to)) return value;
+        const worker = try self.program.convertWorker(self.module, from, to);
+        const target = try self.localOf(to, .frame);
+        try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(worker).proc, .args = try self.store.addLocalSpan(&.{value}), .next = undefined } });
+        return target;
+    }
+
+    /// A conversion worker's body (`WorkerKey.convert`): its one parameter
+    /// converted to its result type along the coercion's reach.
+    pub fn lowerConvertBody(self: *Builder, from: TypeId, to: TypeId) Allocator.Error!void {
+        self.entry_hole = try self.newHole();
+        const entry = self.entry_hole;
+        self.var_descs = &.{};
+        self.dict_locals = &.{};
+        const param = try self.localOf(from, .param);
+        const ret_layout = try self.program.layouts.layoutOf(to);
+        const body_start = try self.newHole();
+        self.hole = body_start;
+        const result = try self.convertValue(param, from, to);
+        if (self.hole != null) try self.emitTerminal(.{ .ret = .{ .value = result } });
+        try self.finishProc(entry, body_start, &.{param}, ret_layout);
+    }
+
+    /// `value` of `from` rebuilt at `to`, one reached row at a time: a
+    /// switch on the source discriminant whose arm for each source variant
+    /// builds the destination's variant of the same name, with each payload
+    /// whose types differ converted in turn (`adaptValue`, which reaches
+    /// the worker for that pair). Positions outside the reach are identical
+    /// on both sides by the checker's rule.
+    fn convertValue(self: *Builder, value: LocalId, from_raw: TypeId, to_raw: TypeId) Allocator.Error!LocalId {
+        const store = &self.program.store;
+        const from = try self.structuralType(from_raw);
+        const to = try self.structuralType(to_raw);
+        const from_union = switch (store.get(from)) {
+            .tag_union => |union_ty| union_ty,
+            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a row conversion's source is not a tag union"),
+        };
+        switch (store.get(to)) {
+            .tag_union => {},
+            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a row conversion's destination is not a tag union"),
+        }
+        // Building payloads interns types, which may grow the store under
+        // its own spans.
+        const from_tags = try self.allocator.dupe(types.Tag, store.tagSpan(from_union.tags));
+        defer self.allocator.free(from_tags);
+        if (from_tags.len == 0) {
+            // No value has the empty row, so no conversion of one runs.
+            try self.emitTerminal(.runtime_error);
+            return try self.localOf(to_raw, .frame);
+        }
+        const result = try self.localOf(to_raw, .frame);
+        const join = self.freshJoin();
+        const after = try self.declareMergeJoin(join, result, null);
+        const committed = self.program.result.layouts.getLayout(try self.program.layouts.layoutOf(from));
+        const arms = try self.allocator.alloc(CFStmtId, from_tags.len);
+        defer self.allocator.free(arms);
+        if (from_tags.len > 1) {
+            if (committed.tag != .tag_union) invariant("a tag union of several variants has no discriminant storage");
+            const discriminant = try self.closedLocal(.u32);
+            try self.emitLinear(.{ .assign_ref = .{ .target = discriminant, .op = LIR.RefOp.discriminant(value), .next = undefined } });
+            for (arms) |*arm| arm.* = try self.newHole();
+            const branches = try self.allocator.alloc(LIR.CFSwitchBranch, from_tags.len - 1);
+            defer self.allocator.free(branches);
+            for (branches, 0..) |*branch, index| branch.* = .{ .value = @intCast(index), .body = arms[index] };
+            try self.emitTerminal(.{ .switch_stmt = .{ .cond = discriminant, .branches = try self.store.addCFSwitchBranches(branches), .default_branch = arms[from_tags.len - 1] } });
+        } else {
+            arms[0] = try self.currentHole();
+        }
+        for (from_tags, arms, 0..) |tag, arm, variant| {
+            self.hole = arm;
+            const payload_types = try self.allocator.dupe(TypeId, store.span(tag.payloads));
+            defer self.allocator.free(payload_types);
+            const destination = self.ownTag(to, tag.name, payload_types.len);
+            const destination_payloads = try self.allocator.dupe(TypeId, store.span(destination.payloads));
+            defer self.allocator.free(destination_payloads);
+            const values = try self.allocator.alloc(LocalId, payload_types.len);
+            defer self.allocator.free(values);
+            for (values, payload_types, destination_payloads, 0..) |*slot, payload_ty, destination_ty, index| {
+                const payload = if (committed.tag != .tag_union) blk: {
+                    // A union without storage has only zero-sized payloads.
+                    const payload_local = try self.localOf(payload_ty, .frame);
+                    if (self.store.getLocal(payload_local).layout_idx != .zst) invariant("a storage-free union has a payload with storage");
+                    try self.emitLinear(.{ .assign_struct = .{ .target = payload_local, .fields = LIR.LocalSpan.empty(), .next = undefined } });
+                    break :blk payload_local;
+                } else try self.readTagPayload(value, from, variant, payload_types, index);
+                slot.* = try self.adaptValue(payload, payload_ty, destination_ty);
+            }
+            const built = try self.buildTag(to_raw, tag.name, values);
+            try self.emitJump(join, built);
+        }
+        self.hole = after;
+        return result;
     }
 
     /// Dictionary `dictionary` of type `from` adapted to `to`. A dictionary
@@ -1837,7 +1951,7 @@ pub const Builder = struct {
                     }
                 }
                 for (params) |param| try self.pushValue(param);
-                try self.finishCall(target, hidden, @intCast(params.len), worker.ret);
+                try self.finishCall(target, hidden, @intCast(params.len), try self.program.substitute(self.allocator, target_worker.ret, bound), worker.ret);
             },
             .callable_eval => |eval| {
                 try self.tasks.append(self.allocator, .{ .finish_erased_call = .{ .fn_ty = fn_ty, .arg_count = @intCast(params.len), .result = worker.ret } });
@@ -2160,9 +2274,7 @@ pub const Builder = struct {
             .runtime_error => |ty| try self.runtimeErrorValue(ty),
             .retag => |retag| {
                 const value = self.popValue();
-                const target = try self.localOf(retag.to, .frame);
-                try self.emitDyn(target, .{ .adapt = .{ .src = value, .from = try self.descOf(retag.from), .to = try self.descOf(retag.to) } });
-                try self.pushValue(target);
+                try self.pushValue(try self.adaptValue(value, retag.from, retag.to));
             },
             .diverged => |ty| {
                 if (self.hole != null) try self.emitTerminal(.runtime_error);
@@ -2258,8 +2370,8 @@ pub const Builder = struct {
             .numeral_arg => |arg| try self.pushValue(try self.numeralArgument(arg.literal, arg.ty)),
             .finish_call => |call| {
                 defer self.allocator.free(call.hidden);
-                if (call.adapt) |adapt| return try self.finishAdaptedCall(call.callee, call.hidden, adapt, call.result);
-                try self.finishCall(call.callee, call.hidden, call.arg_count, call.result);
+                if (call.adapt) |adapt| return try self.finishAdaptedCall(call.callee, call.hidden, adapt, call.ret, call.result);
+                try self.finishCall(call.callee, call.hidden, call.arg_count, call.ret, call.result);
             },
             .finish_low_level => |ll| try self.finishLowLevel(ll.op, ll.arg_count, ll.result, ll.arg_types),
             .finish_record => |expr| try self.finishRecord(expr),
@@ -2288,7 +2400,7 @@ pub const Builder = struct {
                         const hidden = try self.allocator.alloc(LocalId, bound.len);
                         defer self.allocator.free(hidden);
                         for (bound, hidden) |ty, *desc| desc.* = try self.descOf(ty);
-                        try self.finishCall(callee, hidden, 0, eval.ty);
+                        try self.finishCall(callee, hidden, 0, try self.program.substitute(self.allocator, callee_worker.ret, bound), eval.ty);
                     },
                     .discarded, .expect => invariant("a callable-eval binding's root holds a value, which no expect or discarded root does"),
                 }
@@ -3283,7 +3395,7 @@ pub const Builder = struct {
             if (self.program.worker_ids.get(.{ .lambda = .{ .module = self.module, .expr = lambda_expr, .outer = scope_worker } })) |id| return .{ scope_worker, id };
             switch (self.program.worker(scope_worker).key) {
                 .lambda => |key| scope_worker = key.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary => break,
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert => break,
             }
         }
         // No body of the chain declared it: the chain is a stored closure
@@ -3625,9 +3737,9 @@ pub const Builder = struct {
                 const callee = try self.program.templateRefWorker(eval.entry_template);
                 const read_ty = try self.exprType(expr_id);
                 const fn_ty = try self.program.store.intern(.{ .function = .{ .args = &.{}, .ret = read_ty, .effectful = false } });
-                const hidden = try self.hiddenArgsAt(callee, self.siteSubstitution(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{}, fn_ty);
-                try self.finishCall(callee, hidden, 0, read_ty);
-                self.allocator.free(hidden);
+                const instance = try self.callInstanceAt(callee, self.siteSubstitution(expr_id), self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{}, fn_ty);
+                defer self.allocator.free(instance.hidden);
+                try self.finishCall(callee, instance.hidden, 0, instance.ret, read_ty);
             },
             .unimplemented => |unimplemented| {
                 self.region = unimplemented.region;
@@ -3708,7 +3820,7 @@ pub const Builder = struct {
                 }
             },
             .tag => |tag| {
-                const union_ty = switch (store.get(self.program.joins.representative(ty))) {
+                const union_ty = switch (store.get(ty)) {
                     .tag_union => |union_ty| union_ty,
                     .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a stored tag restored at a non-tag-union type"),
                 };
@@ -4045,7 +4157,7 @@ pub const Builder = struct {
     pub fn templateEvidenceParams(self: *Builder, worker_id: WorkerId) []const static_dispatch.EvidenceParamRecord {
         const key = switch (self.program.worker(worker_id).key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary => invariant("evidence parameters of a worker that is not a procedure template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert => invariant("evidence parameters of a worker that is not a procedure template's"),
         };
         const view = self.program.module(key.module).view;
         const template = view.checked_procedure_templates.templates.items[@backingInt(key.template)];
@@ -4297,15 +4409,14 @@ pub const Builder = struct {
         } else return try self.lowerValueCall(expr_id, call);
         const subst = self.siteSubstitution(call.func);
         const call_fn = try self.exprType(call.func);
+        const instance = try self.callInstanceAt(callee, subst, self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{}, call_fn);
         var adapt: ?CallAdapt = null;
         if (try self.program.signatureHasSlots(callee)) {
             const arg_types = try self.program.arena.allocator().alloc(TypeId, call.args.len);
             for (call.args, arg_types) |arg, *arg_ty| arg_ty.* = try self.exprType(arg);
-            const bound = try self.boundTypesAt(callee, subst, call_fn);
-            defer self.allocator.free(bound);
-            adapt = .{ .bound = try self.program.arena.allocator().dupe(TypeId, bound), .arg_types = arg_types };
+            adapt = .{ .bound = instance.bound, .arg_types = arg_types };
         }
-        try self.push(.{ .finish_call = .{ .callee = callee, .hidden = try self.hiddenArgsAt(callee, subst, self.view.view.static_dispatch_plans.siteEvidence(call.func) orelse &.{}, call_fn), .arg_count = @intCast(call.args.len), .result = try self.exprType(expr_id), .adapt = adapt } });
+        try self.push(.{ .finish_call = .{ .callee = callee, .hidden = instance.hidden, .arg_count = @intCast(call.args.len), .ret = instance.ret, .result = try self.exprType(expr_id), .adapt = adapt } });
         try self.pushExprsReversed(call.args);
     }
 
@@ -4315,14 +4426,13 @@ pub const Builder = struct {
     /// presence slots: each argument adapted to the worker's storage of its
     /// parameter at this call's instantiation, and the result adapted back
     /// (design.md "Field Kinds").
-    pub fn finishAdaptedCall(self: *Builder, callee: WorkerId, hidden: []const LocalId, adapt: CallAdapt, result_ty: TypeId) Allocator.Error!void {
+    pub fn finishAdaptedCall(self: *Builder, callee: WorkerId, hidden: []const LocalId, adapt: CallAdapt, ret: TypeId, result_ty: TypeId) Allocator.Error!void {
         const explicit = try self.popValues(@intCast(adapt.arg_types.len));
         defer self.allocator.free(explicit);
         const target_worker = self.program.worker(callee).*;
         for (explicit, adapt.arg_types, target_worker.params) |*arg, arg_ty, param_ty| {
             arg.* = try self.adaptValue(arg.*, arg_ty, try self.program.substitute(self.allocator, param_ty, adapt.bound));
         }
-        const ret = try self.program.substitute(self.allocator, target_worker.ret, adapt.bound);
         const args = try std.mem.concat(self.allocator, LocalId, &.{ explicit, hidden });
         defer self.allocator.free(args);
         const target = try self.localOf(ret, .frame);
@@ -4351,9 +4461,26 @@ pub const Builder = struct {
     /// takes what the call's function type relates it to, or, related to
     /// nothing, what a variable no use relates seals to.
     pub fn hiddenArgsAt(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence, call_fn: ?TypeId) Allocator.Error![]LocalId {
+        return (try self.callInstanceAt(callee, subst, evidence, call_fn)).hidden;
+    }
+
+    /// One instantiation of a direct call of a template worker: its hidden
+    /// arguments (owned by the caller), the types its scheme variables take
+    /// (arena-owned), and the callee's result type at that instantiation.
+    pub const CallInstance = struct { hidden: []LocalId, bound: []const TypeId, ret: TypeId };
+
+    /// `hiddenArgsAt` with the instantiation it computed.
+    pub fn callInstanceAt(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, evidence: []const static_dispatch.CheckedEvidence, call_fn: ?TypeId) Allocator.Error!CallInstance {
+        const owned = try self.boundTypesAt(callee, subst, call_fn);
+        defer self.allocator.free(owned);
+        const bound = try self.program.arena.allocator().dupe(TypeId, owned);
+        return try self.callInstanceBound(callee, bound, evidence);
+    }
+
+    /// The call instance of `callee` whose scheme variables take `bound`
+    /// (arena-owned), its dictionaries from `evidence`.
+    pub fn callInstanceBound(self: *Builder, callee: WorkerId, bound: []const TypeId, evidence: []const static_dispatch.CheckedEvidence) Allocator.Error!CallInstance {
         const target = self.program.worker(callee).*;
-        const bound = try self.boundTypesAt(callee, subst, call_fn);
-        defer self.allocator.free(bound);
         const hidden = try self.allocator.alloc(LocalId, bound.len + target.dictionary_params.len);
         errdefer self.allocator.free(hidden);
         for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
@@ -4364,7 +4491,7 @@ pub const Builder = struct {
                 dict.* = try self.paramDictionary(evidence, param_index, context);
             }
         }
-        return hidden;
+        return .{ .hidden = hidden, .bound = bound, .ret = try self.program.substitute(self.allocator, target.ret, bound) };
     }
 
     /// The function type an evidence edge instantiated its target at, when
@@ -4379,8 +4506,9 @@ pub const Builder = struct {
     /// The types the scheme variables of `callee` take at a call: the
     /// checked substitution's, where an erroneous entry takes what the call's
     /// function type `call_fn` relates it to, or seals.
-    pub fn boundTypesAt(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, call_fn: ?TypeId) Allocator.Error![]TypeId {
+    pub fn boundTypesAt(self: *Builder, callee: WorkerId, checked_subst: []const checked.CheckedTypeId, call_fn: ?TypeId) Allocator.Error![]TypeId {
         const target = self.program.worker(callee).*;
+        const subst = try self.program.keptSubstitution(callee, checked_subst);
         // A use the checker recorded no instantiation for (a platform's use
         // of a procedure the app provides) takes every variable from the
         // call's function type.
@@ -4504,7 +4632,7 @@ pub const Builder = struct {
         const target = self.program.worker(callee).*;
         const key = switch (target.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.program.module(key.module).view.checked_procedure_templates;
         return .{
@@ -4678,6 +4806,12 @@ pub const Builder = struct {
     /// in the scope so instantiated gives the next alias's, alias by alias,
     /// up to the procedure the chain reaches.
     pub fn aliasTargetHidden(self: *Builder, node: static_dispatch.EvidenceNode, callee: WorkerId) Allocator.Error![]LocalId {
+        return (try self.aliasTargetInstance(node, callee)).hidden;
+    }
+
+    /// `aliasTargetHidden` with the instantiation the chain's last lookup
+    /// gives the target.
+    pub fn aliasTargetInstance(self: *Builder, node: static_dispatch.EvidenceNode, callee: WorkerId) Allocator.Error!CallInstance {
         const table = self.view.view.static_dispatch_plans;
         const alias = node.target.alias orelse invariant("an alias-instantiated target has no alias binding");
         const alias_module = self.program.moduleByIdx(node.target.module_idx).index;
@@ -4755,15 +4889,18 @@ pub const Builder = struct {
                     // The procedure the chain reaches: its substitution and
                     // evidence are the lookup's.
                     const target = self.program.worker(callee).*;
-                    if (lookup_subst.len != target.scheme_vars.len) invariant("an alias's forwarded lookup's substitution differs from its target's scheme");
-                    const hidden = try self.allocator.alloc(LocalId, lookup_subst.len + target.dictionary_params.len);
+                    const target_subst = try self.program.keptSubstitution(callee, lookup_subst);
+                    if (target_subst.len != target.scheme_vars.len) invariant("an alias's forwarded lookup's substitution differs from its target's scheme");
+                    const target_bound = try arena.alloc(TypeId, target_subst.len);
+                    for (target_subst, target_bound) |checked_ty, *ty| ty.* = try self.convert(checked_ty);
+                    const hidden = try self.allocator.alloc(LocalId, target_subst.len + target.dictionary_params.len);
                     errdefer self.allocator.free(hidden);
-                    for (lookup_subst, hidden[0..lookup_subst.len]) |checked_ty, *desc| desc.* = try self.descOf(try self.convert(checked_ty));
-                    for (target.dictionary_params, hidden[lookup_subst.len..]) |param_index, *dict| {
+                    for (target_bound, hidden[0..target_subst.len]) |ty, *desc| desc.* = try self.descOf(ty);
+                    for (target.dictionary_params, hidden[target_subst.len..]) |param_index, *dict| {
                         if (param_index >= evidence.len) invariant("an alias's forwarded lookup's evidence does not cover its target's dictionaries");
                         dict.* = try self.dictionaryOf(evidence[param_index]);
                     }
-                    return hidden;
+                    return .{ .hidden = hidden, .bound = target_bound, .ret = try self.program.substitute(self.allocator, target.ret, target_bound) };
                 },
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => invariant("a forwarded procedure alias lookup names no procedure"),
             };
@@ -4824,16 +4961,23 @@ pub const Builder = struct {
     /// its dispatcher's type at the instantiation, as checking selects
     /// targets.
     pub fn callableDerivedHidden(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, call_fn: ?TypeId) Allocator.Error![]LocalId {
+        return (try self.callableDerivedInstance(callee, subst, call_fn)).hidden;
+    }
+
+    /// `callableDerivedHidden` with the instantiation it computed.
+    pub fn callableDerivedInstance(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, call_fn: ?TypeId) Allocator.Error!CallInstance {
         const target = self.program.worker(callee).*;
-        const bound = try self.boundTypesAt(callee, subst, call_fn);
-        defer self.allocator.free(bound);
+        const owned = try self.boundTypesAt(callee, subst, call_fn);
+        defer self.allocator.free(owned);
+        const bound = try self.program.arena.allocator().dupe(TypeId, owned);
         const hidden = try self.allocator.alloc(LocalId, bound.len + target.dictionary_params.len);
         errdefer self.allocator.free(hidden);
         for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
-        if (target.dictionary_params.len == 0) return hidden;
-        const instance = try self.program.targetRequirements(callee, try self.program.arena.allocator().dupe(TypeId, bound));
+        const ret = try self.program.substitute(self.allocator, target.ret, bound);
+        if (target.dictionary_params.len == 0) return .{ .hidden = hidden, .bound = bound, .ret = ret };
+        const instance = try self.program.targetRequirements(callee, bound);
         for (instance.requirements, hidden[bound.len..]) |requirement, *dict| dict.* = try self.dictionaryFromType(requirement);
-        return hidden;
+        return .{ .hidden = hidden, .bound = bound, .ret = ret };
     }
 
     /// Whether stored type evidence `root` of `source` holds an erased
@@ -5085,15 +5229,20 @@ pub const Builder = struct {
         return true;
     }
 
-    pub fn finishCall(self: *Builder, callee: WorkerId, hidden: []const LocalId, arg_count: u32, result_ty: TypeId) Allocator.Error!void {
+    /// A direct call of `callee` with the hidden arguments `hidden`, whose
+    /// result the callee writes at its own result type at this
+    /// instantiation, `ret`; the call's own type `result_ty` may widen a
+    /// sealed row of it, which the result is converted to (design.md
+    /// "Sealed Result Rows").
+    pub fn finishCall(self: *Builder, callee: WorkerId, hidden: []const LocalId, arg_count: u32, ret: TypeId, result_ty: TypeId) Allocator.Error!void {
         const explicit = try self.popValues(arg_count);
         defer self.allocator.free(explicit);
         const args = try std.mem.concat(self.allocator, LocalId, &.{ explicit, hidden });
         defer self.allocator.free(args);
-        const target = try self.localOf(result_ty, .frame);
+        const target = try self.localOf(ret, .frame);
         const proc = self.program.worker(callee).proc;
         try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = proc, .args = try self.store.addLocalSpan(args), .next = undefined } });
-        try self.pushValue(target);
+        try self.pushValue(try self.adaptValue(target, ret, result_ty));
     }
 
     pub fn dispatchPlan(self: *const Builder, id: static_dispatch.StaticDispatchPlanId) static_dispatch.StaticDispatchCallPlan {
@@ -5153,15 +5302,15 @@ pub const Builder = struct {
                     return;
                 }
                 const callee = try self.methodTargetWorker(node.target);
-                const hidden = switch (node.instantiation) {
+                const instance = switch (node.instantiation) {
                     // Reached through a procedure alias, the target takes the
                     // instantiation the call's callable type gives it.
-                    .alias => try self.aliasTargetHidden(node, callee),
+                    .alias => try self.aliasTargetInstance(node, callee),
                     .monomorphic, .callable, .derived_from_callable => blk: {
                         const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
                         break :blk switch (node.nested) {
-                            .resolved => try self.hiddenArgsAt(callee, subst, table.nestedEvidence(node), try self.convert(call_plan.callable_ty)),
-                            .from_callable => try self.callableDerivedHidden(callee, subst, try self.convert(call_plan.callable_ty)),
+                            .resolved => try self.callInstanceAt(callee, subst, table.nestedEvidence(node), try self.convert(call_plan.callable_ty)),
+                            .from_callable => try self.callableDerivedInstance(callee, subst, try self.convert(call_plan.callable_ty)),
                             .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
                         };
                     },
@@ -5173,7 +5322,7 @@ pub const Builder = struct {
                         try self.push(.{ .finish_low_level = .{ .op = .bool_not, .arg_count = 1, .result = result_ty } });
                     },
                 }
-                try self.push(.{ .finish_call = .{ .callee = callee, .hidden = hidden, .arg_count = @intCast(operands.len), .result = if (call_plan.result_mode == .equality) try self.program.store.primitive(.bool) else result_ty } });
+                try self.push(.{ .finish_call = .{ .callee = callee, .hidden = instance.hidden, .arg_count = @intCast(operands.len), .ret = instance.ret, .result = if (call_plan.result_mode == .equality) try self.program.store.primitive(.bool) else result_ty } });
                 var index = operands.len;
                 while (index > 0) {
                     index -= 1;
@@ -5865,8 +6014,7 @@ pub const Builder = struct {
             try self.emitDyn(target, .{ .tag = .{ .desc = try self.descOf(try self.structuralType(ty)), .name = try self.nameDesc(name), .payloads = try self.store.addLocalSpan(values) } });
             return target;
         }
-        const rep = self.program.joins.representative(try self.structuralType(ty));
-        switch (self.program.store.get(rep)) {
+        switch (self.program.store.get(try self.structuralType(ty))) {
             .tag_union => {},
             .primitive => |primitive| {
                 if (primitive != .bool) invariant("a tag expression's type is a non-Bool primitive");
@@ -6155,8 +6303,7 @@ pub const Builder = struct {
                         try self.testDynamicTag(ty, name, tag.args, item.value, miss, &pending);
                         continue;
                     }
-                    const rep = self.program.joins.representative(try self.structuralType(ty));
-                    switch (self.program.store.get(rep)) {
+                    switch (self.program.store.get(try self.structuralType(ty))) {
                         .primitive => |primitive| {
                             if (primitive != .bool) invariant("a tag pattern's type is a non-Bool primitive");
                             const want_true = std.mem.eql(u8, self.program.store.nameText(name), "True");
@@ -6421,8 +6568,7 @@ pub const Builder = struct {
         const actual = try self.closedLocal(.u32);
         const expected = try self.closedLocal(.u32);
         if (try self.closed(ty)) {
-            const rep = self.program.joins.representative(ty);
-            const tags = switch (self.program.store.get(rep)) {
+            const tags = switch (self.program.store.get(ty)) {
                 .tag_union => |union_ty| self.program.store.tagSpan(union_ty.tags),
                 .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a discriminant equality's operand is not a tag union"),
             };
@@ -6876,22 +7022,18 @@ pub const Builder = struct {
         return try self.selectVariant(ty, own);
     }
 
-    /// The variant of `ty`'s joined row that the tag `own` of `ty` itself
-    /// is: its label's variant whose payloads are compatible with `own`'s,
-    /// since a joined row lists a label once per incompatible payload
-    /// (design.md "One label, two payload types").
+    /// The variant of the closed tag union `ty` that its tag `own` is: the
+    /// one with its label and arity, which a checked row lists once.
     pub fn selectVariant(self: *Builder, ty: TypeId, own: types.Tag) Allocator.Error!ClosedVariant {
-        const rep = self.program.joins.representative(ty);
-        const tags = switch (self.program.store.get(rep)) {
+        const tags = switch (self.program.store.get(ty)) {
             .tag_union => |union_ty| self.program.store.tagSpan(union_ty.tags),
             .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a tag's type is not a tag union"),
         };
         for (tags, 0..) |tag, index| {
-            if (tag.name != own.name) continue;
-            if (!try self.program.joins.payloadsCompatible(&self.program.store, tag, own)) continue;
+            if (tag.name != own.name or tag.payloads.len != own.payloads.len) continue;
             return .{ .index = index, .payloads = self.program.store.span(tag.payloads) };
         }
-        invariant("a tag is absent from its joined row");
+        invariant("a tag is absent from its row");
     }
 
     /// The tag of `ty` with label `name` and `arity` payloads.
@@ -6938,7 +7080,7 @@ pub const Builder = struct {
     /// the committed layout inserted to break a recursive type.
     pub fn isRecursionBox(self: *Builder, slot: layout.Idx, ty: TypeId) Allocator.Error!bool {
         if (self.program.result.layouts.getLayout(slot).tag != .box) return false;
-        return self.program.store.get(self.program.joins.representative(try self.structuralType(ty))) != .box;
+        return self.program.store.get(try self.structuralType(ty)) != .box;
     }
 
     /// `value` (of `ty`) as it is stored at `slot`: boxed when the slot is a
@@ -7032,17 +7174,17 @@ pub const Builder = struct {
                 const call_fn = try self.convert(callable_ty);
                 // Reached through a procedure alias, the target takes the
                 // instantiation the call's callable type gives it.
-                const hidden = if (node.instantiation == .alias) try self.aliasTargetHidden(node, callee) else switch (node.nested) {
-                    .resolved => try self.hiddenArgsAt(callee, subst, table.nestedEvidence(node), call_fn),
-                    .from_callable => try self.callableDerivedHidden(callee, subst, call_fn),
+                const instance = if (node.instantiation == .alias) try self.aliasTargetInstance(node, callee) else switch (node.nested) {
+                    .resolved => try self.callInstanceAt(callee, subst, table.nestedEvidence(node), call_fn),
+                    .from_callable => try self.callableDerivedInstance(callee, subst, call_fn),
                     .through_alias => invariant("alias-scope evidence accompanies only an alias instantiation"),
                 };
-                defer self.allocator.free(hidden);
-                const all = try std.mem.concat(self.allocator, LocalId, &.{ args, hidden });
+                defer self.allocator.free(instance.hidden);
+                const all = try std.mem.concat(self.allocator, LocalId, &.{ args, instance.hidden });
                 defer self.allocator.free(all);
-                const target = try self.localOf(result_ty, .frame);
+                const target = try self.localOf(instance.ret, .frame);
                 try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(callee).proc, .args = try self.store.addLocalSpan(all), .next = undefined } });
-                return target;
+                return try self.adaptValue(target, instance.ret, result_ty);
             },
             .evidence_dependent => |dependent| {
                 const fn_ty = (try self.scopeInterface(dependent.index)) orelse try self.convert(callable_ty);

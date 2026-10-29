@@ -960,6 +960,31 @@ pub const ProcAbi = enum {
     erased_record,
 };
 
+/// The unit a procedure is emitted with (design.md "Mode Specialization",
+/// emission units). A direct call demands an ownership variant of its callee
+/// only when the two procedures share a unit; a call across units adapts to
+/// the callee's solved base signature as a call to an object-cache procedure
+/// does. The specialized lowering puts every procedure in `program`; `.boxy`
+/// gives a module's own workers that module's unit and every worker that is
+/// not one module's `isolated`, which shares with nothing.
+pub const EmissionUnit = enum(u32) {
+    program = 0,
+    isolated = 1,
+    _,
+
+    /// The unit of lowering module `index`.
+    pub fn module(index: u32) EmissionUnit {
+        return @enumFromInt(index + 2);
+    }
+
+    /// Whether a call from a procedure in `caller` may demand a variant of a
+    /// procedure in `callee`.
+    pub fn shares(caller: EmissionUnit, callee: EmissionUnit) bool {
+        if (caller == .isolated or callee == .isolated) return false;
+        return caller == callee;
+    }
+};
+
 /// Where the erased calls a callee left pending are run. A tail call through
 /// an erased function value cannot replace its caller's frame, because the
 /// erased-call runtime sits between the two and the callee returns its result
@@ -1830,6 +1855,9 @@ pub const LirProcSpec = struct {
     /// passes after the explicit arguments.
     dyn_result: ?LocalId = null,
     abi: ProcAbi = .roc,
+    /// The emission unit a direct call must share with this procedure to
+    /// demand an ownership variant of it.
+    emission_unit: EmissionUnit = .program,
     /// This closed proc exists only so target static-data materialization can
     /// execute its exact post-layout construction. Runtime backends register
     /// and emit only ordinary procedures.

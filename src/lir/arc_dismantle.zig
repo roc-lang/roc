@@ -2169,6 +2169,7 @@ const OperandUse = struct {
 fn operandSiteUse(
     store: *const LirStore,
     solution: *const arc_solve.Solution,
+    owner: LIR.LirProcSpecId,
     param_benefits: []const arc_sig.ParamMask,
     rc_local: []const bool,
     forest_mark: []const bool,
@@ -2187,9 +2188,12 @@ fn operandSiteUse(
                 if (found != null or position >= arc_sig.tracked_param_count or !rc_local[@backingInt(arg)]) return null;
                 if (@backingInt(solution.unitLocalOf(arg)) != root) return null;
                 const bit = arc_sig.paramBit(position).?;
+                // A borrowed position takes a field only through the
+                // callee's owned variant, which only a call within the
+                // callee's emission unit may demand.
                 const consumes = switch (sig.paramMode(position)) {
                     .owned => true,
-                    .borrowed => !solution.isPinnedProc(stmt.proc) and (param_benefits[@backingInt(stmt.proc)] & bit) != 0,
+                    .borrowed => !solution.isPinnedProc(stmt.proc) and arc_solve.sharesEmissionUnit(store, owner, stmt.proc) and (param_benefits[@backingInt(stmt.proc)] & bit) != 0,
                 };
                 if (!consumes) return null;
                 found = .{ .position = @intCast(position), .next = stmt.next };
@@ -2290,6 +2294,7 @@ fn collectBorrowForest(
 fn forestHasOperandSite(
     store: *const LirStore,
     solution: *const arc_solve.Solution,
+    owner: LIR.LirProcSpecId,
     analysis: *const Analysis,
     param_benefits: []const arc_sig.ParamMask,
     rc_local: []const bool,
@@ -2303,7 +2308,7 @@ fn forestHasOperandSite(
             const edge = analysis.mention_edges.items[mention];
             mention = edge.next;
             const stmt: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
-            if (operandSiteUse(store, solution, param_benefits, rc_local, forest_mark, root, stmt) != null) return true;
+            if (operandSiteUse(store, solution, owner, param_benefits, rc_local, forest_mark, root, stmt) != null) return true;
         }
     }
     return false;
@@ -3375,7 +3380,7 @@ pub fn compute(
                     var demanded = false;
                     if (read.view and solution.isBorrowed(read.target)) {
                         try collectBorrowForest(gpa, store, &analysis, borrow_child_heads, borrow_child_edges.items, &borrow_stack, &forest, forest_mark, @backingInt(read.target));
-                        demanded = forestHasOperandSite(store, solution, &analysis, operand_benefits, rc_local, forest.items, forest_mark, @backingInt(read.target));
+                        demanded = forestHasOperandSite(store, solution, @fromBackingInt(@intCast(owner)), &analysis, operand_benefits, rc_local, forest.items, forest_mark, @backingInt(read.target));
                         for (forest.items) |borrower| forest_mark[borrower] = false;
                     }
                     try view_demand.append(gpa, demanded);
@@ -3484,7 +3489,7 @@ pub fn compute(
                                 const edge = analysis.mention_edges.items[mention];
                                 mention = edge.next;
                                 const stmt: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
-                                const site_use = operandSiteUse(store, solution, operand_benefits, rc_local, forest_mark, target_index, stmt);
+                                const site_use = operandSiteUse(store, solution, @fromBackingInt(@intCast(owner)), operand_benefits, rc_local, forest_mark, target_index, stmt);
                                 const slot = try read_kinds.getOrPut(stmt);
                                 if (site_use) |use| {
                                     if (!slot.found_existing) {

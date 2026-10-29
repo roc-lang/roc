@@ -2405,6 +2405,12 @@ pub const CheckedTypeVariable = struct {
     /// a result row ending in the variable may still be determined by its
     /// request (design.md "Closed Result Rows At Template Boundaries").
     row_default_discharges_constraints: bool = false,
+    /// An implicitly opened row of an annotated definition that the
+    /// annotation bounds (design.md "Polarity"): the definition's body can
+    /// never add a tag to the row, only an instantiation of the definition
+    /// can. `.boxy` seals such a scheme variable to the empty row (design.md
+    /// "Sealed Result Rows").
+    bounded_row_ext: bool = false,
 };
 
 /// Artifact-stable identity of a `??` default in its declaring module; see
@@ -3007,6 +3013,7 @@ pub const StoredTypeVariable = struct {
     numeric_default_phase: ?NumericDefaultPhase = null,
     row_default: ?RowDefault = null,
     row_default_discharges_constraints: bool = false,
+    bounded_row_ext: bool = false,
 };
 
 /// POD form of `CheckedAliasType`: `args` is a range into `type_id_pool`.
@@ -3725,6 +3732,7 @@ fn checkedTypeVariableAlphaStep(
 
     if (left.numeric_default_phase != right.numeric_default_phase or
         left.row_default != right.row_default or
+        left.bounded_row_ext != right.bounded_row_ext or
         left.constraints.len != right.constraints.len)
     {
         return false;
@@ -5503,6 +5511,7 @@ fn cloneCheckedTypeBuildVariable(
         .numeric_default_phase = variable.numeric_default_phase,
         .row_default = variable.row_default,
         .row_default_discharges_constraints = variable.row_default_discharges_constraints,
+        .bounded_row_ext = variable.bounded_row_ext,
     };
 }
 
@@ -8358,7 +8367,7 @@ const CheckedTypePublisher = struct {
             // children first, then hash-cons the immediate payload from interned
             // child ids. Repeated fresh solver graphs therefore stop here without
             // another recursive canonical digest.
-            return .{ .call = .{ .payload = .{ .content = resolved.desc.content } } };
+            return .{ .call = .{ .payload = .{ .content = resolved.desc.content, .bounded_row_ext = resolved.desc.flags.bounded_row_ext } } };
         }
 
         const key_info = try active.scratch.?.key_writer.fromVar(resolved_var);
@@ -8388,7 +8397,7 @@ const CheckedTypePublisher = struct {
         try active.put(resolved_var, id);
         task.id = id;
         task.reserved = true;
-        return .{ .call = .{ .payload = .{ .content = resolved.desc.content } } };
+        return .{ .call = .{ .payload = .{ .content = resolved.desc.content, .bounded_row_ext = resolved.desc.flags.bounded_row_ext } } };
     }
 
     /// Publish a closed acyclic graph's root from its complete payload,
@@ -8449,6 +8458,10 @@ const CheckedTypePublisher = struct {
 
     const PayloadTask = struct {
         content: types.Content,
+        /// The bound of an annotation's implicitly opened row
+        /// (`DescriptorFlags.bounded_row_ext`), a fact of the class rather
+        /// than of its content.
+        bounded_row_ext: bool,
         /// The index in `publisher_builds` of the payload built so far, owned
         /// by this frame once its first step ran.
         build: u32 = undefined,
@@ -8487,6 +8500,7 @@ const CheckedTypePublisher = struct {
                     build.flex.constraints = input.?.get(.constraints);
                     build.flex.numeric_default_phase = numericDefaultPhaseForFlex(module, flex);
                     build.flex.row_default_discharges_constraints = rowDefaultDischargesConstraints(module, flex.constraints);
+                    build.flex.bounded_row_ext = task.bounded_row_ext;
                 },
             },
             .rigid => |rigid| switch (cursor) {
@@ -34378,7 +34392,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 109;
+    const serialized_layout_version: u32 = 110;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -36779,6 +36793,7 @@ const CheckedTypeStoreImportProjector = struct {
             .numeric_default_phase = variable.numeric_default_phase,
             .row_default = variable.row_default,
             .row_default_discharges_constraints = variable.row_default_discharges_constraints,
+            .bounded_row_ext = variable.bounded_row_ext,
         };
     }
 

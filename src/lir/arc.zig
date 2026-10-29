@@ -728,6 +728,9 @@ fn recordObjectCacheFacts(
         spec.rc_ret_unique_fields = sig.ret_unique_fields;
         spec.rc_ret_conditions = conditions;
         spec.rc_variant_demandable = false;
+        // Nothing shares an isolated procedure's unit, so no call demands a
+        // variant of it.
+        if (spec.emission_unit == .isolated) continue;
         if (solution.isPinnedProc(proc)) {
             // A proc pinned only for stability still has its outcome
             // variant, for callers compiled with its current body.
@@ -1230,6 +1233,7 @@ const VariantTable = struct {
             .erased_capture_arg = source_spec.erased_capture_arg,
             .dyn_result = source_spec.dyn_result,
             .abi = source_spec.abi,
+            .emission_unit = source_spec.emission_unit,
             .is_static_initializer = source_spec.is_static_initializer,
             .hosted = source_spec.hosted,
             .tail_transform = source_spec.tail_transform,
@@ -6025,6 +6029,9 @@ const Inserter = struct {
         self.retain_arg_scratch.clearRetainingCapacity();
         var demanded = callee_sig;
         const locals = self.store.getLocalSpan(span);
+        // A call across emission units adapts to the callee's base signature
+        // (design.md "Mode Specialization", emission units).
+        const same_unit = if (callee) |direct| arc_solve.sharesEmissionUnit(self.store, self.current_source_proc, direct) else false;
         if (tail_call != null and self.current_sig.ret_mode == .owned and demanded.ret_mode == .borrowed) {
             // A recursive tail edge must use the caller's return ABI. Asking
             // an owned-return caller to forward a borrowed result would put a
@@ -6162,13 +6169,14 @@ const Inserter = struct {
                 else
                     false;
                 const enables_field_take = if (callee) |direct|
-                    (self.dismantles.ownedOnlyParamBenefits(direct) & bit) != 0
+                    same_unit and (self.dismantles.ownedOnlyParamBenefits(direct) & bit) != 0
                 else
                     false;
                 // Recursive tail transfer and field takes are exact ownership
                 // schedules, so their variants are mandatory. General return
-                // and born-unique specialization remains opt-in.
-                if (!self.options.specialize and !enables_field_take and !requires_tail_transfer) continue;
+                // and born-unique specialization remains opt-in, and only
+                // within the callee's emission unit.
+                if (!(self.options.specialize and same_unit) and !enables_field_take and !requires_tail_transfer) continue;
                 const owner = self.unitOf(local);
                 const used_after_call = local != target and (if (enables_field_take)
                     try self.ownershipPlaceUsedInPath(next, owner)
@@ -6180,9 +6188,9 @@ const Inserter = struct {
                 // it, so a shared operand keeps its unit.
                 const shares_other_operand = self.groupSharesOtherOperand(locals, position, local);
                 const can_transfer = owned.contains(owner) and !used_after_call and !shares_other_operand;
-                const return_borrows_param = callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
+                const return_borrows_param = same_unit and callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0;
                 const seed_can_reach_check = if (callee) |direct| self.procParamCanUseUniqueSeed(direct, position) else false;
-                const seeds_unique_param = can_transfer and unique_demand and seed_can_reach_check and self.isLocalUniqueHere(local);
+                const seeds_unique_param = can_transfer and unique_demand and same_unit and seed_can_reach_check and self.isLocalUniqueHere(local);
                 if (!can_transfer and !requires_tail_transfer) continue;
                 if (!return_borrows_param and !seeds_unique_param and !enables_field_take and !requires_tail_transfer) continue;
                 demanded.borrowed_params &= ~bit;

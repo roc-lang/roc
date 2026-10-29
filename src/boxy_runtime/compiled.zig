@@ -371,16 +371,13 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
 }
 
 /// The variant of the tag union `to` a value of variant `source` is
-/// re-tagged as: the one with its name and payload count, and among several,
-/// the one whose payload has the source payload's shape.
+/// re-tagged as: the one with its name and payload count, which a row names
+/// once (design.md "Row Joins", "One label, two payload types").
 fn targetVariant(to: *const TypeDesc, source: *const Variant, ops: *RocOps) *const Variant {
     var found: ?*const Variant = null;
     for (to.variants()) |*candidate| {
         if (candidate.name.id != source.name.id or candidate.payload_count != source.payload_count) continue;
-        if (found != null) {
-            if (!walk.sameShape(candidate.payload, source.payload, ops)) continue;
-            if (walk.sameShape(found.?.payload, source.payload, ops)) invariant(ops, "a re-tagged variant matches two destination variants");
-        }
+        if (found != null) invariant(ops, "a re-tagged variant matches two destination variants");
         found = candidate;
     }
     return found orelse invariant(ops, "a re-tagged variant is not in its destination's row");

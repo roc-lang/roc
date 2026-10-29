@@ -3,7 +3,6 @@
 
 pub const Lower = @import("lower.zig");
 pub const Types = @import("types.zig");
-pub const RowJoins = @import("row_joins.zig");
 pub const Layouts = @import("layouts.zig");
 pub const StaticDescs = @import("static_descs.zig");
 pub const Body = @import("body.zig");

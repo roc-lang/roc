@@ -242,12 +242,11 @@ pub const Ctx = struct {
         return .{ .index = 0, .ty = try self.b.structuralType(ty), .pat = self.pattern(pat).data.nominal.backing_pattern };
     }
 
-    /// The tags a tag pattern on `ty` selects among: the joined row's for a
-    /// closed union (in discriminant order), the type's own otherwise.
+    /// The tags a tag pattern on `ty` selects among: the type's own, in
+    /// discriminant order for a closed union.
     fn unionTags(self: Ctx, ty: types.TypeId) Allocator.Error![]const types.Tag {
         const structural = try self.b.structuralType(ty);
-        const shown = if (try self.b.closed(structural)) self.b.program.joins.representative(structural) else structural;
-        return switch (self.store().get(shown)) {
+        return switch (self.store().get(structural)) {
             .tag_union => |tag_union| self.store().tagSpan(tag_union.tags),
             .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a tag pattern's type is not a tag union"),
         };

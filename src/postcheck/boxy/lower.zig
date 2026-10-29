@@ -19,7 +19,6 @@ const lir_core = @import("lir_core");
 
 const Common = @import("../common.zig");
 const types = @import("types.zig");
-const RowJoins = @import("row_joins.zig");
 const Layouts = @import("layouts.zig").Layouts;
 const StaticDescs = @import("static_descs.zig").StaticDescs;
 const Body = @import("body.zig");
@@ -107,6 +106,11 @@ pub const WorkerKey = union(enum) {
     /// to a crash: a dispatch checking rejected, or one no value can reach
     /// (design.md "Static Dispatch In Monotype"). Calling it crashes.
     crash_dictionary: CrashDictionary,
+    /// The static row conversion of `module` from the closed type `from` to
+    /// the closed type `to`, whose rows widen `from`'s along the coercion's
+    /// reach (design.md "Sealed Result Rows"). Each module converting a pair
+    /// has its own worker for it.
+    convert: struct { module: ModuleIndex, from: TypeId, to: TypeId },
 };
 
 /// Why a dictionary slot's method crashes.
@@ -144,8 +148,14 @@ pub const Worker = struct {
     proc: LIR.LirProcSpecId,
     module: ModuleIndex,
     /// The checked scheme variables of the worker's scope, in hidden
-    /// descriptor parameter order.
+    /// descriptor parameter order. A template's sealed variables (design.md
+    /// "Sealed Result Rows") are omitted: they seal to the empty row.
     scheme_vars: []const checked.CheckedTypeId,
+    /// For a template worker: the position of each of `scheme_vars` in the
+    /// template's checked `scheme_vars`, which a use's substitution is
+    /// indexed by, and that checked list's length.
+    checked_slots: []const u32 = &.{},
+    checked_scheme_count: u32 = 0,
     /// Evidence parameters that are runtime dictionaries, in hidden
     /// dictionary parameter order (indices into the template's params).
     dictionary_params: []const u32,
@@ -273,7 +283,6 @@ pub const Program = struct {
     input: Input,
     modules: types.Modules,
     store: types.Store,
-    joins: RowJoins.Joins,
     layouts: Layouts,
     result: LirProgram.Result,
     static_descs: StaticDescs,
@@ -391,15 +400,33 @@ pub const Program = struct {
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
         const template = view.view.checked_procedure_templates.templates.items[@backingInt(template_id)];
-        const scheme_vars = poolSlice(checked.CheckedTypeId, view.view.checked_procedure_templates.scheme_vars_pool, template.scheme_vars);
+        const checked_scheme_vars = poolSlice(checked.CheckedTypeId, view.view.checked_procedure_templates.scheme_vars_pool, template.scheme_vars);
+        // A sealed variable (design.md "Sealed Result Rows") is no hidden
+        // parameter: it seals to the empty row wherever the body mentions it,
+        // and an evidence parameter dispatching on it is no dictionary.
+        var scheme_vars: std.ArrayList(checked.CheckedTypeId) = .empty;
+        var checked_slots: std.ArrayList(u32) = .empty;
+        var sealed_slots: std.ArrayList(u32) = .empty;
+        defer sealed_slots.deinit(self.allocator);
+        for (checked_scheme_vars, 0..) |variable, slot| {
+            if (self.converter().sealedSchemeVar(module_index, variable)) {
+                try sealed_slots.append(self.allocator, @intCast(slot));
+                continue;
+            }
+            try scheme_vars.append(self.arena.allocator(), variable);
+            try checked_slots.append(self.arena.allocator(), @intCast(slot));
+        }
         var dictionary_params: std.ArrayList(u32) = .empty;
         const evidence_params = poolSlice(static_dispatch.EvidenceParamRecord, view.view.checked_procedure_templates.evidence_params_pool, template.evidence_params);
         for (evidence_params, 0..) |param, index| {
-            if (param.runtime_dictionary) try dictionary_params.append(self.arena.allocator(), @intCast(index));
+            if (!param.runtime_dictionary) continue;
+            const sealed_dispatcher = if (param.slot) |slot| std.mem.indexOfScalar(u32, sealed_slots.items, slot) != null else false;
+            if (sealed_dispatcher) continue;
+            try dictionary_params.append(self.arena.allocator(), @intCast(index));
         }
-        const bound = try self.arena.allocator().alloc(TypeId, scheme_vars.len);
+        const bound = try self.arena.allocator().alloc(TypeId, scheme_vars.items.len);
         for (bound, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
-        const env: types.Env = .{ .module = module_index, .vars = scheme_vars, .bound = bound };
+        const env: types.Env = .{ .module = module_index, .vars = scheme_vars.items, .bound = bound };
         const fn_ty = try self.converter().convert(module_index, template.checked_fn_root, env);
         const signature = switch (self.store.get(fn_ty)) {
             .function => |function| function,
@@ -411,6 +438,7 @@ pub const Program = struct {
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.programLocal("boxy.worker", @backingInt(id)),
+            .emission_unit = LIR.EmissionUnit.module(@backingInt(module_index)),
             .args = .empty(),
             .ret_layout = .zst,
         }, base.SourceLoc.none);
@@ -418,7 +446,9 @@ pub const Program = struct {
             .key = key,
             .proc = proc,
             .module = module_index,
-            .scheme_vars = scheme_vars,
+            .scheme_vars = scheme_vars.items,
+            .checked_slots = checked_slots.items,
+            .checked_scheme_count = @intCast(checked_scheme_vars.len),
             .dictionary_params = dictionary_params.items,
             .params = params,
             .ret = signature.ret,
@@ -427,6 +457,21 @@ pub const Program = struct {
         });
         try self.worker_ids.put(self.allocator, key, id);
         return id;
+    }
+
+    /// The entries of a use's checked substitution `subst` (indexed by the
+    /// template's checked scheme variables) for the scheme variables of
+    /// template worker `id`: the sealed variables' entries are dropped, since
+    /// the worker takes no descriptor for them. An empty substitution (a use
+    /// checking recorded none for) stays empty.
+    pub fn keptSubstitution(self: *Program, id: WorkerId, subst: []const checked.CheckedTypeId) Allocator.Error![]const checked.CheckedTypeId {
+        const target = self.worker(id).*;
+        if (subst.len == 0 or target.key != .template) return subst;
+        if (subst.len != target.checked_scheme_count) invariant("a use's checked substitution differs from its target's scheme");
+        if (target.checked_slots.len == subst.len) return subst;
+        const kept = try self.arena.allocator().alloc(checked.CheckedTypeId, target.checked_slots.len);
+        for (kept, target.checked_slots) |*entry, slot| entry.* = subst[slot];
+        return kept;
     }
 
     pub fn templateRefScope(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
@@ -456,6 +501,7 @@ pub const Program = struct {
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.programLocal("boxy.lambda", @backingInt(id)),
+            .emission_unit = LIR.EmissionUnit.module(@backingInt(outer_worker.module)),
             .args = .empty(),
             .ret_layout = .zst,
             .abi = .erased_record,
@@ -495,10 +541,8 @@ pub const Program = struct {
     }
 
     /// `relateVariablesPartial`, also marking in `row_vars` each variable
-    /// related as an open tag row's remainder. A closed actual row relates
-    /// through its join representative, whose layout it has: an open row's
-    /// remainder is the representative's tags the row does not name
-    /// (design.md "Row Joins").
+    /// related as an open tag row's remainder: the actual row's tags the open
+    /// row does not name (design.md "Row Joins", `.boxy`).
     pub fn relateVariablesRows(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize, row_vars: ?[]bool) Allocator.Error![]?TypeId {
         const store = &self.store;
         const bound = try allocator.alloc(?TypeId, count);
@@ -560,10 +604,7 @@ pub const Program = struct {
                 .tag_union => |tag_union| {
                     var residual: std.ArrayList(types.TagInput) = .empty;
                     defer residual.deinit(allocator);
-                    const actual = if (tag_union.ext != null and other.tag_union.ext == null) switch (store.get(self.joins.representative(pair[1]))) {
-                        .tag_union => |rep| rep,
-                        .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => other.tag_union,
-                    } else other.tag_union;
+                    const actual = other.tag_union;
                     for (store.tagSpan(actual.tags)) |candidate| {
                         var named = false;
                         for (store.tagSpan(tag_union.tags)) |tag| {
@@ -634,7 +675,7 @@ pub const Program = struct {
     }
 
     /// `ty` with each variable `i` replaced by `bound[i]`. A row whose
-    /// remainder becomes a row joins it.
+    /// remainder becomes a row takes that row's tags.
     pub fn substitute(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId) Allocator.Error!TypeId {
         var done: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty;
         defer done.deinit(allocator);
@@ -933,7 +974,7 @@ pub const Program = struct {
         if (requirements.len == 0) return .{ .bound = bound, .requirements = requirements };
         const key = switch (target_worker.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
         const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
@@ -980,7 +1021,7 @@ pub const Program = struct {
         if (target_worker.dictionary_params.len != 0) {
             const key = switch (target_worker.key) {
                 .template => |key| key,
-                .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary => invariant("a worker with dictionary parameters is not a template's"),
+                .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert => invariant("a worker with dictionary parameters is not a template's"),
             };
             const templates = self.module(key.module).view.checked_procedure_templates;
             const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
@@ -1198,6 +1239,7 @@ pub const Program = struct {
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.programLocal("boxy.adapter", @backingInt(id)),
+            .emission_unit = .isolated,
             .args = .empty(),
             .ret_layout = .zst,
             .abi = .erased_record,
@@ -1239,6 +1281,7 @@ pub const Program = struct {
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.programLocal("boxy.default", @backingInt(id)),
+            .emission_unit = .isolated,
             .args = .empty(),
             .ret_layout = .zst,
         }, base.SourceLoc.none);
@@ -1266,6 +1309,7 @@ pub const Program = struct {
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.programLocal("boxy.static_data", @backingInt(id)),
+            .emission_unit = .isolated,
             .args = .empty(),
             .ret_layout = .zst,
         }, base.SourceLoc.none);
@@ -1297,6 +1341,7 @@ pub const Program = struct {
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.programLocal("boxy.root", @backingInt(id)),
+            .emission_unit = .isolated,
             .args = .empty(),
             .ret_layout = .zst,
         }, base.SourceLoc.none);
@@ -1309,6 +1354,33 @@ pub const Program = struct {
             .params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args)),
             .ret = signature.ret,
             .root_request = request,
+        });
+        try self.worker_ids.put(self.allocator, key, id);
+        try self.worklist.append(self.allocator, id);
+        return id;
+    }
+
+    /// The row conversion worker of `module_index` from `from` to `to` (see
+    /// `WorkerKey.convert`).
+    pub fn convertWorker(self: *Program, module_index: ModuleIndex, from: TypeId, to: TypeId) Allocator.Error!WorkerId {
+        const key: WorkerKey = .{ .convert = .{ .module = module_index, .from = from, .to = to } };
+        if (self.worker_ids.get(key)) |existing| return existing;
+        const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
+        const proc = try self.result.store.addProcSpec(.{
+            .name = self.result.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.programLocal("boxy.convert", @backingInt(id)),
+            .emission_unit = LIR.EmissionUnit.module(@backingInt(module_index)),
+            .args = .empty(),
+            .ret_layout = .zst,
+        }, base.SourceLoc.none);
+        try self.workers.append(self.allocator, .{
+            .key = key,
+            .proc = proc,
+            .module = module_index,
+            .scheme_vars = &.{},
+            .dictionary_params = &.{},
+            .params = try self.arena.allocator().dupe(TypeId, &.{from}),
+            .ret = to,
         });
         try self.worker_ids.put(self.allocator, key, id);
         try self.worklist.append(self.allocator, id);
@@ -1371,6 +1443,7 @@ pub const Program = struct {
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.programLocal(role, @backingInt(id)),
+            .emission_unit = .isolated,
             .args = .empty(),
             .ret_layout = .zst,
             .abi = .erased_record,
@@ -1454,7 +1527,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         .input = input,
         .modules = .{ .allocator = allocator },
         .store = types.Store.init(allocator),
-        .joins = RowJoins.Joins.init(allocator),
         .layouts = undefined,
         .result = try LirProgram.Result.init(allocator, input.target_usize),
         .static_descs = undefined,
@@ -1465,7 +1537,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     defer {
         program.static_descs.deinit();
         program.layouts.deinit();
-        program.joins.deinit();
         program.store.deinit();
         program.modules.deinit();
         program.workers.deinit(allocator);
@@ -1499,7 +1570,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         .allocator = allocator,
         .store = &program.store,
         .converter = program.converter(),
-        .joins = &program.joins,
         .layouts = &program.result.layouts,
     };
     program.static_descs = StaticDescs.init(allocator, &program.store, &program.layouts, &program.result, input.target_usize);
@@ -1578,11 +1648,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
     }
 
-    // Row joins are seeded from every checked body and sealed before any
-    // layout is committed.
-    try seedRowJoins(&program);
-    try program.joins.seal(&program.store);
-
     const requests = input.roots.requests;
     for (requests, 0..) |request, index| {
         const source_module = if (input.roots.source_modules.len == 0)
@@ -1643,7 +1708,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                     const export_name = names.procBase(template.proc_base).export_name orelse break :blk "boxy.template";
                     break :blk names.exportNameText(export_name);
                 },
-                inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary => |_, kind| "boxy." ++ @tagName(kind),
+                inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert => |_, kind| "boxy." ++ @tagName(kind),
             };
             try program.result.store.setProcDebugName(worker.proc, name);
         }
@@ -1681,59 +1746,6 @@ fn seedSourceFiles(program: *Program) Allocator.Error!void {
         program.lowering_module_ids[module_position] = try program.result.appendLoweringModule(view.key);
     }
     try program.result.store.setSourceFiles(files);
-}
-
-/// A root's procedure: its template's worker, which a host-shaped wrapper
-/// would call with static hidden arguments when the worker has any.
-/// Seed the row joins (design.md "Row Joins"): each `row_coerce` with its
-/// value, each lambda's body with its function's result, and each `return`
-/// with its function's result, in every module's checked bodies.
-fn seedRowJoins(program: *Program) Allocator.Error!void {
-    const allocator = program.allocator;
-    for (program.modules.views.items) |*view| {
-        var scheme_vars: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
-        defer scheme_vars.deinit(allocator);
-        for (view.view.checked_procedure_templates.scheme_vars_pool) |variable| try scheme_vars.put(allocator, variable, {});
-        var converter = program.converter();
-        converter.seed_scheme_vars = &scheme_vars;
-        const bodies = view.bodies();
-        for (0..bodies.exprCount()) |index| {
-            const id: checked.CheckedExprId = @fromBackingInt(@intCast(index));
-            const expr = bodies.expr(id);
-            const pair: [2]checked.CheckedTypeId = switch (expr.data) {
-                .row_coerce => |coerce| .{ expr.ty, bodies.expr(coerce.value).ty },
-                .lambda => |lambda| .{ checkedResult(view, expr.ty) orelse continue, bodies.expr(lambda.body).ty },
-                .return_ => |ret| .{ checkedResult(view, bodies.expr(ret.lambda).ty) orelse continue, bodies.expr(ret.expr).ty },
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .for_, .hosted_lambda, .run_low_level => continue,
-            };
-            try seedJoin(program, converter, view.index, pair);
-        }
-        for (0..bodies.statementCount()) |index| {
-            const id: checked.CheckedStatementId = @fromBackingInt(@intCast(index));
-            switch (bodies.statement(id).data) {
-                .return_ => |ret| try seedJoin(program, converter, view.index, .{ checkedResult(view, bodies.expr(ret.lambda).ty) orelse continue, bodies.expr(ret.expr).ty }),
-                .pending, .decl, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
-            }
-        }
-    }
-}
-
-/// Join the types of a flow edge; one type flowing to itself joins nothing.
-fn seedJoin(program: *Program, converter: types.Converter, module_index: ModuleIndex, pair: [2]checked.CheckedTypeId) Allocator.Error!void {
-    if (pair[0] == pair[1]) return;
-    const env: types.Env = .{ .module = module_index, .vars = &.{}, .bound = &.{} };
-    try program.joins.join(&program.store, try converter.convert(module_index, pair[0], env), try converter.convert(module_index, pair[1], env));
-}
-
-/// The checked result type of a lambda's function type, through aliases; a
-/// rejected lambda's type has none.
-fn checkedResult(view: *const types.ModuleView, fn_ty: checked.CheckedTypeId) ?checked.CheckedTypeId {
-    var current = fn_ty;
-    while (true) switch (view.types().payload(current)) {
-        .alias => |alias| current = alias.backing,
-        .function => |function| return function.ret,
-        .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
-    };
 }
 
 /// Bind every hosted procedure in scope to its external symbol and dispatch
@@ -1808,6 +1820,8 @@ fn solvePlatformIdentities(program: *Program) Allocator.Error!void {
     }
 }
 
+/// A root's procedure: its template's worker, which a host-shaped wrapper
+/// would call with static hidden arguments when the worker has any.
 fn lowerRoot(program: *Program, request: checked.RootRequest, index: u32, source_module: ModuleIndex) Allocator.Error!LIR.LirProcSpecId {
     // A root whose target takes no hidden arguments is the target itself.
     const direct: ?checked_names.ProcedureTemplateRef = if (request.procedure_template) |template|
@@ -1850,10 +1864,9 @@ const HostBoundaryGraph = struct {
 
     const Edge = host_boundary.Edge(TypeId);
 
-    pub fn shape(self: HostBoundaryGraph, raw: TypeId, edges: *std.ArrayList(Edge)) Allocator.Error!host_boundary.Shape(TypeId) {
+    pub fn shape(self: HostBoundaryGraph, ty: TypeId, edges: *std.ArrayList(Edge)) Allocator.Error!host_boundary.Shape(TypeId) {
         const program = self.program;
         const allocator = program.allocator;
-        const ty = program.joins.representative(raw);
         switch (program.store.get(ty)) {
             .primitive, .empty_record => return .leaf,
             .variable => invariant("a type variable reached a host boundary"),

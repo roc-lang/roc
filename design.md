@@ -11113,11 +11113,12 @@ Subsumption). A read of a top-level value is never one (Value Rows: Uses
 Share One Row).
 
 The node converts nothing. It marks a place where the child's rows and the
-node's rows flow together, and every lowering makes them ONE row there (Row
-Joins, below), so the child already has its destination's representation and
-is lowered straight into it. The node is the value-only sibling of the `?`
-return boundary (Try Return-Row Composition): the same join, without the
-control transfer.
+node's rows flow together. The specialized lowering makes them ONE row there
+(Row Joins, below), so the child already has its destination's representation
+and is lowered straight into it; `.boxy` builds a constructed child at the
+destination's row and converts a produced one (Sealed Result Rows). The node
+is the value-only sibling of the `?` return boundary (Try Return-Row
+Composition): the same flow, without the control transfer.
 
 The coercion has a fixed REACH, the set of positions the checker widens.
 Starting from the coerced value's own row, it reaches:
@@ -11159,20 +11160,20 @@ wrapper; such a child produces no value, so the join has nothing to relate.
   constructed tag's payloads are reached positions of the destination's row
   and are built at its payload types. A child that produces its value (a
   read or a call) has its own type's representation, and when the two types
-  differ it is re-tagged into the destination by a descriptor-driven `adapt`
-  along the coercion's reach: at each reached tag row the destination
+  differ it is converted into the destination along the coercion's reach
+  (Sealed Result Rows): between two closed types by a static row conversion
+  of the enclosing module, and into a destination whose row a type variable
+  of the body opens by the descriptor-driven `adapt`, whose destination
   discriminant is the one the tag's name has under the destination's
-  descriptor (`tag_discriminant_of`; of a label the joined row holds at
-  several payload types, the variant whose payload has the source payload's
-  shape), the payloads copy into the destination's payload addresses, and the
-  walk descends only into reached positions—tag payloads and nominal
-  backings. Records, lists, boxes, and function values are outside the reach
-  by the checker's rule and copy as they are. The re-tag is elided when the
-  two types are one, or are ground members of one join set. A dictionary of a
-  method whose signature holds a row its consumers' type widens is wrapped in
-  an adapter that re-tags the method's result the same way; the adapter,
-  like the dictionary it wraps, is an immortal composition of the entry chain. The same rule
-  lowers a `?` return and a `return` into an open result.
+  descriptor. Either walk descends only into reached positions—tag payloads
+  and nominal backings. Records, lists, boxes, and function values are
+  outside the reach by the checker's rule and copy as they are. The
+  conversion is elided when the two types are one or have one committed
+  layout. A dictionary of a method whose signature holds a row its consumers'
+  type widens is wrapped in an adapter that converts the method's result the
+  same way; the adapter, like the dictionary it wraps, is an immortal
+  composition of the entry chain. The same rule lowers a `?` return and a
+  `return` into the function's result.
 - SpecConstr clones and walks through the child like any wrapper, and treats
   a self call under a widen as NOT a tail call. A widen changes no value, so
   the child's known structure carries across it at the widen's type
@@ -11199,7 +11200,7 @@ entry: the primitive mutates no solved type graph.
 A row join makes two structural tag rows one row. Wherever a value whose type
 holds row `A` flows into a position whose type holds row `B`—a closed value
 into an annotated function's open result, a `return` or a `?` into its
-function's result—the compiler does
+function's result—the specialized lowering does
 not convert the value. After type checking it gives `A` and `B` the same set
 of tags, and so the same discriminant numbering and the same representation,
 and the value is correct at its destination as it is. It is the row analogue
@@ -11207,14 +11208,16 @@ of a lambda set: a function slot's representation is the set of every lambda
 that flows into it, and a joined row is the set of every tag that flows into
 it. Nominal tag unions are unaffected; their rows are declared.
 
-The join is what makes Row Subsumption free. The checker admits a closed-row
-value in an open result position by relating it through a widened copy, and
-the two rows it keeps apart there are exactly the rows that join. A
-conversion would cost a discriminant switch at every crossing and would need
-a site for every spelling of a use; a join costs nothing at runtime and knows
-nothing about use sites, so a direct call, a method call, an imported call
-and the function as a value all read the one joined row. No stage of the
-compiler inserts a tag-union conversion.
+The join is what makes Row Subsumption free under specialization. The checker
+admits a closed-row value in an open result position by relating it through a
+widened copy, and the two rows it keeps apart there are exactly the rows that
+join. A conversion would cost a discriminant switch at every crossing and
+would need a site for every spelling of a use; a join costs nothing at
+runtime and knows nothing about use sites, so a direct call, a method call,
+an imported call and the function as a value all read the one joined row.
+Under `.lss` no stage of the compiler inserts a tag-union conversion. `.boxy`
+has no specialization to carry a join across a template boundary, so it
+converts instead (Sealed Result Rows); the checker is the same for both.
 
 **Where joins come from.** Every place a value's rows flow into another's:
 a `row_coerce` and its child; a lambda's body and its function's result; a
@@ -11223,7 +11226,7 @@ function's `Try` result. These are edges between types, not between rows:
 each edge is descended structurally, so rows at matching positions (a
 `Try`'s error argument, a tag payload, a record field) join too. Lambda
 Solved has every edge as a unification; `.boxy` reads the same edges from the
-checked bodies.
+checked bodies as the places it converts at.
 
 **`.lss`.** Lambda Solved is whole-program unification over monomorphic code,
 and a join is a unification. `relateReturnedExpr` unifies a returned or
@@ -11271,33 +11274,21 @@ An inherited argument/clone context likewise requires its own explicit proof. Ce
 subscribe to every solved node they read and retire on checked writes. An
 unsuccessful proof leaves the ordinary unification relation unchanged.
 
-**`.boxy`.** Boxy computes the same joins once, before it lowers any body: a
-union-find over `CheckedTypeIdentity` seeded from every module's checked
-bodies—each `row_coerce` with its child, each lambda body with its function's
-result, each `return` with its function's result—with every pair descended
-structurally (shared tags' payloads, nominal arguments, record fields, tuple
-items, function arguments and results). A join set's GROUND members—types
-with no type variable and no open row anywhere—share one layout: the least
-identity is the set's representative, so the choice depends on the program
-alone; every other ground member takes the representative's layout; and the
-representative tag row's layout lists every member's tags. Identities join
-through their aliases, since an alias names its backing's layout. The
-lowerer's one layout function for a checked type consults this map and
-nothing else about the program. Checked types are shared by structure, so a
-join set collects every flow of a type rather than one value's flows; one tag
-label at two incompatible payload types is two variants of the joined row
-(see below), so the descent joins only compatible payloads and every set is
-one shape, which the lowerer checks before electing a representative. An open
-row member stays dynamic in a generic body: its descriptor is composed from
-its explicit tags and the descriptor of its row variable, and a caller
-supplies a row variable's descriptor as the residual of the actual row's
-representative (the representative's tags the open row does not name), so
-the composed layout is the representative's. A `where` result opened per use
-is such an open row, so a dispatch edge needs no seed of its own. A ground
-value that flows into an open-row destination of a generic body cannot share
-its layout, whose rows every caller widens differently: it is re-tagged by
-tag name into the destination's descriptor-composed layout (Row Coercion
-Primitive), and no join is seeded per instantiation.
+**`.boxy`.** Boxy joins nothing. A type's Boxy layout is the committed
+layout of the type itself, so a module's layouts depend only on its own
+checked types and its imports', never on a module that imports it. Where the
+specialized lowering joins, Boxy converts: a closed value flowing into a
+wider row of the same body, a call whose instantiation widens a callee's
+sealed result, a function value used at a wider type, and a dictionary whose
+method's result its consumer widens are each converted along the coercion's
+reach (Sealed Result Rows). An open row of a generic body stays dynamic: its
+descriptor is composed from its explicit tags and the descriptor of its row
+variable, and a caller supplies a row variable's descriptor as the residual
+of the actual row (the actual row's tags the open row does not name), so the
+composed layout is the actual row's committed layout. A `where` result
+opened per use is such an open row. A ground value that flows into an
+open-row destination of a generic body is re-tagged by tag name into the
+destination's descriptor-composed layout (Row Coercion Primitive).
 
 **One label, two payload types.** A join unites rows that may name one tag
 at two payload types: a value of `[Shared]` forwarded into both
@@ -11318,13 +11309,9 @@ its scrutinee's row has an arm (`tagVariantCount`), since the other variant
 of a repeated label cannot reach it. Variants of one label are ordered by the
 digests of their payload types when the row is lowered
 (`Lowerer.orderRepeatedLabels`), so two rows holding the same variants are one
-Lambda Mono type. `.boxy` applies the same rule over checked types: two
-same-label tags of joined rows are one variant only when their payloads are
-structurally compatible (the lowerer's counterpart of `typesCompatible` over
-checked types), and only then are their payloads joined; the joined layout
-lists the other as a second variant, ordered after the first by its payload's
-identity; and the lowerer selects a constructor's, pattern's or restored
-constant's variant by its own checked payload types.
+Lambda Mono type. `.boxy` never meets a repeated label: a checked row lists a
+label once, and Boxy's rows are checked rows, so its descriptors and its
+runtime treat a label named twice in one row as a compiler bug.
 
 **The host boundary.** A host is compiled before the Roc program against the
 rows its declarations wrote, so a host row cannot join a wider one. Every tag
@@ -14564,10 +14551,9 @@ monomorphic runs at nearly the speed of its specialized build.
 
 #### One Representation Per Type
 
-Every checked type has exactly one runtime representation under `.boxy`: the
-committed layout, in the layout store, of its row-join set's representative
-(Row Joins), which for a type whose rows flow nowhere wider is the layout
-`.lss` gives that type. A `List(U64)` is a list of inline 64-bit integers whether the
+Every checked type has exactly one runtime representation under `.boxy`: its
+committed layout in the layout store, the layout `.lss` gives the same type.
+A `List(U64)` is a list of inline 64-bit integers whether the
 code touching it is monomorphic, generic over the item type, a host entry
 wrapper, or a hosted call. A record is the same flat struct, with the same
 field order, in a generic body and in a monomorphic one.
@@ -14586,10 +14572,10 @@ This rule has three consequences that define the rest of the design:
   lowered to the same layouts under both strategies; a generic body reached
   from a host entry sees the host's bytes directly.
 
-Row joins are the one whole-program input to a type's layout, and they are a
-single union-find over the explicit flow edges of the checked bodies, computed
-once before lowering (Row Joins). Nothing else about a type's representation
-depends on where the type is used.
+Nothing about a type's representation depends on where the type is used. A
+module's layouts, descriptors, and workers are a function of its own checked
+module and its imports' checked modules alone (Per-Module Output, below), so
+two modules never need to agree on anything a third module decided.
 
 The layout a descriptor composes at runtime for a type is byte-for-byte the
 layout the layout store commits for the same type at compile time. The struct
@@ -14637,6 +14623,68 @@ parameters are borrowed or owned exactly as the borrow inference decides for
 any aggregate parameter, and the callee's `incref`/`decref` statements on them
 are descriptor-guided (see Ownership).
 
+#### Sealed Result Rows
+
+A tag union in a positive position of a function annotation is implicitly
+open (Polarity): `parse : Str -> Try(U8, [InvalidU8])` quantifies a row
+variable on its error row, instantiated fresh at every call, so a caller may
+use the result at a wider union. The checker bounds that variable
+(`DescriptorFlags.bounded_row_ext`): the body can never add a tag to the row,
+only an instantiation can. The checked artifact publishes the bound on the
+variable (`CheckedTypeVariable.bounded_row_ext`), and Boxy reads it as the
+one condition under which a scheme variable is SEALED: a flex tag-row tail
+that is bounded, whose row default is the empty row, and whose constraints
+closing the row discharges (`variableSealsToRowDefault`). A sealed variable
+is bound to the empty row when its worker is lowered and takes no hidden
+descriptor parameter, so `parse` is a static worker returning
+`Try(U8, [InvalidU8])`. An evidence parameter whose dispatcher is a sealed
+variable is no dictionary parameter either. Polarity withholds per-use
+opening from every position outside the row coercion's reach, so a sealed
+variable sits only at a reached position—the direct result row, a tag
+payload row under it, or the error row of a `Try` result—and a bounded flex
+that unification tied to a rigid or a closed row is not a flex, so genuine
+row polymorphism (`[A, ..r] -> [A, B, ..r]`) and every other quantified
+variable keep their hidden descriptors.
+
+Sealing removes the one dependency a worker's representation had on its
+callers, so widening becomes a CONVERSION at the instantiation that widens:
+
+- A call whose instantiation widens the callee's sealed result converts the
+  result after the call, from the callee's result type at that instantiation
+  to the call's own type.
+- A `return`, a `?` return, or a `row_coerce` that flows a produced value (a
+  read or a call) into the enclosing worker's sealed result converts it
+  there; a constructed value is built at the destination's row (Row Coercion
+  Primitive).
+- A function value used at a type wider than its own sealed result, and a
+  `where` implementation whose result row its dictionary's consumer widens,
+  are wrapped in an adapter (`WorkerKey.adapter`) that calls the value and
+  converts its result, the same adapter that reconciles record-field storage
+  (Field Kinds).
+
+A conversion between two CLOSED types is a static row conversion: a worker
+of the converting module (`WorkerKey.convert`, keyed by the source and
+destination types), lowered as ordinary LIR—a switch on the source
+discriminant, one arm per source variant building the destination's variant
+of the same name, with each payload whose types differ converted by the
+worker for that payload pair—so ARC, the LIR passes, and the backends see
+nothing but ordinary code and payloads move rather than copy. The walk
+descends only into the coercion's reach (tag payloads and nominal backings);
+records, lists, boxes, and function values are identical on both sides by
+the checker's rule. The reach never recurses (nominal rows are declared and
+aliases cannot be recursive), so every conversion worker is finite. A
+conversion whose destination row a type variable of the body opens is the
+descriptor-driven `adapt` (Dynamic Values In LIR), which re-tags by name
+under the destination's descriptor. Either conversion is elided when the two
+types are one or commit one layout, since a reached row's source tags are a
+subset of its destination's and equal variant counts mean equal tag sets.
+
+A conversion worker belongs to the module that emits it and is memoized
+within that module only: two modules converting the same pair each carry
+their own copy. Nothing about a module's conversions is shared or deduplicated
+across modules, so a module's lowered output remains a function of its own
+checked module and its imports' (Per-Module Output).
+
 #### Call Sites
 
 A direct call to a known template reads the checked site evidence of the use
@@ -14647,7 +14695,10 @@ A direct call to a known template reads the checked site evidence of the use
   in `scheme_vars` order, the checked type the variable was copied to at this
   edge. The lowerer passes the descriptor of that checked type: a static
   descriptor when the type is closed, otherwise a composed descriptor built
-  from the enclosing worker's hidden descriptor parameters.
+  from the enclosing worker's hidden descriptor parameters. A sealed variable
+  of the target scheme (Sealed Result Rows) takes no descriptor; where the
+  edge copied it to a wider row, the call's result is converted from the
+  callee's result at the sealed row to the call's own type.
 - the node's nested evidence names, for each evidence parameter of the target
   scheme in checked order, how the requirement was discharged. The lowerer
   passes the dictionary that discharge denotes (see Dictionaries).
@@ -14998,16 +15049,39 @@ the host's allocator, which owns only the values a program releases.
   template, derivation). Linear scans over program-sized tables are forbidden.
 - Lowering is iterative under the Stack Safety rules: explicit frames and work
   stacks, no recursion over source structure.
-- The lowerer emits no conversions between representations, no adapters, no
+- The lowerer emits no conversions between representations of one type, no
   thunks, and no statement whose meaning depends on a path through a type.
+  The only conversions are the row conversions and adapters of Sealed Result
+  Rows and Field Kinds, each between two types the checker relates.
 - `--timings` reports the strategy's post-check work as `Boxy Lowering`
   followed by the shared `LIR Passes` and `ARC` entries. Progress text reports
   the pipeline position as `Lowering`.
 
+#### Per-Module Output
+
+Everything Boxy emits for a module is a function of that module's checked
+artifact and its imports' checked artifacts, and of the target (pointer
+width, operating system, and CPU), the opt level, and the compiler version.
+Nothing a module emits depends on a module that imports it:
+
+- its layouts and descriptors are its own types' (One Representation Per
+  Type; no row joins);
+- its workers are lowered once at their definition types, with sealed result
+  rows (Sealed Result Rows), so no caller's instantiation reaches a body;
+- its conversion workers are its own and memoized within it alone;
+- ARC solves each of its procedures' ownership signatures from the procedure's
+  body and its callees, and a call from another module never demands an
+  ownership variant of it (Mode Specialization, emission units), so the
+  variants a module carries are demanded only by its own calls.
+
+This is the invariant the per-module Boxy cache (Caching Under `.boxy`) rests
+on, and it is the reason modules can be lowered independently and in
+parallel.
+
 #### Caching Under `.boxy`
 
-With `--specialize=no`, the compiler writes nothing to any cache after the
-`roc check` work completes. Checked module and composition entries, the
+With `--specialize=no`, the compiler today writes nothing to any cache after
+the `roc check` work completes. Checked module and composition entries, the
 canonicalized module cache, and the compile-time evaluation results `roc
 check` produces (including `ConstStore` constants and the compile-time object
 cache that evaluation itself uses) are written exactly as `roc check` writes
@@ -15020,6 +15094,38 @@ checks its root for explicit test roots (`Validation.explicit_roots`), which is
 its own check under either strategy, and with `--specialize=no` it leaves
 exactly what that check leaves. `roc check` accepts `--specialize` and `--opt`
 and ignores both, so the same command line can be used across commands.
+
+The per-module Boxy cache is designed to be exactly as simple as the
+checked-module cache, and Per-Module Output is the invariant that makes it
+possible:
+
+- The KEY of a module's lowered output is the module's checked-module cache
+  key (its content identity plus its direct imports' checked keys, which
+  covers every upstream module's source transitively) extended with the
+  compiler version, the opt level, and the target. A key names one file.
+- The FILE is deterministically byte-identical for its key: a cold build and
+  a warm build, and two machines, write the same bytes. It holds everything
+  lowered for the module, through the object's machine code, and the few
+  words of ARC interface a downstream module compiles against (each exported
+  procedure's solved ownership signature and uniqueness facts, which
+  Per-Module Output makes a function of the module and its imports). There
+  is no index, no manifest, no second cache the file refers to, and nothing
+  in it comes from any other cache.
+- The TARGET is part of the object file's key because machine code is
+  target-specific. If lowered data that is not object code is ever kept (a
+  LIR image for the interpreter paths, for instance), it goes in a separate
+  file under a key that omits the operating system and CPU but keeps the
+  pointer width, which Boxy lowering takes as an input to layouts and
+  descriptor sizes.
+- A hit replaces lowering the module: `roc build`, `roc run`, and `roc test`
+  with `--specialize=no` re-lower only modules whose key changed, and modules
+  whose keys are known can be lowered independently and in parallel, since
+  the inputs of each are its own and its imports' checked artifacts and
+  nothing else.
+
+Compile-time evaluation results, checked modules, and the canonicalized cache
+keep their existing keys and behavior. Specialized builds are unaffected:
+their specializations are inherently cross-module and keep their own caches.
 
 ### Compile-Time Evaluation Strategy
 
@@ -20802,6 +20908,25 @@ Variant bodies are cloned with the existing statement-cloning machinery and
 added with `LirStore.addProcSpec`. Root procs are never specialized; their
 vectors are pinned. The variant count is bounded by realized demand vectors,
 not by the theoretical vector space.
+
+**Emission units.** Every procedure carries an emission unit
+(`LirProcSpec.emission_unit`, an `LIR.EmissionUnit`), and a direct call
+demands a variant of its callee—mandatory or optional—only when the caller
+and the callee share a unit; a call across units adapts to the callee's
+solved base signature exactly as a call to an object-cache procedure does
+(it keeps its ownership of a borrowed position, selects no outcome span, and
+seeds no uniqueness). The specialized lowering puts every procedure in the
+one `program` unit, so its behavior is unchanged. `.boxy` gives each
+template worker, lambda worker, and conversion worker its module's unit, and
+every worker that is not one module's (a structural method, an adapter, a
+field default, a dictionary entry, a root wrapper, a static data
+initializer, a crash dictionary, a codec derivation) the `isolated` unit,
+which shares with nothing, not even itself. A module's object therefore
+carries only the variants its own calls demanded, and a procedure's solved
+base signature and uniqueness facts—functions of its body and its
+callees—are the whole of what another module compiles against (Per-Module
+Output). Imports are acyclic, so no same-SCC tail call crosses a unit.
+Variants inherit their source's unit.
 
 Ownership solving and field-take analysis finish before parallel emission
 begins. Source preparation freezes each ownership-neutral procedure's frame

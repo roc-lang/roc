@@ -554,11 +554,6 @@ pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
 pub const Converter = struct {
     store: *Store,
     modules: *const Modules,
-    /// For row-join seeding: the scheme variables of every scope of the
-    /// module being seeded. A variable among them is a scheme variable in the
-    /// body lowering converts it in, so it seeds as a variable, keeping the
-    /// types it occurs in out of every ground join set.
-    seed_scheme_vars: ?*const collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = null,
     /// Whether an undetermined field kind outside every scheme commits to
     /// `required` (a generated codec contract's snapshot, whose kinds no
     /// caller can pin), rather than keeping its presence-slot representation.
@@ -569,9 +564,6 @@ pub const Converter = struct {
 
     /// A checked type of a module.
     pub const IdentityKey = struct { module: ModuleIndex, ty: checked.CheckedTypeId };
-
-    /// The variable a seeding conversion gives a scheme variable.
-    pub const seed_variable_index: u32 = std.math.maxInt(u32);
 
     const Frame = struct {
         module: ModuleIndex,
@@ -625,9 +617,8 @@ pub const Converter = struct {
             scoped.shrinkRetainingCapacity(frame.results_start);
             pending.shrinkRetainingCapacity(frame.pending_start);
             // A type with no identity variables converts the same under
-            // every environment; a seeding conversion, which keeps scheme
-            // variables apart, is not a lowering conversion.
-            if (!frame_scoped and !self.seal_undetermined_kinds and self.seed_scheme_vars == null and !rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
+            // every environment.
+            if (!frame_scoped and !self.seal_undetermined_kinds and !rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
                 try self.store.closed_memo.put(allocator, .{ .module = frame.module, .ty = frame.ty }, built);
             }
             if (frames.items.len == 0) return built;
@@ -658,12 +649,8 @@ pub const Converter = struct {
         }
         return switch (view.types().payload(ty)) {
             .pending => invariant("a pending checked type reached Boxy lowering"),
-            .err => if (self.seed_scheme_vars != null)
-                // A rejected type is never lowered; it joins nothing.
-                try self.store.variable(seed_variable_index)
-            else
-                invariant("an erroneous checked type reached Boxy lowering"),
-            .flex, .rigid => |variable| if (self.seed_scheme_vars) |vars| (if (vars.contains(ty)) try self.store.variable(seed_variable_index) else try self.sealVariable(variable)) else try self.sealVariable(variable),
+            .err => invariant("an erroneous checked type reached Boxy lowering"),
+            .flex, .rigid => |variable| try self.sealVariable(variable),
             .empty_record => try self.store.emptyRecord(),
             .empty_tag_union => try self.store.emptyTagUnion(),
             .nominal => |nominal| switch (nominal.representation) {
@@ -674,6 +661,21 @@ pub const Converter = struct {
                 .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => null,
             },
             .alias, .record, .tuple, .function, .tag_union => null,
+        };
+    }
+
+    /// Whether scheme variable `variable` of `module` is SEALED (design.md
+    /// "Sealed Result Rows"): a flex tag-row tail that an annotation bounds,
+    /// whose row default is the empty row, and whose constraints closing
+    /// the row discharges. A worker binds such a variable to the empty row
+    /// and takes no descriptor for it; omitting it from the worker's scheme
+    /// variables is exactly that, since a flex no scope binds seals to its
+    /// row default (`sealVariable`).
+    pub fn sealedSchemeVar(self: Converter, module: ModuleIndex, variable: checked.CheckedTypeId) bool {
+        const payload = self.modules.get(module).types().payload(variable);
+        return switch (payload) {
+            .flex => |flex| flex.bounded_row_ext and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
+            .rigid, .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
         };
     }
 
@@ -1221,4 +1223,69 @@ test "interning shares structurally equal nodes" {
     const v = try store.variable(0);
     const list_v = try store.intern(.{ .list = v });
     try std.testing.expect(!store.isClosed(list_v));
+}
+
+/// Whether two types could unify without a structural conflict: the same
+/// kind of type, the same primitive, records with the same fields, tuples
+/// and functions of the same arity, the same nominal; a variable is
+/// compatible with anything. A value constructed at a type compatible with
+/// its destination is built at the destination (`Builder.exprType`).
+pub fn compatible(allocator: Allocator, store: *const Store, a: TypeId, b: TypeId) Allocator.Error!bool {
+    var pending: std.ArrayList([2]TypeId) = .empty;
+    defer pending.deinit(allocator);
+    var seen: std.AutoHashMapUnmanaged(struct { TypeId, TypeId }, void) = .empty;
+    defer seen.deinit(allocator);
+    try pending.append(allocator, .{ a, b });
+    while (pending.pop()) |pair| {
+        if (pair[0] == pair[1]) continue;
+        if ((try seen.getOrPut(allocator, .{ pair[0], pair[1] })).found_existing) continue;
+        const left = store.get(pair[0]);
+        const right = store.get(pair[1]);
+        if (left == .variable or right == .variable) continue;
+        if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+        switch (left) {
+            .primitive => |primitive| if (primitive != right.primitive) return false,
+            .empty_record => {},
+            .list => |elem| try pending.append(allocator, .{ elem, right.list }),
+            .box => |payload| try pending.append(allocator, .{ payload, right.box }),
+            .tuple => |items| {
+                const mine = store.span(items);
+                const theirs = store.span(right.tuple);
+                if (mine.len != theirs.len) return false;
+                for (mine, theirs) |x, y| try pending.append(allocator, .{ x, y });
+            },
+            .record => |record| {
+                const mine = store.fieldSpan(record.fields);
+                const theirs = store.fieldSpan(right.record.fields);
+                if (mine.len != theirs.len) return false;
+                for (mine, theirs) |x, y| {
+                    if (x.name != y.name) return false;
+                    try pending.append(allocator, .{ x.ty, y.ty });
+                }
+            },
+            .tag_union => |tag_union| {
+                // Rows merge their tags; only shared labels at one arity
+                // must agree.
+                for (store.tagSpan(tag_union.tags)) |tag| {
+                    for (store.tagSpan(right.tag_union.tags)) |other| {
+                        if (tag.name != other.name or tag.payloads.len != other.payloads.len) continue;
+                        for (store.span(tag.payloads), store.span(other.payloads)) |x, y| try pending.append(allocator, .{ x, y });
+                    }
+                }
+            },
+            .nominal => |nominal| {
+                if (nominal.decl.module != right.nominal.decl.module or nominal.decl.decl != right.nominal.decl.decl) return false;
+                for (store.nominalArgs(nominal), store.nominalArgs(right.nominal)) |x, y| try pending.append(allocator, .{ x, y });
+            },
+            .function => |function| {
+                const mine = store.span(function.args);
+                const theirs = store.span(right.function.args);
+                if (mine.len != theirs.len) return false;
+                for (mine, theirs) |x, y| try pending.append(allocator, .{ x, y });
+                try pending.append(allocator, .{ function.ret, right.function.ret });
+            },
+            .variable => unreachable, // answered above
+        }
+    }
+    return true;
 }
