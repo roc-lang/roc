@@ -206,6 +206,9 @@ pub const Store = struct {
     closed_memo: std.AutoHashMapUnmanaged(ClosedKey, TypeId) = .empty,
     /// The backing of each instantiated nominal node.
     backing_memo: std.AutoHashMapUnmanaged(TypeId, TypeId) = .empty,
+    /// The variables of an enclosing scope each nominal declaration's
+    /// backing mentions (`Converter.outerVariables`).
+    decl_outer_vars: std.AutoHashMapUnmanaged(DeclRef, []const checked.CheckedTypeId) = .empty,
     /// The `??` default identity of each defaulted field of a record type
     /// conversion produced (design.md "Defaulted Fields").
     field_defaults: std.AutoHashMapUnmanaged(FieldDefaultKey, checked.CheckedFieldDefault) = .empty,
@@ -265,6 +268,11 @@ pub const Store = struct {
         self.name_arena.deinit();
         self.closed_memo.deinit(self.allocator);
         self.backing_memo.deinit(self.allocator);
+        {
+            var outer = self.decl_outer_vars.valueIterator();
+            while (outer.next()) |vars| self.allocator.free(vars.*);
+            self.decl_outer_vars.deinit(self.allocator);
+        }
         self.representation_closed.deinit(self.allocator);
         self.field_defaults.deinit(self.allocator);
         self.decl_by_key.deinit(self.allocator);
@@ -565,6 +573,11 @@ pub const Converter = struct {
         defer frames.deinit(allocator);
         var results: std.ArrayList(TypeId) = .empty;
         defer results.deinit(allocator);
+        // Whether each result mentions a nominal whose backing reads the
+        // converting scope's variables, which makes it scope-dependent
+        // though checking found no identity variable in it.
+        var scoped: std.ArrayList(bool) = .empty;
+        defer scoped.deinit(allocator);
         var pending: std.ArrayList(Child) = .empty;
         defer pending.deinit(allocator);
 
@@ -577,6 +590,7 @@ pub const Converter = struct {
                 top.pending_next += 1;
                 if (try self.leaf(child.module, child.ty, env)) |done| {
                     try results.append(allocator, done);
+                    try scoped.append(allocator, false);
                 } else {
                     if (frames.items.len > 1_000_000) invariant("checked type conversion nested past every finite type");
                     try self.pushFrame(&frames, &pending, results.items.len, child.module, child.ty);
@@ -585,17 +599,21 @@ pub const Converter = struct {
             }
             const frame = frames.pop().?;
             const children = results.items[frame.results_start..];
+            var frame_scoped = (try self.outerVariablesOf(frame.module, frame.ty)).len != 0;
+            for (scoped.items[frame.results_start..]) |child_scoped| frame_scoped = frame_scoped or child_scoped;
             const built = try self.finish(frame.module, frame.ty, children, env);
             results.shrinkRetainingCapacity(frame.results_start);
+            scoped.shrinkRetainingCapacity(frame.results_start);
             pending.shrinkRetainingCapacity(frame.pending_start);
             // A type with no identity variables converts the same under
             // every environment; a seeding conversion, which keeps scheme
             // variables apart, is not a lowering conversion.
-            if (!self.seal_undetermined_kinds and self.seed_scheme_vars == null and !rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
+            if (!frame_scoped and !self.seal_undetermined_kinds and self.seed_scheme_vars == null and !rootHasIdentityVariables(self.modules.get(frame.module), frame.ty)) {
                 try self.store.closed_memo.put(allocator, .{ .module = frame.module, .ty = frame.ty }, built);
             }
             if (frames.items.len == 0) return built;
             try results.append(allocator, built);
+            try scoped.append(allocator, frame_scoped);
         }
         unreachable; // the loop returns when the outermost frame finishes
     }
@@ -772,7 +790,6 @@ pub const Converter = struct {
     }
 
     fn finish(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, children: []const TypeId, env: Env) Allocator.Error!TypeId {
-        _ = env;
         const allocator = self.store.allocator;
         const view = self.modules.get(module);
         const types = view.types();
@@ -890,14 +907,15 @@ pub const Converter = struct {
                 }.lessThan);
                 return try self.store.intern(.{ .tag_union = .{ .tags = tags.items, .ext = ext } });
             },
-            .nominal => |nominal| return try self.nominalNode(module, nominal, children),
+            .nominal => |nominal| return try self.nominalNode(module, nominal, children, env),
             .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => unreachable, // `leaf` answers these
         }
     }
 
     /// The type of the nominal `ty` of `module` names (through aliases),
-    /// applied to `args` rather than to its own arguments.
-    pub fn nominalAt(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, args: []const TypeId) Allocator.Error!TypeId {
+    /// applied to `args` rather than to its own arguments, in the scope
+    /// `env`.
+    pub fn nominalAt(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, args: []const TypeId, env: Env) Allocator.Error!TypeId {
         const types = self.modules.get(module).types();
         var current = ty;
         while (true) switch (types.payload(current)) {
@@ -907,13 +925,14 @@ pub const Converter = struct {
                     .primitive => |prim| return try self.store.primitive(prim),
                     else => {},
                 };
-                return try self.nominalNode(module, nominal, args);
+                return try self.nominalNode(module, nominal, args, env);
             },
             else => invariant("a stored named type's occurrence is not a nominal type"),
         };
     }
 
-    fn nominalNode(self: Converter, module: ModuleIndex, nominal: @FieldType(checked.CheckedTypePayload, "nominal"), children: []const TypeId) Allocator.Error!TypeId {
+    fn nominalNode(self: Converter, module: ModuleIndex, nominal: @FieldType(checked.CheckedTypePayload, "nominal"), children: []const TypeId, env: Env) Allocator.Error!TypeId {
+        const allocator = self.store.allocator;
         const view = self.modules.get(module);
         const name_store = view.nameStore();
         {
@@ -936,9 +955,17 @@ pub const Converter = struct {
                 }
                 const decl = try self.declarationRef(view, nominal);
                 const decl_ref = decl orelse DeclRef{ .module = module, .decl = @fromBackingInt(std.math.maxInt(u32)) };
+                // A declaration in a function body whose backing mentions
+                // the body's variables is instantiated at their types here
+                // too: they follow its own arguments.
+                const outer = if (decl) |ref| try self.outerVariables(ref) else &.{};
+                const args = try allocator.alloc(TypeId, children.len + outer.len);
+                defer allocator.free(args);
+                @memcpy(args[0..children.len], children);
+                for (outer, args[children.len..]) |variable, *arg| arg.* = (try self.leaf(decl_ref.module, variable, env)).?;
                 return try self.store.intern(.{ .nominal = .{
                     .decl = decl_ref,
-                    .args = children,
+                    .args = args,
                     .name = if (decl != null) try self.store.internDeclName(decl_ref, name_store.typeNameText(nominal.name)) else try self.store.internName(name_store.typeNameText(nominal.name)),
                     .is_opaque = nominal.is_opaque,
                     .builtin = nominal.builtin,
@@ -1053,6 +1080,92 @@ pub const Converter = struct {
         return closed;
     }
 
+    /// The outer variables of the nominal declaration `ty` names, when `ty`
+    /// is a nominal with a declaration, else none.
+    fn outerVariablesOf(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId) Allocator.Error![]const checked.CheckedTypeId {
+        const view = self.modules.get(module);
+        return switch (view.types().payload(ty)) {
+            .nominal => |nominal| switch (nominal.representation) {
+                .local_declaration => |decl| try self.outerVariables(.{ .module = module, .decl = decl }),
+                else => &.{},
+            },
+            else => &.{},
+        };
+    }
+
+    /// The variables of an enclosing scope that the backing of `decl` (a
+    /// declaration in a function body) mentions, directly or through the
+    /// backings of the declarations it names: the variables its backing
+    /// reaches that are no reached declaration's formal. A top-level
+    /// declaration has none.
+    pub fn outerVariables(self: Converter, decl: DeclRef) Allocator.Error![]const checked.CheckedTypeId {
+        if (self.store.decl_outer_vars.get(decl)) |known| return known;
+        const allocator = self.store.allocator;
+        const view = self.modules.get(decl.module);
+        const types = view.types();
+        var seen: std.AutoHashMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        defer seen.deinit(allocator);
+        var decls: std.AutoHashMapUnmanaged(checked.CheckedNominalDeclarationId, void) = .empty;
+        defer decls.deinit(allocator);
+        var formals: std.AutoHashMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        defer formals.deinit(allocator);
+        var variables: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer variables.deinit(allocator);
+        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(allocator);
+        try decls.put(allocator, decl.decl, {});
+        const root = types.nominalDeclarationById(decl.decl);
+        for (root.formalArgs(types)) |formal| try formals.put(allocator, formal, {});
+        try pending.append(allocator, root.backing);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+            switch (types.payload(ty)) {
+                .flex, .rigid => try variables.append(allocator, ty),
+                .alias => |alias| try pending.append(allocator, alias.backing),
+                .record => |record| {
+                    for (record.fields) |field| try pending.append(allocator, field.ty);
+                    try pending.append(allocator, record.ext);
+                },
+                .tuple => |items| try pending.appendSlice(allocator, items),
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(types));
+                    try pending.append(allocator, tag_union.ext);
+                },
+                .function => |function| {
+                    try pending.appendSlice(allocator, function.args);
+                    try pending.append(allocator, function.ret);
+                },
+                .nominal => |nominal| {
+                    try pending.appendSlice(allocator, nominal.args);
+                    switch (nominal.representation) {
+                        .local_declaration => |nested| if ((try decls.getOrPut(allocator, nested)).found_existing == false) {
+                            const declaration = types.nominalDeclarationById(nested);
+                            for (declaration.formalArgs(types)) |formal| try formals.put(allocator, formal, {});
+                            try pending.append(allocator, declaration.backing);
+                        },
+                        else => {},
+                    }
+                },
+                .pending, .err, .empty_record, .empty_tag_union => {},
+            }
+        }
+        var outer: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer outer.deinit(allocator);
+        for (variables.items) |variable| {
+            if (!formals.contains(variable)) try outer.append(allocator, variable);
+        }
+        // Declaration order of the checked ids, so every instantiation
+        // lists the same variables in the same positions.
+        std.mem.sort(checked.CheckedTypeId, outer.items, {}, struct {
+            fn lessThan(_: void, a: checked.CheckedTypeId, b: checked.CheckedTypeId) bool {
+                return @backingInt(a) < @backingInt(b);
+            }
+        }.lessThan);
+        const owned = try allocator.dupe(checked.CheckedTypeId, outer.items);
+        try self.store.decl_outer_vars.put(allocator, decl, owned);
+        return owned;
+    }
+
     pub fn backing(self: Converter, nominal_ty: TypeId) Allocator.Error!TypeId {
         if (self.store.backing_memo.get(nominal_ty)) |memo| return memo;
         const nominal = switch (self.store.get(nominal_ty)) {
@@ -1062,7 +1175,8 @@ pub const Converter = struct {
         if (!nominal.has_backing) invariant("asked for the backing of an opaque type without one");
         const view = self.modules.get(nominal.decl.module);
         const declaration = view.types().nominalDeclarationById(nominal.decl.decl);
-        const formals = declaration.formalArgs(view.types());
+        const formals = try std.mem.concat(self.store.allocator, checked.CheckedTypeId, &.{ declaration.formalArgs(view.types()), try self.outerVariables(nominal.decl) });
+        defer self.store.allocator.free(formals);
         const args = try self.store.allocator.dupe(TypeId, self.store.nominalArgs(nominal));
         defer self.store.allocator.free(args);
         if (formals.len != args.len) invariant("nominal instantiation arity differs from its declaration");

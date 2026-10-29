@@ -232,7 +232,10 @@ pub const StaticDescs = struct {
         defer pointers.deinit(self.allocator);
         const fields = [_]std.meta.FieldEnum(desc_format.Methods){ .is_eq, .to_hash, .to_inspect };
         inline for (fields, 0..) |field, index| if (overrides[index]) |override| {
-            const callable = try self.staticCallable(owner, @intCast(4 + index), override);
+            const callable = switch (override) {
+                .procedure => |procedure| try self.staticCallable(owner, @intCast(4 + index), procedure),
+                .local => types.invariant("a static descriptor's type holds a local-procedure override, which only a body composes"),
+            };
             try pointers.append(self.allocator, .{ .offset = methods_layout.of(field), .target = callable, .addend = static_callable_header });
         };
         try self.setRelocations(methods, pointers.items);
@@ -253,7 +256,7 @@ pub const StaticDescs = struct {
     /// (`Program.resolveObligation`) into a static callable of its own,
     /// with an explicit stack for the obligations of the method targets
     /// that resolve them.
-    fn staticCallable(self: *StaticDescs, owner: u32, index: u32, override: lower.NominalOverride) Allocator.Error!ExportIndex {
+    fn staticCallable(self: *StaticDescs, owner: u32, index: u32, override: @FieldType(lower.NominalOverride, "procedure")) Allocator.Error!ExportIndex {
         const Frame = struct {
             proc: LIR.LirProcSpecId,
             module: types.ModuleIndex,

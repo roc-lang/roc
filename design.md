@@ -13783,8 +13783,30 @@ lowerer hoists all composition statements to the worker's entry block. A body
 composes each descriptor it needs once per activation, and a descriptor's
 address is stable for the whole activation.
 
-A closed type is never composed: the lowerer emits its static descriptor. Two
-descriptors of the same type may therefore be distinct pointers (one static,
+A nominal whose overrides are instantiated at types that mention the nominal
+(a method generic in its receiver) holds its own descriptor through its
+`Methods` record, so it composes as a recursive member too: its placeholder
+stands for it while its methods compose, and closing it fills the placeholder.
+
+A type declared in a function body may name the body's type variables in its
+backing. Its occurrences are instantiated at those variables' types as well as
+at its own arguments: the converted nominal carries the body's variables its
+backing reaches, in a fixed order, after its own arguments, and its backing
+binds them. Such a nominal is open wherever those variables are.
+
+A method declared in a function body that checking left a local procedure of
+the body (it names the body's type variables; methods capture no values) is
+an override no static descriptor can hold: its function value needs the
+declaring body's descriptors and dictionaries. A type whose descriptor
+reaches such an override, through its structure or its nominals' backings,
+is composed in the body even when it is closed. The override is the local
+procedure's function value at the method's interface, built in the entry
+chain as an immortal composition (`dict_compose`), since the descriptor
+holding it lives for the program's lifetime.
+
+A closed type is otherwise never composed: the lowerer emits its static
+descriptor. Two descriptors of the same type may therefore be distinct
+pointers (one static,
 one composed from static parts at a different site); no consumer compares
 descriptors by identity, and equality, hashing, and inspection are defined on
 values through descriptors, never on descriptors.

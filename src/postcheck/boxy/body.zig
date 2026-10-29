@@ -259,6 +259,13 @@ pub const Builder = struct {
     /// The locals the entry chain defines, which every statement of the
     /// body can read.
     entry_locals: std.AutoHashMapUnmanaged(LocalId, void) = .empty,
+    /// Whether straight-line statements currently go to the entry chain
+    /// (`emitIntoEntry`), whose end is then the current hole.
+    emitting_entry: bool = false,
+    /// Whether function values are built as immortal compositions (a
+    /// descriptor's local-procedure override, which the descriptor holds
+    /// for the program's lifetime) instead of owned callables.
+    immortal_closures: bool = false,
     /// The recursive components whose members' descriptors this body has
     /// begun composing.
     opened_components: std.AutoHashMapUnmanaged(u32, void) = .empty,
@@ -479,6 +486,7 @@ pub const Builder = struct {
 
     pub fn emitEntry(self: *Builder, stmt: LIR.CFStmt) Allocator.Error!void {
         if (definedLocal(stmt)) |target| try self.entry_locals.put(self.allocator, target, {});
+        if (self.emitting_entry) return try self.emitLinear(stmt);
         const next = try self.newHole();
         var linked = stmt;
         setNext(&linked, next);
@@ -502,10 +510,17 @@ pub const Builder = struct {
     /// with its statements going to the entry chain, and record the locals
     /// they define as entry locals.
     fn emitIntoEntry(self: *Builder, comptime emit: anytype, args: anytype) Allocator.Error!LocalId {
+        if (self.emitting_entry) {
+            const nested = try @call(.auto, emit, .{self} ++ args);
+            try self.entry_locals.put(self.allocator, nested, {});
+            return nested;
+        }
         const saved_hole = self.hole;
         const saved_last = self.last_stmt;
         self.hole = self.entry_hole;
+        self.emitting_entry = true;
         const result = try @call(.auto, emit, .{self} ++ args);
+        self.emitting_entry = false;
         self.entry_hole = self.hole orelse invariant("an entry-chain emission diverged");
         self.hole = saved_hole;
         self.last_stmt = saved_last;
@@ -720,6 +735,15 @@ pub const Builder = struct {
                                 continue;
                             }
                         }
+                        // A nominal whose override instances mention the
+                        // nominal (a method generic in its receiver) captures
+                        // its own descriptor: it is composed as a recursive
+                        // member, its placeholder standing for it meanwhile.
+                        if (try self.methodsMention(ty)) {
+                            try self.openRecursiveMember(ty);
+                            top.step = .close_fresh;
+                            continue;
+                        }
                     }
                     top.step = if (top.step == .fresh) .expanded else .close_expanded;
                     try expanding.put(self.allocator, ty, {});
@@ -753,6 +777,48 @@ pub const Builder = struct {
             }
         }
         return self.type_descs.get(root).?;
+    }
+
+    /// Whether the nominal `ty`'s overrides are instantiated at types that
+    /// mention `ty`.
+    fn methodsMention(self: *Builder, ty: TypeId) Allocator.Error!bool {
+        const store = &self.program.store;
+        if (store.get(ty) != .nominal) return false;
+        const overrides = try self.program.nominalOverrides(ty);
+        var pending: std.ArrayList(TypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        var seen: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+        defer seen.deinit(self.allocator);
+        for (overrides) |maybe| switch (maybe orelse continue) {
+            .procedure => |override| {
+                try pending.appendSlice(self.allocator, override.bound);
+                for (override.dicts) |obligation| try pending.appendSlice(self.allocator, &.{ obligation.dispatcher, obligation.callable });
+            },
+            .local => |override| try pending.append(self.allocator, override.interface),
+        };
+        while (pending.pop()) |current| {
+            if (current == ty) return true;
+            if ((try seen.getOrPut(self.allocator, current)).found_existing) continue;
+            switch (store.get(current)) {
+                .primitive, .empty_record, .variable => {},
+                .record => |record| {
+                    for (store.fieldSpan(record.fields)) |field| try pending.append(self.allocator, field.ty);
+                    if (record.ext) |ext| try pending.append(self.allocator, ext);
+                },
+                .tuple => |items| try pending.appendSlice(self.allocator, store.span(items)),
+                .tag_union => |tag_union| {
+                    for (store.tagSpan(tag_union.tags)) |tag| try pending.appendSlice(self.allocator, store.span(tag.payloads));
+                    if (tag_union.ext) |ext| try pending.append(self.allocator, ext);
+                },
+                .list, .box => |child| try pending.append(self.allocator, child),
+                .nominal => |nominal| try pending.appendSlice(self.allocator, store.nominalArgs(nominal)),
+                .function => |function| {
+                    try pending.appendSlice(self.allocator, store.span(function.args));
+                    try pending.append(self.allocator, function.ret);
+                },
+            }
+        }
+        return false;
     }
 
     /// Open the placeholder descriptor of the recursive member `ty`, which
@@ -791,7 +857,7 @@ pub const Builder = struct {
     /// or a scope variable's hidden parameter.
     pub fn leafDesc(self: *Builder, ty: TypeId) Allocator.Error!?LocalId {
         const store = &self.program.store;
-        if (try self.closed(ty)) return try self.staticDesc(ty);
+        if (try self.closed(ty) and !try self.program.composedInBody(ty)) return try self.staticDesc(ty);
         return switch (store.get(ty)) {
             .variable => |index| self.var_descs[index],
             else => null,
@@ -935,11 +1001,24 @@ pub const Builder = struct {
                 try self.emitEntry(.{ .assign_literal = .{ .target = callable.*, .value = .{ .static_data = .{ .id = try self.program.static_descs.nullWordSlot() } }, .next = undefined } });
                 continue;
             };
-            const hidden = try self.allocator.alloc(LocalId, override.bound.len + override.dicts.len);
-            defer self.allocator.free(hidden);
-            for (override.bound, hidden[0..override.bound.len]) |bound_ty, *desc| desc.* = try self.descOf(bound_ty);
-            for (override.dicts, hidden[override.bound.len..]) |obligation, *local| local.* = try self.dictionaryFromType(obligation);
-            callable.* = try self.composeDictionary(override.entry, hidden);
+            switch (override) {
+                .procedure => |procedure| {
+                    const hidden = try self.allocator.alloc(LocalId, procedure.bound.len + procedure.dicts.len);
+                    defer self.allocator.free(hidden);
+                    for (procedure.bound, hidden[0..procedure.bound.len]) |bound_ty, *desc| desc.* = try self.descOf(bound_ty);
+                    for (procedure.dicts, hidden[procedure.bound.len..]) |obligation, *local| local.* = try self.dictionaryFromType(obligation);
+                    callable.* = try self.composeDictionary(procedure.entry, hidden);
+                },
+                // A local procedure's function value is built in the entry
+                // chain, where the descriptor that holds it is composed.
+                .local => |local| {
+                    if (local.module != self.module) invariant("a local-procedure override's descriptor is composed outside its declaring module");
+                    const saved = self.immortal_closures;
+                    self.immortal_closures = true;
+                    defer self.immortal_closures = saved;
+                    callable.* = try self.emitIntoEntry(localProcInstanceValueAt, .{ local.binding, local.interface });
+                },
+            }
         }
         const methods = try self.closedLocal(.opaque_ptr);
         try self.emitEntry(.{ .dyn = .{ .target = methods, .data = try self.store.addStmtRow(LIR.DynOp, .{ .dict_record = .{ .methods = try self.store.addLocalSpan(&callables) } }), .next = undefined } });
@@ -3019,6 +3098,12 @@ pub const Builder = struct {
     /// The function value of local procedure `local` used at the function
     /// type `use_ty`, whose own scheme's dictionaries `evidence` supplies
     /// (or, when null, each dispatcher's type resolves).
+    /// `localProcInstanceValue` resolving the procedure's dictionaries from
+    /// its types.
+    fn localProcInstanceValueAt(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId) Allocator.Error!LocalId {
+        return try self.localProcInstanceValue(local, use_ty, null);
+    }
+
     pub fn localProcInstanceValue(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence) Allocator.Error!LocalId {
         const lambda_expr = switch (self.bodies().expr(local.expr).data) {
             .lambda => local.expr,
@@ -3266,7 +3351,10 @@ pub const Builder = struct {
     /// bound, or, inside the procedure's own body, the same closure rebuilt
     /// from the captures the body received.
     pub fn localProcValue(self: *Builder, local: checked.LocalProcedureBinding) Allocator.Error!LocalId {
-        if (self.binders.get(local.binder)) |value| return value;
+        // The entry chain reads only values the entry chain defines.
+        if (self.binders.get(local.binder)) |value| {
+            if (!self.emitting_entry or self.entry_locals.contains(value)) return value;
+        }
         if (local.is_alias) invariant("an alias is used only after its declaration binds it");
         // Referenced inside its own body or a nested function: rebuild the
         // procedure's function value from its captures, which the checker
@@ -3308,7 +3396,7 @@ pub const Builder = struct {
             try self.emitIntoEntry(packClosure, .{ target, values, target_worker.capture_types, descs, dicts })
         else
             try self.emitIntoEntry(packDynamicClosure, .{ target, values, target_worker.capture_types, descs, dicts });
-        try self.binders.put(self.allocator, local.binder, closure);
+        if (!self.immortal_closures) try self.binders.put(self.allocator, local.binder, closure);
         return closure;
     }
 
@@ -4670,7 +4758,7 @@ pub const Builder = struct {
                     const args = try self.allocator.alloc(TypeId, named.args.len);
                     defer self.allocator.free(args);
                     for (const_types.typeSpan(named.args), args) |child, *arg| arg.* = done.get(child).?;
-                    break :blk try self.program.converter().nominalAt(owner.index, named.named_type.ty, args);
+                    break :blk try self.program.converter().nominalAt(owner.index, named.named_type.ty, args, self.env);
                 },
                 .erased => invariant("restoring a stored capture of erased function type is not yet lowered by Boxy"),
             };
@@ -5267,6 +5355,7 @@ pub const Builder = struct {
     /// the callable. `capture_types` are the captured values' types in this
     /// body's scope.
     pub fn packDynamicClosure(self: *Builder, callee: WorkerId, captured: []const LocalId, capture_types: []const TypeId, descs: []const LocalId, dicts: []const LocalId) Allocator.Error!LocalId {
+        if (self.immortal_closures) invariant("a method override captures a value of an open type, which methods never capture");
         const record_desc = try self.dynamicCaptureDesc(capture_types, descs.len + dicts.len);
         const record = try self.addLocal(.{ .layout_idx = try self.program.result.layouts.dynamicLayout(), .dyn = .{ .desc = record_desc, .storage = .frame } });
         self.has_dynamic_frame = true;
@@ -5283,6 +5372,14 @@ pub const Builder = struct {
     pub fn packClosure(self: *Builder, callee: WorkerId, captured: []const LocalId, capture_types: []const TypeId, descs: []const LocalId, dicts: []const LocalId) Allocator.Error!LocalId {
         const values = try std.mem.concat(self.allocator, LocalId, &.{ captured, descs, dicts });
         defer self.allocator.free(values);
+        if (self.immortal_closures) {
+            // Only function values (an adapted override's own callable,
+            // itself immortal) are captured: methods capture no values.
+            for (capture_types) |capture_ty| {
+                if (self.program.store.get(capture_ty) != .function) invariant("a method override captures a value, which methods never do");
+            }
+            return try self.composeDictionary(callee, values);
+        }
         const target = try self.closedLocal(try self.erasedLayout());
         var capture: ?LocalId = null;
         var capture_layout: ?layout.Idx = null;

@@ -197,7 +197,18 @@ pub const LocalScheme = struct {
 
 /// A nominal method override: its dictionary entry, the types the method's
 /// scheme variables take, and the obligations its dictionaries resolve.
-pub const NominalOverride = struct { entry: WorkerId, bound: []const TypeId, dicts: []const DictObligation };
+/// A nominal's method override, as its descriptor's `Methods` record holds
+/// it.
+pub const NominalOverride = union(enum) {
+    /// A procedure's dictionary entry, its scheme taking `bound` and its
+    /// obligations `dicts`.
+    procedure: struct { entry: WorkerId, bound: []const TypeId, dicts: []const DictObligation },
+    /// A method declared in a function body that checking left a local
+    /// procedure of the body (it names the body's type variables): its
+    /// function value, at the method's interface `interface`, which only a
+    /// body the declaring body encloses can build.
+    local: struct { module: ModuleIndex, binding: checked.LocalProcedureBinding, interface: TypeId },
+};
 
 /// A dispatch obligation resolved from its dispatcher's type: the method
 /// named `method` (of module `module`'s names) on `dispatcher`, at the
@@ -289,6 +300,8 @@ pub const Program = struct {
     signature_slots: std.AutoHashMapUnmanaged(WorkerId, bool) = .empty,
     /// `nominalOverrides` of each nominal type asked about.
     nominal_overrides: std.AutoHashMapUnmanaged(TypeId, NominalOverrides) = .empty,
+    /// `composedInBody` of each type asked about.
+    composed_in_body: std.AutoHashMapUnmanaged(TypeId, bool) = .empty,
     /// The nested procedure site of each lambda and closure expression.
     sites_by_expr: std.AutoHashMapUnmanaged(ExprKey, u32) = .empty,
     /// Modules by their stable identity hash.
@@ -754,7 +767,7 @@ pub const Program = struct {
                     const target_worker = self.worker(worker_id).*;
                     const formal = try self.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
                     const instance = try self.instantiateTarget(worker_id, formal, try self.overrideInterface(2, nominal_ty));
-                    result[2] = .{ .entry = try self.methodEntryWorker(worker_id), .bound = instance.bound, .dicts = instance.obligations };
+                    result[2] = .{ .procedure = .{ .entry = try self.methodEntryWorker(worker_id), .bound = instance.bound, .dicts = instance.obligations } };
                 }
                 try self.nominal_overrides.put(self.allocator, nominal_ty, result);
                 return result;
@@ -782,20 +795,28 @@ pub const Program = struct {
                     // A type whose method checking rejected compares and
                     // hashes as checked-error code.
                     .rejected => {
-                        slot.* = .{ .entry = try self.crashDictionaryWorker(nominal.decl.module, .checked_error), .bound = &.{}, .dicts = &.{} };
+                        slot.* = .{ .procedure = .{ .entry = try self.crashDictionaryWorker(nominal.decl.module, .checked_error), .bound = &.{}, .dicts = &.{} } };
                         continue;
                     },
                     .target => |found| found,
                 };
                 const template = switch (target.kind) {
                     .procedure => |procedure| procedure.template,
-                    .local_proc, .structural => continue,
+                    .structural => continue,
+                    .local_proc => |local| {
+                        slot.* = .{ .local = .{
+                            .module = nominal.decl.module,
+                            .binding = .{ .binder = local.binder, .expr = local.expr, .dispatch_scope = local.dispatch_scope },
+                            .interface = try self.overrideInterface(method_index, nominal_ty),
+                        } };
+                        continue;
+                    },
                 };
                 const worker_id = try self.templateRefWorker(template);
                 const target_worker = self.worker(worker_id).*;
                 const formal = try self.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
                 const instance = try self.instantiateTarget(worker_id, formal, try self.overrideInterface(method_index, nominal_ty));
-                slot.* = .{ .entry = try self.methodEntryWorker(worker_id), .bound = instance.bound, .dicts = instance.obligations };
+                slot.* = .{ .procedure = .{ .entry = try self.methodEntryWorker(worker_id), .bound = instance.bound, .dicts = instance.obligations } };
             }
         }
         try self.nominal_overrides.put(self.allocator, nominal_ty, result);
@@ -834,6 +855,49 @@ pub const Program = struct {
     /// The type a nominal method override is called at: `is_eq` compares
     /// two values to a Bool, `to_hash` feeds one into the Builtin hasher,
     /// and `to_inspect` renders one as a Str.
+    /// Whether a descriptor of `ty` holds a local-procedure override
+    /// (`NominalOverride.local`), reached through its structure and its
+    /// nominals' backings: only a body the override's declaring body
+    /// encloses can compose such a descriptor, so no static descriptor
+    /// describes `ty`.
+    pub fn composedInBody(self: *Program, root: TypeId) Allocator.Error!bool {
+        if (self.composed_in_body.get(root)) |memo| return memo;
+        var seen: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+        defer seen.deinit(self.allocator);
+        var pending: std.ArrayList(TypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        const store = &self.store;
+        const found = walk: while (pending.pop()) |ty| {
+            if (self.composed_in_body.get(ty)) |memo| {
+                if (memo) break :walk true else continue;
+            }
+            if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
+            switch (store.get(ty)) {
+                .primitive, .empty_record, .variable, .function => {},
+                .record => |record| {
+                    for (store.fieldSpan(record.fields)) |field| try pending.append(self.allocator, field.ty);
+                    if (record.ext) |ext| try pending.append(self.allocator, ext);
+                },
+                .tuple => |items| try pending.appendSlice(self.allocator, store.span(items)),
+                .tag_union => |tag_union| {
+                    for (store.tagSpan(tag_union.tags)) |tag| try pending.appendSlice(self.allocator, store.span(tag.payloads));
+                    if (tag_union.ext) |ext| try pending.append(self.allocator, ext);
+                },
+                .list, .box => |child| try pending.append(self.allocator, child),
+                .nominal => |nominal| {
+                    for (try self.nominalOverrides(ty)) |maybe| {
+                        if (maybe) |override| if (override == .local) break :walk true;
+                    }
+                    try pending.appendSlice(self.allocator, store.nominalArgs(nominal));
+                    if (nominal.has_backing) try pending.append(self.allocator, try self.converter().backing(ty));
+                },
+            }
+        } else false;
+        try self.composed_in_body.put(self.allocator, root, found);
+        return found;
+    }
+
     fn overrideInterface(self: *Program, method_index: usize, nominal_ty: TypeId) Allocator.Error!TypeId {
         return switch (method_index) {
             0 => try self.store.intern(.{ .function = .{ .args = &.{ nominal_ty, nominal_ty }, .ret = try self.store.primitive(.bool), .effectful = false } }),
@@ -1346,6 +1410,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.by_identity.deinit(allocator);
         program.sites_by_expr.deinit(allocator);
         program.nominal_overrides.deinit(allocator);
+        program.composed_in_body.deinit(allocator);
         program.signature_slots.deinit(allocator);
         program.omitted_defaults.deinit(allocator);
         program.codec.deinit(allocator);
