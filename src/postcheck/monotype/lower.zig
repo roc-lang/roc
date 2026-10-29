@@ -39793,7 +39793,7 @@ const BodyContext = struct {
                 if ((try self.isGeneratedIteratorEvidenceNode(request_fn.args[0]))) {
                     return try self.graphFunctionNode(
                         &.{request_fn.args[0]},
-                        try self.generatedIteratorStepReturnNode(request_fn.args[0]),
+                        try self.generatedIteratorNextResultNode(request_fn.args[0], public_fn.ret),
                     );
                 }
             },
@@ -40075,6 +40075,19 @@ const BodyContext = struct {
             try self.graph.recordFieldNode(backing.node, topology.len_field),
             try self.graph.recordFieldNode(backing.node, topology.step_field),
         }, iterator);
+    }
+
+    /// The result of a generated-private `next` request: the iterator's step
+    /// row, or, when the public interface's result row includes that closed
+    /// row and more tags, a row at the interface's labels whose own tags keep
+    /// the step row's payloads. The step closure is a call through a function
+    /// value, so its row stays its own and the template body's row coercion
+    /// joins it into the result (design.md "Closed Result Rows At Template
+    /// Boundaries").
+    fn generatedIteratorNextResultNode(self: *BodyContext, iterator: NodeId, public_ret: NodeId) Allocator.Error!NodeId {
+        const step_ret = try self.generatedIteratorStepReturnNode(iterator);
+        if (!try requestRowIncludesClosedRow(self.graph, step_ret, public_ret)) return step_ret;
+        return try self.graph.closedTagRowAtWiderLabels(step_ret, public_ret);
     }
 
     fn generatedIteratorStepReturnNode(self: *BodyContext, iterator: NodeId) Allocator.Error!NodeId {

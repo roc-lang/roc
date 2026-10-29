@@ -9803,6 +9803,16 @@ representation, it continues from the public backing into the generated
 backing, exactly as the unifying relation does, so the public view's step slot
 receives the callable evidence of the value it views.
 
+A tag row is related by label, not position. Monotype relates the two rows
+exactly, but a row join (Row Joins) can grow either one afterwards: a widened
+`next` result joined into an iterator's step row grows the private row, and a
+join that reached the public view before the relation grows the view. The
+private row is the representation, so it carries every tag either row holds
+(`Solver.relateTagRows`). A tag both rows list relates its payloads, a tag
+only the private row lists was joined into the representation, and a tag only
+the public view lists joins the private row, as unifying the two rows would.
+The result is the same whichever runs first, the relation or the join.
+
 When a complete Monotype type clone contains a forced-dynamic iterator,
 Lambda Solved marks the callable in that iterator's backing as erased. The mark
 runs only after the clone is structurally complete, so the erased callable's
@@ -11725,6 +11735,19 @@ Since a payload's representation is taken from the REQUEST rather than from
 the declared type, a polymorphic implementation's rigid payloads are correct
 by construction: the declared row supplies only the set of labels.
 
+A generated-private `next` request (`Iter.next`, `Stream.next!`) takes the
+same rule without merging rows. Its result is the iterator's step row, a
+closed row inside the private backing whose payloads hold the private
+iterator, so widening it in place would merge those payloads into the
+public request's. When the public interface's result row includes the step
+row and more tags, the private result is instead a new row at the
+interface's labels, with the step row's own tags and payloads
+(`InstGraph.closedTagRowAtWiderLabels`). The step function is a call through
+a function value, so its row stays its own, and the template body's row
+coercion joins it into the result in Lambda Solved (Row Joins).
+`test/cli/IterNextWidenedMatch.roc` and `test/cli/StreamNextWidenedMatch.roc`
+match the result with an extra tag.
+
 ### Row Union Normalization
 
 A tag union or record row denotes the union of its labels. When a label occurs more than
@@ -13012,7 +13035,14 @@ The kind rules:
   whose presence var the current boundary OWNS (rank at or above the
   boundary's); lower-ranked entries stay pending for the scope that owns
   them, so nested boundaries fired mid-statement never pin an enclosing
-  destructure prematurely.
+  destructure prematurely. Before a value flows into an annotated
+  function's result, a pass binds only the binders whose kind is already
+  determined (`DestructJudgment.determined_kinds`), which is the binding a
+  later commitment point would make. The row coercion decides from the
+  value's type (Row Subsumption), so a function read out of a record
+  pattern and called into the result widens exactly as one read with a
+  field access does (`Stream.next!`'s body is the first; a still-flex
+  kind stays pending).
   Binding a destructure can also ground a deferred static-dispatch receiver
   without adding an ordinary equality constraint. Every literal-defaulting
   boundary therefore begins with a ROUND-ZERO constraint quiescence: ordinary
