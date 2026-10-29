@@ -1830,6 +1830,20 @@ const Pass = struct {
         return self.nodes.items[node.root].hi + node.off_hi;
     }
 
+    /// Whether two nodes always hold the same value: the same node, or one
+    /// root at the same exact offset. Every literal gets a node of its own,
+    /// so two reads of one constant are the same value at distinct nodes.
+    fn sameValue(self: *const Pass, a: NodeId, b: NodeId) bool {
+        if (a == b) return true;
+        const node_a = self.nodes.items[a];
+        const node_b = self.nodes.items[b];
+        if (node_a.off_lo != node_a.off_hi or node_b.off_lo != node_b.off_hi) return false;
+        if (node_a.root == node_b.root) return node_a.off_lo == node_b.off_lo;
+        const value_a = self.constValueOf(a) orelse return false;
+        const value_b = self.constValueOf(b) orelse return false;
+        return value_a == value_b;
+    }
+
     fn constValueOf(self: *const Pass, id: NodeId) ?i128 {
         const node = self.nodes.items[id];
         if (node.off_lo != node.off_hi) return null;
@@ -6807,8 +6821,8 @@ const Pass = struct {
             const fact = self.no_overflow_facts.items[i];
             const predicate = fact.predicate;
             if (predicate.operation != operation or predicate.operand_layout != operand_layout) continue;
-            if (predicate.lhs == lhs and predicate.rhs == rhs) return fact;
-            if ((operation == .add or operation == .mul) and predicate.lhs == rhs and predicate.rhs == lhs) return fact;
+            if (self.sameValue(predicate.lhs, lhs) and self.sameValue(predicate.rhs, rhs)) return fact;
+            if ((operation == .add or operation == .mul) and self.sameValue(predicate.lhs, rhs) and self.sameValue(predicate.rhs, lhs)) return fact;
         }
         return null;
     }

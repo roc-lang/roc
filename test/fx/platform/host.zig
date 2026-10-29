@@ -7,7 +7,7 @@
 //!
 //! Run with `--test <spec>` to simulate IO and verify behavior:
 //! ```
-//! ./zig-out/bin/roc app.roc -- --test "1>Hello, world!"
+//! ./zig-out/bin/roc app.roc --test "1>Hello, world!"
 //! ```
 //!
 //! Spec format uses pipe-separated operations:

@@ -5,6 +5,34 @@ const CIR = @import("can").CIR;
 const TestEnv = @import("./TestEnv.zig");
 const hoist_roots = @import("../hoist_roots.zig");
 
+test "hoist roots consume transitive producer callable observations" {
+    const leaves = [_][]const u8{
+        "Leaf := {}.{ get : {} -> I64\n get = |_| 7\n}\n",
+        "Leaf := {}.{ get : {} -> I64\n get = |_| { dbg 7.I64\n 7 }\n}\n",
+    };
+    for (leaves, 0..) |source, index| {
+        var leaf = try TestEnv.init("Leaf", source);
+        defer leaf.deinit();
+        try leaf.assertNoErrors();
+        var bridge = try TestEnv.initWithImport("Bridge",
+            \\import Leaf
+            \\Bridge := {}.{
+            \\    get : {} -> I64
+            \\    get = |arg| Leaf.get(arg)
+            \\}
+        , "Leaf", &leaf);
+        defer bridge.deinit();
+        try bridge.assertNoErrors();
+        var root = try TestEnv.initWithImport("Root",
+            \\import Bridge
+            \\main = |_| Bridge.get({})
+        , "Bridge", &bridge);
+        defer root.deinit();
+        try root.assertNoErrors();
+        try std.testing.expectEqual(@as(usize, if (index == 0) 1 else 0), root.checker.selectedHoistedRoots().len);
+    }
+}
+
 test "hoist roots selected for referenced closed local binding chain" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {

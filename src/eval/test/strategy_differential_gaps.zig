@@ -15,7 +15,6 @@ pub const Status = enum {
 /// Why a listed case fails, so the runner can count gaps by cause.
 pub const Reason = enum {
     arc_missing_frame_local,
-    callable_dictionary_two_dispatchers,
     dictionary_call_result_double_free,
     dictionary_worker_multiple_descriptors,
     dynamic_literal_without_producer,
@@ -28,7 +27,6 @@ pub const Reason = enum {
     pub fn text(reason: Reason) []const u8 {
         return switch (reason) {
             .arc_missing_frame_local => ".boxy ARC: a procedure domain lacks a required frame local",
-            .callable_dictionary_two_dispatchers => ".boxy plan: one callable dictionary captures evidence for two dispatcher types",
             .dictionary_call_result_double_free => ".boxy dev: materializing a dictionary method call's result drops a Box twice",
             .dictionary_worker_multiple_descriptors => ".boxy plan: a dictionary method worker descriptor maps to several call descriptors",
             .dynamic_literal_without_producer => ".boxy lowering: a dynamic literal target descriptor has no producer template",
@@ -51,7 +49,6 @@ pub const Gap = struct {
 /// Every case whose `.boxy` executions do not yet agree with `.lss`.
 pub const gaps = [_]Gap{
     .{ .case = "low_level - prefetched returns its list unchanged", .status = .child_failed, .reason = .arc_missing_frame_local },
-    .{ .case = "rc balance: Dict update and escaped refcounted field are fully released", .status = .child_failed, .reason = .callable_dictionary_two_dispatchers },
     .{ .case = "low_level - for loop question through split tuple parser", .status = .child_failed, .reason = .dictionary_call_result_double_free },
     .{ .case = "inspect: polymorphic additional specialization via List.append", .status = .child_failed, .reason = .dictionary_worker_multiple_descriptors },
     .{ .case = "inspect: list returned from function", .status = .child_failed, .reason = .dynamic_literal_without_producer },
