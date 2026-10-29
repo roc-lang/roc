@@ -43,6 +43,8 @@ executed or injected as HTML. Relative source paths resolve against the config
 file. Destination URLs resolve against the generated docs root. Site-absolute
 paths are supported for additional documents, so a website can contribute its
 examples and other pages without depending on a particular website layout.
+Additional documents use full browser navigation (`data-full-navigation` in the
+HTML index), preserving browser history when their pages use a different layout.
 The website build is responsible for publishing and checking those additional
 pages. Documents with different source files may share a destination, e.g. an
 example's README and its Roc source; search deduplicates destination links.

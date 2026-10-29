@@ -56,17 +56,18 @@ const setupSearch = () => {
       const category = article.dataset.category;
       const href = new URL(article.dataset.href, docsBase).href;
       const title = article.dataset.title;
+      const fullNavigation = article.hasAttribute("data-full-navigation");
       if (!article.hasAttribute("data-sections")) {
-        prose.push({ category, href, title, text: article.textContent, terms: [] });
+        prose.push({ category, href, title, fullNavigation, text: article.textContent, terms: [] });
         return;
       }
-      let section = { category, href, title, text: "", terms: [] };
+      let section = { category, href, title, fullNavigation, text: "", terms: [] };
       for (const node of article.querySelectorAll("h1,h2,h3,h4,h5,h6,p,pre,li,table")) {
         // Don't count nested list items and paragraphs twice.
         if (node.parentElement.closest("li,pre,table")) continue;
         if (/^H[1-6]$/.test(node.tagName) && node.id) {
           if (section.text.trim()) prose.push(section);
-          section = { category, href: `${href.split("#")[0]}#${encodeURIComponent(node.id)}`,
+          section = { category, fullNavigation, href: `${href.split("#")[0]}#${encodeURIComponent(node.id)}`,
             title: `${title} › ${node.textContent}`, text: "", terms: [] };
         } else section.text += ` ${node.textContent}`;
       }
@@ -127,6 +128,7 @@ const setupSearch = () => {
       const item = dynamic("li", "search-prose-result");
       const link = dynamic("a", "type-ahead-link type-ahead-langref");
       link.href = entry.href;
+      if (entry.fullNavigation) link.setAttribute("data-full-navigation", "");
       link.append(dynamic("span", "search-result-title", entry.title));
       if (entry.matchedTerm && engine.normalize(entry.title) !== engine.normalize(entry.matchedTerm)) {
         link.append(dynamic("small", "search-match-note", ` — search term: ${entry.matchedTerm}`));
@@ -502,7 +504,7 @@ const setupDocsSoftNavigation = () => {
   let activeDocumentKey = fragmentKey(new URL(window.location.href));
 
   const eligibleLinkUrl = (link) => {
-    if (!link || link.hasAttribute("download")) return undefined;
+    if (!link || link.hasAttribute("download") || link.hasAttribute("data-full-navigation")) return undefined;
 
     const target = link.getAttribute("target");
     if (target && target !== "_self") return undefined;

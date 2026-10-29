@@ -76,7 +76,7 @@ fn renderLine(gpa: Allocator, io: std.Io, directory: std.Io.Dir, config_path: []
         defer gpa.free(source_path);
         const source = try std.Io.Dir.cwd().readFileAlloc(io, source_path, gpa, .limited(8 * 1024 * 1024));
         defer gpa.free(source);
-        try w.writeAll("<article data-category=\"");
+        try w.writeAll("<article data-full-navigation data-category=\"");
         try escaped(w, fields[1]);
         try w.writeAll("\" data-title=\"");
         try escaped(w, fields[2]);
@@ -158,6 +158,7 @@ test "search config indexes relative sources and validates curated anchors" {
     const index = try tmp.dir.readFileAlloc(io, "search-index.html", gpa, .limited(4096));
     defer gpa.free(index);
     try std.testing.expect(std.mem.indexOf(u8, index, "Recipes &amp; examples") != null);
+    try std.testing.expect(std.mem.indexOf(u8, index, "<article data-full-navigation") != null);
     try std.testing.expect(std.mem.indexOf(u8, index, "&lt;script&gt; &amp; text") != null);
     try std.testing.expect(std.mem.indexOf(u8, index, "data-search-term=\"lreduce\"") != null);
     try std.testing.expectError(error.UnknownSearchAnchor, validateTarget(gpa, io, tmp.dir, "#missing"));
