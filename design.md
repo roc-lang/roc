@@ -11741,7 +11741,7 @@ producer today, and any future record composition would be another. Ordinary
 unification never introduces a repeat, because relating two rows partitions
 their labels.
 
-Three consumers keep the rule exact:
+Five consumers keep the rule exact:
 
 - Unification relates every repeated occurrence it gathers to the first one
   (`relateChainDuplicateTags` / `relateChainDuplicateFields`), so a relation
@@ -11763,6 +11763,15 @@ Three consumers keep the rule exact:
   dispatch-requirement identities). The checker normalizes the reported row
   and asks again. Every other request, including all post-check consumers,
   treats a repeated label as an invariant violation.
+- `?` return-row composition (Inferred Try Return-Row Composition) gathers a
+  source row's heads into one projected row, so it normalizes every source
+  row whose chain repeats a label before inventorying the batch, and every
+  source tail it gathers after relating heads, which those relations can
+  expose. A conflict is reported at the contribution. A projection never
+  holds a label twice.
+- Type rendering (`TypeWriter`, and the snapshot diff's row gatherers) shows
+  each label once, with its innermost occurrence, since that is what the row
+  means. A conflicting repeat is the conflicting-label report's to show.
 
 Before `CheckedModule` is built, every tag and record row reachable from a
 type in the checked module's output is checked once; rows that repeat a label
@@ -11803,12 +11812,14 @@ cycle's variables becomes `.err` after every report has its snapshot.
 Normalization needs no metadata on type variables and adds no work where no
 label repeats: detection rides on the unifier's gather,
 the key writer's row sort, and the settled row walk, which already compare
-labels. A conflict is reported as a conflicting tag or field: each occurrence
-is shown as a closed single-label row at the source of the row part holding it,
-so the report names where each copy of the label came from. Its location is
-the value whose type holds the row when the settled walk reached the row from
-an output root, and otherwise the outer occurrence. The walk finishes each
-root before starting the next, in source-node order, so the value is the
+labels, and the `?` composition compares labels only along a source chain
+with two or more tag-bearing parts. A conflict is reported as a conflicting
+tag or field: each occurrence is shown as a closed single-label row at the
+source of the row part holding it, so the report names where each copy of
+the label came from. Its location is the value whose type holds the row when
+the settled walk reached the row from an output root, and otherwise the
+outer occurrence. The walk finishes each root before starting the next, in
+source-node order, so the value is the
 earliest source node whose type reaches the row; choosing it is a reporting
 decision and changes nothing about which programs check. The row is poisoned
 once every diagnostic has snapshotted the settled graph.
