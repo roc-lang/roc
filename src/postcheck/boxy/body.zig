@@ -5042,7 +5042,14 @@ pub const Builder = struct {
                         for (const_types.typeSpan(func.args)) |child| try stack.append(self.allocator, .{ .id = child, .expanded = false });
                         try stack.append(self.allocator, .{ .id = func.ret, .expanded = false });
                     },
-                    .named => |named| for (const_types.typeSpan(named.args)) |child| try stack.append(self.allocator, .{ .id = child, .expanded = false }),
+                    .named => |named| {
+                        for (const_types.typeSpan(named.args)) |child| try stack.append(self.allocator, .{ .id = child, .expanded = false });
+                        // A stored alias is its backing.
+                        if (named.kind == .alias) {
+                            const backing = named.backing orelse invariant("a stored alias has no backing type");
+                            try stack.append(self.allocator, .{ .id = backing.ty, .expanded = false });
+                        }
+                    },
                     .primitive, .erased, .zst => {},
                 }
                 continue;
@@ -5104,14 +5111,27 @@ pub const Builder = struct {
                     for (const_types.typeSpan(func.args), args) |child, *arg| arg.* = done.get(child).?;
                     break :blk try store.intern(.{ .function = .{ .args = args, .ret = done.get(func.ret).?, .effectful = false } });
                 },
-                // The occurrence names the nominal; the stored arguments are
-                // what it is applied to.
+                // The stored definition names the nominal's declaration by
+                // its declaring module's content identity and its source
+                // statement, as Monotype reads it; the stored arguments are
+                // what it is applied to. A stored type never names a type
+                // store of another module: the program a value was evaluated
+                // in need not be the one restoring it.
                 .named => |named| blk: {
-                    const owner = self.program.moduleByKey(.{ .bytes = named.named_type.ty_module.bytes });
+                    if (named.kind == .alias) break :blk done.get(named.backing.?.ty).?;
+                    if (named.def.generated != null) invariant("a stored type names a generated nominal, which only specialization mints");
+                    const identity = names.moduleIdentityBytes(named.def.module).*;
+                    const declaring = self.program.by_identity.get(identity) orelse
+                        invariant("a stored type's declaring module is not in this lowering");
+                    const source_decl = named.def.source_decl orelse invariant("a stored nominal type names no declaring statement");
+                    const view = self.program.module(declaring);
+                    const declaration_id = try self.program.store.declarationBySourceDecl(view, source_decl) orelse
+                        invariant("a stored type names a declaration its module does not make");
+                    const declaration = view.types().nominalDeclarationById(declaration_id);
                     const args = try self.allocator.alloc(TypeId, named.args.len);
                     defer self.allocator.free(args);
                     for (const_types.typeSpan(named.args), args) |child, *arg| arg.* = done.get(child).?;
-                    break :blk try self.program.converter().nominalAt(owner.index, named.named_type.ty, args, self.env);
+                    break :blk try self.program.converter().nominalAt(declaring, declaration.declaration_root, args, self.env);
                 },
                 // Only a closure's capture holds an erased function type, and
                 // its restore relates no such capture (`constTypeHasErased`).

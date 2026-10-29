@@ -1895,7 +1895,10 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     }
     if (input.literal_values) |values| {
         for (values.entries.items, 0..) |entry, index| {
-            const slot = try program.literal_entries.getOrPut(allocator, .{ .module = program.moduleByKey(entry.module).index, .expr = entry.expr });
+            // The values are the program's; a module unit lowers the
+            // literals of its own modules.
+            const module = program.modules.find(entry.module) orelse continue;
+            const slot = try program.literal_entries.getOrPut(allocator, .{ .module = module.index, .expr = entry.expr });
             if (!slot.found_existing) slot.value_ptr.* = .empty;
             try slot.value_ptr.append(allocator, @intCast(index));
         }

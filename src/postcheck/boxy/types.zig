@@ -73,9 +73,16 @@ pub const Modules = struct {
         return &self.views.items[@backingInt(index)];
     }
 
+    /// The module of this lowering with key `key`, or null when the
+    /// lowering does not contain it.
+    pub fn find(self: *const Modules, key: checked.ModuleId) ?*const ModuleView {
+        const index = self.by_key.get(key.bytes) orelse return null;
+        return self.get(index);
+    }
+
     pub fn byKey(self: *const Modules, key: checked.ModuleId) *const ModuleView {
         const index = self.by_key.get(key.bytes) orelse
-            invariant("checked data named a module outside this lowering");
+            invariantFmt("checked data named a module outside this lowering ({s})", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
         return self.get(index);
     }
 };
@@ -253,6 +260,10 @@ pub const Store = struct {
     /// module on first use.
     decl_by_key: std.AutoHashMapUnmanaged(DeclKey, checked.CheckedNominalDeclarationId) = .empty,
     decl_keys_indexed: std.AutoHashMapUnmanaged(ModuleIndex, void) = .empty,
+    /// Each module's nominal declarations by source statement
+    /// (`declarationBySourceDecl`), indexed on first use.
+    decl_by_source: std.AutoHashMapUnmanaged(struct { module: ModuleIndex, source_decl: u32 }, checked.CheckedNominalDeclarationId) = .empty,
+    decl_sources_indexed: std.AutoHashMapUnmanaged(ModuleIndex, void) = .empty,
 
     const DeclKey = struct { module: ModuleIndex, key: names.NominalTypeKey };
 
@@ -313,9 +324,23 @@ pub const Store = struct {
         self.field_defaults.deinit(self.allocator);
         self.decl_by_key.deinit(self.allocator);
         self.decl_keys_indexed.deinit(self.allocator);
+        self.decl_by_source.deinit(self.allocator);
+        self.decl_sources_indexed.deinit(self.allocator);
     }
 
     /// The declaration with nominal key `key` in `view`'s type store.
+    /// The nominal declaration of `view` declared at source statement
+    /// `source_decl`, or null when `view` declares none there.
+    pub fn declarationBySourceDecl(self: *Store, view: *const ModuleView, source_decl: u32) Allocator.Error!?checked.CheckedNominalDeclarationId {
+        if (!self.decl_sources_indexed.contains(view.index)) {
+            try self.decl_sources_indexed.put(self.allocator, view.index, {});
+            for (view.types().nominal_declarations) |declaration| {
+                try self.decl_by_source.put(self.allocator, .{ .module = view.index, .source_decl = declaration.nominal.source_decl }, declaration.id);
+            }
+        }
+        return self.decl_by_source.get(.{ .module = view.index, .source_decl = source_decl });
+    }
+
     pub fn declarationByKey(self: *Store, view: *const ModuleView, key: names.NominalTypeKey) Allocator.Error!?checked.CheckedNominalDeclarationId {
         if (!self.decl_keys_indexed.contains(view.index)) {
             try self.decl_keys_indexed.put(self.allocator, view.index, {});

@@ -11374,6 +11374,11 @@ fn buildBoxyLibraryObjects(
         try units.append(ctx.gpa, artifact);
     }
     const platform = try boxyPlatformView(ctx, build_env, root_artifact, visible);
+    if (dev_diagnostics.isSet(.trace_boxy_work)) {
+        std.debug.print("boxy-work: root {s} key {s} codegen {s} identity {s}\n", .{ root_artifact.canonical_names.moduleNameText(root_artifact.module_identity.module_name), &std.fmt.bytesToHex(root_artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.module_identity.stable_hash[0..8], .lower) });
+        for (units.items) |artifact| std.debug.print("boxy-work: unit {s} key {s} codegen {s} identity {s}\n", .{ artifact.canonical_names.moduleNameText(artifact.module_identity.module_name), &std.fmt.bytesToHex(artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(artifact.module_identity.stable_hash[0..8], .lower) });
+        if (platform) |view| std.debug.print("boxy-work: platform {s} key {s}\n", .{ view.module_env.module_name, &std.fmt.bytesToHex(view.key.bytes[0..8], .lower) });
+    }
     var index_by_key = std.AutoHashMap([32]u8, u32).init(ctx.gpa);
     defer index_by_key.deinit();
     for (units.items, 0..) |artifact, index| try index_by_key.put(artifact.key.bytes, @intCast(index));
@@ -11514,12 +11519,26 @@ const BoxyUnitObject = struct {
 
 /// The key of `artifact`'s object under this build's target and policy.
 /// A module declaring hosted functions is lowered against the platform
-/// header that binds them to their host symbols, so its key covers the
-/// platform module's checked key too.
-fn boxyObjectKey(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView, args: cli_args.BuildArgs, target: RocTarget) compile.boxy_object_cache.Key {
+/// header's hosted section, which binds them to their host symbols, so its
+/// key covers a digest of that section too.
+/// `root` selects the root program's key, which covers its platform
+/// pairing: the root unit lowers the platform modules at the app's types.
+/// A library module's object is a function of the module and its imports
+/// alone, so its key is its checked key whatever program pairs it.
+fn boxyObjectKey(gpa: Allocator, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView, args: cli_args.BuildArgs, target: RocTarget, root: bool) Allocator.Error!compile.boxy_object_cache.Key {
+    const hosted_bindings: ?[32]u8 = if (platform) |platform_view| blk: {
+        const inputs = try gpa.alloc(compile.boxy_object_cache.HostedBindingInput, platform_view.hosted_bindings.bindings.len);
+        defer gpa.free(inputs);
+        for (platform_view.hosted_bindings.bindings, inputs) |binding, *input| input.* = .{
+            .target_module = binding.target_checked_module.bytes,
+            .target_def = @backingInt(binding.target_def),
+            .symbol = platform_view.canonical_names.externalSymbolNameText(binding.external_symbol_name),
+        };
+        break :blk compile.boxy_object_cache.hostedBindingsDigest(inputs);
+    } else null;
     return compile.boxy_object_cache.key(.{
-        .checked_key = artifact.codeGenerationKey().bytes,
-        .platform_key = if (platform) |platform_view| (platform_view.code_generation_key orelse platform_view.key).bytes else null,
+        .checked_key = if (root) artifact.codeGenerationKey().bytes else artifact.key.bytes,
+        .hosted_bindings = hosted_bindings,
         .target = @tagName(target),
         .opt = @tagName(args.opt),
         .inline_expects = inlineExpectModeForOpt(args.opt) == .run,
@@ -11544,12 +11563,21 @@ fn restoreBoxyObject(
     interfaces: *postcheck.Boxy.Lower.ExportInterfaces,
 ) Allocator.Error!?compile.boxy_object_cache.Entry {
     const cache = compile.boxy_object_cache;
-    const manager = cache_manager orelse return null;
-    const bytes = manager.loadFamilyBytes(.boxy_object, key.bytes, cache.scope) orelse return null;
+    const manager = cache_manager orelse {
+        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no cache manager to restore key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
+        return null;
+    };
+    const bytes = manager.loadFamilyBytes(.boxy_object, key.bytes, cache.scope) orelse {
+        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no object cache entry for key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
+        return null;
+    };
     defer gpa.free(bytes);
     const entry = cache.decode(gpa, bytes) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.InvalidEntry => return null,
+        error.InvalidEntry => {
+            if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache entry for key {s} is not an entry ({d} bytes)\n", .{ &std.fmt.bytesToHex(key.bytes[0..8], .lower), bytes.len });
+            return null;
+        },
     };
     errdefer cache.deinitEntry(gpa, entry);
     for (entry.exports) |record| try interfaces.put(.{ .bytes = record.identity }, .{
@@ -11562,7 +11590,6 @@ fn restoreBoxyObject(
         .rc_ret_conditions = record.rc_ret_conditions,
         .may_leave_pending = record.may_leave_pending,
     });
-    base.dev_diagnostics.traceBoxyWork("object cache hit");
     return entry;
 }
 
@@ -11592,10 +11619,14 @@ fn boxyExportRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.Lowered
 /// File `entry` in the per-module Boxy object cache under `key`.
 fn storeBoxyObject(gpa: Allocator, cache_manager: ?*CacheManager, key: compile.boxy_object_cache.Key, entry: compile.boxy_object_cache.Entry) Allocator.Error!void {
     const cache = compile.boxy_object_cache;
-    const manager = cache_manager orelse return;
+    const manager = cache_manager orelse {
+        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no cache manager to store key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
+        return;
+    };
     const bytes = try cache.encode(gpa, entry);
     defer gpa.free(bytes);
     manager.storeFamilyBytes(.boxy_object, key.bytes, bytes, cache.scope, "boxy object");
+    if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: stored object cache entry for key {s} ({d} bytes)\n", .{ &std.fmt.bytesToHex(key.bytes[0..8], .lower), bytes.len });
 }
 
 /// One library module's unit, run as a post-check task: its object restored
@@ -11641,16 +11672,21 @@ const BoxyUnitTask = struct {
 
     fn build(self: *BoxyUnitTask) CliMainError!Result {
         const gpa = self.gpa;
-        const object_key = boxyObjectKey(self.artifact, self.platform, self.args, self.target);
+        const object_key = try boxyObjectKey(gpa, self.artifact, self.platform, self.args, self.target, false);
+        const module_name = self.artifact.canonical_names.moduleNameText(self.artifact.module_identity.module_name);
         if (try restoreBoxyObject(gpa, self.cache_manager, object_key, self.interfaces)) |entry| {
             defer compile.boxy_object_cache.deinitEntry(gpa, entry);
+            if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache hit for {s} key {s} checked {s}\n", .{ module_name, &std.fmt.bytesToHex(object_key.bytes[0..8], .lower), &std.fmt.bytesToHex(self.artifact.key.bytes[0..8], .lower) });
             return .{
                 .restored = true,
                 .object = try gpa.dupe(u8, entry.object),
                 .hosted_symbols = try dupeSymbols(gpa, entry.hosted_symbols),
             };
         }
-        base.dev_diagnostics.traceBoxyWork("object cache miss");
+        if (dev_diagnostics.isSet(.trace_boxy_work)) {
+            std.debug.print("boxy-work: object cache miss for {s} key {s} checked {s}\n", .{ module_name, &std.fmt.bytesToHex(object_key.bytes[0..8], .lower), &std.fmt.bytesToHex(self.artifact.key.bytes[0..8], .lower) });
+            for (self.views) |view| std.debug.print("boxy-work:   in view: {s} ({s})\n", .{ view.module_env.module_name, &std.fmt.bytesToHex(view.key.bytes[0..8], .lower) });
+        }
 
         // The platform module whose hosted section binds the hosted
         // functions the module declares, when it declares any.
@@ -11671,9 +11707,11 @@ const BoxyUnitTask = struct {
         config.target.boxy_unit = .{ .imports = self.interfaces, .root = false };
         var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(gpa, modules, .{}, config.target, self.literal_values);
         defer lowered.deinit();
+        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: lowered {s} ({d} procs)\n", .{ module_name, lowered.lir_result.store.procSpecCount() });
 
         const static_data_exports = try compile.static_data_exports.buildStaticData(gpa, .{ .root = modules.root, .imports = views.items }, &lowered, self.target, .{});
         defer compile.static_data_exports.deinitStaticData(gpa, static_data_exports);
+        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: static data of {s} ({d} exports)\n", .{ module_name, static_data_exports.len });
 
         var object_compiler = backend.ObjectFileCompiler.init(gpa);
         object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
@@ -11690,6 +11728,7 @@ const BoxyUnitTask = struct {
         };
         defer written.deinit();
 
+        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: compiled object for {s} ({d} bytes, {d} exports)\n", .{ module_name, written.object_bytes.len, lowered.lir_result.exported_procs.items.len });
         const records = try boxyExportRecords(gpa, &lowered, self.interfaces);
         defer gpa.free(records);
         var hosted_arena = std.heap.ArenaAllocator.init(gpa);
@@ -12282,7 +12321,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     else
         null;
     const boxy_cache_manager: ?*CacheManager = if (args.no_cache) null else build_env.cache_manager;
-    const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| boxyObjectKey(root_artifact, boxyUnitPlatform(root_artifact, library.platform), args, target) else null;
+    const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| try boxyObjectKey(ctx.gpa, root_artifact, boxyUnitPlatform(root_artifact, library.platform), args, target, true) else null;
+    if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: library objects {d}, root key {s}\n", .{ if (boxy_library) |library| library.objects.len else 0, if (boxy_root_key) |key| &std.fmt.bytesToHex(key.bytes[0..8], .lower) else "none" });
     // The root program's object is cached under its own key too: a build
     // whose every module is cached lowers nothing.
     if (boxy_library) |library| if (try restoreBoxyObject(ctx.gpa, boxy_cache_manager, boxy_root_key.?, &boxy_interfaces.?)) |entry| {

@@ -33,10 +33,10 @@ pub const KeyInput = struct {
     /// The module's checked-module cache key, which covers its content and
     /// every upstream module's checked key transitively.
     checked_key: [32]u8,
-    /// For a module declaring hosted functions: the checked key of the
-    /// platform module whose hosted section binds them to their host
-    /// symbols, which the module's calls name.
-    platform_key: ?[32]u8 = null,
+    /// For a module declaring hosted functions: a digest of the platform
+    /// header's hosted section, which binds them to the host symbols the
+    /// module's calls name (`hostedBindingsDigest`).
+    hosted_bindings: ?[32]u8 = null,
     /// The target the object is compiled for.
     target: []const u8,
     /// The optimization level, which decides the LIR passes and backend.
@@ -52,9 +52,9 @@ pub fn key(input: KeyInput) Key {
     hasher.update(&build_options.compiler_compatibility_hash);
     hashU32(&hasher, format_version);
     hasher.update(&input.checked_key);
-    if (input.platform_key) |platform_key| {
+    if (input.hosted_bindings) |bindings| {
         hasher.update(&[_]u8{1});
-        hasher.update(&platform_key);
+        hasher.update(&bindings);
     } else {
         hasher.update(&[_]u8{0});
     }
@@ -62,6 +62,29 @@ pub fn key(input: KeyInput) Key {
     hashLengthPrefixed(&hasher, input.opt);
     hasher.update(&[_]u8{@intFromBool(input.inline_expects)});
     return .{ .bytes = hasher.finalResult() };
+}
+
+/// One binding of a platform header's hosted section, as `hostedBindingsDigest`
+/// digests it.
+pub const HostedBindingInput = struct {
+    target_module: [32]u8,
+    target_def: u32,
+    symbol: []const u8,
+};
+
+/// The digest of a platform header's hosted section: every binding, in the
+/// section's order. Two platform headers binding the same hosted functions
+/// to the same host symbols digest alike, whatever app they pair with.
+pub fn hostedBindingsDigest(bindings: []const HostedBindingInput) [32]u8 {
+    var hasher = base.Sha256.init(.{});
+    hasher.update("roc-boxy-hosted-bindings-v1");
+    hashU32(&hasher, @intCast(bindings.len));
+    for (bindings) |binding| {
+        hasher.update(&binding.target_module);
+        hashU32(&hasher, binding.target_def);
+        hashLengthPrefixed(&hasher, binding.symbol);
+    }
+    return hasher.finalResult();
 }
 
 /// The ownership signature and tail-drive summary ARC solved for one
@@ -276,10 +299,10 @@ test "a Boxy object key is a function of exactly its declared inputs" {
     try std.testing.expect(!std.mem.eql(u8, &baseline.bytes, &key(changed_module).bytes));
 
     var with_platform = testInput();
-    with_platform.platform_key = @splat(9);
+    with_platform.hosted_bindings = @splat(9);
     try std.testing.expect(!std.mem.eql(u8, &baseline.bytes, &key(with_platform).bytes));
     var other_platform = testInput();
-    other_platform.platform_key = @splat(10);
+    other_platform.hosted_bindings = @splat(10);
     try std.testing.expect(!std.mem.eql(u8, &key(with_platform).bytes, &key(other_platform).bytes));
 
     var changed_target = testInput();
@@ -330,4 +353,20 @@ test "a Boxy object entry round-trips through its bytes" {
     defer allocator.free(altered);
     altered[0] = 'X';
     try std.testing.expectError(error.InvalidEntry, decode(allocator, altered));
+}
+
+test "a hosted bindings digest is a function of the bindings in order" {
+    const a: [32]u8 = @splat(1);
+    const bindings = [_]HostedBindingInput{
+        .{ .target_module = a, .target_def = 3, .symbol = "roc_fx_line" },
+        .{ .target_module = a, .target_def = 4, .symbol = "roc_fx_read" },
+    };
+    const baseline = hostedBindingsDigest(&bindings);
+    try std.testing.expectEqual(baseline, hostedBindingsDigest(&bindings));
+    const reordered = [_]HostedBindingInput{ bindings[1], bindings[0] };
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &hostedBindingsDigest(&reordered)));
+    var renamed = bindings;
+    renamed[0].symbol = "roc_fx_line2";
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &hostedBindingsDigest(&renamed)));
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &hostedBindingsDigest(bindings[0..1])));
 }
