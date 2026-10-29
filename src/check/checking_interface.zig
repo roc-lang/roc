@@ -464,8 +464,7 @@ const Publication = struct {
         try self.section("method definitions", env.method_defs.entries.items.len);
         for (env.method_defs.entries.items) |entry| {
             const owner = entry.key.ownerIdent();
-            if (owner.moduleIdentity()) |identity| try self.value(identity) else dependencies.hashU32(&self.hasher, 0);
-            dependencies.hashU32(&self.hasher, try self.foreignNode(owner.moduleIdentity() orelse env.selfModuleIdentity(), @backingInt(owner.owner)));
+            dependencies.hashU32(&self.hasher, try self.foreignNode(env.selfModuleIdentity(), @backingInt(owner.owner)));
             try self.value(entry.key.methodIdent());
             try self.scheme(entry.value.type_node_idx);
             try self.definition(entry.value.def_idx, classify);
@@ -473,8 +472,7 @@ const Publication = struct {
         try self.section("method identifiers", env.method_idents.entries.items.len);
         for (env.method_idents.entries.items) |entry| {
             const owner = entry.key.ownerIdent();
-            if (owner.moduleIdentity()) |identity| try self.value(identity) else dependencies.hashU32(&self.hasher, 0);
-            dependencies.hashU32(&self.hasher, try self.foreignNode(owner.moduleIdentity() orelse env.selfModuleIdentity(), @backingInt(owner.owner)));
+            dependencies.hashU32(&self.hasher, try self.foreignNode(env.selfModuleIdentity(), @backingInt(owner.owner)));
             try self.value(entry.key.methodIdent());
             try self.value(entry.value);
         }

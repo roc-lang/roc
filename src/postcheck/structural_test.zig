@@ -1033,7 +1033,7 @@ test "Monotype closed direct low-level lowering stays sealed and allocation disc
         "fn scopedNode(self: *BodyContext",
     );
     try expectContains(fresh_inst_node, "TypeInstantiationContext.init");
-    try expectNotContains(fresh_inst_node, "BodyContext.initWithMethodScope");
+    try expectNotContains(fresh_inst_node, "BodyContext.init(");
 
     const source_mapping = sourceSliceBetween(
         lower_source,
@@ -2186,7 +2186,7 @@ test "Monotype lowering scopes share one definition of each type-shape, name-imp
     const lookups = [_][]const u8{ "lookupMethodTarget", "lookupMethodTargetByName", "inspectOverrideFor" };
     inline for (lookups) |name| {
         try std.testing.expectEqual(@as(usize, 1), countDefinitions(source, "fn " ++ name ++ "("));
-        try expectContains(source, "    fn " ++ name ++ "(\n        self: *Builder,\n        scope: ModuleView,\n        owner_names: *const names.NameStore,");
+        try expectContains(source, "    fn " ++ name ++ "(\n        self: *Builder,\n        owner_names: *const names.NameStore,");
     }
     // The restore walker reads shapes through the shared queries, so the
     // restorer interface carries no shape queries of its own.

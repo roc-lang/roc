@@ -750,10 +750,9 @@ existing batched, atomic family store. Counters distinguish misses, serializatio
 failures, records and bytes, replay, invalid records and actual relation expansion.
 
 The provider key includes the exact checked callee code-generation key,
-the method scope's checked value context and ordered
-lookup-scope contexts, the program method context, the callee's explicit import
-closure, and lowering
-policy. These use the identities already produced for literal value reuse:
+the program method context, the callee's explicit import closure, and lowering
+policy. Methods belong only to their declaring type, so there is no
+caller-specific method lookup scope in the provider identity. These use the identities already produced for literal value reuse:
 top modules contribute their checked type/method world and imports; other
 modules contribute exact checked keys. Platform requirements reached from
 methods contribute their exported definition identities. The callee's transitive
@@ -2864,10 +2863,8 @@ specialization is completed as a `crash` at its requested signature. Only
 discovery bodies reference these, and the compile-time consumer's root
 manifest names no discovery root, so evaluation never runs one (a discovery
 procedure reaches that consumer's LIR only as a member of a callable set an
-evaluation never selects). A
-specialization's Monotype identity includes the method scope that requested
-it, but its procedure identity does not, and Direct LIR shares one
-procedure among specializations of equal procedure identity. So every
+evaluation never selects). Direct LIR shares one procedure among
+specializations of equal procedure identity. So every
 procedure a discovery body commits, and every stub, is marked as discovery
 in its source template: the mark is part of its procedure identity and
 removes its object-cache key, so a discovery body, whose requests may name
@@ -5307,8 +5304,6 @@ depends on a resolved reference and cannot be finished at canonicalization time
 is recorded the same way, as an entry on a worklist, with the node identity it
 needs:
 
-- receiver-extension method registrations whose receiver type is an imported
-  type (the owner's identity is unknown until the type reference resolves);
 - `import "path" as name` file imports (reading the file is filesystem input,
   so the node is a deferred file import and the worklist entry names it; the
   file's bytes and content hash are recorded when the entry is drained).
@@ -5653,8 +5648,8 @@ classification, declaration and method bindings, complete copied schemes
 templates, declaration annotations and their argument-position meaning,
 generated-method and hosted-declaration classifications, invoking-callable
 results, diagnostic hosted origins, and the results that govern stored-constant
-eligibility. The ordered import, type-owner and method-lookup scope is part of
-the dependency. An implementation edit can change one of these results without
+eligibility. The ordered imports and type-owner bindings are part of
+the dependency; methods come from the type owner's declaring module alone. An implementation edit can change one of these results without
 changing a printed type signature.
 
 Module ownership is a parameter of reusable inference. A checking dependency
@@ -5688,7 +5683,7 @@ An inference capsule carries the old dependency reference tables and their owner
 parameters. Admission establishes equal interfaces and owner equality partitions
 before translating each retained foreign reference through old node -> committed
 slot -> current node. Translation covers CIR value, associated, nominal, pattern
-and annotation references, suffix and hosted targets, method-owner keys, nominal
+and annotation references, suffix and hosted targets, nominal
 and alias source declarations, record defaults, and their type-store indices.
 Dispatch evidence's type variables and relations are local to the stored solved
 graph and are preserved; only their foreign declaration locators change. A
@@ -6368,11 +6363,7 @@ unchanged body columns, dispatch plans, declaration tables and closure
 inventories, and owns the
 projected types, bindings, root manifests and evaluation results in a session.
 Completed independent roots are consumed as stored values and never evaluated
-again. Both lowering strategies consume this same checked view. Pairing extends the
-platform's ordered method scope with the app and its recorded scope, retaining
-the first occurrence of each checked module. The composition cache carries this
-combined scope so generated helpers can consume the app's exact checked method
-targets on both fresh and cached pairings. A session view
+again. Both lowering strategies consume this same checked view. A session view
 cannot be serialized into the reusable module cache. Its completed changed
 columns may be persisted in the separate composition cache described above.
 Type columns borrow the immutable platform until their first write; ownership
@@ -8075,7 +8066,19 @@ registry target as structural behavior.
 
 The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
-concrete monomorphic dispatcher type has already determined the owner. A
+concrete monomorphic dispatcher type has already determined the owner.
+
+A type's methods are the functions declared in its own `.{ … }` block, so the
+module that declares a type is the only module whose registry holds that
+type's methods, and `value.method(args)` means exactly `Type.method(value,
+args)` for the `Type` of `value`. A function declared in another type's block
+whose first parameter is `Type` is not a method of `Type`, wherever it is
+visible; only `Other.function(value, args)` reaches it. Method lookup
+therefore has no scope: the checker reads the owner's declaring module's
+method tables, Monotype lowering reads the owner's declaring module's registry
+(the Builtin module's for a builtin owner), and a procedure specialization's
+identity names no requesting module, so one specialization serves every
+module that requests the same callable at the same types and evidence. A
 method of a type declared in a function body is registered only by the
 declaring module, so a local procedure target found in any module of a lookup
 scope is that owner's exact target. Specialization-interface evidence uses its
@@ -15752,8 +15755,8 @@ it actually reaches. A request that lowers the callee body in the caller's own
 draft (a caller-owned lexical specialization or an eager iterator completion)
 still replays them, because that replay is the body's own relation production.
 
-Repeated dependency requests are memoized by the procedure family (template
-and method scope), exact evidence topology, and the complete open input
+Repeated dependency requests are memoized by the procedure family (template),
+exact evidence topology, and the complete open input
 interface. The checked source-function key through which a call site reached
 the template is not part of a summary's identity: it names how that site
 spelled the callee's type, and the request's input already carries everything
@@ -15833,19 +15836,19 @@ cache hits replay those same results. Ordinary specialization edges still
 apply the complete contracts before specialization identity or sealing.
 Individual selected method-signature relations use the same immutable summary
 storage, in a distinct key domain from procedure dependency summaries. Their
-keys include the checked signature identity, method scope, adapter reachability,
+keys include the checked signature identity, adapter reachability,
 and complete input constraint. They consume no nested dispatch evidence.
 Expansion uses detached inputs; replay creates fresh open cells and preserves
 the input's sharing, so independent calls never share new quantified variables.
 Construction of a checked procedure's method signature is itself an immutable
-snapshot, keyed by its checked signature and method scope before any request
+snapshot, keyed by its checked signature before any request
 relation is applied. Different constraint inputs instantiate fresh cells from
 that snapshot rather than re-expanding the same nominal declarations. Local
 method signatures remain context-owned and are not shared through this cache.
 
 An ordinary specialization edge applies its complete contracts as one
 summarized relation, in its own key domain: the checked requirement row,
-method scope, complete evidence, and the identity of the edge's substitution
+complete evidence, and the identity of the edge's substitution
 cells. The first edge with that input relates every contract over detached
 copies of the substitution; each later one replays the result in one step,
 so an edge's contract work does not repeat per requirement for every use of
@@ -16446,7 +16449,7 @@ against it like any reserved specialization.
 A fresh procedure specialization reserves its global function identity before
 lowering its body and records that reservation as the active root owner. A call
 from beneath that owner may rejoin the reservation when it names the same
-checked procedure and method scope, carries the same dispatch evidence, and
+checked procedure, carries the same dispatch evidence, and
 matches the active function interface. The checked source root used to reach
 the declaration is not recursive ownership: different checked occurrences may
 reach the same procedure. For a synthesized partial interface, at least one
@@ -16860,7 +16863,6 @@ lowering a body. A specialization request is identified by:
 ```zig
 const SpecIdentity = struct {
     callable: CallableIdentity,
-    method_scope: CheckedModuleDigest,
     evidence_digest: EvidenceDigest,
     codec_contract_digest: TypeDigest,
     request_fn_ty_digest: TypeDigest,
@@ -16899,15 +16901,13 @@ const SpecRecord = struct {
 };
 ```
 
-`method_scope` records the exact checked registry scope that selected static
-dispatch inside the body; it participates in both draft and durable lookup
-keys. `evidence_digest` accelerates lookup of the exact retained
+`evidence_digest` accelerates lookup of the exact retained
 dispatch-evidence topology, and `codec_contract_digest` the exact
 lowering-only context a generated codec body requires. `request_fn_ty_digest`
 records the closed function type REQUESTED by the call site that reserved the
 record. The digests make lookup fast, but they are not the only correctness
 check. When a digest match is found, the store must also verify the checked
-callable identity, method scope, exact evidence topology, exact codec
+callable identity, exact evidence topology, exact codec
 contract, and exact structural equality of the closed Monotype function type.
 Digest collisions are therefore harmless.
 
@@ -16940,7 +16940,7 @@ retains alias provenance deliberately—and both requests seal to one Monotype
 function type. (Monotype does retain some alias-named types; what is required
 here is the sealed request type, whatever shape it has.)
 
-Two requests that agree on the checked callable, method scope, exact evidence
+Two requests that agree on the checked callable, exact evidence
 topology, codec contract, and closed Monotype function type lower the same body
 and must reuse ONE record. Caller provenance must not split them, in the
 durable store, in the draft-commit index, or in the object-cache content key.
@@ -17601,7 +17601,7 @@ Closed direct calls never enter dispatch-relation instantiation. Monotype
 lowers an exact low-level target directly and creates no procedure
 specialization. An ordinary procedure target requests one specialization under
 the identity `(target template, target-instantiated checked callable,
-nested-evidence identity, method scope)`. Closed checked callable and evidence
+nested-evidence identity)`. Closed checked callable and evidence
 identities are interned in CheckedModule, so the first request creates or loads
 the specialization and every repeated call is an O(1) hit before durable type
 or evidence digests are rebuilt. That identity is complete only for a
@@ -27678,8 +27678,9 @@ and a completed immutable worker shard. Its record retains explicit frontier
 requests, compile-time reads, type/name ownership, and source/module ownership.
 The existing coordinator still accepts the result and resolves the frontier.
 A hit does not bypass demand discovery or the observations of a consumed root.
-Input identity covers source, incoming type/evidence/substitution, ordered
-method context, lowering policy, and compile-time dependencies. Each recorded
+Input identity covers source, incoming type/evidence/substitution, declaring
+method dependencies, lowering policy, and compile-time dependencies. It does
+not include a caller-specific method lookup scope. Each recorded
 root read must retain its current value identity and representation state.
 All persisted references must be validated and rebound to current owners
 before a shard reaches compiler invariants. Unsupported optional record
