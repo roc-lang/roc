@@ -280,6 +280,8 @@ pub const Program = struct {
     workers: std.ArrayList(Worker) = .empty,
     worker_ids: std.AutoHashMapUnmanaged(WorkerKey, WorkerId) = .empty,
     worklist: std.ArrayList(WorkerId) = .empty,
+    /// The Builtin module, found on first use (`builtinModule`).
+    builtin_module: ?ModuleIndex = null,
     /// The program-local source file of each module, by module index.
     source_files: []u32 = &.{},
     lowering_module_ids: []LIR.LoweringModuleId = &.{},
@@ -1153,10 +1155,28 @@ pub const Program = struct {
         };
     }
 
-    /// The registration of `owner.method_text` in `scope_module`'s registry.
+    /// The registration of `owner.method_text`, as `scope_module` names the
+    /// owner: an owner's methods live in its declaring module's registry
+    /// alone, Builtin's for a builtin owner.
     fn registeredMethod(self: *Program, scope_module: ModuleIndex, owner_module: ?ModuleIndex, owner: static_dispatch.MethodOwner, method_text: []const u8) ?static_dispatch.CheckedMethodLookup {
         const owner_names = self.module(owner_module orelse scope_module).nameStore();
-        return methodIn(self.module(scope_module), owner_names, owner, method_text);
+        const declaring = switch (owner) {
+            .builtin => self.builtinModule(),
+            .nominal => self.module(owner_module orelse scope_module),
+        };
+        return methodIn(declaring, owner_names, owner, method_text);
+    }
+
+    /// The Builtin module, which declares every builtin owner's methods.
+    fn builtinModule(self: *Program) *const types.ModuleView {
+        if (self.builtin_module) |index| return self.module(index);
+        for (self.modules.views.items) |*view| {
+            if (view.view.module_env.module_role == .builtin) {
+                self.builtin_module = view.index;
+                return view;
+            }
+        }
+        invariant("a program reaches a builtin owner's method without the Builtin module");
     }
 
     fn methodIn(view: *const types.ModuleView, owner_names: anytype, owner: static_dispatch.MethodOwner, method_text: []const u8) ?static_dispatch.CheckedMethodLookup {
