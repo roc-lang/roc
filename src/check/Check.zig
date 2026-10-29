@@ -22104,6 +22104,7 @@ const ResultWidening = struct {
 /// the value's own row is untouched (design.md "Value Rows: Uses Share One
 /// Row").
 fn widenResultValue(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env) std.mem.Allocator.Error!?ResultWidening {
+    try self.judgeRecordDestructBindsAt(env, .determined_kinds);
     const rows_start: u32 = @intCast(self.widened_use_rows.items.len);
     const wide_var = try self.widenedClosedRowsCopy(
         ModuleEnv.varFrom(expr_idx),
@@ -37776,6 +37777,24 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
 /// and rejects the construct that owns the pattern through
 /// `rejectPatternFailureOwner`.
 fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    try self.judgeRecordDestructBindsAt(env, .commit);
+}
+
+/// Which pending record-destructure binders a judgment binds.
+const DestructJudgment = enum {
+    /// Every binder: a commitment point, where a still-flex kind pins
+    /// `required`.
+    commit,
+    /// Only binders whose field kind is already determined. Binding them
+    /// early is the binding a later commitment point would make, so a
+    /// decision that reads a binder's type—the row coercion of a value
+    /// flowing into an annotated result (design.md "Row Subsumption")—sees
+    /// the field's type rather than the binder's placeholder. A still-flex
+    /// kind stays pending.
+    determined_kinds,
+};
+
+fn judgeRecordDestructBindsAt(self: *Self, env: *Env, judgment: DestructJudgment) std.mem.Allocator.Error!void {
     var retained: usize = 0;
     var index: usize = 0;
     while (index < self.pending_record_destructs.items.len) : (index += 1) {
@@ -37806,7 +37825,7 @@ fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void
                 // scope that owns it (finalize as the monomorphic
                 // backstop, where every remaining non-generalized var is
                 // at rank).
-                if (@backingInt(resolved.desc.rank) < @backingInt(env.rank())) {
+                if (judgment == .determined_kinds or @backingInt(resolved.desc.rank) < @backingInt(env.rank())) {
                     self.pending_record_destructs.items[retained] = pending;
                     retained += 1;
                     continue;
