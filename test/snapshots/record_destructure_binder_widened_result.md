@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=A function value destructured from a record is called into an annotated result that a caller widens, exactly as a field read is
+description=A function value destructured from a record, a record literal or a call result is called into an annotated result that a caller widens, exactly as a field read is
 type=snippet
 ~~~
 # SOURCE
@@ -22,7 +22,21 @@ Stepper :: { step : () -> [A, B] }.{
 
 	by_field : Stepper -> [A, B]
 	by_field = |s| (s.step)()
+
+	by_literal : Stepper -> [A, B]
+	by_literal = |s| {
+		{ step } = { step: s.step }
+		step()
+	}
+
+	by_call : Stepper -> [A, B]
+	by_call = |s| {
+		{ step } = wrap(s.step)
+		step()
+	}
 }
+
+wrap = |f| { step: f }
 
 describe = |s| {
 	a = match s.by_pattern() {
@@ -45,7 +59,17 @@ describe = |s| {
 		B => "b"
 		C => "c"
 	}
-	Str.concat(Str.concat(a, b), Str.concat(c, d))
+	e = match s.by_literal() {
+		A => "a"
+		B => "b"
+		C => "c"
+	}
+	f = match s.by_call() {
+		A => "a"
+		B => "b"
+		C => "c"
+	}
+	Str.concat(Str.concat(Str.concat(a, b), Str.concat(c, d)), Str.concat(e, f))
 }
 ~~~
 # EXPECTED
@@ -68,7 +92,18 @@ LowerIdent,OpColon,UpperIdent,OpArrow,OpenSquare,UpperIdent,Comma,UpperIdent,Clo
 LowerIdent,OpAssign,OpBar,OpenCurly,LowerIdent,CloseCurly,OpBar,LowerIdent,NoSpaceOpenRound,CloseRound,
 LowerIdent,OpColon,UpperIdent,OpArrow,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenRound,LowerIdent,NoSpaceDotLowerIdent,CloseRound,NoSpaceOpenRound,CloseRound,
+LowerIdent,OpColon,UpperIdent,OpArrow,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
+OpenCurly,LowerIdent,CloseCurly,OpAssign,OpenCurly,LowerIdent,OpColon,LowerIdent,NoSpaceDotLowerIdent,CloseCurly,
+LowerIdent,NoSpaceOpenRound,CloseRound,
 CloseCurly,
+LowerIdent,OpColon,UpperIdent,OpArrow,OpenSquare,UpperIdent,Comma,UpperIdent,CloseSquare,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
+OpenCurly,LowerIdent,CloseCurly,OpAssign,LowerIdent,NoSpaceOpenRound,LowerIdent,NoSpaceDotLowerIdent,CloseRound,
+LowerIdent,NoSpaceOpenRound,CloseRound,
+CloseCurly,
+CloseCurly,
+LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,LowerIdent,OpColon,LowerIdent,CloseCurly,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,OpenCurly,
 LowerIdent,OpAssign,KwMatch,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,OpenCurly,
 UpperIdent,OpFatArrow,StringStart,StringPart,StringEnd,
@@ -90,7 +125,17 @@ UpperIdent,OpFatArrow,StringStart,StringPart,StringEnd,
 UpperIdent,OpFatArrow,StringStart,StringPart,StringEnd,
 UpperIdent,OpFatArrow,StringStart,StringPart,StringEnd,
 CloseCurly,
-UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,Comma,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,CloseRound,
+LowerIdent,OpAssign,KwMatch,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,OpenCurly,
+UpperIdent,OpFatArrow,StringStart,StringPart,StringEnd,
+UpperIdent,OpFatArrow,StringStart,StringPart,StringEnd,
+UpperIdent,OpFatArrow,StringStart,StringPart,StringEnd,
+CloseCurly,
+LowerIdent,OpAssign,KwMatch,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,OpenCurly,
+UpperIdent,OpFatArrow,StringStart,StringPart,StringEnd,
+UpperIdent,OpFatArrow,StringStart,StringPart,StringEnd,
+UpperIdent,OpFatArrow,StringStart,StringPart,StringEnd,
+CloseCurly,
+UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,Comma,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,CloseRound,Comma,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,CloseRound,CloseRound,
 CloseCurly,
 EndOfFile,
 ~~~
@@ -182,7 +227,65 @@ EndOfFile,
 								(e-field-access
 									(receiver
 										(e-ident (raw "s")))
-									(segment (mode "required") (field "step")))))))))
+									(segment (mode "required") (field "step")))))))
+				(s-type-anno (name "by_literal")
+					(ty-fn
+						(ty (name "Stepper"))
+						(ty-tag-union
+							(tags
+								(ty (name "A"))
+								(ty (name "B"))))))
+				(s-decl
+					(p-ident (raw "by_literal"))
+					(e-lambda
+						(args
+							(p-ident (raw "s")))
+						(e-block
+							(statements
+								(s-decl
+									(p-record
+										(field (name "step") (rest false)))
+									(e-record
+										(field (field "step")
+											(e-field-access
+												(receiver
+													(e-ident (raw "s")))
+												(segment (mode "required") (field "step"))))))
+								(e-apply
+									(e-ident (raw "step")))))))
+				(s-type-anno (name "by_call")
+					(ty-fn
+						(ty (name "Stepper"))
+						(ty-tag-union
+							(tags
+								(ty (name "A"))
+								(ty (name "B"))))))
+				(s-decl
+					(p-ident (raw "by_call"))
+					(e-lambda
+						(args
+							(p-ident (raw "s")))
+						(e-block
+							(statements
+								(s-decl
+									(p-record
+										(field (name "step") (rest false)))
+									(e-apply
+										(e-ident (raw "wrap"))
+										(e-field-access
+											(receiver
+												(e-ident (raw "s")))
+											(segment (mode "required") (field "step")))))
+								(e-apply
+									(e-ident (raw "step")))))))))
+		(s-decl
+			(p-ident (raw "wrap"))
+			(e-lambda
+				(args
+					(p-ident (raw "f")))
+				(e-record
+					(field (field "step")
+						(e-ident (raw "f"))))))
 		(s-decl
 			(p-ident (raw "describe"))
 			(e-lambda
@@ -270,16 +373,62 @@ EndOfFile,
 										(p-tag (raw "C"))
 										(e-string
 											(e-string-part (raw "c")))))))
+						(s-decl
+							(p-ident (raw "e"))
+							(e-match
+								(e-method-call (method ".by_literal")
+									(receiver
+										(e-ident (raw "s")))
+									(args))
+								(branches
+									(branch
+										(p-tag (raw "A"))
+										(e-string
+											(e-string-part (raw "a"))))
+									(branch
+										(p-tag (raw "B"))
+										(e-string
+											(e-string-part (raw "b"))))
+									(branch
+										(p-tag (raw "C"))
+										(e-string
+											(e-string-part (raw "c")))))))
+						(s-decl
+							(p-ident (raw "f"))
+							(e-match
+								(e-method-call (method ".by_call")
+									(receiver
+										(e-ident (raw "s")))
+									(args))
+								(branches
+									(branch
+										(p-tag (raw "A"))
+										(e-string
+											(e-string-part (raw "a"))))
+									(branch
+										(p-tag (raw "B"))
+										(e-string
+											(e-string-part (raw "b"))))
+									(branch
+										(p-tag (raw "C"))
+										(e-string
+											(e-string-part (raw "c")))))))
 						(e-apply
 							(e-ident (raw "Str.concat"))
 							(e-apply
 								(e-ident (raw "Str.concat"))
-								(e-ident (raw "a"))
-								(e-ident (raw "b")))
+								(e-apply
+									(e-ident (raw "Str.concat"))
+									(e-ident (raw "a"))
+									(e-ident (raw "b")))
+								(e-apply
+									(e-ident (raw "Str.concat"))
+									(e-ident (raw "c"))
+									(e-ident (raw "d"))))
 							(e-apply
 								(e-ident (raw "Str.concat"))
-								(e-ident (raw "c"))
-								(e-ident (raw "d"))))))))))
+								(e-ident (raw "e"))
+								(e-ident (raw "f"))))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -308,7 +457,7 @@ NO CHANGE
 												(required
 													(p-assign (ident "step"))))))))
 							(value
-								(e-call (constraint-fn-var 417)
+								(e-call (constraint-fn-var 524)
 									(e-lookup-local
 										(p-assign (ident "step"))))))))))
 		(annotation
@@ -331,7 +480,7 @@ NO CHANGE
 									(p-assign (ident "step"))))))
 					(e-lookup-local
 						(p-assign (ident "s"))))
-				(e-call (constraint-fn-var 439)
+				(e-call (constraint-fn-var 546)
 					(e-lookup-local
 						(p-assign (ident "step"))))))
 		(annotation
@@ -349,7 +498,7 @@ NO CHANGE
 						(record-destruct (label "step") (ident "step")
 							(required
 								(p-assign (ident "step")))))))
-			(e-call (constraint-fn-var 459)
+			(e-call (constraint-fn-var 566)
 				(e-lookup-local
 					(p-assign (ident "step")))))
 		(annotation
@@ -363,7 +512,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "s")))
-			(e-call (constraint-fn-var 475)
+			(e-call (constraint-fn-var 582)
 				(e-field-access
 					(receiver
 						(e-lookup-local
@@ -377,6 +526,76 @@ NO CHANGE
 					(ty-tag-name (name "A"))
 					(ty-tag-name (name "B"))))))
 	(d-let
+		(p-assign (ident "record_destructure_binder_widened_result.Stepper.by_literal"))
+		(e-lambda
+			(args
+				(p-assign (ident "s")))
+			(e-block
+				(s-let
+					(p-record-destructure
+						(destructs
+							(record-destruct (label "step") (ident "step")
+								(required
+									(p-assign (ident "step"))))))
+					(e-record
+						(fields
+							(field (name "step")
+								(e-field-access
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "s"))))
+									(segments
+										(segment (name "step") (mode "required"))))))))
+				(e-call (constraint-fn-var 605)
+					(e-lookup-local
+						(p-assign (ident "step"))))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Stepper") (local))
+				(ty-tag-union
+					(ty-tag-name (name "A"))
+					(ty-tag-name (name "B"))))))
+	(d-let
+		(p-assign (ident "record_destructure_binder_widened_result.Stepper.by_call"))
+		(e-lambda
+			(args
+				(p-assign (ident "s")))
+			(e-block
+				(s-let
+					(p-record-destructure
+						(destructs
+							(record-destruct (label "step") (ident "step")
+								(required
+									(p-assign (ident "step"))))))
+					(e-call (constraint-fn-var 631)
+						(e-lookup-local
+							(p-assign (ident "wrap")))
+						(e-field-access
+							(receiver
+								(e-lookup-local
+									(p-assign (ident "s"))))
+							(segments
+								(segment (name "step") (mode "required"))))))
+				(e-call (constraint-fn-var 634)
+					(e-lookup-local
+						(p-assign (ident "step"))))))
+		(annotation
+			(ty-fn (effectful false)
+				(ty-lookup (name "Stepper") (local))
+				(ty-tag-union
+					(ty-tag-name (name "A"))
+					(ty-tag-name (name "B"))))))
+	(d-let
+		(p-assign (ident "wrap"))
+		(e-lambda
+			(args
+				(p-assign (ident "f")))
+			(e-record
+				(fields
+					(field (name "step")
+						(e-lookup-local
+							(p-assign (ident "f"))))))))
+	(d-let
 		(p-assign (ident "describe"))
 		(e-lambda
 			(args
@@ -387,7 +606,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "by_pattern") (constraint-fn-var 478)
+								(e-dispatch-call (method "by_pattern") (constraint-fn-var 638)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "s"))))
@@ -419,7 +638,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "by_statement") (constraint-fn-var 514)
+								(e-dispatch-call (method "by_statement") (constraint-fn-var 674)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "s"))))
@@ -451,7 +670,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "by_param") (constraint-fn-var 550)
+								(e-dispatch-call (method "by_param") (constraint-fn-var 710)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "s"))))
@@ -483,7 +702,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "by_field") (constraint-fn-var 586)
+								(e-dispatch-call (method "by_field") (constraint-fn-var 746)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "s"))))
@@ -510,23 +729,97 @@ NO CHANGE
 									(value
 										(e-string
 											(e-literal (string "c")))))))))
-				(e-call (constraint-fn-var 632)
+				(s-let
+					(p-assign (ident "e"))
+					(e-match
+						(match
+							(cond
+								(e-dispatch-call (method "by_literal") (constraint-fn-var 782)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "s"))))
+									(args)))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag)))
+									(value
+										(e-string
+											(e-literal (string "a")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag)))
+									(value
+										(e-string
+											(e-literal (string "b")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag)))
+									(value
+										(e-string
+											(e-literal (string "c")))))))))
+				(s-let
+					(p-assign (ident "f"))
+					(e-match
+						(match
+							(cond
+								(e-dispatch-call (method "by_call") (constraint-fn-var 818)
+									(receiver
+										(e-lookup-local
+											(p-assign (ident "s"))))
+									(args)))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag)))
+									(value
+										(e-string
+											(e-literal (string "a")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag)))
+									(value
+										(e-string
+											(e-literal (string "b")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-applied-tag)))
+									(value
+										(e-string
+											(e-literal (string "c")))))))))
+				(e-call (constraint-fn-var 870)
 					(e-lookup-external
 						(builtin))
-					(e-call (constraint-fn-var 628)
+					(e-call (constraint-fn-var 866)
+						(e-lookup-external
+							(builtin))
+						(e-call (constraint-fn-var 862)
+							(e-lookup-external
+								(builtin))
+							(e-lookup-local
+								(p-assign (ident "a")))
+							(e-lookup-local
+								(p-assign (ident "b"))))
+						(e-call (constraint-fn-var 865)
+							(e-lookup-external
+								(builtin))
+							(e-lookup-local
+								(p-assign (ident "c")))
+							(e-lookup-local
+								(p-assign (ident "d")))))
+					(e-call (constraint-fn-var 869)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local
-							(p-assign (ident "a")))
+							(p-assign (ident "e")))
 						(e-lookup-local
-							(p-assign (ident "b"))))
-					(e-call (constraint-fn-var 631)
-						(e-lookup-external
-							(builtin))
-						(e-lookup-local
-							(p-assign (ident "c")))
-						(e-lookup-local
-							(p-assign (ident "d"))))))))
+							(p-assign (ident "f"))))))))
 	(s-nominal-decl
 		(ty-header (name "Stepper"))
 		(ty-record
@@ -544,7 +837,10 @@ NO CHANGE
 		(patt (type "Stepper -> [A, B]"))
 		(patt (type "Stepper -> [A, B]"))
 		(patt (type "Stepper -> [A, B]"))
-		(patt (type "e -> Str where [e.by_field : e -> [A, B, C], e.by_param : e -> [A, B, C], e.by_pattern : e -> [A, B, C], e.by_statement : e -> [A, B, C]]")))
+		(patt (type "Stepper -> [A, B]"))
+		(patt (type "Stepper -> [A, B]"))
+		(patt (type "g -> { step: g }"))
+		(patt (type "g -> Str where [g.by_call : g -> [A, B, C], g.by_field : g -> [A, B, C], g.by_literal : g -> [A, B, C], g.by_param : g -> [A, B, C], g.by_pattern : g -> [A, B, C], g.by_statement : g -> [A, B, C]]")))
 	(type_decls
 		(nominal (type "Stepper")
 			(ty-header (name "Stepper"))))
@@ -553,5 +849,8 @@ NO CHANGE
 		(expr (type "Stepper -> [A, B]"))
 		(expr (type "Stepper -> [A, B]"))
 		(expr (type "Stepper -> [A, B]"))
-		(expr (type "e -> Str where [e.by_field : e -> [A, B, C], e.by_param : e -> [A, B, C], e.by_pattern : e -> [A, B, C], e.by_statement : e -> [A, B, C]]"))))
+		(expr (type "Stepper -> [A, B]"))
+		(expr (type "Stepper -> [A, B]"))
+		(expr (type "g -> { step: g }"))
+		(expr (type "g -> Str where [g.by_call : g -> [A, B, C], g.by_field : g -> [A, B, C], g.by_literal : g -> [A, B, C], g.by_param : g -> [A, B, C], g.by_pattern : g -> [A, B, C], g.by_statement : g -> [A, B, C]]"))))
 ~~~

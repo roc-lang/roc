@@ -21102,6 +21102,54 @@ fn pinVarAtRank(self: *Self, obligation_var: Var, boundary_rank: Rank, env: *Env
     }
 }
 
+/// Pin every class reachable from `root` at `boundary_rank`, as
+/// `pinVarAtRank` pins one class: a type whose relation to data at that rank
+/// is still pending stays monomorphic in every frame nested inside it. A
+/// rigid keeps the rank its annotation gave it, as it does when it unifies
+/// into a lower-ranked structure.
+fn pinReachableVarsAtRank(self: *Self, root: Var, boundary_rank: Rank, env: *Env) std.mem.Allocator.Error!void {
+    const stack = &self.type_visit_stack;
+    const stack_base = stack.items.len;
+    defer stack.items.len = stack_base;
+    self.var_set.clearRetainingCapacity();
+    try stack.append(self.gpa, root);
+    while (stack.items.len > stack_base) {
+        const resolved = self.types.resolveVar(stack.pop().?);
+        if (self.var_set.contains(resolved.var_)) continue;
+        try self.var_set.put(resolved.var_, {});
+        if (resolved.desc.rank == .generalized or resolved.desc.content == .rigid) continue;
+        try self.pinVarAtRank(resolved.var_, boundary_rank, env);
+        switch (resolved.desc.content) {
+            .flex, .rigid, .field_presence, .err => {},
+            .alias => |alias| {
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                    }
+                    try stack.append(self.gpa, tag_union.ext);
+                },
+                .empty_tag_union, .empty_record => {},
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.append(self.gpa, func.ret);
+                },
+                .record => |record| {
+                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                        try stack.append(self.gpa, presence.typeVar());
+                    }
+                    try stack.append(self.gpa, record.ext);
+                },
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+            },
+        }
+    }
+}
+
 // create types for type decls //
 
 fn aliasOriginModule(self: *const Self) base.ModuleIdentity.Idx {
@@ -22178,7 +22226,7 @@ const ResultWidening = struct {
 /// the value's own row is untouched (design.md "Value Rows: Uses Share One
 /// Row").
 fn widenResultValue(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env) std.mem.Allocator.Error!?ResultWidening {
-    try self.judgeRecordDestructBindsAt(env, .determined_kinds);
+    try self.judgeRecordDestructBinds(env);
     const rows_start: u32 = @intCast(self.widened_use_rows.items.len);
     const wide_var = try self.widenedClosedRowsCopy(
         ModuleEnv.varFrom(expr_idx),
@@ -37819,30 +37867,18 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
 /// checking order), which is also what the pre-optional-fields `.required`
 /// row demand did at pattern-check time.
 ///
+/// ALSO called where a value flows into an annotated function's result: the
+/// row coercion decides from the value's type (design.md "Row Subsumption"),
+/// so a function read out of a record pattern and called into the result
+/// widens exactly as one read with a field access does. That decision is a
+/// commitment point in the same way.
+///
 /// A binder whose sub-pattern does not describe the field's value (a closed
 /// nested record pattern missing one of the field's fields, or a binder whose
 /// uses demand another type) is a rejected pattern: the judgment reports it
 /// and rejects the construct that owns the pattern through
 /// `rejectPatternFailureOwner`.
 fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    try self.judgeRecordDestructBindsAt(env, .commit);
-}
-
-/// Which pending record-destructure binders a judgment binds.
-const DestructJudgment = enum {
-    /// Every binder: a commitment point, where a still-flex kind pins
-    /// `required`.
-    commit,
-    /// Only binders whose field kind is already determined. Binding them
-    /// early is the binding a later commitment point would make, so a
-    /// decision that reads a binder's type—the row coercion of a value
-    /// flowing into an annotated result (design.md "Row Subsumption")—sees
-    /// the field's type rather than the binder's placeholder. A still-flex
-    /// kind stays pending.
-    determined_kinds,
-};
-
-fn judgeRecordDestructBindsAt(self: *Self, env: *Env, judgment: DestructJudgment) std.mem.Allocator.Error!void {
     var retained: usize = 0;
     var index: usize = 0;
     while (index < self.pending_record_destructs.items.len) : (index += 1) {
@@ -37872,8 +37908,12 @@ fn judgeRecordDestructBindsAt(self: *Self, env: *Env, judgment: DestructJudgment
                 // unification has run. The entry stays pending for the
                 // scope that owns it (finalize as the monomorphic
                 // backstop, where every remaining non-generalized var is
-                // at rank).
-                if (judgment == .determined_kinds or @backingInt(resolved.desc.rank) < @backingInt(env.rank())) {
+                // at rank). Whichever binding the owner makes relates the
+                // binder's type to the field's value at the owner's rank,
+                // so everything that type holds stays at that rank and no
+                // boundary nested inside the owner quantifies it first.
+                if (@backingInt(resolved.desc.rank) < @backingInt(env.rank())) {
+                    try self.pinReachableVarsAtRank(pending.binder_var, resolved.desc.rank, env);
                     self.pending_record_destructs.items[retained] = pending;
                     retained += 1;
                     continue;

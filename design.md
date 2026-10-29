@@ -11718,7 +11718,12 @@ request itself is formed at the widened row: a direct call whose result flows
 into a wider row, through a row coercion or a lambda body whose composed `?`
 result is wider than its own, is lowered at that row's cell, and a callee
 request whose row includes the callee's closed row widens it
-(`stepCallExprAtNode`, `coercedValueTakesRow`). A construction builds only
+(`stepCallExprAtNode`, `coercedValueTakesRow`). That holds for a procedure
+template, which is instantiated afresh for each request. A local
+procedure's request relates the instance the enclosing body holds exactly,
+so a closed row in its result is the enclosing body's own, such as the row
+of a captured function value it calls, and a direct call to it keeps that
+row like any other value. A construction builds only
 its own row: each payload whose type is not already the destination's slot
 for it must take that slot by the same rule, so `Err(tag)` forwarding a
 parameter whose row the `?` result widens is not lowered at the result's
@@ -13093,14 +13098,16 @@ The kind rules:
   whose presence var the current boundary OWNS (rank at or above the
   boundary's); lower-ranked entries stay pending for the scope that owns
   them, so nested boundaries fired mid-statement never pin an enclosing
-  destructure prematurely. Before a value flows into an annotated
-  function's result, a pass binds only the binders whose kind is already
-  determined (`DestructJudgment.determined_kinds`), which is the binding a
-  later commitment point would make. The row coercion decides from the
+  destructure prematurely. A value flowing into an annotated function's
+  result is a commitment point too: the row coercion decides from the
   value's type (Row Subsumption), so a function read out of a record
   pattern and called into the result widens exactly as one read with a
-  field access does (`Stream.next!`'s body is the first; a still-flex
-  kind stays pending).
+  field access does, whether the record's kind was declared
+  (`Stream.next!`'s body) or is a literal's still-flex kind. An entry a
+  boundary retains for an enclosing owner pins every class its binder's
+  type reaches at the owner's rank: whichever binding the owner makes
+  relates that type to the field's value there, so no boundary nested
+  inside the owner may quantify it first.
   Binding a destructure can also ground a deferred static-dispatch receiver
   without adding an ordinary equality constraint. Every literal-defaulting
   boundary therefore begins with a ROUND-ZERO constraint quiescence: ordinary
