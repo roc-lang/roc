@@ -463,13 +463,13 @@ pub const Store = struct {
 
     fn addSpan(self: *Store, ids: []const TypeId) Allocator.Error!Span {
         const start: u32 = @intCast(self.type_ids.items.len);
-        try self.type_ids.appendSlice(self.allocator, ids);
+        try appendStored(TypeId, self.allocator, &self.type_ids, ids);
         return .{ .start = start, .len = @intCast(ids.len) };
     }
 
     fn addFields(self: *Store, fields: []const Field) Allocator.Error!FieldSpan {
         const start: u32 = @intCast(self.fields.items.len);
-        try self.fields.appendSlice(self.allocator, fields);
+        try appendStored(Field, self.allocator, &self.fields, fields);
         return .{ .start = start, .len = @intCast(fields.len) };
     }
 
@@ -499,6 +499,19 @@ pub const Store = struct {
         return self.intern(.{ .tag_union = .{ .tags = &.{}, .ext = null } });
     }
 };
+
+/// Append `items` to `list`. `items` may be a span of `list` itself (a
+/// caller interning a node from another node's children), which growing
+/// `list` moves, so such a span is copied from its new place.
+fn appendStored(comptime T: type, allocator: Allocator, list: *std.ArrayList(T), items: []const T) Allocator.Error!void {
+    if (items.len == 0) return;
+    const start = @intFromPtr(list.items.ptr);
+    const addr = @intFromPtr(items.ptr);
+    if (addr < start or addr >= start + list.items.len * @sizeOf(T)) return list.appendSlice(allocator, items);
+    const offset = (addr - start) / @sizeOf(T);
+    try list.ensureUnusedCapacity(allocator, items.len);
+    list.appendSliceAssumeCapacity(list.items[offset..][0..items.len]);
+}
 
 /// A tag to intern: its name and payload types.
 pub const TagInput = struct {

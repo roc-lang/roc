@@ -17030,7 +17030,9 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     var command_arena = std.heap.ArenaAllocator.init(ctx.gpa);
     defer command_arena.deinit();
     const command_allocator = command_arena.allocator();
-    const complete_cache_enabled = !args.no_cache and args.opt == .dev;
+    // A completed test run is post-check work, so it is reused and recorded
+    // only under a strategy that caches it.
+    const complete_cache_enabled = !args.no_cache and args.opt == .dev and cachesPostCheckWork(currentRuntimeSpecializationStrategy(args.specialization_strategy));
     var debug_capture = CliTestDebugCapture{ .allocator = command_allocator };
 
     // --- Normal compilation path ---

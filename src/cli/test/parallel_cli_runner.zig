@@ -11382,7 +11382,7 @@ fn customIssue11678DevCacheBoxyTables(
 /// design.md "Caching Under `.boxy`": with `--specialize=no`, a command
 /// writes nothing to the cache once its checking is done. `roc test` checks
 /// its module with explicit roots, so its checked entries are its own; what
-/// it may not add is anything outside the sections `roc check` writes, and
+/// it may not add is an entry of a family `roc check` writes none of, and
 /// running its tests again under another execution mode, whose results a
 /// specializing build records separately, must change nothing.
 fn customBoxyCachesNothingAfterChecking(
@@ -11417,7 +11417,7 @@ fn customBoxyCachesNothingAfterChecking(
         .{ .env_index = 1, .args = &.{ "test", "--specialize=no", "--opt=interpreter" }, .stdout = "All (1) tests passed" },
         .{ .env_index = 1, .args = &.{ "test", "--specialize=no", "--opt=dev" }, .stdout = "All (1) tests passed" },
     };
-    var test_listing: ?[]const []const u8 = null;
+    var test_inventory: ?[]const CacheEntryName = null;
     for (commands) |command| {
         const command_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
             return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a command");
@@ -11427,24 +11427,23 @@ fn customBoxyCachesNothingAfterChecking(
             return failureFromRun(allocator, timer, ran, "command did not succeed");
         }
         if (command.env_index != 1) continue;
-        const listing = cacheListing(io, allocator, cache_roots[1]) catch |err|
-            return customInfraFailure(allocator, timer, "failed to list the cache: {}", .{err});
-        if (test_listing) |previous| {
-            if (!listingsEqual(previous, listing)) {
-                return customFailure(allocator, timer, "running the tests again with {s} changed the cache", .{command.args[2]});
+        const inventory = cacheInventory(io, allocator, cache_roots[1]) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
+        if (test_inventory) |previous| {
+            if (firstInventoryDifference(previous, inventory)) |entry| {
+                return customFailure(allocator, timer, "running the tests again with {s} changed the cache: {s} {x}", .{ command.args[2], @tagName(entry.family), &entry.key });
             }
-        } else test_listing = listing;
+        } else test_inventory = inventory;
     }
 
-    const check_listing = cacheListing(io, allocator, cache_roots[0]) catch |err|
-        return customInfraFailure(allocator, timer, "failed to list the cache: {}", .{err});
-    for (test_listing.?) |path| {
-        const section = cacheSectionPrefix(path);
-        const written_by_check = for (check_listing) |checked| {
-            if (std.mem.eql(u8, cacheSectionPrefix(checked), section)) break true;
+    const check_inventory = cacheInventory(io, allocator, cache_roots[0]) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
+    for (test_inventory.?) |entry| {
+        const written_by_check = for (check_inventory) |checked| {
+            if (checked.family == entry.family) break true;
         } else false;
         if (!written_by_check) {
-            return customFailure(allocator, timer, "`roc test --specialize=no` wrote {s}, outside every section `roc check` writes", .{path});
+            return customFailure(allocator, timer, "`roc test --specialize=no` wrote a {s} entry, a family `roc check` writes none of", .{@tagName(entry.family)});
         }
     }
     return null;
@@ -11452,8 +11451,7 @@ fn customBoxyCachesNothingAfterChecking(
 
 /// design.md "Caching Under `.boxy`": `roc check`, `roc build`, and `roc run`
 /// with `--specialize=no` leave identical cache contents for the same
-/// sources, compile-time packs included. The per-invocation scratch section
-/// (`CacheConfig.getScratchDir`) holds no cache entries.
+/// sources, compile-time packs included.
 fn customBoxyBuildAndRunCacheWhatCheckCaches(
     io: std.Io,
     allocator: Allocator,
@@ -11472,8 +11470,8 @@ fn customBoxyBuildAndRunCacheWhatCheckCaches(
     var cache_envs: [commands.len]CaseEnv = undefined;
     var initialized: usize = 0;
     defer for (cache_envs[0..initialized]) |*cache_env| cache_env.env_map.deinit();
-    var listings: [commands.len][]const []const u8 = undefined;
-    for (commands, &cache_envs, &listings, 0..) |args, *cache_env, *listing, index| {
+    var inventories: [commands.len][]const CacheEntryName = undefined;
+    for (commands, &cache_envs, &inventories, 0..) |args, *cache_env, *inventory, index| {
         const cache_root = std.fmt.allocPrint(allocator, "{s}/boxy_build_and_run_cache_{d}", .{ env.dirs.work_dir, index }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
         cache_env.* = .{
@@ -11491,80 +11489,68 @@ fn customBoxyBuildAndRunCacheWhatCheckCaches(
         const ran = runRocInEnv(io, allocator, cache_env, args, roc_file, .relative, &.{}, null, command_timeout) catch |err|
             return customInfraFailure(allocator, timer, "command spawn error: {}", .{err});
         if (!processSucceeded(ran.term)) return failureFromRun(allocator, timer, ran, "command did not succeed");
-        const full = cacheListing(io, allocator, cache_root) catch |err|
-            return customInfraFailure(allocator, timer, "failed to list the cache: {}", .{err});
-        var entries = std.ArrayList([]const u8).empty;
-        for (full) |path| {
-            if (!isScratchPath(path)) entries.append(allocator, path) catch |err|
-                return customInfraFailure(allocator, timer, "failed to collect the cache listing: {}", .{err});
-        }
-        listing.* = entries.items;
-        if (index != 0 and !listingsEqual(listings[0], listing.*)) {
-            return customFailure(allocator, timer, "`roc {s} --specialize=no` left a cache other than `roc check`'s: {s}", .{ args[0], firstListingDifference(listings[0], listing.*) });
-        }
+        inventory.* = cacheInventory(io, allocator, cache_root) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read the cache: {}", .{err});
+        if (index != 0) if (firstInventoryDifference(inventories[0], inventory.*)) |entry| {
+            return customFailure(allocator, timer, "`roc {s} --specialize=no` left a cache other than `roc check`'s: {s} {x}", .{ args[0], @tagName(entry.family), &entry.key });
+        };
     }
     return null;
 }
 
-/// Every path under `cache_root`, relative to it, sorted.
-fn cacheListing(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError![]const []const u8 {
-    var root = try std.Io.Dir.cwd().openDir(io, cache_root, .{ .iterate = true });
-    defer root.close(io);
-    var walker = try root.walk(allocator);
-    defer walker.deinit();
-    var paths = std.ArrayList([]const u8).empty;
-    while (try walker.next(io)) |entry| {
-        try paths.append(allocator, try allocator.dupe(u8, entry.path));
+/// One published cache entry, by what it is: its family, variant, and
+/// semantic key (`artifact_store.Identity.key`, the second half of its
+/// catalog key, whose first half hashes the store's own namespace). Where
+/// the store placed its payload and in which generation are the store's own
+/// bookkeeping.
+const CacheEntryName = struct {
+    family: artifact_store.Family,
+    key: [32]u8,
+    variant: [32]u8,
+
+    fn lessThan(_: void, a: CacheEntryName, b: CacheEntryName) bool {
+        if (a.family != b.family) return @backingInt(a.family) < @backingInt(b.family);
+        return switch (std.mem.order(u8, &a.key, &b.key)) {
+            .lt => true,
+            .gt => false,
+            .eq => std.mem.order(u8, &a.variant, &b.variant) == .lt,
+        };
     }
-    std.mem.sort([]const u8, paths.items, {}, stringLessThan);
-    return paths.toOwnedSlice(allocator);
+
+    fn eql(a: CacheEntryName, b: CacheEntryName) bool {
+        return a.family == b.family and std.mem.eql(u8, &a.key, &b.key) and std.mem.eql(u8, &a.variant, &b.variant);
+    }
+};
+
+/// The published entries of the cache under `cache_root`, sorted, apart
+/// from the per-invocation scratch entries, which hold no cache contents.
+fn cacheInventory(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError![]const CacheEntryName {
+    const entries = try indexedCacheEntries(io, allocator, cache_root);
+    defer allocator.free(entries);
+    var names = std.ArrayList(CacheEntryName).empty;
+    for (entries) |entry| {
+        if (entry.state != .published or entry.family == .scratch) continue;
+        try names.append(allocator, .{ .family = entry.family, .key = entry.key[32..64].*, .variant = entry.variant });
+    }
+    std.mem.sort(CacheEntryName, names.items, {}, CacheEntryName.lessThan);
+    return names.toOwnedSlice(allocator);
 }
 
-/// The first path one sorted listing holds and the other lacks.
-fn firstListingDifference(left: []const []const u8, right: []const []const u8) []const u8 {
+/// The first entry one sorted inventory holds and the other lacks.
+fn firstInventoryDifference(left: []const CacheEntryName, right: []const CacheEntryName) ?CacheEntryName {
     var l: usize = 0;
     var r: usize = 0;
     while (l < left.len and r < right.len) {
-        switch (std.mem.order(u8, left[l], right[r])) {
-            .eq => {
-                l += 1;
-                r += 1;
-            },
-            .lt => return left[l],
-            .gt => return right[r],
-        }
+        if (left[l].eql(right[r])) {
+            l += 1;
+            r += 1;
+        } else if (CacheEntryName.lessThan({}, left[l], right[r])) {
+            return left[l];
+        } else return right[r];
     }
     if (l < left.len) return left[l];
     if (r < right.len) return right[r];
-    return "";
-}
-
-fn listingsEqual(left: []const []const u8, right: []const []const u8) bool {
-    if (left.len != right.len) return false;
-    for (left, right) |a, b| {
-        if (!std.mem.eql(u8, a, b)) return false;
-    }
-    return true;
-}
-
-/// A cache-root-relative path's `<version>/<section>` prefix, or the whole
-/// path when it names the version directory itself.
-/// Whether a cache-root-relative path lies in a version's per-invocation
-/// scratch section, `<version>/tmp`.
-fn isScratchPath(path: []const u8) bool {
-    const section = cacheSectionPrefix(path);
-    const separator = std.mem.findScalar(u8, section, '/') orelse std.mem.findScalar(u8, section, '\\') orelse return false;
-    return std.mem.eql(u8, section[separator + 1 ..], "tmp");
-}
-
-fn cacheSectionPrefix(path: []const u8) []const u8 {
-    var separators: usize = 0;
-    for (path, 0..) |byte, index| {
-        if (byte != '/' and byte != '\\') continue;
-        separators += 1;
-        if (separators == 2) return path[0..index];
-    }
-    return path;
+    return null;
 }
 
 fn customIssue11673CallableCache(
