@@ -3793,7 +3793,6 @@ test "checked artifact method registry skips nominal associated values" {
         module,
         &names,
         &template_lookup,
-        &.{},
         &checked_types,
         &checked_bodies,
     );

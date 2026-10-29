@@ -2828,7 +2828,7 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .exact_type_checks = 0,
         // A template's interface relations' summarized expansion
         // instantiates its root once per summary, and summaries are keyed by
-        // template and method scope rather than by each call site's spelling
+        // template rather than by each call site's spelling
         // of the callee's type. The `unwrap(v6)` request is shaped by demand
         // (design.md "Specialization By Demand"): `unwrap` demands only the
         // layout of its payload, so the record becomes its tuple

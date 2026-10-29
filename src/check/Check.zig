@@ -32973,6 +32973,9 @@ fn methodAnnotationErroneous(lookup: StaticDispatchMethodBinding) bool {
     return lookup.env.store.getAnnotation(annotation_idx).erroneous;
 }
 
+/// The method `owner_env`'s declaration `owner_source_decl` declares under
+/// `method_ident`. A type's methods are declared only in its own `.{ … }`
+/// block, so its declaring module's tables are the only place one can be.
 fn lookupStaticDispatchMethodBinding(
     self: *const Self,
     owner_env: *const ModuleEnv,
@@ -32980,44 +32983,15 @@ fn lookupStaticDispatchMethodBinding(
     method_source_env: *const ModuleEnv,
     method_ident: Ident.Idx,
 ) ?StaticDispatchMethodBinding {
-    if (self.lookupStaticDispatchMethodBindingInEnv(owner_env, owner_env, owner_source_decl, method_source_env, method_ident)) |found| {
-        return found;
-    }
-
-    if (owner_env != self.cir) {
-        if (self.lookupStaticDispatchMethodBindingInEnv(self.cir, owner_env, owner_source_decl, method_source_env, method_ident)) |found| {
-            return found;
-        }
-    }
-
-    for (self.imported_modules) |candidate_env| {
-        if (candidate_env == owner_env or candidate_env == self.cir) continue;
-        if (self.lookupStaticDispatchMethodBindingInEnv(candidate_env, owner_env, owner_source_decl, method_source_env, method_ident)) |found| {
-            return found;
-        }
-    }
-
-    return null;
-}
-
-fn lookupStaticDispatchMethodBindingInEnv(
-    self: *const Self,
-    candidate_env: *const ModuleEnv,
-    owner_env: *const ModuleEnv,
-    owner_source_decl: ?u32,
-    method_source_env: *const ModuleEnv,
-    method_ident: Ident.Idx,
-) ?StaticDispatchMethodBinding {
-    const binding = candidate_env.lookupMethodBindingFromOwnerAndMethodEnvsConst(
-        owner_env,
+    const binding = owner_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
         owner_source_decl,
         method_source_env,
         method_ident,
     ) orelse return null;
 
     return .{
-        .env = candidate_env,
-        .is_this_module = candidate_env == self.cir,
+        .env = owner_env,
+        .is_this_module = owner_env == self.cir,
         .binding = binding,
     };
 }
@@ -39044,7 +39018,6 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
 fn recordInspectOverrideInstances(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.cir.method_defs.entries.items) |entry| {
         if (!entry.key.methodIdent().eql(self.cir.idents.to_inspect)) continue;
-        if (entry.key.ownerIdent().moduleIdentity() != null) continue;
         if (self.cir.store.nodes.get(ModuleEnv.nodeIdxFrom(entry.key.owner)).tag != .statement_nominal_decl) continue;
         const binding_var = ModuleEnv.varFrom(entry.value.type_node_idx);
         const use_var = try self.inspectOverrideStrInstance(entry.value.def_idx, entry.key.owner, binding_var, env) orelse continue;
@@ -58566,9 +58539,9 @@ test "issue 11393: imported codec methods instantiate independently and reject u
         var accepted = try TestEnv.initWithImport("Accepted",
             \\import Browser
             \\page = Browser.Page.{}
-            \\text = page.stringify("hello")
+            \\text = Browser.stringify(page, "hello")
             \\flag = Browser.stringify(page, True)
-            \\record = page.stringify({ nested: "world" })
+            \\record = Browser.stringify(page, { nested: "world" })
         , "Browser", &imported_source);
         defer accepted.deinit();
         try accepted.assertDefType("text", "Str");
@@ -58578,7 +58551,7 @@ test "issue 11393: imported codec methods instantiate independently and reject u
         var rejected = try TestEnv.initWithImport("Rejected",
             \\import Browser
             \\page = Browser.Page.{}
-            \\bad = page.stringify(|x| x)
+            \\bad = Browser.stringify(page, |x| x)
         , "Browser", &imported_source);
         defer rejected.deinit();
         try std.testing.expect((try rejected.typeProblemCount()) > 0);

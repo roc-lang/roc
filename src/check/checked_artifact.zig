@@ -494,90 +494,6 @@ pub const LoweringVisibility = struct {
 /// Ordered checked-module registries visible to method lookup after the
 /// current module's local registry. Checking owns this ordering, and later
 /// stages consume the published scope directly.
-pub const MethodLookupScope = struct {
-    module_ids: []const ModuleId = &.{},
-
-    pub const Serialized = extern struct {
-        module_ids: SerializedSlice(ModuleId) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(MethodLookupScope, @This());
-        pub const serialize = Serde.serialize;
-        pub const deserialize = Serde.deserialize;
-    };
-
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
-};
-
-const MethodLookupScopeBuilder = struct {
-    allocator: Allocator,
-    current: ModuleId,
-    module_ids: std.ArrayList(ModuleId) = .empty,
-    seen: std.AutoHashMap(CheckedModuleDigest, void),
-    seen_module_hashes: std.AutoHashMap([32]u8, void),
-
-    fn init(allocator: Allocator, current: ModuleId) MethodLookupScopeBuilder {
-        return .{
-            .allocator = allocator,
-            .current = current,
-            .seen = std.AutoHashMap(CheckedModuleDigest, void).init(allocator),
-            .seen_module_hashes = std.AutoHashMap([32]u8, void).init(allocator),
-        };
-    }
-
-    fn deinit(self: *MethodLookupScopeBuilder) void {
-        self.seen.deinit();
-        self.seen_module_hashes.deinit();
-        self.module_ids.deinit(self.allocator);
-    }
-
-    fn append(self: *MethodLookupScopeBuilder, module_id: ModuleId) Allocator.Error!void {
-        if (module_id.eql(self.current)) return;
-        const entry = try self.seen.getOrPut(module_id);
-        if (entry.found_existing) return;
-        entry.value_ptr.* = {};
-        try self.module_ids.append(self.allocator, module_id);
-    }
-
-    fn appendView(self: *MethodLookupScopeBuilder, view: ImportedModuleView) Allocator.Error!void {
-        const entry = try self.seen_module_hashes.getOrPut(view.module_identity.stable_hash);
-        if (entry.found_existing) return;
-        entry.value_ptr.* = {};
-        try self.append(view.key.digest());
-    }
-
-    fn finish(self: *MethodLookupScopeBuilder) Allocator.Error!MethodLookupScope {
-        return .{ .module_ids = try self.module_ids.toOwnedSlice(self.allocator) };
-    }
-};
-
-fn collectMethodLookupScope(
-    allocator: Allocator,
-    current: ModuleId,
-    current_module_identity: ModuleIdentity,
-    available_artifacts: []const ImportedModuleView,
-    relation_artifacts: []const ImportedModuleView,
-    direct_imports: []const PublishImportArtifact,
-) Allocator.Error!MethodLookupScope {
-    var builder = MethodLookupScopeBuilder.init(allocator, current);
-    defer builder.deinit();
-    try builder.seen_module_hashes.put(current_module_identity.stable_hash, {});
-
-    // This is the same first-match order used by EvidencePass:
-    // available views, platform-relation views, then direct-import views that
-    // are not otherwise present (needed by small/snapshot-style compilations).
-    for (available_artifacts) |*artifact| {
-        if (moduleViewIsSuperseded(artifact, relation_artifacts, direct_imports)) continue;
-        if (artifact.method_registry.entries.len != 0) try builder.appendView(artifact.*);
-    }
-    for (relation_artifacts) |artifact| {
-        if (artifact.method_registry.entries.len != 0) try builder.appendView(artifact);
-    }
-    for (direct_imports) |artifact| {
-        if (artifact.view.method_registry.entries.len != 0) try builder.appendView(artifact.view);
-    }
-
-    return try builder.finish();
-}
-
 /// The import views method-target lookup searches after the local registry,
 /// in search order: the available views a platform relation or direct import
 /// does not supersede, the platform-relation views, then the direct-import
@@ -26864,7 +26780,6 @@ pub const PlatformPairing = struct {
         root_requests: RootRequestTable.Serialized,
         exhaustiveness_sites: CheckedExhaustivenessSiteTable.Serialized,
         lowering_visibility: LoweringVisibility.Serialized,
-        method_lookup_scope: MethodLookupScope.Serialized,
         entry_wrappers: EntryWrapperTable.Serialized,
         intrinsic_wrappers: IntrinsicWrapperTable.Serialized,
         compile_time_roots: CompileTimeRootTable.Serialized,
@@ -26966,7 +26881,6 @@ pub const PlatformPairing = struct {
             try self.root_requests.serialize(&artifact.root_requests, gpa, writer);
             try self.exhaustiveness_sites.serialize(&artifact.exhaustiveness_sites, gpa, writer);
             try self.lowering_visibility.serialize(&artifact.lowering_visibility, gpa, writer);
-            try self.method_lookup_scope.serialize(&artifact.method_lookup_scope, gpa, writer);
             try self.entry_wrappers.serialize(&artifact.entry_wrappers, gpa, writer);
             try self.intrinsic_wrappers.serialize(&artifact.intrinsic_wrappers, gpa, writer);
             const compile_time_roots_empty: CompileTimeRootTable = .{};
@@ -27017,7 +26931,6 @@ pub const PlatformPairing = struct {
             result.root_requests = self.root_requests.deserialize(address);
             result.exhaustiveness_sites = self.exhaustiveness_sites.deserialize(address);
             result.lowering_visibility = self.lowering_visibility.deserialize(address);
-            result.method_lookup_scope = self.method_lookup_scope.deserialize(address);
             result.entry_wrappers = self.entry_wrappers.deserialize(address);
             result.intrinsic_wrappers = self.intrinsic_wrappers.deserialize(address);
             if (self.has_dependent_evaluation) result.compile_time_roots = self.compile_time_roots.deserialize(address);
@@ -27061,14 +26974,6 @@ pub fn pairCheckedPlatform(
     const relation = try buildPlatformAppRelationFromDeclarations(session, platform.module_identity.module_idx, platform.platformRequirementContextKey(), platform.platform_required_declarations.declarations, type_keys, app);
     result.checking_context_identity.platform_app_relation = relation.key;
     const relations = [_]ImportedModuleView{importedView(app)};
-    // Pairing extends the platform's checked scope with the app and its scope.
-    // Keep each producer's order and retain the result in the pairing cache.
-    var method_scope = MethodLookupScopeBuilder.init(session, result.key.digest());
-    defer method_scope.deinit();
-    for (platform.method_lookup_scope.module_ids) |key| try method_scope.append(key);
-    try method_scope.append(app.key.digest());
-    for (app.method_lookup_scope.module_ids) |key| try method_scope.append(key);
-    result.method_lookup_scope = try method_scope.finish();
     var substitutions = try PlatformRelationTypeSubstitutions.fromRelation(session, result.module_identity, &result.canonical_names, &result.checked_types, &result.platform_required_declarations, &result.platform_type_inputs, &relations, relation);
     result.platform_requirement_relations = try PlatformRequirementRelationTable.fromRelation(session, result.module_identity, &result.canonical_names, &result.checked_types, &result.platform_required_declarations, &relations, relation);
     result.platform_required_bindings = try PlatformRequiredBindingTable.fromRelation(session, result.module_identity, &result.canonical_names, &result.platform_required_declarations, &result.platform_requirement_relations, relation);
@@ -27270,7 +27175,7 @@ pub fn pairCheckedPlatform(
             .root => {},
         };
     }
-    result.lowering_visibility = try collectLoweringVisibility(session, result.key.digest(), result.direct_import_module_keys, result.method_lookup_scope, result.public_api_dependencies, &result.checked_types, &result.checked_procedure_templates, &result.callable_eval_templates, &result.entry_wrappers, &result.const_templates, &result.resolved_value_refs, &result.top_level_procedure_bindings, &result.platform_required_bindings, &result.root_requests, &.{}, available_artifacts, &relations, &result.exported_procedure_templates, &result.exported_procedure_bindings, &result.exported_const_templates);
+    result.lowering_visibility = try collectLoweringVisibility(session, result.key.digest(), result.direct_import_module_keys, result.public_api_dependencies, &result.checked_types, &result.checked_procedure_templates, &result.callable_eval_templates, &result.entry_wrappers, &result.const_templates, &result.resolved_value_refs, &result.top_level_procedure_bindings, &result.platform_required_bindings, &result.root_requests, &.{}, available_artifacts, &relations, &result.exported_procedure_templates, &result.exported_procedure_bindings, &result.exported_const_templates);
     return result;
 }
 
@@ -32200,7 +32105,6 @@ const LoweringVisibilityBuilder = struct {
         };
         try pending.appendSlice(self.allocator, view.public_api_dependencies.artifacts);
         try pending.appendSlice(self.allocator, view.public_api_dependencies.type_owner_artifacts);
-        try pending.appendSlice(self.allocator, view.method_lookup_scope);
     }
 
     fn appendRootRequest(self: *LoweringVisibilityBuilder, request: RootRequest) Allocator.Error!void {
@@ -32287,7 +32191,6 @@ fn collectLoweringVisibility(
     allocator: Allocator,
     artifact_key: ModuleId,
     direct_import_module_keys: []const CheckedModuleArtifactKey,
-    method_lookup_scope: MethodLookupScope,
     public_api_dependencies: PublicApiDependencies,
     checked_types: *const CheckedTypeStore,
     checked_templates: *const CheckedProcedureTemplateTable,
@@ -32316,7 +32219,6 @@ fn collectLoweringVisibility(
     defer builder.deinit();
 
     for (direct_import_module_keys) |key| try builder.appendKey(key.digest());
-    for (method_lookup_scope.module_ids) |key| try builder.appendKey(key);
     for (public_api_dependencies.artifacts) |key| try builder.appendKey(key);
     for (public_api_dependencies.type_owner_artifacts) |key| try builder.appendKey(key);
     for (root_requests.requests) |request| try builder.appendRootRequest(request);
@@ -33935,7 +33837,6 @@ pub const CheckedModuleArtifact = struct {
     direct_import_module_keys: []CheckedModuleArtifactKey = &.{},
     public_api_dependencies: PublicApiDependencies = .{},
     lowering_visibility: LoweringVisibility = .{},
-    method_lookup_scope: MethodLookupScope = .{},
     module_env: ModuleEnvStorage,
     exports: ExportTable,
     checked_types: CheckedTypeStore = .{},
@@ -34170,7 +34071,6 @@ pub const CheckedModuleArtifact = struct {
         checking_context_identity: CheckingContextIdentity.Serialized,
         public_api_dependencies: PublicApiDependencies.Serialized,
         lowering_visibility: LoweringVisibility.Serialized,
-        method_lookup_scope: MethodLookupScope.Serialized,
         exports: ExportTable.Serialized,
         checked_types: CheckedTypeStore.Serialized,
         checked_bodies: CheckedBodyStore.Serialized,
@@ -34240,7 +34140,7 @@ pub const CheckedModuleArtifact = struct {
             // export requirements, and the portability column one more. Stored
             // function evidence keeps its target and structural payloads in
             // two pools of their own. Template demand vectors add one.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 246);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 245);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -36184,7 +36084,6 @@ pub const ImportedModuleView = struct {
     direct_import_module_keys: []const CheckedModuleArtifactKey = &.{},
     public_api_dependencies: PublicApiDependencies = .{},
     lowering_visibility: LoweringVisibility = .{},
-    method_lookup_scope: []const ModuleId = &.{},
     exports: ExportTableView,
     checked_types: CheckedTypeStoreView,
     checked_bodies: CheckedBodyStoreView,
@@ -36242,7 +36141,6 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .direct_import_module_keys = artifact.direct_import_module_keys,
         .public_api_dependencies = artifact.public_api_dependencies,
         .lowering_visibility = artifact.lowering_visibility,
-        .method_lookup_scope = artifact.method_lookup_scope.module_ids,
         .exports = artifact.exports.view(),
         .checked_types = artifact.checked_types.view(),
         .checked_bodies = artifact.checked_bodies.view(),
@@ -37593,7 +37491,6 @@ pub fn publishFromTypedModule(
         module,
         &canonical_names,
         &template_lookup,
-        inputs.available_artifacts,
         &checked_type_publication,
         checked_bodies,
     );
@@ -38087,21 +37984,10 @@ pub fn publishFromTypedModule(
     // before compile-time evaluation can allocate specialization/backend data.
     checked_type_publication.deinitIndex(allocator);
 
-    var method_lookup_scope = try collectMethodLookupScope(
-        allocator,
-        artifact_key.digest(),
-        module_identity,
-        inputs.available_artifacts,
-        inputs.relation_artifacts,
-        inputs.imports,
-    );
-    errdefer method_lookup_scope.deinit(allocator);
-
     var lowering_visibility = try collectLoweringVisibility(
         allocator,
         artifact_key.digest(),
         direct_import_module_keys,
-        method_lookup_scope,
         public_api_dependencies,
         checked_types,
         &checked_procedure_templates,
@@ -38135,7 +38021,6 @@ pub fn publishFromTypedModule(
         .direct_import_module_keys = direct_import_module_keys,
         .public_api_dependencies = public_api_dependencies,
         .lowering_visibility = lowering_visibility,
-        .method_lookup_scope = method_lookup_scope,
         .module_env = inputs.module_env_storage,
         .exports = .{ .defs = exports },
         .checked_types = checked_types.*,
@@ -39260,7 +39145,6 @@ test "transform-A stores: serialize/deserialize round-trip preserves every slice
     try expectAllSliceStoreRoundTrips(ProvidesRequiresMetadata);
     try expectAllSliceStoreRoundTrips(PublicApiDependencies);
     try expectAllSliceStoreRoundTrips(LoweringVisibility);
-    try expectAllSliceStoreRoundTrips(MethodLookupScope);
     try expectAllSliceStoreRoundTrips(CheckedProcedureTemplateTable);
     try expectAllSliceStoreRoundTrips(static_dispatch.MethodRegistry);
     // Total-dispatch plans: resolutions, evidence nodes/refs, site evidence,
@@ -39270,29 +39154,6 @@ test "transform-A stores: serialize/deserialize round-trip preserves every slice
     try expectAllSliceStoreRoundTrips(ModuleInterfaceCapabilities); // transform-B: args moved to shared pool
     try expectAllSliceStoreRoundTrips(HostedProcTable); // transform-B: order_key moved to byte pool
     try expectAllSliceStoreRoundTrips(HostedBindingTable);
-}
-
-test "method lookup scope preserves first-seen checking order without duplicates" {
-    const gpa = std.testing.allocator;
-    const current = testCheckedModuleKey(0xF0);
-    const available = testCheckedModuleKey(0x01);
-    const relation = testCheckedModuleKey(0x02);
-    const direct_only = testCheckedModuleKey(0x03);
-
-    var builder = MethodLookupScopeBuilder.init(gpa, current.digest());
-    defer builder.deinit();
-    try builder.append(available.digest());
-    try builder.append(relation.digest());
-    try builder.append(available.digest());
-    try builder.append(current.digest());
-    try builder.append(direct_only.digest());
-
-    var scope = try builder.finish();
-    defer scope.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 3), scope.module_ids.len);
-    try std.testing.expect(available.digest().eql(scope.module_ids[0]));
-    try std.testing.expect(relation.digest().eql(scope.module_ids[1]));
-    try std.testing.expect(direct_only.digest().eql(scope.module_ids[2]));
 }
 
 fn testVisibilityImportedView(
@@ -39307,7 +39168,7 @@ fn testVisibilityImportedView(
         .module_identity = .{
             .stable_hash = key.bytes,
             .module_idx = 0,
-            // Method-scope collection reads only the stable identity hash.
+            // Visibility collection reads only the stable identity hash.
             .module_name = undefined,
             .display_module_name = undefined,
             .kind = .package,
@@ -39341,57 +39202,6 @@ fn testVisibilityImportedView(
         .interface_capabilities = undefined,
         .const_store = undefined,
     };
-}
-
-test "method lookup scope keeps only registry-bearing modules in checking order" {
-    const gpa = std.testing.allocator;
-    var env = try ModuleEnv.init(gpa, "");
-    defer env.deinit();
-
-    const current = testCheckedModuleKey(0xF0);
-    const empty_key = testCheckedModuleKey(0x01);
-    const available_key = testCheckedModuleKey(0x02);
-    const relation_key = testCheckedModuleKey(0x03);
-    const previous_publication_key = testCheckedModuleKey(0x04);
-    const previous_relation_key = testCheckedModuleKey(0x05);
-    const dummy_entries = [_]static_dispatch.MethodRegistryEntry{undefined};
-    const empty_registry = static_dispatch.MethodRegistry{};
-    const nonempty_registry = static_dispatch.MethodRegistry{ .entries = @constCast(&dummy_entries) };
-
-    var empty_view = testVisibilityImportedView(empty_key, &env, .{});
-    empty_view.method_registry = &empty_registry;
-    var available_view = testVisibilityImportedView(available_key, &env, .{});
-    available_view.method_registry = &nonempty_registry;
-    var relation_view = testVisibilityImportedView(relation_key, &env, .{});
-    relation_view.method_registry = &nonempty_registry;
-    var previous_publication_view = testVisibilityImportedView(previous_publication_key, &env, .{});
-    previous_publication_view.module_identity.stable_hash = current.bytes;
-    previous_publication_view.method_registry = &nonempty_registry;
-    var previous_relation_view = testVisibilityImportedView(previous_relation_key, &env, .{});
-    previous_relation_view.module_identity.stable_hash = relation_view.module_identity.stable_hash;
-    previous_relation_view.method_registry = &nonempty_registry;
-
-    const available = [_]ImportedModuleView{ previous_publication_view, previous_relation_view, empty_view, available_view };
-    const relations = [_]ImportedModuleView{ available_view, relation_view };
-    const direct = [_]PublishImportArtifact{.{
-        .module_idx = 1,
-        .key = relation_key,
-        .view = relation_view,
-    }};
-    const current_identity = ModuleIdentity{
-        .stable_hash = current.bytes,
-        .module_idx = 0,
-        // Method-scope collection reads only the stable identity hash.
-        .module_name = undefined,
-        .display_module_name = undefined,
-        .kind = .package,
-    };
-    var scope = try collectMethodLookupScope(gpa, current.digest(), current_identity, &available, &relations, &direct);
-    defer scope.deinit(gpa);
-
-    try std.testing.expectEqual(@as(usize, 2), scope.module_ids.len);
-    try std.testing.expect(available_key.digest().eql(scope.module_ids[0]));
-    try std.testing.expect(relation_key.digest().eql(scope.module_ids[1]));
 }
 
 test "lowering visibility follows recursive public API and type-owner dependencies deterministically" {
@@ -39428,7 +39238,6 @@ test "lowering visibility follows recursive public API and type-owner dependenci
 
     const a_public = [_]ModuleId{ key_c.digest(), key_builtin.digest() };
     const a_type_owners = [_]ModuleId{key_e.digest()};
-    const b_method_lookup_scope = [_]ModuleId{key_e.digest()};
     const d_type_owners = [_]ModuleId{key_b.digest()};
 
     var views = [_]ImportedModuleView{
@@ -39439,7 +39248,6 @@ test "lowering visibility follows recursive public API and type-owner dependenci
         testVisibilityImportedView(key_e, &env_e, .{}),
         testVisibilityImportedView(key_builtin, &env_builtin, .{}),
     };
-    views[1].method_lookup_scope = &b_method_lookup_scope;
 
     var checked_types = CheckedTypeStore{};
     defer checked_types.deinit(gpa);
@@ -39471,7 +39279,6 @@ test "lowering visibility follows recursive public API and type-owner dependenci
         gpa,
         root_key.digest(),
         &direct_imports,
-        .{},
         root_deps,
         &checked_types,
         &checked_templates,
@@ -40537,8 +40344,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x0F, 0xB8, 0xF9, 0x4D, 0xFB, 0x75, 0x54, 0x0E, 0xD7, 0xFC, 0x0B, 0xF5, 0x24, 0x00, 0x01, 0x45,
-        0xE1, 0x86, 0x76, 0xF2, 0x41, 0xBF, 0x8D, 0x93, 0x10, 0xA2, 0x97, 0xCC, 0x13, 0xB7, 0xA5, 0xBD,
+        0x6D, 0xF3, 0x5A, 0xF7, 0x3A, 0x96, 0xC7, 0x8E, 0xC7, 0x98, 0x35, 0xC5, 0xD9, 0xDD, 0x4A, 0x60,
+        0x09, 0x0A, 0x68, 0xF2, 0xD8, 0x54, 0x6D, 0xDE, 0xF3, 0xE2, 0x5C, 0xF0, 0x50, 0xA8, 0x8C, 0x4C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
