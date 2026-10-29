@@ -1088,6 +1088,7 @@ pre>code {
   padding: 0;
   overflow-y: auto;
   overscroll-behavior-y: contain;
+  overflow-anchor: none;
   max-height: 60vh;
 }
 
@@ -1665,5 +1666,5 @@ main > .main-content[aria-busy="true"] {
 #search-type-ahead .search-prose-result a:focus-visible { text-decoration: none; }
 #search-type-ahead .search-prose-result a:hover .search-result-title,
 #search-type-ahead .search-prose-result a:focus-visible .search-result-title { text-decoration: underline; }
-#search-type-ahead .search-snippet mark { color: var(--text-color); background: var(--violet-bg); font-weight: bold; }
+#search-type-ahead .search-snippet mark { color: var(--violet); background: transparent; font-weight: bold; }
 .search-snippet-toggle { margin-left: auto; }

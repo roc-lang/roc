@@ -34,7 +34,7 @@ const setupSearch = () => {
     const categories = new Map([["api", "API"], ["guides", "Guides & examples"]]);
     let allLabel = "All";
     let selectedCategory = "";
-    let expanded = false;
+    const expandedCategories = new Set();
     let showSnippets = false;
     let prose = [];
     let loaded = false;
@@ -142,7 +142,29 @@ const setupSearch = () => {
       appendItem(item);
       shownItems.push(item);
     }
-    function search() {
+    function capturePosition() {
+      const top = searchTypeAhead.getBoundingClientRect().top +
+        (searchTypeAhead.querySelector(".search-filters")?.offsetHeight || 0);
+      const link = Array.from(searchTypeAhead.querySelectorAll("li:not(.hidden) > a.type-ahead-link"))
+        .find(node => node.getBoundingClientRect().bottom > top);
+      return { scrollTop: searchTypeAhead.scrollTop, href: link?.href,
+        offset: link ? link.getBoundingClientRect().top - top : 0 };
+    }
+    function restorePosition(position) {
+      if (!position) { searchTypeAhead.scrollTop = 0; return; }
+      searchTypeAhead.scrollTop = position.scrollTop;
+      if (!position.href) return;
+      const link = Array.from(searchTypeAhead.querySelectorAll("li:not(.hidden) > a.type-ahead-link"))
+        .find(node => node.href === position.href);
+      if (!link) return;
+      const top = searchTypeAhead.getBoundingClientRect().top +
+        (searchTypeAhead.querySelector(".search-filters")?.offsetHeight || 0);
+      const rect = link.getBoundingClientRect();
+      // If a visible snippet disappears, keep its result from scrolling entirely out of view.
+      const offset = Math.max(position.offset, -rect.height + 1);
+      searchTypeAhead.scrollTop += rect.top - top - offset;
+    }
+    function search(position) {
       topSearchResultListItem = undefined;
       for (const item of shownItems) item.classList.add("hidden");
       for (const item of dynamicItems) item.remove();
@@ -163,7 +185,7 @@ const setupSearch = () => {
           const button = dynamic("button", "", label);
           button.type = "button";
           button.setAttribute("aria-pressed", String(id === selectedCategory));
-          button.addEventListener("click", event => { event.stopPropagation(); selectedCategory = id; expanded = false; search(); searchBox.focus(); });
+          button.addEventListener("click", event => { event.stopPropagation(); selectedCategory = id; expandedCategories.clear(); search(); searchBox.focus(); });
           controls.append(button);
         }
         if (prose.length) {
@@ -172,8 +194,9 @@ const setupSearch = () => {
           toggle.setAttribute("aria-pressed", String(showSnippets));
           toggle.addEventListener("click", event => {
             event.stopPropagation();
+            const position = capturePosition();
             showSnippets = !showSnippets;
-            search();
+            search(position);
             searchTypeAhead.querySelector(".search-snippet-toggle").focus({ preventScroll: true });
           });
           controls.append(toggle);
@@ -211,13 +234,30 @@ const setupSearch = () => {
         const matches = ranked.filter(item => item.category === category && !seen.has(item.href));
         if (!matches.length) continue;
         addHeading(category === "api" ? `${label} — documentation` : label);
-        const limit = expanded || selectedCategory ? MAX_RESULTS : 5;
+        const expanded = expandedCategories.has(category);
+        const limit = expanded ? matches.length : 5;
         for (const item of matches.slice(0, limit)) { addProse(item, query); seen.add(item.href); }
-        if (matches.length > limit) {
+        if (matches.length > 5) {
           const row = dynamic("li", "search-more");
-          const button = dynamic("button", "", `More ${label} matches (${matches.length})`);
+          const button = dynamic("button", "", expanded ? `Less ${label} matches` : `More ${label} matches (${matches.length})`);
           button.type = "button";
-          button.addEventListener("click", event => { event.stopPropagation(); selectedCategory = category; expanded = true; search(); searchBox.focus(); });
+          row.dataset.category = category;
+          button.setAttribute("aria-expanded", String(expanded));
+          button.addEventListener("click", event => {
+            event.stopPropagation();
+            const scrollTop = searchTypeAhead.scrollTop;
+            const offset = row.getBoundingClientRect().top - searchTypeAhead.getBoundingClientRect().top;
+            if (expanded) expandedCategories.delete(category);
+            else expandedCategories.add(category);
+            search({ scrollTop });
+            if (expanded) {
+              const replacement = Array.from(searchTypeAhead.querySelectorAll(".search-more"))
+                .find(node => node.dataset.category === category);
+              searchTypeAhead.scrollTop += replacement.getBoundingClientRect().top -
+                searchTypeAhead.getBoundingClientRect().top - offset;
+              replacement.querySelector("button").focus({ preventScroll: true });
+            } else searchBox.focus({ preventScroll: true });
+          });
           row.append(button);
           appendItem(row);
         }
@@ -225,10 +265,10 @@ const setupSearch = () => {
       if (!loaded) appendItem(dynamic("li", "search-status", failed ? "Additional documentation search is unavailable. API search still works." : "Searching documentation…"));
       if (!shownItems.length && loaded) appendItem(dynamic("li", "search-status", "No matching documentation."));
       topSearchResultListItem = shownItems[0];
-      searchTypeAhead.scrollTop = 0;
       searchTypeAhead.classList.remove("hidden");
+      restorePosition(position);
     }
-    searchBox.addEventListener("input", () => { expanded = false; search(); });
+    searchBox.addEventListener("input", () => { expandedCategories.clear(); search(); });
     search();
 
     function searchSubmit(e) {
