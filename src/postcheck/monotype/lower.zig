@@ -37579,7 +37579,10 @@ const BodyContext = struct {
     /// Whether a direct call's callee has a closed result row that
     /// `expected_node`'s row includes, so the call is requested at the
     /// expected result and the callee specialized there (design.md "Closed
-    /// Result Rows At Template Boundaries").
+    /// Result Rows At Template Boundaries"). Only a procedure template takes
+    /// a wider row. A local procedure's request relates its instance exactly,
+    /// and a closed row in that instance belongs to the enclosing body, so a
+    /// call to one keeps its own row.
     fn directCallWidensClosedResult(
         self: *BodyContext,
         call_expr: checked.CheckedExprId,
@@ -37587,6 +37590,7 @@ const BodyContext = struct {
         expected_node: NodeId,
     ) Allocator.Error!bool {
         const target = call.direct_target orelse return false;
+        if (self.directCallTargetIsLocalProc(target)) return false;
         const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
         const declared_row = closedResultRowOrNull(self.view, source_fn_ty) orelse return false;
         const call_ret_node = try self.instNode(self.view.bodies.expr(call_expr).ty);
@@ -45329,6 +45333,17 @@ const BodyContext = struct {
         const argument_node = try self.instNode(self.view.bodies.expr(checked_arg).ty);
         if (try self.graph.containsGeneratedPrivate(argument_node)) return true;
         return try self.graph.containsIteratorInterface(argument_node);
+    }
+
+    fn directCallTargetIsLocalProc(self: *const BodyContext, target: checked.ResolvedValueId) bool {
+        const raw = @backingInt(target);
+        if (raw >= self.view.resolved_refs.records.len) {
+            Common.invariant("checked direct call target is outside resolved value table");
+        }
+        return switch (self.view.resolved_refs.records[raw].ref) {
+            .local_proc => true,
+            .platform_required_proc, .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .promoted_top_level_proc => false,
+        };
     }
 
     fn directCallInstantiationSourceFnType(

@@ -9985,10 +9985,14 @@ A clone that admits only productive direct inlines (every clone outside
 `.none`'s fusion pass) inlines a direct call only when the copied body pays for
 itself. Three kinds of call always qualify: the checker-stamped iterator
 protocol (`IteratorProcedureId`), a wrapper whose body does less work than its
-call (the definition solved inline analysis uses, shared in `wrapper_body.zig`)
-and that lies on no cycle of direct calls, where inlining it would only unroll
-the recursion, and a call whose captures the context substituted, which cannot
-stay residual.
+call (the definition solved inline analysis uses, shared in `wrapper_body.zig`),
+that lies on no cycle of direct calls, where inlining it would only unroll the
+recursion, and that passes none of its own calls a value it builds itself where
+the callee consumes it, and a call whose captures the context substituted,
+which cannot stay residual. A body like `|msg| for_each!(msg, Stdout.line!)`
+inlines `for_each!` into itself on the function reference it supplies, so its
+clone is a whole loop wherever it lands; it stays one procedure, and copies of
+it at each caller are admitted only where they are productive there.
 Any other call qualifies only when inlining lets a known value meet a consumer
 that gains from it:
 
@@ -11699,7 +11703,12 @@ request itself is formed at the widened row: a direct call whose result flows
 into a wider row, through a row coercion or a lambda body whose composed `?`
 result is wider than its own, is lowered at that row's cell, and a callee
 request whose row includes the callee's closed row widens it
-(`stepCallExprAtNode`, `coercedValueTakesRow`). A construction builds only
+(`stepCallExprAtNode`, `coercedValueTakesRow`). That holds for a procedure
+template, which is instantiated afresh for each request. A local
+procedure's request relates the instance the enclosing body holds exactly,
+so a closed row in its result is the enclosing body's own, such as the row
+of a captured function value it calls, and a direct call to it keeps that
+row like any other value. A construction builds only
 its own row: each payload whose type is not already the destination's slot
 for it must take that slot by the same rule, so `Err(tag)` forwarding a
 parameter whose row the `?` result widens is not lowered at the result's
@@ -11797,7 +11806,13 @@ Five consumers keep the rule exact:
 
 - Unification relates every repeated occurrence it gathers to the first one
   (`relateChainDuplicateTags` / `relateChainDuplicateFields`), so a relation
-  that flattens a chain never discards a repeated occurrence's payload.
+  that flattens a chain never discards a repeated occurrence's payload. When
+  occurrences fail to relate, the conflict belongs to the row, not to the
+  relation: the unifier stops and names the row (`Scratch.repeatedLabelRow`),
+  and the checker, outside speculative probes, normalizes that row and relates
+  the operands again. A conflicting repeat is reported once, as the row's
+  conflicting-label report, never also as a mismatch of the relation that
+  found it.
 - `normalizeRowUnion` relates each repeated occurrence to the next one out,
   then rewrites the row part that holds the outer copy to omit it. Inner
   parts may be shared by other types (a callback's own error row) and keep
@@ -11862,19 +11877,20 @@ call, is reported at the output root whose walk found it, and one of the
 cycle's variables becomes `.err` after every report has its snapshot.
 
 Normalization needs no metadata on type variables and adds no work where no
-label repeats: detection rides on the unifier's gather,
-the key writer's row sort, and the settled row walk, which already compare
-labels, and the `?` composition compares labels only along a source chain
-with two or more tag-bearing parts. A conflict is reported as a conflicting
-tag or field: each occurrence is shown as a closed single-label row at the
-source of the row part holding it, so the report names where each copy of
-the label came from. Its location is the value whose type holds the row when
-the settled walk reached the row from an output root, and otherwise the
-outer occurrence. The walk finishes each root before starting the next, in
-source-node order, so the value is the
-earliest source node whose type reaches the row; choosing it is a reporting
-decision and changes nothing about which programs check. The row is poisoned
-once every diagnostic has snapshotted the settled graph.
+label repeats: detection rides on the unifier's gather, the key writer's row
+sort, and the settled row walk, which already compare labels, and the `?`
+composition compares labels only along a source chain with two or more
+tag-bearing parts. A conflict is reported as a conflicting tag or field: each
+occurrence is shown as a closed single-label row at the source of the row part
+holding it, so the report names where each copy of the label came from. Its
+location is the value whose type holds the row: the actual operand of the
+relation that found the conflict, the contribution of a `?` composition, or the
+output root the settled walk reached the row from; and otherwise the outer
+occurrence. The walk finishes each root before starting the next, in source-node
+order, so the value is the earliest source node whose type reaches the row;
+choosing it is a reporting decision and changes nothing about which programs
+check. The row is poisoned once every diagnostic has snapshotted the settled
+graph.
 
 The accepted side is pinned by `src/check/test/row_union_normalization_test.zig`
 (a callback raising the tag its wrapper adds, a repeated tag reaching a method
@@ -11883,6 +11899,9 @@ repeated two extensions down), by `src/check/test/issue_11621_test.zig`
 (recursive functions using `?`, directly, mutually, through a generalized
 helper, and through dispatch), and by the chain-duplicate unifier tests and the
 `normalizeRowUnion` test in `src/check/Check.zig`, which cover records.
+`src/check/test/issue_12677_test.zig` pins `?` composition and rendering of
+a repeated tag, and a conflicting repeat reported once whether a `?`
+composition or a plain relation finds it.
 `src/compile/test/issue_11621_test.zig` pins the output of a mutually
 recursive group's substitution rows, and
 `test/fx-open/issue_11621_recursive_try.roc` runs those programs on every
@@ -12472,7 +12491,9 @@ A boundary whose root does not generalize outputs no scheme, and no use of
 its monomorphic binding instantiates one, so `retireNonGeneralizedTypeSchemes`
 hands each requirement it captured to the innermost enclosing root still
 prospective, exactly as a use's copy would; every use shares the binding's one
-type, so that single copy stands for all of them. A generated codec relation
+type, so that single copy stands for all of them. No use made that copy, so it
+keeps the requirement's own failure expression rather than whichever expression
+is being checked when the boundary runs. A generated codec relation
 over an enclosing scope's variable (`g = |{}| Json.to_str(W.(r))` inside a
 function of `r`) is attached to no receiver descriptor, so this transfer is how
 the enclosing scheme learns of it and validates it at each of its own uses.
@@ -13064,14 +13085,16 @@ The kind rules:
   whose presence var the current boundary OWNS (rank at or above the
   boundary's); lower-ranked entries stay pending for the scope that owns
   them, so nested boundaries fired mid-statement never pin an enclosing
-  destructure prematurely. Before a value flows into an annotated
-  function's result, a pass binds only the binders whose kind is already
-  determined (`DestructJudgment.determined_kinds`), which is the binding a
-  later commitment point would make. The row coercion decides from the
+  destructure prematurely. A value flowing into an annotated function's
+  result is a commitment point too: the row coercion decides from the
   value's type (Row Subsumption), so a function read out of a record
   pattern and called into the result widens exactly as one read with a
-  field access does (`Stream.next!`'s body is the first; a still-flex
-  kind stays pending).
+  field access does, whether the record's kind was declared
+  (`Stream.next!`'s body) or is a literal's still-flex kind. An entry a
+  boundary retains for an enclosing owner pins every class its binder's
+  type reaches at the owner's rank: whichever binding the owner makes
+  relates that type to the field's value there, so no boundary nested
+  inside the owner may quantify it first.
   Binding a destructure can also ground a deferred static-dispatch receiver
   without adding an ordinary equality constraint. Every literal-defaulting
   boundary therefore begins with a ROUND-ZERO constraint quiescence: ordinary
@@ -23806,15 +23829,19 @@ runs only when something calls a function value, so it joins a producer's
 evaluation exactly when that evaluation makes a value call: then every
 function value the evaluation creates, and every one a value it reads holds,
 may run. The graph over-approximates any one lowering's reads, and lowering
-checks that every compile-time slot a program declares is either completed or
-one of its own roots'. An erased callable type's member set names every
-function the whole program may put in a value of that type, so a program
-compiles a member only when its own code creates it or a completed value it
-reads holds it (`CompletedErasedMembers`, collected from each stage's frozen
-image); its erased callable plans keep only the members it compiled. A member
-a completed value holds was compiled by the stage that created it, so every
-value that member reads is already complete. A Boxy program has no Solved program; its literal roots
-take the same order from its own LIR (`CompileTimeRootGraph`), where a Boxy
+checks that every compile-time slot a program declares is completed, one of
+its own roots', or one a later level evaluates. An erased callable type's
+member set names every function the whole program may put in a value of that
+type, so a program compiles a member only when its own code creates it or a
+completed value it reads holds it (`CompletedErasedMembers`, collected from
+each stage's frozen image); its erased callable plans keep only the members it
+compiled. A compiled member runs in a stage only when the stage makes a value
+call, and then the graph orders the member's reads before the stage, so a
+member that does not run may read a value a later level evaluates. The stage
+reserves that value's slot uninitialized: no code it runs reads it, and later
+levels and the runtime consumer compile their own members against the
+completed value. A Boxy program has no Solved program; its literal roots take
+the same order from its own LIR (`CompileTimeRootGraph`), where a Boxy
 dictionary call, comparison, hash, or inspection is a value call that may
 run any of the program's Boxy workers.
 

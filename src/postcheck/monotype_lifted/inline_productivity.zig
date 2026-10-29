@@ -272,8 +272,10 @@ pub const FnSummary = struct {
     constructed: []const Read = &.{},
     passes: []const PassThrough = &.{},
     /// The body does less work than a call to it costs (`WrapperBody`), so
-    /// inlining it never grows the program, and it lies on no cycle of direct
-    /// calls, where inlining it would only unroll the recursion.
+    /// inlining it never grows the program. It lies on no cycle of direct
+    /// calls, where inlining it would only unroll the recursion, and passes
+    /// none of its calls a value it builds where the callee consumes it, which
+    /// would inline that callee into every copy of the body.
     wrapper: bool = false,
 };
 
@@ -396,6 +398,7 @@ pub fn analyze(gpa: Allocator, program: *const Ast.Program, bodies: []const ?Ast
     try builder.fixpoint(bodies, Builder.demandFn);
     try builder.fixpoint(bodies, Builder.constructedFn);
     try builder.dropRecursiveWrappers();
+    try builder.dropSpecializingWrappers(bodies);
     return analysis;
 }
 
@@ -578,6 +581,76 @@ const Builder = struct {
                 component_stack.shrinkRetainingCapacity(start);
             }
         }
+    }
+
+    /// Clear `wrapper` on every function whose body passes a direct call a
+    /// value it builds itself, where the callee consumes that value. The
+    /// clone of the body inlines such a call wherever the body is, so the
+    /// body only stays smaller than a call while it stays one procedure.
+    fn dropSpecializingWrappers(self: *Builder, bodies: []const ?Ast.ExprId) Allocator.Error!void {
+        for (bodies, 0..) |maybe_body, index| {
+            const body = maybe_body orelse continue;
+            if (!self.analysis.fns[index].wrapper) continue;
+            const fn_id: Ast.FnId = @fromBackingInt(@as(u32, @intCast(index)));
+            if (try self.bodySpecializesCall(fn_id, body)) self.analysis.fns[index].wrapper = false;
+        }
+    }
+
+    /// Whether a direct call in `body` gets, from a value `body` builds, a
+    /// part its callee consumes, so that the call inlines productively with
+    /// nothing known about `fn_id`'s arguments or result.
+    fn bodySpecializesCall(self: *Builder, fn_id: Ast.FnId, body: Ast.ExprId) Allocator.Error!bool {
+        self.resetFunction(fn_id);
+        const program_ = self.program();
+        var slots: collections.DenseMapUnmanaged(Ast.LocalId, Slot) = .empty;
+        const args = program_.typedLocalSpan(program_.getFn(fn_id).args);
+        for (0..args.len) |index| try slots.put(self.temp(), GuardedList.at(args, index).local, .{ .kind = .arg, .index = @intCast(index) });
+        var defs: collections.DenseMapUnmanaged(Ast.LocalId, ?Ast.ExprId) = .empty;
+        var returns: std.ArrayList(Ast.ExprId) = .empty;
+        try self.collectDefinitions(body, &defs, &returns);
+        const context: BuiltContext = .{ .defs = &defs, .slots = &slots };
+        var memo: collections.DenseMapUnmanaged(Ast.ExprId, Built) = .empty;
+
+        var stack: std.ArrayList(Ast.ExprChild) = .empty;
+        try stack.append(self.temp(), .{ .expr = body });
+        while (stack.pop()) |child| switch (child) {
+            .stmt => |stmt_id| try Ast.appendStmtChildren(self.temp(), program_, stmt_id, &stack),
+            .expr => |expr_id| {
+                switch (program_.getExpr(expr_id).data) {
+                    .call_proc => |call| if (Ast.localDirectCallee(call)) |callee| {
+                        const callee_summary = self.analysis.summary(callee);
+                        const call_args = program_.exprSpan(call.args);
+                        for (0..call_args.len) |index| {
+                            const arg = try self.built(GuardedList.at(call_args, index), context, &memo);
+                            if (meetsDemand(arg, callee_summary.params[index].view())) return true;
+                        }
+                        const operands = program_.captureOperandSpan(call.captures);
+                        for (0..operands.len) |index| {
+                            const operand = GuardedList.at(operands, index);
+                            const value = try self.built(operand.value, context, &memo);
+                            if (meetsDemand(value, callee_summary.captures[self.analysis.captureSlot(callee, operand.id)].view())) return true;
+                        }
+                    },
+                    // A compile-time value is an opaque leaf to the clone.
+                    .comptime_value => continue,
+                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
+                }
+                try Ast.appendChildren(self.temp(), program_, expr_id, &stack);
+            },
+        };
+        return false;
+    }
+
+    /// Whether a part `value` builds meets a consumer of it that `demand`
+    /// reads directly.
+    fn meetsDemand(value: Built, demand: Demand) bool {
+        for (value.parts) |part| {
+            for (demand.read_paths, demand.read_consumers) |path, consumers| {
+                if (path != part.path) continue;
+                if (part.consumers.intersectWith(consumers).intersectWith(argument_consumers).count() != 0) return true;
+            }
+        }
+        return false;
     }
 
     fn callsItself(self: *const Builder, node: u32) bool {

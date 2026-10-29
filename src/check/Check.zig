@@ -2279,6 +2279,12 @@ const SchemeRequirementCandidate = struct {
     source: Source,
 
     const Source = enum { creation, scheme_copy };
+    /// How a candidate came to be, with the expression a rejection of a
+    /// copied relation poisons.
+    const Provenance = union(Source) {
+        creation,
+        scheme_copy: ?CIR.Expr.Idx,
+    };
     const none: u32 = std.math.maxInt(u32);
 };
 
@@ -2778,10 +2784,11 @@ fn recordSchemeRequirementCandidate(
     self: *Self,
     receiver_var: Var,
     constraint: StaticDispatchConstraint,
-    source: SchemeRequirementCandidate.Source,
+    provenance: SchemeRequirementCandidate.Provenance,
     structural_origin: ?StructuralSchemeRequirementOrigin,
     deferred_generated_codec: bool,
 ) Allocator.Error!void {
+    const source: SchemeRequirementCandidate.Source = provenance;
     try self.recordDispatchRelationOwner(constraint.fn_var);
     if (self.constraintIsLiteralConversion(constraint)) return;
     std.debug.assert((source == .creation) == (structural_origin == null));
@@ -2807,9 +2814,9 @@ fn recordSchemeRequirementCandidate(
             .receiver_var = receiver_var,
             .constraint_fn_var = constraint.fn_var,
         },
-        .failure_expr = switch (source) {
+        .failure_expr = switch (provenance) {
             .creation => constraintIntroExpr(constraint),
-            .scheme_copy => self.discarded_binding_rhs_expr orelse self.instantiation_source_expr,
+            .scheme_copy => |failure_expr| failure_expr,
         },
         .source = source,
         .deferred_generated_codec = deferred_generated_codec,
@@ -3015,7 +3022,7 @@ fn registerInstantiatedSchemeRequirement(
     try self.recordSchemeRequirementCandidate(
         requirement.receiver_var,
         requirement.constraint,
-        .scheme_copy,
+        .{ .scheme_copy = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr },
         requirement.structural_origin,
         requirement.deferred_generated_codec,
     );
@@ -7278,7 +7285,20 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     // needs the same owner the absorption will later be attributed to.
     var unify_opts = opts;
     unify_opts.record_construction_var = construction_var;
-    const result = try unifier.unify(&unify_env, a, b, unify_opts);
+    // A row repeating a label whose occurrences do not relate conflicts on
+    // its own, whatever it is related to: normalizing it reports that
+    // conflict once (design.md "Row Union Normalization"), and the operands
+    // are related again with the row normalized or poisoned.
+    if (self.probe_depth == 0 or self.commit_probe_active) {
+        unify_opts.repeated_label_rows = .return_row;
+    }
+    var result = try unifier.unify(&unify_env, a, b, unify_opts);
+    while (unify_opts.repeated_label_rows == .return_row and result == .mismatch) {
+        const row = self.unify_scratch.repeatedLabelRow() orelse break;
+        try self.adoptUnifyScratch(env, b, owner);
+        try self.normalizeRowUnionOrReport(row, b, env);
+        result = try unifier.unify(&unify_env, a, b, unify_opts);
+    }
     switch (result) {
         .problem => |problem_idx| {
             const mismatch = &self.problems.problems.items[@backingInt(problem_idx)].type_mismatch;
@@ -7295,9 +7315,20 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     if (result.isAccepted()) {
         try self.recordAbsorbedDefaults(construction_var, a, b);
     }
+    try self.adoptUnifyScratch(env, b, owner);
+
+    // Ensure arrays are in sync
+    self.debugAssertArraysInSync();
+
+    return result;
+}
+
+/// Give the fresh variables and deferred constraints the last unification
+/// created to the checker. Fresh variables take `actual`'s region.
+fn adoptUnifyScratch(self: *Self, env: *Env, actual: Var, owner: DeferredDispatchObligationOwner) Allocator.Error!void {
     // Set regions and add to the current rank all variables created during unification.
     //
-    // We assign all fresh variables the region of `b` (the "actual" type), since `a` is
+    // We assign all fresh variables the region of `actual`, since the other operand is
     // typically the "expected" type from an annotation. This policy works well for
     // most cases but can be imprecise for deeply nested unifications where fresh variables
     // are created for sub-components (e.g., record fields, tag payloads). In those cases,
@@ -7306,7 +7337,7 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     // A more precise solution would track the origin of each fresh variable during
     // unification and propagate that back, but the current approach is sufficient for
     // typical error reporting scenarios.
-    const region = self.getRegionAt(b);
+    const region = self.getRegionAt(actual);
     for (self.unify_scratch.fresh_vars.items.items) |fresh_var| {
         // Set the rank
         const fresh_rank = self.types.resolveVar(fresh_var).desc.rank;
@@ -7337,11 +7368,6 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
         }
         try self.enqueueUseOwnedDeferredConstraint(env, deferred_constraint, expr_idx, owner);
     }
-
-    // Ensure arrays are in sync
-    self.debugAssertArraysInSync();
-
-    return result;
 }
 
 /// Mark a recorded mismatch that a use's conflicting interpolation values
@@ -21083,6 +21109,54 @@ fn pinVarAtRank(self: *Self, obligation_var: Var, boundary_rank: Rank, env: *Env
     }
 }
 
+/// Pin every class reachable from `root` at `boundary_rank`, as
+/// `pinVarAtRank` pins one class: a type whose relation to data at that rank
+/// is still pending stays monomorphic in every frame nested inside it. A
+/// rigid keeps the rank its annotation gave it, as it does when it unifies
+/// into a lower-ranked structure.
+fn pinReachableVarsAtRank(self: *Self, root: Var, boundary_rank: Rank, env: *Env) std.mem.Allocator.Error!void {
+    const stack = &self.type_visit_stack;
+    const stack_base = stack.items.len;
+    defer stack.items.len = stack_base;
+    self.var_set.clearRetainingCapacity();
+    try stack.append(self.gpa, root);
+    while (stack.items.len > stack_base) {
+        const resolved = self.types.resolveVar(stack.pop().?);
+        if (self.var_set.contains(resolved.var_)) continue;
+        try self.var_set.put(resolved.var_, {});
+        if (resolved.desc.rank == .generalized or resolved.desc.content == .rigid) continue;
+        try self.pinVarAtRank(resolved.var_, boundary_rank, env);
+        switch (resolved.desc.content) {
+            .flex, .rigid, .field_presence, .err => {},
+            .alias => |alias| {
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                    }
+                    try stack.append(self.gpa, tag_union.ext);
+                },
+                .empty_tag_union, .empty_record => {},
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.append(self.gpa, func.ret);
+                },
+                .record => |record| {
+                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                        try stack.append(self.gpa, presence.typeVar());
+                    }
+                    try stack.append(self.gpa, record.ext);
+                },
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+            },
+        }
+    }
+}
+
 // create types for type decls //
 
 fn aliasOriginModule(self: *const Self) base.ModuleIdentity.Idx {
@@ -22159,7 +22233,7 @@ const ResultWidening = struct {
 /// the value's own row is untouched (design.md "Value Rows: Uses Share One
 /// Row").
 fn widenResultValue(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env) std.mem.Allocator.Error!?ResultWidening {
-    try self.judgeRecordDestructBindsAt(env, .determined_kinds);
+    try self.judgeRecordDestructBinds(env);
     const rows_start: u32 = @intCast(self.widened_use_rows.items.len);
     const wide_var = try self.widenedClosedRowsCopy(
         ModuleEnv.varFrom(expr_idx),
@@ -37800,30 +37874,18 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
 /// checking order), which is also what the pre-optional-fields `.required`
 /// row demand did at pattern-check time.
 ///
+/// ALSO called where a value flows into an annotated function's result: the
+/// row coercion decides from the value's type (design.md "Row Subsumption"),
+/// so a function read out of a record pattern and called into the result
+/// widens exactly as one read with a field access does. That decision is a
+/// commitment point in the same way.
+///
 /// A binder whose sub-pattern does not describe the field's value (a closed
 /// nested record pattern missing one of the field's fields, or a binder whose
 /// uses demand another type) is a rejected pattern: the judgment reports it
 /// and rejects the construct that owns the pattern through
 /// `rejectPatternFailureOwner`.
 fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    try self.judgeRecordDestructBindsAt(env, .commit);
-}
-
-/// Which pending record-destructure binders a judgment binds.
-const DestructJudgment = enum {
-    /// Every binder: a commitment point, where a still-flex kind pins
-    /// `required`.
-    commit,
-    /// Only binders whose field kind is already determined. Binding them
-    /// early is the binding a later commitment point would make, so a
-    /// decision that reads a binder's type—the row coercion of a value
-    /// flowing into an annotated result (design.md "Row Subsumption")—sees
-    /// the field's type rather than the binder's placeholder. A still-flex
-    /// kind stays pending.
-    determined_kinds,
-};
-
-fn judgeRecordDestructBindsAt(self: *Self, env: *Env, judgment: DestructJudgment) std.mem.Allocator.Error!void {
     var retained: usize = 0;
     var index: usize = 0;
     while (index < self.pending_record_destructs.items.len) : (index += 1) {
@@ -37853,8 +37915,12 @@ fn judgeRecordDestructBindsAt(self: *Self, env: *Env, judgment: DestructJudgment
                 // unification has run. The entry stays pending for the
                 // scope that owns it (finalize as the monomorphic
                 // backstop, where every remaining non-generalized var is
-                // at rank).
-                if (judgment == .determined_kinds or @backingInt(resolved.desc.rank) < @backingInt(env.rank())) {
+                // at rank). Whichever binding the owner makes relates the
+                // binder's type to the field's value at the owner's rank,
+                // so everything that type holds stays at that rank and no
+                // boundary nested inside the owner quantifies it first.
+                if (@backingInt(resolved.desc.rank) < @backingInt(env.rank())) {
+                    try self.pinReachableVarsAtRank(pending.binder_var, resolved.desc.rank, env);
                     self.pending_record_destructs.items[retained] = pending;
                     retained += 1;
                     continue;
@@ -41271,10 +41337,12 @@ fn retireNonGeneralizedTypeSchemes(self: *Self, roots: []const BoundaryRoot) All
         // Recording a candidate never adds or removes a scheme, so the index
         // and the requirements list stay valid across the loop.
         for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |requirement| {
+            // The relation moves outward unchanged, so it keeps the
+            // expression a rejection poisons.
             try self.recordSchemeRequirementCandidate(
                 requirement.receiver_var,
                 requirement.constraint,
-                .scheme_copy,
+                .{ .scheme_copy = requirement.failure_expr },
                 requirement.structural_origin,
                 requirement.deferred_generated_codec,
             );

@@ -3335,6 +3335,21 @@ test "zero statement block wrapper is inlined" {
     , .wrappers, 0);
 }
 
+test "a wrapper that hands its callee a function it names stays one procedure" {
+    // `sum`'s body is one call, but the function reference it passes inlines
+    // the fold's loop into it, so each copy of `sum` would be a whole loop.
+    try expectRootDirectCallCount(
+        \\add : U64, U64 -> U64
+        \\add = |a, b| a + b
+        \\
+        \\sum : List(U64) -> U64
+        \\sum = |xs| xs.fold(0, add)
+        \\
+        \\main : List(U64) -> U64
+        \\main = |xs| sum(xs) + sum(xs)
+    , .wrappers, 2);
+}
+
 test "low level wrapper is inlined when inline mode is enabled" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,
