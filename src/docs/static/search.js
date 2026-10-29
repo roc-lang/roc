@@ -48,6 +48,7 @@ const setupSearch = () => {
         (li.querySelector(".type-ahead-def-name")?.textContent || "")).toLowerCase(),
       signature: (li.querySelector(".type-ahead-signature")?.textContent || "").toLowerCase().replace(/\s+/g, ""),
       category: "api",
+      kind: li.dataset.searchKind,
     }));
     let shownItems = [];
     const MAX_RESULTS = 50;
@@ -175,10 +176,7 @@ const setupSearch = () => {
       const query = searchBox.value.trim();
       if (!query) { searchTypeAhead.classList.add("hidden"); return; }
       loadIndex();
-      const q = query.toLowerCase();
-      const signatureQuery = q.replace(/\s+/g, "");
-      const apiMatches = apiEntries.filter(item =>
-        item.name.includes(q) || item.signature.includes(signatureQuery));
+      const apiMatches = engine.rankApi(apiEntries, query);
       const ranked = engine.rank(prose, query, { allowAliasPrefixes: apiMatches.length === 0 });
       const curatedSymbol = !/[\p{L}\p{N}]/u.test(query) && ranked.some(item => item.exactTerm);
       const used = new Set([...(apiEntries.length ? ["api"] : []), ...prose.map(item => item.category)]);

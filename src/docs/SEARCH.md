@@ -49,6 +49,10 @@ The website build is responsible for publishing and checking those additional
 pages. Documents with different source files may share a destination, e.g. an
 example's README and its Roc source; search deduplicates destination links.
 
+API results prioritize matches in type names, then value/function names, then
+signatures. Names include their module qualification. Ties retain generator order,
+and prose matches follow these compact API results.
+
 Curated terms match case-insensitively and rank before incidental prose matches.
 Exact aliases always match. Word aliases also match prefixes when there are no
 API name or signature matches, displaying the complete alias alongside the result. Punctuation-only terms require an exact match.

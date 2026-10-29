@@ -1,6 +1,19 @@
 // Shared by the browser UI and the search ranking tests.
 (function (root) {
   const normalize = text => text.toLowerCase().replace(/\s+/g, " ").trim();
+  // Preserve generator order within each match location.
+  function rankApi(entries, query) {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const signatureQuery = q.replace(/\s+/g, "");
+    const types = [], names = [], signatures = [];
+    for (const entry of entries) {
+      if (entry.name.includes(q)) {
+        (entry.kind === "type" ? types : names).push(entry);
+      } else if (entry.signature.includes(signatureQuery)) signatures.push(entry);
+    }
+    return types.concat(names, signatures);
+  }
   function rank(documents, query, { allowAliasPrefixes = true } = {}) {
     const q = normalize(query);
     if (!q) return [];
@@ -53,7 +66,7 @@
     if (offset < text.length) parts.push({ text: text.slice(offset), match: false });
     return parts;
   }
-  const api = { normalize, rank, snippet, highlightParts };
+  const api = { normalize, rankApi, rank, snippet, highlightParts };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.rocDocsSearch = api;
 })(globalThis);

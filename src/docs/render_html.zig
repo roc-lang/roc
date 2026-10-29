@@ -1641,7 +1641,9 @@ fn renderSearchTree(
     base: []const u8,
 ) (Allocator.Error || error{WriteFailed})!void {
     if (node.entry) |entry| {
-        try w.writeAll("            <li class=\"hidden\"><a class=\"type-ahead-link\" href=\"");
+        try w.writeAll("            <li class=\"hidden\" data-search-kind=\"");
+        try w.writeAll(if (node.is_type) "type" else "value");
+        try w.writeAll("\"><a class=\"type-ahead-link\" href=\"");
         if (ctx.single_module_at_root) {
             try w.writeAll(base);
             try w.writeAll("#");
@@ -3271,13 +3273,19 @@ test "search index preserves API anchors for packages, single modules, and built
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    var entries = [_]DocModel.DocEntry{.{
+    var entries = [_]DocModel.DocEntry{ .{
         .name = "read",
         .kind = .value,
         .type_signature = null,
         .doc_comment = "Read <input> & preserve text",
         .children = &.{},
-    }};
+    }, .{
+        .name = "Input",
+        .kind = .nominal,
+        .type_signature = null,
+        .doc_comment = null,
+        .children = &.{},
+    } };
     var modules = [_]DocModel.ModuleDocs{
         .{ .name = "Reader", .package_name = "test", .kind = .type_module, .module_doc = "Reader documentation", .entries = &entries },
         .{ .name = "Other", .package_name = "test", .kind = .type_module, .module_doc = null, .entries = &.{} },
@@ -3306,6 +3314,8 @@ test "search index preserves API anchors for packages, single modules, and built
             const row_link = try std.fmt.allocPrint(gpa, "href=\"../../{s}#{s}\"", .{ prefix, anchor });
             defer gpa.free(row_link);
             try std.testing.expect(std.mem.find(u8, rows.written(), row_link) != null);
+            try std.testing.expect(std.mem.find(u8, rows.written(), "data-search-kind=\"type\"") != null);
+            try std.testing.expect(std.mem.find(u8, rows.written(), "data-search-kind=\"value\"") != null);
         }
     }
 }

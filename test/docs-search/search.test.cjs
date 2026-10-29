@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {rank, snippet, highlightParts} = require('../../src/docs/static/search-core.js');
+const {rankApi, rank, snippet, highlightParts} = require('../../src/docs/static/search-core.js');
 const entries = [
  {title:'Some example', text:'A := B and Token :: Str', href:'example/', category:'guides'},
  {title:'Types › Nominal Types', text:'A nominal type uses :=', terms:[':='], href:'types/#nominal-types',category:'guides'},
@@ -79,4 +79,25 @@ test('API matches suppress partial aliases but retain exact aliases and ordinary
  assert.equal(rank(docs,'foldr',options)[0].matchedTerm,'foldr');
  assert.deepEqual(rank(docs,'lredu',options),[]);
  assert.equal(rank(docs,'lredu',{allowAliasPrefixes:true})[0].matchedTerm,'lreduce');
+});
+
+
+test('API type names precede function names, which precede signature-only matches',()=>{
+ const api = [
+  {name:'alpha.consume',kind:'value',signature:':list(u8)->u64'},
+  {name:'str.to_list',kind:'value',signature:':str->list(u8)'},
+  {name:'list.list',kind:'type',signature:':=opaque'},
+  {name:'list.len',kind:'value',signature:':list(a)->u64'},
+  {name:'other.container',kind:'type',signature:':=list(u8)'},
+  {name:'other.list_view',kind:'type',signature:':=opaque'},
+  {name:'str.len',kind:'value',signature:':str->u64'}
+ ];
+ assert.deepEqual(rankApi(api,' LIST ').map(x=>x.name),[
+  'list.list','other.list_view','str.to_list','list.len','alpha.consume','other.container'
+ ]);
+ assert.deepEqual(rankApi(api,'str.to_list'),[api[1]]);
+ assert.deepEqual(rankApi(api,'List( U8 )'),[api[0],api[1],api[4]]);
+ assert.deepEqual(rankApi(api,'len').map(x=>x.name),['list.len','str.len']);
+ assert.deepEqual(rankApi(api,''),[]);
+ assert.deepEqual(rankApi(api,'missing'),[]);
 });
