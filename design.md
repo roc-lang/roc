@@ -14065,10 +14065,14 @@ canonicalized module cache, and the compile-time evaluation results `roc
 check` produces (including `ConstStore` constants and the compile-time object
 cache that evaluation itself uses) are written exactly as `roc check` writes
 them. Lowered output, dev packs, run object caches, optimized packs, and
-recorded program outputs are not written. `roc check`, `roc build`, `roc run`,
-and `roc test` with `--specialize=no` therefore leave identical cache contents
-for the same sources. `roc check` accepts `--specialize` and `--opt` and
-ignores both, so the same command line can be used across commands.
+recorded program outputs are not written, and the compile-time packs and
+discovery summaries are filed under `roc check`'s publisher whatever the
+command. `roc check`, `roc build`, and `roc run` with `--specialize=no`
+therefore leave identical cache contents for the same sources. `roc test`
+checks its root for explicit test roots (`Validation.explicit_roots`), which is
+its own check under either strategy, and with `--specialize=no` it leaves
+exactly what that check leaves. `roc check` accepts `--specialize` and `--opt`
+and ignores both, so the same command line can be used across commands.
 
 ### Compile-Time Evaluation Strategy
 

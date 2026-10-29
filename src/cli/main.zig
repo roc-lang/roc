@@ -2922,6 +2922,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
             .enable_checked_cache = !args.no_cache,
             .reporter = &reporter,
+            .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy),
         });
         defer build_env.deinit();
         try discoverRunDependencies(ctx, &build_env, args.path, args.path, &reporter);
@@ -6696,6 +6697,7 @@ fn lowerLirWithBuildEnv(
         .resolution_config = resolution_config,
         .enable_checked_cache = enable_checked_cache,
         .reporter = reporter,
+        .specialization_strategy = specialization_strategy,
     });
     defer build_env.deinit();
     const display_path = runDisplayPath(roc_file_path, synthetic_default_app);
@@ -6711,6 +6713,7 @@ const RunBuildEnvOptions = struct {
     resolution_config: compile.package_resolution.Config,
     enable_checked_cache: bool,
     reporter: ?*progress.Reporter,
+    specialization_strategy: base.SpecializationStrategy,
 };
 
 /// The build environment for a run, before its runtime artifact is chosen.
@@ -6726,6 +6729,9 @@ fn initRunBuildEnv(ctx: *CliCtx, opts: RunBuildEnvOptions) CliMainError!BuildEnv
         .release_checked_solver_types = true,
         .source_dir_override = opts.source_dir_override,
         .post_check_publication_mode = .executable_artifacts,
+        // A run whose post-check work writes no cache writes the compile-time
+        // packs `roc check` writes (design.md "Caching Under `.boxy`").
+        .compile_time_pack_publisher = if (cachesPostCheckWork(opts.specialization_strategy)) null else check_compile_time_pack_publisher,
     });
     applySyntheticDefaultAppMapping(&build_env, opts.synthetic_default_app);
     return build_env;
@@ -6957,6 +6963,9 @@ fn lowerDiscoveredLir(
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
+    // A run whose post-check work writes no cache leaves what `roc check`
+    // leaves (design.md "Caching Under `.boxy`").
+    if (counts.errors == 0 and !cachesPostCheckWork(specialization_strategy)) try publishCompileTimeResults(ctx, build_env, root_artifact);
 
     if (reporter) |r| r.begin(loweringProgressLabel(specialization_strategy));
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
@@ -11283,7 +11292,7 @@ fn initBuildCommandEnv(ctx: *CliCtx, args: cli_args.BuildArgs) InitCliBuildEnvEr
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .release_checked_solver_types = true,
-        .compile_time_pack_publisher = .{ .command = .build, .opt = @tagName(args.opt) },
+        .compile_time_pack_publisher = compileTimePackPublisher(.build, args.opt, args.specialization_strategy),
         .source_dir_override = args.source_dir_override,
         .root_source_url = args.root_source_url,
     });
@@ -13642,6 +13651,16 @@ fn currentRuntimeSpecializationStrategy(
 /// executables and shim libraries, recorded program outputs, and test
 /// results. Under `.boxy` a command leaves the cache exactly as `roc check`
 /// leaves it (design.md "Caching Under `.boxy`").
+/// The publisher of a command's compile-time packs. A command whose
+/// post-check work writes no cache writes the compile-time packs `roc check`
+/// writes (design.md "Caching Under `.boxy`").
+fn compileTimePackPublisher(command: @FieldType(pack_store.CompileTimePublisher, "command"), opt: cli_args.OptLevel, explicit: ?base.SpecializationStrategy) pack_store.CompileTimePublisher {
+    if (!cachesPostCheckWork(currentRuntimeSpecializationStrategy(explicit))) return check_compile_time_pack_publisher;
+    return .{ .command = command, .opt = @tagName(opt) };
+}
+
+const check_compile_time_pack_publisher: pack_store.CompileTimePublisher = .{ .command = .check, .opt = @tagName(cli_args.OptLevel.dev) };
+
 fn cachesPostCheckWork(strategy: base.SpecializationStrategy) bool {
     return switch (strategy) {
         .lss => true,
@@ -16183,7 +16202,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .release_checked_solver_types = true,
-        .compile_time_pack_publisher = .{ .command = .test_run, .opt = @tagName(args.opt) },
+        .compile_time_pack_publisher = compileTimePackPublisher(.test_run, args.opt, args.specialization_strategy),
         .root_source_url = args.root_source_url,
         .main_source_url = args.main_source_url,
         // `roc test` never links a program, so it publishes no executable
@@ -19126,7 +19145,7 @@ fn checkFileWithBuildEnvPreserved(
         .timings = timings,
         .resolution_config = resolution_config,
         .track_watch_inputs = track_watch_inputs,
-        .compile_time_pack_publisher = .{ .command = .check, .opt = @tagName(cli_args.OptLevel.dev) },
+        .compile_time_pack_publisher = check_compile_time_pack_publisher,
         .source_dir_override = source_dir_override,
         .root_source_url = root_source_url,
         .main_source_url = main_source_url,
@@ -19174,7 +19193,7 @@ fn checkFileWithBuildEnv(
         .timings = timings,
         .resolution_config = resolution_config,
         .release_checked_solver_types = true,
-        .compile_time_pack_publisher = .{ .command = .check, .opt = @tagName(cli_args.OptLevel.dev) },
+        .compile_time_pack_publisher = check_compile_time_pack_publisher,
         .source_dir_override = source_dir_override,
         .root_source_url = root_source_url,
         .main_source_url = main_source_url,

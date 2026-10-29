@@ -482,6 +482,7 @@ const CustomCase = enum {
     issue_11678_recursive_callback_cache,
     issue_11678_dev_cache_boxy_tables,
     boxy_caches_nothing_after_checking,
+    boxy_build_and_run_cache_what_check_caches,
     issue_11710_shared_object_cache,
     issue_12220_shared_object_cache_literals,
     issue_11826_cache_ownership_variants,
@@ -3259,6 +3260,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: cached recursive callbacks retain method result rows", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_recursive_callback_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: dev builds whose code reaches the Boxy runtime are identical whatever the dev cache holds, including another app's packs", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_dev_cache_boxy_tables } },
     .{ .id = 0, .suite = .subcommands, .name = "--specialize=no caches nothing after checking", .timeout_ms = 600_000, .body = .{ .custom = .boxy_caches_nothing_after_checking } },
+    .{ .id = 0, .suite = .subcommands, .name = "--specialize=no build and run leave the cache check leaves", .timeout_ms = 600_000, .body = .{ .custom = .boxy_build_and_run_cache_what_check_caches } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12220: shared object cache keeps each module's list literals in a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_12220_shared_object_cache_literals } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: every program compiles an offered procedure to the same LIR", .timeout_ms = 600_000, .body = .{ .custom = .cache_fingerprints_agree } },
@@ -5254,6 +5256,7 @@ fn runCustomCase(
         .issue_11678_recursive_callback_cache => customIssue11678RecursiveCallbackCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11678_dev_cache_boxy_tables => customIssue11678DevCacheBoxyTables(io, allocator, &env, &timer, timeout_ms),
         .boxy_caches_nothing_after_checking => customBoxyCachesNothingAfterChecking(io, allocator, &env, &timer, timeout_ms),
+        .boxy_build_and_run_cache_what_check_caches => customBoxyBuildAndRunCacheWhatCheckCaches(io, allocator, &env, &timer, timeout_ms),
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
         .issue_12220_shared_object_cache_literals => customIssue12220SharedObjectCacheLiterals(io, allocator, &env, &timer, timeout_ms),
         .issue_11826_cache_ownership_variants => customIssue11826CacheOwnershipVariants(io, allocator, &env, &timer, timeout_ms),
@@ -10236,6 +10239,62 @@ fn customBoxyCachesNothingAfterChecking(
     return null;
 }
 
+/// design.md "Caching Under `.boxy`": `roc check`, `roc build`, and `roc run`
+/// with `--specialize=no` leave identical cache contents for the same
+/// sources, compile-time packs included. The per-invocation scratch section
+/// (`CacheConfig.getScratchDir`) holds no cache entries.
+fn customBoxyBuildAndRunCacheWhatCheckCaches(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const roc_file = "test/cli/BoxyStoredValues.roc";
+    const output_arg = std.fmt.allocPrint(allocator, "--output={s}/boxy_build_cache_app", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the output path: {}", .{err});
+    const commands = [_][]const []const u8{
+        &.{ "check", "--specialize=no", "--opt=dev" },
+        &.{ "build", "--specialize=no", "--opt=dev", output_arg },
+        &.{ "run", "--specialize=no", "--opt=dev" },
+    };
+    var cache_envs: [commands.len]CaseEnv = undefined;
+    var initialized: usize = 0;
+    defer for (cache_envs[0..initialized]) |*cache_env| cache_env.env_map.deinit();
+    var listings: [commands.len][]const []const u8 = undefined;
+    for (commands, &cache_envs, &listings, 0..) |args, *cache_env, *listing, index| {
+        const cache_root = std.fmt.allocPrint(allocator, "{s}/boxy_build_and_run_cache_{d}", .{ env.dirs.work_dir, index }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
+        cache_env.* = .{
+            .dirs = env.dirs,
+            .env_map = env.env_map.clone(allocator) catch |err|
+                return customInfraFailure(allocator, timer, "failed to clone the environment: {}", .{err}),
+        };
+        initialized += 1;
+        for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+            cache_env.env_map.put(key, cache_root) catch |err|
+                return customInfraFailure(allocator, timer, "failed to set cache root: {}", .{err});
+        }
+        const command_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a command");
+        const ran = runRocInEnv(io, allocator, cache_env, args, roc_file, .relative, &.{}, null, command_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "command spawn error: {}", .{err});
+        if (!processSucceeded(ran.term)) return failureFromRun(allocator, timer, ran, "command did not succeed");
+        const full = cacheListing(io, allocator, cache_root) catch |err|
+            return customInfraFailure(allocator, timer, "failed to list the cache: {}", .{err});
+        var entries = std.ArrayList([]const u8).empty;
+        for (full) |path| {
+            if (!isScratchPath(path)) entries.append(allocator, path) catch |err|
+                return customInfraFailure(allocator, timer, "failed to collect the cache listing: {}", .{err});
+        }
+        listing.* = entries.items;
+        if (index != 0 and !listingsEqual(listings[0], listing.*)) {
+            return customFailure(allocator, timer, "`roc {s} --specialize=no` left a cache other than `roc check`'s: {s}", .{ args[0], firstListingDifference(listings[0], listing.*) });
+        }
+    }
+    return null;
+}
+
 /// Every path under `cache_root`, relative to it, sorted.
 fn cacheListing(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError![]const []const u8 {
     var root = try std.Io.Dir.cwd().openDir(io, cache_root, .{ .iterate = true });
@@ -10250,6 +10309,25 @@ fn cacheListing(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRun
     return paths.toOwnedSlice(allocator);
 }
 
+/// The first path one sorted listing holds and the other lacks.
+fn firstListingDifference(left: []const []const u8, right: []const []const u8) []const u8 {
+    var l: usize = 0;
+    var r: usize = 0;
+    while (l < left.len and r < right.len) {
+        switch (std.mem.order(u8, left[l], right[r])) {
+            .eq => {
+                l += 1;
+                r += 1;
+            },
+            .lt => return left[l],
+            .gt => return right[r],
+        }
+    }
+    if (l < left.len) return left[l];
+    if (r < right.len) return right[r];
+    return "";
+}
+
 fn listingsEqual(left: []const []const u8, right: []const []const u8) bool {
     if (left.len != right.len) return false;
     for (left, right) |a, b| {
@@ -10260,6 +10338,14 @@ fn listingsEqual(left: []const []const u8, right: []const []const u8) bool {
 
 /// A cache-root-relative path's `<version>/<section>` prefix, or the whole
 /// path when it names the version directory itself.
+/// Whether a cache-root-relative path lies in a version's per-invocation
+/// scratch section, `<version>/tmp`.
+fn isScratchPath(path: []const u8) bool {
+    const section = cacheSectionPrefix(path);
+    const separator = std.mem.findScalar(u8, section, '/') orelse std.mem.findScalar(u8, section, '\\') orelse return false;
+    return std.mem.eql(u8, section[separator + 1 ..], "tmp");
+}
+
 fn cacheSectionPrefix(path: []const u8) []const u8 {
     var separators: usize = 0;
     for (path, 0..) |byte, index| {
