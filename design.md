@@ -11121,7 +11121,13 @@ rank (`Check.reachedVarEscapesResultRelation`) is therefore not related:
 the copy stands a fresh variable at the current rank in its place
 (`Check.deferredResultPlaceholder`), the relation binds that placeholder to
 the result position the variable must fit, and the definition's scheme
-quantifies the position with the rest of its annotation. The variable's
+quantifies the position with the rest of its annotation. A row's open TAIL
+is not such a variable, whichever scope owns it: the tags the row holds
+relate now, the tail stays shared with the value's own row or is re-opened
+in a copy exactly as above, and every tag the row gains later joins
+through that tail or propagates into the copy (Row Joins,
+`Check.propagateValueRowsToWidenedUses`), so a top-level value forwarded
+into several results keeps one row of its own. The variable's
 own relation to that position is recorded (`Check.DeferredResultRelation`)
 for the generalization boundary that owns the variable, which discharges
 it after its field-kind judgments and before its literal defaulting

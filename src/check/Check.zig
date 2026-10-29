@@ -22154,7 +22154,6 @@ fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, regi
     var current = row;
     var at_head = true;
     var kept_tail: ?Var = null;
-    var placeholder_tail: ?Var = null;
     while (true) {
         const resolved = self.types.resolveVar(current);
         if (at_head) {
@@ -22176,18 +22175,16 @@ fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, regi
                 .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return self.types.resolveVar(row).var_,
             },
             .flex => {
-                // A tail an enclosing scope owns may still gain tags from
-                // that scope: the copy's tail is a placeholder the relation
-                // binds to the result's remaining tags, and the tail's own
-                // relation to them waits for the owner.
-                if (self.reachedVarEscapesResultRelation(resolved, env)) {
-                    placeholder_tail = try self.deferredResultPlaceholder(resolved.var_, use_expr, env, region);
-                    break;
-                }
                 // A row that is still open is shared with whatever else holds
                 // it; only a row that cannot gain a tag needs its own re-opened
                 // copy: a closed one, or one an annotation bounds (an annotated
-                // value's row, which closes when its module finishes).
+                // value's row, which closes when its module finishes). A tail
+                // an enclosing scope owns is shared the same way, never stood
+                // in for by a placeholder: the tags the row holds relate now,
+                // and every tag the row gains later joins through the shared
+                // tail or propagates into the copy (design.md "Row Joins",
+                // `propagateValueRowsToWidenedUses`), so the value's own row
+                // stays its own at every use.
                 if (self.widen_closed_rows_only and !resolved.desc.flags.bounded_row_ext) kept_tail = resolved.var_;
                 break;
             },
@@ -22226,12 +22223,6 @@ fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, regi
         const copy = try self.freshFromContent(try self.types.mkTagUnion(tags, tail), env, region);
         try self.widened_kept_tail_rows.append(self.gpa, .{ .source = self.types.resolveVar(row).var_, .copy = copy });
         return copy;
-    }
-    // A placeholder tail is not re-opened: every tag the value's row gains
-    // through its own tail is related to the result when the tail's owner
-    // discharges the deferred relation.
-    if (placeholder_tail) |tail| {
-        return try self.freshFromContent(try self.types.mkTagUnion(tags, tail), env, region);
     }
     const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
     const copy = try self.freshFromContent(try self.types.mkTagUnion(tags, ext), env, region);
