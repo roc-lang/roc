@@ -1724,13 +1724,18 @@ fn markReachableLiftedStmt(
     }
 }
 
-/// A specialized loop over two state leaves: a worker taking the leaves as
-/// its arguments, or that worker localized as a join in a caller that takes
-/// no arguments, which happens when the caller is the worker's only user.
-fn loopCarriesTwoLeaves(shape: ProcShape) bool {
+/// A specialized loop over `leaves` state leaves: a worker taking the leaves
+/// as its arguments, or that worker localized as a join in a caller that
+/// takes no arguments, which happens when the caller is the worker's only
+/// user.
+fn loopCarriesLeaves(shape: ProcShape, leaves: usize) bool {
     return shape.self_call_count == 0 and
         shape.jump_count >= 1 and
-        (shape.arg_count == 2 or (shape.arg_count == 0 and shape.max_join_param_count >= 2));
+        (shape.arg_count == leaves or (shape.arg_count == 0 and shape.max_join_param_count >= leaves));
+}
+
+fn loopCarriesTwoLeaves(shape: ProcShape) bool {
+    return loopCarriesLeaves(shape, 2);
 }
 
 fn directRecordWorkerIsSpecialized(shape: ProcShape) bool {
@@ -1820,10 +1825,7 @@ fn taggedStepWorkerIsGeneric(shape: ProcShape) bool {
 }
 
 fn multiTupleWorkerIsFullySpecialized(shape: ProcShape) bool {
-    return shape.arg_count == 5 and
-        shape.self_call_count == 0 and
-        shape.jump_count >= 1 and
-        shape.struct_assign_count == 0;
+    return loopCarriesLeaves(shape, 5) and shape.struct_assign_count == 0;
 }
 
 fn multiTupleWorkerIsGeneric(shape: ProcShape) bool {
@@ -5269,9 +5271,11 @@ test "ARC keeps a loop-invariant record field out of the loop body keep" {
         \\    if i == 0 acc else count_from(state, i - 1, List.append(acc, List.len(state.a)))
         \\
         \\main : U64
-        \\main = List.len(count_from({ a: [1, 2], b: [3, 4] }, 4, []))
+        \\main = List.len(count_from({ a: [1, 2], b: [3, 4] }, 4, [])) + List.len(List.append([], 5.U64))
     ;
 
+    // The second append keeps `List.append` a procedure the loop calls, as
+    // slack versioning expects, rather than a single-use body inlined there.
     for ([_]bool{ false, true }) |promote_loop_appends| {
         var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
             .promote_loop_appends = promote_loop_appends,

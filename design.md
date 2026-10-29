@@ -9244,21 +9244,23 @@ A clone that admits only productive direct inlines (every clone outside
 `.none`'s fusion pass) inlines a direct call only when the copied body pays for
 itself. Three kinds of call always qualify: the checker-stamped iterator
 protocol (`IteratorProcedureId`), a wrapper whose body does less work than its
-call (the definition solved inline analysis uses, shared in `wrapper_body.zig`),
-and a call whose captures the context substituted, which cannot stay residual.
+call (the definition solved inline analysis uses, shared in `wrapper_body.zig`)
+and that lies on no cycle of direct calls, where inlining it would only unroll
+the recursion, and a call whose captures the context substituted, which cannot
+stay residual.
 Any other call qualifies only when inlining lets a known value meet a consumer
 that gains from it:
 
 - a `match` on a known tag, a call of a known callable, or a loop entered with
   a known constructor, reached by a known part of an argument or capture;
 - a part of the result that the callee constructs on every path that returns,
-  where the caller matches, calls, enters a loop with, projects a field or item
-  from, or places into a constructor operand or its own result. A projected
-  result is read without building the aggregate, and a placed one is built in
-  its destination, where box and erased-callable reuse can use its storage.
-  A projected or placed argument gains nothing from inlining, since the
-  call-pattern worker already takes a known argument apart and the caller
-  already built it where it is written.
+  where the caller matches, calls, enters a loop with, or projects a field or
+  item from it. A projected result is read without building the aggregate. A
+  projected argument gains nothing from inlining, since the call-pattern
+  worker already takes a known argument apart. Returning a result, or storing
+  it in a constructor, is not such a use: the callee already builds it where
+  the caller receives it, and a result the caller returns is read by whatever
+  reads the caller's result.
 
 A known argument is one the clone holds as a constructor, callable, or known
 local at the consumed path, or a nested direct call whose callee constructs

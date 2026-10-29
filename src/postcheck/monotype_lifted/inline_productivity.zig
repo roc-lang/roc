@@ -3,12 +3,10 @@
 //! The value-aware clone simplifies a known value in exactly three places: a
 //! `match` on a known tag selects its arm, a call of a known callable inlines
 //! the callable, and a loop entered with a known constructor scalarizes it. A
-//! constructed value also gains where it is read or placed: a field or item
-//! read of a known record or tuple takes the part without building the
-//! aggregate, and a constructor operand or function result that is a known
-//! construction builds it in place, where later stages can write it into its
-//! destination and reuse storage. Inlining a direct call pays for its copied body only when it lets
-//! one of those consumers meet a known value: a known part of an argument or
+//! constructed value also gains where it is read: a field or item read of a
+//! known record or tuple takes the part without building the aggregate.
+//! Inlining a direct call pays for its copied body only when it lets one of
+//! those consumers meet a known value: a known part of an argument or
 //! capture reaches a match, call, or loop in the callee, or the caller
 //! consumes a part of the result that the callee constructs on every path that
 //! returns.
@@ -40,11 +38,6 @@ pub const Consumer = enum {
     /// inlining, so a projection makes an inline productive only when it
     /// reads the call's result.
     project,
-    /// An operand of a tag, record, or tuple constructor, or a function's
-    /// result: a destination the value is built into. A known argument is
-    /// already built where the caller wrote it, so a placement makes an
-    /// inline productive only when it places the call's result.
-    place,
 };
 
 /// The consumers a known argument or capture can meet in a callee.
@@ -265,7 +258,8 @@ pub const FnSummary = struct {
     constructed: []const Read = &.{},
     passes: []const PassThrough = &.{},
     /// The body does less work than a call to it costs (`WrapperBody`), so
-    /// inlining it never grows the program.
+    /// inlining it never grows the program, and it lies on no cycle of direct
+    /// calls, where inlining it would only unroll the recursion.
     wrapper: bool = false,
 };
 
@@ -384,6 +378,7 @@ pub fn analyze(gpa: Allocator, program: *const Ast.Program, bodies: []const ?Ast
 
     try builder.fixpoint(bodies, Builder.demandFn);
     try builder.fixpoint(bodies, Builder.constructedFn);
+    try builder.dropRecursiveWrappers();
     return analysis;
 }
 
@@ -490,6 +485,91 @@ const Builder = struct {
         }
     }
 
+    /// Clear `wrapper` on every function that lies on a cycle of direct
+    /// calls: a strongly connected component of more than one function, or
+    /// one that calls itself. The caller lists are the call graph reversed,
+    /// which has the same components. Tarjan's algorithm, on an explicit
+    /// stack so call chains never become native call depth.
+    fn dropRecursiveWrappers(self: *Builder) Allocator.Error!void {
+        const count = self.callers.len;
+        const unvisited = std.math.maxInt(u32);
+        const order = try self.gpa.alloc(u32, count);
+        defer self.gpa.free(order);
+        const low = try self.gpa.alloc(u32, count);
+        defer self.gpa.free(low);
+        const on_stack = try self.gpa.alloc(bool, count);
+        defer self.gpa.free(on_stack);
+        @memset(order, unvisited);
+        @memset(on_stack, false);
+
+        const Frame = struct { node: u32, next: u32 };
+        var frames: std.ArrayList(Frame) = .empty;
+        defer frames.deinit(self.gpa);
+        var component_stack: std.ArrayList(u32) = .empty;
+        defer component_stack.deinit(self.gpa);
+        var next_order: u32 = 0;
+
+        for (0..count) |root_index| {
+            const root: u32 = @intCast(root_index);
+            if (order[root] != unvisited) continue;
+            order[root] = next_order;
+            low[root] = next_order;
+            next_order += 1;
+            try component_stack.append(self.gpa, root);
+            on_stack[root] = true;
+            try frames.append(self.gpa, .{ .node = root, .next = 0 });
+
+            while (frames.items.len != 0) {
+                const frame = &frames.items[frames.items.len - 1];
+                const node = frame.node;
+                const edges = self.callers[node].items;
+                if (frame.next < edges.len) {
+                    const target: u32 = @backingInt(edges[frame.next]);
+                    frame.next += 1;
+                    if (order[target] == unvisited) {
+                        order[target] = next_order;
+                        low[target] = next_order;
+                        next_order += 1;
+                        try component_stack.append(self.gpa, target);
+                        on_stack[target] = true;
+                        try frames.append(self.gpa, .{ .node = target, .next = 0 });
+                    } else if (on_stack[target]) {
+                        low[node] = @min(low[node], order[target]);
+                    }
+                    continue;
+                }
+
+                _ = frames.pop();
+                if (frames.items.len != 0) {
+                    const parent = frames.items[frames.items.len - 1].node;
+                    low[parent] = @min(low[parent], low[node]);
+                }
+                if (low[node] != order[node]) continue;
+
+                const top = component_stack.items.len;
+                var start = top;
+                while (true) {
+                    start -= 1;
+                    on_stack[component_stack.items[start]] = false;
+                    if (component_stack.items[start] == node) break;
+                }
+                const component = component_stack.items[start..top];
+                const on_cycle = component.len > 1 or self.callsItself(node);
+                if (on_cycle) for (component) |member| {
+                    self.analysis.fns[member].wrapper = false;
+                };
+                component_stack.shrinkRetainingCapacity(start);
+            }
+        }
+    }
+
+    fn callsItself(self: *const Builder, node: u32) bool {
+        for (self.callers[node].items) |caller| {
+            if (@backingInt(caller) == node) return true;
+        }
+        return false;
+    }
+
     // Demand walk
 
     /// Walk one body until its locals' demand stops growing, then fold the
@@ -529,13 +609,12 @@ const Builder = struct {
         return set.view();
     }
 
-    /// Demand on a value the function returns: it is the result, and the
-    /// result is a destination it is placed in.
+    /// Demand on a value the function returns: it is the result, read by
+    /// whatever reads the result at each call. Returning a value is not
+    /// itself a use that gains from knowing it, since a callee that builds
+    /// its result already builds it where the caller receives it.
     fn resultDemand(self: *Builder) Allocator.Error!Demand {
-        return self.demandOf(
-            &.{.{ .path = .root, .consumers = Consumers.initOne(.place) }},
-            &.{.{ .value = .root, .result = .root }},
-        );
+        return self.demandOf(&.{}, &.{.{ .value = .root, .result = .root }});
     }
 
     fn consumedAtRoot(self: *Builder, consumer: Consumer) Allocator.Error!Demand {
@@ -596,7 +675,6 @@ const Builder = struct {
     fn constructorOperand(self: *Builder, demand: Demand, step_: Step) Allocator.Error!Demand {
         var set: DemandSet = .{};
         _ = try set.addAll(self.temp(), try self.project(demand, step_));
-        _ = try set.addRead(self.temp(), .root, Consumers.initOne(.place));
         return set.view();
     }
 
@@ -1323,7 +1401,7 @@ const Builder = struct {
             },
             .join_point => |join| return self.meet(memo.get(join.body).?, memo.get(join.remainder).?),
             .tag => |tag| {
-                var result: Built = .{ .parts = try a.dupe(Read, &.{.{ .path = .root, .consumers = Consumers.initMany(&.{ .match, .loop, .place }) }}) };
+                var result: Built = .{ .parts = try a.dupe(Read, &.{.{ .path = .root, .consumers = Consumers.initMany(&.{ .match, .loop }) }}) };
                 const payloads = program_.exprSpan(tag.payloads);
                 for (0..payloads.len) |index| {
                     const payload = memo.get(GuardedList.at(payloads, index)).?;
@@ -1332,7 +1410,7 @@ const Builder = struct {
                 return result;
             },
             .record => |span| {
-                var result: Built = .{ .parts = try a.dupe(Read, &.{.{ .path = .root, .consumers = Consumers.initMany(&.{ .loop, .project, .place }) }}) };
+                var result: Built = .{ .parts = try a.dupe(Read, &.{.{ .path = .root, .consumers = Consumers.initMany(&.{ .loop, .project }) }}) };
                 const fields = program_.fieldExprSpan(span);
                 for (0..fields.len) |index| {
                     const field = GuardedList.at(fields, index);
@@ -1341,7 +1419,7 @@ const Builder = struct {
                 return result;
             },
             .record_update => |update| {
-                var result: Built = .{ .parts = try a.dupe(Read, &.{.{ .path = .root, .consumers = Consumers.initMany(&.{ .loop, .project, .place }) }}) };
+                var result: Built = .{ .parts = try a.dupe(Read, &.{.{ .path = .root, .consumers = Consumers.initMany(&.{ .loop, .project }) }}) };
                 const fields = program_.fieldExprSpan(update.fields);
                 for (0..fields.len) |index| {
                     const field = GuardedList.at(fields, index);
@@ -1350,7 +1428,7 @@ const Builder = struct {
                 return result;
             },
             .tuple => |span| {
-                var result: Built = .{ .parts = try a.dupe(Read, &.{.{ .path = .root, .consumers = Consumers.initMany(&.{ .loop, .project, .place }) }}) };
+                var result: Built = .{ .parts = try a.dupe(Read, &.{.{ .path = .root, .consumers = Consumers.initMany(&.{ .loop, .project }) }}) };
                 const items = program_.exprSpan(span);
                 for (0..items.len) |index| {
                     result = try self.builtWith(result, try self.builtUnder(memo.get(GuardedList.at(items, index)).?, &.{Step.item(@intCast(index))}));
@@ -1364,7 +1442,7 @@ const Builder = struct {
                 return self.builtBelow(memo.get(access.receiver).?, steps.items);
             },
             .tuple_access => |access| return self.builtBelow(memo.get(access.tuple).?, &.{Step.item(access.elem_index)}),
-            .fn_ref => return .{ .parts = try a.dupe(Read, &.{.{ .path = .root, .consumers = Consumers.initMany(&.{ .call, .place }) }}) },
+            .fn_ref => return .{ .parts = try a.dupe(Read, &.{.{ .path = .root, .consumers = Consumers.initOne(.call) }}) },
             .call_proc => |call| {
                 const callee = Ast.localDirectCallee(call) orelse return .{};
                 const callee_summary = self.analysis.summary(callee);
