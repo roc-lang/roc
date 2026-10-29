@@ -712,7 +712,9 @@ test "range prove keeps a loop test whose body allocates many value nodes" {
     const next = try store.addLocal(.{ .layout_idx = .u64 });
     const start = try store.addLocal(.{ .layout_idx = .u64 });
     const filler = try store.addLocal(.{ .layout_idx = .u64 });
-    const head: LIR.JoinPointId = @fromBackingInt(0);
+    var fixture_join_ids = BodyClone.JoinParamIndex.init(testing.allocator);
+    defer fixture_join_ids.deinit();
+    const head = fixture_join_ids.freshJoinPoint();
 
     const back_edge = try store.addCFStmt(.{ .jump = .{ .target = head } }, .test_fixture);
     const rebind = try store.addCFStmt(.{ .set_local = .{ .target = i, .value = next, .mode = .initialize_join_param, .next = back_edge } }, .test_fixture);
