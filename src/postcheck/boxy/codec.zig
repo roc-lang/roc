@@ -1120,7 +1120,10 @@ const Gen = struct {
                 };
                 const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
                 const hidden = switch (node.instantiation) {
-                    .alias => invariant("generated codec calls of targets reached through a procedure alias are not yet lowered by Boxy"),
+                    .alias => blk: {
+                        if (b.module != self.fam().module) invariant("a generated codec piece is lowered outside its family's module");
+                        break :blk try b.aliasTargetHidden(node, callee);
+                    },
                     .derived_from_callable => |callable_ty| try b.relatedHiddenArgs(callee, callable_ty),
                     .callable, .monomorphic => try b.hiddenArgsAt(callee, subst, nested, callable.fn_ty),
                 };

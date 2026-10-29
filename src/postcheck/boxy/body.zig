@@ -256,6 +256,9 @@ pub const Builder = struct {
     /// start in `alias_scopes`. Its lookup reaches no scope outside them.
     foreign_scopes: ?usize = null,
     type_descs: std.AutoHashMapUnmanaged(TypeId, LocalId) = .empty,
+    /// The locals the entry chain defines, which every statement of the
+    /// body can read.
+    entry_locals: std.AutoHashMapUnmanaged(LocalId, void) = .empty,
     /// The recursive components whose members' descriptors this body has
     /// begun composing.
     opened_components: std.AutoHashMapUnmanaged(u32, void) = .empty,
@@ -316,6 +319,7 @@ pub const Builder = struct {
         self.recursive_slots.deinit(self.allocator);
         self.declared_captures.deinit(self.allocator);
         self.type_descs.deinit(self.allocator);
+        self.entry_locals.deinit(self.allocator);
         self.opened_components.deinit(self.allocator);
         self.open_members.deinit(self.allocator);
         self.recursive_boxes.deinit(self.allocator);
@@ -474,11 +478,39 @@ pub const Builder = struct {
     }
 
     pub fn emitEntry(self: *Builder, stmt: LIR.CFStmt) Allocator.Error!void {
+        if (definedLocal(stmt)) |target| try self.entry_locals.put(self.allocator, target, {});
         const next = try self.newHole();
         var linked = stmt;
         setNext(&linked, next);
         try self.fill(self.entry_hole, linked, .scaffold);
         self.entry_hole = next;
+    }
+
+    /// The local a straight-line statement defines, if any.
+    fn definedLocal(stmt: LIR.CFStmt) ?LocalId {
+        return switch (stmt) {
+            inline else => |payload| blk: {
+                const Payload = @TypeOf(payload);
+                if (@typeInfo(Payload) != .@"struct" or !@hasField(Payload, "target")) break :blk null;
+                if (@TypeOf(payload.target) != LocalId) break :blk null;
+                break :blk payload.target;
+            },
+        };
+    }
+
+    /// Run `emit` (a function of `self` emitting straight-line statements)
+    /// with its statements going to the entry chain, and record the locals
+    /// they define as entry locals.
+    fn emitIntoEntry(self: *Builder, comptime emit: anytype, args: anytype) Allocator.Error!LocalId {
+        const saved_hole = self.hole;
+        const saved_last = self.last_stmt;
+        self.hole = self.entry_hole;
+        const result = try @call(.auto, emit, .{self} ++ args);
+        self.entry_hole = self.hole orelse invariant("an entry-chain emission diverged");
+        self.hole = saved_hole;
+        self.last_stmt = saved_last;
+        try self.entry_locals.put(self.allocator, result, {});
+        return result;
     }
 
     pub fn setNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
@@ -603,9 +635,34 @@ pub const Builder = struct {
         }
         if (info.merge) |merge| {
             const m = self.merges.items[merge];
-            for (m.binders, m.params) |binder, param| {
+            // The parameters take their values at once: a value that is one
+            // of the parameters (a loop's carried value moving to another
+            // carried position) or a view, which may point into one, is
+            // read into a local of its own before any parameter is written.
+            const sources = try self.allocator.alloc(LocalId, m.params.len);
+            defer self.allocator.free(sources);
+            var params: std.AutoHashMapUnmanaged(LocalId, void) = .empty;
+            defer params.deinit(self.allocator);
+            for (m.params) |param| try params.put(self.allocator, param, {});
+            for (m.binders, m.params, sources) |binder, param, *source| {
                 const current = self.binders.get(binder) orelse invariant("a merged binder lost its value");
-                try self.emitLinear(.{ .set_local = .{ .target = param, .value = current, .mode = .initialize_join_param, .next = undefined } });
+                source.* = current;
+                if (current == param) continue;
+                const dyn = self.store.localDyn(current);
+                if (!params.contains(current) and (dyn == null or dyn.?.storage != .view)) continue;
+                if (dyn) |dyn_info| {
+                    const staged = try self.addLocal(.{ .layout_idx = self.store.getLocal(current).layout_idx, .dyn = .{ .desc = dyn_info.desc, .storage = .frame } });
+                    self.has_dynamic_frame = true;
+                    try self.emitDyn(staged, .{ .copy = .{ .src = current, .desc = dyn_info.desc } });
+                    source.* = staged;
+                } else {
+                    const staged = try self.closedLocal(self.store.getLocal(current).layout_idx);
+                    try self.emitLinear(.{ .assign_ref = .{ .target = staged, .op = LIR.RefOp.local(current), .next = undefined } });
+                    source.* = staged;
+                }
+            }
+            for (m.params, sources) |param, source| {
+                try self.emitLinear(.{ .set_local = .{ .target = param, .value = source, .mode = .initialize_join_param, .next = undefined } });
             }
         }
         try self.emitTerminal(.{ .jump = .{ .target = id } });
@@ -987,7 +1044,8 @@ pub const Builder = struct {
                 const root = self.view.view.compile_time_roots.root(wrapper.root);
                 switch (root.kind) {
                     .expect, .repl_expr, .callable_binding, .constant, .hoisted_constant => {},
-                    else => invariantFmt("{s} entry wrappers are not yet lowered by Boxy", .{@tagName(root.kind)}),
+                    .hoisted_validation => invariant("a validation root's entry wrapper produces no value for a runtime read to reach"),
+                    .numeral_conversion, .quote_conversion => invariant("a literal conversion root's value is read from its literal table, never by calling its entry wrapper"),
                 }
                 if (params.len != 0) invariant("an entry wrapper has parameters");
                 try self.tasks.append(self.allocator, .ret);
@@ -1202,9 +1260,10 @@ pub const Builder = struct {
             capture_values = try self.dynamicCaptures(worker, capture_ptr);
         } else if (capture_count != 0) {
             const capture_layout = try self.captureLayout(worker.capture_types, outer_descs, captured_dicts);
-            const record = try self.closedLocal(capture_layout);
-            try self.emitEntry(.{ .assign_low_level = .{
-                .target = record,
+            // A record of zero-sized captures has no storage to read.
+            const record: ?LocalId = if (capture_layout == .zst) null else try self.closedLocal(capture_layout);
+            if (record) |loaded| try self.emitEntry(.{ .assign_low_level = .{
+                .target = loaded,
                 .op = .erased_capture_load,
                 .rc_effect = try self.store.addRcEffect(LIR.LowLevel.erased_capture_load.rcEffect()),
                 .args = try self.store.addLocalSpan(&.{capture_ptr}),
@@ -1219,7 +1278,12 @@ pub const Builder = struct {
                 else
                     try self.erasedLayout();
                 slot.* = try self.closedLocal(field_layout);
-                try self.emitEntry(.{ .assign_ref = .{ .target = slot.*, .op = LIR.RefOp.field(record, @intCast(index)), .next = undefined } });
+                if (record) |loaded| {
+                    try self.emitEntry(.{ .assign_ref = .{ .target = slot.*, .op = LIR.RefOp.field(loaded, @intCast(index)), .next = undefined } });
+                } else {
+                    if (field_layout != .zst) invariant("a zero-sized capture record holds a capture with storage");
+                    try self.emitEntry(.{ .assign_struct = .{ .target = slot.*, .fields = LIR.LocalSpan.empty(), .next = undefined } });
+                }
             }
         }
         if (capture_count != 0) {
@@ -1530,7 +1594,18 @@ pub const Builder = struct {
         const fields = try self.allocator.alloc(layout.StructField, field_layouts.len);
         defer self.allocator.free(fields);
         for (fields, field_layouts, 0..) |*field, field_layout, index| field.* = .{ .index = @intCast(index), .layout = field_layout };
-        const record = try self.closedLocal(try self.program.result.layouts.putStructFields(fields));
+        const record_layout = try self.program.result.layouts.putStructFields(fields);
+        const values = try self.allocator.alloc(LocalId, field_layouts.len);
+        if (record_layout == .zst) {
+            // Zero-sized captures are stored nowhere; each is built empty.
+            for (values, field_layouts) |*value, field_layout| {
+                if (field_layout != .zst) invariant("a zero-sized capture record holds a capture with storage");
+                value.* = try self.closedLocal(.zst);
+                try self.emitEntry(.{ .assign_struct = .{ .target = value.*, .fields = LIR.LocalSpan.empty(), .next = undefined } });
+            }
+            return values;
+        }
+        const record = try self.closedLocal(record_layout);
         try self.emitEntry(.{ .assign_low_level = .{
             .target = record,
             .op = .erased_capture_load,
@@ -1538,7 +1613,6 @@ pub const Builder = struct {
             .args = try self.store.addLocalSpan(&.{capture_ptr}),
             .next = undefined,
         } });
-        const values = try self.allocator.alloc(LocalId, field_layouts.len);
         for (values, field_layouts, 0..) |*value, field_layout, index| {
             value.* = try self.closedLocal(field_layout);
             try self.emitEntry(.{ .assign_ref = .{ .target = value.*, .op = LIR.RefOp.field(record, @intCast(index)), .next = undefined } });
@@ -2139,7 +2213,8 @@ pub const Builder = struct {
                 const message = try self.closedLocal(.str);
                 try self.emitDyn(message, .{ .inspect = .{ .value = value, .desc = try self.descOf(ty) } });
                 try self.emitLinear(.{ .debug = .{ .message = message, .next = undefined } });
-                try self.pushValue(value);
+                // `dbg` evaluates to `{}`.
+                try self.pushValue(try self.unitValue());
             },
             .finish_erased_call => |call| try self.finishErasedCall(call.fn_ty, call.arg_count, call.result),
             .finish_tuple => |expr| try self.finishTuple(expr),
@@ -2427,7 +2502,33 @@ pub const Builder = struct {
                 try self.push(.{ .finish_low_level = .{ .op = .bool_not, .arg_count = 1, .result = try self.exprType(expr_id) } });
                 try self.push(.{ .expr = operand });
             },
-            else => invariantFmt("checked expression {s} is not yet lowered by Boxy", .{@tagName(expr.data)}),
+            .structural_hash => |hash| {
+                try self.push(.{ .finish_hash = .{ .value = try self.exprType(hash.value), .result = try self.exprType(expr_id) } });
+                try self.push(.{ .expr = hash.hasher });
+                try self.push(.{ .expr = hash.value });
+            },
+            .bytes_literal => |literal| {
+                const bytes = self.bodies().stringLiteral(literal);
+                const local = try self.localOf(try self.exprType(expr_id), .frame);
+                const backing = try self.store.insertStringAligned(bytes, 16);
+                try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = .{ .bytes_literal = .{
+                    .bytes = .{ .backing = backing, .offset = 0, .len = @intCast(bytes.len) },
+                    .len = @intCast(bytes.len),
+                } }, .next = undefined } });
+                try self.pushValue(local);
+            },
+            .ellipsis => try self.crashValue("not implemented", try self.exprType(expr_id)),
+            .break_ => {
+                if (self.loops.items.len == 0) invariant("a break outside every loop reached Boxy lowering");
+                const loop = &self.loops.items[self.loops.items.len - 1];
+                loop.reached = true;
+                try self.emitJump(loop.join, null);
+                try self.push(.{ .unreachable_value = try self.exprType(expr_id) });
+            },
+            .pending => invariant("a pending checked expression reached Boxy lowering, which reads only completed checking"),
+            .unary_minus => invariant("a unary minus reached Boxy lowering without its checked dispatch"),
+            .anno_only => invariant("an annotation-only declaration is read, which resolves to what it requests instead"),
+            .hosted_lambda => invariant("a hosted lambda is a hosted template's body root, never a nested expression"),
         }
     }
 
@@ -2442,7 +2543,6 @@ pub const Builder = struct {
             },
             .match_ => |match| for (match.branches) |branch| try self.destination_types.put(self.allocator, branch.value, destination),
             .nominal => |nominal| try self.destination_types.put(self.allocator, nominal.backing_expr, try self.structuralType(destination)),
-            .dbg => |inner| try self.destination_types.put(self.allocator, inner, destination),
             // A tag's payloads are reached positions of its destination's
             // row (design.md "Row Coercion Primitive").
             .tag => |tag| {
@@ -3191,10 +3291,23 @@ pub const Builder = struct {
         for (declaring.dict_scopes) |scope| declaring_dicts += scope.len;
         const descs = self.var_descs[0..declaring.scheme_vars.len];
         const dicts = self.dict_locals[self.dict_locals.len - declaring_dicts ..];
-        const closure = if (try self.allClosed(target_worker.capture_types))
-            try self.packClosure(target, values, target_worker.capture_types, descs, dicts)
+        // A value built from entry locals only is built once, in the entry
+        // chain, for every reference; one reading a value the body computes
+        // is built where it is referenced.
+        const at_entry = for (values) |value| {
+            if (!self.entry_locals.contains(value)) break false;
+        } else true;
+        const all_closed = try self.allClosed(target_worker.capture_types);
+        if (!at_entry) {
+            return if (all_closed)
+                try self.packClosure(target, values, target_worker.capture_types, descs, dicts)
+            else
+                try self.packDynamicClosure(target, values, target_worker.capture_types, descs, dicts);
+        }
+        const closure = if (all_closed)
+            try self.emitIntoEntry(packClosure, .{ target, values, target_worker.capture_types, descs, dicts })
         else
-            try self.packDynamicClosure(target, values, target_worker.capture_types, descs, dicts);
+            try self.emitIntoEntry(packDynamicClosure, .{ target, values, target_worker.capture_types, descs, dicts });
         try self.binders.put(self.allocator, local.binder, closure);
         return closure;
     }
@@ -4846,7 +4959,7 @@ pub const Builder = struct {
                     try self.pushOperand(operands[index], operand_types[index]);
                 }
             },
-            else => invariantFmt("dispatch resolution {s} is not yet lowered by Boxy", .{@tagName(call_plan.resolution)}),
+            .direct_pending => invariant("a checked artifact holds a pending dispatch resolution"),
         }
     }
 
@@ -4861,6 +4974,29 @@ pub const Builder = struct {
         var open = !store.isClosed(result_ty);
         for (arg_types) |arg_ty| open = open or !store.isClosed(arg_ty);
         if (op == .list_map_can_reuse) return try self.pushValue(try self.listMapCanReuse(args, arg_types, result_ty));
+        if (op == .list_prefetched) {
+            // The result is the list itself, so it is the argument; the
+            // hint is a separate statement that borrows it.
+            if (args.len != 2) invariant("list_prefetched reached Boxy lowering with the wrong arity");
+            const hint = try self.closedLocal(.zst);
+            if (open) {
+                const elem = switch (store.get(arg_types[0])) {
+                    .list => |elem| elem,
+                    else => invariant("list_prefetched's first operand is not a List"),
+                };
+                try self.emitLinear(.{ .assign_low_level = .{
+                    .target = hint,
+                    .op = .list_prefetch,
+                    .rc_effect = try self.store.addRcEffect(LIR.LowLevel.list_prefetch.rcEffect()),
+                    .extra = try self.store.addStmtRow(LIR.LowLevelExtra, .{ .dyn_elem_desc = true }),
+                    .args = try self.store.addLocalSpan(&.{ args[0], args[1], try self.descOf(elem) }),
+                    .next = undefined,
+                } });
+            } else {
+                try self.emitLowLevel(hint, .list_prefetch, args);
+            }
+            return try self.pushValue(args[0]);
+        }
         if (op == .crash) {
             // A crash ends its block; the result stands for the value no
             // execution reaches.
@@ -5546,6 +5682,11 @@ pub const Builder = struct {
         for (match.branches, 0..) |branch, index| {
             const patterns = branch.patternsSlice(self.bodies());
             try state.alternatives.put(arena, branch.value, @intCast(patterns.len));
+            for (patterns) |alternative| {
+                for (alternative.binderRemapsSlice(self.bodies())) |remap| {
+                    try state.representatives.put(arena, remap.candidate_binder, remap.representative_binder);
+                }
+            }
             for (patterns) |alternative| try rows.append(arena, .{
                 .pat = alternative.pattern,
                 .guard = branch.guard,
@@ -5829,7 +5970,39 @@ pub const Builder = struct {
                         try self.branchOrMiss(matches, miss);
                     }
                 },
-                else => invariantFmt("{s} patterns are not yet lowered by Boxy", .{@tagName(pattern.data)}),
+                .str_interpolation => |str| {
+                    // The match binds each captured span as a `Str` view of
+                    // the matched string.
+                    const str_ty = try self.program.store.primitive(.str);
+                    const steps = try self.allocator.alloc(LIR.StrMatchStep, str.steps.len);
+                    defer self.allocator.free(steps);
+                    for (steps, str.steps) |*out, str_step| {
+                        const delimiter = self.bodies().stringLiteral(str_step.delimiter);
+                        const capture: LIR.StrMatchCapture = if (str_step.capture) |capture_pattern| blk: {
+                            const local = try self.closedLocal(.str);
+                            try pending.append(self.allocator, .{ .pattern = capture_pattern, .value = local, .ty = str_ty });
+                            break :blk .{ .view = local };
+                        } else .discard;
+                        out.* = .{ .capture = capture, .delimiter = .{ .backing = try self.store.insertString(delimiter), .offset = 0, .len = @intCast(delimiter.len) } };
+                    }
+                    const prefix = self.bodies().stringLiteral(str.prefix);
+                    const then = try self.newHole();
+                    try self.emitTerminal(.{ .str_match = .{
+                        .source = item.value,
+                        .data = try self.store.addStmtRow(LIR.StrMatchData, .{
+                            .prefix = .{ .backing = try self.store.insertString(prefix), .offset = 0, .len = @intCast(prefix.len) },
+                            .steps = try self.store.addStrMatchSteps(steps),
+                            .end = switch (str.end) {
+                                .exact => .exact,
+                                .tail => .tail,
+                            },
+                        }),
+                        .on_match = then,
+                        .on_miss = miss,
+                    } });
+                    self.hole = then;
+                },
+                .runtime_error, .pending => invariant("an erroneous pattern reached Boxy pattern lowering, which code holding one never reaches"),
             }
         }
     }
@@ -6108,7 +6281,7 @@ pub const Builder = struct {
         const ty = try self.structuralType(nominal_ty);
         const union_ty = switch (store.get(ty)) {
             .tag_union => |union_ty| union_ty,
-            else => invariantFmt("tag patterns on a dynamic {s} are not yet lowered by Boxy", .{@tagName(store.get(ty))}),
+            else => invariant("a tag pattern's type is not a tag union"),
         };
         const desc = try self.descOf(ty);
         const name_local = try self.nameDesc(name);
@@ -6230,7 +6403,14 @@ pub const Builder = struct {
             },
             .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias => {},
             .promoted_proc => {},
-            else => invariantFmt("checked statement {s} is not yet lowered by Boxy", .{@tagName(stmt.data)}),
+            .return_ => |ret| {
+                // The enclosing function returns the value; nothing after the
+                // statement is reached.
+                try self.push(.ret);
+                try self.destination_types.put(self.allocator, ret.expr, self.currentWorker().ret);
+                try self.push(.{ .expr = ret.expr });
+            },
+            .pending => invariant("a pending checked statement reached Boxy lowering, which reads only completed checking"),
         }
     }
 
@@ -6561,7 +6741,8 @@ pub const Builder = struct {
                 try self.emitDispatchCrash(if (resolution == .checked_error) .checked_error else .unreachable_value);
                 return try self.localOf(result_ty, .frame);
             },
-            else => invariantFmt("iterator dispatch resolution {s} is not yet lowered by Boxy", .{@tagName(resolution)}),
+            .structural => invariant("an iterator dispatch resolved to a structural derivation, which no iterator method has"),
+            .direct_pending => invariant("a checked artifact holds a pending dispatch resolution"),
         }
     }
 

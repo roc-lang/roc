@@ -48,6 +48,9 @@ pub const State = struct {
     occ_types: std.AutoHashMapUnmanaged(LocalId, TypeId) = .empty,
     /// The local each pattern binder is bound to.
     binder_locals: std.AutoHashMapUnmanaged(checked.PatternBinderId, LocalId) = .empty,
+    /// The representative binder of each later alternative's binder: a
+    /// branch's alternatives bind one local per name, which its body reads.
+    representatives: std.AutoHashMapUnmanaged(checked.PatternBinderId, checked.PatternBinderId) = .empty,
     /// How many of the match's branch patterns each body belongs to.
     alternatives: std.AutoHashMapUnmanaged(CheckedExprId, u32) = .empty,
     /// The join holding the one lowering of a body several patterns share.
@@ -158,8 +161,13 @@ pub const Ctx = struct {
     /// The local `binder` is bound to, made on first use.
     fn binderLocal(self: Ctx, binder: checked.PatternBinderId, pat: CheckedPatternId) Allocator.Error!void {
         if (self.state.binder_locals.contains(binder)) return;
-        const ty = try self.b.patternType(pat);
-        const local = try self.b.localOf(ty, .frame);
+        const representative = self.state.representatives.get(binder) orelse binder;
+        const local = self.state.binder_locals.get(representative) orelse blk: {
+            const created = try self.b.localOf(try self.b.patternType(pat), .frame);
+            try self.state.binder_locals.put(self.arena(), representative, created);
+            try self.b.binders.put(self.b.allocator, representative, created);
+            break :blk created;
+        };
         try self.state.binder_locals.put(self.arena(), binder, local);
         try self.b.binders.put(self.b.allocator, binder, local);
     }
