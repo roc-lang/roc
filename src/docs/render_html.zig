@@ -1553,6 +1553,18 @@ fn renderLangRefSidebar(
 
 fn renderSearchEntries(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) (Allocator.Error || error{WriteFailed})!void {
     for (ctx.package_docs.modules) |mod| {
+        // A type module's own type is displayed at the page top, outside the entry tree.
+        if (mod.kind == .type_module) {
+            try w.writeAll("            <li class=\"hidden\" data-search-kind=\"type\"><a class=\"type-ahead-link\" href=\"");
+            try w.writeAll(base);
+            if (!ctx.single_module_at_root) {
+                try reporting.writeEscapedHtml(w, mod.name);
+                try w.writeAll("/");
+            }
+            try w.writeAll("\"><span class=\"type-ahead-def-name\">");
+            try reporting.writeEscapedHtml(w, mod.name);
+            try w.writeAll("</span></a></li>\n");
+        }
         const entry_tree = try buildEntryTree(gpa, mod.entries, mod.name, mod.builtin_derived);
         defer entry_tree.deinit(gpa);
         try renderSearchTree(w, ctx, gpa, mod.name, entry_tree.root, base);
@@ -3314,6 +3326,9 @@ test "search index preserves API anchors for packages, single modules, and built
             const row_link = try std.fmt.allocPrint(gpa, "href=\"../../{s}#{s}\"", .{ prefix, anchor });
             defer gpa.free(row_link);
             try std.testing.expect(std.mem.find(u8, rows.written(), row_link) != null);
+            const type_row = try std.fmt.allocPrint(gpa, "data-search-kind=\"type\"><a class=\"type-ahead-link\" href=\"../../{s}\"><span class=\"type-ahead-def-name\">Reader</span>", .{prefix});
+            defer gpa.free(type_row);
+            try std.testing.expect(std.mem.find(u8, rows.written(), type_row) != null);
             try std.testing.expect(std.mem.find(u8, rows.written(), "data-search-kind=\"type\"") != null);
             try std.testing.expect(std.mem.find(u8, rows.written(), "data-search-kind=\"value\"") != null);
         }
