@@ -1663,7 +1663,13 @@ fn lowerCheckedRootWithViews(
     const target = lowerToLirTarget(target_usize, options);
     var lowered = switch (target.specialization_strategy) {
         .lss => try lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, modules, roots, target),
-        .boxy => try CompileTimeFinalization.lowerBoxyRuntime(allocator, modules, roots, target, null),
+        // A `.boxy` runtime program reads the values compile-time evaluation
+        // converts its literals to, as a compilation's runtime consumer does.
+        .boxy => blk: {
+            var session = try CompileTimeFinalization.finalizeProgram(allocator, &.{.{ .module = root_module, .problem_store = null }}, modules, roots, roots, target, .{});
+            defer session.deinit();
+            break :blk try session.takeRuntime(allocator, roots, target);
+        },
     };
     defer lowered.deinit();
 

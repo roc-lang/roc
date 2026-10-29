@@ -13878,6 +13878,21 @@ spells. A literal whose type is closed in its body selects its candidate
 statically. Nominal descriptors carry a name of their own declaration, so the
 structural comparison never takes one nominal for another.
 
+An interpolation converts the same way. Its conversion produces the assembler
+its values are passed to, and compile-time evaluation converts it at every
+type the program reaches it at, so its table's candidates are assembler
+values: the selected candidate's stored function value is restored and
+called with the interpolated values. There is no builtin rule for an
+interpolation: some candidate always describes its type, so with one
+candidate it is that candidate and otherwise the last candidate is the one no
+earlier candidate is. `from_interpolation` never runs in a `.boxy` runtime
+program.
+
+An expression compile-time evaluation hoisted and stored is read from its
+stored value wherever it occurs, as `.lss` reads it, except in the entry
+wrapper that computes it, when its evaluation failed (it runs in place), and
+for a guarded binding's right-hand side.
+
 A value whose type is closed inside a generic body is an ordinary local with
 an ordinary layout, lowered with the same statements `.lss` emits. The
 dynamic statements appear only where a type variable is involved, so a generic
@@ -14062,11 +14077,8 @@ LIR interpreter and the dev backend, and requires all four executions to agree
 on the inspect string or crash message, the `dbg` transcript, and the
 expect-failure transcript. An execution a case cannot run (a backend the case
 skips, a backend the host lacks) is counted and reported per reason, never
-silently skipped. An eval case whose `.boxy` executions do not yet agree is
-listed in `strategy_differential_gaps.zig` with the failure it shows and a
-reason; the harness counts these per reason, and fails on any unlisted
-failure, on a listed case that now agrees, and on an entry naming no case, so
-the list only shrinks. The harness's own corpus builds its values from a seed
+silently skipped. Any case whose executions disagree, or whose compilation
+or execution dies, fails the run. The harness's own corpus builds its values from a seed
 read after a `dbg` statement, which no compile-time evaluation performs, and
 requires each case to report that `dbg` at runtime, so each strategy's
 runtime rendering, equality, hashing, and matching run rather than a
