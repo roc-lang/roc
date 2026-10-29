@@ -43,7 +43,7 @@ fn variantNamed(desc: *const TypeDesc, name: *const Name, ops: *RocOps) struct {
     const union_desc = backing(desc);
     if (union_desc.kind != .tag_union) invariant(ops, "a tag of a descriptor that is not a tag union");
     for (union_desc.variants()) |*variant| {
-        if (variant.name.id == name.id) return .{ .union_desc = union_desc, .variant = variant };
+        if (variant.name.eql(name)) return .{ .union_desc = union_desc, .variant = variant };
     }
     invariant(ops, "a tag that is not in its union's descriptor");
 }
@@ -101,7 +101,7 @@ pub fn fieldAddrNamed(desc: *const TypeDesc, base: [*]u8, name: *const Name, ops
     const record = recordOf(desc, ops);
     for (record.fields()) |*field| {
         const field_name = field.name orelse continue;
-        if (field_name.id == name.id) return componentAddr(field.desc, base + field.offset);
+        if (field_name.eql(name)) return componentAddr(field.desc, base + field.offset);
     }
     invariant(ops, "a field name that is not in its record's descriptor");
 }
@@ -178,14 +178,14 @@ pub fn updateRecord(base_desc: *const TypeDesc, base: [*]u8, desc: *const TypeDe
         if (field.is_padding != 0) continue;
         const name = field.name orelse invariant(ops, "an updated record has an unnamed field");
         const updated = for (names, values) |candidate, value| {
-            if (candidate.id == name.id) break value;
+            if (candidate.eql(name)) break value;
         } else null;
         if (updated) |value| {
             writeComponent(field.desc, dst + field.offset, value, ops);
             continue;
         }
         const source = for (base_record.fields()) |*candidate| {
-            if (candidate.name != null and candidate.name.?.id == name.id) break candidate;
+            if (candidate.name != null and candidate.name.?.eql(name)) break candidate;
         } else invariant(ops, "an updated record's field is absent from its base");
         @memcpy(dst[field.offset..][0..field.desc.size], base[source.offset..][0..field.desc.size]);
         walk.incref(field.desc, dst + field.offset, 1, ops);
@@ -317,7 +317,7 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
                     if (to_field.is_padding != 0) continue;
                     // Fields match by name, tuple elements by position.
                     const from_field: ?*const Field = if (t.kind == .tuple) f.fieldBySemanticIndex(to_field.field_index) else for (f.fields()) |*candidate| {
-                        if (candidate.name != null and candidate.name.?.id == to_field.name.?.id) break candidate;
+                        if (candidate.name != null and candidate.name.?.eql(to_field.name.?)) break candidate;
                     } else null;
                     if (from_field) |source| {
                         stack.push(.{ .from = source.desc, .to = to_field.desc, .src = work.src + source.offset, .dst = work.dst + to_field.offset }, ops);
@@ -376,7 +376,7 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
 fn targetVariant(to: *const TypeDesc, source: *const Variant, ops: *RocOps) *const Variant {
     var found: ?*const Variant = null;
     for (to.variants()) |*candidate| {
-        if (candidate.name.id != source.name.id or candidate.payload_count != source.payload_count) continue;
+        if (!candidate.name.eql(source.name) or candidate.payload_count != source.payload_count) continue;
         if (found != null) invariant(ops, "a re-tagged variant matches two destination variants");
         found = candidate;
     }

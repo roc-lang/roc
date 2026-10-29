@@ -181,6 +181,10 @@ pub const TargetConfig = struct {
     /// Monotype records what each one reads of compile-time evaluation
     /// (`SpecComptimeReads`).
     spec_comptime_reads: bool = false,
+    /// For `.boxy`: the module whose object this lowering emits, with every
+    /// other module's worker an imported symbol (design.md "Per-Module
+    /// Output"); null lowers everything the roots reach as one program.
+    boxy_unit: ?postcheck.Boxy.Lower.ModuleUnit = null,
     /// The compilation session evaluates the program's literal roots.
     literal_roots: bool = false,
     /// With `literal_roots`, the literal values an earlier compilation of the
@@ -2070,6 +2074,7 @@ fn finishLoweredOutput(
     var arc_roots = std.ArrayList(LIR.LirProcSpecId).empty;
     defer arc_roots.deinit(allocator);
     try arc_roots.appendSlice(allocator, lowered.lir_result.root_procs.items);
+    try arc_roots.appendSlice(allocator, lowered.lir_result.exported_procs.items);
     if (frozen.*) |data| {
         var seen = try allocator.alloc(bool, lowered.lir_result.store.procSpecCount());
         defer allocator.free(seen);
@@ -2178,6 +2183,7 @@ pub const PreparedBoxy = struct {
             .list_in_place_map = target.list_in_place_map,
             .host_boundary_digests = target.host_boundary_digests,
             .literal_values = self.literal_values,
+            .unit = if (target.boxy_unit) |unit| .{ .module = unit } else .program,
         });
         boxy_timing_scope.end();
         var lowered: struct {

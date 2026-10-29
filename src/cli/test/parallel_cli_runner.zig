@@ -9162,7 +9162,7 @@ const PackStoreFiles = struct {
             if (entry.state != .published) continue;
             switch (entry.family) {
                 .local_pack, .package_pack, .optimized_pack => {},
-                .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .local_discovery, .package_discovery, .program_output, .scratch => continue,
+                .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .local_discovery, .package_discovery, .program_output, .scratch, .boxy_object => continue,
             }
             try result.families.append(allocator, entry.family);
             const path = try allocator.dupe(u8, &std.fmt.bytesToHex(entry.key, .lower));

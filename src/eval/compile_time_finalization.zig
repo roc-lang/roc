@@ -641,6 +641,13 @@ pub const ProgramSession = struct {
         self.* = undefined;
     }
 
+    /// For a `.boxy` runtime consumer: the values evaluation converted the
+    /// program's instance-dependent literals to, which each module's unit
+    /// lowering reads (design.md "Literal Tables").
+    pub fn boxyLiteralValues(self: *const ProgramSession) ?*const lir.CheckedPipeline.BoxyLiteralValues {
+        return self.boxy_literals;
+    }
+
     /// The compile-time reads of the specializations compile-time
     /// evaluation lowered: its own, or, while a runtime consumer is still to
     /// continue the same Solved program, that program's.

@@ -1829,9 +1829,11 @@ pub const MonoLlvmCodeGen = struct {
         const fn_ty = builder.fnType(.void, params, .normal) catch return error.OutOfMemory;
         const name = try self.procFunctionName(builder, proc_id, proc);
         const func = builder.addFunction(fn_ty, name, .default) catch return error.OutOfMemory;
-        const externally_referenced = self.procNeedsExternalLinkage(proc_id);
+        // A procedure another object of the link defines is a declaration;
+        // one this object defines for other objects is a global definition.
+        const externally_referenced = self.procNeedsExternalLinkage(proc_id) or proc.linked or proc.exported;
         func.setLinkage(if (externally_referenced) .external else .internal, builder);
-        if (externally_referenced and self.target.os.tag == .windows) {
+        if (externally_referenced and !proc.linked and self.target.os.tag == .windows) {
             func.ptrConst(builder).global.setDllStorageClass(.dllexport, builder);
         }
         var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
@@ -1891,7 +1893,7 @@ pub const MonoLlvmCodeGen = struct {
     /// function. Erased callables keep the public erased ABI, and hosted
     /// procedures have no body of their own.
     fn fastAbiEligible(proc: LirProcSpec) bool {
-        return proc.abi == .roc and proc.hosted == null and proc.body != null;
+        return proc.abi == .roc and proc.hosted == null and (proc.body != null or proc.linked);
     }
 
     /// The result layout a register-passing function returns: none for a
@@ -2442,7 +2444,7 @@ pub const MonoLlvmCodeGen = struct {
 
         const fn_ty = builder.fnType(ret_ty, param_types.items, .normal) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, try self.fastProcFunctionName(builder, proc_id, proc), .default) catch return error.OutOfMemory;
-        func.setLinkage(.internal, builder);
+        func.setLinkage(if (proc.linked or proc.exported) .external else .internal, builder);
         func.setCallConv(self.fastCallConv(proc), builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
         if (self.enable_default_platform_diagnostics) {
@@ -2638,6 +2640,9 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn compileProcBody(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
+        // A procedure another object of the link defines was declared and
+        // has no body here.
+        if (proc.linked) return;
         const ice = Base.ice_context.enter(.{ .phase = .codegen, .stage = "llvm backend", .proc = self.store.iceContextProc(proc_id) });
         defer ice.leave();
         const builder = self.builder orelse return error.CompilationFailed;

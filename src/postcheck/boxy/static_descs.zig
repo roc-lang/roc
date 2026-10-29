@@ -365,7 +365,7 @@ pub const StaticDescs = struct {
         );
         @memcpy(@constCast(self.exports.items[text_node].bytes)[0..text.len], text);
         const bytes = @constCast(self.exports.items[reserved.node].bytes);
-        writeU32(bytes, name_layout.of(.id), @backingInt(name));
+        @memcpy(bytes[name_layout.of(.id)..][0..32], &desc_format.nameIdDigest(self.store.nameContentId(name)));
         writeU32(bytes, name_layout.of(.len), @intCast(text.len));
         try self.setRelocations(reserved.node, &.{.{ .offset = name_layout.of(.bytes), .target = text_node }});
         try self.name_slots.put(self.allocator, name, reserved);

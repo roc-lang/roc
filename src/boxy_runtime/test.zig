@@ -21,16 +21,16 @@ const hash_mod = builtins.hash;
 const TypeDesc = desc_mod.TypeDesc;
 const Name = desc_mod.Name;
 
-fn name(comptime id: u32, comptime text: []const u8) Name {
-    return .{ .id = id, .len = text.len, .bytes = text.ptr };
+fn name(comptime text: []const u8) Name {
+    return .{ .id = desc_mod.labelId(text), .len = text.len, .bytes = text.ptr };
 }
 
-const name_a = name(1, "a");
-const name_b = name(2, "b");
-const name_c = name(3, "c");
-const name_ok = name(10, "Ok");
-const name_err = name(11, "Err");
-const name_point = name(20, "Point");
+const name_a = name("a");
+const name_b = name("b");
+const name_c = name("c");
+const name_ok = name("Ok");
+const name_err = name("Err");
+const name_point = name("Point");
 
 /// The errors these tests' helpers return.
 const TestError = std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult };

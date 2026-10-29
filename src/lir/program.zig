@@ -417,6 +417,10 @@ pub const Result = struct {
     store: LirStore,
     layouts: layout.Store,
     root_procs: std.ArrayList(LIR.LirProcSpecId) = .empty,
+    /// The procedures this program defines for other objects of its link
+    /// (`LIR.LirProcSpec.exported`), roots of reachability and ARC beside
+    /// `root_procs` (design.md "Per-Module Output").
+    exported_procs: std.ArrayList(LIR.LirProcSpecId) = .empty,
     /// The procedures each object-cache entry this program takes calls by
     /// identity, which the program supplies its own code for. The entry's
     /// procedure is body-less, so these are its only outgoing edges.
@@ -481,6 +485,7 @@ pub const Result = struct {
         self.requested_layouts.deinit(allocator);
         self.root_metadata.deinit(allocator);
         self.root_procs.deinit(allocator);
+        self.exported_procs.deinit(allocator);
         self.served_callees.deinit(allocator);
         self.spec_procs.deinit(allocator);
         self.layouts.deinit();

@@ -20,6 +20,7 @@ const std = @import("std");
 const collections = @import("collections");
 const base = @import("base");
 const check = @import("check");
+const boxy_runtime = @import("boxy_runtime");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
@@ -81,6 +82,35 @@ pub const Modules = struct {
 
 /// A label (record field or tag name), interned program-wide by text.
 pub const NameId = enum(u32) { _ };
+
+/// The content id of the label or tag `text`: the runtime's definition
+/// (`boxy_runtime.labelId`) computed with the compiler's SHA-256.
+pub fn labelContentId(text: []const u8) boxy_runtime.NameId {
+    var hasher = base.Sha256.init(.{});
+    hasher.update(boxy_runtime.desc.label_name_domain);
+    hasher.update(text);
+    return boxy_runtime.desc.nameIdFromDigest(hasher.finalResult());
+}
+
+/// The content id of nominal declaration `source_decl` of the module whose
+/// content identity is `module_identity`, named `text`
+/// (`boxy_runtime.nominalId`).
+pub fn nominalContentId(module_identity: [32]u8, source_decl: u32, text: []const u8) boxy_runtime.NameId {
+    var hasher = base.Sha256.init(.{});
+    hasher.update(boxy_runtime.desc.nominal_name_domain);
+    hasher.update(&module_identity);
+    var index_bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &index_bytes, source_decl, .little);
+    hasher.update(&index_bytes);
+    hasher.update(text);
+    return boxy_runtime.desc.nameIdFromDigest(hasher.finalResult());
+}
+
+test "name content ids agree with the runtime's definition" {
+    try std.testing.expectEqual(boxy_runtime.labelId("field"), labelContentId("field"));
+    try std.testing.expectEqual(boxy_runtime.labelId(""), labelContentId(""));
+    try std.testing.expectEqual(boxy_runtime.nominalId(@splat(7), 3, "Point"), nominalContentId(@splat(7), 3, "Point"));
+}
 
 /// An interned type node.
 pub const TypeId = enum(u32) { _ };
@@ -198,6 +228,8 @@ pub const Store = struct {
     scratch_key: std.ArrayList(u8) = .empty,
 
     name_texts: std.ArrayList([]const u8) = .empty,
+    /// Each name's content id (design.md "Name Identity"), by `NameId`.
+    name_content_ids: std.ArrayList(boxy_runtime.NameId) = .empty,
     name_ids: std.StringHashMapUnmanaged(NameId) = .empty,
     /// Each nominal declaration's name, its own whatever its text: a
     /// descriptor compares nominals by name, and two declarations can share
@@ -266,6 +298,7 @@ pub const Store = struct {
         self.key_bytes.deinit(self.allocator);
         self.scratch_key.deinit(self.allocator);
         self.name_texts.deinit(self.allocator);
+        self.name_content_ids.deinit(self.allocator);
         self.name_ids.deinit(self.allocator);
         self.decl_name_ids.deinit(self.allocator);
         self.name_arena.deinit();
@@ -300,22 +333,35 @@ pub const Store = struct {
         const owned = try self.name_arena.allocator().dupe(u8, text);
         const id: NameId = @fromBackingInt(@intCast(self.name_texts.items.len));
         try self.name_texts.append(self.allocator, owned);
+        errdefer _ = self.name_texts.pop();
+        try self.name_content_ids.append(self.allocator, labelContentId(text));
+        errdefer _ = self.name_content_ids.pop();
         try self.name_ids.put(self.allocator, owned, id);
         return id;
     }
 
-    /// The name of nominal declaration `decl`, whose text is `text`.
-    pub fn internDeclName(self: *Store, decl: NominalDeclKey, text: []const u8) Allocator.Error!NameId {
+    /// The name of nominal declaration `decl`, whose text is `text`:
+    /// `module_identity` is the declaring module's content identity and
+    /// `source_decl` the declaration's index in that module.
+    pub fn internDeclName(self: *Store, decl: NominalDeclKey, module_identity: [32]u8, source_decl: u32, text: []const u8) Allocator.Error!NameId {
         if (self.decl_name_ids.get(decl)) |existing| return existing;
         const owned = try self.name_arena.allocator().dupe(u8, text);
         const id: NameId = @fromBackingInt(@intCast(self.name_texts.items.len));
         try self.name_texts.append(self.allocator, owned);
+        errdefer _ = self.name_texts.pop();
+        try self.name_content_ids.append(self.allocator, nominalContentId(module_identity, source_decl, text));
+        errdefer _ = self.name_content_ids.pop();
         try self.decl_name_ids.put(self.allocator, decl, id);
         return id;
     }
 
     pub fn nameText(self: *const Store, id: NameId) []const u8 {
         return self.name_texts.items[@backingInt(id)];
+    }
+
+    /// The content id the runtime `Name` node of `id` carries.
+    pub fn nameContentId(self: *const Store, id: NameId) boxy_runtime.NameId {
+        return self.name_content_ids.items[@backingInt(id)];
     }
 
     pub fn nameCount(self: *const Store) usize {
@@ -987,7 +1033,7 @@ pub const Converter = struct {
                 return try self.store.intern(.{ .nominal = .{
                     .decl = decl_key,
                     .args = args,
-                    .name = if (decl != null) try self.store.internDeclName(decl_key, name_store.typeNameText(nominal.name)) else try self.store.internName(name_store.typeNameText(nominal.name)),
+                    .name = if (decl != null) try self.declName(decl_key, name_store.typeNameText(nominal.name)) else try self.store.internName(name_store.typeNameText(nominal.name)),
                     .is_opaque = nominal.is_opaque,
                     .builtin = nominal.builtin,
                     .has_backing = decl != null,
@@ -1112,6 +1158,15 @@ pub const Converter = struct {
             },
             .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => &.{},
         };
+    }
+
+    /// The name of nominal declaration `decl`, which is its own name
+    /// whatever its text (design.md "Name Identity"): the runtime node's id
+    /// digests the declaring module's content identity and the declaration.
+    fn declName(self: Converter, decl: NominalDeclKey, text: []const u8) Allocator.Error!NameId {
+        const view = self.modules.get(decl.module);
+        const declaration = view.types().nominalDeclarationById(decl.decl);
+        return try self.store.internDeclName(decl, view.view.module_identity.stable_hash, declaration.nominal.source_decl, text);
     }
 
     /// The variables of an enclosing scope that the backing of `decl` (a

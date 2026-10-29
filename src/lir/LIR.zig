@@ -974,7 +974,7 @@ pub const EmissionUnit = enum(u32) {
 
     /// The unit of lowering module `index`.
     pub fn module(index: u32) EmissionUnit {
-        return @enumFromInt(index + 2);
+        return @fromBackingInt(@intCast(index + 2));
     }
 
     /// Whether a call from a procedure in `caller` may demand a variant of a
@@ -1901,6 +1901,16 @@ pub const LirProcSpec = struct {
     /// (`ProcIdentity.writeCAbiEntryName`), classified from its argument and
     /// return layouts by `layout.abi`.
     c_abi_entry: bool = false,
+    /// Set with `external` on a procedure another object of the same link
+    /// defines (design.md "Per-Module Output"): it has no body here, its
+    /// symbol (`ProcIdentity.writeSymbolName`) is an undefined reference the
+    /// linker resolves, and callers reach it with the backend's own Roc
+    /// convention, exactly as they reach a procedure compiled beside them.
+    /// Its `rc_*` fields carry the signature the defining object solved.
+    linked: bool = false,
+    /// A procedure this object defines for other objects of the link: its
+    /// symbol has global binding and it is a root of reachability and ARC.
+    exported: bool = false,
     /// Exact self-tail sites produced by LIR construction, consumed by TRMC/TCE.
     tail_calls: ?TailCalls = null,
     /// Set by the tail-drive pass on an erased-callable procedure with an

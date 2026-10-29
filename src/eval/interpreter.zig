@@ -8462,7 +8462,7 @@ pub const Interpreter = struct {
             return self.invariantFailedError("LIR/interpreter invariant violated: tag of a {s} descriptor", .{@tagName(union_desc.kind)});
         }
         for (union_desc.variants()) |*variant| {
-            if (variant.name.id == name.id) return .{ .union_desc = union_desc, .variant = variant };
+            if (variant.name.eql(name)) return .{ .union_desc = union_desc, .variant = variant };
         }
         return self.invariantFailedError("LIR/interpreter invariant violated: tag {s} is not in its union's descriptor", .{name.text()});
     }
@@ -8725,7 +8725,7 @@ pub const Interpreter = struct {
                 const name = try self.nameAt(frame, f.name);
                 const field = for (record.fields()) |*field| {
                     if (field.name) |field_name| {
-                        if (field_name.id == name.id) break field;
+                        if (field_name.eql(name)) break field;
                     }
                 } else return self.invariantFailedError("LIR/interpreter invariant violated: field {s} is not in its record's descriptor", .{name.text()});
                 try self.setComponentTarget(frame, stmt_id, target, boxy.compiled.componentAddr(field.desc, (try self.localBytes(frame, f.base)) + field.offset));

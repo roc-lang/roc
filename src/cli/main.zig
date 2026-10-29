@@ -6884,6 +6884,7 @@ fn lowerDiscoveredLir(
         build_env.runtimeProgramSession(),
         if (object_cache) |cache| cache.packs.specCacheLookup() else null,
         if (object_cache) |cache| cache.codeProvision() else .source_bodies,
+        null,
     );
     errdefer lowered.deinit();
     if (reporter) |r| finishPostCheckLowering(r, &spec_timing, specialization_strategy);
@@ -11333,6 +11334,260 @@ fn finishBuildCommand(
 
 /// Lowers a checked `roc build` program to LIR, reporting the post-check
 /// lowering phase.
+/// The objects of every module of a `.boxy` build other than the root
+/// program's, materialized for linking, and the hosted symbols they
+/// reference.
+const BoxyLibraryObjects = struct {
+    objects: []const []const u8,
+    hosted_symbols: []const []const u8,
+};
+
+/// Lower every module of the program other than the root as its own unit,
+/// filing each object in the per-module Boxy object cache under the
+/// module's extended checked key and restoring the ones already there
+/// (design.md "Caching Under `.boxy`"). Modules are lowered in import
+/// order, since a module's calls compile against its imports' export
+/// interfaces. A module with platform requirements has no object of its
+/// own: the root unit lowers its workers at the app's types.
+fn buildBoxyLibraryObjects(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    target: RocTarget,
+    link_objects: *link_artifacts.Objects,
+    interfaces: *postcheck.Boxy.Lower.ExportInterfaces,
+) CliMainError!BoxyLibraryObjects {
+    reporter.begin("Lowering Modules");
+    const Artifact = check.CheckedArtifact.CheckedModuleArtifact;
+    const visible = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(visible);
+    var units: std.ArrayList(*const Artifact) = .empty;
+    defer units.deinit(ctx.gpa);
+    try units.append(ctx.gpa, &build_env.builtin_modules.checked_artifact);
+    for (visible) |artifact| {
+        if (artifact.platform_type_inputs.requirements.len != 0) continue;
+        try units.append(ctx.gpa, artifact);
+    }
+    // The platform module, whose hosted section binds every hosted function
+    // of the program: a relation of the root, or the root itself.
+    const relations = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(relations);
+    var platform: ?check.CheckedArtifact.ImportedModuleView = null;
+    for (relations) |view| {
+        if (view.module_identity.kind == .platform) platform = view;
+    }
+    for (visible) |artifact| {
+        if (artifact.module_identity.kind == .platform) platform = check.CheckedArtifact.importedView(artifact);
+    }
+    if (root_artifact.module_identity.kind == .platform) platform = check.CheckedArtifact.importedView(root_artifact);
+    var by_key = std.AutoHashMap([32]u8, *const Artifact).init(ctx.gpa);
+    defer by_key.deinit();
+    for (units.items) |artifact| try by_key.put(artifact.key.bytes, artifact);
+
+    // Imports before importers: a depth-first postorder over direct imports.
+    var ordered: std.ArrayList(*const Artifact) = .empty;
+    defer ordered.deinit(ctx.gpa);
+    var placed = std.AutoHashMap([32]u8, void).init(ctx.gpa);
+    defer placed.deinit();
+    const Frame = struct { artifact: *const Artifact, next_import: usize };
+    var stack: std.ArrayList(Frame) = .empty;
+    defer stack.deinit(ctx.gpa);
+    for (units.items) |unit| {
+        if (placed.contains(unit.key.bytes)) continue;
+        try stack.append(ctx.gpa, .{ .artifact = unit, .next_import = 0 });
+        try placed.put(unit.key.bytes, {});
+        while (stack.items.len != 0) {
+            const frame = &stack.items[stack.items.len - 1];
+            if (frame.next_import < frame.artifact.direct_import_module_keys.len) {
+                const import_key = frame.artifact.direct_import_module_keys[frame.next_import];
+                frame.next_import += 1;
+                const imported = by_key.get(import_key.bytes) orelse continue;
+                if (placed.contains(import_key.bytes)) continue;
+                try placed.put(import_key.bytes, {});
+                try stack.append(ctx.gpa, .{ .artifact = imported, .next_import = 0 });
+                continue;
+            }
+            try ordered.append(ctx.gpa, frame.artifact);
+            stack.items.len -= 1;
+        }
+    }
+
+    var objects: std.ArrayList([]const u8) = .empty;
+    var hosted_symbols: std.ArrayList([]const u8) = .empty;
+    var seen_hosted = std.StringHashMap(void).init(ctx.arena);
+    for (ordered.items) |artifact| {
+        const unit = try buildBoxyUnitObject(ctx, args, build_env, artifact, boxyUnitPlatform(artifact, platform), target, link_objects, interfaces);
+        try objects.append(ctx.arena, unit.object);
+        for (unit.hosted_symbols) |symbol| {
+            if ((try seen_hosted.getOrPut(symbol)).found_existing) continue;
+            try hosted_symbols.append(ctx.arena, symbol);
+        }
+    }
+    reporter.end();
+    return .{ .objects = objects.items, .hosted_symbols = hosted_symbols.items };
+}
+
+/// One module's object for the link, and the hosted symbols it references.
+const BoxyUnitObject = struct {
+    object: []const u8,
+    hosted_symbols: []const []const u8,
+};
+
+/// The key of `artifact`'s object under this build's target and policy.
+/// A module declaring hosted functions is lowered against the platform
+/// header that binds them to their host symbols, so its key covers the
+/// platform module's checked key too.
+fn boxyObjectKey(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView, args: cli_args.BuildArgs, target: RocTarget) compile.boxy_object_cache.Key {
+    return compile.boxy_object_cache.key(.{
+        .checked_key = artifact.codeGenerationKey().bytes,
+        .platform_key = if (platform) |platform_view| (platform_view.code_generation_key orelse platform_view.key).bytes else null,
+        .target = @tagName(target),
+        .opt = @tagName(args.opt),
+        .inline_expects = inlineExpectModeForOpt(args.opt) == .run,
+    });
+}
+
+/// The platform module a unit of `artifact` needs in view: the one whose
+/// hosted section binds the hosted functions `artifact` declares to their
+/// host symbols. Null for a module declaring none.
+fn boxyUnitPlatform(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView) ?check.CheckedArtifact.ImportedModuleView {
+    if (artifact.hosted_procs.procs.len == 0) return null;
+    return platform;
+}
+
+/// `artifact`'s object: restored from the per-module Boxy object cache, or
+/// lowered as a unit, compiled, and filed there. Either way its export
+/// interface joins `interfaces` for the modules that import it.
+fn buildBoxyUnitObject(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    platform: ?check.CheckedArtifact.ImportedModuleView,
+    target: RocTarget,
+    link_objects: *link_artifacts.Objects,
+    interfaces: *postcheck.Boxy.Lower.ExportInterfaces,
+) CliMainError!BoxyUnitObject {
+    const cache = compile.boxy_object_cache;
+    const object_key = boxyObjectKey(artifact, platform, args, target);
+    const manager: ?*CacheManager = if (args.no_cache) null else build_env.cache_manager;
+    if (manager) |cache_manager| {
+        if (cache_manager.loadFamilyBytes(.boxy_object, object_key.bytes, cache.scope)) |bytes| {
+            defer ctx.gpa.free(bytes);
+            if (cache.decode(ctx.gpa, bytes)) |entry| {
+                defer cache.deinitEntry(ctx.gpa, entry);
+                for (entry.exports) |record| try interfaces.put(.{ .bytes = record.identity }, .{
+                    .rc_borrowed_params = record.rc_borrowed_params,
+                    .rc_ret_borrowed = record.rc_ret_borrowed,
+                    .rc_ret_lenders = record.rc_ret_lenders,
+                    .rc_read_only_params = record.rc_read_only_params,
+                    .rc_ret_unique = record.rc_ret_unique,
+                    .rc_ret_unique_fields = record.rc_ret_unique_fields,
+                    .rc_ret_conditions = record.rc_ret_conditions,
+                    .may_leave_pending = record.may_leave_pending,
+                });
+                const hosted = try ctx.arena.alloc([]const u8, entry.hosted_symbols.len);
+                for (entry.hosted_symbols, hosted) |symbol, *owned| owned.* = try ctx.arena.dupe(u8, symbol);
+                const object = link_objects.materialize(entry.object) catch return error.NativeCompilationFailed;
+                return .{ .object = object, .hosted_symbols = hosted };
+            } else |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                // Bytes this compiler did not write: a miss.
+                error.InvalidEntry => {},
+            }
+        }
+    }
+
+    const imported = try build_env.collectImportedArtifactViews(ctx.gpa, artifact);
+    defer ctx.gpa.free(imported);
+    // The platform module whose hosted section binds the hosted functions
+    // the module declares, when it declares any.
+    var views: std.ArrayList(check.CheckedArtifact.ImportedModuleView) = .empty;
+    defer views.deinit(ctx.gpa);
+    try views.appendSlice(ctx.gpa, imported);
+    if (platform) |platform_view| {
+        const present = for (imported) |view| {
+            if (std.meta.eql(view.key, platform_view.key)) break true;
+        } else false;
+        if (!present) try views.append(ctx.gpa, platform_view);
+    }
+    const modules: lir.CheckedPipeline.CheckedModuleSet = .{
+        .root = check.CheckedArtifact.loweringViewWithRelations(artifact, &.{}),
+        .imports = views.items,
+    };
+    var config = checkedRuntimeLoweringConfig(.linked_output, args.opt, .boxy, target, args.synthetic_default_platform);
+    config.target.boxy_unit = .{ .imports = interfaces, .root = false };
+    config.target.post_check_executor = build_env.postCheckExecutor();
+    const session = build_env.runtimeProgramSession() orelse
+        base.invariant("roc build invariant violated: a .boxy build has no program session", .{});
+    var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(ctx.gpa, modules, .{}, config.target, session.boxyLiteralValues());
+    defer lowered.deinit();
+
+    const static_data_exports = try compile.static_data_exports.buildStaticData(ctx.gpa, .{ .root = modules.root, .imports = views.items }, &lowered, target, .{});
+    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
+
+    var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+    object_compiler.post_check_executor = build_env.postCheckExecutor();
+    object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
+    var written = object_compiler.compileToObjectFile(
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        &.{},
+        static_data_exports,
+        lowered.lir_result.store.getProcSpecs(),
+        target,
+    ) catch |err| {
+        std.log.err("Native compilation of module {s} failed: {}", .{ artifact.canonical_names.moduleNameText(artifact.module_identity.module_name), err });
+        return error.NativeCompilationFailed;
+    };
+    defer written.deinit();
+
+    const store = &lowered.lir_result.store;
+    const records = try ctx.gpa.alloc(cache.ExportRecord, lowered.lir_result.exported_procs.items.len);
+    defer ctx.gpa.free(records);
+    for (lowered.lir_result.exported_procs.items, records) |proc, *record| {
+        try interfaces.putProc(store, proc);
+        const spec = store.getProcSpec(proc);
+        const interface = interfaces.get(spec.identity).?;
+        record.* = .{
+            .identity = spec.identity.bytes,
+            .rc_borrowed_params = interface.rc_borrowed_params,
+            .rc_ret_lenders = interface.rc_ret_lenders,
+            .rc_read_only_params = interface.rc_read_only_params,
+            .rc_ret_unique_fields = interface.rc_ret_unique_fields,
+            .rc_ret_borrowed = interface.rc_ret_borrowed,
+            .rc_ret_unique = interface.rc_ret_unique,
+            .may_leave_pending = interface.may_leave_pending,
+            .rc_ret_conditions = interface.rc_ret_conditions,
+        };
+    }
+    const hosted = try hostedSymbolsFromLir(ctx.arena, store);
+    if (manager) |cache_manager| {
+        const bytes = try cache.encode(ctx.gpa, .{ .exports = records, .hosted_symbols = hosted, .object = written.object_bytes });
+        defer ctx.gpa.free(bytes);
+        cache_manager.storeFamilyBytes(.boxy_object, object_key.bytes, bytes, cache.scope, "boxy object");
+    }
+    const object = link_objects.materialize(written.object_bytes) catch return error.NativeCompilationFailed;
+    return .{ .object = object, .hosted_symbols = hosted };
+}
+
+/// `first` followed by every symbol of `second` it lacks.
+fn unionSymbols(arena: Allocator, first: []const []const u8, second: []const []const u8) Allocator.Error![]const []const u8 {
+    var seen = std.StringHashMap(void).init(arena);
+    var symbols: std.ArrayList([]const u8) = .empty;
+    for (first) |symbol| {
+        if ((try seen.getOrPut(symbol)).found_existing) continue;
+        try symbols.append(arena, symbol);
+    }
+    for (second) |symbol| {
+        if ((try seen.getOrPut(symbol)).found_existing) continue;
+        try symbols.append(arena, symbol);
+    }
+    return symbols.items;
+}
+
 fn lowerBuildCommandToLir(
     ctx: *CliCtx,
     args: cli_args.BuildArgs,
@@ -11346,6 +11601,7 @@ fn lowerBuildCommandToLir(
     proc_debug_names: bool,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
     code_provision: lir.CheckedPipeline.CodeProvision,
+    boxy_unit: ?postcheck.Boxy.Lower.ModuleUnit,
 ) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
     const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
     reporter.begin(loweringProgressLabel(specialization_strategy));
@@ -11368,6 +11624,7 @@ fn lowerBuildCommandToLir(
         build_env.runtimeProgramSession(),
         spec_cache,
         code_provision,
+        boxy_unit,
     );
     finishPostCheckLowering(reporter, &spec_timing, specialization_strategy);
     return lowered;
@@ -11496,7 +11753,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         try publishCompileTimeResults(ctx, &build_env, root_artifact);
         reporter.end();
     }
-    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, null, .source_bodies);
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, null, .source_bodies, null);
     defer lowered.deinit();
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
@@ -11787,6 +12044,16 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     runtime_lowering.target.code_provision = nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_stores != null, currentRuntimeSpecializationStrategy(args.specialization_strategy));
     // This program's specializations go into packs.
     runtime_lowering.target.spec_comptime_reads = object_store != null or dev_diagnostics.isSet(.dev_pack_objects);
+    // A `.boxy` dev build of a native target lowers one object per module
+    // and files each in the per-module Boxy object cache (design.md
+    // "Caching Under `.boxy`"): the root program is the root unit, whose
+    // calls into other modules compile against their objects' export
+    // interfaces.
+    const boxy_units = runtime_strategy == .boxy and args.opt == .dev and target_arch != .wasm32;
+    var boxy_interfaces: ?postcheck.Boxy.Lower.ExportInterfaces = if (boxy_units) postcheck.Boxy.Lower.ExportInterfaces.init(ctx.gpa) else null;
+    defer if (boxy_interfaces) |*interfaces| interfaces.deinit();
+    const boxy_root_unit: ?postcheck.Boxy.Lower.ModuleUnit = if (boxy_interfaces) |*interfaces| .{ .imports = interfaces, .root = true } else null;
+    runtime_lowering.target.boxy_unit = boxy_root_unit;
     build_env.setRuntimeLowering(runtime_lowering);
     // A build of a program whose runtime output is recorded links that output
     // and lowers no runtime program. Debug pack emission reads the lowering.
@@ -11864,7 +12131,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         if (loaded_packs) |packs| packs.refreshIndex();
         reporter.end();
     }
-    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (loaded_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_stores != null, currentRuntimeSpecializationStrategy(args.specialization_strategy)));
+    // Every other module's object comes first: the root unit compiles its
+    // calls against their export interfaces.
+    const boxy_library: ?BoxyLibraryObjects = if (boxy_interfaces) |*interfaces|
+        try buildBoxyLibraryObjects(ctx, args, &build_env, &reporter, root_artifact, target, &link_objects, interfaces)
+    else
+        null;
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (loaded_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_stores != null, currentRuntimeSpecializationStrategy(args.specialization_strategy)), boxy_root_unit);
     defer lowered.deinit();
     // The program links the objects defining the entries it took, and no
     // other.
@@ -11952,8 +12225,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const obj_path = link_objects.materializeKnown(written.object_bytes, object_identity) catch return error.NativeCompilationFailed;
     ctx.gpa.free(written.object_bytes);
     written.object_bytes = &.{};
+    const root_hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
     const link_facts: ProgramOutput.LinkFacts = .{
-        .hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
+        .hosted_symbols = if (boxy_library) |library| try unionSymbols(ctx.arena, root_hosted_symbols, library.hosted_symbols) else root_hosted_symbols,
         .link_root_symbols = try devObjectLinkRootSymbols(ctx.arena, static_data_exports),
         .app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
         .boxy_runtime = lowered.lir_result.store.runtime_contract == .boxy,
@@ -11966,6 +12240,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         identity.* = link_artifacts.Identity.of(object);
         try extra_objects.append(link_objects.materializeKnown(object, identity.*) catch return error.NativeCompilationFailed);
     }
+    // The other modules' objects of a `.boxy` build.
+    if (boxy_library) |library| try extra_objects.appendSlice(library.objects);
     reporter.end();
     // The record retains every selected object.
     if (program_probe) |*probe| if (probe.key) |key| if (diag.errors == 0) {
@@ -12714,7 +12990,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(lir.LirImage.Header);
 
-    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .{ .platform_entrypoints = .lir_image }, target, false, null, .source_bodies);
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .{ .platform_entrypoints = .lir_image }, target, false, null, .source_bodies, null);
     defer lowered.deinit();
 
     reporter.begin("LIR Image Generation");
@@ -14668,6 +14944,7 @@ fn lowerCheckedSourceToLir(
     session: ?*eval.CompileTimeFinalization.ProgramSession,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
     code_provision: lir.CheckedPipeline.CodeProvision,
+    boxy_unit: ?postcheck.Boxy.Lower.ModuleUnit,
 ) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
         .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
@@ -14685,6 +14962,7 @@ fn lowerCheckedSourceToLir(
     config.target.timing = timing;
     config.target.spec_cache = spec_cache;
     config.target.code_provision = code_provision;
+    config.target.boxy_unit = boxy_unit;
     const requests: lir.CheckedPipeline.RootRequestSet = .{
         .requests = selected_roots,
         .include_provided_data_exports = config.include_provided_data_exports,
