@@ -6,12 +6,6 @@ const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
 const BuildEnv = compile_build.BuildEnv;
 
-const Issue12631TestError = compile_build.InitError ||
-    compile_build.BuildRootError ||
-    std.Io.Dir.RealPathFileAllocError ||
-    std.Io.Dir.WriteFileError ||
-    error{TestUnexpectedResult};
-
 // repro for https://github.com/roc-lang/roc/issues/12631
 //
 // A record of closures passed to an annotated function, where one closure
