@@ -435,12 +435,14 @@ fn runWasm(b: *Builder, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx) ![]u
     try codegen.module.addStaticDataExports(exports);
     const generated = try codegen.generateModule(proc_id, ret_layout, wasm32_builtins.bytes, wasm32_builtins.boxy_runtime_bytes);
     defer allocator.free(generated.wasm_bytes);
-    const shape: WasmRunner.RawResult = switch (ret_layout) {
-        .str => .str,
-        .i64, .u64 => .i64,
-        .u32, .bool => .i32,
-        else => unreachable, // every test procedure returns one of these
-    };
+    // Every test procedure returns one of these layouts.
+    std.debug.assert(ret_layout == .str or ret_layout == .i64 or ret_layout == .u64 or ret_layout == .u32 or ret_layout == .bool);
+    const shape: WasmRunner.RawResult = if (ret_layout == .str)
+        .str
+    else if (ret_layout == .i64 or ret_layout == .u64)
+        .i64
+    else
+        .i32;
     return WasmRunner.runWasmRaw(allocator, generated.wasm_bytes, generated.heap_base, generated.has_imports, shape);
 }
 

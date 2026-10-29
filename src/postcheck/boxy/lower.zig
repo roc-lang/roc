@@ -121,7 +121,7 @@ pub const ConstSource = union(enum) { module: ModuleIndex, literals };
 fn descFormatIsVector(primitive: types.Primitive) bool {
     return switch (primitive) {
         .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => true,
-        else => false,
+        .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => false,
     };
 }
 
@@ -400,7 +400,7 @@ pub const Program = struct {
         const fn_ty = try self.converter().convert(module_index, template.checked_fn_root, env);
         const signature = switch (self.store.get(fn_ty)) {
             .function => |function| function,
-            else => invariant("a procedure template's checked root is not a function type"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a procedure template's checked root is not a function type"),
         };
         const params = try self.arena.allocator().dupe(TypeId, self.store.span(signature.args));
 
@@ -447,7 +447,7 @@ pub const Program = struct {
         if (self.worker_ids.get(key)) |existing| return existing;
         const signature = switch (self.store.get(fn_ty)) {
             .function => |function| function,
-            else => invariant("a lambda's type is not a function type"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a lambda's type is not a function type"),
         };
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const proc = try self.result.store.addProcSpec(.{
@@ -559,7 +559,7 @@ pub const Program = struct {
                     defer residual.deinit(allocator);
                     const actual = if (tag_union.ext != null and other.tag_union.ext == null) switch (store.get(self.joins.representative(pair[1]))) {
                         .tag_union => |rep| rep,
-                        else => other.tag_union,
+                        .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => other.tag_union,
                     } else other.tag_union;
                     for (store.tagSpan(actual.tags)) |candidate| {
                         var named = false;
@@ -578,7 +578,7 @@ pub const Program = struct {
                             .variable => |index| if (index < marks.len) {
                                 marks[index] = true;
                             },
-                            else => {},
+                            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function => {},
                         };
                         try pending.append(allocator, .{ ext, try store.intern(.{ .tag_union = .{ .tags = residual.items, .ext = actual.ext } }) });
                     }
@@ -702,7 +702,7 @@ pub const Program = struct {
                             ext = ext_record.ext;
                         },
                         .variable => {},
-                        else => invariant("a record row's remainder substituted to a non-record type"),
+                        .primitive, .tuple, .tag_union, .list, .box, .nominal, .function => invariant("a record row's remainder substituted to a non-record type"),
                     };
                     if (fields.items.len == 0 and ext == null) break :blk try self.store.emptyRecord();
                     const store = &self.store;
@@ -737,7 +737,7 @@ pub const Program = struct {
                             ext = ext_union.ext;
                         },
                         .variable => {},
-                        else => invariant("a tag row's remainder substituted to a non-tag type"),
+                        .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function => invariant("a tag row's remainder substituted to a non-tag type"),
                     };
                     const store = &self.store;
                     std.mem.sort(types.TagInput, tags.items, store, struct {
@@ -784,7 +784,7 @@ pub const Program = struct {
                 try self.nominal_overrides.put(self.allocator, nominal_ty, result);
                 return result;
             },
-            else => invariant("asked for the overrides of a non-nominal type"),
+            .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => invariant("asked for the overrides of a non-nominal type"),
         };
         var result: NominalOverrides = .{ null, null, null };
         if (nominal.has_backing) {
@@ -853,7 +853,7 @@ pub const Program = struct {
                 const statement_idx: can.CIR.Statement.Idx = @fromBackingInt(@intCast(declaration.source_statement));
                 const header = switch (env.store.getStatement(statement_idx)) {
                     .s_nominal_decl => |decl| decl.header,
-                    else => continue,
+                    .s_decl, .s_var, .s_var_uninitialized, .s_reassign, .s_crash, .s_dbg, .s_expr, .s_expect, .s_for, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_alias_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => continue,
                 };
                 if (!env.store.getTypeHeader(header).name.eql(ident)) continue;
                 const hasher = try self.converter().convert(view.index, declaration.declaration_root, .{ .module = view.index, .vars = &.{}, .bound = &.{} });
@@ -930,7 +930,7 @@ pub const Program = struct {
         if (obligations.len == 0) return .{ .bound = bound, .obligations = obligations };
         const key = switch (target_worker.key) {
             .template => |key| key,
-            else => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
         const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
@@ -977,7 +977,7 @@ pub const Program = struct {
         if (target_worker.dictionary_params.len != 0) {
             const key = switch (target_worker.key) {
                 .template => |key| key,
-                else => invariant("a worker with dictionary parameters is not a template's"),
+                .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary => invariant("a worker with dictionary parameters is not a template's"),
             };
             const templates = self.module(key.module).view.checked_procedure_templates;
             const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
@@ -1088,7 +1088,7 @@ pub const Program = struct {
                 .{ .structural = .{ .method = method, .over = obligation.dispatcher } }
             else
                 .{ .scope_variable = index },
-            else => {},
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function => {},
         }
         if (self.methodOwner(obligation.dispatcher)) |owned| {
             if (self.registeredMethod(obligation.module, owned.module, owned.owner, method_text)) |found| switch (found) {
@@ -1104,7 +1104,7 @@ pub const Program = struct {
         while (self.store.get(structural_ty) == .nominal) structural_ty = try self.converter().backing(structural_ty);
         const uninhabited = switch (self.store.get(structural_ty)) {
             .tag_union => |tag_union| tag_union.tags.len == 0 and tag_union.ext == null,
-            else => false,
+            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => false,
         };
         if (uninhabited) return switch (static_dispatch.unpinnedDispatchResolution(obligation.structural)) {
             .structural => structuralResolution(obligation.structural.?, obligation.dispatcher),
@@ -1148,7 +1148,7 @@ pub const Program = struct {
                 else
                     .{ .builtin = static_dispatch.builtinOwnerForCheckedBuiltin(builtin) }) else .{ .nominal = declaration.nominal } };
             },
-            else => null,
+            .empty_record, .record, .tuple, .tag_union, .function, .variable => null,
         };
     }
 
@@ -1171,7 +1171,7 @@ pub const Program = struct {
         const outer_worker = self.worker(outer).*;
         const signature = switch (self.store.get(to)) {
             .function => |function| function,
-            else => invariant("an adapted function value's type is not a function type"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("an adapted function value's type is not a function type"),
         };
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const proc = try self.result.store.addProcSpec(.{
@@ -1270,7 +1270,7 @@ pub const Program = struct {
         const fn_ty = try self.converter().convert(module_index, request.checked_type, .{ .module = module_index, .vars = &.{}, .bound = &.{} });
         const signature = switch (self.store.get(fn_ty)) {
             .function => |function| function,
-            else => invariant("a procedure root's checked type is not a function type"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a procedure root's checked type is not a function type"),
         };
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const proc = try self.result.store.addProcSpec(.{
@@ -1514,7 +1514,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             try program.local_scopes.put(allocator, .{ .module = view.index, .expr = scope.checked_expr }, id);
             switch (bodies.expr(scope.checked_expr).data) {
                 .closure => |closure| try program.local_scopes.put(allocator, .{ .module = view.index, .expr = closure.lambda }, id),
-                else => {},
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
             }
         }
         try program.by_identity.put(allocator, view.view.module_identity.stable_hash, view.index);
@@ -1535,7 +1535,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                     try program.local_procs.put(allocator, .{ .module = view.index, .expr = local.expr }, {});
                     switch (bodies.expr(local.expr).data) {
                         .closure => |closure| try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {}),
-                        else => {},
+                        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
                     }
                 },
                 .procedure, .structural => {},
@@ -1546,12 +1546,12 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         for (view.view.resolved_value_refs.records) |record| {
             const local = switch (record.ref) {
                 .local_proc => |local| local,
-                else => continue,
+                .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => continue,
             };
             try program.local_procs.put(allocator, .{ .module = view.index, .expr = local.expr }, {});
             switch (bodies.expr(local.expr).data) {
                 .closure => |closure| try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {}),
-                else => {},
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
             }
         }
     }
@@ -1612,7 +1612,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             // A template's worker carries its procedure's source name.
             const name: []const u8 = switch (worker.key) {
                 .codec => |piece| switch (program.codec.pieces.items[piece].kind) {
-                    inline else => |kind| "boxy.codec." ++ @tagName(kind),
+                    inline .constructor, .runtime, .encode_helper, .parse_helper, .record_body, .tuple_body, .list_body, .dict_body, .tag_body, .value_thunk, .key_thunk, .tag_spec, .field_names_step => |kind| "boxy.codec." ++ @tagName(kind),
                 },
                 .template => |key| blk: {
                     const view = program.module(key.module);
@@ -1621,7 +1621,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                     const export_name = names.procBase(template.proc_base).export_name orelse break :blk "boxy.template";
                     break :blk names.exportNameText(export_name);
                 },
-                inline else => |_, kind| "boxy." ++ @tagName(kind),
+                inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary => |_, kind| "boxy." ++ @tagName(kind),
             };
             try program.result.store.setProcDebugName(worker.proc, name);
         }
@@ -1682,7 +1682,7 @@ fn seedRowJoins(program: *Program) Allocator.Error!void {
                 .row_coerce => |coerce| .{ expr.ty, bodies.expr(coerce.value).ty },
                 .lambda => |lambda| .{ checkedResult(view, expr.ty) orelse continue, bodies.expr(lambda.body).ty },
                 .return_ => |ret| .{ checkedResult(view, bodies.expr(ret.lambda).ty) orelse continue, bodies.expr(ret.expr).ty },
-                else => continue,
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .for_, .hosted_lambda, .run_low_level => continue,
             };
             try seedJoin(program, converter, view.index, pair);
         }
@@ -1690,7 +1690,7 @@ fn seedRowJoins(program: *Program) Allocator.Error!void {
             const id: checked.CheckedStatementId = @fromBackingInt(@intCast(index));
             switch (bodies.statement(id).data) {
                 .return_ => |ret| try seedJoin(program, converter, view.index, .{ checkedResult(view, bodies.expr(ret.lambda).ty) orelse continue, bodies.expr(ret.expr).ty }),
-                else => {},
+                .pending, .decl, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
             }
         }
     }
@@ -1710,7 +1710,7 @@ fn checkedResult(view: *const types.ModuleView, fn_ty: checked.CheckedTypeId) ?c
     while (true) switch (view.types().payload(current)) {
         .alias => |alias| current = alias.backing,
         .function => |function| return function.ret,
-        else => return null,
+        .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
     };
 }
 
@@ -1813,7 +1813,7 @@ fn hostBoundaryDigest(program: *Program, request: checked.RootRequest, source_mo
     const graph: HostBoundaryGraph = .{ .program = program };
     switch (program.store.get(root_ty)) {
         .function => |function| try graph.abiValues(function.args, function.ret, &values),
-        else => try values.append(allocator, .{ .node = root_ty, .position = 0, .layout = try program.layouts.layoutOf(root_ty) }),
+        .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => try values.append(allocator, .{ .node = root_ty, .position = 0, .layout = try program.layouts.layoutOf(root_ty) }),
     }
     var walk = host_boundary.Walk(TypeId, HostBoundaryGraph, Allocator.Error).init(allocator, &program.result.layouts, graph);
     defer walk.deinit();

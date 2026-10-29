@@ -110,7 +110,7 @@ pub const Layouts = struct {
             .field => true,
             .payload => switch (self.store.get(edge.child)) {
                 .record, .tuple => false,
-                else => true,
+                .primitive, .empty_record, .tag_union, .list, .box, .nominal, .function, .variable => true,
             },
             .backing => false,
         };

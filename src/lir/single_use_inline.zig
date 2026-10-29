@@ -104,7 +104,7 @@ const Inventory = struct {
                     const escaping: ?LIR.LirProcSpecId = switch (self.store.stmtRow(stmt.dyn.data)) {
                         .dict_compose => |dict| dict.worker,
                         .closure => |closure| closure.proc,
-                        else => null,
+                        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_elem_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .desc_index, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .view, .numeral, .adapt => null,
                     };
                     if (escaping) |proc| {
                         self.escapes[@backingInt(proc)] = true;

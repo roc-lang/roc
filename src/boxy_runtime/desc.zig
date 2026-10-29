@@ -89,7 +89,7 @@ pub const Scalar = enum(u8) {
     pub fn isVector(self: Scalar) bool {
         return switch (self) {
             .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => true,
-            else => false,
+            .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .opaque_ptr => false,
         };
     }
 };
@@ -287,9 +287,9 @@ fn fieldSize(comptime F: type, width: PointerWidth) u32 {
         .pointer => width.bytes(),
         .optional => |optional| switch (@typeInfo(optional.child)) {
             .pointer => width.bytes(),
-            else => @compileError("descriptor fields are optional only when they are pointers"),
+            .type, .void, .bool, .noreturn, .int, .float, .array, .@"struct", .comptime_float, .comptime_int, .undefined, .null, .optional, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @compileError("descriptor fields are optional only when they are pointers"),
         },
-        else => @sizeOf(F),
+        .type, .void, .bool, .noreturn, .int, .float, .array, .@"struct", .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @sizeOf(F),
     };
 }
 

@@ -11035,7 +11035,7 @@ fn recordFieldReadCounts(
                 seen_call = true;
                 cursor = stmt.next;
             },
-            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .dyn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 cursor = stmt.next;
             },
             .expect_err,
@@ -11155,7 +11155,7 @@ fn fieldReadRetainCount(
                     }
                     try stack.append(allocator, stmt.next);
                 },
-                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .decref, .decref_if_initialized, .free => |stmt| {
+                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .dyn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .decref, .decref_if_initialized, .free => |stmt| {
                     try stack.append(allocator, stmt.next);
                 },
                 .switch_stmt => |stmt| {
@@ -11949,7 +11949,7 @@ fn listSetCounts(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) ListSet
                     top += 1;
                 }
             },
-            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .dyn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 if (top < cursor_stack.len) {
                     cursor_stack[top] = stmt.next;
                     top += 1;
@@ -13969,7 +13969,7 @@ test "provenance: ARC RC statements state their subject, reason, and deciding lo
                     try std.testing.expect(store.stmtLoc(stmt_id).hasLocation());
                     decrefs += 1;
                 },
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => try std.testing.expect(!kind.isArcInserted()),
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .dyn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => try std.testing.expect(!kind.isArcInserted()),
             }
         }
     }

@@ -650,9 +650,9 @@ pub const Converter = struct {
             .nominal => |nominal| switch (nominal.representation) {
                 .builtin => |builtin_nominal| switch (checked.builtinRuntimeEncoding(builtin_nominal)) {
                     .primitive => |prim| try self.store.primitive(prim),
-                    else => null,
+                    .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .iterator, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => null,
                 },
-                else => null,
+                .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => null,
             },
             .alias, .record, .tuple, .function, .tag_union => null,
         };
@@ -663,7 +663,7 @@ pub const Converter = struct {
     pub fn sealedScheme(self: Converter, module: ModuleIndex, variable: checked.CheckedTypeId) Allocator.Error!TypeId {
         return switch (self.modules.get(module).types().payload(variable)) {
             .flex, .rigid => |payload| try self.sealVariable(payload),
-            else => try self.convert(module, variable, .{ .module = module, .vars = &.{}, .bound = &.{} }),
+            .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => try self.convert(module, variable, .{ .module = module, .vars = &.{}, .bound = &.{} }),
         };
     }
 
@@ -741,13 +741,13 @@ pub const Converter = struct {
                             current_fields = ext_record.fields;
                             current = ext_record.ext;
                         },
-                        else => break,
+                        .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => break,
                     }
                 }
                 // The row's remainder, when it is not the empty record.
                 switch (types.payload(current)) {
                     .empty_record => {},
-                    else => try pending.append(allocator, .{ .module = module, .ty = current }),
+                    .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .tag_union, .empty_tag_union => try pending.append(allocator, .{ .module = module, .ty = current }),
                 }
             },
             .tuple => |items| for (items) |item| try pending.append(allocator, .{ .module = module, .ty = item }),
@@ -765,12 +765,12 @@ pub const Converter = struct {
                             current_tags = ext_union.tags;
                             current = ext_union.ext;
                         },
-                        else => break,
+                        .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => break,
                     }
                 }
                 switch (types.payload(current)) {
                     .empty_tag_union => {},
-                    else => try pending.append(allocator, .{ .module = module, .ty = current }),
+                    .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union => try pending.append(allocator, .{ .module = module, .ty = current }),
                 }
             },
             .function => |function| {
@@ -828,12 +828,12 @@ pub const Converter = struct {
                             current_fields = ext_record.fields;
                             current = ext_record.ext;
                         },
-                        else => break,
+                        .pending, .err, .flex, .rigid, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => break,
                     }
                 }
                 var ext: ?TypeId = switch (types.payload(current)) {
                     .empty_record => null,
-                    else => children[child_index],
+                    .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .tag_union, .empty_tag_union => children[child_index],
                 };
                 // A remainder that converted to a closed record joins this row.
                 if (ext) |ext_ty| switch (self.store.get(ext_ty)) {
@@ -843,7 +843,7 @@ pub const Converter = struct {
                         ext = null;
                     },
                     .variable => {},
-                    else => invariant("a record row's remainder converted to a non-record type"),
+                    .primitive, .tuple, .tag_union, .list, .box, .nominal, .function => invariant("a record row's remainder converted to a non-record type"),
                 };
                 if (fields.items.len == 0 and ext == null) return try self.store.emptyRecord();
                 const store = self.store;
@@ -878,12 +878,12 @@ pub const Converter = struct {
                             current_tags = ext_union.tags;
                             current = ext_union.ext;
                         },
-                        else => break,
+                        .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => break,
                     }
                 }
                 var ext: ?TypeId = switch (types.payload(current)) {
                     .empty_tag_union => null,
-                    else => children[child_index],
+                    .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union => children[child_index],
                 };
                 var ext_payload_copies: std.ArrayList(TypeId) = .empty;
                 defer ext_payload_copies.deinit(allocator);
@@ -897,7 +897,7 @@ pub const Converter = struct {
                         }
                     },
                     .variable => {},
-                    else => invariant("a tag row's remainder converted to a non-tag type"),
+                    .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function => invariant("a tag row's remainder converted to a non-tag type"),
                 };
                 const store = self.store;
                 std.mem.sort(TagInput, tags.items, store, struct {
@@ -923,11 +923,11 @@ pub const Converter = struct {
             .nominal => |nominal| {
                 if (nominal.representation == .builtin) switch (checked.builtinRuntimeEncoding(nominal.representation.builtin)) {
                     .primitive => |prim| return try self.store.primitive(prim),
-                    else => {},
+                    .bool_tag_union, .try_nominal, .list, .box, .dict, .set, .iterator, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
                 };
                 return try self.nominalNode(module, nominal, args, env);
             },
-            else => invariant("a stored named type's occurrence is not a nominal type"),
+            .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => invariant("a stored named type's occurrence is not a nominal type"),
         };
     }
 
@@ -949,9 +949,9 @@ pub const Converter = struct {
                         .fields => return try self.store.intern(.{ .list = try self.fieldHandle() }),
                         .field => return try self.fieldHandle(),
                         .parse_tag_union_spec => return try self.store.intern(.{ .function = .{ .args = &.{}, .ret = children[0], .effectful = false } }),
-                        else => {},
+                        .bool_tag_union, .try_nominal, .dict, .set, .iterator, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
                     },
-                    else => {},
+                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
                 }
                 const decl = try self.declarationRef(view, nominal);
                 const decl_ref = decl orelse DeclRef{ .module = module, .decl = @fromBackingInt(std.math.maxInt(u32)) };
@@ -1087,9 +1087,9 @@ pub const Converter = struct {
         return switch (view.types().payload(ty)) {
             .nominal => |nominal| switch (nominal.representation) {
                 .local_declaration => |decl| try self.outerVariables(.{ .module = module, .decl = decl }),
-                else => &.{},
+                .builtin, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => &.{},
             },
-            else => &.{},
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => &.{},
         };
     }
 
@@ -1143,7 +1143,7 @@ pub const Converter = struct {
                             for (declaration.formalArgs(types)) |formal| try formals.put(allocator, formal, {});
                             try pending.append(allocator, declaration.backing);
                         },
-                        else => {},
+                        .builtin, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
                     }
                 },
                 .pending, .err, .empty_record, .empty_tag_union => {},
@@ -1170,7 +1170,7 @@ pub const Converter = struct {
         if (self.store.backing_memo.get(nominal_ty)) |memo| return memo;
         const nominal = switch (self.store.get(nominal_ty)) {
             .nominal => |value| value,
-            else => invariant("asked for the backing of a non-nominal type"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => invariant("asked for the backing of a non-nominal type"),
         };
         if (!nominal.has_backing) invariant("asked for the backing of an opaque type without one");
         const view = self.modules.get(nominal.decl.module);

@@ -428,7 +428,7 @@ pub const StaticDescs = struct {
                     discriminant_size = 1;
                 },
                 .str => kind = .str,
-                else => {
+                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => {
                     kind = .scalar;
                     scalar = scalarOf(primitive);
                     if (scalar.isVector()) {
@@ -442,7 +442,7 @@ pub const StaticDescs = struct {
                 kind = .list;
                 const elem_layout = switch (committed_layout.tag) {
                     .list => committed_layout.getIdx(),
-                    else => try self.layouts.layoutOf(elem),
+                    .scalar, .box, .box_of_zst, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .hole, .dynamic => try self.layouts.layoutOf(elem),
                 };
                 try pointers.append(self.allocator, .{ .offset = desc_layout.of(.child), .target = try self.componentNode(elem, elem_layout) });
             },
@@ -453,7 +453,7 @@ pub const StaticDescs = struct {
                 kind = .box;
                 const payload_layout = switch (committed_layout.tag) {
                     .box => committed_layout.getIdx(),
-                    else => try self.layouts.layoutOf(payload),
+                    .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .hole, .dynamic => try self.layouts.layoutOf(payload),
                 };
                 try pointers.append(self.allocator, .{ .offset = desc_layout.of(.child), .target = try self.componentNode(payload, payload_layout) });
             },

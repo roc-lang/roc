@@ -154,7 +154,7 @@ pub const Ctx = struct {
     fn literalPrimitive(self: Ctx, ty: types.TypeId) types.Primitive {
         return switch (self.store().get(self.b.structuralType(ty) catch invariant("out of memory converting a numeral pattern's type"))) {
             .primitive => |primitive| primitive,
-            else => invariant("a builtin numeral pattern's occurrence is not a primitive"),
+            .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a builtin numeral pattern's occurrence is not a primitive"),
         };
     }
 
@@ -210,7 +210,7 @@ pub const Ctx = struct {
         const record_ty = try self.b.structuralType(ty);
         const record = switch (self.store().get(record_ty)) {
             .record => |record| record,
-            else => invariant("a record pattern's type is not a record"),
+            .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a record pattern's type is not a record"),
         };
         const fields = self.store().fieldSpan(record.fields);
         for (fields, 0..) |field, index| {
@@ -234,7 +234,7 @@ pub const Ctx = struct {
         const tuple_ty = try self.b.structuralType(ty);
         const elems = switch (self.store().get(tuple_ty)) {
             .tuple => |span| self.store().span(span),
-            else => invariant("a tuple pattern's type is not a tuple"),
+            .primitive, .empty_record, .record, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a tuple pattern's type is not a tuple"),
         };
         return .{ .index = i, .ty = elems[i], .pat = self.pattern(pat).data.tuple[i] };
     }
@@ -250,14 +250,14 @@ pub const Ctx = struct {
         const shown = if (try self.b.closed(structural)) self.b.program.joins.representative(structural) else structural;
         return switch (self.store().get(shown)) {
             .tag_union => |tag_union| self.store().tagSpan(tag_union.tags),
-            else => invariant("a tag pattern's type is not a tag union"),
+            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a tag pattern's type is not a tag union"),
         };
     }
 
     fn isBool(self: Ctx, ty: types.TypeId) Allocator.Error!bool {
         return switch (self.store().get(try self.b.structuralType(ty))) {
             .primitive => |primitive| primitive == .bool,
-            else => false,
+            .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => false,
         };
     }
 
@@ -346,7 +346,7 @@ pub const Ctx = struct {
     pub fn listElemTy(self: Ctx, ty: types.TypeId) types.TypeId {
         return switch (self.store().get(self.b.structuralType(ty) catch invariant("out of memory reading a list pattern's type"))) {
             .list => |elem| elem,
-            else => invariant("a list pattern's type is not a List"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("a list pattern's type is not a List"),
         };
     }
 
@@ -361,7 +361,7 @@ pub const Ctx = struct {
         const exact_numeral = checked.exact_numeral;
         const target: exact_numeral.Target = switch (self.literalPrimitive(ty)) {
             inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |p| @field(exact_numeral.Target, @tagName(p)),
-            else => return null,
+            .bool, .str, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return null,
         };
         const bits = exact_numeral.intBits(self.exactNumeral(pat), target) orelse return null;
         return switch (bits) {
@@ -388,7 +388,7 @@ pub const Ctx = struct {
                     const value = try checked.exact_numeral.floatBits(f64, self.arena(), self.exactNumeral(pat));
                     break :blk @as(u64, @bitCast(if (value == 0.0) @as(f64, 0.0) else value));
                 },
-                else => @bitCast(self.intValue(pat, ty) orelse invariant("a numeral pattern does not fit its integer type")),
+                .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => @bitCast(self.intValue(pat, ty) orelse invariant("a numeral pattern does not fit its integer type")),
             },
             .str_literal => |literal| try self.strShapeKey(self.b.bodies().stringLiteral(literal.literal), &.{}, .exact),
             .str_interpolation => |str| try self.strShapeKey(self.b.bodies().stringLiteral(str.prefix), str.steps, str.end),
@@ -447,7 +447,7 @@ pub const Ctx = struct {
             .i8 => if (value < 0 or value > std.math.maxInt(i8)) return null else 8,
             .i16 => if (value < 0 or value > std.math.maxInt(i16)) return null else 16,
             .i32 => if (value < 0 or value > std.math.maxInt(i32)) return null else 32,
-            else => return null,
+            .bool, .str, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return null,
         };
         const bits: u128 = @bitCast(value);
         const mask: u128 = if (width == 64) std.math.maxInt(u64) else (@as(u128, 1) << @intCast(width)) - 1;
@@ -463,7 +463,7 @@ pub const Ctx = struct {
     pub fn strCaptureCount(self: Ctx, pat: CheckedPatternId) u32 {
         return switch (self.pattern(pat).data) {
             .str_interpolation => |str| @intCast(str.steps.len),
-            else => 0,
+            .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .underscore, .runtime_error => 0,
         };
     }
 
@@ -502,7 +502,7 @@ pub const Ctx = struct {
             .nominal_backing => parent.?,
             // Components of a dynamic value are views of its storage.
             .field, .tag_payload => try self.b.localOf(ty, .view),
-            else => try self.b.localOf(ty, .frame),
+            .root, .callable_payload, .list_elem_front, .list_elem_back, .list_rest, .str_capture, .record_rest, .retype => try self.b.localOf(ty, .frame),
         };
         try self.noteOcc(local, ty);
         return local;
@@ -566,7 +566,7 @@ pub const Ctx = struct {
         const list_ty = try self.b.structuralType(self.occType(source));
         return switch (self.store().get(list_ty)) {
             .list => |elem| .{ .list = list_ty, .elem = elem },
-            else => invariant("a list pattern's value is not a List"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("a list pattern's value is not a List"),
         };
     }
 
@@ -690,7 +690,7 @@ pub const Ctx = struct {
                 const expected = try self.b.strLiteral(self.b.bodies().stringLiteral(literal.literal));
                 try self.b.emitLowLevel(matches, .str_is_eq, &.{ source, expected });
             },
-            else => invariant("an equality arm was asked of a non-literal pattern"),
+            .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_interpolation, .underscore, .runtime_error => invariant("an equality arm was asked of a non-literal pattern"),
         }
         try self.b.emitTerminal(try self.boolSwitchStmt(matches, on_match, on_miss));
         return self.b.endBackwardTerminal(start);
@@ -706,7 +706,7 @@ pub const Ctx = struct {
                 }
                 break :blk locals;
             },
-            else => invariant("a string arm was asked of a non-string pattern"),
+            .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .underscore, .runtime_error => invariant("a string arm was asked of a non-string pattern"),
         };
     }
 
@@ -741,7 +741,7 @@ pub const Ctx = struct {
                     .on_match = on_match,
                 };
             },
-            else => invariant("a string arm was asked of a non-string pattern"),
+            .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .underscore, .runtime_error => invariant("a string arm was asked of a non-string pattern"),
         };
     }
 

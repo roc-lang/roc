@@ -111,7 +111,7 @@ const Builder = struct {
     fn layoutOf(self: *Builder, ty: Ty) !Idx {
         return switch (ty) {
             .scalar => |scalar| switch (scalar) {
-                inline else => |s| @field(Idx, @tagName(s)),
+                inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .opaque_ptr => |s| @field(Idx, @tagName(s)),
             },
             .str => .str,
             .bool => .bool,
@@ -220,7 +220,7 @@ const Builder = struct {
                 try testing.expectEqual(@as(u32, 0), d.child.?.size);
             },
             .bool => try testing.expectEqual(Idx.bool, idx),
-            else => {},
+            .zst, .scalar, .str, .erased_callable, .nominal, .opaque_unknown, .recursive_box => {},
         }
     }
 };

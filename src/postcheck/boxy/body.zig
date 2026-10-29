@@ -416,7 +416,7 @@ pub const Builder = struct {
         if (destination == own) return null;
         switch (self.bodies().expr(expr).data) {
             .block, .if_, .match_, .nominal, .dbg, .tag, .zero_argument_tag, .record, .empty_record, .tuple, .list, .empty_list, .numeral, .str_from_quote, .str_segment, .str, .interpolation, .lambda, .closure, .runtime_error, .crash, .return_ => return null,
-            else => {},
+            .pending, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .call, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .expect_err, .expect, .ellipsis, .anno_only, .break_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
         // Two closed types of one join share a layout.
         if (try self.closed(own) and try self.closed(destination) and self.program.joins.representative(own) == self.program.joins.representative(destination)) return null;
@@ -499,7 +499,7 @@ pub const Builder = struct {
     /// The local a straight-line statement defines, if any.
     fn definedLocal(stmt: LIR.CFStmt) ?LocalId {
         return switch (stmt) {
-            inline else => |payload| blk: {
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => |payload| blk: {
                 const Payload = @TypeOf(payload);
                 if (@typeInfo(Payload) != .@"struct" or !@hasField(Payload, "target")) break :blk null;
                 if (@TypeOf(payload.target) != LocalId) break :blk null;
@@ -862,7 +862,7 @@ pub const Builder = struct {
         if (try self.closed(ty) and !try self.program.composedInBody(ty)) return try self.staticDesc(ty);
         return switch (store.get(ty)) {
             .variable => |index| self.var_descs[index],
-            else => null,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function => null,
         };
     }
 
@@ -1108,7 +1108,7 @@ pub const Builder = struct {
                             try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = message }, .checked_error = true } });
                         }
                     },
-                    else => {
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .run_low_level => {
                         if (params.len != 0) invariant("a non-lambda template body has parameters");
                         try self.tasks.append(self.allocator, .ret);
                         try self.tasks.append(self.allocator, .{ .expr = body.root_expr });
@@ -1264,7 +1264,7 @@ pub const Builder = struct {
                     }
                     break :blk try layouts.putTagUnion(variants);
                 },
-                else => unreachable, // only the composite kinds above expand
+                .primitive, .empty_record, .list, .function, .variable => unreachable, // only the composite kinds above expand
             };
             try done.put(self.allocator, frame.ty, built);
         }
@@ -1325,7 +1325,7 @@ pub const Builder = struct {
         const worker = self.currentWorker().*;
         const lambda = switch (self.bodies().expr(lambda_expr).data) {
             .lambda => |lambda| lambda,
-            else => invariant("a lambda worker's expression is not a lambda"),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a lambda worker's expression is not a lambda"),
         };
         self.entry_hole = try self.newHole();
         const entry = self.entry_hole;
@@ -1471,7 +1471,7 @@ pub const Builder = struct {
         self.hole = body_start;
         const signature = switch (self.program.store.get(from)) {
             .function => |function| function,
-            else => invariant("an adapted function value's type is not a function type"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("an adapted function value's type is not a function type"),
         };
         const from_params = try self.allocator.dupe(TypeId, self.program.store.span(signature.args));
         defer self.allocator.free(from_params);
@@ -2179,7 +2179,7 @@ pub const Builder = struct {
                 for (interpolation.segments, elems) |segment, *elem| {
                     elem.* = switch (self.bodies().expr(segment).data) {
                         .str_segment => |literal| try self.strLiteral(self.bodies().stringLiteral(literal)),
-                        else => invariant("an interpolation segment is not a string segment"),
+                        .pending, .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("an interpolation segment is not a string segment"),
                     };
                 }
                 const list = try self.localOf(arg.ty, .frame);
@@ -2235,7 +2235,7 @@ pub const Builder = struct {
                 switch (plan.iter.resolution) {
                     .checked_error => try self.emitDispatchCrash(.checked_error),
                     .@"unreachable" => try self.emitDispatchCrash(.unreachable_value),
-                    else => {
+                    .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .structural => {
                         const literal = try self.store.insertString("runtime error");
                         try self.emitTerminal(.{ .crash = .{ .msg = .{ .literal = literal }, .checked_error = true } });
                     },
@@ -2319,7 +2319,7 @@ pub const Builder = struct {
                 const tuple_ty = try self.structuralType(try self.exprType(access.tuple));
                 const elems = switch (self.program.store.get(tuple_ty)) {
                     .tuple => |span| self.program.store.span(span),
-                    else => invariant("a tuple access's receiver is not a tuple"),
+                    .primitive, .empty_record, .record, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a tuple access's receiver is not a tuple"),
                 };
                 try self.pushValue(try self.readField(tuple_ty, tuple, access.elem_index, elems[access.elem_index]));
             },
@@ -2483,7 +2483,7 @@ pub const Builder = struct {
                     switch (self.bodies().statement(stmt).data) {
                         .decl => |decl| if (self.bodies().exprDiverges(decl.expr, mode)) break position,
                         .var_ => |var_| if (self.bodies().exprDiverges(var_.expr, mode)) break position,
-                        else => {},
+                        .pending, .promoted_proc, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
                     }
                 } else null;
                 var index = if (diverges_at) |position| position + 1 else block.statements.len;
@@ -2548,7 +2548,7 @@ pub const Builder = struct {
                         try self.pushExprsReversed(tag.args);
                     },
                     .zero_argument_tag => try self.push(.{ .finish_tag_at = .{ .expr = nominal.backing_expr, .ty = try self.exprType(expr_id) } }),
-                    else => try self.push(.{ .expr = nominal.backing_expr }),
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => try self.push(.{ .expr = nominal.backing_expr }),
                 }
             },
             .lambda => try self.lowerClosure(expr_id, expr_id, self.program.siteCaptures(self.module, expr_id)),
@@ -2620,7 +2620,7 @@ pub const Builder = struct {
             },
             .binop => |binop| switch (binop.op) {
                 .@"and", .@"or" => try self.lowerShortCircuit(expr_id, binop.op == .@"and", binop.lhs, binop.rhs),
-                else => invariantFmt("binary operator {s} reached Boxy lowering outside a dispatch", .{@tagName(binop.op)}),
+                .add, .sub, .mul, .div, .rem, .lt, .gt, .le, .ge, .eq, .ne, .div_trunc, .range_exclusive, .range_inclusive => invariantFmt("binary operator {s} reached Boxy lowering outside a dispatch", .{@tagName(binop.op)}),
             },
             .for_ => |for_| try self.pushForLoop(for_.pattern, for_.expr, for_.body, for_.plan, for_.mutations),
             .field_access => |access| {
@@ -2704,7 +2704,7 @@ pub const Builder = struct {
                 const store = &self.program.store;
                 const tag_union = switch (store.get(try self.structuralType(destination))) {
                     .tag_union => |value| value,
-                    else => return,
+                    .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => return,
                 };
                 const name = try store.internName(self.view.nameStore().tagLabelText(tag.name));
                 for (store.tagSpan(tag_union.tags)) |candidate| {
@@ -2713,7 +2713,7 @@ pub const Builder = struct {
                     return;
                 }
             },
-            else => {},
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => {},
         }
     }
 
@@ -2798,7 +2798,7 @@ pub const Builder = struct {
     pub fn builtinNumeral(self: *Builder, literal: NumeralLiteral, ty: TypeId) Allocator.Error!LocalId {
         const primitive = switch (self.program.store.get(ty)) {
             .primitive => |primitive| primitive,
-            else => invariant("a builtin numeral's type is not a primitive"),
+            .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a builtin numeral's type is not a primitive"),
         };
         const exact = self.view.view.module_env.exactNumeral(literal);
         const exact_numeral = checked.exact_numeral;
@@ -2807,7 +2807,7 @@ pub const Builder = struct {
             .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .u128, .i128 => blk: {
                 const target: exact_numeral.Target = switch (primitive) {
                     inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |p| @field(exact_numeral.Target, @tagName(p)),
-                    else => unreachable, // the enclosing prong admits only integers
+                    .bool, .str, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => unreachable, // the enclosing prong admits only integers
                 };
                 const bits = exact_numeral.intBits(exact, target) orelse return try self.crashLocal("invalid numeric literal", ty);
                 const wide: i128 = switch (bits) {
@@ -2816,13 +2816,13 @@ pub const Builder = struct {
                 };
                 break :blk switch (primitive) {
                     .u128, .i128 => .{ .i128_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = wide, .layout_idx = @import("layouts.zig").primitiveLayout(primitive) }) },
-                    else => .{ .i64_literal = .{ .value = @truncate(wide), .layout_idx = @import("layouts.zig").primitiveLayout(primitive) } },
+                    .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => .{ .i64_literal = .{ .value = @truncate(wide), .layout_idx = @import("layouts.zig").primitiveLayout(primitive) } },
                 };
             },
             .f32 => .{ .f32_literal = try exact_numeral.floatBits(f32, self.allocator, exact) },
             .f64 => .{ .f64_literal = try exact_numeral.floatBits(f64, self.allocator, exact) },
             .dec => .{ .dec_literal = (try exact_numeral.decBits(self.allocator, exact)) orelse return try self.crashLocal("invalid numeric literal", ty) },
-            else => return try self.crashLocal("invalid numeric literal", ty),
+            .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return try self.crashLocal("invalid numeric literal", ty),
         };
         try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = value, .next = undefined } });
         return local;
@@ -2955,7 +2955,7 @@ pub const Builder = struct {
         switch (self.view.view.compile_time_roots.root(root_id).payload) {
             .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = try self.exprType(expr_id) } }),
             .pending, .unevaluated => try self.lowerLiteralTable(expr_id, kind),
-            else => |payload| invariantFmt("a literal conversion root holding {s} reached runtime lowering", .{@tagName(payload)}),
+            inline .fn_value, .discarded, .expect, .runtime => |_, tag| invariantFmt("a literal conversion root holding {s} reached runtime lowering", .{@tagName(tag)}),
         }
     }
 
@@ -2964,7 +2964,7 @@ pub const Builder = struct {
         const plan = self.dispatchPlan(plan_id);
         const try_ty = switch (self.program.store.get(try self.convert(plan.callable_ty))) {
             .function => |function| function.ret,
-            else => invariant("an interpolation's conversion type is not a function type"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("an interpolation's conversion type is not a function type"),
         };
         // The conversion's assembler is read from the interpolation's
         // literal table, as compile-time evaluation produced it.
@@ -2979,7 +2979,7 @@ pub const Builder = struct {
         const ok = try store.internName("Ok");
         const union_ty = switch (store.get(try self.structuralType(try_ty))) {
             .tag_union => |union_ty| union_ty,
-            else => invariant("a conversion's Try type is not a tag union"),
+            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a conversion's Try type is not a tag union"),
         };
         for (store.tagSpan(union_ty.tags)) |tag| {
             if (tag.name == ok and tag.payloads.len == 1) return store.span(tag.payloads)[0];
@@ -2997,7 +2997,7 @@ pub const Builder = struct {
                 if (args.len != 1) invariant("an interpolation assembler does not take exactly the values list");
                 break :blk args[0];
             },
-            else => invariant("an interpolation assembler is not a function"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("an interpolation assembler is not a function"),
         };
         // The values are lowered after the assembler, in order.
         try self.push(.{ .finish_interpolation_call = .{ .assembler = assembler, .assembler_ty = assembler_ty, .values_ty = values_ty, .count = @intCast(interpolation.values.len), .result = try self.exprType(expr_id) } });
@@ -3016,7 +3016,7 @@ pub const Builder = struct {
         const record_ty = try self.structuralType(variant.payloads[0]);
         const fields = switch (store.get(record_ty)) {
             .record => |record| try self.allocator.dupe(types.Field, store.fieldSpan(record.fields)),
-            else => invariant("the Numeral Literal payload is not a record"),
+            .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("the Numeral Literal payload is not a record"),
         };
         defer self.allocator.free(fields);
         const env = self.view.view.module_env;
@@ -3056,13 +3056,13 @@ pub const Builder = struct {
     pub fn intValue(self: *Builder, value: u64, ty: TypeId) Allocator.Error!LocalId {
         const primitive = switch (self.program.store.get(ty)) {
             .primitive => |primitive| primitive,
-            else => invariant("an integer field's type is not a primitive"),
+            .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("an integer field's type is not a primitive"),
         };
         const prim_layout = @import("layouts.zig").primitiveLayout(primitive);
         const local = try self.closedLocal(prim_layout);
         const literal: LIR.LiteralValue = switch (primitive) {
             .u128, .i128 => .{ .i128_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = value, .layout_idx = prim_layout }) },
-            else => .{ .i64_literal = .{ .value = @bitCast(value), .layout_idx = prim_layout } },
+            .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => .{ .i64_literal = .{ .value = @bitCast(value), .layout_idx = prim_layout } },
         };
         try self.emitLinear(.{ .assign_literal = .{ .target = local, .value = literal, .next = undefined } });
         return local;
@@ -3171,7 +3171,7 @@ pub const Builder = struct {
         const lambda_expr = switch (self.bodies().expr(local.expr).data) {
             .lambda => local.expr,
             .closure => |closure| closure.lambda,
-            else => invariant("a local procedure's expression is not a lambda or closure"),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
         const scope_id = self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }) orelse
             return try self.localProcValue(local);
@@ -3251,7 +3251,7 @@ pub const Builder = struct {
     pub fn localMethodValue(self: *Builder, node: static_dispatch.EvidenceNode, fn_ty: TypeId) Allocator.Error!LocalId {
         const target = switch (node.target.kind) {
             .local_proc => |target| target,
-            else => invariant("a local method value names a procedure that is not local"),
+            .procedure, .structural => invariant("a local method value names a procedure that is not local"),
         };
         if (self.program.moduleByIdx(node.target.module_idx).index != self.module) invariant("a method declared in a function body is dispatched outside its module");
         const local: checked.LocalProcedureBinding = .{ .binder = target.binder, .expr = target.expr, .dispatch_scope = target.dispatch_scope };
@@ -3273,7 +3273,7 @@ pub const Builder = struct {
         const lambda_expr = switch (closure_expr.data) {
             .lambda => local.expr,
             .closure => |closure| closure.lambda,
-            else => invariant("a local procedure's expression is not a lambda or closure"),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
         const captures = self.program.siteCaptures(self.module, local.expr);
         var scope_worker = self.worker_id;
@@ -3281,7 +3281,7 @@ pub const Builder = struct {
             if (self.program.worker_ids.get(.{ .lambda = .{ .module = self.module, .expr = lambda_expr, .outer = scope_worker } })) |id| return .{ scope_worker, id };
             switch (self.program.worker(scope_worker).key) {
                 .lambda => |key| scope_worker = key.outer,
-                else => break,
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary => break,
             }
         }
         // No body of the chain declared it: the chain is a stored closure
@@ -3334,11 +3334,11 @@ pub const Builder = struct {
     fn readRecursiveSlot(self: *Builder, slot: LocalId, slot_ty: TypeId) Allocator.Error!LocalId {
         const tuple_ty = switch (self.program.store.get(slot_ty)) {
             .box => |payload| payload,
-            else => invariant("a recursive value's slot is not a box"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .nominal, .function, .variable => invariant("a recursive value's slot is not a box"),
         };
         const value_ty = self.program.store.span(switch (self.program.store.get(tuple_ty)) {
             .tuple => |items| items,
-            else => invariant("a recursive value's slot does not hold a tuple"),
+            .primitive, .empty_record, .record, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a recursive value's slot does not hold a tuple"),
         })[0];
         const payload = try self.localOf(tuple_ty, .view);
         try self.emitEntry(.{ .dyn = .{ .target = payload, .data = try self.store.addStmtRow(LIR.DynOp, .{ .box_payload_addr = .{ .box = slot, .desc = try self.descOf(tuple_ty) } }), .next = undefined } });
@@ -3369,7 +3369,7 @@ pub const Builder = struct {
                     if (list.rest) |rest| if (rest.pattern) |sub| try stack.append(self.allocator, sub);
                 },
                 .tuple => |items| try stack.appendSlice(self.allocator, items),
-                else => {},
+                .pending, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => {},
             }
         }
     }
@@ -3426,7 +3426,7 @@ pub const Builder = struct {
         const lambda_expr = switch (self.bodies().expr(local.expr).data) {
             .lambda => local.expr,
             .closure => |closure| closure.lambda,
-            else => invariant("a local procedure's expression is not a lambda or closure"),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
         _ = lambda_expr;
         const scope_worker, const target = try self.localProcWorker(local);
@@ -3498,7 +3498,7 @@ pub const Builder = struct {
         const lambda_expr = switch (self.bodies().expr(local.expr).data) {
             .lambda => local.expr,
             .closure => |closure_expr| closure_expr.lambda,
-            else => invariant("a local procedure's expression is not a lambda or closure"),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
         };
         const outer_count = self.env.vars.len;
         const vars = try std.mem.concat(self.allocator, checked.CheckedTypeId, &.{ scheme.scheme_vars, self.env.vars });
@@ -3529,7 +3529,7 @@ pub const Builder = struct {
         const fn_ty = try self.program.converter().convert(self.module, lambda_ty, .{ .module = self.module, .vars = vars, .bound = bound });
         const params, const ret = switch (self.program.store.get(fn_ty)) {
             .function => |function| .{ try self.allocator.dupe(TypeId, self.program.store.span(function.args)), function.ret },
-            else => invariant("a local procedure's type is not a function type"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a local procedure's type is not a function type"),
         };
         defer self.allocator.free(params);
         if (params.len != call.args.len) invariant("a local procedure call's arity differs from its type");
@@ -3680,7 +3680,7 @@ pub const Builder = struct {
             .box => |child| {
                 const payload = switch (store.get(ty)) {
                     .box => |payload| payload,
-                    else => invariant("a stored box restored at a non-Box type"),
+                    .primitive, .empty_record, .record, .tuple, .tag_union, .list, .nominal, .function, .variable => invariant("a stored box restored at a non-Box type"),
                 };
                 try self.push(.{ .finish_low_level = .{ .op = .box_box, .arg_count = 1, .result = raw_ty } });
                 try self.push(.{ .restore = .{ .source = source, .node = child, .ty = payload } });
@@ -3697,7 +3697,7 @@ pub const Builder = struct {
                         break :blk storage;
                     },
                     .empty_record => &.{},
-                    else => invariant("a stored product restored at a non-product type"),
+                    .primitive, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a stored product restored at a non-product type"),
                 };
                 if (component_types.len != children.len) invariant("a stored product's arity differs from its type");
                 try self.push(.{ .finish_restore_struct = .{ .ty = raw_ty, .count = @intCast(children.len) } });
@@ -3710,7 +3710,7 @@ pub const Builder = struct {
             .tag => |tag| {
                 const union_ty = switch (store.get(self.program.joins.representative(ty))) {
                     .tag_union => |union_ty| union_ty,
-                    else => invariant("a stored tag restored at a non-tag-union type"),
+                    .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a stored tag restored at a non-tag-union type"),
                 };
                 const name = try store.internName(tag.tag_name);
                 const tags = store.tagSpan(union_ty.tags);
@@ -3728,7 +3728,7 @@ pub const Builder = struct {
             .list => |list| {
                 const elem = switch (store.get(ty)) {
                     .list => |elem| elem,
-                    else => invariant("a stored list restored at a non-List type"),
+                    .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("a stored list restored at a non-List type"),
                 };
                 switch (list) {
                     .nodes => |nodes| {
@@ -3816,7 +3816,7 @@ pub const Builder = struct {
                 const lambda_expr = switch (expr.data) {
                     .lambda => site_expr,
                     .closure => |closure| closure.lambda,
-                    else => invariant("a stored closure's site is not a lambda or closure"),
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a stored closure's site is not a lambda or closure"),
                 };
                 const captures = owner_view.view.nested_proc_sites.runtime_captures[site.runtime_captures.start..][0..site.runtime_captures.len];
                 // The closure in its owner's scope (and, for a generalized
@@ -3997,7 +3997,7 @@ pub const Builder = struct {
                 const edge_callable = try self.program.converter().convert(edge_view.index, edge.callable_ty, .{ .module = edge_view.index, .vars = &.{}, .bound = &.{} });
                 try out.append(self.allocator, .{ try self.program.converter().convert(module_index, params[position].callable_ty, env), edge_callable });
             },
-            else => {},
+            .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
         };
     }
 
@@ -4045,7 +4045,7 @@ pub const Builder = struct {
     pub fn templateEvidenceParams(self: *Builder, worker_id: WorkerId) []const static_dispatch.EvidenceParamRecord {
         const key = switch (self.program.worker(worker_id).key) {
             .template => |key| key,
-            else => invariant("evidence parameters of a worker that is not a procedure template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary => invariant("evidence parameters of a worker that is not a procedure template's"),
         };
         const view = self.program.module(key.module).view;
         const template = view.checked_procedure_templates.templates.items[@backingInt(key.template)];
@@ -4257,12 +4257,12 @@ pub const Builder = struct {
                 const final = local.alias_target orelse invariant("a callable alias has no published target");
                 ref = owner.view.resolved_value_refs.records[@backingInt(final)].ref;
             },
-            else => break,
+            .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => break,
         };
         return switch (ref) {
             .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |next| next.binding,
             .platform_required_proc => |required| required.procedure.binding,
-            else => invariant("a procedure alias forwards only to a procedure, as checking requires"),
+            .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => invariant("a procedure alias forwards only to a procedure, as checking requires"),
         };
     }
 
@@ -4272,7 +4272,7 @@ pub const Builder = struct {
             .lookup_external => |r| r orelse invariant("a call's external callee was unresolved"),
             .lookup_required => |r| r orelse invariant("a call's platform requirement callee was unresolved"),
             .lookup_local => |lookup| lookup.resolved,
-            else => null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         };
         const callee: WorkerId = if (resolved) |id| switch (self.resolvedRef(id).ref) {
             inline .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc, .platform_required_proc => |ref, tag| switch (try self.procedureUseCallee(if (tag == .platform_required_proc) ref.procedure else ref)) {
@@ -4504,7 +4504,7 @@ pub const Builder = struct {
         const target = self.program.worker(callee).*;
         const key = switch (target.key) {
             .template => |key| key,
-            else => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.program.module(key.module).view.checked_procedure_templates;
         return .{
@@ -4636,20 +4636,20 @@ pub const Builder = struct {
         const store = &self.program.store;
         const function = switch (store.get(fn_ty)) {
             .function => |value| value,
-            else => invariant("a derived map's callable type is not a function type"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a derived map's callable type is not a function type"),
         };
         const args = try self.allocator.dupe(TypeId, store.span(function.args));
         defer self.allocator.free(args);
         if (args.len != 2) invariant("a derived map does not take a value and a transform");
         const transform = switch (store.get(args[1])) {
             .function => |value| value,
-            else => invariant("a derived map's transform is not a function"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a derived map's transform is not a function"),
         };
         const mapped = transform.ret;
         const name = try store.internName(self.view.nameStore().tagLabelText(plan.tag));
         const input_union = switch (store.get(try self.structuralType(args[0]))) {
             .tag_union => |value| value,
-            else => invariant("a derived map's input is not a tag union"),
+            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a derived map's input is not a tag union"),
         };
         const payload_types: []const TypeId = for (store.tagSpan(input_union.tags)) |tag| {
             if (tag.name == name) break try self.allocator.dupe(TypeId, store.span(tag.payloads));
@@ -4765,7 +4765,7 @@ pub const Builder = struct {
                     }
                     return hidden;
                 },
-                else => invariant("a forwarded procedure alias lookup names no procedure"),
+                .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => invariant("a forwarded procedure alias lookup names no procedure"),
             };
             if (lookup_subst.len != next.vars.len) invariant("an alias's forwarded lookup's substitution differs from the next alias's scope");
             const next_bound = try arena.alloc(TypeId, lookup_subst.len);
@@ -5079,7 +5079,7 @@ pub const Builder = struct {
                 if (self.store.stmtRow(op.data) != .call_erased) return false;
                 op.target = result;
             },
-            else => return false,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return false,
         }
         try self.store.replaceCFStmt(last, stmt, self.store.stmtOrigin(last));
         return true;
@@ -5118,7 +5118,7 @@ pub const Builder = struct {
     pub fn operandTypes(self: *Builder, callable_ty: checked.CheckedTypeId) Allocator.Error![]const TypeId {
         return switch (self.program.store.get(try self.convert(callable_ty))) {
             .function => |function| self.program.store.span(function.args),
-            else => invariant("a dispatch's callable type is not a function type"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a dispatch's callable type is not a function type"),
         };
     }
 
@@ -5157,7 +5157,7 @@ pub const Builder = struct {
                     // Reached through a procedure alias, the target takes the
                     // instantiation the call's callable type gives it.
                     .alias => try self.aliasTargetHidden(node, callee),
-                    else => blk: {
+                    .monomorphic, .callable, .derived_from_callable => blk: {
                         const subst = table.site_substitutions[node.subst.start..][0..node.subst.len];
                         break :blk switch (node.nested) {
                             .resolved => try self.hiddenArgsAt(callee, subst, table.nestedEvidence(node), try self.convert(call_plan.callable_ty)),
@@ -5190,16 +5190,16 @@ pub const Builder = struct {
                 .equality => {
                     const negated = switch (call_plan.result_mode) {
                         .equality => |equality| equality.negated,
-                        else => false,
+                        .value, .hash, .parser_for, .encoder_for, .map, .map_effectful => false,
                     };
                     if (operands.len != 2) invariant("structural equality has two operands");
                     const lhs = switch (operands[0]) {
                         .checked_expr => |operand| operand,
-                        else => invariant("structural equality operand is not an expression"),
+                        .generated_interpolation_segments, .generated_numeral, .generated_quote => invariant("structural equality operand is not an expression"),
                     };
                     const rhs = switch (operands[1]) {
                         .checked_expr => |operand| operand,
-                        else => invariant("structural equality operand is not an expression"),
+                        .generated_interpolation_segments, .generated_numeral, .generated_quote => invariant("structural equality operand is not an expression"),
                     };
                     try self.push(.{ .finish_eq = .{ .negated = negated, .operand = try self.exprType(lhs) } });
                     try self.push(.{ .expr = rhs });
@@ -5234,7 +5234,7 @@ pub const Builder = struct {
                 }
                 const call_result = switch (self.program.store.get(try self.convert(call_plan.callable_ty))) {
                     .function => |function| function.ret,
-                    else => invariant("a dispatch's callable type is not a function type"),
+                    .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a dispatch's callable type is not a function type"),
                 };
                 try self.push(.{ .finish_erased_call = .{ .fn_ty = fn_ty, .arg_count = @intCast(operands.len), .result = call_result } });
                 var index = operands.len;
@@ -5281,7 +5281,7 @@ pub const Builder = struct {
             if (open) {
                 const elem = switch (store.get(arg_types[0])) {
                     .list => |elem| elem,
-                    else => invariant("list_prefetched's first operand is not a List"),
+                    .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("list_prefetched's first operand is not a List"),
                 };
                 try self.emitLinear(.{ .assign_low_level = .{
                     .target = hint,
@@ -5307,7 +5307,7 @@ pub const Builder = struct {
         switch (op) {
             .box_box => if (store.get(result_ty) == .box and store.get(store.get(result_ty).box) == .function) return try self.pushValue(args[0]),
             .box_unbox, .box_unbox_borrowed => if (store.get(result_ty) == .function) return try self.pushValue(args[0]),
-            else => {},
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_prefetched, .list_prefetch, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
         }
         if (!open) {
             const target = try self.localOf(result_ty, .frame);
@@ -5329,7 +5329,7 @@ pub const Builder = struct {
                 try self.emitDyn(target, .{ .copy = .{ .src = view, .desc = try self.descOf(result_ty) } });
                 return try self.pushValue(target);
             },
-            else => {},
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_prefetched, .list_prefetch, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
         }
         // Every Builtin low-level whose operands or result can mention a type
         // variable is a list or box operation; every other one is declared
@@ -5343,7 +5343,7 @@ pub const Builder = struct {
             if (store.get(arg_ty) == .list) break store.get(arg_ty).list;
         } else switch (store.get(result_ty)) {
             .list => |elem| elem,
-            else => invariantFmt("list low-level {s} has no List operand or result", .{@tagName(op)}),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariantFmt("list low-level {s} has no List operand or result", .{@tagName(op)}),
         };
         const with_desc = try std.mem.concat(self.allocator, LocalId, &.{ args, &.{try self.descOf(elem)} });
         defer self.allocator.free(with_desc);
@@ -5367,34 +5367,34 @@ pub const Builder = struct {
     fn layoutResolvedBranch(self: *Builder, cond: CheckedExprId, branches: []const checked.CheckedMatchBranch) Allocator.Error!?CheckedExprId {
         const call = switch (self.bodies().expr(cond).data) {
             .call => |call| call,
-            else => return null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
         };
         const resolved = switch (self.bodies().expr(call.func).data) {
             .lookup_external => |r| r orelse return null,
             .lookup_local => |lookup| lookup.resolved orelse return null,
-            else => return null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
         };
         const use = switch (self.resolvedRef(resolved).ref) {
             .top_level_proc, .imported_proc => |use| use,
-            else => return null,
+            .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => return null,
         };
         const binding = self.program.procedureBinding(use.binding);
         const template_ref = switch (binding.body) {
             .direct_template => |direct| Program.directTemplate(direct.template),
-            else => return null,
+            .callable_eval_template, .checked_error => return null,
         };
         const owner = self.program.moduleByKey(.{ .bytes = template_ref.artifact.bytes });
         const op = (owner.view.checked_procedure_templates.templates.items[@backingInt(template_ref.template)].provided_low_level orelse return null).layoutResolved() orelse return null;
         for (call.args) |arg| switch (self.bodies().expr(arg).data) {
             .lookup_local => {},
-            else => return null,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return null,
         };
         for (branches) |branch| {
             if (branch.guard != null) return null;
             for (branch.patternsSlice(self.bodies())) |pattern| switch (self.bodies().pattern(pattern.pattern).data) {
                 .underscore => {},
                 .numeral_literal => |numeral| if (numeral.guard != null) return null,
-                else => return null,
+                .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_literal, .str_interpolation, .runtime_error => return null,
             };
         }
         const arg_types = try self.allocator.alloc(TypeId, call.args.len);
@@ -5420,7 +5420,7 @@ pub const Builder = struct {
                     };
                     if (value == answer) return branch.value;
                 },
-                else => unreachable, // only literal and wildcard branches reach here
+                .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_literal, .str_interpolation, .runtime_error => unreachable, // only literal and wildcard branches reach here
             };
         }
         return null;
@@ -5437,11 +5437,11 @@ pub const Builder = struct {
         const store = &self.program.store;
         const in_elem = switch (store.get(try self.structuralType(arg_types[0]))) {
             .list => |elem| elem,
-            else => invariant("list_map_can_reuse's first operand is not a List"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("list_map_can_reuse's first operand is not a List"),
         };
         const out_elem = switch (store.get(arg_types[1])) {
             .function => |function| function.ret,
-            else => invariant("list_map_can_reuse's transform is not a function"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("list_map_can_reuse's transform is not a function"),
         };
         if (!try self.closed(in_elem) or !try self.closed(out_elem)) return .{ .widths = none, .output_elem = null, .open = true };
         const layouts = &self.program.result.layouts;
@@ -5643,7 +5643,7 @@ pub const Builder = struct {
     pub fn emitErasedCall(self: *Builder, closure: LocalId, fn_ty: TypeId, args: []const LocalId, result_ty: TypeId) Allocator.Error!LocalId {
         const params = switch (self.program.store.get(fn_ty)) {
             .function => |function| self.program.store.span(function.args),
-            else => invariant("a called value's type is not a function type"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a called value's type is not a function type"),
         };
         var record: ?LocalId = null;
         if (args.len != 0) {
@@ -5662,7 +5662,7 @@ pub const Builder = struct {
         // "Row Joins").
         const ret = switch (self.program.store.get(fn_ty)) {
             .function => |function| function.ret,
-            else => unreachable, // checked above
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => unreachable, // checked above
         };
         if (ret == result_ty) return try self.callErased(closure, record, result_ty);
         return try self.adaptValue(try self.callErased(closure, record, ret), ret, result_ty);
@@ -5716,7 +5716,7 @@ pub const Builder = struct {
         const record: @FieldType(checked.CheckedExprData, "record") = switch (self.bodies().expr(expr_id).data) {
             .record => |record| record,
             .empty_record => .{ .fields = &.{}, .unsets = &.{}, .ext = null },
-            else => invariant("a record construction is not a record expression"),
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a record construction is not a record expression"),
         };
         const ty = try self.exprType(expr_id);
         const values = try self.popValues(@intCast(record.fields.len));
@@ -5725,7 +5725,7 @@ pub const Builder = struct {
         const record_ty = switch (self.program.store.get(try self.structuralType(ty))) {
             .record => |value| value,
             .empty_record => return try self.pushValue(try self.unitValue()),
-            else => invariant("a record expression's type is not a record"),
+            .primitive, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a record expression's type is not a record"),
         };
         const fields = try self.allocator.dupe(types.Field, self.program.store.fieldSpan(record_ty.fields));
         defer self.allocator.free(fields);
@@ -5782,7 +5782,7 @@ pub const Builder = struct {
             const base_ty = try self.structuralType(try self.exprType(record.ext.?));
             const base_record = switch (self.program.store.get(base_ty)) {
                 .record => |value| value,
-                else => invariant("a record update's base is not a record"),
+                .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a record update's base is not a record"),
             };
             const base_fields = try self.allocator.dupe(types.Field, self.program.store.fieldSpan(base_record.fields));
             defer self.allocator.free(base_fields);
@@ -5849,7 +5849,7 @@ pub const Builder = struct {
         const label, const arg_count: usize = switch (expr.data) {
             .tag => |tag| .{ tag.name, tag.args.len },
             .zero_argument_tag => |tag| .{ tag.name, 0 },
-            else => unreachable, // only tag expressions finish as tags
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .nominal, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable, // only tag expressions finish as tags
         };
         const ty = at_ty orelse try self.exprType(expr_id);
         const values = try self.popValues(@intCast(arg_count));
@@ -5873,7 +5873,7 @@ pub const Builder = struct {
                 if (primitive != .bool) invariant("a tag expression's type is a non-Bool primitive");
                 return try self.boolValue(std.mem.eql(u8, self.program.store.nameText(name), "True"));
             },
-            else => invariant("a tag expression's type is not a tag union"),
+            .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a tag expression's type is not a tag union"),
         };
         _ = union_ty;
         const selected = try self.selectVariant(try self.structuralType(ty), self.ownTag(try self.structuralType(ty), name, values.len));
@@ -5908,7 +5908,7 @@ pub const Builder = struct {
         const count: usize = switch (expr.data) {
             .list => |items| items.len,
             .empty_list => 0,
-            else => unreachable, // only list expressions finish as lists
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable, // only list expressions finish as lists
         };
         const ty = try self.exprType(expr_id);
         const values = try self.popValues(@intCast(count));
@@ -5924,7 +5924,7 @@ pub const Builder = struct {
         } else {
             const elem = switch (self.program.store.get(try self.structuralType(ty))) {
                 .list => |elem| elem,
-                else => invariant("a list's type is not a List"),
+                .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("a list's type is not a List"),
             };
             try self.emitDyn(target, .{ .list = .{ .elem_desc = try self.descOf(elem), .elems = try self.store.addLocalSpan(values) } });
         }
@@ -6062,7 +6062,7 @@ pub const Builder = struct {
                     const expr = switch (self.bodies().pattern(guard.pat).data) {
                         .numeral_literal => |numeral| numeral.guard.?,
                         .str_literal => |literal| literal.guard.?,
-                        else => invariant("a literal guard was asked of a non-literal pattern"),
+                        .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_interpolation, .underscore, .runtime_error => invariant("a literal guard was asked of a non-literal pattern"),
                     };
                     const guard_hole = try self.newHole();
                     try self.push(.{ .match_advance = .{ .state = state, .input = guard_hole } });
@@ -6199,14 +6199,14 @@ pub const Builder = struct {
                                 try pending.append(self.allocator, .{ .pattern = arg_pattern, .value = payload_local, .ty = payloads[arg_index] });
                             }
                         },
-                        else => invariant("a tag pattern's type is not a tag union"),
+                        .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a tag pattern's type is not a tag union"),
                     }
                 },
                 .tuple => |items| {
                     const ty = try self.structuralType(item.ty);
                     const elems = switch (self.program.store.get(ty)) {
                         .tuple => |span| self.program.store.span(span),
-                        else => invariant("a tuple pattern's type is not a tuple"),
+                        .primitive, .empty_record, .record, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a tuple pattern's type is not a tuple"),
                     };
                     for (items, 0..) |sub, index| {
                         const local = try self.readField(ty, item.value, @intCast(index), elems[index]);
@@ -6218,7 +6218,7 @@ pub const Builder = struct {
                     const record = switch (self.program.store.get(ty)) {
                         .record => |record| record,
                         .empty_record => if (destructs.len == 0) continue else invariant("a record pattern names a field of the empty record"),
-                        else => invariant("a record pattern's type is not a record"),
+                        .primitive, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a record pattern's type is not a record"),
                     };
                     const fields = self.program.store.fieldSpan(record.fields);
                     for (destructs) |destruct| {
@@ -6329,7 +6329,7 @@ pub const Builder = struct {
         const list_ty = try self.structuralType(item.ty);
         const elem_ty = switch (store.get(list_ty)) {
             .list => |elem| elem,
-            else => invariant("a list pattern's value is not a List"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("a list pattern's value is not a List"),
         };
         const u64_ty = try store.primitive(.u64);
         const len = try self.closedLocal(.u64);
@@ -6426,7 +6426,7 @@ pub const Builder = struct {
             const rep = self.program.joins.representative(ty);
             const tags = switch (self.program.store.get(rep)) {
                 .tag_union => |union_ty| self.program.store.tagSpan(union_ty.tags),
-                else => invariant("a discriminant equality's operand is not a tag union"),
+                .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a discriminant equality's operand is not a tag union"),
             };
             const variant = for (tags, 0..) |tag, index| {
                 if (tag.name == name and tag.payloads.len == 0) break index;
@@ -6477,7 +6477,7 @@ pub const Builder = struct {
             const structural = try self.structuralType(record_ty);
             const record = switch (self.program.store.get(structural)) {
                 .record => |record| record,
-                else => invariant("a field access's receiver is not a record"),
+                .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a field access's receiver is not a record"),
             };
             const fields = self.program.store.fieldSpan(record.fields);
             const semantic = for (fields, 0..) |field, index| {
@@ -6546,7 +6546,7 @@ pub const Builder = struct {
                 for (fields, out) |field, *slot| slot.* = try self.program.layouts.fieldStorage(field);
                 break :blk out;
             },
-            else => try self.allocator.alloc(TypeId, 0),
+            .primitive, .empty_record, .tag_union, .list, .box, .nominal, .function, .variable => try self.allocator.alloc(TypeId, 0),
         };
     }
 
@@ -6584,7 +6584,7 @@ pub const Builder = struct {
                 const name = self.program.store.fieldSpan(record.fields)[semantic_index].name;
                 return try self.emitDyn(target, .{ .field_addr_named = .{ .base = base_local, .desc = try self.descOf(ty), .name = try self.nameDesc(name) } });
             },
-            else => {},
+            .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => {},
         }
         try self.emitDyn(target, .{ .field_addr = .{ .base = base_local, .desc = try self.descOf(ty), .semantic_index = semantic_index } });
     }
@@ -6596,7 +6596,7 @@ pub const Builder = struct {
         const ty = try self.structuralType(nominal_ty);
         const union_ty = switch (store.get(ty)) {
             .tag_union => |union_ty| union_ty,
-            else => invariant("a tag pattern's type is not a tag union"),
+            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a tag pattern's type is not a tag union"),
         };
         const desc = try self.descOf(ty);
         const name_local = try self.nameDesc(name);
@@ -6875,7 +6875,7 @@ pub const Builder = struct {
             .tag_union => |union_ty| for (self.program.store.tagSpan(union_ty.tags)) |tag| {
                 if (tag.name == name) break tag;
             } else invariant("a tag test's tag is absent from its type"),
-            else => invariant("a tag test's value is not a tag union"),
+            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a tag test's value is not a tag union"),
         };
         return try self.selectVariant(ty, own);
     }
@@ -6888,7 +6888,7 @@ pub const Builder = struct {
         const rep = self.program.joins.representative(ty);
         const tags = switch (self.program.store.get(rep)) {
             .tag_union => |union_ty| self.program.store.tagSpan(union_ty.tags),
-            else => invariant("a tag's type is not a tag union"),
+            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a tag's type is not a tag union"),
         };
         for (tags, 0..) |tag, index| {
             if (tag.name != own.name) continue;
@@ -6902,7 +6902,7 @@ pub const Builder = struct {
     pub fn ownTag(self: *Builder, ty: TypeId, name: types.NameId, arity: usize) types.Tag {
         const union_ty = switch (self.program.store.get(ty)) {
             .tag_union => |union_ty| union_ty,
-            else => invariant("a tag's type is not a tag union"),
+            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a tag's type is not a tag union"),
         };
         for (self.program.store.tagSpan(union_ty.tags)) |tag| {
             if (tag.name == name and tag.payloads.len == arity) return tag;
@@ -7001,7 +7001,7 @@ pub const Builder = struct {
         return switch (committed.tag) {
             .struct_ => layouts.getStructFieldLayoutByOriginalIndex(committed.getStruct().idx, index),
             .zst => .zst,
-            else => invariant("a component read names a field of a layout that is neither a struct nor zero-sized"),
+            .scalar, .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .tag_union, .ptr, .hole, .dynamic => invariant("a component read names a field of a layout that is neither a struct nor zero-sized"),
         };
     }
 
@@ -7010,7 +7010,7 @@ pub const Builder = struct {
         const ty = try self.structuralType(raw_ty);
         const record = switch (self.program.store.get(ty)) {
             .record => |record| record,
-            else => invariant("a record field read's value is not a record"),
+            .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a record field read's value is not a record"),
         };
         const fields = self.program.store.fieldSpan(record.fields);
         const index = for (fields, 0..) |field, i| {

@@ -266,7 +266,7 @@ pub fn constructedValues(store: *const LirStore, allocator: std.mem.Allocator, o
         .slot_store => |slot| try out.appendSlice(allocator, &.{ slot.slot, slot.value }),
         .dict_compose => |dict| try appendSpan(store, allocator, dict.captures, out),
         .closure => |closure| try out.append(allocator, closure.capture),
-        else => unreachable, // only construct operations consume value operands
+        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_elem_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .desc_index, .tag_payload_addr, .eq, .hash, .inspect, .call_erased, .view, .numeral, .adapt => unreachable, // only construct operations consume value operands
     }
 }
 
@@ -280,7 +280,7 @@ pub fn borrowedValues(store: *const LirStore, allocator: std.mem.Allocator, op: 
         .numeral => {},
         .adapt => |adapt| try out.append(allocator, adapt.src),
         .dict_record => |dict| try appendSpan(store, allocator, dict.methods, out),
-        else => unreachable, // only borrow_operands operations borrow value operands
+        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_compose, .dict_method, .copy, .field_addr, .field_addr_named, .list_elem_addr, .box_payload_addr, .tag_discriminant_of, .desc_index, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .call_erased, .closure, .view => unreachable, // only borrow_operands operations borrow value operands
     }
 }
 

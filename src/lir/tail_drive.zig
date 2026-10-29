@@ -164,7 +164,7 @@ pub fn run(
                 op.call_erased.drive = drive;
                 updated.data = try store.addStmtRow(LIR.DynOp, op);
             },
-            else => unreachable, // only erased calls are collected as deferred
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => unreachable, // only erased calls are collected as deferred
         }
         if (drive == .unless_caller_drives) store.getProcSpecPtr(@fromBackingInt(deferred.caller)).reads_caller_drives = true;
     }
@@ -233,7 +233,7 @@ fn returnOf(
             .decref => |rc| current = rc.next,
             .decref_if_initialized => |rc| current = rc.next,
             .free => |rc| current = rc.next,
-            else => return .no,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .crash => return .no,
         }
     }
 }

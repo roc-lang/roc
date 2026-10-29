@@ -395,7 +395,7 @@ fn container(cache: *Cache, ops: *RocOps, comptime kind: Kind, child: *const Typ
         .list => .list,
         .box => .box,
         .recursive_box => .recursive_box,
-        else => @compileError("not a container kind"),
+        .zst, .scalar, .str, .bool, .record, .tuple, .tag_union, .erased_callable, .nominal, .opaque_unknown => @compileError("not a container kind"),
     };
     const key = [_]u64{ @backingInt(tag), ptrWord(child) };
     if (cache.lookup(&key)) |existing| return existing;
@@ -443,7 +443,7 @@ pub fn recordExtended(cache: *Cache, ops: *RocOps, fields: []const FieldInput, e
     const ext_fields: []const desc_mod.Field = switch (ext.kind) {
         .record => ext.fields(),
         .zst => &.{},
-        else => invariant(ops, "a record row's remainder descriptor is not a record"),
+        .scalar, .str, .bool, .list, .box, .tuple, .tag_union, .erased_callable, .nominal, .opaque_unknown, .recursive_box => invariant(ops, "a record row's remainder descriptor is not a record"),
     };
     var scratch: Scratch(FieldInput, 32) = .{};
     defer scratch.deinit(ops);
@@ -464,7 +464,7 @@ pub fn tagUnionExtended(cache: *Cache, ops: *RocOps, variants: []const VariantIn
     const ext_variants: []const desc_mod.Variant = switch (ext.kind) {
         .tag_union => ext.variants(),
         .zst => &.{},
-        else => invariant(ops, "a tag row's remainder descriptor is not a tag union"),
+        .scalar, .str, .bool, .list, .box, .record, .tuple, .erased_callable, .nominal, .opaque_unknown, .recursive_box => invariant(ops, "a tag row's remainder descriptor is not a tag union"),
     };
     var scratch: Scratch(VariantInput, 32) = .{};
     defer scratch.deinit(ops);

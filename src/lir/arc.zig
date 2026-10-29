@@ -17290,7 +17290,7 @@ const DynFixture = struct {
                     try testing.expectEqual(self.dynamic, rc.rc.concrete.layout_idx);
                 },
                 .free => |rc| try testing.expect(self.f.store.getLocal(rc.value).dyn == null),
-                else => {},
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .decref_if_initialized, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
             }
         }
     }
@@ -17463,7 +17463,7 @@ test "ARC outcome capability excludes conventions that return no ownership units
         f.store.getProcSpecPtr(proc).stable_signature = stable;
         const rc = [_]bool{ true, false, true };
         {
-            var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
+            var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, true);
             defer solution.deinit();
             try testing.expect(solution.availableOutcomeSpanOf(proc).isEmpty());
         }

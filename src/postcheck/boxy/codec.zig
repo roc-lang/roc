@@ -220,7 +220,7 @@ fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.C
 fn functionOf(program: *Program, ty: TypeId) @FieldType(types.Node, "function") {
     return switch (program.store.get(ty)) {
         .function => |function| function,
-        else => invariant("a generated codec's callable type is not a function type"),
+        .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a generated codec's callable type is not a function type"),
     };
 }
 
@@ -305,7 +305,7 @@ fn subjectKey(program: *Program, method: NameId, ty: TypeId) Allocator.Error!Typ
                 if (!peelable(nominal)) return current;
                 current = try program.converter().backing(current);
             },
-            else => return current,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => return current,
         }
     }
 }
@@ -402,24 +402,24 @@ fn scalarOf(program: *Program, ty: TypeId) ?Scalar {
     return switch (program.store.get(ty)) {
         .primitive => |primitive| switch (primitive) {
             inline .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64 => |tag| @field(Scalar, @tagName(tag)),
-            else => null,
+            .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => null,
         },
         .nominal => |nominal| if (nominal.builtin == .bool) .bool else null,
-        else => null,
+        .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => null,
     };
 }
 
 fn builtinArgs(program: *Program, ty: TypeId, builtin: checked.CheckedBuiltinNominal) ?[]const TypeId {
     return switch (program.store.get(ty)) {
         .nominal => |nominal| if (nominal.builtin == builtin) program.store.nominalArgs(nominal) else null,
-        else => null,
+        .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => null,
     };
 }
 
 fn tagByText(program: *Program, union_ty: TypeId, text: []const u8) ?types.Tag {
     const tag_union = switch (program.store.get(union_ty)) {
         .tag_union => |tag_union| tag_union,
-        else => return null,
+        .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => return null,
     };
     for (program.store.tagSpan(tag_union.tags)) |tag| {
         if (std.mem.eql(u8, program.store.nameText(tag.name), text)) return tag;
@@ -431,7 +431,7 @@ fn tagByText(program: *Program, union_ty: TypeId, text: []const u8) ?types.Tag {
 fn isUnitTagUnion(program: *Program, ty: TypeId, text: []const u8) bool {
     const tag_union = switch (program.store.get(ty)) {
         .tag_union => |tag_union| tag_union,
-        else => return false,
+        .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => return false,
     };
     if (tag_union.ext != null) return false;
     const tags = program.store.tagSpan(tag_union.tags);
@@ -497,7 +497,7 @@ fn recordFields(program: *Program, record_ty: TypeId) []const types.Field {
     return switch (program.store.get(record_ty)) {
         .record => |record| program.store.fieldSpan(record.fields),
         .empty_record => &.{},
-        else => invariant("a generated record codec's shape is not a record"),
+        .primitive, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a generated record codec's shape is not a record"),
     };
 }
 
@@ -506,7 +506,7 @@ fn recordFields(program: *Program, record_ty: TypeId) []const types.Field {
 fn keyIsUnitTags(program: *Program, ty: TypeId) bool {
     const tag_union = switch (program.store.get(ty)) {
         .tag_union => |tag_union| tag_union,
-        else => return false,
+        .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => return false,
     };
     const tags = program.store.tagSpan(tag_union.tags);
     if (tags.len == 0) return false;
@@ -739,7 +739,7 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
     const owner_view = program.moduleByKey(.{ .bytes = owner.artifact.bytes });
     const plan_id = switch (owner_view.bodies().expr(expr).data) {
         .dispatch_call, .type_dispatch_call => |maybe| maybe orelse invariant("a stored generated codec runtime's dispatch has no plan"),
-        else => invariant("a stored generated codec runtime does not name a dispatch"),
+        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a stored generated codec runtime does not name a dispatch"),
     };
     const plan = owner_view.view.static_dispatch_plans.plans[@backingInt(plan_id)];
     // A dispatch on a constrained variable reaches its derivation through
@@ -755,13 +755,13 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
             defer b.allocator.free(roots);
             const structural = switch (stored.evidence.nodes[roots[dependent.index.index]]) {
                 .structural => |index| stored.evidence.structural(index).*,
-                else => invariant("a stored generated codec runtime's evidence is not a structural derivation"),
+                .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => invariant("a stored generated codec runtime's evidence is not a structural derivation"),
             };
             const recorded = structural.checked orelse invariant("stored structural codec evidence records no checked edge");
             break :blk .{ program.moduleByKey(.{ .bytes = recorded.view.bytes }).index, recorded.generated_codec_derivation orelse
                 invariant("stored structural codec evidence names no generated derivation") };
         },
-        else => invariant("a stored generated codec runtime's dispatch names no derivation"),
+        .direct_pending, .direct_closed, .direct_parametric, .structural, .checked_error, .@"unreachable" => invariant("a stored generated codec runtime's dispatch names no derivation"),
     };
     const family = try familyFor(program, derivation_module, derivation);
     const worker = try runtimeWorker(program, family);
@@ -1033,7 +1033,7 @@ const Gen = struct {
     fn tryType(self: *Gen, template: TypeId, ok: TypeId, err: TypeId) Allocator.Error!TypeId {
         const nominal = switch (self.store().get(template)) {
             .nominal => |nominal| nominal,
-            else => invariant("a generated codec's Try template is not a nominal"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => invariant("a generated codec's Try template is not a nominal"),
         };
         const ty = try self.store().intern(.{ .nominal = .{
             .decl = nominal.decl,
@@ -1634,7 +1634,7 @@ const Gen = struct {
         const list_ty = self.b.currentWorker().capture_types[0];
         const elem_ty = switch (program_.store.get(list_ty)) {
             .list => |elem| elem,
-            else => invariant("a generated list encoder's elements are not a list"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("a generated list encoder's elements are not a list"),
         };
         const len = try self.lowLevelLayout(.list_len, &.{list}, .u64);
         const head = self.b.freshJoin();
@@ -2086,7 +2086,7 @@ const Gen = struct {
         const field_set_ty = fnArgs(program_, field_fn)[1];
         const handle_ty = switch (program_.store.get(field_set_ty)) {
             .list => |elem| elem,
-            else => invariant("a record parser's field set is not a list of field handles"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .box, .nominal, .function, .variable => invariant("a record parser's field set is not a list of field handles"),
         };
         const names = try allocator.alloc(LocalId, fields.len);
         defer allocator.free(names);
@@ -2609,7 +2609,7 @@ const Gen = struct {
     fn fieldsTypeOf(self: *Gen, iter_ty: TypeId) Allocator.Error!TypeId {
         const args = switch (self.store().get(iter_ty)) {
             .nominal => |nominal| self.store().nominalArgs(nominal),
-            else => invariant("a field set iterator is not an Iter"),
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .function, .variable => invariant("a field set iterator is not an Iter"),
         };
         return self.store().intern(.{ .list = args[0] });
     }
@@ -2658,7 +2658,7 @@ const Gen = struct {
 fn unionTags(program: *Program, ty: TypeId) []const types.Tag {
     return switch (program.store.get(ty)) {
         .tag_union => |tag_union| program.store.tagSpan(tag_union.tags),
-        else => invariant("a generated codec expected a tag union"),
+        .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a generated codec expected a tag union"),
     };
 }
 
@@ -2667,7 +2667,7 @@ fn tagUninhabited(program: *Program, tag_info: types.Tag) Allocator.Error!bool {
     for (program.store.span(tag_info.payloads)) |payload_ty| {
         switch (program.store.get(payload_ty)) {
             .tag_union => |tag_union| if (tag_union.ext == null and tag_union.tags.len == 0) return true,
-            else => {},
+            .primitive, .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => {},
         }
     }
     return false;
