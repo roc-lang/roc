@@ -1559,6 +1559,77 @@ fn renderSearchEntries(w: Writer, ctx: *const RenderContext, gpa: Allocator, bas
     }
 }
 
+/// Prose is stored once per site, separately from the immediately available API rows.
+fn writeSearchIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir) RenderError!void {
+    const file = try dir.createFile(io, "search-index.html", .{});
+    defer file.close(io);
+    var buf: [4096]u8 = undefined;
+    var bw = file.writer(io, &buf);
+    const w = &bw.interface;
+    try w.writeAll("<meta charset=\"utf-8\"><nav data-search-categories><span data-category=\"api\">API</span><span data-category=\"guides\">Guides &amp; examples</span></nav>\n");
+    for (ctx.package_docs.modules) |mod| {
+        if (mod.module_doc) |doc| {
+            try w.writeAll("<article data-category=\"api\" data-title=\"");
+            try reporting.writeEscapedHtml(w, mod.name);
+            try w.writeAll("\" data-href=\"");
+            if (!ctx.single_module_at_root) {
+                try reporting.writeEscapedHtml(w, mod.name);
+                try w.writeAll("/");
+            }
+            try w.writeAll("\"><p>");
+            try reporting.writeEscapedHtml(w, doc);
+            try w.writeAll("</p></article>\n");
+        }
+        const tree = try buildEntryTree(gpa, mod.entries, mod.name, mod.builtin_derived);
+        defer tree.deinit(gpa);
+        try writeSearchProseTree(w, ctx, mod.name, tree.root);
+    }
+    if (ctx.langref) |lr| {
+        for (lr.articles) |*article| {
+            try w.writeAll("<article data-category=\"guides\" data-sections data-title=\"");
+            const title = try render_markdown.titlePlainText(gpa, article);
+            defer gpa.free(title);
+            try reporting.writeEscapedHtml(w, title);
+            try w.writeAll("\" data-href=\"langref/");
+            if (!article.is_index) {
+                try reporting.writeEscapedHtml(w, article.slug);
+                try w.writeAll("/");
+            }
+            try w.writeAll("\">");
+            try render_markdown.renderArticleBody(w, gpa, lr.articles, article, "");
+            try w.writeAll("</article>\n");
+        }
+    }
+    try w.flush();
+}
+
+/// Emit documentation using the same entry paths as the sidebar and API rows.
+fn writeSearchProseTree(w: Writer, ctx: *const RenderContext, module_name: []const u8, node: *const SidebarNode) (Allocator.Error || error{WriteFailed})!void {
+    if (node.entry) |entry| {
+        if (entry.doc_comment) |doc| {
+            try w.writeAll("<article data-category=\"api\" data-title=\"");
+            if (!std.mem.eql(u8, node.full_path, module_name) and
+                !(std.mem.startsWith(u8, node.full_path, module_name) and node.full_path.len > module_name.len and node.full_path[module_name.len] == '.'))
+            {
+                try reporting.writeEscapedHtml(w, module_name);
+                try w.writeAll(".");
+            }
+            try reporting.writeEscapedHtml(w, node.full_path);
+            try w.writeAll("\" data-href=\"");
+            if (!ctx.single_module_at_root) {
+                try reporting.writeEscapedHtml(w, module_name);
+                try w.writeAll("/");
+            }
+            try w.writeAll("#");
+            try reporting.writeEscapedHtml(w, node.full_path);
+            try w.writeAll("\"><p>");
+            try reporting.writeEscapedHtml(w, doc);
+            try w.writeAll("</p></article>\n");
+        }
+    }
+    for (node.children.items) |child| try writeSearchProseTree(w, ctx, module_name, child);
+}
+
 /// Walk the entry tree depth-first, emitting a search type-ahead <li> for
 /// every leaf node that carries a DocEntry.
 fn renderSearchTree(
@@ -1572,6 +1643,7 @@ fn renderSearchTree(
     if (node.entry) |entry| {
         try w.writeAll("            <li class=\"hidden\"><a class=\"type-ahead-link\" href=\"");
         if (ctx.single_module_at_root) {
+            try w.writeAll(base);
             try w.writeAll("#");
         } else {
             try w.writeAll(base);
@@ -3194,72 +3266,46 @@ test "bidi controls render as visible text in documentation" {
     try std.testing.expectEqualStrings("שלום مرحبا", output.written()[start..]);
 }
 
-// Prose is stored once per site, separately from the immediately available API rows.
-fn writeSearchIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir) RenderError!void {
-    const file = try dir.createFile(io, "search-index.html", .{});
-    defer file.close(io);
-    var buf: [4096]u8 = undefined;
-    var bw = file.writer(io, &buf);
-    const w = &bw.interface;
-    try w.writeAll("<meta charset=\"utf-8\"><nav data-search-categories><span data-category=\"api\">API</span><span data-category=\"guides\">Guides &amp; examples</span></nav>\n");
-    for (ctx.package_docs.modules) |mod| {
-        if (mod.module_doc) |doc| {
-            try w.writeAll("<article data-category=\"api\" data-title=\"");
-            try reporting.writeEscapedHtml(w, mod.name);
-            try w.writeAll("\" data-href=\"");
-            if (!ctx.single_module_at_root) {
-                try reporting.writeEscapedHtml(w, mod.name);
-                try w.writeAll("/");
-            }
-            try w.writeAll("\"><p>");
-            try reporting.writeEscapedHtml(w, doc);
-            try w.writeAll("</p></article>\n");
-        }
-        const tree = try buildEntryTree(gpa, mod.entries, mod.name, mod.builtin_derived);
-        defer tree.deinit(gpa);
-        try writeSearchProseTree(w, ctx, mod.name, tree.root);
-    }
-    if (ctx.langref) |lr| {
-        for (lr.articles) |*article| {
-            try w.writeAll("<article data-category=\"guides\" data-sections data-title=\"");
-            const title = try render_markdown.titlePlainText(gpa, article);
-            defer gpa.free(title);
-            try reporting.writeEscapedHtml(w, title);
-            try w.writeAll("\" data-href=\"langref/");
-            if (!article.is_index) {
-                try reporting.writeEscapedHtml(w, article.slug);
-                try w.writeAll("/");
-            }
-            try w.writeAll("\">");
-            try render_markdown.renderArticleBody(w, gpa, lr.articles, article, "");
-            try w.writeAll("</article>\n");
-        }
-    }
-    try w.flush();
-}
+test "search index preserves API anchors for packages, single modules, and builtins" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var entries = [_]DocModel.DocEntry{.{
+        .name = "read",
+        .kind = .value,
+        .type_signature = null,
+        .doc_comment = "Read <input> & preserve text",
+        .children = &.{},
+    }};
+    var modules = [_]DocModel.ModuleDocs{
+        .{ .name = "Reader", .package_name = "test", .kind = .type_module, .module_doc = "Reader documentation", .entries = &entries },
+        .{ .name = "Other", .package_name = "test", .kind = .type_module, .module_doc = null, .entries = &.{} },
+    };
+    const package: DocModel.PackageDocs = .{ .name = "test", .modules = &modules };
+    var ctx = try RenderContext.init(&package, gpa);
+    defer ctx.deinit(gpa);
+    for ([_]bool{ false, true }) |single_module| {
+        ctx.single_module_at_root = single_module;
+        for ([_]bool{ false, true }) |builtin_derived| {
+            modules[0].builtin_derived = builtin_derived;
+            try writeSearchIndex(&ctx, gpa, io, tmp.dir);
+            const index = try tmp.dir.readFileAlloc(io, "search-index.html", gpa, .limited(4096));
+            defer gpa.free(index);
+            const anchor = if (builtin_derived) "read" else "Reader.read";
+            const prefix = if (single_module) "" else "Reader/";
+            const link = try std.fmt.allocPrint(gpa, "data-href=\"{s}#{s}\"", .{ prefix, anchor });
+            defer gpa.free(link);
+            try std.testing.expect(std.mem.find(u8, index, link) != null);
+            try std.testing.expect(std.mem.find(u8, index, "Read &lt;input&gt; &amp; preserve text") != null);
+            try std.testing.expect(std.mem.find(u8, index, "data-title=\"Reader.read\"") != null);
 
-fn writeSearchProseTree(w: Writer, ctx: *const RenderContext, module_name: []const u8, node: *const SidebarNode) (Allocator.Error || error{WriteFailed})!void {
-    if (node.entry) |entry| {
-        if (entry.doc_comment) |doc| {
-            try w.writeAll("<article data-category=\"api\" data-title=\"");
-            if (!std.mem.eql(u8, node.full_path, module_name) and
-                !(std.mem.startsWith(u8, node.full_path, module_name) and node.full_path.len > module_name.len and node.full_path[module_name.len] == '.'))
-            {
-                try reporting.writeEscapedHtml(w, module_name);
-                try w.writeAll(".");
-            }
-            try reporting.writeEscapedHtml(w, node.full_path);
-            try w.writeAll("\" data-href=\"");
-            if (!ctx.single_module_at_root) {
-                try reporting.writeEscapedHtml(w, module_name);
-                try w.writeAll("/");
-            }
-            try w.writeAll("#");
-            try reporting.writeEscapedHtml(w, node.full_path);
-            try w.writeAll("\"><p>");
-            try reporting.writeEscapedHtml(w, doc);
-            try w.writeAll("</p></article>\n");
+            var rows: std.Io.Writer.Allocating = .init(gpa);
+            defer rows.deinit();
+            try renderSearchEntries(&rows.writer, &ctx, gpa, "../../");
+            const row_link = try std.fmt.allocPrint(gpa, "href=\"../../{s}#{s}\"", .{ prefix, anchor });
+            defer gpa.free(row_link);
+            try std.testing.expect(std.mem.find(u8, rows.written(), row_link) != null);
         }
     }
-    for (node.children.items) |child| try writeSearchProseTree(w, ctx, module_name, child);
 }

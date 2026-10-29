@@ -21297,6 +21297,22 @@ test "renderDependencyTree shows declared sources, provenance, and shared subtre
     try std.testing.expect(std.mem.find(u8, out.items, "characters") == null);
 }
 
+/// Apply optional search metadata after all documentation destinations exist.
+fn configureDocsSearch(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
+    if (args.search_config) |path| {
+        var diagnostic: docs.search_config.Diagnostic = .{};
+        docs.search_config.apply(ctx.gpa, ctx.io.std_io, args.output, path, &diagnostic) catch |err| {
+            const stderr = ctx.io.stderr();
+            if (diagnostic.line > 0) {
+                stderr.print("{s}:{d}: could not configure documentation search: {}\n", .{ path, diagnostic.line, err }) catch {};
+            } else {
+                stderr.print("{s}: could not configure documentation search: {}\n", .{ path, err }) catch {};
+            }
+            return error.DocsFailed;
+        };
+    }
+}
+
 fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -21958,14 +21974,5 @@ test "dev ARC specialization is independent of source inlining" {
         try std.testing.expectEqual(expected, config.target.specialize_arc_modes);
         try std.testing.expectEqual(expected, lir.CheckedPipeline.LirPolicy.fromTarget(config.target).specialize_arc_modes);
         if (opt == .dev) try std.testing.expect(config.target.inline_mode != .none);
-    }
-}
-
-fn configureDocsSearch(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
-    if (args.search_config) |path| {
-        docs.search_config.apply(ctx.gpa, ctx.io.std_io, args.output, path) catch |err| {
-            std.debug.print("Error: could not configure documentation search: {}\n", .{err});
-            return error.DocsFailed;
-        };
     }
 }

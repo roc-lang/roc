@@ -3,11 +3,28 @@ const std = @import("std");
 const reporting = @import("reporting");
 const Allocator = std.mem.Allocator;
 
+/// Invalid metadata, unreadable input, or failures writing the generated index.
+pub const Error = Allocator.Error || std.Io.Dir.ReadFileAllocError || std.Io.Dir.OpenError || std.Io.Dir.WriteFileError || std.Io.Writer.Error || error{
+    InvalidSearchConfig,
+    InvalidSearchUrl,
+    InvalidUtf8,
+    UnknownSearchCategory,
+    TermTargetMustBeRelative,
+    UnknownSearchAnchor,
+};
+
+/// Location of a configuration failure; zero means a file-level failure.
+pub const Diagnostic = struct {
+    line: usize = 0,
+};
+
 /// Append configured categories, documents, and curated terms to the generated index.
 /// Relative source files are resolved against the configuration file's directory.
-pub fn apply(gpa: Allocator, io: std.Io, output: []const u8, config_path: []const u8) !void {
+pub fn apply(gpa: Allocator, io: std.Io, output: []const u8, config_path: []const u8, diagnostic: *Diagnostic) Error!void {
+    diagnostic.* = .{};
     const config = try std.Io.Dir.cwd().readFileAlloc(io, config_path, gpa, .limited(8 * 1024 * 1024));
     defer gpa.free(config);
+    if (!std.unicode.utf8ValidateSlice(config)) return error.InvalidUtf8;
     var directory = try std.Io.Dir.cwd().openDir(io, output, .{});
     defer directory.close(io);
     const original = try directory.readFileAlloc(io, "search-index.html", gpa, .limited(64 * 1024 * 1024));
@@ -21,37 +38,37 @@ pub fn apply(gpa: Allocator, io: std.Io, output: []const u8, config_path: []cons
     try categories.put("api", {});
     try categories.put("guides", {});
     var lines = std.mem.splitScalar(u8, config, '\n');
-    var line_number: usize = 0;
     // Categories are declared first so documents can be validated regardless of order.
     while (lines.next()) |raw| {
         const line = std.mem.trim(u8, raw, "\r");
         if (line.len == 0 or line[0] == '#') continue;
         var fields = std.mem.splitScalar(u8, line, '\t');
         if (std.mem.eql(u8, fields.next().?, "category")) {
-            const id = fields.next() orelse return error.InvalidSearchConfig;
-            if (id.len == 0) return error.InvalidSearchConfig;
-            try categories.put(id, {});
+            // Malformed records are diagnosed in the second pass, with a line number.
+            if (fields.next()) |id| {
+                if (id.len > 0) try categories.put(id, {});
+            }
         }
     }
     lines.reset();
     while (lines.next()) |raw| {
-        line_number += 1;
+        diagnostic.line += 1;
         const line = std.mem.trim(u8, raw, "\r");
         if (line.len == 0 or line[0] == '#') continue;
-        renderLine(gpa, io, directory, config_path, w, &categories, line) catch |err| {
-            std.debug.print("{s}:{d}: invalid search configuration: {}\n", .{ config_path, line_number, err });
-            return err;
-        };
+        try renderLine(gpa, io, directory, config_path, w, &categories, line);
     }
+    diagnostic.line = 0;
     try directory.writeFile(io, .{ .sub_path = "search-index.html", .data = html.written() });
 }
 
-fn escaped(w: *std.Io.Writer, text: []const u8) !void {
+/// Escape both attribute values and document text.
+fn escaped(w: *std.Io.Writer, text: []const u8) std.Io.Writer.Error!void {
     try reporting.writeEscapedHtml(w, text);
 }
 
-fn renderLine(gpa: Allocator, io: std.Io, directory: std.Io.Dir, config_path: []const u8, w: *std.Io.Writer, categories: *std.StringHashMap(void), line: []const u8) !void {
-    var fields: [6][]const u8 = undefined;
+/// Validate one TSV record and append its escaped index markup.
+fn renderLine(gpa: Allocator, io: std.Io, directory: std.Io.Dir, config_path: []const u8, w: *std.Io.Writer, categories: *std.StringHashMap(void), line: []const u8) Error!void {
+    var fields: [5][]const u8 = undefined;
     var count: usize = 0;
     var split = std.mem.splitScalar(u8, line, '\t');
     while (split.next()) |field| {
@@ -76,6 +93,7 @@ fn renderLine(gpa: Allocator, io: std.Io, directory: std.Io.Dir, config_path: []
         defer gpa.free(source_path);
         const source = try std.Io.Dir.cwd().readFileAlloc(io, source_path, gpa, .limited(8 * 1024 * 1024));
         defer gpa.free(source);
+        if (!std.unicode.utf8ValidateSlice(source)) return error.InvalidUtf8;
         try w.writeAll("<article data-full-navigation data-category=\"");
         try escaped(w, fields[1]);
         try w.writeAll("\" data-title=\"");
@@ -102,16 +120,22 @@ fn renderLine(gpa: Allocator, io: std.Io, directory: std.Io.Dir, config_path: []
     } else return error.InvalidSearchConfig;
 }
 
-fn validateUrl(url: []const u8) !void {
+/// Require a same-site URL without browser-normalized whitespace or separators.
+fn validateUrl(url: []const u8) error{InvalidSearchUrl}!void {
+    if (url.len == 0) return error.InvalidSearchUrl;
+    for (url) |byte| {
+        if (byte <= 0x20 or byte == 0x7f) return error.InvalidSearchUrl;
+    }
     // Search destinations are same-site paths; never executable schemes or network URLs.
-    if (std.mem.indexOfScalar(u8, url, ':') != null or std.mem.startsWith(u8, url, "//") or
-        std.mem.indexOfScalar(u8, url, '\\') != null) return error.InvalidSearchUrl;
+    if (std.mem.findScalar(u8, url, ':') != null or std.mem.startsWith(u8, url, "//") or
+        std.mem.findScalar(u8, url, '\\') != null) return error.InvalidSearchUrl;
 }
 
-fn validateTarget(gpa: Allocator, io: std.Io, dir: std.Io.Dir, url: []const u8) !void {
-    const hash = std.mem.indexOfScalar(u8, url, '#') orelse url.len;
+/// Check that a relative destination and optional anchor exist in generated output.
+fn validateTarget(gpa: Allocator, io: std.Io, dir: std.Io.Dir, url: []const u8) Error!void {
+    const hash = std.mem.findScalar(u8, url, '#') orelse url.len;
     const page = url[0..hash];
-    if (std.mem.startsWith(u8, page, "/") or std.mem.indexOf(u8, page, "..") != null or std.mem.indexOfScalar(u8, page, '?') != null) return error.TermTargetMustBeRelative;
+    if (std.mem.startsWith(u8, page, "/") or std.mem.find(u8, page, "..") != null or std.mem.findScalar(u8, page, '?') != null) return error.TermTargetMustBeRelative;
     const path = if (page.len == 0 or std.mem.endsWith(u8, page, "/"))
         try std.fmt.allocPrint(gpa, "{s}index.html", .{page})
     else
@@ -125,7 +149,7 @@ fn validateTarget(gpa: Allocator, io: std.Io, dir: std.Io.Dir, url: []const u8) 
         try anchor.writer.writeAll("id=\"");
         try escaped(&anchor.writer, url[hash + 1 ..]);
         try anchor.writer.writeAll("\"");
-        if (std.mem.indexOf(u8, content, anchor.written()) == null) return error.UnknownSearchAnchor;
+        if (std.mem.find(u8, content, anchor.written()) == null) return error.UnknownSearchAnchor;
     }
 }
 
@@ -154,15 +178,51 @@ test "search config indexes relative sources and validates curated anchors" {
             "category\trecipes\tRecipes & examples\n" ++
             "term\tapi\tlreduce\t#fold\tfold\n",
     });
-    try apply(gpa, io, path, config_path);
+    var diagnostic: Diagnostic = .{};
+    try apply(gpa, io, path, config_path, &diagnostic);
     const index = try tmp.dir.readFileAlloc(io, "search-index.html", gpa, .limited(4096));
     defer gpa.free(index);
-    try std.testing.expect(std.mem.indexOf(u8, index, "Recipes &amp; examples") != null);
-    try std.testing.expect(std.mem.indexOf(u8, index, "<article data-full-navigation") != null);
-    try std.testing.expect(std.mem.indexOf(u8, index, "&lt;script&gt; &amp; text") != null);
-    try std.testing.expect(std.mem.indexOf(u8, index, "data-search-term=\"lreduce\"") != null);
+    try std.testing.expect(std.mem.find(u8, index, "Recipes &amp; examples") != null);
+    try std.testing.expect(std.mem.find(u8, index, "<article data-full-navigation") != null);
+    try std.testing.expect(std.mem.find(u8, index, "&lt;script&gt; &amp; text") != null);
+    try std.testing.expect(std.mem.find(u8, index, "data-search-term=\"lreduce\"") != null);
     try std.testing.expectError(error.UnknownSearchAnchor, validateTarget(gpa, io, tmp.dir, "#missing"));
     try std.testing.expectError(error.TermTargetMustBeRelative, validateTarget(gpa, io, tmp.dir, "../index.html"));
     try tmp.dir.writeFile(io, .{ .sub_path = "search.tsv", .data = "term\tunknown\tx\t#fold\tfold\n" });
-    try std.testing.expectError(error.UnknownSearchCategory, apply(gpa, io, path, config_path));
+    try std.testing.expectError(error.UnknownSearchCategory, apply(gpa, io, path, config_path, &diagnostic));
+    try std.testing.expectEqual(@as(usize, 1), diagnostic.line);
+}
+
+test "search config failures leave the index unchanged and identify the record" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(path);
+    const config_path = try std.fs.path.join(gpa, &.{ path, "search.tsv" });
+    defer gpa.free(config_path);
+    const original = "<meta charset=\"utf-8\">";
+    try tmp.dir.writeFile(io, .{ .sub_path = "search-index.html", .data = original });
+    try tmp.dir.writeFile(io, .{ .sub_path = "index.html", .data = "<h2 id=\"fold\">fold</h2>" });
+    const cases = .{
+        .{ "category", error.InvalidSearchConfig },
+        .{ "category\t\tEmpty", error.InvalidSearchConfig },
+        .{ "all\tEverything\textra", error.InvalidSearchConfig },
+        .{ "term\tmissing\tlreduce\t#fold\tfold", error.UnknownSearchCategory },
+        .{ "term\tapi\tlreduce\t#missing\tfold", error.UnknownSearchAnchor },
+        .{ "term\tapi\tlreduce\tmissing/\tfold", error.FileNotFound },
+        .{ "term\tapi\tlreduce\t../index.html\tfold", error.TermTargetMustBeRelative },
+        .{ "document\tguides\tExample\t //example.com\tmissing.roc", error.InvalidSearchUrl },
+        .{ "document\tguides\tExample\t/examples/\tmissing.roc", error.FileNotFound },
+    };
+    inline for (cases) |case| {
+        try tmp.dir.writeFile(io, .{ .sub_path = "search.tsv", .data = "# comment\nall\tEverything\n" ++ case[0] ++ "\n" });
+        var diagnostic: Diagnostic = .{};
+        try std.testing.expectError(case[1], apply(gpa, io, path, config_path, &diagnostic));
+        try std.testing.expectEqual(@as(usize, 3), diagnostic.line);
+        const index = try tmp.dir.readFileAlloc(io, "search-index.html", gpa, .limited(4096));
+        defer gpa.free(index);
+        try std.testing.expectEqualStrings(original, index);
+    }
 }

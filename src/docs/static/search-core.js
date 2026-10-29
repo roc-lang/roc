@@ -1,6 +1,6 @@
 // Shared by the browser UI and the search ranking tests.
 (function (root) {
-  const normalize = text => text.toLocaleLowerCase().replace(/\s+/g, " ").trim();
+  const normalize = text => text.toLowerCase().replace(/\s+/g, " ").trim();
   function rank(documents, query, { allowAliasPrefixes = true } = {}) {
     const q = normalize(query);
     if (!q) return [];

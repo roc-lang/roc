@@ -8,7 +8,7 @@ API module and entry documentation is indexed at its existing destination.
 The dropdown keeps API matches in compact signature rows. Other matches appear in
 separate groups, with five prose results per category in the initial All view.
 “More” expands that group in place without changing the filter; “Less” collapses
-it again. Each group expands independently. “Show snippets” / “Hide snippets”
+it again. Each group expands independently. The snippet icon button
 toggles context independently of the category, keeping the choice while searching.
 Snippets highlight query words case-insensitively and keep only the title underlined
 on hover. Toggling snippets preserves the top visible result where space allows.
@@ -50,8 +50,8 @@ pages. Documents with different source files may share a destination, e.g. an
 example's README and its Roc source; search deduplicates destination links.
 
 Curated terms match case-insensitively and rank before incidental prose matches.
-Word aliases also match prefixes from the first letter, displaying the complete
-alias alongside the result. Punctuation-only terms require an exact match.
+Exact aliases always match. Word aliases also match prefixes when there are no
+API name or signature matches, displaying the complete alias alongside the result. Punctuation-only terms require an exact match.
 For a curated punctuation-only query, incidental matches are suppressed.
 Their destinations must be relative paths into the generated site, with an
 optional fragment. Generation checks that the target file and anchor exist.
@@ -80,8 +80,12 @@ zig-out/bin/roc docs --builtins --with-lang-ref --search-config=docs/search.tsv
 
 ## Checks
 
+The dependency-free JavaScript tests run in the PR static-checks job. Run them
+locally with Node.js 18 or newer, and run the generator tests with Zig:
+
 ```sh
 node --test test/docs-search/search.test.cjs
+zig build run-test-zig-module-docs
 ```
 
 Browser checks should cover dense API queries (`fold`), case-insensitive headings

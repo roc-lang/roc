@@ -66,12 +66,12 @@ const setupSearch = () => {
         // Don't count nested list items and paragraphs twice.
         if (node.parentElement.closest("li,pre,table")) continue;
         if (/^H[1-6]$/.test(node.tagName) && node.id) {
-          if (section.text.trim()) prose.push(section);
+          prose.push(section);
           section = { category, fullNavigation, href: `${href.split("#")[0]}#${encodeURIComponent(node.id)}`,
             title: `${title} › ${node.textContent}`, text: "", terms: [] };
         } else section.text += ` ${node.textContent}`;
       }
-      if (section.text.trim()) prose.push(section);
+      prose.push(section);
     }
 
     function loadIndex() {
@@ -131,7 +131,7 @@ const setupSearch = () => {
       if (entry.fullNavigation) link.setAttribute("data-full-navigation", "");
       link.append(dynamic("span", "search-result-title", entry.title));
       if (entry.matchedTerm && engine.normalize(entry.title) !== engine.normalize(entry.matchedTerm)) {
-        link.append(dynamic("small", "search-match-note", ` — search term: ${entry.matchedTerm}`));
+        link.append(dynamic("small", "search-match-note", ` (search term: ${entry.matchedTerm})`));
       }
       if (showSnippets && entry.text.trim()) {
         const snippet = dynamic("small", "search-snippet");
@@ -247,7 +247,7 @@ const setupSearch = () => {
         if (selectedCategory && category !== selectedCategory) continue;
         const matches = ranked.filter(item => item.category === category && !seen.has(item.href));
         if (!matches.length) continue;
-        addHeading(category === "api" ? `${label} — documentation` : label);
+        addHeading(category === "api" ? `${label} documentation` : label);
         const expanded = expandedCategories.has(category);
         const limit = expanded ? matches.length : 5;
         for (const item of matches.slice(0, limit)) { addProse(item, query); seen.add(item.href); }
@@ -299,12 +299,13 @@ const setupSearch = () => {
     }
     searchForm.addEventListener("submit", searchSubmit);
 
-    // Capture '/' keypress for quick search
+    // Capture 's' keypress for quick search
     window.addEventListener("keyup", (e) => {
       if (e.key === "s" && document.activeElement !== searchBox) {
         e.preventDefault();
-        searchBox.focus();
         searchBox.value = "";
+        searchBox.focus();
+        search();
       }
 
       if (e.key === "Escape") {
