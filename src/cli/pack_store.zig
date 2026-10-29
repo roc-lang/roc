@@ -600,6 +600,130 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
     try std.testing.expect(malformed.spliceSource().find(malformed.spliceSource().context, key) == null);
 }
 
+// repro for https://github.com/roc-lang/roc/issues/12626
+test "a pack evicted between listing its directory and reading it is a miss, not an unreadable cache" {
+    // Another `roc`'s cache sweep deletes the first pack after the listing
+    // names it and before the loader opens it.
+    const Eviction = struct {
+        // Every hooked call receives the testing Io's own context, so the
+        // hook's count lives outside it.
+        var deleted: usize = 0;
+
+        fn openFile(context: ?*anyopaque, dir: std.Io.Dir, path: []const u8, options: std.Io.Dir.OpenFileOptions) std.Io.File.OpenError!std.Io.File {
+            if (deleted == 0 and std.mem.endsWith(u8, path, "a-evicted.rpk")) {
+                std.testing.io.vtable.dirDeleteFile(context, dir, path) catch unreachable; // the fixture wrote this pack and only this hook deletes it, once
+                deleted += 1;
+            }
+            return std.testing.io.vtable.dirOpenFile(context, dir, path, options);
+        }
+
+        fn packBytes(allocator: Allocator, key: [32]u8, identity: lir.ProcIdentity) Allocator.Error![]u8 {
+            const set = backend.dev.CodeExcerpt.Set{
+                .arena = @import("base").SingleThreadArena.init(allocator),
+                .excerpts = &.{.{
+                    .kind = .{ .proc = identity },
+                    .code = "\xc3",
+                    .entry = 0,
+                    .frame = null,
+                    .refs = &.{},
+                    .relocations = &.{},
+                    .data = &.{},
+                }},
+            };
+            return PackFile.write(allocator, &set, &.{.{
+                .key = key,
+                .excerpt = 0,
+                .rc_borrowed_params = 0,
+                .rc_ret_borrowed = false,
+                .rc_ret_lenders = 0,
+                .rc_read_only_params = 0,
+                .rc_ret_unique = false,
+                .rc_ret_unique_fields = 0,
+                .rc_ret_conditions = &.{},
+            }});
+        }
+    };
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const evicted_key = @as([32]u8, @splat(1));
+    const kept_key = @as([32]u8, @splat(2));
+    const offered_key = @as([32]u8, @splat(3));
+    const kept_identity = lir.ProcIdentity.forTest(2);
+    const offered_identity = lir.ProcIdentity.forTest(3);
+    const evicted_bytes = try Eviction.packBytes(allocator, evicted_key, lir.ProcIdentity.forTest(1));
+    defer allocator.free(evicted_bytes);
+    const kept_bytes = try Eviction.packBytes(allocator, kept_key, kept_identity);
+    defer allocator.free(kept_bytes);
+    const offered_bytes = try Eviction.packBytes(allocator, offered_key, offered_identity);
+    defer allocator.free(offered_bytes);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "a-evicted.rpk", .data = evicted_bytes });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "b-kept.rpk", .data = kept_bytes });
+    const dir_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(dir_path);
+
+    Eviction.deleted = 0;
+    var vtable = std.testing.io.vtable.*;
+    vtable.dirOpenFile = Eviction.openFile;
+    const io: std.Io = .{ .userdata = std.testing.io.userdata, .vtable = &vtable };
+
+    var packs = LoadedPacks.init(allocator);
+    defer packs.deinit();
+    try packs.loadDirInto(io, dir_path, .cache_offers);
+    try std.testing.expectEqual(@as(usize, 1), Eviction.deleted);
+    try std.testing.expect(packs.failure == null);
+    try std.testing.expectEqual(@as(usize, 1), packs.packs.items.len);
+    try packs.indexPacks();
+    try std.testing.expect(packs.specCacheLookup().lookup(evicted_key, .dev_code, &.{}) == null);
+    const kept = packs.specCacheLookup().lookup(kept_key, .dev_code, &.{}) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(u8, &kept_identity.bytes, &kept.identity);
+    // The build goes on to offer the packs it compiles for the miss.
+    try packs.offerPack(offered_bytes);
+    const offered = packs.specCacheLookup().lookup(offered_key, .dev_code, &.{}) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(u8, &offered_identity.bytes, &offered.identity);
+}
+
+test "an offer to an unavailable object cache is dropped without failing the build" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "broken.rpk", .data = "not a pack" });
+    const dir_path = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(dir_path);
+    var packs = LoadedPacks.init(allocator);
+    defer packs.deinit();
+    try std.testing.expectError(error.MalformedPack, packs.loadDirInto(io, dir_path, .cache_offers));
+    const key = @as([32]u8, @splat(7));
+    const set = backend.dev.CodeExcerpt.Set{
+        .arena = @import("base").SingleThreadArena.init(allocator),
+        .excerpts = &.{.{
+            .kind = .{ .proc = lir.ProcIdentity.forTest(7) },
+            .code = "\xc3",
+            .entry = 0,
+            .frame = null,
+            .refs = &.{},
+            .relocations = &.{},
+            .data = &.{},
+        }},
+    };
+    const bytes = try PackFile.write(allocator, &set, &.{.{
+        .key = key,
+        .excerpt = 0,
+        .rc_borrowed_params = 0,
+        .rc_ret_borrowed = false,
+        .rc_ret_lenders = 0,
+        .rc_read_only_params = 0,
+        .rc_ret_unique = false,
+        .rc_ret_unique_fields = 0,
+        .rc_ret_conditions = &.{},
+    }});
+    defer allocator.free(bytes);
+    try packs.offerPack(bytes);
+    try std.testing.expectEqual(@as(usize, 0), packs.packs.items.len);
+    try std.testing.expect(packs.specCacheLookup().lookup(key, .dev_code, &.{}) == null);
+}
+
 test "object cache accepts new offers after indexing without moving served excerpts" {
     const allocator = std.testing.allocator;
     var packs = LoadedPacks.init(allocator);
@@ -1927,24 +2051,31 @@ pub const LoadedPacks = struct {
 
     /// Offer a pack prepared after checking to the same command's runtime
     /// lowering. Decoded packs keep stable addresses, including artifacts
-    /// already handed to the compile-time evaluator.
-    pub fn offerPack(self: *LoadedPacks, bytes: []const u8) LoadError!void {
+    /// already handed to the compile-time evaluator. An unavailable cache
+    /// serves no lookup, so an offer to it has no reader and is dropped.
+    /// The offered bytes are a pack this command just encoded, so only
+    /// allocation can fail to take them.
+    pub fn offerPack(self: *LoadedPacks, bytes: []const u8) Allocator.Error!void {
         self.ensureLoaded();
-        if (self.state == .unavailable) return self.failure.?;
+        if (self.state == .unavailable) return;
         var arena = base.SingleThreadArena.init(self.allocator);
         const owned = arena.allocator().dupe(u8, bytes) catch |err| {
             arena.deinit();
             self.unavailable(err);
             return err;
         };
-        self.appendPack(arena, owned) catch |err| {
-            self.unavailable(err);
-            return err;
-        };
-        if (self.state == .ready) self.indexPack(self.packs.items[self.packs.items.len - 1]) catch |err| {
-            self.unavailable(err);
-            return err;
-        };
+        self.appendPack(arena, owned) catch |err| return self.offerFailed(err);
+        if (self.state == .ready) self.indexPack(self.packs.items[self.packs.items.len - 1]) catch |err| return self.offerFailed(err);
+    }
+
+    fn offerFailed(self: *LoadedPacks, err: LoadError) Allocator.Error {
+        switch (err) {
+            error.OutOfMemory => {
+                self.unavailable(err);
+                return error.OutOfMemory;
+            },
+            error.MalformedPack, error.UnsupportedPackVersion, error.PackDirectoryUnreadable => base.invariant("a pack this command encoded could not be offered: {}", .{err}),
+        }
     }
 
     /// Index every loaded pack. Each decoded pack owns its stable storage.
