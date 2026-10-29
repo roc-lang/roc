@@ -8557,9 +8557,12 @@ module of the storing module's reflexive import closure, breadth-first in
 direct-import order, that holds a contract with that digest and roots with
 those keys, at its first such contract. The stored function was lowered from
 bodies that closure reaches, so one of its modules recorded an equal contract.
-Boxy reads the edge in the module its plan names, which must hold an equal
-contract. Completed-body records retain recorded edges and are rejected when
-their recording module is absent.
+Boxy resolves a stored function's codec dictionary edge from the same module,
+and builds the generated codec worker in it: the dictionary's requirement comes
+from the template's module and the shape from the use's module, and neither
+need hold the contract. A generated codec runtime body reads its edge in that
+body's module, which must hold an equal contract. Completed-body records
+retain recorded edges and are rejected when their recording module is absent.
 
 The checker's derived-codec walk records each nominal application whose
 backing it walks together with the generated derivation that walks it. A later
