@@ -1,7 +1,7 @@
 // Shared by the browser UI and the search ranking tests.
 (function (root) {
   const normalize = text => text.toLocaleLowerCase().replace(/\s+/g, " ").trim();
-  function rank(documents, query) {
+  function rank(documents, query, { allowAliasPrefixes = true } = {}) {
     const q = normalize(query);
     if (!q) return [];
     const words = q.split(" ");
@@ -10,7 +10,7 @@
       const body = normalize(entry.text);
       const terms = entry.terms || [];
       const matchedTerm = terms.find(term => normalize(term) === q) ||
-        terms.find(term => /[\p{L}\p{N}]/u.test(q) && normalize(term).startsWith(q));
+        (allowAliasPrefixes ? terms.find(term => /[\p{L}\p{N}]/u.test(q) && normalize(term).startsWith(q)) : undefined);
       const exactTerm = matchedTerm !== undefined && normalize(matchedTerm) === q;
       let score = exactTerm ? 1000 : matchedTerm ? 900 : title === q ? 800 : title.includes(q) ? 600 : 0;
       if (!score && words.every(word => `${title} ${body}`.includes(word))) score = 100;

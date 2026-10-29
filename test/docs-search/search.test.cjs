@@ -66,3 +66,17 @@ test('multiword snippets center on a matching word even without the exact phrase
  const result=snippet('prefix '.repeat(50)+'JSON input needs careful parsing','json parsing');
  assert.ok(result.includes('JSON'));
 });
+
+
+test('API matches suppress partial aliases but retain exact aliases and ordinary matches',()=>{
+ const docs = [
+  {title:'List.fold_rev',text:'Fold from the right',terms:['foldr'],href:'List/#fold_rev',category:'api'},
+  {title:'List.fold',text:'Combine elements',terms:['lreduce'],href:'List/#fold',category:'api'}
+ ];
+ const options = {allowAliasPrefixes:false};
+ assert.ok(rank(docs,'fol',options).every(item=>!item.matchedTerm));
+ assert.equal(rank(docs,'fol',options).length,2);
+ assert.equal(rank(docs,'foldr',options)[0].matchedTerm,'foldr');
+ assert.deepEqual(rank(docs,'lredu',options),[]);
+ assert.equal(rank(docs,'lredu',{allowAliasPrefixes:true})[0].matchedTerm,'lreduce');
+});

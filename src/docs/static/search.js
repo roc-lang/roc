@@ -177,7 +177,9 @@ const setupSearch = () => {
       loadIndex();
       const q = query.toLowerCase();
       const signatureQuery = q.replace(/\s+/g, "");
-      const ranked = engine.rank(prose, query);
+      const apiMatches = apiEntries.filter(item =>
+        item.name.includes(q) || item.signature.includes(signatureQuery));
+      const ranked = engine.rank(prose, query, { allowAliasPrefixes: apiMatches.length === 0 });
       const curatedSymbol = !/[\p{L}\p{N}]/u.test(query) && ranked.some(item => item.exactTerm);
       const used = new Set([...(apiEntries.length ? ["api"] : []), ...prose.map(item => item.category)]);
       if (loaded && (used.size > 1 || prose.length)) {
@@ -232,8 +234,7 @@ const setupSearch = () => {
         seen.add(item.href);
       }
       if (!curatedSymbol && (!selectedCategory || selectedCategory === "api")) {
-        const matches = apiEntries.filter(item => !seen.has(item.href) &&
-          (item.name.includes(q) || item.signature.includes(signatureQuery))).slice(0, MAX_RESULTS);
+        const matches = apiMatches.filter(item => !seen.has(item.href)).slice(0, MAX_RESULTS);
         if (matches.length && loaded && used.size > 1) addHeading(categories.get("api"));
         for (const item of matches) {
           item.li.classList.remove("hidden");
