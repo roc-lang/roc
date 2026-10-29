@@ -14,12 +14,8 @@ pub const Status = enum {
 
 /// Why a listed case fails, so the runner can count gaps by cause.
 pub const Reason = enum {
-    static_dictionary_unresolved_method,
-
     pub fn text(reason: Reason) []const u8 {
-        return switch (reason) {
-            .static_dictionary_unresolved_method => ".boxy plan: a static dictionary cannot resolve its method target",
-        };
+        return switch (reason) {};
     }
 };
 
@@ -31,6 +27,4 @@ pub const Gap = struct {
 };
 
 /// Every case whose `.boxy` executions do not yet agree with `.lss`.
-pub const gaps = [_]Gap{
-    .{ .case = "inspect: noncapturing compile-time callable restores attached-method target", .status = .child_failed, .reason = .static_dictionary_unresolved_method },
-};
+pub const gaps = [_]Gap{};

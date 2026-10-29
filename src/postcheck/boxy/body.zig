@@ -3995,7 +3995,10 @@ pub const Builder = struct {
                     const target_worker = self.program.worker(target).*;
                     const formal = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
                     entry.target = target;
-                    entry.bound = try self.relateVariables(formal, callable.*.?, target_worker.scheme_vars.len);
+                    // A scheme variable only the target's own obligations
+                    // mention is fixed by relating those obligations'
+                    // methods (`Program.instantiateTarget`).
+                    entry.bound = try self.allocator.dupe(TypeId, (try self.program.instantiateTarget(target, formal, callable.*.?)).bound);
                 },
                 .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
             }
