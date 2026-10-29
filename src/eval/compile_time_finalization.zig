@@ -755,6 +755,11 @@ pub const CompletedStages = struct {
     erased_members: lir.CheckedPipeline.CompletedErasedMembers = .{},
     /// The producers of the stage being lowered, whose slots it evaluates.
     pending: std.AutoHashMapUnmanaged(ProducerSlotKey, void) = .empty,
+    /// Each producer's level, and the level of the stage being lowered.
+    /// A stage reserves, without filling, the slots of producers a later
+    /// level evaluates (`evaluatesLater`).
+    levels: std.AutoHashMapUnmanaged(ProducerSlotKey, u32) = .empty,
+    level: u32 = 0,
     /// The specializations' compile-time reads, which the object cache
     /// writes beside the program's procedures.
     spec_comptime_reads: ?lir.CheckedPipeline.SpecComptimeReads = null,
@@ -794,6 +799,7 @@ pub const CompletedStages = struct {
         self.scalar_values.deinit(self.allocator);
         self.erased_members.deinit(self.allocator);
         self.pending.deinit(self.allocator);
+        self.levels.deinit(self.allocator);
         if (self.spec_comptime_reads) |*reads| reads.deinit();
         for (self.artifacts.items) |*set| set.deinit();
         self.artifacts.deinit(self.allocator);
@@ -909,6 +915,17 @@ pub const CompletedStages = struct {
         return self.pending.contains(.{ .module = module, .root = root });
     }
 
+    /// Whether a level after the stage being lowered evaluates `module`'s
+    /// `root`. The stage's code reads such a root only from a function it
+    /// compiles without running: a function value it creates as an erased
+    /// callable's member. Code the stage may run reads only roots of
+    /// earlier levels or its own (design.md "Dependency-Ordered
+    /// Compile-Time Evaluation").
+    fn evaluatesLater(self: *const CompletedStages, module: checked.ModuleId, root: lir.LIR.ComptimeProducer) bool {
+        const level = self.levels.get(.{ .module = module, .root = root }) orelse return false;
+        return level > self.level;
+    }
+
     fn materializeStage(allocator: Allocator, context: *anyopaque, target: *LirProgram.Result) Allocator.Error!LirProgram.FrozenStaticData {
         const self: *CompletedStages = @ptrCast(@alignCast(context));
         return transcodeCompletedSlots(allocator, self, target);
@@ -963,12 +980,18 @@ const ProgramSlots = struct {
     fn evaluatesHere(_: *const ProgramSlots, _: checked.ModuleId, _: lir.LIR.ComptimeProducer) bool {
         return false;
     }
+
+    fn evaluatesLater(_: *const ProgramSlots, _: checked.ModuleId, _: lir.LIR.ComptimeProducer) bool {
+        return false;
+    }
 };
 
 /// Freeze each of `target`'s compile-time value slots that `sources` holds
 /// a completed value for, matched by owner module and producer identity.
 /// Target representation comes exclusively from the paired slot plans. A
-/// slot `sources` holds no value for is one the target evaluates itself.
+/// slot `sources` holds no value for is one the target evaluates itself, or
+/// one a later level evaluates, which only code the target never runs reads
+/// and which the target reserves uninitialized.
 fn transcodeCompletedSlots(
     allocator: Allocator,
     sources: anytype,
@@ -989,7 +1012,14 @@ fn transcodeCompletedSlots(
         const target_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(index));
         const source = sources.find(target_root.module, target_root.root, std.meta.activeTag(target_root.role)) orelse {
             if (sources.evaluatesHere(target_root.module, target_root.root)) continue;
-            finalizationInvariant("target slot has no corresponding host root");
+            if (!sources.evaluatesLater(target_root.module, target_root.root)) finalizationInvariant("target slot has no corresponding host root");
+            const reserved = try uninitializedSlot(allocator, target, target_slot);
+            appendFrozenGraph(allocator, &exports, reserved) catch |err| {
+                static_data_exports.deinitStaticData(allocator, reserved);
+                return err;
+            };
+            allocator.free(reserved);
+            continue;
         };
         const source_result = &source.program.lir_result;
         const frozen = source.program.frozen_static_data.?;
@@ -1006,7 +1036,7 @@ fn transcodeCompletedSlots(
         const converted = if (target_root.role == .failure_message)
             try FrozenRootTranscode.transcodeFailure(allocator, source_result, source_entry, frozen.exports, source_symbol, target, target_slot)
         else if (failed)
-            try uninitializedFailedSlot(allocator, target, target_slot)
+            try uninitializedSlot(allocator, target, target_slot)
         else
             try FrozenRootTranscode.transcodeValueSlot(allocator, source_result, source_entry, frozen.exports, source_symbol, target, target_slot);
         appendFrozenGraph(allocator, &exports, converted) catch |err| {
@@ -1023,9 +1053,11 @@ fn frozenSlotSymbol(symbols: []const ?static_data_exports.StaticDataSymbolId, sl
     return symbols[@backingInt(slot)] orelse finalizationInvariant("completed frozen graph omitted a declared slot");
 }
 
-/// Failed values have no representation to convert. Their explicit guard
-/// owns the failure; reserve the destination slot without inspecting its bytes.
-fn uninitializedFailedSlot(allocator: Allocator, program: *const LirProgram.Result, slot: lir.LIR.StaticDataId) Allocator.Error![]static_data_exports.StaticDataExport {
+/// Failed values have no representation to convert, and their explicit guard
+/// owns the failure; a later level's values do not exist yet, and no code
+/// that runs reads them. Either way, reserve the destination slot without
+/// inspecting its bytes.
+fn uninitializedSlot(allocator: Allocator, program: *const LirProgram.Result, slot: lir.LIR.StaticDataId) Allocator.Error![]static_data_exports.StaticDataExport {
     const entry = program.static_data_values.items[@backingInt(slot)];
     const size_align = program.layouts.layoutSizeAlign(program.layouts.getLayout(entry.layout_idx));
     const name = try LirProgram.staticDataSymbolName(allocator, slot);
@@ -1958,6 +1990,10 @@ fn evaluateStaged(
 
     var completed = CompletedStages.init(allocator);
     errdefer completed.deinit();
+    for (groups.groups.items) |group| for (groups.membersOf(group)) |ordinal| {
+        const gop = try completed.levels.getOrPut(allocator, CompletedStages.producerSlotKey(producers, lifted.loweringModules(), ordinal));
+        gop.value_ptr.* = if (gop.found_existing) @min(gop.value_ptr.*, group.level) else group.level;
+    };
     var stage_roots = std.ArrayList(u32).empty;
     defer stage_roots.deinit(allocator);
     var stage_literals = std.ArrayList(lir.LIR.LiteralRootId).empty;
@@ -1982,6 +2018,7 @@ fn evaluateStaged(
             try stage_producers.appendSlice(allocator, groups.membersOf(group));
         }
         std.sort.pdq(usize, stage_producers.items, {}, std.sort.asc(usize));
+        completed.level = @intCast(level);
         for (stage_producers.items) |ordinal| {
             if (ordinal < roots.len) {
                 try stage_roots.append(allocator, @intCast(ordinal));
