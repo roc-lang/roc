@@ -157,6 +157,7 @@ const LowerModuleOptions = struct {
     tag_reachability: bool = false,
     promote_loop_appends: bool = true,
     prove_ranges: bool = false,
+    spec_constr_clone_inlining: lir.CheckedPipeline.SpecConstrCloneInlining = .all_calls,
     imports: []const helpers.ModuleSource = &.{},
     /// TEMPORARY SCAFFOLDING: rewrites the root module's checked bodies after
     /// checking and before lowering, for post-check forms no checker site emits
@@ -215,6 +216,7 @@ fn lowerModuleWithOptions(
             .promote_loop_appends = .{ .value = options.promote_loop_appends },
             .prove_ranges = options.prove_ranges,
             .tag_reachability = options.tag_reachability,
+            .spec_constr_clone_inlining = options.spec_constr_clone_inlining,
         },
     );
     errdefer lowered.deinit();
@@ -1249,6 +1251,11 @@ fn expectInlinePlanDecision(
     fn_name: []const u8,
     expected: bool,
 ) TestError!void {
+    try std.testing.expectEqual(expected, try inlinePlanDecision(source, fn_name));
+}
+
+/// Whether the inline plan inlines the function named `fn_name`.
+fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     const allocator = std.testing.allocator;
     var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
@@ -1297,18 +1304,19 @@ fn expectInlinePlanDecision(
     defer inline_plan.deinit();
     const plan = inline_plan.view();
 
-    var found = false;
+    var decision: ?bool = null;
     for (solved.lifted.fnsView(), 0..) |fn_, index| {
         const name_id = solved.lifted.procDebugName(fn_.symbol) orelse continue;
         const actual_name = solved.lifted.names.exportNameText(name_id);
         if (!std.mem.eql(u8, actual_name, fn_name)) continue;
 
-        found = true;
         const fn_id: postcheck.MonotypeLifted.Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        try std.testing.expectEqual(expected, plan.bodyForFn(fn_id) != null);
+        const inlined = plan.bodyForFn(fn_id) != null;
+        if (decision) |earlier| try std.testing.expectEqual(earlier, inlined);
+        decision = inlined;
     }
 
-    try std.testing.expect(found);
+    return decision orelse error.TestUnexpectedResult;
 }
 
 fn rootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) TestError!LIR.LirProcSpecId {
@@ -1716,11 +1724,22 @@ fn markReachableLiftedStmt(
     }
 }
 
-fn directRecordWorkerIsSpecialized(shape: ProcShape) bool {
-    return shape.arg_count == 2 and
-        shape.self_call_count == 0 and
+/// A specialized loop over `leaves` state leaves: a worker taking the leaves
+/// as its arguments, or that worker localized as a join in a caller that
+/// takes no arguments, which happens when the caller is the worker's only
+/// user.
+fn loopCarriesLeaves(shape: ProcShape, leaves: usize) bool {
+    return shape.self_call_count == 0 and
         shape.jump_count >= 1 and
-        shape.struct_assign_count == 0;
+        (shape.arg_count == leaves or (shape.arg_count == 0 and shape.max_join_param_count >= leaves));
+}
+
+fn loopCarriesTwoLeaves(shape: ProcShape) bool {
+    return loopCarriesLeaves(shape, 2);
+}
+
+fn directRecordWorkerIsSpecialized(shape: ProcShape) bool {
+    return loopCarriesTwoLeaves(shape) and shape.struct_assign_count == 0;
 }
 
 fn directRecordWorkerIsGeneric(shape: ProcShape) bool {
@@ -1769,10 +1788,7 @@ fn whileRecordStateWithUnreadCallableIsScalarized(shape: ProcShape) bool {
 }
 
 fn directTupleWorkerIsSpecialized(shape: ProcShape) bool {
-    return shape.arg_count == 2 and
-        shape.self_call_count == 0 and
-        shape.jump_count >= 1 and
-        shape.struct_assign_count == 0;
+    return loopCarriesTwoLeaves(shape) and shape.struct_assign_count == 0;
 }
 
 fn directTupleWorkerIsGeneric(shape: ProcShape) bool {
@@ -1809,10 +1825,7 @@ fn unusedStateWorkerIsGeneric(shape: ProcShape) bool {
 }
 
 fn taggedStepWorkerIsSpecialized(shape: ProcShape) bool {
-    return shape.arg_count == 2 and
-        shape.self_call_count == 0 and
-        shape.jump_count >= 1 and
-        shape.tag_assign_count == 0;
+    return loopCarriesTwoLeaves(shape) and shape.tag_assign_count == 0;
 }
 
 fn taggedStepWorkerIsGeneric(shape: ProcShape) bool {
@@ -1823,10 +1836,7 @@ fn taggedStepWorkerIsGeneric(shape: ProcShape) bool {
 }
 
 fn multiTupleWorkerIsFullySpecialized(shape: ProcShape) bool {
-    return shape.arg_count == 5 and
-        shape.self_call_count == 0 and
-        shape.jump_count >= 1 and
-        shape.struct_assign_count == 0;
+    return loopCarriesLeaves(shape, 5) and shape.struct_assign_count == 0;
 }
 
 fn multiTupleWorkerIsGeneric(shape: ProcShape) bool {
@@ -3438,9 +3448,9 @@ test "single-use block helper nested in a multi-use wrapper is not duplicated" {
     , "helper", false);
 }
 
-test "bodies on interlocking call cycles stay procedures in every definition order" {
-    // `a` and `b` call each other, and so do `b` and `c`. All three lie on
-    // one cycle of candidate bodies, so none is inlined, whichever order the
+test "bodies on interlocking call cycles are decided alike in every definition order" {
+    // `a` and `b` call each other, and so do `b` and `c`. Which of them are
+    // inlined depends on the call graph alone, never on the order the
     // program numbers them in.
     const forward =
         \\a : U64 -> U64
@@ -3468,10 +3478,11 @@ test "bodies on interlocking call cycles stay procedures in every definition ord
         \\main : U64
         \\main = c(5)
     ;
-    for ([_][]const u8{ forward, backward }) |source| {
-        for ([_][]const u8{ "a", "b", "c" }) |name| {
-            try expectInlinePlanDecision(source, name, false);
-        }
+    // Each program is the other with `a` and `c` swapped, so each function
+    // is decided as its counterpart is.
+    const mirrored = [_][2][]const u8{ .{ "a", "c" }, .{ "b", "b" }, .{ "c", "a" } };
+    for (mirrored) |pair| {
+        try std.testing.expectEqual(try inlinePlanDecision(forward, pair[0]), try inlinePlanDecision(backward, pair[1]));
     }
 }
 
@@ -5521,9 +5532,11 @@ test "ARC keeps a loop-invariant record field out of the loop body keep" {
         \\    if i == 0 acc else count_from(state, i - 1, List.append(acc, List.len(state.a)))
         \\
         \\main : U64
-        \\main = List.len(count_from({ a: [1, 2], b: [3, 4] }, 4, []))
+        \\main = List.len(count_from({ a: [1, 2], b: [3, 4] }, 4, [])) + List.len(List.append([], 5.U64))
     ;
 
+    // The second append keeps `List.append` a procedure the loop calls, as
+    // slack versioning expects, rather than a single-use body inlined there.
     for ([_]bool{ false, true }) |promote_loop_appends| {
         var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
             .promote_loop_appends = promote_loop_appends,
@@ -11673,7 +11686,9 @@ test "a field take assigned into a join result cell keeps a loop list unique" {
 // uniqueness check, so the append grows the list in place. A string-pattern
 // `match` elsewhere in the loop body is unrelated to the record and must not
 // change that choice; the `==` form of the same loops is the control. Two
-// loops give `add` and `at_pos` two call sites, so neither is inlined.
+// loops give `add` and `at_pos` two call sites, so the inline plan keeps both
+// procedures. Release SpecConstr inlines both where the loops take their
+// records apart, so the program is lowered as dev builds lower it.
 test "issue 12420 a string match in a loop keeps dying call arguments on the owned variant" {
     const allocator = std.testing.allocator;
     const cases = [_]struct { name: []const u8, k: []const u8 }{
@@ -11731,7 +11746,10 @@ test "issue 12420 a string match in a loop keeps dying call arguments on the own
         });
         defer allocator.free(source);
 
-        var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .proc_debug_names = true });
+        var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+            .proc_debug_names = true,
+            .spec_constr_clone_inlining = lir.CheckedPipeline.dev_spec_constr_clone_inlining,
+        });
         defer lowered.deinit(allocator);
 
         const store = &lowered.lowered.lir_result.store;
