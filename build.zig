@@ -126,8 +126,9 @@ const msvc_runtime = @import("src/echo_platform/msvc_runtime.zig");
 var msvc_runtime_libs: [2]?*Step.Compile = .{ null, null };
 
 /// The MSVC-ABI startup archive for `target_name` (`x64win` or `arm64win`):
-/// process and DLL entry points, the TLS directory, and compiler-rt, each in
-/// its own archive member so a link pulls only what it references.
+/// process and DLL entry points, the TLS directory, the routines vcruntime
+/// supplies, and compiler-rt, each in its own archive member so a link pulls
+/// only what it references.
 fn msvcRuntimeLib(b: *std.Build, target_name: []const u8) *Step.Compile {
     const is_arm64 = std.mem.startsWith(u8, target_name, "arm64");
     const slot = &msvc_runtime_libs[@intFromBool(is_arm64)];
@@ -155,6 +156,11 @@ fn msvcRuntimeLib(b: *std.Build, target_name: []const u8) *Step.Compile {
     for ([_]Member{
         .{ .name = "dll_startup", .source = b.path("src/default_platform/msvc_runtime/dll_startup.zig") },
         .{ .name = "tls", .source = b.path("src/default_platform/msvc_runtime/tls.zig") },
+        .{ .name = "fltused", .source = b.path("src/default_platform/msvc_runtime/fltused.zig") },
+        .{ .name = "memcpy", .source = b.path("src/default_platform/msvc_runtime/memcpy.zig") },
+        .{ .name = "memmove", .source = b.path("src/default_platform/msvc_runtime/memmove.zig") },
+        .{ .name = "memset", .source = b.path("src/default_platform/msvc_runtime/memset.zig") },
+        .{ .name = "memcmp", .source = b.path("src/default_platform/msvc_runtime/memcmp.zig") },
     }) |member| {
         const obj = b.addObject(.{
             .name = b.fmt("msvc_runtime_{s}_{s}", .{ member.name, arch_name }),
@@ -169,7 +175,7 @@ fn msvcRuntimeLib(b: *std.Build, target_name: []const u8) *Step.Compile {
         });
         lib.root_module.addObject(obj);
     }
-    // Without libc, compiler-rt also defines `__chkstk` and `_fltused`.
+    // Without libc, compiler-rt also defines `__chkstk`.
     lib.bundle_compiler_rt = true;
 
     slot.* = lib;
@@ -1933,7 +1939,7 @@ pub fn build(b: *std.Build) void {
         \\/// Whether this compiler honors the developer-diagnostic environment
         \\/// variables (`ROC_LIR_DUMP`, `ROC_SPEC_CENSUS`, `ROC_PACK_TRACE`,
         \\/// `ROC_PACK_STATS`, `ROC_CTFE_DEMAND_TRACE`, `ROC_DEV_PACK_OBJECTS`,
-        \\/// `ROC_DEV_PACK_HITS`, `ROC_DEV_ARTIFACT_ROUNDTRIP`,
+        \\/// `ROC_DEV_PACK_HITS`, `ROC_DEV_EXCERPT_ROUNDTRIP`,
         \\/// `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE` and `ROC_BACKGROUND_OBJECTS`). Each executable reads its
         \\/// own optimize mode: a Debug compiler always does, and any other build
         \\/// only with `-Ddev-diagnostics`, so a release compiler reads none of
@@ -2452,7 +2458,9 @@ pub fn build(b: *std.Build) void {
     // (#10992). Every install of the roc CLI for a macOS target goes through
     // this tool, which removes the export trie and weak-bind info and
     // rewrites the ad-hoc code signature. src/cli/macho/DyldExportStrip.zig
-    // describes what removing this step would take.
+    // describes what removing this step would take. The same pass fails the
+    // build if the executable loads any dylib outside the OS or carries a
+    // run-path search entry.
     const dyld_export_strip_module = b.createModule(.{
         .root_source_file = b.path("src/cli/macho/DyldExportStrip.zig"),
         .imports = &.{
@@ -2477,6 +2485,11 @@ pub fn build(b: *std.Build) void {
     const roc_exe = main_exe_result.exe;
     roc_exe.root_module.addImport("compiler_version", compiler_version_module);
     const fixture_roc = executableRuntimePath(b, roc_exe, strip_macho_exports_tool);
+    const outcome_cache_check = b.addSystemCommand(&.{"python3"});
+    outcome_cache_check.addFileArg(b.path("ci/test_outcome_cache.py"));
+    outcome_cache_check.addArg("--roc");
+    outcome_cache_check.addFileArg(fixture_roc);
+    b.step("run-test-outcome-cache", "Check per-root test outcome reuse with focused CLI fixtures").dependOn(&outcome_cache_check.step);
     const fixture_options = b.addOptions();
     // Zig resolves this path against the build runner's directory. Tests run
     // in prepared fixture roots, so they also need the absolute build root.
@@ -2780,6 +2793,7 @@ pub fn build(b: *std.Build) void {
                     .{ .name = "bytebox", .module = bytebox.module("bytebox") },
                     .{ .name = "build_options", .module = roc_modules.build_options },
                     .{ .name = "msvc_runtime", .module = b.createModule(.{ .root_source_file = b.path("src/echo_platform/msvc_runtime.zig") }) },
+                    .{ .name = "artifact_store", .module = b.createModule(.{ .root_source_file = b.path("src/compile/artifact_store.zig"), .imports = &.{.{ .name = "base", .module = roc_modules.base }} }) },
                 },
             }),
         });
@@ -2854,7 +2868,17 @@ pub fn build(b: *std.Build) void {
     _ = llvm_embedded_files.addCopyFile(sha256_x86_sha_bc_file, "sha256_x86_sha.bc");
     _ = llvm_embedded_files.addCopyFile(sha256_aarch64_sha2_bc_file, "sha256_aarch64_sha2.bc");
 
-    const llvm_embedded_source: []const u8 =
+    // The private runtime every native LLVM object links, one per target that
+    // `llvmPrivateRuntimeTarget` names.
+    var private_runtime_entries: std.ArrayList(u8) = .empty;
+    for (std.enums.values(roc_target.RocTarget)) |runtime_target| {
+        if (runtime_target.llvmPrivateRuntimeTarget() != runtime_target) continue;
+        const file_name = b.fmt("private_runtime_{s}.bc", .{@tagName(runtime_target)});
+        _ = llvm_embedded_files.addCopyFile(addLlvmPrivateRuntimeBitcode(b, runtime_target), file_name);
+        private_runtime_entries.print(b.allocator, "    .{{ .target = .{s}, .bitcode = @embedFile(\"{s}\") }},\n", .{ @tagName(runtime_target), file_name }) catch @panic("OOM");
+    }
+
+    const llvm_embedded_fixed_source: []const u8 =
         \\pub const builtins32_bc = @embedFile("builtins32.bc");
         \\pub const builtins64_bc = @embedFile("builtins64.bc");
         \\pub const builtins32_core_bc = @embedFile("builtins32_core.bc");
@@ -2869,11 +2893,15 @@ pub fn build(b: *std.Build) void {
         \\pub const sha256_x86_sha_bc = @embedFile("sha256_x86_sha.bc");
         \\pub const sha256_aarch64_sha2_bc = @embedFile("sha256_aarch64_sha2.bc");
         \\pub const builtins_bc = builtins64_bc;
+        \\pub const PrivateRuntime = struct { target: @import("roc_target").RocTarget, bitcode: []const u8 };
+        \\pub const private_runtimes = [_]PrivateRuntime{
         \\
     ;
+    const llvm_embedded_source = b.fmt("{s}{s}}};\n", .{ llvm_embedded_fixed_source, private_runtime_entries.items });
 
     const llvm_embedded_module = b.createModule(.{
         .root_source_file = llvm_embedded_files.add("llvm_embedded.zig", llvm_embedded_source),
+        .imports = &.{.{ .name = "roc_target", .module = roc_modules.roc_target }},
     });
     roc_exe.step.dependOn(&llvm_embedded_files.step);
     roc_exe.root_module.addImport("llvm_embedded", llvm_embedded_module);
@@ -4165,6 +4193,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "bytebox", .module = bytebox.module("bytebox") },
                 .{ .name = "build_options", .module = roc_modules.build_options },
                 .{ .name = "msvc_runtime", .module = b.createModule(.{ .root_source_file = b.path("src/echo_platform/msvc_runtime.zig") }) },
+                .{ .name = "artifact_store", .module = b.createModule(.{ .root_source_file = b.path("src/compile/artifact_store.zig"), .imports = &.{.{ .name = "base", .module = roc_modules.base }} }) },
             },
         }),
         .filters = test_filters,
@@ -5533,6 +5562,40 @@ fn addSha256RoundsBitcode(b: *std.Build, comptime rounds_name: []const u8, query
     return obj.getEmittedLlvmBc();
 }
 
+/// LLVM bitcode for src/builtins/llvm_private_runtime.zig compiled for
+/// `runtime_target` at the lowest CPU level that target names, so one runtime
+/// serves every CPU level of the target.
+fn addLlvmPrivateRuntimeBitcode(b: *std.Build, runtime_target: roc_target.RocTarget) std.Build.LazyPath {
+    const lowest_cpu_target = runtime_target.baselineCpuTarget() orelse runtime_target;
+    const resolved = b.resolveTargetQuery(lowest_cpu_target.llvmTargetQuery());
+    const compiler_rt_module = b.createModule(.{
+        .root_source_file = std.Build.LazyPath.zig_lib.path(b, "compiler_rt.zig"),
+        .target = resolved,
+        .optimize = .fast,
+        .strip = true,
+        .pic = true,
+        .single_threaded = true,
+    });
+    const obj = b.addObject(.{
+        .name = b.fmt("roc_llvm_private_runtime_{s}", .{@tagName(runtime_target)}),
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/llvm_private_runtime.zig"),
+            .target = resolved,
+            .optimize = .fast,
+            .strip = true,
+            .pic = true,
+            .single_threaded = true,
+            .imports = &.{.{ .name = "compiler_rt", .module = compiler_rt_module }},
+        }),
+    });
+    obj.root_module.stack_check = false;
+    obj.root_module.link_libc = false;
+    obj.use_llvm = true;
+    obj.bundle_compiler_rt = false;
+    _ = obj.getEmittedBin();
+    return obj.getEmittedLlvmBc();
+}
+
 /// Run the wasm static-lib test runner on one built app as part of `step`.
 fn addWasmStaticLibRun(
     b: *std.Build,
@@ -5656,6 +5719,11 @@ fn addMainExe(
     // SetUnhandledExceptionFilter stack-overflow handler before the interpreter
     // can catch the overflow itself. Reserve 64 MiB to match eval-test-runner.
     exe.stack_size = stack_budget.roc_stack_size;
+    // Every library roc links is static, so no library directory belongs in
+    // the run-path search list. Native builds otherwise add one per library
+    // directory, naming a path on the build machine, which the macOS
+    // load-command check in src/cli/macho/DyldExportStrip.zig rejects.
+    exe.each_lib_rpath = false;
     splitCompilerSections(exe);
     configureBackend(exe, target);
     exe.root_module.addImport("llvm_codegen", llvm_codegen_module);

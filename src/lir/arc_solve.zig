@@ -1949,6 +1949,14 @@ fn computeOutcomeRestitution(
             continue;
         }
 
+        // A complete table can still return no ownership unit on any path.
+        // Such a convention is identical to the base and cannot be demanded;
+        // do not publish it as a variant capability or duplicate its liveness.
+        var restituted_params: arc_sig.ParamMask = 0;
+        var capabilities = accum.valueIterator();
+        while (capabilities.next()) |outcome| restituted_params |= outcome.remaining_on_all_paths;
+        if (restituted_params == 0) continue;
+
         const start = all_outcomes.items.len;
         var iter = accum.iterator();
         while (iter.next()) |entry| {

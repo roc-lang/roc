@@ -26,6 +26,8 @@ const PlatformPairing = check.CheckedArtifact.PlatformPairing;
 pub const Entry = enum {
     /// One fully checked module: an env body and an artifact body.
     checked_module,
+    /// Solved source and checker-owned publication inputs, before evaluation.
+    inference,
     /// One exact platform/app composition's changed columns, written in the
     /// checked-module envelope with an empty env body.
     platform_pairing,
@@ -54,6 +56,11 @@ const literal_values_version: u32 = 1;
 /// The running compiler's admission hash for `entry`.
 pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
     return comptime switch (entry) {
+        .inference => compose(
+            "roc-inference-entry-v1",
+            &.{ 1, check.CheckingDependencies.format_version },
+            &.{ module_env_layout, check.rootLayoutVersionHash(check.InferenceOutput.Serialized, 1) },
+        ),
         .checked_module => compose(
             "roc-checked-module-entry-v1",
             &.{checked_envelope_version},
@@ -124,6 +131,7 @@ fn splitmix64(x: u64) u64 {
 test "every entry kind has a distinct admission hash" {
     const hashes = [_][32]u8{
         entryVersionHash(.checked_module),
+        entryVersionHash(.inference),
         entryVersionHash(.platform_pairing),
         entryVersionHash(.canonicalized_module),
         entryVersionHash(.literal_values),
@@ -152,8 +160,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x58, 0xB4, 0x29, 0x77, 0x97, 0x61, 0xDD, 0xF6, 0x2E, 0xB0, 0x31, 0xDF, 0xDE, 0x90, 0xBA, 0xAC,
-        0x49, 0x90, 0xE4, 0xD5, 0x1B, 0xFF, 0xE0, 0x31, 0x81, 0x9A, 0x6F, 0xAD, 0xC8, 0x02, 0x6D, 0x35,
+        0x5A, 0x7C, 0xED, 0xE8, 0x50, 0x9E, 0x1D, 0xCB, 0x20, 0x43, 0xA7, 0x8B, 0x93, 0xDB, 0xE0, 0x8C,
+        0x02, 0x58, 0x9C, 0x96, 0xF0, 0x0C, 0xC8, 0x30, 0xE1, 0x40, 0x29, 0x0E, 0xDE, 0xCE, 0x96, 0x14,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }
