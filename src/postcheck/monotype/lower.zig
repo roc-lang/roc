@@ -5088,6 +5088,7 @@ const SpecJobWorkerInputs = struct {
     lanes: []?*SpecJobLaneState,
     modules: Common.CheckedModules,
     module_views: []const ModuleViewData,
+    closed_occurrences: *const ClosedOccurrenceIndex,
     source_file_ids: *const SourceFileIds,
     lowering_module_ids: *const LoweringModuleIds,
     snapshot: *const WorkerInputs.Snapshot,
@@ -5448,6 +5449,68 @@ const LoweringModuleIds = std.AutoHashMap([32]u8, Common.LoweringModuleId);
 
 const CheckedOccurrence = struct { module: checked.ModuleId, ty: checked.CheckedTypeId };
 
+/// The program's representative checked occurrence of every closed named
+/// type, by checked type key: the declaring module's own occurrence when
+/// that module holds one, so the choice does not move with other modules'
+/// keys as they are edited, and otherwise the occurrence in the lowest-keyed
+/// module that holds one. Closed occurrences have no instantiation identity,
+/// so one witness per program keeps freshly lowered, replayed and restored
+/// named types one Monotype. The coordinator builds the index once from every
+/// module view's root rows before any body is lowered, and workers read it.
+const ClosedOccurrenceIndex = struct {
+    entries: std.AutoHashMapUnmanaged([32]u8, Entry) = .empty,
+
+    const Entry = struct {
+        occurrence: CheckedOccurrence,
+        /// The checked key of the module declaring the named type.
+        owner: [32]u8,
+        /// Whether `occurrence` is in the declaring module's own store.
+        declared: bool,
+    };
+
+    fn build(allocator: Allocator, views: []const ModuleViewData) Allocator.Error!ClosedOccurrenceIndex {
+        var index: ClosedOccurrenceIndex = .{};
+        errdefer index.deinit(allocator);
+        for (views) |*view| {
+            for (view.types.rootRows(), 0..) |row, position| {
+                if (row.contains_identity_variables) continue;
+                const id: checked.CheckedTypeId = @fromBackingInt(@intCast(position));
+                if (!view.types.isNamed(id)) continue;
+                // A store represents each key by the root `rootForKey` names.
+                if ((view.types.rootForKey(row.key) orelse continue) != id) continue;
+                const owner: [32]u8 = switch (view.types.payload(id)) {
+                    .nominal => |nominal| nominal.owner_module.bytes,
+                    .alias => |alias| alias.owner_module.bytes,
+                    .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => unreachable, // isNamed admitted only nominal and alias payloads
+                };
+                const candidate: Entry = .{
+                    .occurrence = .{ .module = view.key, .ty = id },
+                    .owner = owner,
+                    .declared = std.mem.eql(u8, &view.key.bytes, &owner),
+                };
+                const slot = try index.entries.getOrPut(allocator, row.key.bytes);
+                if (!slot.found_existing) {
+                    slot.value_ptr.* = candidate;
+                    continue;
+                }
+                if (slot.value_ptr.declared) continue;
+                if (candidate.declared or std.mem.order(u8, &view.key.bytes, &slot.value_ptr.occurrence.module.bytes) == .lt) {
+                    slot.value_ptr.* = candidate;
+                }
+            }
+        }
+        return index;
+    }
+
+    fn deinit(self: *ClosedOccurrenceIndex, allocator: Allocator) void {
+        self.entries.deinit(allocator);
+    }
+
+    fn get(self: *const ClosedOccurrenceIndex, key: [32]u8) ?Entry {
+        return self.entries.get(key);
+    }
+};
+
 const Builder = struct {
     resolution_profile: ResolutionProfile = .{},
     /// `appModuleIdentity` of this lowering's modules.
@@ -5547,9 +5610,10 @@ const Builder = struct {
     /// Top-level statements of each top module whose types a literal value
     /// identity named, by module key.
     literal_top_statements: std.AutoHashMapUnmanaged([32]u8, collections.DenseMap(can.CIR.Statement.Idx, void)) = .empty,
-    /// Current committed representatives of normalized closed checked types.
-    /// Views are immutable for this lowering; a missing key stays missing.
-    persistent_closed_occurrences: std.AutoHashMapUnmanaged([32]u8, ?CheckedOccurrence) = .empty,
+    /// Coordinator only: the program's closed occurrence index, built by
+    /// `seedProgramModuleTables`. Workers borrow the coordinator's.
+    closed_occurrences: ClosedOccurrenceIndex = .{},
+    borrowed_closed_occurrences: ?*const ClosedOccurrenceIndex = null,
 
     /// Compile-time roots by module and site, for the modules whose roots a
     /// stored literal value's reads were looked up in.
@@ -5961,6 +6025,7 @@ const Builder = struct {
     /// run, so a worker's rows name the same owners the coordinator's do.
     fn seedProgramModuleTables(self: *Builder) Allocator.Error!void {
         try self.seedModuleIdentityIndex();
+        try self.buildClosedOccurrenceIndex();
         std.debug.assert(self.borrowed_source_file_ids == null);
         std.debug.assert(self.borrowed_lowering_module_ids == null);
         std.debug.assert(self.source_file_ids.count() == 0);
@@ -6039,6 +6104,7 @@ const Builder = struct {
         errdefer builder.deinit();
         builder.borrowed_source_file_ids = inputs.source_file_ids;
         builder.borrowed_module_views = inputs.module_views;
+        builder.borrowed_closed_occurrences = inputs.closed_occurrences;
         try builder.seedModuleIdentityIndex();
         builder.borrowed_lowering_module_ids = inputs.lowering_module_ids;
         builder.borrowed_comptime_roots = inputs.declared_comptime_roots;
@@ -6140,7 +6206,7 @@ const Builder = struct {
         var top_statements = self.literal_top_statements.valueIterator();
         while (top_statements.next()) |statements| statements.deinit();
         self.literal_top_statements.deinit(self.allocator);
-        self.persistent_closed_occurrences.deinit(self.allocator);
+        self.closed_occurrences.deinit(self.allocator);
         self.literal_read_sites.deinit(self.allocator);
         self.literal_read_site_modules.deinit(self.allocator);
         if (self.literal_store_view) |view| self.allocator.destroy(view);
@@ -7705,6 +7771,7 @@ const Builder = struct {
             .lanes = try self.specJobLanes(),
             .modules = self.modules,
             .module_views = self.moduleViews(),
+            .closed_occurrences = &self.closed_occurrences,
             .source_file_ids = self.sourceFileIds(),
             .lowering_module_ids = self.loweringModuleIds(),
             .snapshot = &snapshot,
@@ -7918,6 +7985,7 @@ const Builder = struct {
             .lanes = try self.specJobLanes(),
             .modules = self.modules,
             .module_views = self.moduleViews(),
+            .closed_occurrences = &self.closed_occurrences,
             .source_file_ids = self.sourceFileIds(),
             .lowering_module_ids = self.loweringModuleIds(),
             .snapshot = &snapshot,
@@ -10112,6 +10180,7 @@ const Builder = struct {
                             .lanes = try self.specJobLanes(),
                             .modules = self.modules,
                             .module_views = self.moduleViews(),
+                            .closed_occurrences = &self.closed_occurrences,
                             .source_file_ids = self.sourceFileIds(),
                             .lowering_module_ids = self.loweringModuleIds(),
                             .snapshot = &context.snapshot,
@@ -12855,6 +12924,18 @@ const Builder = struct {
     fn moduleForIdentityHash(self: *Builder, origin_hash: *const [32]u8) ?ModuleView {
         const index = self.module_identity_index.get(origin_hash.*) orelse return null;
         return &self.moduleViews()[index];
+    }
+
+    /// Coordinator only: index every module view's closed named roots before
+    /// any body is lowered, so every worker borrowing the index sees it complete.
+    fn buildClosedOccurrenceIndex(self: *Builder) Allocator.Error!void {
+        std.debug.assert(self.borrowed_closed_occurrences == null);
+        std.debug.assert(self.closed_occurrences.entries.count() == 0);
+        self.closed_occurrences = try ClosedOccurrenceIndex.build(self.allocator, self.moduleViews());
+    }
+
+    fn closedOccurrenceIndex(self: *const Builder) *const ClosedOccurrenceIndex {
+        return self.borrowed_closed_occurrences orelse &self.closed_occurrences;
     }
 
     fn seedModuleIdentityIndex(self: *Builder) Allocator.Error!void {
@@ -28597,50 +28678,9 @@ const BodyContext = struct {
                 .input => null,
                 .exact => |exact| .{ .module = .{ .bytes = exact.owner }, .ty_module = .{ .bytes = exact.occurrence }, .ty = @fromBackingInt(exact.ty) },
                 .closed => |closed| blk: {
-                    const entry = try self.builder.persistent_closed_occurrences.getOrPut(self.builder.allocator, closed.key);
-                    if (!entry.found_existing) {
-                        // The declaring module's own occurrence represents the
-                        // type whenever that module has it, so the choice does
-                        // not move with other modules' keys as they are edited.
-                        // A closed type its owner does not hold is represented
-                        // by the lowest-keyed module that does.
-                        var representative: ?CheckedOccurrence = null;
-                        if (self.builder.moduleForKeyBytes(closed.owner)) |owner_view| {
-                            if (owner_view.types.rootForKey(.{ .bytes = closed.key })) |root| {
-                                if (!owner_view.types.rootRows()[@backingInt(root)].contains_identity_variables) {
-                                    representative = .{ .module = owner_view.key, .ty = root };
-                                }
-                            }
-                        }
-                        if (representative == null) for (self.builder.moduleViews()) |view| {
-                            const root = view.types.rootForKey(.{ .bytes = closed.key }) orelse continue;
-                            if (view.types.rootRows()[@backingInt(root)].contains_identity_variables) continue;
-                            if (representative) |previous| {
-                                if (std.mem.order(u8, &previous.module.bytes, &view.key.bytes) != .gt) continue;
-                            }
-                            representative = .{ .module = view.key, .ty = root };
-                        };
-                        entry.value_ptr.* = representative;
-                    }
-                    const occurrence = entry.value_ptr.* orelse break :blk null;
-                    const view = self.builder.moduleForKeyBytes(occurrence.module.bytes).?;
-                    const owner = switch (view.types.payload(occurrence.ty)) {
-                        .nominal => |nominal| nominal.owner_module,
-                        .alias => |alias| alias.owner_module,
-                        .pending,
-                        .err,
-                        .flex,
-                        .rigid,
-                        .record,
-                        .tuple,
-                        .function,
-                        .empty_record,
-                        .tag_union,
-                        .empty_tag_union,
-                        => break :blk null,
-                    };
-                    if (!std.mem.eql(u8, &owner.bytes, &closed.owner)) break :blk null;
-                    break :blk .{ .module = .{ .bytes = closed.owner }, .ty_module = occurrence.module, .ty = occurrence.ty };
+                    const entry = self.builder.closedOccurrenceIndex().get(closed.key) orelse break :blk null;
+                    if (!std.mem.eql(u8, &entry.owner, &closed.owner)) break :blk null;
+                    break :blk .{ .module = .{ .bytes = closed.owner }, .ty_module = entry.occurrence.module, .ty = entry.occurrence.ty };
                 },
             };
         }
@@ -48575,12 +48615,14 @@ const BodyContext = struct {
                 const def = results[cursor].named_def;
                 const args_span = results[cursor + 1].span;
                 cursor += 2;
+                // A stored occurrence is the storing module's own (or, when
+                // open, its lowering view's); the program's representative
+                // occurrence of the same closed type keeps restored and
+                // freshly lowered types one Monotype.
+                const occurrence_view = self.builder.moduleForKeyBytes(named.named_type.ty_module.bytes) orelse
+                    Common.invariant("a stored named type's checked occurrence named a module outside the lowering input");
                 break :blk .{ .named = .{
-                    .named_type = .{
-                        .module = named.named_type.module,
-                        .ty = named.named_type.ty,
-                        .ty_module = named.named_type.ty_module,
-                    },
+                    .named_type = try self.builder.canonicalNamedOccurrence(occurrence_view, named.named_type.ty, named.named_type.module),
                     .def = def,
                     .kind = monotypeNamedKind(named.kind),
                     .builtin_owner = named.builtin_owner,
@@ -73173,8 +73215,9 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
     var views: [1]ModuleViewData = undefined;
     const view = &views[0];
     builder.borrowed_module_views = &views;
-    builder.persistent_closed_occurrences = .empty;
-    defer builder.persistent_closed_occurrences.deinit(gpa);
+    builder.closed_occurrences = .{};
+    builder.borrowed_closed_occurrences = null;
+    defer builder.closed_occurrences.deinit(gpa);
     builder.module_index = @TypeOf(builder.module_index).init(gpa);
     defer builder.module_index.deinit();
     view.key = .{};
@@ -73183,6 +73226,7 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
     view.types = checked_types.view();
     // The program seeds this module as its lowering input, as the coordinator does.
     view.lowering_module = try program.addLoweringModule(view.key);
+    try builder.buildClosedOccurrenceIndex();
 
     const pair_ty = try builder.lowerType(view, previous);
     try std.testing.expectEqual(@as(usize, 3), program.types.typeCount());
@@ -73223,14 +73267,34 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     var constants = check.ConstStore.ConstStore.init(gpa);
     defer constants.deinit();
     const stored_types = &constants.type_store;
-    // Two distinct synthetic checked types: the opaque nominal, and the alias
-    // chain that wraps it. This test resolves neither against a checked module;
-    // they only have to stay distinct from each other.
-    const nominal_checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
-    const alias_checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(2));
+    // Two distinct closed checked occurrences in the storing module's own
+    // checked types, as a stored type carries them: the opaque nominal, and
+    // the alias chain that wraps it. Restoring resolves each through the
+    // program's closed occurrence index to that same occurrence.
+    const module_key: checked.ModuleId = .{ .bytes = @splat(7) };
+    var checked_types = checked.CheckedTypeStore{};
+    defer checked_types.deinit(gpa);
+    const nominal_checked_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, nominal_checked_ty, .{ .nominal = .{
+        .name = type_name,
+        .origin_module = origin,
+        .owner_module = module_key,
+        .source_decl = 100,
+        .is_opaque = true,
+        .representation = .opaque_without_backing,
+    } });
+    const alias_checked_ty = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(2) }, false);
+    try checked_types.fillSyntheticTypeRoot(gpa, alias_checked_ty, .{ .alias = .{
+        .name = type_name,
+        .origin_module = origin,
+        .owner_module = module_key,
+        .source_decl = 101,
+        .backing = nominal_checked_ty,
+    } });
+    const stored_owner: names.CheckedModuleDigest = .{ .bytes = module_key.bytes };
     const str = try stored_types.append(.{ .primitive = .str });
     const nominal = try stored_types.append(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = nominal_checked_ty, .ty_module = .{} },
+        .named_type = .{ .module = stored_owner, .ty = nominal_checked_ty, .ty_module = stored_owner },
         .def = .{ .module = origin, .type_name = type_name },
         .kind = .@"opaque",
         .args = .{},
@@ -73239,7 +73303,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     var alias = nominal;
     for (0..32) |_| {
         alias = try stored_types.append(.{ .named = .{
-            .named_type = .{ .module = .{}, .ty = alias_checked_ty, .ty_module = .{} },
+            .named_type = .{ .module = stored_owner, .ty = alias_checked_ty, .ty_module = stored_owner },
             .def = .{ .module = origin, .type_name = type_name },
             .kind = .alias,
             .args = .{},
@@ -73248,7 +73312,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     }
     const recursive = try stored_types.reserve();
     const recursive_alias = try stored_types.append(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
+        .named_type = .{ .module = stored_owner, .ty = alias_checked_ty, .ty_module = stored_owner },
         .def = .{ .module = origin, .type_name = type_name },
         .kind = .alias,
         .args = .{},
@@ -73266,6 +73330,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     draft.mutable_graph_names = &program.names;
     var builder: Builder = undefined;
     builder.app_module_identity = null;
+    builder.allocator = gpa;
     builder.program = &program;
     builder.const_type_cache = .empty;
     defer builder.const_type_cache.deinit(gpa);
@@ -73276,10 +73341,20 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     ctx.builder = &builder;
     ctx.graph = graph;
     ctx.draft = &draft;
-    var view_data: ModuleViewData = undefined;
-    const view = &view_data;
+    var views: [1]ModuleViewData = undefined;
+    const view = &views[0];
+    view.key = module_key;
     view.names = &source_names;
+    view.types = checked_types.view();
     view.const_store = &constants;
+    builder.borrowed_module_views = &views;
+    builder.module_index = @TypeOf(builder.module_index).init(gpa);
+    defer builder.module_index.deinit();
+    try builder.module_index.put(view.key.bytes, .root);
+    builder.closed_occurrences = .{};
+    builder.borrowed_closed_occurrences = null;
+    defer builder.closed_occurrences.deinit(gpa);
+    try builder.buildClosedOccurrenceIndex();
 
     const result = try ctx.lowerConstCaptureType(view, root);
     const items = program.types.span(program.types.get(result).tuple);
@@ -73287,6 +73362,8 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     try std.testing.expectEqual(restored_nominal, GuardedList.at(items, 1));
     const named = program.types.get(restored_nominal).named;
     try std.testing.expectEqual(Type.NamedKind.@"opaque", named.kind);
+    try std.testing.expectEqual(nominal_checked_ty, named.named_type.ty);
+    try std.testing.expectEqualSlices(u8, &module_key.bytes, &named.named_type.ty_module.bytes);
     try std.testing.expectEqual(Type.BackingUse.runtime_layout_only, named.backing.?.use);
     try std.testing.expectEqual(GuardedList.at(items, 2), named.backing.?.ty);
     try std.testing.expect(restored_nominal != named.backing.?.ty);
@@ -73520,12 +73597,14 @@ test "fresh closed named occurrences agree with persistent replay and preserve o
     var builder: Builder = undefined;
     builder.allocator = a;
     builder.borrowed_module_views = &views;
-    builder.persistent_closed_occurrences = .empty;
-    defer builder.persistent_closed_occurrences.deinit(a);
+    builder.closed_occurrences = .{};
+    builder.borrowed_closed_occurrences = null;
+    defer builder.closed_occurrences.deinit(a);
     builder.module_index = @TypeOf(builder.module_index).init(a);
     defer builder.module_index.deinit();
     try builder.module_index.put(views[0].key.bytes, .root);
     try builder.module_index.put(views[1].key.bytes, .{ .import = 0 });
+    try builder.buildClosedOccurrenceIndex();
     const left = try builder.canonicalNamedOccurrence(&views[0], first_ty, owner);
     const right = try builder.canonicalNamedOccurrence(&views[1], second_ty, owner);
     const provenance = BodyContext.PersistentProvenance{ .builder = &builder };
