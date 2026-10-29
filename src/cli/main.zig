@@ -2166,12 +2166,19 @@ fn defaultRunCheckedHostIdentity(
     target: RocTarget,
     entrypoint_names: []const []const u8,
     hosted_symbols: []const []const u8,
+    boxy_runtime: bool,
 ) [32]u8 {
     var hasher = base.Sha256.init(.{});
     updateHashBytes(&hasher, "roc-run-default-checked-host-v1");
     updateHashBytes(&hasher, @tagName(target));
     updateHashBytes(&hasher, echo_platform.run_shim_platform_main_source);
     updateHashBytes(&hasher, echo_platform.echo_module_source);
+    // A `.boxy` program's host links the Boxy runtime (design.md "`.boxy`
+    // Runtime Lowering", Runtime).
+    if (boxy_runtime) {
+        updateHashBytes(&hasher, "roc-run-boxy-runtime-v1");
+        if (EmbeddedTargetObjects.forTarget(target).boxy_runtime_digest) |digest| hasher.update(&digest);
+    }
 
     updateHashU32(&hasher, @intCast(entrypoint_names.len));
     for (entrypoint_names) |name| {
@@ -3534,7 +3541,11 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
 
     const lowered = &lowered_result.lowered;
     const enable_debug = builtin.mode == .debug;
-    const exe_checked_host_identity = defaultRunCheckedHostIdentity(selected_target, entrypoint_names, lowered_result.hosted_symbols);
+    // A `.boxy` program's image calls the Boxy runtime's entry points: the
+    // host links the runtime object and the machine-code shim resolves them
+    // by name (design.md "`.boxy` Runtime Lowering", Runtime).
+    const boxy_runtime = lowered.lir_result.store.runtime_contract == .boxy;
+    const exe_checked_host_identity = defaultRunCheckedHostIdentity(selected_target, entrypoint_names, lowered_result.hosted_symbols, boxy_runtime);
     const link_inputs_identity = defaultRunLinkInputsIdentity(selected_target) orelse {
         return rejectRunTargetNotExecutable(ctx, selected_target);
     };
@@ -3579,7 +3590,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
             platform_entrypoints,
-            &.{},
+            if (boxy_runtime) backend.boxy_runtime_symbols else &.{},
             null,
             0,
             true,
@@ -3593,19 +3604,16 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
             return rejectRunTargetNotExecutable(ctx, selected_target);
         };
 
-        const object_files = [_][]const u8{
-            platform_shim_path,
-            shim_path,
-            runtime_path,
-            compiler_rt_path,
-        };
+        var object_files: std.ArrayList([]const u8) = .empty;
+        try object_files.appendSlice(ctx.arena, &.{ platform_shim_path, shim_path, runtime_path, compiler_rt_path });
+        if (boxy_runtime) try object_files.append(ctx.arena, try writeBoxyRuntimeObject(ctx, temp_dir, selected_target));
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(selected_target.toOsTag()),
             .target_abi = buildLinkAbi(selected_target, true),
             .target_os = selected_target.toOsTag(),
             .target_arch = selected_target.toCpuArch(),
             .output_path = exe_path,
-            .object_files = &object_files,
+            .object_files = object_files.items,
             .can_exit_early = false,
             .disable_output = false,
             .scratch_dir = temp_dir,
