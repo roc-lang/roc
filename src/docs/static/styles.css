@@ -218,7 +218,8 @@ table tr td {
 
 /* Targets of anchor-link navigation (permalink clicks, # references). */
 .entry[id],
-.entry-group[id] {
+.entry-group[id],
+.langref-article :is(h1, h2, h3, h4, h5, h6)[id] {
   /* Offset so the target lands below the sticky search bar. */
   scroll-margin-top: var(--module-search-form-height);
 }
