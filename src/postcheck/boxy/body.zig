@@ -511,7 +511,7 @@ pub const Builder = struct {
     /// Run `emit` (a function of `self` emitting straight-line statements)
     /// with its statements going to the entry chain, and record the locals
     /// they define as entry locals.
-    fn emitIntoEntry(self: *Builder, comptime emit: anytype, args: anytype) Allocator.Error!LocalId {
+    pub fn emitIntoEntry(self: *Builder, comptime emit: anytype, args: anytype) Allocator.Error!LocalId {
         if (self.emitting_entry) {
             const nested = try @call(.auto, emit, .{self} ++ args);
             try self.entry_locals.put(self.allocator, nested, {});
@@ -1497,6 +1497,13 @@ pub const Builder = struct {
     /// type the value has.
     pub const StorageDifference = enum { none, data, function };
 
+    /// A function value inside data is outside every row widening's reach
+    /// (design.md "Row Coercion Primitive") and function types relate
+    /// exactly, never by a construction relation that absorbs omitted
+    /// optional fields (design.md "Field Kinds"), so both types of the value
+    /// store such a function's signature alike.
+    const nested_function_storage = "two types of one value store the signature of a function value inside data differently";
+
     pub fn storageDifference(self: *Builder, from_root: TypeId, to_root: TypeId) Allocator.Error!StorageDifference {
         if (from_root == to_root) return .none;
         const store = &self.program.store;
@@ -1537,14 +1544,14 @@ pub const Builder = struct {
                         if (!present and record.ext == null and to_field.kind == .presence_slot) switch (pair.place) {
                             .data => result = .data,
                             .root_function, .signature_data => return .function,
-                            .nested_function => invariant("adapting a function value inside data is not yet lowered by Boxy"),
+                            .nested_function => invariant(nested_function_storage),
                         };
                         for (store.fieldSpan(record.fields)) |from_field| {
                             if (from_field.name != to_field.name) continue;
                             if (from_field.kind != to_field.kind) switch (pair.place) {
                                 .data => result = .data,
                                 .root_function, .signature_data => return .function,
-                                .nested_function => invariant("adapting a function value inside data is not yet lowered by Boxy"),
+                                .nested_function => invariant(nested_function_storage),
                             };
                             try pending.append(self.allocator, .{ .from = from_field.ty, .to = to_field.ty, .place = inner });
                         }
@@ -1558,7 +1565,7 @@ pub const Builder = struct {
                     if (tag_union.tags.len != to.tag_union.tags.len or (tag_union.ext == null) != (to.tag_union.ext == null)) switch (pair.place) {
                         .data => result = .data,
                         .root_function, .signature_data => return .function,
-                        .nested_function => invariant("a function value inside data whose result row the destination widens has no representation of the destination's"),
+                        .nested_function => invariant(nested_function_storage),
                     };
                     for (store.tagSpan(to.tag_union.tags)) |to_tag| {
                         for (store.tagSpan(tag_union.tags)) |from_tag| {
@@ -1604,6 +1611,16 @@ pub const Builder = struct {
                 return try self.packClosure(adapter, &.{value}, &.{from}, self.var_descs, &.{});
             },
         }
+    }
+
+    /// Dictionary `dictionary` of type `from` adapted to `to`. A dictionary
+    /// is composed in the entry chain and lives as long as the process, so
+    /// its adapter is too.
+    fn adaptDictionary(self: *Builder, dictionary: LocalId, from: TypeId, to: TypeId) Allocator.Error!LocalId {
+        const saved = self.immortal_closures;
+        self.immortal_closures = true;
+        defer self.immortal_closures = saved;
+        return try self.adaptValue(dictionary, from, to);
     }
 
     /// Read a dynamic capture record at `capture_ptr`: its descriptor word,
@@ -3834,7 +3851,11 @@ pub const Builder = struct {
                     stored_capture.* = for (stored.captures) |candidate| {
                         if (std.meta.eql(candidate.id, capture.capture_id)) break candidate;
                     } else invariant("a stored closure lacks one of its site's captures");
-                    if (stored_capture.kind != .lexical) invariant("restoring a closure capturing its own recursive binding is not yet lowered by Boxy");
+                    // A site's runtime captures are binders of enclosing
+                    // frames; a recursive-binding capture holds a top-level
+                    // root, which the restored closure reaches through its
+                    // own top-level reference and its site never lists.
+                    if (stored_capture.kind != .lexical) invariant("a closure site's runtime capture matched a stored recursive-binding capture");
                     // A capture of erased function type names no signature
                     // to relate; its type is its site's, at the variables
                     // the rest relates.
@@ -4449,7 +4470,7 @@ pub const Builder = struct {
                 const bound = try self.boundTypesAt(target, subst, callable);
                 defer self.allocator.free(bound);
                 const own_fn = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
-                return try self.adaptValue(dictionary, try self.program.substitute(self.allocator, own_fn, bound), expected);
+                return try self.adaptDictionary(dictionary, try self.program.substitute(self.allocator, own_fn, bound), expected);
             },
             .structural => |structural| {
                 const method: lower.StructuralMethod = switch (structural.derivation) {
@@ -4585,7 +4606,7 @@ pub const Builder = struct {
             const target_worker = self.program.worker(done.target).*;
             const dictionary = try self.composeDictionary(try self.program.methodEntryWorker(done.target), done.hidden.items);
             const own_fn = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
-            delivered = try self.adaptValue(dictionary, try self.program.substitute(self.allocator, own_fn, done.instance.bound), done.callable);
+            delivered = try self.adaptDictionary(dictionary, try self.program.substitute(self.allocator, own_fn, done.instance.bound), done.callable);
         }
     }
 
@@ -5573,8 +5594,9 @@ pub const Builder = struct {
         const values = try std.mem.concat(self.allocator, LocalId, &.{ captured, descs, dicts });
         defer self.allocator.free(values);
         if (self.immortal_closures) {
-            // Only function values (an adapted override's own callable,
-            // itself immortal) are captured: methods capture no values.
+            // Only function values (an adapted override's or dictionary's
+            // own callable, itself immortal) are captured: methods capture
+            // no values.
             for (capture_types) |capture_ty| {
                 if (self.program.store.get(capture_ty) != .function) invariant("a method override captures a value, which methods never do");
             }

@@ -7433,7 +7433,13 @@ The runtime worker contains direct field/tag branches and direct or dictionary
 calls selected by the checked evidence. It must not interpret a runtime shape
 plan or enter the LSS pipeline as a fallback. Stored generated callables retain their generated worker kind
 and compiler-assigned capture identities so restoration rebuilds the same
-ordinary Boxy callable from `ConstStore` data.
+ordinary Boxy callable from `ConstStore` data. A format or custom codec method
+that is a local procedure (a method of a type declared in a function body that
+stays a procedure of that body) is a function value of its declaring body: each
+use builds it there, in the entry chain, and the constructor captures it and
+hands it to the runtime worker after the renamed names, where every call of it
+is an erased call. Restoring a stored runtime builds those values in the
+restoring body, since compile-time evaluation stores none of them.
 
 Boxy generated encoders call the same format methods, with the same callback
 protocols, as the checked derivation contract names. A tag union of any
@@ -10326,7 +10332,8 @@ wrapper; such a child produces no value, so the join has nothing to relate.
   by the checker's rule and copy as they are. The re-tag is elided when the
   two types are one, or are ground members of one join set. A dictionary of a
   method whose signature holds a row its consumers' type widens is wrapped in
-  an adapter that re-tags the method's result the same way. The same rule
+  an adapter that re-tags the method's result the same way; the adapter,
+  like the dictionary it wraps, is an immortal composition of the entry chain. The same rule
   lowers a `?` return and a `return` into an open result.
 - SpecConstr clones and walks through the child like any wrapper, and treats
   a self call under a widen as NOT a tail call. A widen changes no value, so

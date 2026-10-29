@@ -52,8 +52,10 @@ const CallKey = struct { method: NameId, subject: ?TypeId };
 
 /// What a contract call resolved to.
 const Resolved = union(enum) {
-    /// A procedure, through its checked evidence edge.
-    callable: struct { node: static_dispatch.EvidenceNodeId, fn_ty: TypeId, checked_fn: checked.CheckedTypeId },
+    /// A procedure, through its checked evidence edge. A local procedure
+    /// (a method of a type declared in a function body) is the family's
+    /// local value `local`.
+    callable: struct { node: static_dispatch.EvidenceNodeId, fn_ty: TypeId, checked_fn: checked.CheckedTypeId, local: ?u32 = null },
     /// A nested generated derivation, walked structurally by this family.
     structural: DerivationId,
     /// A call checking rejected.
@@ -64,6 +66,9 @@ const FamilyKey = struct { kind: Kind, digest: [32]u8 };
 
 /// One renamed record field the constructor computes.
 const NameEntry = struct { record: TypeId, label: NameId };
+
+/// A local procedure the family calls, at the family's type `fn_ty`.
+const LocalCall = struct { node: static_dispatch.EvidenceNodeId, fn_ty: TypeId };
 
 pub const Family = struct {
     module: ModuleIndex,
@@ -84,7 +89,12 @@ pub const Family = struct {
     names: std.ArrayList(NameEntry) = .empty,
     /// The first name of each record's fields, by record type.
     record_names: std.AutoHashMapUnmanaged(TypeId, u32) = .empty,
-    /// The tuple of every renamed name (the empty record when there are none).
+    /// The local procedures the family calls. A use builds their function
+    /// values in its own body, where they are declared, and the constructor
+    /// captures them.
+    locals: std.ArrayList(LocalCall) = .empty,
+    /// The tuple of every renamed name, then every local procedure's
+    /// function value (the empty record when there are none).
     names_ty: TypeId,
     /// A `Try` type whose declaration builds the family's other `Try`s.
     try_template: TypeId,
@@ -136,6 +146,7 @@ pub const State = struct {
             family.calls.deinit(allocator);
             family.names.deinit(allocator);
             family.record_names.deinit(allocator);
+            family.locals.deinit(allocator);
         }
         self.families.deinit(allocator);
         self.family_ids.deinit(allocator);
@@ -246,10 +257,13 @@ pub fn familyFor(program: *Program, module: ModuleIndex, id: DerivationId) Alloc
     };
     const shape = try convertIn(program, env, derivation.shape_ty);
     // The codec walks a value whose shape its contract fixes; only the
-    // results (their error rows) vary with the family's variables.
+    // results (their error rows) vary with the family's variables. Checking
+    // derives a codec only for a shape and an encoding it has resolved (an
+    // unresolved one is a missing-method error), and the state is the
+    // resolved encoding's.
     const conv = program.converter();
     if (!try conv.representationClosed(shape) or !try conv.representationClosed(encoding_ty) or !try conv.representationClosed(state_ty)) {
-        invariant("generated codecs over open value shapes are not yet lowered by Boxy");
+        invariant("a generated codec's value shape, encoding, or state is open");
     }
 
     const index: u32 = @intCast(state.families.items.len);
@@ -334,8 +348,19 @@ fn collectCalls(program: *Program, family_index: u32) Allocator.Error!void {
                     break :blk .{ .structural = nested };
                 },
             };
-            const entry = try program.codec.families.items[family_index].calls.getOrPut(allocator, .{ .method = method, .subject = subject });
-            if (!entry.found_existing) entry.value_ptr.* = resolved;
+            const family = &program.codec.families.items[family_index];
+            const entry = try family.calls.getOrPut(allocator, .{ .method = method, .subject = subject });
+            if (!entry.found_existing) {
+                var value = resolved;
+                switch (value) {
+                    .callable => |*callable| if (table.evidenceNode(callable.node).target.kind == .local_proc) {
+                        callable.local = @intCast(family.locals.items.len);
+                        try family.locals.append(allocator, .{ .node = callable.node, .fn_ty = callable.fn_ty });
+                    },
+                    .structural, .checked_error => {},
+                }
+                entry.value_ptr.* = value;
+            }
         }
     }
 }
@@ -549,13 +574,14 @@ fn planNames(program: *Program, family_index: u32) Allocator.Error!void {
         std.mem.reverse(Step, pending.items[start..]);
     }
     const family = &program.codec.families.items[family_index];
-    if (family.names.items.len == 0) {
+    if (family.names.items.len == 0 and family.locals.items.len == 0) {
         family.names_ty = try program.store.emptyRecord();
     } else {
         const str = try program.store.primitive(.str);
-        const items = try allocator.alloc(TypeId, family.names.items.len);
+        const items = try allocator.alloc(TypeId, family.names.items.len + family.locals.items.len);
         defer allocator.free(items);
-        @memset(items, str);
+        @memset(items[0..family.names.items.len], str);
+        for (items[family.names.items.len..], family.locals.items) |*item, local| item.* = local.fn_ty;
         family.names_ty = try program.store.intern(.{ .tuple = items });
     }
 }
@@ -596,16 +622,25 @@ fn pieceWorker(program: *Program, module: ModuleIndex, piece: Piece, params: []c
     return id;
 }
 
+fn localTypes(program: *Program, family_index: u32) Allocator.Error![]const TypeId {
+    const family = program.codec.families.items[family_index];
+    const types_ = try program.arena.allocator().alloc(TypeId, family.locals.items.len);
+    for (types_, family.locals.items) |*ty, local| ty.* = local.fn_ty;
+    return types_;
+}
+
+/// The constructor captures the family's local procedure values.
 fn constructorWorker(program: *Program, family_index: u32) Allocator.Error!WorkerId {
     const family = program.codec.families.items[family_index];
-    return pieceWorker(program, family.module, .{ .family = family_index, .kind = .constructor }, fnArgs(program, family.constructor_fn), family.runtime_fn, &.{}, true);
+    return pieceWorker(program, family.module, .{ .family = family_index, .kind = .constructor }, fnArgs(program, family.constructor_fn), family.runtime_fn, try localTypes(program, family_index), true);
 }
 
 fn runtimeCaptures(program: *Program, family_index: u32) Allocator.Error![]const TypeId {
     const family = program.codec.families.items[family_index];
-    const captures = try program.arena.allocator().alloc(TypeId, 1 + family.names.items.len);
+    const captures = try program.arena.allocator().alloc(TypeId, 1 + family.names.items.len + family.locals.items.len);
     captures[0] = family.encoding;
-    @memset(captures[1..], try program.store.primitive(.str));
+    @memset(captures[1..][0..family.names.items.len], try program.store.primitive(.str));
+    @memcpy(captures[1 + family.names.items.len ..], try localTypes(program, family_index));
     return captures;
 }
 
@@ -645,29 +680,41 @@ fn callbackWorker(program: *Program, family_index: u32, piece: Piece, fn_ty: Typ
 pub fn dictionary(b: *Builder, structural: static_dispatch.StructuralEvidence) Allocator.Error!LocalId {
     const id = structural.generated_codec_derivation orelse invariant("structural codec evidence names no generated derivation");
     const family = try familyFor(b.program, b.module, id);
-    const descs = try familyDescs(b, family, b.program.codec.families.items[family].constructor_fn, try b.convert(structural.callable_ty));
-    defer b.allocator.free(descs);
-    return try b.composeDictionary(try constructorWorker(b.program, family), descs);
+    return try constructorAt(b, family, try b.convert(structural.callable_ty));
 }
 
 /// The dictionary of generated derivation `id` of `module_index` at the
 /// method callable type `callable`.
 pub fn dictionaryAt(b: *Builder, module_index: ModuleIndex, id: static_dispatch.GeneratedCodecDerivationId, callable: TypeId) Allocator.Error!LocalId {
     const family = try familyFor(b.program, module_index, id);
-    const descs = try familyDescs(b, family, b.program.codec.families.items[family].constructor_fn, callable);
-    defer b.allocator.free(descs);
-    return try b.composeDictionary(try constructorWorker(b.program, family), descs);
+    return try constructorAt(b, family, callable);
 }
 
-/// The descriptors of a family's variables at a use whose type `actual`
-/// instantiates the family's `formal` type.
-fn familyDescs(b: *Builder, family: u32, formal: TypeId, actual: TypeId) Allocator.Error![]LocalId {
-    const count = b.program.codec.families.items[family].env.vars.len;
-    const bound = try b.relateVariables(formal, actual, count);
+/// A family's constructor at a use whose constructor type is `actual`:
+/// the immortal callable capturing the family's local procedure values at
+/// the use's types, then its variables' descriptors.
+fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!LocalId {
+    const fam_ = b.program.codec.families.items[family];
+    const count = fam_.env.vars.len;
+    const bound = try b.relateVariables(fam_.constructor_fn, actual, count);
     defer b.allocator.free(bound);
-    const descs = try b.allocator.alloc(LocalId, count);
-    for (bound, descs) |ty, *desc| desc.* = try b.descOf(ty);
-    return descs;
+    const captures = try b.allocator.alloc(LocalId, fam_.locals.items.len + count);
+    defer b.allocator.free(captures);
+    if (fam_.locals.items.len != 0) {
+        if (fam_.module != b.module) invariant("a generated codec calling local procedures is used outside the module declaring them");
+        const table = b.view.view.static_dispatch_plans;
+        // The function values are built in the entry chain, where the
+        // constructor that holds them is composed.
+        const saved = b.immortal_closures;
+        b.immortal_closures = true;
+        defer b.immortal_closures = saved;
+        for (fam_.locals.items, captures[0..fam_.locals.items.len]) |local, *value| {
+            const fn_ty = try b.program.substitute(b.allocator, local.fn_ty, bound);
+            value.* = try b.emitIntoEntry(Builder.localMethodValue, .{ table.evidenceNode(local.node), fn_ty });
+        }
+    }
+    for (bound, captures[fam_.locals.items.len..]) |ty, *desc| desc.* = try b.descOf(ty);
+    return try b.composeDictionary(try constructorWorker(b.program, family), captures);
 }
 
 /// A structural `parser_for`/`encoder_for` dispatch: the derivation's
@@ -677,9 +724,7 @@ pub fn dispatch(b: *Builder, call_plan: static_dispatch.StaticDispatchCallPlan, 
     if (operands.len != 1) invariant("a structural codec dispatch does not take one encoding");
     const family = try familyFor(b.program, b.module, id);
     const fn_ty = try b.convert(call_plan.callable_ty);
-    const descs = try familyDescs(b, family, b.program.codec.families.items[family].constructor_fn, fn_ty);
-    defer b.allocator.free(descs);
-    const constructor = try b.composeDictionary(try constructorWorker(b.program, family), descs);
+    const constructor = try constructorAt(b, family, fn_ty);
     try b.push(.{ .finish_erased_call = .{ .fn_ty = fn_ty, .arg_count = 1, .result = result_ty } });
     try b.pushOperand(operands[0], operand_types[0]);
     try b.pushValue(constructor);
@@ -721,10 +766,28 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
     const family = try familyFor(program, derivation_module, derivation);
     const worker = try runtimeWorker(program, family);
     const captures = try runtimeCaptures(program, family);
-    const descs = try familyDescs(b, family, program.codec.families.items[family].runtime_fn, fn_ty);
-    try b.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = try program.arena.allocator().dupe(LocalId, descs), .dicts = &.{}, .capture_types = captures, .worker_ty = fn_ty, .ty = fn_ty } });
-    b.allocator.free(descs);
-    var index = captures.len;
+    const fam_ = program.codec.families.items[family];
+    const bound = try b.relateVariables(fam_.runtime_fn, fn_ty, fam_.env.vars.len);
+    defer b.allocator.free(bound);
+    const descs = try program.arena.allocator().alloc(LocalId, bound.len);
+    for (bound, descs) |ty, *desc| desc.* = try b.descOf(ty);
+    try b.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = descs, .dicts = &.{}, .capture_types = captures, .worker_ty = fn_ty, .ty = fn_ty } });
+    // The local procedures' function values follow the names; compile-time
+    // evaluation stores none of them, as a local procedure is a procedure
+    // of its declaring body, not a value the runtime holds.
+    const stored_count = 1 + fam_.names.items.len;
+    if (fam_.locals.items.len != 0) {
+        if (fam_.module != b.module) invariant("a stored generated codec calling local procedures is restored outside the module declaring them");
+        const table = b.view.view.static_dispatch_plans;
+        var local_index = fam_.locals.items.len;
+        while (local_index > 0) {
+            local_index -= 1;
+            const local = fam_.locals.items[local_index];
+            const local_ty = try program.substitute(b.allocator, local.fn_ty, bound);
+            try b.push(.{ .push_value = try b.localMethodValue(table.evidenceNode(local.node), local_ty) });
+        }
+    }
+    var index = stored_count;
     while (index > 0) {
         index -= 1;
         const needle = check.CheckedIds.CaptureId.generatedCheck(@intCast(index));
@@ -1102,9 +1165,14 @@ const Gen = struct {
             .callable => |callable| {
                 const table = program_.module(self.fam().module).view.static_dispatch_plans;
                 const node = table.evidenceNode(callable.node);
+                if (callable.local) |index| {
+                    const value = try self.localValue(index);
+                    const ret_ty = fnRet(program_, callable.fn_ty);
+                    return .{ .value = try b.emitErasedCall(value, callable.fn_ty, args, ret_ty), .ty = ret_ty };
+                }
                 const template = switch (node.target.kind) {
                     .procedure => |procedure| procedure.template,
-                    .local_proc => invariant("generated codec calls of local procedures are not yet lowered by Boxy"),
+                    .local_proc => invariant("a generated codec's local procedure call has no local value"),
                     .structural => invariant("a generated codec call's callable evidence names a structural target"),
                 };
                 const callee = try program_.templateRefWorker(template);
@@ -1181,6 +1249,13 @@ const Gen = struct {
     /// Renamed name `index` of the family's names.
     fn renamed(self: *Gen, index: u32) Allocator.Error!LocalId {
         return self.b.readField(self.fam().names_ty, self.names, index, try self.strTy());
+    }
+
+    /// The function value of the family's local procedure `index`, which
+    /// follows the names.
+    fn localValue(self: *Gen, index: u32) Allocator.Error!LocalId {
+        const fam_ = self.fam();
+        return self.b.readField(fam_.names_ty, self.names, @intCast(fam_.names.items.len + index), fam_.locals.items[index].fn_ty);
     }
 
     fn recordNameBase(self: *Gen, record_ty: TypeId) u32 {
@@ -1294,10 +1369,11 @@ const Gen = struct {
         const encoding = frame.args[0];
         const entries = try self.b.allocator.dupe(NameEntry, self.fam().names.items);
         defer self.b.allocator.free(entries);
-        const captured = try self.b.allocator.alloc(LocalId, 1 + entries.len);
+        const captured = try self.b.allocator.alloc(LocalId, 1 + entries.len + frame.captures.len);
         defer self.b.allocator.free(captured);
         captured[0] = encoding;
-        for (entries, captured[1..]) |entry, *slot| {
+        @memcpy(captured[1 + entries.len ..], frame.captures);
+        for (entries, captured[1..][0..entries.len]) |entry, *slot| {
             const label = try self.b.strLiteral(self.store().nameText(entry.label));
             slot.* = (try self.callFormat("rename_field", null, &.{ encoding, label })).value;
         }
