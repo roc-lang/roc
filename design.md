@@ -11603,7 +11603,9 @@ A boundary whose root does not generalize publishes no scheme, and no use of
 its monomorphic binding instantiates one, so `retireNonGeneralizedTypeSchemes`
 hands each requirement it captured to the innermost enclosing root still
 prospective, exactly as a use's copy would; every use shares the binding's one
-type, so that single copy stands for all of them. A generated codec relation
+type, so that single copy stands for all of them. No use made that copy, so it
+keeps the requirement's own failure expression rather than whichever expression
+is being checked when the boundary runs. A generated codec relation
 over an enclosing scope's variable (`g = |{}| Json.to_str(W.(r))` inside a
 function of `r`) is attached to no receiver descriptor, so this transfer is how
 the enclosing scheme learns of it and validates it at each of its own uses.
