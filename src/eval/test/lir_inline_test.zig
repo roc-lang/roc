@@ -14134,4 +14134,3 @@ test "issue 12491 nested closure chain bound to a block local lowers under lss" 
 test "issue 12491 nested closure chain bound to a block local lowers under boxy" {
     try expectIssue12491BlockLocalClosureChain(.boxy);
 }
-

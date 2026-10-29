@@ -1420,7 +1420,7 @@ pub const Builder = struct {
                 const local = try self.localOf(param_ty, .view);
                 try self.emitDyn(local, .{ .field_addr = .{ .base = record_param.?, .desc = self.store.localDyn(record_param.?).?.desc, .field_index = @intCast(own_words + index) } });
                 break :blk local;
-            } else try self.argsRecordField(worker.params, record_param.?, @intCast(index), param_ty);
+            } else try self.argsRecordField(record_param.?, @intCast(index), param_ty);
             try self.bindIrrefutable(pattern, value, param_ty);
         }
         try self.tasks.append(self.allocator, .ret);
@@ -1482,7 +1482,7 @@ pub const Builder = struct {
         const adapted = try self.allocator.alloc(LocalId, worker.params.len);
         defer self.allocator.free(adapted);
         for (worker.params, from_params, adapted, 0..) |param_ty, from_ty, *value, index| {
-            const arg = try self.argsRecordField(worker.params, record_param.?, @intCast(index), param_ty);
+            const arg = try self.argsRecordField(record_param.?, @intCast(index), param_ty);
             value.* = try self.adaptValue(arg, param_ty, from_ty);
         }
         const result = try self.emitErasedCall(inner, from, adapted, signature.ret);
@@ -2024,7 +2024,7 @@ pub const Builder = struct {
         self.hole = body_start;
         const values = try self.allocator.alloc(LocalId, params.len);
         defer self.allocator.free(values);
-        for (values, params, 0..) |*value, param_ty, index| value.* = try self.argsRecordField(params, record.?, @intCast(index), param_ty);
+        for (values, params, 0..) |*value, param_ty, index| value.* = try self.argsRecordField(record.?, @intCast(index), param_ty);
         const result: ?LocalId = switch (body) {
             .call => |call| blk: {
                 const all = try std.mem.concat(self.allocator, LocalId, &.{ values, call.hidden });
@@ -2112,13 +2112,12 @@ pub const Builder = struct {
     }
 
     /// Argument `index` of an argument record, as a borrowed read.
-    pub fn argsRecordField(self: *Builder, params: []const TypeId, record: LocalId, index: u32, param_ty: TypeId) Allocator.Error!LocalId {
+    pub fn argsRecordField(self: *Builder, record: LocalId, index: u32, param_ty: TypeId) Allocator.Error!LocalId {
         if (self.store.localDyn(record)) |dyn| {
             const local = try self.localOf(param_ty, .view);
             try self.emitDyn(local, .{ .field_addr = .{ .base = record, .desc = dyn.desc, .field_index = index } });
             return local;
         }
-        _ = params;
         const local = try self.localOf(param_ty, .frame);
         if (self.store.getLocal(record).layout_idx == .zst) {
             // A record of zero-sized arguments has no storage to read.
@@ -2358,8 +2357,7 @@ pub const Builder = struct {
             .finish_list => |expr| try self.finishList(expr),
             .finish_str => |str| try self.finishStr(str.count),
             .finish_eq => |eq| try self.finishEq(eq.negated, eq.operand),
-            .finish_expect => |expr| {
-                _ = expr;
+            .finish_expect => {
                 const cond = self.popValue();
                 try self.emitLinear(.{ .expect = .{ .condition = cond, .site = try self.expectSite(), .next = undefined } });
                 try self.pushValue(try self.unitValue());
@@ -2623,7 +2621,7 @@ pub const Builder = struct {
                 try self.push(.{ .expr = match.cond });
             },
             .binop => |binop| switch (binop.op) {
-                .@"and", .@"or" => try self.lowerShortCircuit(expr_id, binop.op == .@"and", binop.lhs, binop.rhs),
+                .@"and", .@"or" => try self.lowerShortCircuit(binop.op == .@"and", binop.lhs, binop.rhs),
                 .add, .sub, .mul, .div, .rem, .lt, .gt, .le, .ge, .eq, .ne, .div_trunc, .range_exclusive, .range_inclusive => invariantFmt("binary operator {s} reached Boxy lowering outside a dispatch", .{@tagName(binop.op)}),
             },
             .for_ => |for_| try self.pushForLoop(for_.pattern, for_.expr, for_.body, for_.plan, for_.mutations),
@@ -3427,12 +3425,10 @@ pub const Builder = struct {
         // procedure's function value from its captures, which the checker
         // makes visible wherever the procedure is, and the scope it was
         // declared in, whose descriptors and dictionaries this body holds.
-        const lambda_expr = switch (self.bodies().expr(local.expr).data) {
-            .lambda => local.expr,
-            .closure => |closure| closure.lambda,
+        switch (self.bodies().expr(local.expr).data) {
+            .lambda, .closure => {},
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => invariant("a local procedure's expression is not a lambda or closure"),
-        };
-        _ = lambda_expr;
+        }
         const scope_worker, const target = try self.localProcWorker(local);
         const declaring = self.program.worker(scope_worker).*;
         const target_worker = self.program.worker(target).*;
@@ -5693,8 +5689,7 @@ pub const Builder = struct {
 
     /// `a and b` evaluates `b` only when `a` is true; `a or b` only when
     /// `a` is false.
-    pub fn lowerShortCircuit(self: *Builder, expr_id: CheckedExprId, is_and: bool, lhs: CheckedExprId, rhs: CheckedExprId) Allocator.Error!void {
-        _ = expr_id;
+    pub fn lowerShortCircuit(self: *Builder, is_and: bool, lhs: CheckedExprId, rhs: CheckedExprId) Allocator.Error!void {
         const result = try self.closedLocal(.bool);
         const join = self.freshJoin();
         const after = try self.declareMergeJoin(join, result, null);
@@ -5871,15 +5866,14 @@ pub const Builder = struct {
             return target;
         }
         const rep = self.program.joins.representative(try self.structuralType(ty));
-        const union_ty = switch (self.program.store.get(rep)) {
-            .tag_union => |value| value,
+        switch (self.program.store.get(rep)) {
+            .tag_union => {},
             .primitive => |primitive| {
                 if (primitive != .bool) invariant("a tag expression's type is a non-Bool primitive");
                 return try self.boolValue(std.mem.eql(u8, self.program.store.nameText(name), "True"));
             },
             .empty_record, .record, .tuple, .list, .box, .nominal, .function, .variable => invariant("a tag expression's type is not a tag union"),
-        };
-        _ = union_ty;
+        }
         const selected = try self.selectVariant(try self.structuralType(ty), self.ownTag(try self.structuralType(ty), name, values.len));
         const variant = selected.index;
         const target = try self.localOf(ty, .frame);
@@ -6790,7 +6784,6 @@ pub const Builder = struct {
         const iterable = self.popValue();
         const iterator_ty = try self.convert(plan.iterator_ty);
         const step_ty = try self.convert(plan.step_ty);
-        const item_ty = try self.convert(plan.item_ty);
         const iterator = try self.emitDispatch(plan.iter.resolution, plan.iter.callable_ty, &.{iterable}, iterator_ty);
 
         const binders: []const checked.PatternBinderId = if (mutations) |id| blk: {
@@ -6835,7 +6828,6 @@ pub const Builder = struct {
         const payload = try self.tagPayloadValue(step_value, step_ty, one, 0);
         const item = try self.recordFieldValue(payload.value, payload.ty, item_name);
         const rest = try self.recordFieldValue(payload.value, payload.ty, rest_name);
-        _ = item_ty;
         try self.bindIrrefutable(pattern, item.value, item.ty);
         try self.loops.append(self.allocator, .{ .join = exit, .reached = true });
         try self.push(.end_loop);

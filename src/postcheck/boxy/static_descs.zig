@@ -541,8 +541,6 @@ pub const StaticDescs = struct {
         );
         var entry_pointers: std.ArrayList(Pointer) = .empty;
         defer entry_pointers.deinit(self.allocator);
-        const bytes_len = self.exports.items[entries].bytes.len;
-        _ = bytes_len;
         if (committed_layout.tag == .struct_) {
             const struct_idx = committed_layout.getStruct().idx;
             const memory_count = layouts.getStructData(struct_idx).fields.count;

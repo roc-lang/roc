@@ -1336,7 +1336,7 @@ const Gen = struct {
         const body_start = try b.newHole();
         b.hole = body_start;
         const args = try b.allocator.alloc(LocalId, worker.params.len);
-        for (args, worker.params, 0..) |*arg, ty, index| arg.* = try b.argsRecordField(worker.params, record.?, @intCast(index), ty);
+        for (args, worker.params, 0..) |*arg, ty, index| arg.* = try b.argsRecordField(record.?, @intCast(index), ty);
         return .{ .start = start, .record = record, .ret_layout = ret_layout, .body_start = body_start, .args = args, .captures = start.captures[0..worker.capture_types.len] };
     }
 

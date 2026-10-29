@@ -535,7 +535,7 @@ pub const Ctx = struct {
         return try self.b.endBackward(start, next);
     }
 
-    pub fn readTagPayload(self: Ctx, dest: LIR.LocalId, ty: types.TypeId, source: LIR.LocalId, variant: layout.VariantIndex, index: u32, _: bool, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+    pub fn readTagPayload(self: Ctx, dest: LIR.LocalId, _: types.TypeId, source: LIR.LocalId, variant: layout.VariantIndex, index: u32, _: bool, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         const union_ty = try self.b.structuralType(self.occType(source));
         const start = try self.b.beginBackward();
         if (try self.b.closed(union_ty)) {
@@ -552,7 +552,6 @@ pub const Ctx = struct {
             const name = (try self.unionTags(union_ty))[variant].name;
             try self.b.emitDyn(dest, .{ .tag_payload_addr = .{ .base = source, .desc = try self.b.descOf(union_ty), .name = try self.b.nameDesc(name), .payload_index = index } });
         }
-        _ = ty;
         return try self.b.endBackward(start, next);
     }
 
@@ -752,7 +751,7 @@ pub const Ctx = struct {
         } }, self.b.origin(.source));
     }
 
-    pub fn bindPatternLocal(self: Ctx, binder: checked.PatternBinderId, ty: types.TypeId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+    pub fn bindPatternLocal(self: Ctx, binder: checked.PatternBinderId, _: types.TypeId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         const local = self.state.binder_locals.get(binder) orelse invariant("a pattern binder has no local");
         if (self.b.store.localDyn(local)) |dyn| {
             return try self.b.store.addCFStmt(.{ .dyn = .{
@@ -761,7 +760,6 @@ pub const Ctx = struct {
                 .next = next,
             } }, self.b.origin(.source));
         }
-        _ = ty;
         return try self.b.store.addCFStmt(.{ .assign_ref = .{ .target = local, .op = LIR.RefOp.local(source), .next = next } }, self.b.origin(.source));
     }
 

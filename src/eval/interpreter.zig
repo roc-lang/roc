@@ -8082,7 +8082,9 @@ pub const Interpreter = struct {
 
     const WordsContext = struct {
         pub fn hash(_: WordsContext, key: []const u64) u64 {
-            return std.hash.Wyhash.hash(0, std.mem.sliceAsBytes(key));
+            var hasher = std.hash.Wyhash.init(0);
+            for (key) |word| hasher.update(std.mem.asBytes(&word));
+            return hasher.final();
         }
 
         pub fn eql(_: WordsContext, a: []const u64, b: []const u64) bool {
