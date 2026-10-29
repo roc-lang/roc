@@ -304,6 +304,7 @@ pub const StaticDescs = struct {
                     const callable = try self.staticCallableOf(owner, 16 + self.extra_nodes, worker.proc, &.{});
                     try frames.items[frames.items.len - 1].words.append(self.allocator, .{ .callable = callable });
                 },
+                .derived => types.invariant("a closed nominal's override obligation names a derived codec or map, which checking records with its plan at the dispatch it serves"),
                 .scope_variable => types.invariant("a closed nominal's override names a scope variable"),
                 .target => |target| {
                     const instance = try program_.targetAt(target, obligation.callable);

@@ -2378,14 +2378,14 @@ pub const Builder = struct {
     /// reads it instead of computing it: not the root this body computes,
     /// not a root whose evaluation failed (it runs in place), and not a
     /// guarded binding's root, whose declaration keeps its right-hand side.
-    fn storedHoistedNode(self: *Builder, expr_id: CheckedExprId) ?checked.ConstNodeId {
+    fn storedHoisted(self: *Builder, expr_id: CheckedExprId) ?checked.StoredConstTemplate {
         const entry = self.view.view.hoisted_constants.lookupByExpr(expr_id) orelse return null;
         if (self.own_root) |own| if (own == entry.root) return null;
         const root = self.view.view.compile_time_roots.root(entry.root);
         if (root.payload == .runtime) return null;
         if (entry.pattern != null and root.guarded) return null;
         return switch (self.view.view.const_templates.get(entry.const_ref).state) {
-            .stored_const => |stored| stored.node,
+            .stored_const => |stored| stored,
             // A polymorphic hoisted value computes at its instance, as its
             // entry procedure would.
             .eval_template => null,
@@ -2403,8 +2403,8 @@ pub const Builder = struct {
         }
         // An expression compile-time evaluation hoisted and stored is read
         // (design.md "Runtime Programs Read Stored Values").
-        if (self.storedHoistedNode(expr_id)) |node| {
-            return try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = try self.exprType(expr_id) } });
+        if (self.storedHoisted(expr_id)) |stored| {
+            return try self.pushStoredRestore(.{ .module = self.module }, stored, try self.exprType(expr_id));
         }
         switch (expr.data) {
             .numeral => |numeral| try self.lowerNumeral(expr_id, numeral),
@@ -3554,11 +3554,21 @@ pub const Builder = struct {
 
     /// A read of a stored constant: its value's construction at `ty`
     /// (design.md "Compile-Time Evaluation Strategy").
+    /// Restore stored constant `stored` read at `ty`: at `ty` when it is
+    /// closed, and otherwise at the value's own stored type, re-tagged to
+    /// `ty`.
+    fn pushStoredRestore(self: *Builder, source: lower.ConstSource, stored: checked.StoredConstTemplate, ty: TypeId) Allocator.Error!void {
+        if (self.program.store.isClosed(ty)) return try self.push(.{ .restore = .{ .source = source, .node = stored.node, .ty = ty } });
+        const stored_ty = try self.constType(source, stored.root_type);
+        try self.push(.{ .retag = .{ .from = stored_ty, .to = ty } });
+        try self.push(.{ .restore = .{ .source = source, .node = stored.node, .ty = stored_ty } });
+    }
+
     pub fn restoreConstUse(self: *Builder, expr_id: CheckedExprId, use: checked.ConstUseTemplate, ty: TypeId) Allocator.Error!void {
         const owner = self.program.moduleByKey(use.const_ref.artifact);
         const template = owner.view.const_templates.get(use.const_ref);
         switch (template.state) {
-            .stored_const => |stored| try self.push(.{ .restore = .{ .source = .{ .module = owner.index }, .node = stored.node, .ty = ty } }),
+            .stored_const => |stored| try self.pushStoredRestore(.{ .module = owner.index }, stored, ty),
             // A polymorphic constant compile-time evaluation did not store
             // is its entry procedure's value at the read's instantiation.
             .eval_template => |eval| {
@@ -3582,7 +3592,9 @@ pub const Builder = struct {
     pub fn restoreStep(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId, raw_ty: TypeId) Allocator.Error!void {
         const const_store = self.program.constStore(source);
         const store = &self.program.store;
-        if (!store.isClosed(raw_ty)) invariant("restoring a constant at an open type is not yet lowered by Boxy");
+        // Every restore starts at a closed type (`pushStoredRestore`), and a
+        // closed type's components are closed.
+        if (!store.isClosed(raw_ty)) invariant("a stored value is restored at an open type");
         const ty = try self.structuralType(raw_ty);
         switch (const_store.get(node)) {
             .pending => invariant("a stored constant was never filled"),
@@ -3715,12 +3727,15 @@ pub const Builder = struct {
         const const_store = self.program.constStore(source);
         const stored = const_store.getFn(fn_id);
         switch (stored.fn_def) {
-            .local_template, .imported_template => |ref| {
+            // A procedure template's value, whether a checked body, a hosted
+            // procedure, or a checked-generated procedure.
+            .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated => |ref| {
                 const target = try self.program.templateRefWorker(ref);
                 const target_worker = self.program.worker(target).*;
                 const formal = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
-                const bound = try self.relateVariables(formal, fn_ty, target_worker.scheme_vars.len);
-                defer self.allocator.free(bound);
+                // A scheme variable only the target's obligations mention is
+                // fixed by relating those obligations' methods.
+                const bound = (try self.program.instantiateTarget(target, formal, fn_ty)).bound;
                 const dicts = try self.storedDictionaries(stored, target, bound);
                 defer self.allocator.free(dicts);
                 const hidden = try self.allocator.alloc(LocalId, bound.len + dicts.len);
@@ -3731,8 +3746,18 @@ pub const Builder = struct {
                 try self.pushValue(try self.composeDictionary(entry, hidden));
             },
             .nested => |nested| {
-                if (nested.default_root != null) invariant("restoring default-root closures is not yet lowered by Boxy");
-                const owner_worker = try self.program.templateRefScope(nested.owner);
+                // A closure of a defaulted field's expression belongs to the
+                // worker evaluating that default, which has no scheme and no
+                // dictionaries of its own.
+                const owner_worker = if (nested.default_root) |identity| blk: {
+                    const declaring = self.program.by_identity.get(identity.bytes) orelse invariant("a stored default-root closure's module is not in this lowering");
+                    const declaring_view = self.program.module(declaring);
+                    const default_site = declaring_view.view.nested_proc_sites.sites[@backingInt(nested.site)];
+                    break :blk switch (default_site.owner) {
+                        .default_root => |default_expr| try self.program.defaultWorker(declaring, default_expr),
+                        .template => invariant("a stored default-root closure's site is owned by a template"),
+                    };
+                } else try self.program.templateRefScope(nested.owner);
                 const owner = self.program.worker(owner_worker).*;
                 const owner_view = self.program.module(owner.module);
                 const site = owner_view.view.nested_proc_sites.sites[@backingInt(nested.site)];
@@ -3785,6 +3810,44 @@ pub const Builder = struct {
                 // relates.
                 const related = try self.relateVariablesPartial(relations.items, scope_vars.len);
                 defer self.allocator.free(related);
+                // A variable only the closure's obligations mention (its own
+                // scheme's, then its owner's) is fixed by relating those
+                // obligations' methods.
+                {
+                    var params: std.ArrayList(static_dispatch.EvidenceParamRecord) = .empty;
+                    defer params.deinit(self.allocator);
+                    if (own) |scheme| {
+                        const templates = owner_view.view.checked_procedure_templates;
+                        const scope_params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.dispatch_scopes[@backingInt(own_scope.?)].evidence_params);
+                        for (scheme.dictionaries) |param_index| try params.append(self.allocator, scope_params[param_index]);
+                    }
+                    if (owner.dictionary_params.len != 0) {
+                        const owner_params = self.templateEvidenceParams(owner_worker);
+                        for (owner.dictionary_params) |param_index| try params.append(self.allocator, owner_params[param_index]);
+                    }
+                    // A derived codec's or map's instantiation is the
+                    // callable its stored evidence recorded: its own
+                    // scheme's frame, then its owner's.
+                    var recorded: std.ArrayList([2]TypeId) = .empty;
+                    defer recorded.deinit(self.allocator);
+                    if (own) |scheme| if (scheme.dictionaries.len != 0) {
+                        const head = stored.evidence_frame_head orelse invariant("a stored generalized lambda with dictionaries has no evidence");
+                        const templates = owner_view.view.checked_procedure_templates;
+                        const scope_params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.dispatch_scopes[@backingInt(own_scope.?)].evidence_params);
+                        try self.recordedDerivedCallables(stored, head, scope_params, owner.module, generic, &recorded);
+                    };
+                    if (owner.dictionary_params.len != 0) {
+                        var frame_index = stored.evidence_frame_head orelse invariant("a stored function value with dictionaries has no evidence");
+                        while (stored.evidence_frames[frame_index].parent) |parent| frame_index = parent;
+                        try self.recordedDerivedCallables(stored, frame_index, self.templateEvidenceParams(owner_worker), owner.module, generic, &recorded);
+                    }
+                    const from_edges = try self.relateVariablesPartial(recorded.items, scope_vars.len);
+                    defer self.allocator.free(from_edges);
+                    for (related, from_edges) |*slot, determined| {
+                        if (slot.* == null) slot.* = determined;
+                    }
+                    try self.program.relateThroughObligations(owner.module, scope_vars, params.items, related);
+                }
                 const bound = try self.allocator.alloc(TypeId, scope_vars.len);
                 defer self.allocator.free(bound);
                 for (related, bound, scope_vars) |ty, *slot, variable| slot.* = ty orelse try self.program.converter().sealedScheme(owner.module, variable);
@@ -3797,7 +3860,7 @@ pub const Builder = struct {
                 const worker = try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, own);
                 const descs = try self.program.arena.allocator().alloc(LocalId, bound.len);
                 for (bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
-                const owner_dicts = try self.storedDictionaries(stored, owner_worker, bound[0..owner.scheme_vars.len]);
+                const owner_dicts = if (nested.default_root != null) try self.allocator.alloc(LocalId, 0) else try self.storedDictionaries(stored, owner_worker, bound[0..owner.scheme_vars.len]);
                 defer self.allocator.free(owner_dicts);
                 // A generalized lambda's own dictionaries are the stored
                 // evidence's innermost frame, its own scope's, ahead of its
@@ -3834,7 +3897,6 @@ pub const Builder = struct {
                 }
             },
             inline .parser_runtime, .encoder_for_runtime => |runtime| try Codec.restoreRuntime(self, source, fn_id, runtime.owner, runtime.expr, fn_ty),
-            else => invariantFmt("restoring stored {s} function values is not yet lowered by Boxy", .{@tagName(stored.fn_def)}),
         }
     }
 
@@ -3859,6 +3921,25 @@ pub const Builder = struct {
             dict.* = roots[param_index] orelse invariant("a stored dictionary's evidence denotes no dictionary");
         }
         return dicts;
+    }
+
+    /// Append, for each derived codec or map root of stored evidence frame
+    /// `frame_index` (whose roots are `params`, over `env`), the parameter's
+    /// callable type paired with the instantiated callable its stored edge
+    /// recorded.
+    fn recordedDerivedCallables(self: *Builder, stored: check.ConstStore.ConstFn, frame_index: u32, params: []const static_dispatch.EvidenceParamRecord, module_index: types.ModuleIndex, env: types.Env, out: *std.ArrayList([2]TypeId)) Allocator.Error!void {
+        const frame = stored.evidence_frames[frame_index];
+        const roots = try self.storedEvidenceRoots(stored.evidence, frame.roots_start, frame.roots_len);
+        defer self.allocator.free(roots);
+        for (roots, 0..) |node_index, position| switch (stored.evidence.nodes[node_index]) {
+            .structural => |index| if (stored.evidence.structural(index).checked) |edge| {
+                if (position >= params.len) invariant("stored evidence has more entries than its scope has evidence parameters");
+                const edge_view = self.program.moduleByKey(.{ .bytes = edge.view.bytes });
+                const edge_callable = try self.program.converter().convert(edge_view.index, edge.callable_ty, .{ .module = edge_view.index, .vars = &.{}, .bound = &.{} });
+                try out.append(self.allocator, .{ try self.program.converter().convert(module_index, params[position].callable_ty, env), edge_callable });
+            },
+            else => {},
+        };
     }
 
     /// The node indices of `count` stored evidence trees starting at
@@ -4058,7 +4139,7 @@ pub const Builder = struct {
                 const id = recorded.generated_codec_derivation orelse invariant("stored structural codec evidence names no generated derivation");
                 return try Codec.dictionaryAt(self, view.index, id, callable);
             },
-            else => invariantFmt("structural {s} dictionaries are not yet lowered by Boxy", .{@tagName(stored.derivation)}),
+            .map, .map_effectful => |plan| return try self.structuralMapDictionary(plan, stored.derivation == .map_effectful, callable),
         };
         return try self.composeDictionary(try self.program.structuralWorker(self.module, method), &.{try self.descOf(dispatcher)});
     }
@@ -4428,6 +4509,7 @@ pub const Builder = struct {
                     .structural => |structural| delivered = try self.composeDictionary(try self.program.structuralWorker(self.module, structural.method), &.{try self.descOf(structural.over)}),
                     .crash => |kind| delivered = try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, kind), &.{}),
                     .scope_variable => |index| delivered = self.variableDictionary(index, self.program.module(obligation.module).nameStore().methodNameText(obligation.method)),
+                    .derived => invariant("a derived codec or map dictionary is resolved from a type alone, but checking records each with its plan at the dispatch it serves"),
                     .target => |target| {
                         const instance = try self.program.targetAt(target, obligation.callable);
                         var hidden: std.ArrayList(LocalId) = .empty;
@@ -5505,10 +5587,6 @@ pub const Builder = struct {
     }
 
     // -- Aggregates --
-
-    pub fn requireClosed(self: *Builder, ty: TypeId, comptime what: []const u8) void {
-        if (!try self.closed(ty)) invariant("building a dynamic " ++ what ++ " is not yet lowered by Boxy");
-    }
 
     pub fn finishRecord(self: *Builder, expr_id: CheckedExprId) Allocator.Error!void {
         const record: @FieldType(checked.CheckedExprData, "record") = switch (self.bodies().expr(expr_id).data) {

@@ -233,6 +233,10 @@ pub const ObligationResolution = union(enum) {
     crash: CrashDictionary,
     /// The dictionary a body's scope holds for scope variable `index`.
     scope_variable: u32,
+    /// A derived codec or map, which checking selects with its plan at the
+    /// dispatch it serves: an obligation resolved from a type alone only
+    /// names it.
+    derived: static_dispatch.StructuralKind,
 };
 
 /// A method target instantiated at an obligation's callable: the types its
@@ -968,53 +972,66 @@ pub const Program = struct {
                 else => invariant("a worker with dictionary parameters is not a template's"),
             };
             const templates = self.module(key.module).view.checked_procedure_templates;
-            const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
-            const partial = try self.allocator.alloc(TypeId, count);
-            defer self.allocator.free(partial);
-            const own = try self.allocator.alloc(TypeId, count);
-            defer self.allocator.free(own);
-            for (own, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
-            const own_env: types.Env = .{ .module = key.module, .vars = target_worker.scheme_vars, .bound = own };
-            var changed = true;
-            while (changed) {
-                changed = false;
-                for (related, partial, 0..) |ty, *slot, index| slot.* = ty orelse try self.store.variable(placeholder_base + @as(u32, @intCast(index)));
-                const env: types.Env = .{ .module = key.module, .vars = target_worker.scheme_vars, .bound = partial };
-                for (target_worker.dictionary_params) |param_index| {
-                    const param = params[param_index];
-                    const dispatcher = try self.converter().convert(key.module, param.dispatcher_ty, env);
-                    if (try self.mentionsPlaceholder(dispatcher)) continue;
-                    const callable = try self.converter().convert(key.module, param.callable_ty, env);
-                    const method_target = switch (try self.resolveObligation(.{ .module = key.module, .method = param.method, .structural = param.structural, .dispatcher = dispatcher, .callable = callable })) {
-                        .target => |method_target| method_target,
-                        .structural, .crash, .scope_variable => continue,
-                    };
-                    // The method's own type at the obligation's callable:
-                    // its variables the callable determines take those
-                    // types, the rest stay placeholders.
-                    const method_worker = self.worker(method_target).*;
-                    const method_formal = try self.store.intern(.{ .function = .{ .args = method_worker.params, .ret = method_worker.ret, .effectful = false } });
-                    const method_related = try self.relateVariablesPartial(self.allocator, &.{.{ method_formal, callable }}, method_worker.scheme_vars.len);
-                    defer self.allocator.free(method_related);
-                    const method_bound = try self.allocator.alloc(TypeId, method_related.len);
-                    defer self.allocator.free(method_bound);
-                    for (method_related, method_bound, 0..) |ty, *slot, index| slot.* = ty orelse try self.store.variable(placeholder_base + @as(u32, @intCast(count + index)));
-                    const method_ty = try self.substitute(self.allocator, method_formal, method_bound);
-                    const back = try self.relateVariablesPartial(self.allocator, &.{.{ try self.converter().convert(key.module, param.callable_ty, own_env), method_ty }}, count);
-                    defer self.allocator.free(back);
-                    for (related, back) |*slot, determined| {
-                        if (slot.* != null) continue;
-                        const ty = determined orelse continue;
-                        if (try self.mentionsPlaceholder(ty)) continue;
-                        slot.* = ty;
-                        changed = true;
-                    }
-                }
-            }
+            const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
+            const params = try self.allocator.alloc(static_dispatch.EvidenceParamRecord, target_worker.dictionary_params.len);
+            defer self.allocator.free(params);
+            for (target_worker.dictionary_params, params) |param_index, *param| param.* = all_params[param_index];
+            try self.relateThroughObligations(key.module, target_worker.scheme_vars, params, related);
         }
         const bound = try self.arena.allocator().alloc(TypeId, count);
         for (related, bound, target_worker.scheme_vars) |ty, *slot, variable| slot.* = ty orelse try self.converter().sealedScheme(target_worker.module, variable);
         return try self.targetObligations(target, bound);
+    }
+
+    /// Fill the variables of `vars` (of `module`) that `related` leaves
+    /// unrelated from the obligations `params` (evidence parameters over
+    /// `vars`): an obligation whose dispatcher is determined resolves to a
+    /// method whose own type, related back to the obligation's callable,
+    /// determines the variables that callable names, until no obligation
+    /// determines more.
+    pub fn relateThroughObligations(self: *Program, module_index: ModuleIndex, vars: []const checked.CheckedTypeId, params: []const static_dispatch.EvidenceParamRecord, related: []?TypeId) Allocator.Error!void {
+        const count = vars.len;
+        const partial = try self.allocator.alloc(TypeId, count);
+        defer self.allocator.free(partial);
+        const own = try self.allocator.alloc(TypeId, count);
+        defer self.allocator.free(own);
+        for (own, 0..) |*slot, index| slot.* = try self.store.variable(@intCast(index));
+        const own_env: types.Env = .{ .module = module_index, .vars = vars, .bound = own };
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (related, partial, 0..) |ty, *slot, index| slot.* = ty orelse try self.store.variable(placeholder_base + @as(u32, @intCast(index)));
+            const env: types.Env = .{ .module = module_index, .vars = vars, .bound = partial };
+            for (params) |param| {
+                const dispatcher = try self.converter().convert(module_index, param.dispatcher_ty, env);
+                if (try self.mentionsPlaceholder(dispatcher)) continue;
+                const callable = try self.converter().convert(module_index, param.callable_ty, env);
+                const method_target = switch (try self.resolveObligation(.{ .module = module_index, .method = param.method, .structural = param.structural, .dispatcher = dispatcher, .callable = callable })) {
+                    .target => |method_target| method_target,
+                    .structural, .crash, .scope_variable, .derived => continue,
+                };
+                // The method's own type at the obligation's callable: its
+                // variables the callable determines take those types, the
+                // rest stay placeholders.
+                const method_worker = self.worker(method_target).*;
+                const method_formal = try self.store.intern(.{ .function = .{ .args = method_worker.params, .ret = method_worker.ret, .effectful = false } });
+                const method_related = try self.relateVariablesPartial(self.allocator, &.{.{ method_formal, callable }}, method_worker.scheme_vars.len);
+                defer self.allocator.free(method_related);
+                const method_bound = try self.allocator.alloc(TypeId, method_related.len);
+                defer self.allocator.free(method_bound);
+                for (method_related, method_bound, 0..) |ty, *slot, index| slot.* = ty orelse try self.store.variable(placeholder_base + @as(u32, @intCast(count + index)));
+                const method_ty = try self.substitute(self.allocator, method_formal, method_bound);
+                const back = try self.relateVariablesPartial(self.allocator, &.{.{ try self.converter().convert(module_index, param.callable_ty, own_env), method_ty }}, count);
+                defer self.allocator.free(back);
+                for (related, back) |*slot, determined| {
+                    if (slot.* != null) continue;
+                    const ty = determined orelse continue;
+                    if (try self.mentionsPlaceholder(ty)) continue;
+                    slot.* = ty;
+                    changed = true;
+                }
+            }
+        }
     }
 
     /// Whether `root` names a placeholder variable (`placeholder_base`).
@@ -1070,7 +1087,7 @@ pub const Program = struct {
                 .rejected => return .{ .crash = .checked_error },
                 .target => |target| switch (target.kind) {
                     .procedure => |procedure| return .{ .target = try self.templateRefWorker(procedure.template) },
-                    .structural => |kind| return .{ .structural = .{ .method = structuralMethodOf(kind), .over = obligation.dispatcher } },
+                    .structural => |kind| return structuralResolution(kind, obligation.dispatcher),
                     .local_proc => invariant("a method a local procedure implements belongs to a type declared in a function body, which no type-resolved obligation outside that body names"),
                 },
             };
@@ -1082,11 +1099,19 @@ pub const Program = struct {
             else => false,
         };
         if (uninhabited) return switch (static_dispatch.unpinnedDispatchResolution(obligation.structural)) {
-            .structural => .{ .structural = .{ .method = structuralMethodOf(obligation.structural.?), .over = obligation.dispatcher } },
+            .structural => structuralResolution(obligation.structural.?, obligation.dispatcher),
             .unreachable_value => .{ .crash = .unreachable_value },
         };
         const kind = obligation.structural orelse invariant("a type-resolved obligation's dispatcher has no method and no structural derivation, which checking rejects");
-        return .{ .structural = .{ .method = structuralMethodOf(kind), .over = obligation.dispatcher } };
+        return structuralResolution(kind, obligation.dispatcher);
+    }
+
+    /// The structural resolution of derivation `kind` over `dispatcher`.
+    fn structuralResolution(kind: static_dispatch.StructuralKind, dispatcher: TypeId) ObligationResolution {
+        return switch (kind) {
+            .equality, .hash => .{ .structural = .{ .method = structuralMethodOf(kind), .over = dispatcher } },
+            .parser, .encoder, .map, .map_effectful => .{ .derived = kind },
+        };
     }
 
     /// The structural method of derivation `kind`. Derived codecs and maps

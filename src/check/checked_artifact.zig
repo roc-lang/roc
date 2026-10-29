@@ -22531,7 +22531,8 @@ pub const NestedProcEvidenceSource = enum {
 /// module's default-expression root set.
 pub const NestedProcSiteOwner = union(enum) {
     template: canonical.ProcedureTemplateRef,
-    default_root,
+    /// The defaulted-field expression whose root set owns the site.
+    default_root: CheckedExprId,
 };
 
 /// Public `NestedProcSite` declaration.
@@ -22628,7 +22629,7 @@ pub const NestedProcSiteTable = struct {
         // value.
         for (checked_bodies.default_exprs.items) |default| {
             builder.current_scope = .root;
-            try builder.scanExpr(default.checked_expr, .default_root, false);
+            try builder.scanExpr(default.checked_expr, .{ .default_root = default.checked_expr }, false);
         }
 
         const sites = try builder.sites.toOwnedSlice(allocator);
