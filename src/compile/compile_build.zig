@@ -249,6 +249,9 @@ pub const BuildEnv = struct {
     defer_post_check: bool = false,
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
+    /// See `recordBoxyObjects`.
+    boxy_objects_restored: u32 = 0,
+    boxy_objects_built: u32 = 0,
     // I/O abstraction for all OS operations (filesystem, stdio, env vars, etc.)
     filesystem: CoreCtx,
     // Explicit working directory for resolving relative paths
@@ -2700,6 +2703,11 @@ pub const BuildEnv = struct {
         /// Canonicalized-module cache entries this build wrote.
         canonicalized_cache_stores: u32 = 0,
 
+        /// Objects of a `.boxy` build restored from the per-module Boxy
+        /// object cache, and lowered and compiled by this build.
+        boxy_objects_restored: u32 = 0,
+        boxy_objects_built: u32 = 0,
+
         /// Number of modules that were compiled (not cached)
         modules_compiled: u32 = 0,
         /// Hits that restored inference and published current implementation artifacts.
@@ -2720,10 +2728,17 @@ pub const BuildEnv = struct {
 
     /// Get build statistics from the coordinator
     pub fn getBuildStats(self: *BuildEnv) BuildStats {
-        if (self.coordinator) |coord| {
-            return coord.getBuildStats();
-        }
-        return .{};
+        var stats: BuildStats = if (self.coordinator) |coord| coord.getBuildStats() else .{};
+        stats.boxy_objects_restored = self.boxy_objects_restored;
+        stats.boxy_objects_built = self.boxy_objects_built;
+        return stats;
+    }
+
+    /// Count the objects a `.boxy` build restored from and filed in the
+    /// per-module Boxy object cache (`BuildStats`).
+    pub fn recordBoxyObjects(self: *BuildEnv, restored: u32, built: u32) void {
+        self.boxy_objects_restored += restored;
+        self.boxy_objects_built += built;
     }
 
     pub fn freeWatchInputStates(self: *BuildEnv, inputs: []const watch_inputs.Input) void {

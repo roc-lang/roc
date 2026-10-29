@@ -72,7 +72,7 @@ pub const Unit = union(enum) {
 pub const ModuleUnit = struct {
     /// The export interface of every imported module's object (what its
     /// unit's ARC solved for each exported worker), by worker identity.
-    imports: *const ExportInterfaces,
+    imports: *ExportInterfaces,
     /// Whether this is the program's root unit: it lowers `Input.roots` as
     /// well, and the workers of every module with platform requirements,
     /// which are lowered at the app's types and belong to no module's own
@@ -95,13 +95,25 @@ pub const ExportInterface = struct {
 };
 
 /// The export interfaces of every object a unit imports, by worker identity.
+/// Units lowered in parallel read and record interfaces concurrently, so
+/// every access takes the mutex; an interface, once recorded, never changes.
 pub const ExportInterfaces = struct {
     allocator: Allocator,
+    io: std.Io,
     map: std.AutoHashMapUnmanaged(LIR.ProcIdentity, ExportInterface) = .empty,
     arena: std.heap.ArenaAllocator,
+    mutex: Mutex = .init,
 
-    pub fn init(allocator: Allocator) ExportInterfaces {
-        return .{ .allocator = allocator, .arena = std.heap.ArenaAllocator.init(allocator) };
+    /// A mutex on hosts with threads; a freestanding compiler runs every
+    /// unit on its one thread.
+    const Mutex = if (@import("builtin").os.tag == .freestanding) struct {
+        pub const init: @This() = .{};
+        pub fn lockUncancelable(_: *@This(), _: std.Io) void {}
+        pub fn unlock(_: *@This(), _: std.Io) void {}
+    } else std.Io.Mutex;
+
+    pub fn init(allocator: Allocator, io: std.Io) ExportInterfaces {
+        return .{ .allocator = allocator, .io = io, .arena = std.heap.ArenaAllocator.init(allocator) };
     }
 
     pub fn deinit(self: *ExportInterfaces) void {
@@ -111,19 +123,23 @@ pub const ExportInterfaces = struct {
 
     /// Record `interface` for `identity`, copying its condition rows.
     pub fn put(self: *ExportInterfaces, identity: LIR.ProcIdentity, interface: ExportInterface) Allocator.Error!void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         var owned = interface;
         owned.rc_ret_conditions = try self.arena.allocator().dupe(u32, interface.rc_ret_conditions);
         try self.map.put(self.allocator, identity, owned);
     }
 
     /// Record the interface ARC solved for `proc` of `store`, under the
-    /// procedure's identity.
-    pub fn putProc(self: *ExportInterfaces, store: *const lir_core.LirStore, proc: LIR.LirProcSpecId) Allocator.Error!void {
+    /// procedure's identity, and return it.
+    pub fn putProc(self: *ExportInterfaces, store: *const lir_core.LirStore, proc: LIR.LirProcSpecId) Allocator.Error!ExportInterface {
         const spec = store.getProcSpec(proc);
         const words = store.getU32Span(spec.rc_ret_conditions);
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         const conditions = try self.arena.allocator().alloc(u32, collections.GuardedList.borrowLen(words));
         for (conditions, 0..) |*word, index| word.* = collections.GuardedList.at(words, index);
-        try self.map.put(self.allocator, spec.identity, .{
+        const interface: ExportInterface = .{
             .rc_borrowed_params = spec.rc_borrowed_params,
             .rc_ret_borrowed = spec.rc_ret_borrowed,
             .rc_ret_lenders = spec.rc_ret_lenders,
@@ -132,10 +148,14 @@ pub const ExportInterfaces = struct {
             .rc_ret_unique_fields = spec.rc_ret_unique_fields,
             .rc_ret_conditions = conditions,
             .may_leave_pending = spec.may_leave_pending,
-        });
+        };
+        try self.map.put(self.allocator, spec.identity, interface);
+        return interface;
     }
 
-    pub fn get(self: *const ExportInterfaces, identity: LIR.ProcIdentity) ?ExportInterface {
+    pub fn get(self: *ExportInterfaces, identity: LIR.ProcIdentity) ?ExportInterface {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         return self.map.get(identity);
     }
 };

@@ -84,6 +84,10 @@ pub const Entry = struct {
     exports: []const ExportRecord,
     /// The hosted function symbols the object references.
     hosted_symbols: []const []const u8,
+    /// For the root program's object: the static data symbols the link
+    /// keeps, and the symbols a shared library exports.
+    link_root_symbols: []const []const u8 = &.{},
+    app_export_symbols: []const []const u8 = &.{},
     object: []const u8,
 };
 
@@ -106,10 +110,12 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
         try appendU32(&bytes, allocator, @intCast(record.rc_ret_conditions.len));
         for (record.rc_ret_conditions) |word| try appendU32(&bytes, allocator, word);
     }
-    try appendU32(&bytes, allocator, @intCast(entry.hosted_symbols.len));
-    for (entry.hosted_symbols) |symbol| {
-        try appendU32(&bytes, allocator, @intCast(symbol.len));
-        try bytes.appendSlice(allocator, symbol);
+    for ([_][]const []const u8{ entry.hosted_symbols, entry.link_root_symbols, entry.app_export_symbols }) |symbols| {
+        try appendU32(&bytes, allocator, @intCast(symbols.len));
+        for (symbols) |symbol| {
+            try appendU32(&bytes, allocator, @intCast(symbol.len));
+            try bytes.appendSlice(allocator, symbol);
+        }
     }
     try appendU64(&bytes, allocator, entry.object.len);
     try bytes.appendSlice(allocator, entry.object);
@@ -153,30 +159,52 @@ pub fn decode(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         record.rc_ret_conditions = conditions;
         decoded_exports += 1;
     }
-    const symbol_count = try reader.word32();
-    const symbols = try allocator.alloc([]const u8, symbol_count);
-    errdefer allocator.free(symbols);
-    var decoded_symbols: usize = 0;
-    errdefer for (symbols[0..decoded_symbols]) |symbol| allocator.free(symbol);
-    for (symbols) |*symbol| {
-        const len = try reader.word32();
-        symbol.* = try allocator.dupe(u8, try reader.take(len));
-        decoded_symbols += 1;
-    }
+    const hosted_symbols = try decodeSymbols(allocator, &reader);
+    errdefer freeSymbols(allocator, hosted_symbols);
+    const link_root_symbols = try decodeSymbols(allocator, &reader);
+    errdefer freeSymbols(allocator, link_root_symbols);
+    const app_export_symbols = try decodeSymbols(allocator, &reader);
+    errdefer freeSymbols(allocator, app_export_symbols);
     const object_len = try reader.word64();
     if (object_len > std.math.maxInt(usize)) return error.InvalidEntry;
     const object = try allocator.dupe(u8, try reader.take(@intCast(object_len)));
     errdefer allocator.free(object);
     if (reader.at != bytes.len) return error.InvalidEntry;
-    return .{ .exports = exports, .hosted_symbols = symbols, .object = object };
+    return .{
+        .exports = exports,
+        .hosted_symbols = hosted_symbols,
+        .link_root_symbols = link_root_symbols,
+        .app_export_symbols = app_export_symbols,
+        .object = object,
+    };
+}
+
+fn decodeSymbols(allocator: Allocator, reader: *Reader) DecodeError![]const []const u8 {
+    const count = try reader.word32();
+    const symbols = try allocator.alloc([]const u8, count);
+    errdefer allocator.free(symbols);
+    var decoded: usize = 0;
+    errdefer for (symbols[0..decoded]) |symbol| allocator.free(symbol);
+    for (symbols) |*symbol| {
+        const len = try reader.word32();
+        symbol.* = try allocator.dupe(u8, try reader.take(len));
+        decoded += 1;
+    }
+    return symbols;
+}
+
+fn freeSymbols(allocator: Allocator, symbols: []const []const u8) void {
+    for (symbols) |symbol| allocator.free(symbol);
+    allocator.free(symbols);
 }
 
 /// Free an entry `decode` returned.
 pub fn deinitEntry(allocator: Allocator, entry: Entry) void {
     for (entry.exports) |record| allocator.free(record.rc_ret_conditions);
     allocator.free(entry.exports);
-    for (entry.hosted_symbols) |symbol| allocator.free(symbol);
-    allocator.free(entry.hosted_symbols);
+    freeSymbols(allocator, entry.hosted_symbols);
+    freeSymbols(allocator, entry.link_root_symbols);
+    freeSymbols(allocator, entry.app_export_symbols);
     allocator.free(entry.object);
 }
 
@@ -282,6 +310,8 @@ test "a Boxy object entry round-trips through its bytes" {
             .{ .identity = @splat(2), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 2, .rc_ret_borrowed = false, .rc_ret_unique = true, .may_leave_pending = false, .rc_ret_conditions = &.{} },
         },
         .hosted_symbols = &.{ "roc_fx_stdout_line", "roc_fx_stdin_line" },
+        .link_root_symbols = &.{"roc__d3"},
+        .app_export_symbols = &.{ "roc__main_for_host", "roc__d3" },
         .object = "not really an object",
     };
     const bytes = try encode(allocator, entry);
@@ -290,6 +320,8 @@ test "a Boxy object entry round-trips through its bytes" {
     defer deinitEntry(allocator, decoded);
     try std.testing.expectEqualDeep(entry.exports, decoded.exports);
     try std.testing.expectEqualDeep(entry.hosted_symbols, decoded.hosted_symbols);
+    try std.testing.expectEqualDeep(entry.link_root_symbols, decoded.link_root_symbols);
+    try std.testing.expectEqualDeep(entry.app_export_symbols, decoded.app_export_symbols);
     try std.testing.expectEqualStrings(entry.object, decoded.object);
 
     // A truncated or altered file is no entry.
