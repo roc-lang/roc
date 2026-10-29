@@ -9,7 +9,7 @@ import pkg.Form
 
 Msg : [SubmitDone(Try({}, Form.SubmitError))]
 
-main! = || Stdout.line!(update("", SubmitDone(Err(Invalid("x")))))
+main! = || Stdout.line!("${update("", SubmitDone(Err(Invalid("x"))))} ${Form.adder(399).to_str()}")
 
 update : Str, Msg -> Str
 update = |model, msg|

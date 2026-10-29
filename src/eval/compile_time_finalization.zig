@@ -369,10 +369,10 @@ fn programTypesOf(lowering_modules: *const lir.CheckedPipeline.CheckedModuleSet)
     return .{ .context = lowering_modules, .find = findProgramTypes };
 }
 
-fn findProgramTypes(context: *const anyopaque, key: [32]u8) ?checked.CheckedTypeStoreView {
+fn findProgramTypes(context: *const anyopaque, key: [32]u8) ?ConstStoreWriter.ProgramModule {
     const lowering_modules: *const lir.CheckedPipeline.CheckedModuleSet = @ptrCast(@alignCast(context));
     const view = loweringModuleView(lowering_modules.*, .{ .bytes = key }) orelse return null;
-    return view.checked_types;
+    return .{ .types = view.checked_types, .direct_imports = view.direct_import_module_keys };
 }
 
 /// A literal root's source, at most 96 bytes of it. Owned.

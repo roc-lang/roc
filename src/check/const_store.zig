@@ -501,8 +501,8 @@ pub const TypeOccurrenceMap = collections.DenseMap(checked_ids.CheckedTypeId, ch
 /// Across Edits"), while the program-wide stores a value is lowered in hold
 /// the program's representative occurrence.
 pub const OccurrenceTranslation = struct {
-    context: *const anyopaque,
-    rebind: *const fn (context: *const anyopaque, named: NamedType) NamedType,
+    context: *anyopaque,
+    rebind: *const fn (context: *anyopaque, named: NamedType) NamedType,
 
     pub fn apply(self: OccurrenceTranslation, named: NamedType) NamedType {
         return self.rebind(self.context, named);

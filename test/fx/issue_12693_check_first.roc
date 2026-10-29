@@ -8,5 +8,6 @@ import pkg.Form
 
 main! = || {
 	_ = Form.submit
+	_ = Form.adder
 	Stdout.line!("hi")
 }

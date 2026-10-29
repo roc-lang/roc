@@ -3657,11 +3657,14 @@ carries a checked occurrence: `named_type.ty`, an id in the type store of
 which is explicit and need not be `named_type.module`. Static data planning
 re-enters `ty_module`'s store at `ty`, and the occurrence takes part in a
 Monotype type's full and specialization digests. In a stored value and its
-stored type, every closed named type's occurrence is the storing module's own
-(`ConstStoreWriter.rebindNamedOccurrence`): the stored root's checked type is
-the module's, so the module holds an occurrence of each closed named type in
-it under the same checked type key, and the module's cache entry then names only
-modules its own identity covers. Monotype's in-memory occurrence of a closed
+stored type, every closed named type's occurrence is one the storing module's
+identity covers (`ConstStoreWriter.rebindNamedOccurrence`): the storing
+module's own, which holds every closed named type of the stored root's
+checked type under the same checked type key, or, for a stored closure's
+captures, which are lowered in the callee's module, the occurrence in the
+lowest-keyed module of the storing module's transitive imports that holds
+one. The module's cache entry then names only modules its own identity
+covers. Monotype's in-memory occurrence of a closed
 type is instead one representative per program ("Closed Named Occurrences"
 above), which may belong to any module of the program the value was lowered
 in, so a module's entry must not retain it: a later program reusing the entry

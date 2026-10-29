@@ -2600,9 +2600,10 @@ test "roc build of an app succeeds against the cache a roc check of another app 
     try cache_env.put("ROC_CACHE_DIR", cache_path);
 
     // Both apps import the same package. The first app's check stores the
-    // package's compile-time constant `Form.submit`, and the second app's
-    // build reuses that stored constant: it must build and run exactly as it
-    // does from an empty cache.
+    // package's compile-time constants `Form.submit` and the closure
+    // `Form.adder`, whose capture is an `Api` nominal `Form` never mentions,
+    // and the second app's build reuses those stored constants: it must
+    // build and run exactly as it does from an empty cache.
     const check_result = try util.runRocWithEnv(
         std.testing.io,
         allocator,
@@ -2638,7 +2639,7 @@ test "roc build of an app succeeds against the cache a roc check of another app 
         .exited => |code| try testing.expectEqual(@as(u8, 0), code),
         .signal, .stopped, .unknown => return error.UnexpectedTermination,
     }
-    try testing.expectEqualStrings("400\n", run_result.stdout);
+    try testing.expectEqualStrings("400 400\n", run_result.stdout);
 }
 
 /// Build a compile-time demand pack test app for the dev backend against the

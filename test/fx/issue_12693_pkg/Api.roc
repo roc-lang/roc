@@ -16,4 +16,13 @@ Api := [].{
 
 	status_of : Api.Endpoint(request, answer, error), error -> U16
 	status_of = |e, error| (e.status)(error)
+
+	Secret := { n : U16 }
+
+	make_adder : {} -> (U16 -> U16)
+	make_adder = |{}| {
+		s : Api.Secret
+		s = { n: 1 }
+		|x| x + s.n
+	}
 }

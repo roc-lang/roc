@@ -53,22 +53,31 @@ const StrBacking = struct {
     len: usize,
 };
 
-/// The checked types of every module of the program a value was lowered in,
-/// by checked module key: the stores a Monotype named type's occurrence
-/// (`ty_module`, `ty`) indexes.
+/// One checked module of the program a value was lowered in: the checked
+/// types a Monotype named type's occurrence (`ty_module`, `ty`) indexes, and
+/// the module's direct imports.
+pub const ProgramModule = struct {
+    types: checked.CheckedTypeStoreView,
+    direct_imports: []const checked.CheckedModuleArtifactKey,
+};
+
+/// The program's checked modules by checked module key.
 pub const ProgramTypes = struct {
     context: *const anyopaque,
-    find: *const fn (context: *const anyopaque, key: [32]u8) ?checked.CheckedTypeStoreView,
+    find: *const fn (context: *const anyopaque, key: [32]u8) ?ProgramModule,
 };
 
 /// How a writer into a checked module's ConstStore rebinds each closed named
-/// type to the storing module's own occurrence of it (design.md
-/// "Compile-Time Value Reuse Across Edits"): the storing module, whose key
-/// and checked types the rebinding reads, and the program's checked types
-/// the lowered occurrence is read from.
+/// type to an occurrence the storing module's identity covers (design.md
+/// "Compile-Time Value Reuse Across Edits"): the storing module, whose key,
+/// checked types and imports the rebinding reads, and the program's checked
+/// modules the lowered occurrence is read from.
 pub const OccurrenceRebinding = struct {
     storing_module: *const checked.CheckedModuleArtifact,
     program: ProgramTypes,
+    /// The storing module's transitive imports within the program, by
+    /// ascending key, built on first use.
+    import_closure: ?[]const [32]u8 = null,
 };
 
 /// Stores interpreted compile-time roots into a checked ConstStore.
@@ -141,6 +150,7 @@ pub const Writer = struct {
     }
 
     pub fn deinit(self: *Writer) void {
+        if (self.occurrences) |rebinding| if (rebinding.import_closure) |closure| self.allocator.free(closure);
         self.store_capture_types.deinit(self.allocator);
         self.store_nodes.deinit(self.allocator);
         self.store_requests.deinit(self.allocator);
@@ -232,37 +242,76 @@ pub const Writer = struct {
 
     /// The clone-time rebinding of named occurrences into this writer's
     /// store; none for a program-owned store.
-    fn occurrenceTranslation(self: *const Writer) ?const_store.OccurrenceTranslation {
+    fn occurrenceTranslation(self: *Writer) ?const_store.OccurrenceTranslation {
         if (self.occurrences == null) return null;
         return .{ .context = self, .rebind = rebindNamedOccurrenceCallback };
     }
 
-    fn rebindNamedOccurrenceCallback(context: *const anyopaque, named: const_store.NamedType) const_store.NamedType {
-        const self: *const Writer = @ptrCast(@alignCast(context));
+    fn rebindNamedOccurrenceCallback(context: *anyopaque, named: const_store.NamedType) const_store.NamedType {
+        const self: *Writer = @ptrCast(@alignCast(context));
         return self.rebindNamedOccurrence(named);
     }
 
-    /// The occurrence a stored named type carries in this writer's store. A
-    /// closed named type's occurrence is the storing module's own: the
-    /// program's representative occurrence may belong to any module of the
-    /// program the value was lowered in, which a later program reusing the
-    /// stored value need not contain. An open occurrence is exact and is
-    /// already the lowering view's, which the storing module's value identity
-    /// covers.
-    fn rebindNamedOccurrence(self: *const Writer, named: const_store.NamedType) const_store.NamedType {
-        const rebinding = self.occurrences orelse return named;
+    /// The occurrence a stored named type carries in this writer's store. The
+    /// program's representative occurrence of a closed named type may belong
+    /// to any module of the program the value was lowered in, which a later
+    /// program reusing the stored value need not contain, so a closed
+    /// occurrence is rebound to one the storing module's identity covers: the
+    /// storing module's own, which holds every closed named type of the
+    /// stored root's checked type, or else the lowest-keyed module of its
+    /// transitive imports that holds one, where a stored closure's captures,
+    /// lowered in the callee's module, are found. An open occurrence is exact
+    /// and is already the lowering view's, which that identity covers.
+    fn rebindNamedOccurrence(self: *Writer, named: const_store.NamedType) const_store.NamedType {
+        const rebinding = &(self.occurrences orelse return named);
         const storing_key = rebinding.storing_module.key;
         if (std.meta.eql(named.ty_module.bytes, storing_key.bytes)) return named;
-        const occurrence_types = rebinding.program.find(rebinding.program.context, named.ty_module.bytes) orelse
+        const occurrence = rebinding.program.find(rebinding.program.context, named.ty_module.bytes) orelse
             writerInvariant("a stored named type's checked occurrence named a module outside the program");
-        const root = occurrence_types.rootRows()[@backingInt(named.ty)];
+        const root = occurrence.types.rootRows()[@backingInt(named.ty)];
         if (root.contains_identity_variables) return named;
-        // Every closed named type in a stored value or its type is a type of
-        // the storing module's own checked root, so the module holds an
-        // occurrence under the same checked type key.
-        const local = rebinding.storing_module.checked_types.view().rootForKey(root.key) orelse
-            writerInvariant("a stored closed named type has no checked occurrence in the module storing it");
-        return .{ .module = named.module, .ty = local, .ty_module = storing_key.digest() };
+        if (rebinding.storing_module.checked_types.view().rootForKey(root.key)) |local| {
+            return .{ .module = named.module, .ty = local, .ty_module = storing_key.digest() };
+        }
+        const closure = rebinding.import_closure orelse closure: {
+            const built = self.buildImportClosure(rebinding.*) catch writerInvariant("import closure allocation failed");
+            rebinding.import_closure = built;
+            break :closure built;
+        };
+        for (closure) |key| {
+            const imported = rebinding.program.find(rebinding.program.context, key) orelse continue;
+            const found = imported.types.rootForKey(root.key) orelse continue;
+            if (imported.types.rootRows()[@backingInt(found)].contains_identity_variables) continue;
+            return .{ .module = named.module, .ty = found, .ty_module = .{ .bytes = key } };
+        }
+        writerInvariant("a stored closed named type has no checked occurrence in the module storing it or its imports");
+    }
+
+    /// The storing module's transitive imports that are in the program, by
+    /// ascending key. A direct import outside the program (a type-only
+    /// dependency the lowering did not need) holds no occurrence the values
+    /// were lowered from and contributes nothing.
+    fn buildImportClosure(self: *Writer, rebinding: OccurrenceRebinding) Allocator.Error![]const [32]u8 {
+        var seen = std.AutoHashMap([32]u8, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList([32]u8).empty;
+        defer pending.deinit(self.allocator);
+        var closure = std.ArrayList([32]u8).empty;
+        errdefer closure.deinit(self.allocator);
+        try seen.put(rebinding.storing_module.key.bytes, {});
+        for (rebinding.storing_module.direct_import_module_keys) |key| try pending.append(self.allocator, key.bytes);
+        while (pending.pop()) |key| {
+            if ((try seen.getOrPut(key)).found_existing) continue;
+            const module = rebinding.program.find(rebinding.program.context, key) orelse continue;
+            try closure.append(self.allocator, key);
+            for (module.direct_imports) |imported| try pending.append(self.allocator, imported.bytes);
+        }
+        std.mem.sort([32]u8, closure.items, {}, struct {
+            fn lessThan(_: void, a: [32]u8, b: [32]u8) bool {
+                return std.mem.order(u8, &a, &b) == .lt;
+            }
+        }.lessThan);
+        return closure.toOwnedSlice(self.allocator);
     }
 
     /// One value to store or scan.
@@ -1372,10 +1421,10 @@ fn testProgramTypes(artifact: *const checked.CheckedModuleArtifact) ProgramTypes
     return .{ .context = artifact, .find = findTestProgramTypes };
 }
 
-fn findTestProgramTypes(context: *const anyopaque, key: [32]u8) ?checked.CheckedTypeStoreView {
+fn findTestProgramTypes(context: *const anyopaque, key: [32]u8) ?ProgramModule {
     const artifact: *const checked.CheckedModuleArtifact = @ptrCast(@alignCast(context));
     if (!std.meta.eql(artifact.key.bytes, key)) return null;
-    return artifact.checked_types.view();
+    return .{ .types = artifact.checked_types.view(), .direct_imports = artifact.direct_import_module_keys };
 }
 
 fn testConstRoot(plan: LirProgram.ConstPlanId, ret_layout: layout.Idx) LirProgram.ConstRootPlan {
