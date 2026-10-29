@@ -552,10 +552,13 @@ test "frozen root transcode keeps a named type's explicit Box as part of the val
     const plan: Program.ConstPlanId = @fromBackingInt(2);
     var boxes: [2]layout.Idx = undefined;
     for ([_]*Program.Result{ &source, &target }, 0..) |program, side| {
+        const scalar: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
         try program.const_plans.append(allocator, .scalar);
-        try program.const_plans.append(allocator, .{ .box = @fromBackingInt(0) });
+        const box: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+        try program.const_plans.append(allocator, .{ .box = scalar });
         // Graph transcode follows only the backing plan, not the checked name.
-        try program.const_plans.append(allocator, .{ .named = .{ .named_type = undefined, .backing = @fromBackingInt(1) } });
+        std.debug.assert(@backingInt(plan) == program.const_plans.items.len);
+        try program.const_plans.append(allocator, .{ .named = .{ .named_type = undefined, .backing = box } });
         boxes[side] = try program.layouts.insertBox(.u64);
     }
     var payload: u64 = 0x123456789abcdef0;
