@@ -14931,6 +14931,11 @@ receiver and callable share a dictionary group. The worker ABI includes that
 group once, retaining its checked owner and evidence index even when signature
 or body traversal also reaches it. Inline closures capture that group once;
 the owner's selected method keeps its exact slot within the group.
+Every dictionary group a worker's signature or body reaches carries the
+checked evidence index of its first method's evidence parameter: checking
+emits a receiver's constraints consecutively in the group's order, but orders
+receivers by its own walk of the scheme's row chains, so a group's position in
+the worker's label-sorted representation never names its evidence.
 Function lookups plan the worker from its declared callable type, just as direct
 calls do. The lookup's instantiated type describes the callable boundary and
 supplies hidden arguments; it must not erase dictionary parameters from a
@@ -18148,9 +18153,13 @@ Evidence paths describe the normalized logical type, never checked-store row
 topology. Record and tag extension chains, including transparent aliases along
 those chains, are traversed by the evidence-param producer but are not emitted
 as path steps; a field or tag payload in any tail is addressed directly by its
-label from the logical row root. A static-dispatch requirement on an open-row
-remainder is pathless because closure erases that remainder as a standalone
-component; ordinary checked edges can still supply it, while a
+label from the logical row root. A use can lift a scheme's anonymous record or
+tag union into a nominal whose backing it matches, so a record-field or tag
+step that reaches a named type at a use reads that type's structural backing
+(`InstGraph.shapeRoot` in Monotype, `structureBackingRep` in Boxy); the step
+still names the structure the scheme wrote. A static-dispatch requirement on
+an open-row remainder is pathless because closure erases that remainder as a
+standalone component; ordinary checked edges can still supply it, while a
 compiler-generated edge cannot synthesize it from the closed callable. The
 CheckedModule boundary validates both the path grammar and that every nonempty
 path resolves over its template's checked callable type before Monotype may
