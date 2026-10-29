@@ -1934,7 +1934,7 @@ pub const SyntaxChecker = struct {
         const def = store.getDef(@fromBackingInt(value_node));
         const ident = module_lookup.extractIdentFromPattern(store, def.pattern) orelse return null;
         for (module_env.method_idents.entries.items) |entry| {
-            if (entry.key.owner_module == ModuleEnv.MethodOwner.self_module and entry.value.eql(ident)) return entry.key.owner;
+            if (entry.value.eql(ident)) return entry.key.owner;
         }
         return null;
     }

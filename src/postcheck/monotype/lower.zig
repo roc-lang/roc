@@ -1638,7 +1638,6 @@ const ModuleViewData = struct {
     hosted_bindings: *const checked.HostedBindingTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     method_registry: *const static_dispatch.MethodRegistry,
-    method_lookup_scope: []const checked.ModuleId,
     direct_import_module_keys: []const checked.CheckedModuleArtifactKey,
     resolved_refs: *const checked.ResolvedValueTable,
     nested_proc_sites: *const checked.NestedProcSiteTable,
@@ -3858,14 +3857,13 @@ fn evidenceChainEql(allocator: Allocator, a: EvidenceChain, b: EvidenceChain) Al
     }
 }
 
-const ScopedMethodDispatch = struct {
-    scope: [32]u8,
+const MethodDispatchKey = struct {
     owner_tag: u8,
     owner_first: u32,
     owner_second: u32,
     method: u32,
 
-    fn init(scope: checked.ModuleId, owner: static_dispatch.MethodOwner, method: names.MethodNameId) ScopedMethodDispatch {
+    fn init(owner: static_dispatch.MethodOwner, method: names.MethodNameId) MethodDispatchKey {
         const owner_fields: struct { tag: u8, first: u32, second: u32 } = switch (owner) {
             .builtin => |builtin| .{
                 .tag = 1,
@@ -3879,7 +3877,6 @@ const ScopedMethodDispatch = struct {
             },
         };
         return .{
-            .scope = scope.bytes,
             .owner_tag = owner_fields.tag,
             .owner_first = owner_fields.first,
             .owner_second = owner_fields.second,
@@ -3898,7 +3895,7 @@ const MethodLookupResult = union(enum) {
     rejected,
 };
 
-const ScopedMethodResolution = union(enum) {
+const MethodResolution = union(enum) {
     missing,
     found: MethodLookupResult,
 };
@@ -4457,7 +4454,6 @@ fn storedConstFnEvidenceEql(left: StoredConstFnEvidence, right: StoredConstFnEvi
 /// purpose the evidence is materialized for.
 const SiteEvidenceMemoKey = struct {
     view: usize,
-    method_scope: usize,
     refs: usize,
     refs_len: usize,
     subst: usize,
@@ -4620,7 +4616,6 @@ const PendingSpecJob = struct {
     reservation: TemplateReservation,
     fn_template: Ast.FnTemplate,
     template_ref: names.ProcTemplate,
-    method_scope: checked.ModuleId,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     fn_ty: Type.TypeId,
@@ -5117,7 +5112,6 @@ const SpecJobWorkerInputs = struct {
 const PreparedSpecJob = struct {
     job: PendingSpecJob,
     view: ModuleView,
-    method_scope: ModuleView,
     template: checked.CheckedProcedureTemplate,
 };
 
@@ -5349,14 +5343,12 @@ const GeneratedTryTypeAddress = struct {
 /// Process-local O(1) reuse key for a checker-classified closed direct
 /// procedure call. `evidence` is an interned producer identity in `module`;
 /// the plan's closed callable type is likewise structurally interned there.
-/// The method scope remains part of specialization identity because imported
-/// bodies resolve compiler-generated method calls in that scope. The key is a
+/// The key is a
 /// complete identity only for specializations independent of the caller's
 /// local context, so caller-owned specializations are never stored under it.
 const ClosedDirectCallIdentity = struct {
     callable: CheckedTypeAddress,
     evidence: static_dispatch.EvidenceNodeId,
-    method_scope: checked.ModuleId,
 };
 
 /// Tracks a memoized structural-derivation helper def (is_eq / inspect /
@@ -5706,16 +5698,15 @@ const Builder = struct {
     /// derivation internals, inspect/parser/encode helpers, path synthesis).
     /// Built once; keys use the same program-name interning as `typeDef`, so
     /// owners derived from monomorphic type content correlate directly.
-    /// Scoped method-target resolutions. The same owner and method pair may
-    /// resolve to different targets depending on which module's method-lookup
-    /// registry scope applies. Checked modules output the ordered registry
-    /// scope; this memo only accelerates repeated exact lookups during the
-    /// build and never changes the checked outcome.
-    scoped_method_targets: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ScopedMethodResolution) = .{},
-    /// Scoped inspect-override resolutions, memoized like
-    /// `scoped_method_targets`. `null` means inspection renders the owner's
-    /// default form.
-    scoped_inspect_overrides: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ?MethodLookup) = .{},
+    /// Method-target resolutions. An owner's methods live in its declaring
+    /// module's registry alone, so this memo only accelerates repeated exact
+    /// lookups during the build and never changes the checked outcome.
+    method_targets: std.AutoHashMapUnmanaged(MethodDispatchKey, MethodResolution) = .{},
+    /// The Builtin module's view, found once on first use (`builtinModuleView`).
+    builtin_module_view: ??ModuleView = null,
+    /// Inspect-override resolutions, memoized like `method_targets`. `null`
+    /// means inspection renders the owner's default form.
+    inspect_overrides: std.AutoHashMapUnmanaged(MethodDispatchKey, ?MethodLookup) = .{},
     /// Exact checked identity of the compiler-provided `Try` nominal. `Try`
     /// deliberately retains nominal static-dispatch ownership, so it cannot use
     /// `builtin_owner`; structural parser lowering still needs its producer
@@ -6159,8 +6150,8 @@ const Builder = struct {
         self.unshared_summary_domains.deinit(self.allocator);
         if (self.spec_job_commit_domain) |*domain| domain.deinit();
         if (self.spec_job_worker) |*worker| worker.deinit();
-        self.scoped_method_targets.deinit(self.allocator);
-        self.scoped_inspect_overrides.deinit(self.allocator);
+        self.method_targets.deinit(self.allocator);
+        self.inspect_overrides.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.static_data_eligibility.deinit();
         self.stored_data.deinit();
@@ -6459,28 +6450,12 @@ const Builder = struct {
         // Checking already supplies the complete relation of a closed
         // interface, so no callee relation program exists for it.
         if (templateInterfaceIsClosed(callee, &template)) return null;
-        const scope = self.moduleForKeyBytes(address.family.method_scope) orelse return null;
-        const scope_context = scope.compile_time_root_identities.valueContext() orelse return null;
+        const scope_context = callee.compile_time_root_identities.valueContext() orelse return null;
         const program_context = (try self.programValueContext(false)) orelse return null;
         var hash = base.Sha256.init(.{});
-        hash.update("roc.interface-provider.v2");
+        hash.update("roc.interface-provider.v3");
         hash.update(&(callee.code_generation_key orelse callee.key).bytes);
         hash.update(&scope_context);
-        // Method lookup order is producer data too; a sorted module set does
-        // not establish the precedence of an ordered lookup scope.
-        var scope_count: [4]u8 = undefined;
-        std.mem.writeInt(u32, &scope_count, @intCast(scope.method_lookup_scope.len), .little);
-        hash.update(&scope_count);
-        const top = (try self.literalTopModules()).?;
-        for (scope.method_lookup_scope) |module| {
-            if (top.get(module.bytes)) |context| {
-                hash.update(&.{1});
-                hash.update(&context);
-            } else {
-                hash.update(&.{0});
-                hash.update(&module.bytes);
-            }
-        }
         hash.update(&program_context);
         hash.update(&((try self.interfaceCalleeContext(callee)) orelse return null));
         var ordinals: [8]u8 = undefined;
@@ -8457,7 +8432,7 @@ const Builder = struct {
                     view.types.rootKey(source_fn_ty),
                     fn_ty,
                 );
-                const callee = try self.lowerFnTemplateCallTarget(view, fn_template, &.{});
+                const callee = try self.lowerFnTemplateCallTarget(fn_template, &.{});
                 break :blk try self.program.addExpr(.{
                     .ty = fn_data.ret,
                     .data = .{ .call_proc = .{
@@ -8549,7 +8524,7 @@ const Builder = struct {
                     view.types.rootKey(source_fn_ty),
                     mono_fn_ty,
                 );
-                const fn_id = try self.lowerFnTemplateDef(view, fn_template, &.{});
+                const fn_id = try self.lowerFnTemplateDef(fn_template, &.{});
                 break :blk try self.program.addExpr(.{
                     .ty = self.program.fnSource(fn_id).mono_fn_ty,
                     .data = .{ .fn_def = .{ .fn_id = fn_id } },
@@ -8718,7 +8693,6 @@ const Builder = struct {
         } else &.{};
         return try self.lowerTemplateWithMono(
             template_ref,
-            view,
             source_fn_ty,
             source_ty_view.types.rootKey(source_fn_ty),
             fn_ty,
@@ -9003,7 +8977,6 @@ const Builder = struct {
     fn lowerTemplateWithMono(
         self: *Builder,
         template_ref: names.ProcTemplate,
-        method_scope: ModuleView,
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         fn_ty: Type.TypeId,
@@ -9048,7 +9021,6 @@ const Builder = struct {
         const request_digest = precomputed_request_digest orelse self.specializationTypeDigest(fn_ty);
         const spec_identity = self.templateSpecIdentity(
             template_ref,
-            method_scope.key,
             evidence_digest,
             self.codecContractIdentity(codec_contract),
             fn_ty,
@@ -9103,7 +9075,6 @@ const Builder = struct {
                                 job.reservation,
                                 job.fn_template,
                                 job.template_ref,
-                                self.moduleForId(job.method_scope),
                                 job.source_fn_key,
                                 job.fn_ty,
                                 job.evidence,
@@ -9208,7 +9179,6 @@ const Builder = struct {
             });
             const spec = try self.addTemplateSpecRecord(
                 template_ref,
-                method_scope.key,
                 identity_evidence,
                 lower_fn_ty,
                 request_digest,
@@ -9244,14 +9214,13 @@ const Builder = struct {
                 }
                 resolution_profile.enter(.body_address);
                 const job: PendingSpecJob = .{
-                    .completed_body_address = if (dev_diagnostics.isSet(.completed_body_cache)) try self.completedBodyAddress(spec_identity, view, method_scope, source_fn_key, subst, signature_relation, demand) else null,
+                    .completed_body_address = if (dev_diagnostics.isSet(.completed_body_cache)) try self.completedBodyAddress(spec_identity, view, source_fn_key, subst, signature_relation, demand) else null,
                     .profile_key = if (dev_diagnostics.isSet(.sealed_body_profile)) Ast.specIdentityKey(spec_identity).bytes else @splat(0),
                     .dispatch_index = undefined,
                     .spec = reserved.spec,
                     .reservation = reservation,
                     .fn_template = fn_template,
                     .template_ref = template_ref,
-                    .method_scope = method_scope.key,
                     .source_fn_ty = source_fn_ty,
                     .source_fn_key = source_fn_key,
                     .fn_ty = lower_fn_ty,
@@ -9316,7 +9285,6 @@ const Builder = struct {
             reservation,
             fn_template,
             template_ref,
-            method_scope,
             source_fn_key,
             lower_fn_ty,
             spec_evidence,
@@ -9483,7 +9451,6 @@ const Builder = struct {
         reservation: TemplateReservation,
         fn_template: Ast.FnTemplate,
         template_ref: names.ProcTemplate,
-        method_scope: ModuleView,
         source_fn_key: names.TypeDigest,
         lower_fn_ty: Type.TypeId,
         spec_evidence: []const SpecEvidence,
@@ -9596,7 +9563,6 @@ const Builder = struct {
             fn_template,
             template_ref,
             view,
-            method_scope,
             template,
             source_fn_key,
             lower_fn_ty,
@@ -10130,7 +10096,7 @@ const Builder = struct {
                     contexts[submitted % capacity] = .{
                         .inputs = undefined,
                         .snapshot = undefined,
-                        .prepared = .{ .job = job, .view = view, .method_scope = self.moduleForId(job.method_scope), .template = template },
+                        .prepared = .{ .job = job, .view = view, .template = template },
                         .completed = true,
                         .coordinator_only = true,
                     };
@@ -10166,7 +10132,7 @@ const Builder = struct {
                             .current_region = self.current_region,
                             .timing_std_io = if (self.timing) |timing| timing.std_io else null,
                         },
-                        .prepared = .{ .job = job, .view = view, .method_scope = self.moduleForId(job.method_scope), .template = template },
+                        .prepared = .{ .job = job, .view = view, .template = template },
                     };
                     try session.submit(.{ .id = slot, .context = context, .run = runSpecJobTask });
                     _ = self.pending_spec_jobs.pop();
@@ -10317,7 +10283,6 @@ const Builder = struct {
             &lane.commit_domain,
             context.prepared.job,
             context.prepared.view,
-            context.prepared.method_scope,
             context.prepared.template,
         ) catch {
             context.failed = true;
@@ -10426,7 +10391,6 @@ const Builder = struct {
                 job.reservation,
                 job.fn_template,
                 job.template_ref,
-                self.moduleForId(job.method_scope),
                 job.source_fn_key,
                 job.fn_ty,
                 job.evidence,
@@ -10446,7 +10410,6 @@ const Builder = struct {
             commit_domain,
             job,
             view,
-            self.moduleForId(job.method_scope),
             template,
         );
         defer shard.deinit();
@@ -10538,34 +10501,22 @@ const Builder = struct {
         self: *Builder,
         identity: Ast.SpecIdentity,
         view: ModuleView,
-        scope: ModuleView,
         source_fn_key: names.TypeDigest,
         subst: ?SealedSubstitution,
         relation: Ast.SignatureRelation,
         demand: Demand,
     ) Allocator.Error!?CompletedBodyAddress {
         if (self.interface_cache == null) return null;
-        const scope_context = scope.compile_time_root_identities.valueContext() orelse return null;
+        const scope_context = view.compile_time_root_identities.valueContext() orelse return null;
         const program_context = (try self.programValueContext(false)) orelse return null;
         const callee_context = (try self.interfaceCalleeContext(view)) orelse return null;
-        const top = (try self.literalTopModules()).?;
         var family = TypeDigestHasher.init();
-        family.update("roc.completed-body-family.v5");
+        family.update("roc.completed-body-family.v6");
         family.update(&view.key.bytes);
         family.update(&(view.code_generation_key orelse view.key).bytes);
         family.update(&scope_context);
         family.update(&program_context);
         family.update(&callee_context);
-        hashU32(&family, @intCast(scope.method_lookup_scope.len));
-        for (scope.method_lookup_scope) |module| {
-            if (top.get(module.bytes)) |context| {
-                family.update(&.{1});
-                family.update(&context);
-            } else {
-                family.update(&.{0});
-                family.update(&module.bytes);
-            }
-        }
         family.update(@tagName(self.inline_expects));
         family.update(@tagName(demand));
         family.update(&.{ @intFromBool(self.static_data_literals), @intFromBool(self.comptime_value_reads), @intFromBool(self.literal_roots), @intFromBool(self.proc_debug_names) });
@@ -10865,7 +10816,6 @@ const Builder = struct {
         commit_domain: *SpecJobCommitDomain,
         job: PendingSpecJob,
         view: ModuleView,
-        method_scope: ModuleView,
         template: checked.CheckedProcedureTemplate,
     ) Allocator.Error!CompletedSpecJobShard {
         const profile_start = if (dev_diagnostics.isSet(.sealed_body_profile) or dev_diagnostics.isSet(.completed_body_cache)) if (self.timing) |timing| timingNowNs(timing.std_io) else 0 else 0;
@@ -10951,7 +10901,6 @@ const Builder = struct {
             job.fn_template,
             job.template_ref,
             view,
-            method_scope,
             template,
             job.source_fn_key,
             job.fn_ty,
@@ -11117,7 +11066,6 @@ const Builder = struct {
         fn_template: Ast.FnTemplate,
         template_ref: names.ProcTemplate,
         view: ModuleView,
-        method_scope: ModuleView,
         template: checked.CheckedProcedureTemplate,
         source_fn_key: names.TypeDigest,
         lower_fn_ty: Type.TypeId,
@@ -11138,11 +11086,10 @@ const Builder = struct {
         defer self.active_body_draft = saved_body_draft;
         defer self.active_template_root = saved_template_root;
 
-        var body_ctx = try BodyContext.initWithMethodScope(
+        var body_ctx = try BodyContext.init(
             self.allocator,
             self,
             view,
-            method_scope,
             template_ref,
             graph,
             body_draft,
@@ -11181,7 +11128,7 @@ const Builder = struct {
         }
         self.active_template_root = .{
             .graph = graph,
-            .family = DraftTemplateFamilyAddress.init(template_ref, method_scope.key, source_fn_key),
+            .family = DraftTemplateFamilyAddress.init(template_ref, source_fn_key),
             .evidence = body_ctx.evidence.vector,
             .subst = body_ctx.evidence.subst,
             .request_fn_node = root_node,
@@ -11299,7 +11246,7 @@ const Builder = struct {
             .body_lowering,
         );
         const evidence = edge.vector;
-        const family = DraftTemplateFamilyAddress.init(template_ref, source_ctx.method_scope.key, source_fn_key);
+        const family = DraftTemplateFamilyAddress.init(template_ref, source_fn_key);
 
         // The globally reserved root is the active ancestor of recursive calls
         // in its own specialization graph. A checked recursive reference to it
@@ -11586,7 +11533,6 @@ const Builder = struct {
         try source_ctx.draft.template_specs.append(self.allocator, .{
             .state = if (local_context_dependent) .lowering else .deferred,
             .template_ref = template_ref,
-            .method_scope = source_ctx.method_scope.key,
             .source_fn_ty = source_fn_ty,
             .source_fn_key = source_fn_key,
             .symbol = symbol,
@@ -11631,7 +11577,7 @@ const Builder = struct {
         defer owner_scope.leave();
         try self.registerDraftProcDebugNameForTemplate(source_ctx.draft, symbol, view, template_ref);
 
-        var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self, view, source_ctx.method_scope, template_ref, source_ctx.graph, source_ctx.draft);
+        var body_ctx = try BodyContext.init(self.allocator, self, view, template_ref, source_ctx.graph, source_ctx.draft);
         body_ctx.evidence = rootEvidenceWithSubstitution(template_ref, templateSchemaIn(view, &template), edge);
         try body_ctx.seedSubstitution(body_ctx.evidence.schema.?, edge.subst);
         body_ctx.runtime_demand_guard_frames = source_ctx.runtime_demand_guard_frames;
@@ -11796,11 +11742,10 @@ const Builder = struct {
             spec.template_ref,
         );
 
-        var body_ctx = try BodyContext.initWithMethodScope(
+        var body_ctx = try BodyContext.init(
             self.allocator,
             self,
             view,
-            source_ctx.method_scope,
             spec.template_ref,
             source_ctx.graph,
             source_ctx.draft,
@@ -11885,7 +11830,6 @@ const Builder = struct {
         const lookup_prefix = try source_ctx.draft.template_spec_lookup.internPrefix(
             DraftTemplateFamilyAddress.init(
                 spec.template_ref,
-                spec.method_scope,
                 spec.source_fn_key,
             ),
             completed_template.evidence_digest.bytes,
@@ -11955,7 +11899,6 @@ const Builder = struct {
     fn addTemplateSpecRecord(
         self: *Builder,
         template_ref: names.ProcTemplate,
-        method_scope: checked.ModuleId,
         evidence: StoredConstFnEvidence,
         request_fn_ty: Type.TypeId,
         request_fn_ty_digest: names.TypeDigest,
@@ -11967,7 +11910,6 @@ const Builder = struct {
         return try self.addSpecRecord(
             self.templateSpecIdentity(
                 template_ref,
-                method_scope,
                 evidence_digest,
                 codec_contract,
                 request_fn_ty,
@@ -11983,7 +11925,6 @@ const Builder = struct {
     fn addNestedSpecRecord(
         self: *Builder,
         nested: Ast.NestedFn,
-        method_scope: checked.ModuleId,
         evidence: StoredConstFnEvidence,
         program_span: ?specialize.ProgramEvidenceSpan,
         capture_abi_digest: names.TypeDigest,
@@ -11994,7 +11935,7 @@ const Builder = struct {
     ) Allocator.Error!Ast.SpecId {
         const evidence_digest = evidence.digest;
         return try self.addSpecRecord(
-            self.nestedSpecIdentity(nested, method_scope, evidence_digest, capture_abi_digest, codec_contract, request_fn_ty, request_fn_ty_digest),
+            self.nestedSpecIdentity(nested, evidence_digest, capture_abi_digest, codec_contract, request_fn_ty, request_fn_ty_digest),
             evidence,
             program_span,
             fn_id,
@@ -12928,7 +12869,6 @@ const Builder = struct {
     fn templateSpecIdentity(
         self: *Builder,
         template_ref: names.ProcTemplate,
-        method_scope: checked.ModuleId,
         evidence_digest: Ast.EvidenceDigest,
         codec_contract: ?Ast.CodecContractIdentity,
         request_fn_ty: Type.TypeId,
@@ -12941,7 +12881,6 @@ const Builder = struct {
                 .proc_base = @backingInt(template_ref.proc_base),
                 .template = @backingInt(template_ref.template),
             } },
-            .method_scope = moduleDigestFromId(self.moduleForId(method_scope).code_generation_key orelse method_scope),
             .evidence_digest = evidence_digest,
             .codec_contract_digest = codecContractIdentityDigest(codec_contract),
             .codec_contract = codec_contract,
@@ -12953,7 +12892,6 @@ const Builder = struct {
     fn nestedSpecIdentity(
         self: *Builder,
         nested: Ast.NestedFn,
-        method_scope: checked.ModuleId,
         evidence_digest: Ast.EvidenceDigest,
         capture_abi_digest: names.TypeDigest,
         codec_contract: ?Ast.CodecContractIdentity,
@@ -12974,7 +12912,6 @@ const Builder = struct {
                 .site = @backingInt(nested.site),
                 .default_root_module = nested.default_root,
             } },
-            .method_scope = moduleDigestFromId(self.moduleForId(method_scope).code_generation_key orelse method_scope),
             .evidence_digest = evidence_digest,
             .codec_contract_digest = codecContractIdentityDigest(codec_contract),
             .codec_contract = codec_contract,
@@ -13496,47 +13433,44 @@ const Builder = struct {
     /// `owner`'s ids belong to: the program's, or a private body graph's.
     fn lookupMethodTarget(
         self: *Builder,
-        scope: ModuleView,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
         method_view: ModuleView,
         method: names.MethodNameId,
     ) Allocator.Error!?MethodLookupResult {
-        return try self.lookupMethodTargetByName(scope, owner_names, owner, method_view.names.methodNameText(method));
+        return try self.lookupMethodTargetByName(owner_names, owner, method_view.names.methodNameText(method));
     }
 
-    /// Resolve `owner.method_name` in `scope`. Only owners in the program
-    /// name domain are memoized: the memo's raw name-id keys belong to that
-    /// domain alone, so an owner from a private body graph's store is
-    /// resolved directly.
+    /// Resolve `owner.method_name`. Only owners in the program name domain are
+    /// memoized: the memo's raw name-id keys belong to that domain alone, so
+    /// an owner from a private body graph's store is resolved directly.
     fn lookupMethodTargetByName(
         self: *Builder,
-        scope: ModuleView,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
     ) Allocator.Error!?MethodLookupResult {
         if (owner_names != &self.program.names) {
-            return self.findMethodTargetByNameFromStore(scope, owner_names, owner, method_name);
+            return self.findMethodTargetByNameFromStore(owner_names, owner, method_name);
         }
         if (self.activeNameStore() != &self.program.names) {
             Common.invariant("program-domain method owner was looked up under a private name destination");
         }
         const method = try self.program.names.internMethodName(method_name);
-        const address = ScopedMethodDispatch.init(scope.key, owner, method);
-        if (self.scoped_method_targets.get(address)) |resolution| {
+        const address = MethodDispatchKey.init(owner, method);
+        if (self.method_targets.get(address)) |resolution| {
             return switch (resolution) {
                 .missing => null,
                 .found => |found| found,
             };
         }
 
-        const resolution: ScopedMethodResolution = if (self.findMethodTargetByNameFromStore(scope, owner_names, owner, method_name)) |found|
+        const resolution: MethodResolution = if (self.findMethodTargetByNameFromStore(owner_names, owner, method_name)) |found|
             .{ .found = found }
         else
             .missing;
 
-        try self.scoped_method_targets.put(self.allocator, address, resolution);
+        try self.method_targets.put(self.allocator, address, resolution);
         return switch (resolution) {
             .missing => null,
             .found => |found| found,
@@ -13548,57 +13482,54 @@ const Builder = struct {
     /// under the same name-domain rule as `lookupMethodTargetByName`.
     fn inspectOverrideFor(
         self: *Builder,
-        scope: ModuleView,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
     ) Allocator.Error!?MethodLookup {
         if (owner_names != &self.program.names) {
-            return self.inspectOverrideFromStore(scope, owner_names, owner);
+            return self.inspectOverrideFromStore(owner_names, owner);
         }
         if (self.activeNameStore() != &self.program.names) {
             Common.invariant("program-domain method owner was looked up under a private name destination");
         }
         const method = try self.program.names.internMethodName("to_inspect");
-        const address = ScopedMethodDispatch.init(scope.key, owner, method);
-        if (self.scoped_inspect_overrides.get(address)) |resolution| return resolution;
+        const address = MethodDispatchKey.init(owner, method);
+        if (self.inspect_overrides.get(address)) |resolution| return resolution;
 
-        const resolution = self.inspectOverrideFromStore(scope, owner_names, owner);
-        try self.scoped_inspect_overrides.put(self.allocator, address, resolution);
+        const resolution = self.inspectOverrideFromStore(owner_names, owner);
+        try self.inspect_overrides.put(self.allocator, address, resolution);
         return resolution;
     }
 
-    /// Selects the view that declares `owner.to_inspect` exactly as method
-    /// dispatch does: the scope, then its method lookup scope.
+    /// Reads `owner.to_inspect` from the registry of the module that declares
+    /// `owner`, exactly as method dispatch does.
     fn inspectOverrideFromStore(
         self: *Builder,
-        scope: ModuleView,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
     ) ?MethodLookup {
+        const owner_view = self.methodOwnerView(owner_names, owner) orelse return null;
         return value_rules.lookupInspectOverride(InspectOverrideViews{
-            .builder = self,
-            .scope = scope,
+            .owner_view = owner_view,
             .owner_names = owner_names,
             .owner = owner,
         });
     }
 
-    /// The views inspection searches for an owner's `to_inspect`.
+    /// The one view inspection reads an owner's `to_inspect` from.
     const InspectOverrideViews = struct {
-        builder: *Builder,
-        scope: ModuleView,
+        owner_view: ModuleView,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
 
         pub const Found = MethodLookup;
 
-        pub fn viewCount(views: InspectOverrideViews) usize {
-            return 1 + views.scope.method_lookup_scope.len;
+        pub fn viewCount(_: InspectOverrideViews) usize {
+            return 1;
         }
 
         pub fn view(views: InspectOverrideViews, index: usize) ModuleView {
-            if (index == 0) return views.scope;
-            return views.builder.moduleForId(views.scope.method_lookup_scope[index - 1]);
+            std.debug.assert(index == 0);
+            return views.owner_view;
         }
 
         pub fn inspectKey(views: InspectOverrideViews, candidate: ModuleView) ?static_dispatch.MethodKey {
@@ -13616,40 +13547,52 @@ const Builder = struct {
         }
     };
 
-    fn findMethodTargetByNameFromStore(
-        self: *Builder,
-        scope: ModuleView,
-        owner_names: *const names.NameStore,
-        owner: static_dispatch.MethodOwner,
-        method_name: []const u8,
-    ) ?MethodLookupResult {
-        if (self.methodTargetInViewFromStore(scope, owner_names, owner, method_name, true)) |found| return found;
-        for (scope.method_lookup_scope) |module_id| {
-            const candidate = self.moduleForId(module_id);
-            // Only the module declaring a function-body type registers its
-            // methods, so a local procedure found here is that owner's exact
-            // target; its declaration context comes from the evidence purpose.
-            if (self.methodTargetInViewFromStore(candidate, owner_names, owner, method_name, true)) |found| return found;
-        }
-        return null;
+    /// The module that declares `owner`, whose registry holds every method of
+    /// `owner`: the Builtin module for a builtin owner, and the declaring
+    /// module named by a nominal owner's content identity. Null when that
+    /// module is not in the lowering input, where no method of `owner` can be
+    /// either.
+    fn methodOwnerView(self: *Builder, owner_names: *const names.NameStore, owner: static_dispatch.MethodOwner) ?ModuleView {
+        return switch (owner) {
+            .builtin => self.builtinModuleView(),
+            .nominal => |nominal| self.moduleForIdentityHash(owner_names.moduleIdentityBytes(nominal.module)),
+        };
     }
 
-    fn methodTargetInViewFromStore(
-        _: *Builder,
-        view: ModuleView,
+    /// The Builtin module's view, which declares every builtin owner's methods.
+    fn builtinModuleView(self: *Builder) ?ModuleView {
+        if (self.builtin_module_view) |view| return view;
+        const root = self.rootModuleView();
+        const found: ?ModuleView = if (root.module_env.module_role == .builtin) root else found: {
+            for (0..self.modules.imports.len) |index| {
+                const view = self.importModuleView(index);
+                if (view.module_env.module_role == .builtin) break :found view;
+            }
+            for (0..self.modules.root.relation_modules.len) |index| {
+                const view = self.relationModuleView(index);
+                if (view.module_env.module_role == .builtin) break :found view;
+            }
+            break :found null;
+        };
+        self.builtin_module_view = found;
+        return found;
+    }
+
+    /// The target `owner`'s declaring module registers for `method_name`. A
+    /// local procedure found there is that owner's exact target; its
+    /// declaration context comes from the evidence purpose.
+    fn findMethodTargetByNameFromStore(
+        self: *Builder,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
-        allow_local_proc: bool,
     ) ?MethodLookupResult {
-        const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, view.names, owner) orelse return null;
-        const view_method = view.names.lookupMethodName(method_name) orelse return null;
-        return switch (view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null) {
+        const owner_view = self.methodOwnerView(owner_names, owner) orelse return null;
+        const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, owner_view.names, owner) orelse return null;
+        const view_method = owner_view.names.lookupMethodName(method_name) orelse return null;
+        return switch (owner_view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null) {
             .rejected => .rejected,
-            .target => |target| if (!allow_local_proc and target.kind == .local_proc)
-                null
-            else
-                .{ .target = .{ .view = view, .target = target } },
+            .target => |target| .{ .target = .{ .view = owner_view, .target = target } },
         };
     }
 
@@ -13826,7 +13769,7 @@ const Builder = struct {
     /// request reserves an id and defers the body; outside one (root and
     /// wrapper paths, whose types come from the builder-global cache without
     /// body evidence), the body lowers now.
-    fn lowerFnTemplateCallTarget(self: *Builder, method_scope: ModuleView, fn_template: Ast.FnTemplate, evidence: []const SpecEvidence) Allocator.Error!Ast.FnSlot {
+    fn lowerFnTemplateCallTarget(self: *Builder, fn_template: Ast.FnTemplate, evidence: []const SpecEvidence) Allocator.Error!Ast.FnSlot {
         const template_ref = switch (fn_template.fn_def) {
             .local_template,
             .imported_template,
@@ -13855,7 +13798,6 @@ const Builder = struct {
         // not even match). Neither states the claim this checks.
         const def = try self.lowerTemplateWithMono(
             template_ref,
-            method_scope,
             fn_template.source_fn_ty,
             fn_template.source_fn_key,
             fn_template.mono_fn_ty,
@@ -13872,8 +13814,8 @@ const Builder = struct {
         return .{ .local = self.defFnId(def) };
     }
 
-    fn lowerFnTemplateDef(self: *Builder, method_scope: ModuleView, fn_template: Ast.FnTemplate, evidence: []const SpecEvidence) Allocator.Error!Ast.FnId {
-        return localFnIdFromSlot(try self.lowerFnTemplateCallTarget(method_scope, fn_template, evidence));
+    fn lowerFnTemplateDef(self: *Builder, fn_template: Ast.FnTemplate, evidence: []const SpecEvidence) Allocator.Error!Ast.FnId {
+        return localFnIdFromSlot(try self.lowerFnTemplateCallTarget(fn_template, evidence));
     }
 
     fn lowerRestoredConstFnTemplate(
@@ -13954,7 +13896,6 @@ const Builder = struct {
                 // call-target site above.
                 const def = try self.lowerTemplateWithMono(
                     template_ref,
-                    fn_view,
                     fn_template.source_fn_ty,
                     fn_template.source_fn_key,
                     fn_template.mono_fn_ty,
@@ -14137,7 +14078,7 @@ const Builder = struct {
             .independent => null,
             .anchored => |anchor| source_ctx.activeCodecContractContextForAnchor(anchor),
         };
-        const family = DraftNestedFamilyAddress.init(nested, source_ctx.method_scope.key, source_fn_key);
+        const family = DraftNestedFamilyAddress.init(nested, source_fn_key);
         self.countBodyDiagnostic("nested_lookup_probes");
         const family_exists = source_ctx.draft.nested_spec_families.contains(family);
         const stored_evidence = try source_ctx.storedEvidence(requested_evidence);
@@ -14289,7 +14230,7 @@ const Builder = struct {
                 {
                     continue;
                 }
-                if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.method_scope, spec.source_fn_key), family)) continue;
+                if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.source_fn_key), family)) continue;
                 if (!try evidenceChainEql(self.allocator, spec.evidence, requested_evidence)) continue;
                 if (!substitutionsShareClasses(source_ctx.graph, spec.evidence.subst, requested_evidence.subst)) continue;
                 if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
@@ -14366,7 +14307,6 @@ const Builder = struct {
         try source_ctx.draft.nested_specs.append(self.allocator, .{
             .state = .lowering,
             .nested = nested,
-            .method_scope = source_ctx.method_scope.key,
             .expr_id = expr_id,
             .source_fn_ty = source_fn_ty,
             .source_fn_key = source_fn_key,
@@ -14638,7 +14578,6 @@ const Builder = struct {
 
     fn draftSpecIdentityEql(self: *Builder, left: Ast.SpecIdentity, right: Ast.SpecIdentity) Allocator.Error!bool {
         if (!std.meta.eql(left.callable, right.callable)) return false;
-        if (!std.mem.eql(u8, left.method_scope.bytes[0..], right.method_scope.bytes[0..])) return false;
         if (!std.meta.eql(left.evidence_digest, right.evidence_digest)) return false;
         if (!std.mem.eql(u8, left.codec_contract_digest.bytes[0..], right.codec_contract_digest.bytes[0..])) return false;
         if ((left.codec_contract == null) != (right.codec_contract == null)) return false;
@@ -14756,18 +14695,17 @@ const Builder = struct {
     }
 
     /// A body context for the deferred boundary `boundary`: its module view,
-    /// method scope, owner template, evidence, and enclosing function key.
+    /// owner template, evidence, and enclosing function key.
     inline fn deferredBoundaryContext(
         self: *Builder,
         body_draft: *BodyDraftStore,
         graph: *InstGraph,
         boundary: anytype,
     ) Allocator.Error!BodyContext {
-        var ctx = try BodyContext.initWithMethodScope(
+        var ctx = try BodyContext.init(
             self.allocator,
             self,
             boundary.view,
-            boundary.method_scope,
             boundary.owner_template,
             graph,
             body_draft,
@@ -14814,11 +14752,10 @@ const Builder = struct {
         const loc_scope = self.enterBoundaryLoc(body_draft, boundary.expr);
         defer loc_scope.leave();
 
-        var ctx = try BodyContext.initWithMethodScope(
+        var ctx = try BodyContext.init(
             self.allocator,
             self,
             boundary.view,
-            boundary.method_scope,
             boundary.owner_template,
             graph,
             body_draft,
@@ -15515,7 +15452,6 @@ const Builder = struct {
         const request_digest = self.specializationTypeDigest(request_fn_ty);
         const identity = self.templateSpecIdentity(
             spec.template_ref,
-            spec.method_scope,
             draft_fn.source.evidence_digest,
             self.codecContractIdentity(codec_contract),
             request_fn_ty,
@@ -15535,7 +15471,6 @@ const Builder = struct {
         const resolved_slot: Ast.FnSlot = blk: {
             const def = try self.lowerTemplateWithMono(
                 spec.template_ref,
-                self.moduleForId(spec.method_scope),
                 spec.source_fn_ty,
                 spec.source_fn_key,
                 request_fn_ty,
@@ -15900,7 +15835,6 @@ const Builder = struct {
                     const request_digest = self.specializationTypeDigest(request_fn_ty);
                     identity = self.templateSpecIdentity(
                         spec.template_ref,
-                        spec.method_scope,
                         sealed_template.evidence_digest,
                         spec.committed_codec_contract,
                         request_fn_ty,
@@ -15916,7 +15850,6 @@ const Builder = struct {
                         const solved_digest = self.specializationTypeDigest(fn_ty);
                         identity = self.nestedSpecIdentity(
                             spec.nested,
-                            spec.method_scope,
                             sealed_template.evidence_digest,
                             spec.capture_abi_digest,
                             spec.sealed_codec_contract,
@@ -16201,7 +16134,6 @@ const Builder = struct {
             body_draft.sealed_template_specs.appendAssumeCapacity(.{
                 .state = spec.state,
                 .template_ref = spec.template_ref,
-                .method_scope = spec.method_scope,
                 .source_fn_ty = spec.source_fn_ty,
                 .source_fn_key = spec.source_fn_key,
                 .request_fn_ty = request_ty,
@@ -16229,7 +16161,6 @@ const Builder = struct {
             body_draft.sealed_nested_specs.appendAssumeCapacity(.{
                 .state = spec.state,
                 .nested = spec.nested,
-                .method_scope = spec.method_scope,
                 .source_fn_key = spec.source_fn_key,
                 .request_fn_ty = try sealer.sealNode(spec.request_fn_node),
                 .capture_abi_digest = try graphCaptureAbiDigest(
@@ -16521,7 +16452,6 @@ const Builder = struct {
             const evidence = programViewFnEvidence(self.program.view(), fn_template);
             const identity = self.templateSpecIdentity(
                 spec.template_ref,
-                spec.method_scope,
                 fn_template.evidence_digest,
                 spec.committed_codec_contract,
                 request_fn_ty,
@@ -16549,7 +16479,6 @@ const Builder = struct {
 
             const spec_id = try self.addTemplateSpecRecord(
                 spec.template_ref,
-                spec.method_scope,
                 evidence,
                 request_fn_ty,
                 request_digest,
@@ -16588,12 +16517,11 @@ const Builder = struct {
             var view = specializationEvidenceView(evidence);
             view.program_span = program_span;
             if (try self.spec_store.findLocal(
-                self.nestedSpecIdentity(spec.nested, spec.method_scope, fn_template.evidence_digest, capture_abi_digest, spec.sealed_codec_contract, fn_ty, digest),
+                self.nestedSpecIdentity(spec.nested, fn_template.evidence_digest, capture_abi_digest, spec.sealed_codec_contract, fn_ty, digest),
                 view,
             )) |_| continue;
             const spec_id = try self.addNestedSpecRecord(
                 spec.nested,
-                spec.method_scope,
                 evidence,
                 program_span,
                 capture_abi_digest,
@@ -18252,15 +18180,13 @@ const DraftTemplateFamilyAddress = struct {
     module: [32]u8,
     proc_base: u32,
     template: u32,
-    method_scope: [32]u8,
     source_fn_key: [32]u8,
 
-    fn init(template_ref: names.ProcTemplate, method_scope: checked.ModuleId, source_fn_key: names.TypeDigest) DraftTemplateFamilyAddress {
+    fn init(template_ref: names.ProcTemplate, source_fn_key: names.TypeDigest) DraftTemplateFamilyAddress {
         return .{
             .module = names.procTemplateModuleDigest(template_ref).bytes,
             .proc_base = @backingInt(template_ref.proc_base),
             .template = @backingInt(template_ref.template),
-            .method_scope = method_scope.bytes,
             .source_fn_key = source_fn_key.bytes,
         };
     }
@@ -18269,19 +18195,18 @@ const DraftTemplateFamilyAddress = struct {
     /// input carries everything its instantiation constrains; a checked
     /// source-function key only names how one call site spelled the callee's
     /// type, so it does not split summaries.
-    fn interfaceSummary(template_ref: names.ProcTemplate, method_scope: checked.ModuleId) DraftTemplateFamilyAddress {
-        return init(template_ref, method_scope, .{ .bytes = @splat(0) });
+    fn interfaceSummary(template_ref: names.ProcTemplate) DraftTemplateFamilyAddress {
+        return init(template_ref, .{ .bytes = @splat(0) });
     }
 
     /// Recursive references may instantiate the same checked procedure
-    /// template through a different checked root. Declaration and method scope
-    /// identify the active body; the complete live function interface decides
-    /// whether the reference belongs to that specialization.
+    /// template through a different checked root. The declaration identifies
+    /// the active body; the complete live function interface decides whether
+    /// the reference belongs to that specialization.
     fn sameRecursiveCallable(self: DraftTemplateFamilyAddress, other: DraftTemplateFamilyAddress) bool {
         return std.mem.eql(u8, self.module[0..], other.module[0..]) and
             self.proc_base == other.proc_base and
-            self.template == other.template and
-            std.mem.eql(u8, self.method_scope[0..], other.method_scope[0..]);
+            self.template == other.template;
     }
 };
 
@@ -18314,10 +18239,9 @@ const DraftNestedFamilyAddress = struct {
     /// carries that module's content identity (zeros under `false`).
     default_root: bool,
     default_root_module: [32]u8,
-    method_scope: [32]u8,
     source_fn_key: [32]u8,
 
-    fn init(nested: Ast.NestedFn, method_scope: checked.ModuleId, source_fn_key: names.TypeDigest) DraftNestedFamilyAddress {
+    fn init(nested: Ast.NestedFn, source_fn_key: names.TypeDigest) DraftNestedFamilyAddress {
         return .{
             .module = names.procTemplateModuleDigest(nested.owner).bytes,
             .owner_proc_base = @backingInt(nested.owner.proc_base),
@@ -18326,7 +18250,6 @@ const DraftNestedFamilyAddress = struct {
             .site = @backingInt(nested.site),
             .default_root = nested.default_root != null,
             .default_root_module = if (nested.default_root) |identity| identity.bytes else @splat(0),
-            .method_scope = method_scope.bytes,
             .source_fn_key = source_fn_key.bytes,
         };
     }
@@ -18533,9 +18456,6 @@ const DraftTemplateSpec = struct {
     template_ref: names.ProcTemplate,
     /// The next draft spec of the same template, or `TemplateSpecChain.end`.
     next_in_template: u32 = TemplateSpecChain.end,
-    /// Checked module whose ordered registry scope governs generated method
-    /// dispatch embedded in this specialization's body.
-    method_scope: checked.ModuleId,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     /// Worker-local symbol retained when a deferred request must eagerly lower
@@ -18589,7 +18509,6 @@ const DraftTemplateSpec = struct {
 const SealedTemplateSpec = struct {
     state: DraftSpecState,
     template_ref: names.ProcTemplate,
-    method_scope: checked.ModuleId,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     request_fn_ty: Type.TypeId,
@@ -18643,9 +18562,6 @@ const DraftConstUseProvenance = union(enum) {
 
 const DraftDeferredConstUse = struct {
     view: ModuleView,
-    /// Checked module whose ordered registry scope governs generated method
-    /// dispatch inside the deferred emission, captured at deferral time.
-    method_scope: ModuleView,
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
@@ -18747,7 +18663,6 @@ const MaterializedConstNode = struct {
 /// hasher (whose type is `ret_ty`).
 const DraftDeferredStructuralEq = struct {
     view: ModuleView,
-    method_scope: ModuleView,
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
@@ -18774,7 +18689,6 @@ const DraftStructuralDerivationMode = union(enum) {
 
 const DraftDeferredStructuralSerialization = struct {
     view: ModuleView,
-    method_scope: ModuleView,
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
@@ -18800,7 +18714,6 @@ const CheckedIntrinsicOperands = union(enum) {
 
 const DraftDeferredCallsiteIntrinsic = struct {
     view: ModuleView,
-    method_scope: ModuleView,
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
@@ -18839,7 +18752,6 @@ const DraftStoredCodecEncodingLet = struct {
 /// one to a sealed type is not a comparison this boundary can make.
 const DraftDeferredStoredCodecRestore = struct {
     view: ModuleView,
-    method_scope: ModuleView,
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
@@ -19246,7 +19158,6 @@ const FrozenPreparedFieldDefaults = struct {
 
 const DraftDeferredInspect = struct {
     view: ModuleView,
-    method_scope: ModuleView,
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
@@ -19549,9 +19460,6 @@ fn nestedSpecReusableAt(draft: *const BodyDraftStore, spec: *const DraftNestedSp
 const DraftNestedSpec = struct {
     state: DraftSpecState,
     nested: Ast.NestedFn,
-    /// Checked module whose ordered registry scope governs generated method
-    /// dispatch embedded in this specialization's body.
-    method_scope: checked.ModuleId,
     expr_id: checked.CheckedExprId,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
@@ -19585,7 +19493,6 @@ const DraftNestedSpec = struct {
 const SealedNestedSpec = struct {
     state: DraftSpecState,
     nested: Ast.NestedFn,
-    method_scope: checked.ModuleId,
     source_fn_key: names.TypeDigest,
     request_fn_ty: Type.TypeId,
     capture_abi_digest: names.TypeDigest,
@@ -19801,7 +19708,6 @@ const DraftStaticDataRequest = struct {
 const CachedCodecContractInstance = struct {
     graph: *InstGraph,
     view_key: [32]u8,
-    method_scope_key: [32]u8,
     derivation: static_dispatch.GeneratedCodecDerivationId,
     kind: CodecKind,
     callable_node: NodeId,
@@ -22521,7 +22427,6 @@ const InterfaceReplayAddressContext = struct {
         const scalars = [_]u32{ @backingInt(address.kind), address.family.proc_base, address.family.template };
         hasher.update(std.mem.asBytes(&scalars));
         hasher.update(address.family.module[0..8]);
-        hasher.update(address.family.method_scope[0..8]);
         hasher.update(address.family.source_fn_key[0..8]);
         hasher.update(address.evidence_digest[0..8]);
         hasher.update(address.input_digest[0..8]);
@@ -23057,10 +22962,6 @@ const ParserErrorRowKey = struct {
 const BodyContext = struct {
     allocator: Allocator,
     builder: *Builder,
-    /// Checked module whose ordered registry scope governs generated method
-    /// dispatch in this specialization. This can differ from `view` when an
-    /// imported template is specialized for a caller's concrete types.
-    method_scope: ModuleView,
     view: ModuleView,
     /// Source-file identity for `view`, resolved once when this body context is
     /// created instead of through the draft hash table for every source node.
@@ -23954,23 +23855,10 @@ const BodyContext = struct {
         graph: *InstGraph,
         draft: *BodyDraftStore,
     ) Allocator.Error!BodyContext {
-        return try initWithMethodScope(allocator, builder, view, view, owner_template, graph, draft);
-    }
-
-    fn initWithMethodScope(
-        allocator: Allocator,
-        builder: *Builder,
-        view: ModuleView,
-        method_scope: ModuleView,
-        owner_template: names.ProcTemplate,
-        graph: *InstGraph,
-        draft: *BodyDraftStore,
-    ) Allocator.Error!BodyContext {
         var ctx = try initBodyState(allocator, builder, view, owner_template, graph, draft);
         errdefer ctx.deinit();
         std.debug.assert(allocator.ptr == builder.allocator.ptr);
         if (builder.body_memo_pool.pop()) |memos| ctx.installMemos(memos);
-        ctx.method_scope = method_scope;
         ctx.source_file_id = builder.sourceFileId(view);
         return ctx;
     }
@@ -23990,7 +23878,6 @@ const BodyContext = struct {
         return .{
             .allocator = allocator,
             .builder = builder,
-            .method_scope = view,
             .view = view,
             .source_file_id = null,
             .owner_template = owner_template,
@@ -25632,7 +25519,7 @@ const BodyContext = struct {
 
     fn hasInspectOverride(self: *BodyContext, value_ty: Type.TypeId) Allocator.Error!bool {
         const owner = methodOwnerFromType(self.typeStore(), value_ty) orelse return false;
-        return (try self.builder.inspectOverrideFor(self.method_scope, self.nameStore(), owner)) != null;
+        return (try self.builder.inspectOverrideFor(self.nameStore(), owner)) != null;
     }
 
     fn tagHasProvenUninhabitedPayload(self: *BodyContext, tag: Type.Tag) Allocator.Error!bool {
@@ -25705,7 +25592,7 @@ const BodyContext = struct {
 
     fn toInspectCall(self: *BodyContext, value: DraftExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!?DraftExprId {
         const owner = methodOwnerFromType(self.typeStore(), value_ty) orelse return null;
-        const lookup = try self.withLocalProcContext((try self.builder.inspectOverrideFor(self.method_scope, self.nameStore(), owner)) orelse return null);
+        const lookup = try self.withLocalProcContext((try self.builder.inspectOverrideFor(self.nameStore(), owner)) orelse return null);
         const callee = if (self.frozen_inspect_method_calls) |prepared|
             prepared.get(value_ty) orelse
                 Common.invariant("deferred inspect method was not reserved before relation freeze")
@@ -25793,7 +25680,7 @@ const BodyContext = struct {
         str_ty: Type.TypeId,
         owner: static_dispatch.MethodOwner,
     ) Allocator.Error!?bool {
-        const raw_lookup = (try self.builder.inspectOverrideFor(self.method_scope, self.nameStore(), owner)) orelse return null;
+        const raw_lookup = (try self.builder.inspectOverrideFor(self.nameStore(), owner)) orelse return null;
         const lookup = try self.withLocalProcContext(raw_lookup);
         for (self.draft.prepared_inspect_methods.items) |prepared| {
             if (self.graph.sameClass(prepared.value_node, node)) return false;
@@ -26050,7 +25937,7 @@ const BodyContext = struct {
         current_fn_key: names.TypeDigest,
         copy_type_cells: bool,
     ) Allocator.Error!BodyContext {
-        var child = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
+        var child = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
         child.evidence = self.evidence;
         errdefer child.deinit();
         child.owner_context_fn_key = self.owner_context_fn_key;
@@ -28527,11 +28414,10 @@ const BodyContext = struct {
                         continue;
                     }
                     const local_ctx = try self.allocator.create(BodyContext);
-                    local_ctx.* = BodyContext.initWithMethodScope(
+                    local_ctx.* = BodyContext.init(
                         self.allocator,
                         self.builder,
                         self.view,
-                        self.method_scope,
                         self.owner_template,
                         self.graph,
                         self.draft,
@@ -29067,7 +28953,7 @@ const BodyContext = struct {
         for (edge.subst, request_bytes[shape.bytes.len..]) |slot, *byte| byte.* = if (slot == .checked_error) 1 else 0;
         const request: InterfaceConstraints.Identity = .{ .bytes = request_bytes, .leaves = shape.leaves };
         const address = InterfaceReplayAddress{
-            .family = DraftTemplateFamilyAddress.interfaceSummary(template_ref, self.method_scope.key),
+            .family = DraftTemplateFamilyAddress.interfaceSummary(template_ref),
             .evidence_digest = evidence_digest.bytes,
             .input_digest = interfaceRequestBucket(request.bytes),
         };
@@ -29157,11 +29043,10 @@ const BodyContext = struct {
         expansion.restores_current = true;
         try replay_state.buckets.append(self.allocator, address, @intCast(replay_index));
 
-        expansion.callee_ctx = try BodyContext.initWithMethodScope(
+        expansion.callee_ctx = try BodyContext.init(
             self.allocator,
             self.builder,
             callee_view,
-            self.method_scope,
             template_ref,
             self.graph,
             self.draft,
@@ -29569,7 +29454,6 @@ const BodyContext = struct {
         }
         try self.draft.deferred_inspects.append(self.allocator, .{
             .view = self.view,
-            .method_scope = self.method_scope,
             .owner_template = self.owner_template,
             .owner = self.draft.current_owner,
             .expr = expr,
@@ -31449,7 +31333,7 @@ const BodyContext = struct {
         const contexts = &self.builder.task_storage.contexts;
         const call_ctx = try contexts.create(self.allocator);
         errdefer contexts.destroy(self.allocator, call_ctx);
-        call_ctx.* = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
+        call_ctx.* = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
         call_ctx.current_fn_key = self.current_fn_key;
@@ -37059,7 +36943,6 @@ const BodyContext = struct {
         const direct_key = ClosedDirectCallIdentity{
             .callable = checkedTypeAddress(self.view, plan.callable_ty),
             .evidence = evidence_id,
-            .method_scope = self.method_scope.key,
         };
         const slot = if (self.draft.closed_direct_specializations.get(direct_key)) |existing| blk: {
             switch (existing.slot.local) {
@@ -38395,7 +38278,6 @@ const BodyContext = struct {
         };
         try self.draft.deferred_callsite_intrinsics.append(self.allocator, .{
             .view = self.view,
-            .method_scope = self.method_scope,
             .owner_template = self.owner_template,
             .owner = self.draft.current_owner,
             .expr = expr,
@@ -38573,7 +38455,7 @@ const BodyContext = struct {
             wrapper_fn_ty,
         );
 
-        var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, wrapper.template, self.graph, self.draft);
+        var body_ctx = try BodyContext.init(self.allocator, self.builder, view, wrapper.template, self.graph, self.draft);
         defer body_ctx.deinit();
         const entry_template = view.templates.get(wrapper.template.template);
         const schema = templateSchemaIn(view, &entry_template);
@@ -38641,7 +38523,7 @@ const BodyContext = struct {
         const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse
             Common.invariant("callable eval template root had no checked entry wrapper");
 
-        var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, wrapper.template, self.graph, self.draft);
+        var body_ctx = try BodyContext.init(self.allocator, self.builder, view, wrapper.template, self.graph, self.draft);
         defer body_ctx.deinit();
         const entry_template = view.templates.get(wrapper.template.template);
         const schema = templateSchemaIn(view, &entry_template);
@@ -46060,7 +45942,7 @@ const BodyContext = struct {
             Common.invariant("callable eval template root had no checked entry wrapper");
         const edge = try self.evidenceForUseSiteAtNode(use_expr, request_fn_node);
 
-        var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, wrapper.template, self.graph, self.draft);
+        var body_ctx = try BodyContext.init(self.allocator, self.builder, view, wrapper.template, self.graph, self.draft);
         defer body_ctx.deinit();
         const entry_template = view.templates.get(wrapper.template.template);
         const schema = templateSchemaIn(view, &entry_template);
@@ -47232,7 +47114,6 @@ const BodyContext = struct {
         }
         try self.draft.deferred_const_uses.append(self.allocator, .{
             .view = self.view,
-            .method_scope = self.method_scope,
             .owner_template = self.owner_template,
             .owner = self.draft.current_owner,
             .expr = expr,
@@ -47414,7 +47295,6 @@ const BodyContext = struct {
         if (self.builder.active_template_root) |active_root| {
             const family = DraftTemplateFamilyAddress.init(
                 spec.template_ref,
-                spec.method_scope,
                 spec.source_fn_key,
             );
             if (active_root.graph == self.graph and
@@ -47471,7 +47351,6 @@ const BodyContext = struct {
         const lookup_prefix = try self.draft.template_spec_lookup.internPrefix(
             DraftTemplateFamilyAddress.init(
                 completed_spec.template_ref,
-                completed_spec.method_scope,
                 completed_spec.source_fn_key,
             ),
             completed_source.evidence_digest.bytes,
@@ -47747,11 +47626,10 @@ const BodyContext = struct {
         }
         const entry_template = store_view.templates.get(eval.entry_template.template);
 
-        var body_ctx = try BodyContext.initWithMethodScope(
+        var body_ctx = try BodyContext.init(
             self.allocator,
             self.builder,
             store_view,
-            self.method_scope,
             eval.entry_template,
             self.graph,
             self.draft,
@@ -48831,11 +48709,10 @@ const BodyContext = struct {
         return switch (fn_def) {
             .nested => |nested| {
                 const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
-                var fn_ctx = try BodyContext.initWithMethodScope(
+                var fn_ctx = try BodyContext.init(
                     self.allocator,
                     self.builder,
                     fn_view,
-                    self.method_scope,
                     ownerTemplateForConstFnDef(fn_value.fn_def),
                     self.graph,
                     self.draft,
@@ -48898,7 +48775,7 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
         const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
-        var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
+        var fn_ctx = try BodyContext.init(self.allocator, self.builder, fn_view, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
         fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
         fn_ctx.evidence = retained_evidence;
         fn_ctx.inheritFrozenEmissionContext(self);
@@ -49239,7 +49116,7 @@ const BodyContext = struct {
         };
         const fn_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(runtime.owner));
 
-        var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, runtime.owner, self.graph, self.draft);
+        var fn_ctx = try BodyContext.init(self.allocator, self.builder, fn_view, runtime.owner, self.graph, self.draft);
         defer fn_ctx.deinit();
         fn_ctx.inheritFrozenEmissionContext(self);
         try fn_ctx.inheritActiveConstBinding(self);
@@ -49336,7 +49213,6 @@ const BodyContext = struct {
 
         var boundary = DraftDeferredStoredCodecRestore{
             .view = fn_view,
-            .method_scope = fn_ctx.method_scope,
             .owner_template = runtime.owner,
             .owner = fn_ctx.draft.current_owner,
             .expr = runtime_boundary,
@@ -52794,14 +52670,14 @@ const BodyContext = struct {
             switch (entry) {
                 .target => |target| {
                     if (ctx == null) {
-                        ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, owner, self.graph, self.draft);
+                        ctx = try BodyContext.init(self.allocator, self.builder, view, owner, self.graph, self.draft);
                         try ctx.?.seedSubstitution(schema, subst);
                     }
                     try self.relateTargetToConstraint(target, &ctx.?, param);
                 },
                 .structural => |structural| if (structural.checked) |checked_structural| {
                     if (ctx == null) {
-                        ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, owner, self.graph, self.draft);
+                        ctx = try BodyContext.init(self.allocator, self.builder, view, owner, self.graph, self.draft);
                         try ctx.?.seedSubstitution(schema, subst);
                     }
                     try self.relateStructuralEvidenceToConstraint(checked_structural, &ctx.?, param);
@@ -53410,7 +53286,6 @@ const BodyContext = struct {
             try self.builder.checkedTypesGround(site_view, checked_subst))
             .{
                 .view = @intFromPtr(site_view),
-                .method_scope = @intFromPtr(self.method_scope),
                 .refs = @intFromPtr(refs.ptr),
                 .refs_len = refs.len,
                 .subst = @intFromPtr(checked_subst.ptr),
@@ -53453,11 +53328,10 @@ const BodyContext = struct {
     fn substitutionAtRequest(self: *BodyContext, schema: SchemeRequirements, request_node: NodeId) Allocator.Error!SpecSubstitution {
         if (schema.scheme_vars.len == 0) return &.{};
         const root = schema.root orelse Common.invariant("scheme without a root type received a request substitution");
-        var scheme_ctx = try BodyContext.initWithMethodScope(
+        var scheme_ctx = try BodyContext.init(
             self.allocator,
             self.builder,
             schema.view,
-            self.method_scope,
             self.owner_template,
             self.graph,
             self.draft,
@@ -53547,11 +53421,10 @@ const BodyContext = struct {
     ) Allocator.Error!SpecSubstitution {
         if (tys.len == 0) return &.{};
         const same_module = moduleBytesEqual(site_view.key.bytes, self.view.key.bytes);
-        var site_ctx: ?BodyContext = if (same_module) null else try BodyContext.initWithMethodScope(
+        var site_ctx: ?BodyContext = if (same_module) null else try BodyContext.init(
             self.allocator,
             self.builder,
             site_view,
-            self.method_scope,
             self.owner_template,
             self.graph,
             self.draft,
@@ -54051,11 +53924,10 @@ const BodyContext = struct {
                         switch (forwarded) {
                             .structural => |structural| if (structural.checked) |checked_structural| {
                                 if (scheme_ctx == null) {
-                                    scheme_ctx = try BodyContext.initWithMethodScope(
+                                    scheme_ctx = try BodyContext.init(
                                         self.allocator,
                                         self.builder,
                                         schema.view,
-                                        self.method_scope,
                                         self.owner_template,
                                         self.graph,
                                         self.draft,
@@ -54077,11 +53949,10 @@ const BodyContext = struct {
                 switch (out[k]) {
                     .target => |target| {
                         if (scheme_ctx == null) {
-                            scheme_ctx = try BodyContext.initWithMethodScope(
+                            scheme_ctx = try BodyContext.init(
                                 self.allocator,
                                 self.builder,
                                 schema.view,
-                                self.method_scope,
                                 self.owner_template,
                                 self.graph,
                                 self.draft,
@@ -54219,7 +54090,6 @@ const BodyContext = struct {
                 .module = schema.view.key.bytes,
                 .proc_base = schema.params_start,
                 .template = @intCast(schema.params.len),
-                .method_scope = self.method_scope.key.bytes,
                 .source_fn_key = if (schema.root) |root| schema.view.types.rootKey(root).bytes else @splat(0),
             },
             .evidence_digest = evidence.digest.bytes,
@@ -54281,7 +54151,7 @@ const BodyContext = struct {
         subst: SpecSubstitution,
         contract: []const SpecEvidence,
     ) Allocator.Error!void {
-        var checked_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, schema.view, self.method_scope, self.owner_template, self.graph, self.draft);
+        var checked_ctx = try BodyContext.init(self.allocator, self.builder, schema.view, self.owner_template, self.graph, self.draft);
         defer checked_ctx.deinit();
         try checked_ctx.seedSubstitution(schema, subst);
         try self.relateMaterializedEvidenceConstraints(&checked_ctx, schema, contract);
@@ -54341,7 +54211,7 @@ const BodyContext = struct {
                 .local_proc => .local_method_contract,
                 .structural => unreachable, // the owner-template switch above rejects structural targets before this address is built
             },
-            .family = DraftTemplateFamilyAddress.init(owner, self.method_scope.key, root_view.types.rootKey(root_fn_ty)),
+            .family = DraftTemplateFamilyAddress.init(owner, root_view.types.rootKey(root_fn_ty)),
             .evidence_digest = @splat(0),
             .input_digest = interfaceRequestBucket(request.bytes),
         };
@@ -54415,11 +54285,10 @@ const BodyContext = struct {
             }
         }
         const node = if (target.instantiation) |instantiation| blk: {
-            var instantiation_ctx = try BodyContext.initWithMethodScope(
+            var instantiation_ctx = try BodyContext.init(
                 self.allocator,
                 self.builder,
                 instantiation.view,
-                self.method_scope,
                 self.owner_template,
                 self.graph,
                 self.draft,
@@ -54461,11 +54330,10 @@ const BodyContext = struct {
         scheme_ctx: *BodyContext,
         param: static_dispatch.EvidenceParamRecord,
     ) Allocator.Error!void {
-        var evidence_ctx = try BodyContext.initWithMethodScope(
+        var evidence_ctx = try BodyContext.init(
             self.allocator,
             self.builder,
             structural.view,
-            self.method_scope,
             self.owner_template,
             self.graph,
             self.draft,
@@ -54746,11 +54614,10 @@ const BodyContext = struct {
             .local_proc, .structural => Common.invariant("a callable-derived substitution reached a non-procedure method target"),
         };
         const template = lookup.view.templates.get(procedure.template.template);
-        var target_ctx = try BodyContext.initWithMethodScope(
+        var target_ctx = try BodyContext.init(
             self.allocator,
             self.builder,
             lookup.view,
-            self.method_scope,
             procedure.template,
             self.graph,
             self.draft,
@@ -54810,11 +54677,10 @@ const BodyContext = struct {
     /// Instantiate a substitution recorded in another body together in a
     /// fresh context of its module.
     fn carriedSubstitutionNodes(self: *BodyContext, substitution: CheckedTargetSubstitution) Allocator.Error!SpecSubstitution {
-        var site_ctx = try BodyContext.initWithMethodScope(
+        var site_ctx = try BodyContext.init(
             self.allocator,
             self.builder,
             substitution.view,
-            self.method_scope,
             self.owner_template,
             self.graph,
             self.draft,
@@ -54893,7 +54759,7 @@ const BodyContext = struct {
                     self.scopeSchema(local.view, local.dispatch_scope),
                 },
             };
-            var alias_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, owner_template, self.graph, self.draft);
+            var alias_ctx = try BodyContext.init(self.allocator, self.builder, view, owner_template, self.graph, self.draft);
             defer alias_ctx.deinit();
             if (subst.len != schema.scheme_vars.len) {
                 Common.invariant("procedure alias substitution length differed from its scope's quantified variables");
@@ -55227,7 +55093,7 @@ const BodyContext = struct {
             .local_proc => |local| self.localMethodOwnerTemplate(lookup, local),
             .structural => Common.invariant("structural method registry result has no callable body context"),
         };
-        return BodyContext.initWithMethodScope(self.allocator, self.builder, lookup.view, self.method_scope, owner_template, self.graph, self.draft);
+        return BodyContext.init(self.allocator, self.builder, lookup.view, owner_template, self.graph, self.draft);
     }
 
     fn localMethodOwnerTemplate(
@@ -55285,7 +55151,7 @@ const BodyContext = struct {
             plan_callable_ty,
         );
         if (lookup.instantiation) |instantiation| {
-            var edge_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, instantiation.view, self.method_scope, self.owner_template, self.graph, self.draft);
+            var edge_ctx = try BodyContext.init(self.allocator, self.builder, instantiation.view, self.owner_template, self.graph, self.draft);
             defer edge_ctx.deinit();
             const edge_node = try edge_ctx.instNode(instantiation.callable_ty);
             try self.relateDispatchTargetRequestInterface(lookup, target_node, edge_node);
@@ -55461,7 +55327,7 @@ const BodyContext = struct {
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error!SpecEvidence {
         if ((try self.methodOwnerFromNode(component_node))) |owner| {
-            if (try self.builder.lookupMethodTarget(self.method_scope, self.nameStore(), owner, view, method)) |result| {
+            if (try self.builder.lookupMethodTarget(self.nameStore(), owner, view, method)) |result| {
                 const found = switch (result) {
                     .rejected => return .checked_error,
                     .target => |found| found,
@@ -56239,7 +56105,6 @@ const BodyContext = struct {
         };
         try self.draft.deferred_structural_serializations.append(self.allocator, .{
             .view = self.view,
-            .method_scope = self.method_scope,
             .owner_template = self.owner_template,
             .owner = self.draft.current_owner,
             .expr = expr,
@@ -59384,11 +59249,10 @@ const BodyContext = struct {
             };
         }
 
-        var contract_ctx = try BodyContext.initWithMethodScope(
+        var contract_ctx = try BodyContext.init(
             self.allocator,
             self.builder,
             checked_view,
-            self.method_scope,
             self.owner_template,
             self.graph,
             self.draft,
@@ -59435,7 +59299,6 @@ const BodyContext = struct {
             try self.draft.codec_contract_instances.append(self.allocator, .{
                 .graph = self.graph,
                 .view_key = checked_view.key.bytes,
-                .method_scope_key = self.method_scope.key.bytes,
                 .derivation = derivation_id,
                 .kind = kind,
                 .callable_node = boundary.callable_node,
@@ -59472,7 +59335,6 @@ const BodyContext = struct {
                 cached.derivation == derivation_id and
                 cached.kind == kind and
                 moduleBytesEqual(cached.view_key, checked_view.key.bytes) and
-                moduleBytesEqual(cached.method_scope_key, self.method_scope.key.bytes) and
                 self.graph.sameClass(cached.callable_node, boundary.callable_node) and
                 self.graph.sameClass(cached.shape_node, boundary.shape_node)) return cached;
         }
@@ -61975,7 +61837,6 @@ const BodyContext = struct {
         }
         try self.draft.deferred_structural_eqs.append(self.allocator, .{
             .view = self.view,
-            .method_scope = self.method_scope,
             .owner_template = self.owner_template,
             .owner = self.draft.current_owner,
             .expr = expr,
@@ -62091,7 +61952,7 @@ const BodyContext = struct {
                 .named => named: {
                     const named = (try self.graph.namedNodes(raw_node));
                     if ((try self.methodOwnerFromNode(raw_node))) |owner| {
-                        if (try self.builder.lookupMethodTargetByName(self.method_scope, self.nameStore(), owner, structuralDerivationMethodName(mode))) |result| {
+                        if (try self.builder.lookupMethodTargetByName(self.nameStore(), owner, structuralDerivationMethodName(mode))) |result| {
                             // A rejected declaration is this component's
                             // comparison; emission lowers it to a checked error
                             // without calling anything or expanding the backing.
@@ -62651,7 +62512,7 @@ const BodyContext = struct {
         method_name: []const u8,
     ) Allocator.Error!?MethodLookupResult {
         const owner = methodOwnerFromType(self.typeStore(), ty) orelse return null;
-        return switch ((try self.builder.lookupMethodTargetByName(self.method_scope, self.nameStore(), owner, method_name)) orelse return null) {
+        return switch ((try self.builder.lookupMethodTargetByName(self.nameStore(), owner, method_name)) orelse return null) {
             .rejected => .rejected,
             .target => |lookup| .{ .target = try self.withLocalProcContext(lookup) },
         };
@@ -62661,7 +62522,7 @@ const BodyContext = struct {
     /// builtin module checks without diagnostics, so its registry declares
     /// every List derivation method with a target.
     fn builtinListDerivationLookup(self: *BodyContext, method_name: []const u8) Allocator.Error!MethodLookup {
-        return switch ((try self.builder.lookupMethodTargetByName(self.method_scope, self.nameStore(), .{ .builtin = .list }, method_name)) orelse
+        return switch ((try self.builder.lookupMethodTargetByName(self.nameStore(), .{ .builtin = .list }, method_name)) orelse
             Common.invariant("checked method registry is missing the List structural derivation target")) {
             .rejected => Common.invariant("builtin List derivation target was a rejected declaration"),
             .target => |lookup| lookup,
@@ -68105,7 +67966,6 @@ test "queued specialization skips a body claimed immediately before dispatch" {
             const def_id: Ast.DefId = @fromBackingInt(@intCast(@as(u32, @intCast(dispatch_index))));
             const identity = Ast.SpecIdentity{
                 .callable = .{ .generated = @fromBackingInt(@intCast(@as(u32, @intCast(dispatch_index)))) },
-                .method_scope = .{},
                 .evidence_digest = .{},
                 .codec_contract_digest = .{},
                 .codec_contract = null,
@@ -68135,7 +67995,6 @@ test "queued specialization skips a body claimed immediately before dispatch" {
                 },
                 .fn_template = fn_template_,
                 .template_ref = template_ref_,
-                .method_scope = .{},
                 // The job is marked ready before draining, so its type is not read.
                 .source_fn_ty = undefined,
                 .source_fn_key = .{},
@@ -69712,7 +69571,6 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .hosted_bindings = view.hosted_bindings,
         .static_dispatch_plans = view.static_dispatch_plans,
         .method_registry = view.method_registry,
-        .method_lookup_scope = view.method_lookup_scope,
         .direct_import_module_keys = view.direct_import_module_keys,
         .resolved_refs = view.resolved_value_refs,
         .nested_proc_sites = view.nested_proc_sites,
@@ -73735,7 +73593,6 @@ const FrozenCodecProbe = struct {
 const FrozenTemplateProbe = struct {
     state: DraftSpecState,
     template_ref: names.ProcTemplate,
-    method_scope: checked.ModuleId,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     request_fn_ty: Type.TypeId,
@@ -73763,7 +73620,6 @@ const FrozenTemplateProbe = struct {
 const FrozenNestedProbe = struct {
     state: DraftSpecState,
     nested: Ast.NestedFn,
-    method_scope: checked.ModuleId,
     source_fn_key: names.TypeDigest,
     request_fn_ty: Type.TypeId,
     capture_abi_digest: names.TypeDigest,

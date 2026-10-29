@@ -398,61 +398,36 @@ pub const CommonIdents = extern struct {
     }
 };
 
-/// Owner identity for static-dispatch method lookup.
-///
-/// The owning module is named by content identity, never by a module's name:
-/// `self_module` for a declaration in this environment, and an env-local
-/// `ModuleIdentity.Idx` for one in another. Cross-environment lookup joins on
-/// those identities rather than spelling a module's name into another
-/// environment's ident store.
+/// Owner identity for static-dispatch method lookup: the declaration, in this
+/// environment, of the type whose `.{ … }` block declares the method. A type's
+/// methods are registered only by the module that declares the type, so every
+/// owner in a method table is one of that module's own declarations.
 pub const MethodOwner = extern struct {
-    owner_module: u32,
     owner: CIR.Statement.Idx,
 
-    /// The owning module is the environment that holds this table.
-    pub const self_module: u32 = std.math.maxInt(u32);
-
-    /// An owner declared in the environment that holds the method tables.
     pub fn initSelf(owner: CIR.Statement.Idx) MethodOwner {
-        return .{ .owner_module = self_module, .owner = owner };
-    }
-
-    /// An owner declared in another module, named by its content identity as
-    /// this environment interned it.
-    pub fn initImported(identity: base.ModuleIdentity.Idx, owner: CIR.Statement.Idx) MethodOwner {
-        return .{ .owner_module = @backingInt(identity), .owner = owner };
-    }
-
-    /// The owning module's content identity, or null when it is this one.
-    pub fn moduleIdentity(self: MethodOwner) ?base.ModuleIdentity.Idx {
-        if (self.owner_module == self_module) return null;
-        return @fromBackingInt(@intCast(self.owner_module));
+        return .{ .owner = owner };
     }
 
     pub fn eql(a: MethodOwner, b: MethodOwner) bool {
-        return a.owner_module == b.owner_module and a.owner == b.owner;
+        return a.owner == b.owner;
     }
 };
 
-/// Key for method lookup: (receiver owner declaration, method_ident) pair.
+/// Key for method lookup: (owner declaration, method_ident) pair.
 pub const MethodKey = extern struct {
-    owner_module: u32,
     owner: CIR.Statement.Idx,
     method_ident_bits: u32,
 
     pub fn init(owner: MethodOwner, method_ident: Ident.Idx) MethodKey {
         return .{
-            .owner_module = owner.owner_module,
             .owner = owner.owner,
             .method_ident_bits = @bitCast(method_ident),
         };
     }
 
     pub fn ownerIdent(self: MethodKey) MethodOwner {
-        return .{
-            .owner_module = self.owner_module,
-            .owner = self.owner,
-        };
+        return .{ .owner = self.owner };
     }
 
     pub fn methodIdent(self: MethodKey) Ident.Idx {
@@ -460,12 +435,6 @@ pub const MethodKey = extern struct {
     }
 
     pub fn order(a: MethodKey, b: MethodKey) std.math.Order {
-        const a_module = a.owner_module;
-        const b_module = b.owner_module;
-        if (a_module != b_module) {
-            return if (a_module < b_module) .lt else .gt;
-        }
-
         const a_owner = @backingInt(a.owner);
         const b_owner = @backingInt(b.owner);
         if (a_owner != b_owner) {
@@ -479,7 +448,7 @@ pub const MethodKey = extern struct {
     }
 };
 
-/// Mapping from (receiver owner declaration, method_ident) pairs to their qualified
+/// Mapping from (owner declaration, method_ident) pairs to their qualified
 /// method ident.
 ///
 /// This is populated during canonicalization when methods are defined in associated blocks.
@@ -492,14 +461,10 @@ pub const MethodBinding = extern struct {
     def_idx: CIR.Def.Idx,
 };
 
-/// Mapping from (receiver owner declaration, method_ident) pairs to the method binding.
+/// Mapping from (owner declaration, method_ident) pairs to the method binding.
 /// This keeps method implementation lookup explicit without requiring local
 /// associated methods to be published through the module exposure table.
 pub const MethodDefs = SortedArrayBuilder(MethodKey, MethodBinding);
-
-/// Construction-time position shared by the parallel method identity and
-/// definition tables.
-pub const MethodTableIndex = enum(u32) { _ };
 
 /// A definition whose implementation was authored by the compiler as one
 /// exact low-level operation. Canonicalization publishes this alongside CIR so
@@ -1266,10 +1231,6 @@ pub const DeferredRefKind = enum(u8) {
     type_anno_apply,
     /// A literal suffix naming an imported type.
     numeric_suffix,
-    /// A receiver-extension method registration whose receiver type is
-    /// imported. Its owner identity is settled once the receiver type's own
-    /// deferred reference resolves.
-    receiver_method_owner,
     /// An `import` statement itself. Whether the name it spells denotes a
     /// module at all is not a source-local question, so the statement waits
     /// here for the answer.
@@ -1331,9 +1292,7 @@ pub const DeferredImportRef = extern struct {
     /// The import this reference goes through, or `no_import` when the
     /// reference goes through no module import.
     import_idx: u32,
-    /// Raw node index of the node this entry resolves. For
-    /// `receiver_method_owner` this is the type-annotation node whose resolved
-    /// target names the owner declaration.
+    /// Raw node index of the node this entry resolves.
     node_idx: u32,
     /// Dotted path relative to the imported module root (e.g. `Files.Dir.Read`).
     path_bits: u32,
@@ -1347,9 +1306,6 @@ pub const DeferredImportRef = extern struct {
     /// The whole qualified spelling, for diagnostics that name it. For
     /// exposed-item checks, the local name bound by the item.
     qualified_name_bits: u32,
-    /// For `receiver_method_owner`, the method registration this entry
-    /// completes; unused otherwise.
-    method_ident_bits: u32,
     kind: DeferredRefKind,
     /// Diagnostic for an import that resolution rejected or that named no module.
     missing_module_failure: DeferredRefFailure,
@@ -1365,12 +1321,6 @@ pub const DeferredImportRef = extern struct {
     /// member: the call written `Q.U.v(...)`, or this entry's own node when the
     /// member is not called.
     tag_member_access_node: u32 = 0,
-    /// For `receiver_method_owner`, the node whose type variable holds the
-    /// method's checked type.
-    method_binding_type_node: u32,
-    /// For `receiver_method_owner`, the definition that owns the method's
-    /// implementation identity.
-    method_binding_def: u32,
     /// For `file_import`, the `file_dependencies` entry this import records
     /// its read state under.
     file_dependency_idx: u32,
@@ -1453,33 +1403,16 @@ pub const DeferredImportRef = extern struct {
         return @bitCast(self.qualified_name_bits);
     }
 
-    pub fn methodIdent(self: @This()) Ident.Idx {
-        return @bitCast(self.method_ident_bits);
-    }
-
     /// `import_idx` value for a reference that goes through no module import.
     /// A file import is such a reference: the file it names is the
     /// `file_dependencies` entry at `file_dependency_idx`.
     pub const no_import: u32 = std.math.maxInt(u32);
-
-    /// `method_binding_type_node` value for an entry that registers no method.
-    pub const no_method_binding: u32 = std.math.maxInt(u32);
 
     /// The import this reference goes through, or null for a reference that
     /// goes through no module import.
     pub fn importIdx(self: @This()) ?CIR.Import.Idx {
         if (self.import_idx == no_import) return null;
         return @fromBackingInt(@intCast(self.import_idx));
-    }
-
-    /// The method registration this entry completes, or null when it
-    /// registers no method.
-    pub fn methodBinding(self: @This()) ?MethodBinding {
-        if (self.method_binding_type_node == no_method_binding) return null;
-        return .{
-            .type_node_idx = @fromBackingInt(@intCast(self.method_binding_type_node)),
-            .def_idx = @fromBackingInt(@intCast(self.method_binding_def)),
-        };
     }
 };
 
@@ -5738,33 +5671,12 @@ pub fn appendMethodForMethodOwner(
     method_ident: Ident.Idx,
     qualified_ident: Ident.Idx,
     binding: MethodBinding,
-) Allocator.Error!MethodTableIndex {
+) Allocator.Error!void {
     std.debug.assert(self.method_idents.entries.items.len == self.method_defs.entries.items.len);
-    const index: MethodTableIndex = @fromBackingInt(@intCast(self.method_idents.entries.items.len));
-
     try self.method_idents.entries.ensureUnusedCapacity(self.gpa, 1);
     try self.method_defs.entries.ensureUnusedCapacity(self.gpa, 1);
     try self.registerMethodIdentForMethodOwner(owner, method_ident, qualified_ident);
     try self.registerMethodDefForMethodOwner(owner, method_ident, binding);
-    return index;
-}
-
-/// Replaces the values at one construction-time method table position while
-/// preserving its explicit owner-and-name key.
-pub fn replaceMethodAt(
-    self: *Self,
-    index: MethodTableIndex,
-    owner: MethodOwner,
-    method_ident: Ident.Idx,
-    qualified_ident: Ident.Idx,
-    binding: MethodBinding,
-) void {
-    const table_index: usize = @backingInt(index);
-    const key = MethodKey.init(owner, method_ident);
-    std.debug.assert(MethodKey.order(self.method_idents.entries.items[table_index].key, key) == .eq);
-    std.debug.assert(MethodKey.order(self.method_defs.entries.items[table_index].key, key) == .eq);
-    self.method_idents.entries.items[table_index].value = qualified_ident;
-    self.method_defs.entries.items[table_index].value = binding;
 }
 
 /// Looks up a qualified method ident for an explicit owner declaration.
@@ -5801,22 +5713,10 @@ pub fn finalizeMethodTables(self: *Self) void {
     self.method_defs.ensureSortedUnique();
 }
 
-/// Looks up method metadata using a type declaration owner and a method ident
-/// that come from different source environments.
+/// Looks up method metadata for one of this environment's type declarations
+/// by a method ident from another source environment.
 pub fn lookupMethodBindingFromTwoEnvsAndDeclConst(
     self: *const Self,
-    source_decl: ?u32,
-    method_source_env: *const Self,
-    method_ident: Ident.Idx,
-) ?MethodBinding {
-    return self.lookupMethodBindingFromOwnerAndMethodEnvsConst(self, source_decl, method_source_env, method_ident);
-}
-
-/// Looks up method metadata using an owner declaration and method ident that may
-/// both come from different source environments.
-pub fn lookupMethodBindingFromOwnerAndMethodEnvsConst(
-    self: *const Self,
-    owner_source_env: *const Self,
     source_decl: ?u32,
     method_source_env: *const Self,
     method_ident: Ident.Idx,
@@ -5824,19 +5724,7 @@ pub fn lookupMethodBindingFromOwnerAndMethodEnvsConst(
     const method_name = method_source_env.getIdent(method_ident);
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
     const owner: CIR.Statement.Idx = @fromBackingInt(@intCast(source_decl orelse return null));
-
-    // The owner is this environment's own declaration when the two
-    // environments are the same one, and otherwise the content identity this
-    // environment interned for the owner's module.
-    const method_owner = if (owner_source_env == self)
-        MethodOwner.initSelf(owner)
-    else blk: {
-        const owner_hash = owner_source_env.contentIdentityHash() orelse return null;
-        const identity = self.lookupModuleIdentity(owner_hash) orelse return null;
-        break :blk MethodOwner.initImported(identity, owner);
-    };
-
-    return self.lookupMethodBindingForMethodOwnerConst(method_owner, local_method_ident);
+    return self.lookupMethodBindingForOwnerConst(owner, local_method_ident);
 }
 
 /// Returns the line start positions for source code position mapping.

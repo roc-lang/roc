@@ -435,7 +435,7 @@ pub const CallableIdentity = union(enum(u8)) {
 /// from is deliberately absent. The callable says which checked body to
 /// lower; that type is the requesting graph's instantiation context, which
 /// the graph may memoize by. Two call sites reaching the same callable at the
-/// same closed Monotype type, evidence, codec context, and method scope name
+/// same closed Monotype type, evidence, and codec context name
 /// ONE specialization even when their checked source types differ—as they do
 /// when one is annotated with a transparent alias of the other's type
 /// (`design.md`). No identity derived from the record may reintroduce that
@@ -448,7 +448,6 @@ pub const CallableIdentity = union(enum(u8)) {
 /// additional lookup alias—never a rekey of this identity.
 pub const SpecIdentity = struct {
     callable: CallableIdentity,
-    method_scope: names.CheckedModuleDigest,
     evidence_digest: EvidenceDigest,
     /// Exact lowering-only context required by generated codec method bodies.
     /// Zero for ordinary specializations.
@@ -461,10 +460,8 @@ pub const SpecIdentity = struct {
 };
 
 /// Content key of a specialization identity: the callable rendered by tag
-/// and content plus every digest field except the requesting method scope.
-/// The scope only decides how
-/// dispatch evidence was derived, and the evidence digest already names the
-/// result, so two modules requesting the same specialization get one key.
+/// and content plus every digest field, so two modules requesting the same
+/// specialization get one key.
 /// The request type uses the same cached equality digest as local reservation,
 /// so checked type ids and alias provenance do not change the key. Identical
 /// for the same request in every program, and computable at reservation.
@@ -2940,7 +2937,6 @@ test "monotype program view exposes read-only side arrays" {
     _ = try program.addSpec(.{
         .identity = .{
             .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 0, .template = 0 } },
-            .method_scope = .{},
             .evidence_digest = fnEvidenceDigest(.{}, &.{}, null),
             .codec_contract_digest = .{},
             .codec_contract = null,

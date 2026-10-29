@@ -1,7 +1,6 @@
 //! Relocate foreign source locators using a producer-owned correspondence.
 //! Type variables, local nodes, solver relationships and dispatch decisions do
 //! not change. The mapper rejects any reference outside its declared domain.
-const std = @import("std");
 const base = @import("base");
 const can = @import("can");
 const CIR = can.CIR;
@@ -291,17 +290,6 @@ pub fn source(env: *ModuleEnv, mapper: anytype) @TypeOf(mapper.*).Error!void {
                 .builtin, .local, .pending => {},
             }
         }
-    }
-    inline for (.{ &env.method_defs, &env.method_idents }) |table| {
-        for (table.entries.items) |*entry| {
-            if (entry.key.ownerIdent().moduleIdentity()) |owner| entry.key.owner = @fromBackingInt(try mapper.node(owner, @backingInt(entry.key.owner)));
-        }
-        const Entry = @TypeOf(table.entries.items[0]);
-        std.mem.sort(Entry, table.entries.items, {}, struct {
-            fn lessThan(_: void, a: Entry, b: Entry) bool {
-                return ModuleEnv.MethodKey.order(a.key, b.key) == .lt;
-            }
-        }.lessThan);
     }
     for (env.numeric_suffix_targets.items.items) |*suffix| {
         switch (suffix.target()) {
