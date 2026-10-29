@@ -1313,7 +1313,7 @@ fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
 const FrozenStaticData = struct {
     data: ?eval.InterpreterStaticData,
 
-    fn init(allocator: Allocator, lowered: *const lir.CheckedPipeline.LoweredProgram) !FrozenStaticData {
+    fn init(allocator: Allocator, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!FrozenStaticData {
         const frozen = lowered.frozen_static_data orelse return .{ .data = null };
         return .{ .data = try eval.InterpreterStaticData.init(allocator, frozen.exports, lowered.lir_result.static_data_values.items.len) };
     }
