@@ -406,8 +406,7 @@ pub const LayoutStoreImage = extern struct {
             .scratch_intern_key = .empty,
             .recursive_layout_keys = try safeListFromRef(layout_mod.Store.RecursiveLayoutKey, base_ptr, image_size, self.recursive_layout_keys),
             .interned_recursive_graphs = .empty,
-            .recursive_unfoldings = .empty,
-            .recursive_groups = .{},
+            .recursive_digests = base.recursive_digest.Settled.init(allocator, layout_mod.Store.recursive_digest_domain),
             .target_usize = target_usize,
             .digest_cache = try layout_mod.DigestCache.create(allocator),
         };
@@ -759,8 +758,7 @@ fn serializeSidecarInto(
         .scratch_intern_key = .empty,
         .recursive_layout_keys = try cloneSafeList(layout_mod.Store.RecursiveLayoutKey, gpa, lowered.layouts.recursive_layout_keys),
         .interned_recursive_graphs = .empty,
-        .recursive_unfoldings = .empty,
-        .recursive_groups = .{},
+        .recursive_digests = base.recursive_digest.Settled.init(gpa, layout_mod.Store.recursive_digest_domain),
         .target_usize = lowered.layouts.target_usize,
         // `BoxySidecar.fromStores` reads only the array-backed fields.
         .digest_cache = undefined,
@@ -1017,8 +1015,7 @@ fn serializeArrangedSidecarInto(
         // what the code loads.
         .recursive_layout_keys = .{},
         .interned_recursive_graphs = .empty,
-        .recursive_unfoldings = .empty,
-        .recursive_groups = .{},
+        .recursive_digests = base.recursive_digest.Settled.init(gpa, layout_mod.Store.recursive_digest_domain),
         .target_usize = source.target_usize,
         // `BoxySidecar.fromStores` reads only the array-backed fields.
         .digest_cache = undefined,
@@ -1087,7 +1084,7 @@ comptime {
     // each view starts empty, and its `commit_scratch` and
     // `scratch_field_offsets` are scratch that views start empty.
     std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 41);
-    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 21);
+    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 20);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
     // The header is authored field by field in image storage and is part of a
@@ -2019,8 +2016,7 @@ test "LIR image copies and round-trips every populated store field" {
         .scratch_intern_key = undefined,
         .recursive_layout_keys = try h.safeList(layout_mod.Store.RecursiveLayoutKey, source_allocator, 2, 0xa8),
         .interned_recursive_graphs = undefined,
-        .recursive_unfoldings = undefined,
-        .recursive_groups = undefined,
+        .recursive_digests = undefined,
         .target_usize = target_usize,
         .digest_cache = undefined,
     };

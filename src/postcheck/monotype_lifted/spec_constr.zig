@@ -17761,7 +17761,10 @@ fn checkSpecConstrRequestAllocationFailure(allocator: Allocator) (Allocator.Erro
 }
 
 test "staged SpecConstr request copying and admission allocation failures release owners" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, checkSpecConstrRequestAllocationFailure, .{});
+    // In-place growth under the testing allocator depends on the heap's
+    // layout, so the failure check runs over an allocator that refuses it.
+    var deterministic = @import("base").DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), checkSpecConstrRequestAllocationFailure, .{});
 }
 
 test "issue 10313 value-aware call-pattern collection does not append lifted IR" {

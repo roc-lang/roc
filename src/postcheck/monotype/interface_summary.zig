@@ -1355,7 +1355,10 @@ fn allocationFailureRoundTrip(gpa: Allocator) error{ InvalidSummary, NotRepresen
 }
 
 test "persistent interface allocation failures roll back construction" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, allocationFailureRoundTrip, .{});
+    // In-place growth under the testing allocator depends on the heap's
+    // layout, so the failure check runs over an allocator that refuses it.
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), allocationFailureRoundTrip, .{});
 }
 
 test "persistent interface rejects corrupt graph data before changing the receiving store" {

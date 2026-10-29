@@ -72687,7 +72687,10 @@ test "function context identity excludes draft local allocation ids" {
 
 test "issue 11362: checked instantiation allocates placeholders only for recursive lookups" {
     try testLazyCheckedInstantiationAliases(std.testing.allocator);
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testLazyCheckedInstantiationAliases, .{});
+    // In-place growth under the testing allocator depends on the heap's
+    // layout, so the failure check runs over an allocator that refuses it.
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), testLazyCheckedInstantiationAliases, .{});
 }
 
 fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
