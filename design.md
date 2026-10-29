@@ -3644,7 +3644,9 @@ in a Monotype type's full and specialization digests. An occurrence in the
 module's own store names a type of the version that stored it: after an edit
 the same id names another type of the new version, or none. A root holding
 one is therefore not portable. An occurrence in another module's store stays
-valid, because the value identity covers that module's key. Compilers with
+valid, because the value identity covers that module's key: Monotype lowering
+names only occurrences inside the storing module's import closure (see
+"Occurrence scope"). Compilers with
 runtime safety check, for every transplanted root, that each named type's
 occurrence re-enters another module's store at the nominal type it names.
 A literal conversion stores no type, so its value is portable when its checked
@@ -27638,14 +27640,35 @@ Persistent interface records distinguish checked occurrence provenance from
 nominal ownership. An occurrence of a closed checked type is serialized by its
 normalized checked type key and its nominal owner's exact entry key. Reopening
 binds that key only to a current committed closed root with the same key and
-owner. The representative is the owner's own occurrence when the owner holds
-the closed root, so it does not move when another module's entry key changes
-with an edit; a closed root the owner does not hold is represented by the
-lowest-keyed module that holds it. Representatives are memoized for the
-immutable lowering input set. A missing key rejects the optional
-record. Types containing identity variables keep their exact entry and root id;
-no variable identity is reconstructed or merged. Nominal declaration, generated
-representation and default-expression validation remain mandatory after rebinding.
+owner, chosen inside the reader's occurrence scope (below). Types containing
+identity variables keep their exact entry and root id, which must lie inside
+that scope as well; no variable identity is reconstructed or merged. A key the
+scope does not hold, or an exact occurrence outside it, rejects the optional
+record. Nominal declaration, generated representation and default-expression
+validation remain mandatory after rebinding.
+
+**Occurrence scope.** A Monotype named type names the checked occurrence it
+was lowered from (`named_type.ty`, an id in `ty_module`'s store). Every
+occurrence a lowering names lies in that lowering's occurrence scope: the
+reflexive import closure of the module whose checked types or body it lowers
+(`direct_import_module_keys`, restricted to the lowering input), together with
+the modules that the lowering's input types already name (a replayed request's
+leaves, a completed body's requested function type). The scope is what keeps
+stored results reusable elsewhere: a compile-time value of module M is lowered
+from M's types and the bodies M's closure reaches, so every occurrence it
+stores names a module M's checked key covers, and any program holding M holds
+that module too. The program-wide module set is never a scope: a lowering must
+not name a module merely because the current program happens to contain it,
+since another program that reuses the stored result need not. A closed checked
+occurrence has no instantiation identity, so a fresh lowering and a persistent
+replay of one closed type are given the same current witness: the owner's own
+occurrence when the owner holds the closed root inside the scope's closure, so
+the witness does not move when another module's entry key changes with an
+edit; otherwise the closure's holder that imports no other holder in the
+closure, the lowest-keyed one when several qualify; and only when the closure
+holds no such root, the same choice among the modules the input types name.
+Representatives inside a closure are memoized per module for the immutable
+lowering input set.
 
 Each Monotype builder indexes its immutable input views by module content
 identity before lowering. The first view in root/import/relation order wins,

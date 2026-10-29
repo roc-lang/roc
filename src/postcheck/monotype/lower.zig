@@ -5448,6 +5448,21 @@ const LoweringModuleIds = std.AutoHashMap([32]u8, Common.LoweringModuleId);
 
 const CheckedOccurrence = struct { module: checked.ModuleId, ty: checked.CheckedTypeId };
 
+/// A closed checked type key inside one module's reflexive import closure.
+const ClosedOccurrenceKey = struct { module: [32]u8, key: [32]u8 };
+
+/// The checked modules whose type occurrences one lowering may name
+/// (design.md "Occurrence scope"): the reflexive import closure of `view`,
+/// the module whose checked types or body is lowered, and the modules that
+/// the lowering's input types already name.
+const OccurrenceScope = struct {
+    view: ModuleView,
+    /// The modules the lowering's input types name (a replayed request's
+    /// leaves, a completed body's requested function type), sorted by key;
+    /// see `Builder.inputOccurrenceModules`.
+    input_modules: []const [32]u8 = &.{},
+};
+
 const Builder = struct {
     resolution_profile: ResolutionProfile = .{},
     /// `appModuleIdentity` of this lowering's modules.
@@ -5547,9 +5562,14 @@ const Builder = struct {
     /// Top-level statements of each top module whose types a literal value
     /// identity named, by module key.
     literal_top_statements: std.AutoHashMapUnmanaged([32]u8, collections.DenseMap(can.CIR.Statement.Idx, void)) = .empty,
-    /// Current committed representatives of normalized closed checked types.
-    /// Views are immutable for this lowering; a missing key stays missing.
-    persistent_closed_occurrences: std.AutoHashMapUnmanaged([32]u8, ?CheckedOccurrence) = .empty,
+    /// Reflexive import closures of the lowering input's modules by module
+    /// key, each a sorted slice of the keys of the input's modules it reaches
+    /// (design.md "Occurrence scope").
+    module_closures: std.AutoHashMapUnmanaged([32]u8, []const [32]u8) = .empty,
+    /// Current representatives of normalized closed checked types inside one
+    /// module's import closure. Views are immutable for this lowering; a
+    /// missing key stays missing.
+    closed_occurrence_representatives: std.AutoHashMapUnmanaged(ClosedOccurrenceKey, ?CheckedOccurrence) = .empty,
 
     /// Compile-time roots by module and site, for the modules whose roots a
     /// stored literal value's reads were looked up in.
@@ -6140,7 +6160,8 @@ const Builder = struct {
         var top_statements = self.literal_top_statements.valueIterator();
         while (top_statements.next()) |statements| statements.deinit();
         self.literal_top_statements.deinit(self.allocator);
-        self.persistent_closed_occurrences.deinit(self.allocator);
+        self.deinitModuleClosures();
+        self.closed_occurrence_representatives.deinit(self.allocator);
         self.literal_read_sites.deinit(self.allocator);
         self.literal_read_site_modules.deinit(self.allocator);
         if (self.literal_store_view) |view| self.allocator.destroy(view);
@@ -10599,6 +10620,16 @@ const Builder = struct {
         return dependencies;
     }
 
+    /// The occurrence scope of `job`'s body: its template's module and the
+    /// requested function type, which is sealed in the program's store. The
+    /// caller frees the scope's input modules.
+    fn specJobOccurrenceScope(self: *Builder, job: *const PendingSpecJob) Allocator.Error!OccurrenceScope {
+        return .{
+            .view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref)),
+            .input_modules = try self.inputOccurrenceModules(&self.program.types, (&job.fn_ty)[0..1]),
+        };
+    }
+
     fn loadCompletedBody(
         self: *Builder,
         workspace: *SpecJobWorkspace,
@@ -10618,7 +10649,9 @@ const Builder = struct {
             self.allocator.destroy(arena);
         };
         const validation = CompletedBodyValidation{ .builder = self, .job = job, .names = &workspace.name_store };
-        var payload = PersistentInterface.decodeFrozen(FrozenBodyProbe, "BODY0005".*, arena.allocator(), &workspace.types, &workspace.name_store, bytes, BodyContext.PersistentProvenance{ .builder = self, .completed_body_validation = &validation }, null) catch |err| switch (err) {
+        const scope = try self.specJobOccurrenceScope(&job);
+        defer self.allocator.free(scope.input_modules);
+        var payload = PersistentInterface.decodeFrozen(FrozenBodyProbe, "BODY0005".*, arena.allocator(), &workspace.types, &workspace.name_store, bytes, BodyContext.PersistentProvenance{ .builder = self, .scope = scope, .completed_body_validation = &validation }, null) catch |err| switch (err) {
             error.InvalidSummary => return null,
             error.OutOfMemory => return error.OutOfMemory,
         };
@@ -10786,8 +10819,10 @@ const Builder = struct {
         const family = hash.finalResult();
         const prior = if (self.interface_cache) |provider| try provider.load(provider.context, self.allocator, family, job.profile_key) else null;
         defer if (prior) |old| self.allocator.free(old);
-        const decoded_fresh = try self.probeFrozenRead(bytes);
-        const decoded_prior = if (prior) |old| try self.probeFrozenRead(old) else null;
+        const scope = try self.specJobOccurrenceScope(&job);
+        defer self.allocator.free(scope.input_modules);
+        const decoded_fresh = try self.probeFrozenRead(bytes, scope);
+        const decoded_prior = if (prior) |old| try self.probeFrozenRead(old, scope) else null;
         var refs: FrozenReferenceProbe = .{ .self_fn = job.reservation.fn_id, .self_def = job.reservation.def, .builder = self };
         refs.scan(FrozenBodyProbe, payload);
         std.debug.print("body-record key={x} prior={} fresh_decoded={} prior_decoded={} external_fn={d} external_def={d} lifted_fn={d} missing_checked_module={d}\n", .{ job.profile_key, prior != null, decoded_fresh, decoded_prior orelse false, refs.external_fn, refs.external_def, refs.lifted_fn, refs.missing_checked_module });
@@ -10798,12 +10833,12 @@ const Builder = struct {
 
     // This probe validates the portable type closure only. Its result is never
     // supplied to compilation: IR references have not yet been rebound.
-    fn probeFrozenRead(self: *Builder, bytes: []const u8) Allocator.Error!bool {
+    fn probeFrozenRead(self: *Builder, bytes: []const u8, scope: OccurrenceScope) Allocator.Error!bool {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
         var ns = names.NameStore.init(arena.allocator());
         var types_ = Type.Store.init(arena.allocator());
-        _ = PersistentInterface.decodeFrozen(FrozenBodyProbe, "BODYPR02".*, arena.allocator(), &types_, &ns, bytes, BodyContext.PersistentProvenance{ .builder = self }, null) catch |err| switch (err) {
+        _ = PersistentInterface.decodeFrozen(FrozenBodyProbe, "BODYPR02".*, arena.allocator(), &types_, &ns, bytes, BodyContext.PersistentProvenance{ .builder = self, .scope = scope }, null) catch |err| switch (err) {
             error.InvalidSummary => return false,
             error.OutOfMemory => return error.OutOfMemory,
         };
@@ -12768,14 +12803,152 @@ const Builder = struct {
     }
 
     /// Closed checked occurrences have no instantiation identity. Give both
-    /// freshly lowered and replayed named types the same exact current witness.
-    /// Open occurrences retain their source cells and are never coalesced here.
+    /// freshly lowered and replayed named types the same exact current witness
+    /// inside `view`'s occurrence scope (design.md "Occurrence scope"). Open
+    /// occurrences retain their source cells and are never coalesced here.
     fn canonicalNamedOccurrence(self: *Builder, view: ModuleView, ty: checked.CheckedTypeId, owner: names.CheckedModuleDigest) Allocator.Error!Type.NamedType {
         const root = view.types.rootRows()[@backingInt(ty)];
         if (root.contains_identity_variables) return .{ .module = owner, .ty = ty, .ty_module = moduleDigestFromId(view.key) };
-        const provenance = BodyContext.PersistentProvenance{ .builder = self };
-        return (try provenance.resolveNamedType(.{ .closed = .{ .owner = owner.bytes, .key = root.key.bytes } })) orelse
+        // `view` itself holds the closed root, so its closure has a representative.
+        const occurrence = (try self.closedOccurrenceInClosure(view.key.bytes, owner.bytes, root.key.bytes)) orelse
             Common.invariant("a lowered closed named type has no current representative occurrence");
+        return .{ .module = owner, .ty = occurrence.ty, .ty_module = moduleDigestFromId(occurrence.module) };
+    }
+
+    fn deinitModuleClosures(self: *Builder) void {
+        var closures = self.module_closures.valueIterator();
+        while (closures.next()) |closure| self.allocator.free(closure.*);
+        self.module_closures.deinit(self.allocator);
+    }
+
+    /// The reflexive import closure of the module keyed `module`, as the
+    /// sorted keys of the lowering input's modules it reaches. A dependency
+    /// outside the lowering input holds no occurrence a lowering could name.
+    fn moduleClosure(self: *Builder, module: [32]u8) Allocator.Error![]const [32]u8 {
+        if (self.module_closures.get(module)) |known| return known;
+        var reached = std.AutoHashMapUnmanaged([32]u8, void).empty;
+        defer reached.deinit(self.allocator);
+        var pending = std.ArrayList([32]u8).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, module);
+        while (pending.pop()) |next| {
+            const view = self.moduleForKeyBytes(next) orelse continue;
+            if ((try reached.getOrPut(self.allocator, next)).found_existing) continue;
+            for (view.direct_import_module_keys) |imported| try pending.append(self.allocator, imported.bytes);
+        }
+        const closure = try self.allocator.alloc([32]u8, reached.count());
+        errdefer self.allocator.free(closure);
+        var keys = reached.keyIterator();
+        var index: usize = 0;
+        while (keys.next()) |key| : (index += 1) closure[index] = key.*;
+        std.mem.sort([32]u8, closure, {}, moduleKeyLessThan);
+        try self.module_closures.put(self.allocator, module, closure);
+        return closure;
+    }
+
+    fn moduleKeyLessThan(_: void, a: [32]u8, b: [32]u8) bool {
+        return std.mem.order(u8, &a, &b) == .lt;
+    }
+
+    fn sortedModuleKeysContain(keys: []const [32]u8, module: [32]u8) bool {
+        var low: usize = 0;
+        var high: usize = keys.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            switch (std.mem.order(u8, &keys[mid], &module)) {
+                .lt => low = mid + 1,
+                .gt => high = mid,
+                .eq => return true,
+            }
+        }
+        return false;
+    }
+
+    /// The current witness of the closed checked root `key` of a type `owner`
+    /// declares, among the modules keyed `candidates` that hold it: the
+    /// owner's own occurrence when the owner is such a candidate, so the
+    /// witness does not move when another module's entry key changes with an
+    /// edit; otherwise the holder that imports no other holder, the
+    /// lowest-keyed one when several qualify.
+    fn closedOccurrenceAmong(self: *Builder, candidates: []const [32]u8, owner: [32]u8, key: [32]u8) Allocator.Error!?CheckedOccurrence {
+        var holders = std.ArrayList(CheckedOccurrence).empty;
+        defer holders.deinit(self.allocator);
+        for (candidates) |candidate| {
+            const view = self.moduleForKeyBytes(candidate) orelse continue;
+            const root = view.types.rootForKey(.{ .bytes = key }) orelse continue;
+            if (view.types.rootRows()[@backingInt(root)].contains_identity_variables) continue;
+            if (std.mem.eql(u8, &candidate, &owner)) return .{ .module = view.key, .ty = root };
+            try holders.append(self.allocator, .{ .module = view.key, .ty = root });
+        }
+        var chosen: ?CheckedOccurrence = null;
+        for (holders.items) |holder| {
+            const closure = try self.moduleClosure(holder.module.bytes);
+            const imports_another_holder = for (holders.items) |other| {
+                if (std.mem.eql(u8, &other.module.bytes, &holder.module.bytes)) continue;
+                if (sortedModuleKeysContain(closure, other.module.bytes)) break true;
+            } else false;
+            if (imports_another_holder) continue;
+            if (chosen) |previous| {
+                if (std.mem.order(u8, &previous.module.bytes, &holder.module.bytes) != .gt) continue;
+            }
+            chosen = holder;
+        }
+        return chosen;
+    }
+
+    /// `closedOccurrenceAmong` over the reflexive import closure of the module
+    /// keyed `module`, memoized for the immutable lowering input set.
+    fn closedOccurrenceInClosure(self: *Builder, module: [32]u8, owner: [32]u8, key: [32]u8) Allocator.Error!?CheckedOccurrence {
+        const memo_key = ClosedOccurrenceKey{ .module = module, .key = key };
+        if (self.closed_occurrence_representatives.get(memo_key)) |known| return known;
+        const representative = try self.closedOccurrenceAmong(try self.moduleClosure(module), owner, key);
+        try self.closed_occurrence_representatives.put(self.allocator, memo_key, representative);
+        return representative;
+    }
+
+    /// The modules that the types `inputs` of `input_types` name through
+    /// their named types, as occurrence stores and as declaring modules,
+    /// sorted by key. The caller frees the result.
+    fn inputOccurrenceModules(self: *Builder, input_types: *const Type.Store, inputs: []const Type.TypeId) Allocator.Error![]const [32]u8 {
+        var reached = std.AutoHashMapUnmanaged([32]u8, void).empty;
+        defer reached.deinit(self.allocator);
+        var seen = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(Type.TypeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.appendSlice(self.allocator, inputs);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(ty)).found_existing) continue;
+            switch (input_types.get(ty)) {
+                .named => |named| {
+                    try reached.put(self.allocator, named.named_type.ty_module.bytes, {});
+                    try reached.put(self.allocator, named.named_type.module.bytes, {});
+                },
+                .primitive, .erased, .zst, .hole, .list, .box, .tuple, .func, .record, .tag_union => {},
+            }
+            try input_types.appendChildTypes(ty, &pending);
+        }
+        const modules = try self.allocator.alloc([32]u8, reached.count());
+        var keys = reached.keyIterator();
+        var index: usize = 0;
+        while (keys.next()) |key| : (index += 1) modules[index] = key.*;
+        std.mem.sort([32]u8, modules, {}, moduleKeyLessThan);
+        return modules;
+    }
+
+    /// The current witness of the closed checked root `key` inside `scope`:
+    /// the closure's representative, or, when the closure holds no such root,
+    /// the same choice among the modules the scope's input types name.
+    fn closedOccurrenceInScope(self: *Builder, scope: OccurrenceScope, owner: [32]u8, key: [32]u8) Allocator.Error!?CheckedOccurrence {
+        if (try self.closedOccurrenceInClosure(scope.view.key.bytes, owner, key)) |occurrence| return occurrence;
+        if (scope.input_modules.len == 0) return null;
+        return self.closedOccurrenceAmong(scope.input_modules, owner, key);
+    }
+
+    /// Whether `scope` may name occurrences in the module keyed `module`.
+    fn scopeContainsModule(self: *Builder, scope: OccurrenceScope, module: [32]u8) Allocator.Error!bool {
+        if (sortedModuleKeysContain(try self.moduleClosure(scope.view.key.bytes), module)) return true;
+        return sortedModuleKeysContain(scope.input_modules, module);
     }
 
     fn moduleForDigest(self: *Builder, module_digest: names.CheckedModuleDigest) ModuleView {
@@ -28529,7 +28702,9 @@ const BodyContext = struct {
         };
         defer self.allocator.free(bytes);
         var stats: PersistentInterface.Stats = .{};
-        const decoded = PersistentInterface.decodeForRequest(self.graph.arena(), self.typeStore(), self.nameStoreMut(), request.leaves, bytes, PersistentProvenance{ .builder = self.builder }, root_count, address.kind != .method_signature, &stats) catch |err| switch (err) {
+        const scope = OccurrenceScope{ .view = self.view, .input_modules = try self.builder.inputOccurrenceModules(self.typeStore(), request.leaves) };
+        defer self.builder.allocator.free(scope.input_modules);
+        const decoded = PersistentInterface.decodeForRequest(self.graph.arena(), self.typeStore(), self.nameStoreMut(), request.leaves, bytes, PersistentProvenance{ .builder = self.builder, .scope = scope }, root_count, address.kind != .method_signature, &stats) catch |err| switch (err) {
             error.InvalidSummary => {
                 self.builder.count("interface_persistent_invalid");
                 return null;
@@ -28550,6 +28725,9 @@ const BodyContext = struct {
 
     const PersistentProvenance = struct {
         builder: *Builder,
+        /// The occurrence scope a decoded record's occurrences are bound in
+        /// (design.md "Occurrence scope"); encoding needs none.
+        scope: ?OccurrenceScope = null,
         completed_body_validation: ?*const CompletedBodyValidation = null,
         pub fn validateFrozenPayload(self: PersistentProvenance, payload: FrozenBodyProbe) PersistentInterface.DecodeError!void {
             // The optional context is present for actual replay; the separate
@@ -28592,37 +28770,20 @@ const BodyContext = struct {
             if (!root.contains_identity_variables) return .{ .closed = .{ .owner = named.module.bytes, .key = root.key.bytes } };
             return .{ .exact = .{ .owner = named.module.bytes, .occurrence = named.ty_module.bytes, .ty = @backingInt(named.ty) } };
         }
+        /// The current occurrence a stored one binds to inside this
+        /// provenance's scope, or null when the record is invalid here: an
+        /// exact occurrence outside the scope, or a closed key the scope holds
+        /// no committed closed root for.
         pub fn resolveNamedType(self: PersistentProvenance, stored: PersistentInterface.NamedOccurrence) Allocator.Error!?Type.NamedType {
+            const scope = self.scope orelse Common.invariant("persistent occurrence resolution has no occurrence scope");
             return switch (stored) {
                 .input => null,
-                .exact => |exact| .{ .module = .{ .bytes = exact.owner }, .ty_module = .{ .bytes = exact.occurrence }, .ty = @fromBackingInt(exact.ty) },
+                .exact => |exact| blk: {
+                    if (!try self.builder.scopeContainsModule(scope, exact.occurrence)) break :blk null;
+                    break :blk .{ .module = .{ .bytes = exact.owner }, .ty_module = .{ .bytes = exact.occurrence }, .ty = @fromBackingInt(exact.ty) };
+                },
                 .closed => |closed| blk: {
-                    const entry = try self.builder.persistent_closed_occurrences.getOrPut(self.builder.allocator, closed.key);
-                    if (!entry.found_existing) {
-                        // The declaring module's own occurrence represents the
-                        // type whenever that module has it, so the choice does
-                        // not move with other modules' keys as they are edited.
-                        // A closed type its owner does not hold is represented
-                        // by the lowest-keyed module that does.
-                        var representative: ?CheckedOccurrence = null;
-                        if (self.builder.moduleForKeyBytes(closed.owner)) |owner_view| {
-                            if (owner_view.types.rootForKey(.{ .bytes = closed.key })) |root| {
-                                if (!owner_view.types.rootRows()[@backingInt(root)].contains_identity_variables) {
-                                    representative = .{ .module = owner_view.key, .ty = root };
-                                }
-                            }
-                        }
-                        if (representative == null) for (self.builder.moduleViews()) |view| {
-                            const root = view.types.rootForKey(.{ .bytes = closed.key }) orelse continue;
-                            if (view.types.rootRows()[@backingInt(root)].contains_identity_variables) continue;
-                            if (representative) |previous| {
-                                if (std.mem.order(u8, &previous.module.bytes, &view.key.bytes) != .gt) continue;
-                            }
-                            representative = .{ .module = view.key, .ty = root };
-                        };
-                        entry.value_ptr.* = representative;
-                    }
-                    const occurrence = entry.value_ptr.* orelse break :blk null;
+                    const occurrence = (try self.builder.closedOccurrenceInScope(scope, closed.owner, closed.key)) orelse break :blk null;
                     const view = self.builder.moduleForKeyBytes(occurrence.module.bytes).?;
                     const owner = switch (view.types.payload(occurrence.ty)) {
                         .nominal => |nominal| nominal.owner_module,
@@ -73158,14 +73319,17 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
     var views: [1]ModuleViewData = undefined;
     const view = &views[0];
     builder.borrowed_module_views = &views;
-    builder.persistent_closed_occurrences = .empty;
-    defer builder.persistent_closed_occurrences.deinit(gpa);
+    builder.module_closures = .empty;
+    defer builder.deinitModuleClosures();
+    builder.closed_occurrence_representatives = .empty;
+    defer builder.closed_occurrence_representatives.deinit(gpa);
     builder.module_index = @TypeOf(builder.module_index).init(gpa);
     defer builder.module_index.deinit();
     view.key = .{};
     try builder.module_index.put(view.key.bytes, .root);
     view.names = &source_names;
     view.types = checked_types.view();
+    view.direct_import_module_keys = &.{};
     // The program seeds this module as its lowering input, as the coordinator does.
     view.lowering_module = try program.addLoweringModule(view.key);
 
@@ -73467,6 +73631,27 @@ test "module identity index retains first current view and rejects absent owners
     try std.testing.expect(builder.moduleForIdentityHash(&@as([32]u8, @splat(4))) == null);
 }
 
+/// A synthetic closed or open alias root of a checked type store, keyed
+/// `identity`, declared by the module keyed 42, for occurrence tests.
+const ClosedOccurrenceFixture = struct {
+    fn add(store: *checked.CheckedTypeStore, identity: [32]u8, open: bool) Allocator.Error!checked.CheckedTypeId {
+        // Each alias has its own backing root; a shared identity would
+        // name one already-filled root.
+        var backing_identity = identity;
+        backing_identity[0] ^= 0xff;
+        const backing = try store.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = backing_identity }, false);
+        try store.fillSyntheticTypeRoot(std.testing.allocator, backing, .empty_record);
+        const id = try store.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = identity }, open);
+        try store.fillSyntheticTypeRoot(std.testing.allocator, id, .{ .alias = .{
+            .name = @fromBackingInt(@as(u32, 0)),
+            .origin_module = @fromBackingInt(@as(u32, 0)),
+            .owner_module = .{ .bytes = @splat(42) },
+            .backing = backing,
+        } });
+        return id;
+    }
+};
+
 test "fresh closed named occurrences agree with persistent replay and preserve open identities" {
     const a = std.testing.allocator;
     var first = checked.CheckedTypeStore{};
@@ -73475,45 +73660,31 @@ test "fresh closed named occurrences agree with persistent replay and preserve o
     defer second.deinit(a);
     const owner: names.CheckedModuleDigest = .{ .bytes = @splat(42) };
     const key: [32]u8 = @splat(73);
-    const Fixture = struct {
-        fn add(store: *checked.CheckedTypeStore, identity: [32]u8, open: bool) Allocator.Error!checked.CheckedTypeId {
-            // Each alias has its own backing root; a shared identity would
-            // name one already-filled root.
-            var backing_identity = identity;
-            backing_identity[0] ^= 0xff;
-            const backing = try store.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = backing_identity }, false);
-            try store.fillSyntheticTypeRoot(std.testing.allocator, backing, .empty_record);
-            const id = try store.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = identity }, open);
-            try store.fillSyntheticTypeRoot(std.testing.allocator, id, .{ .alias = .{
-                .name = @fromBackingInt(@as(u32, 0)),
-                .origin_module = @fromBackingInt(@as(u32, 0)),
-                .owner_module = .{ .bytes = @splat(42) },
-                .backing = backing,
-            } });
-            return id;
-        }
-    };
-    const first_ty = try Fixture.add(&first, key, false);
-    _ = try Fixture.add(&second, @splat(74), false);
-    const second_ty = try Fixture.add(&second, key, false);
-    const open_ty = try Fixture.add(&first, @splat(75), true);
+    const first_ty = try ClosedOccurrenceFixture.add(&first, key, false);
+    _ = try ClosedOccurrenceFixture.add(&second, @splat(74), false);
+    const second_ty = try ClosedOccurrenceFixture.add(&second, key, false);
+    const open_ty = try ClosedOccurrenceFixture.add(&first, @splat(75), true);
     var views: [2]ModuleViewData = undefined;
     views[0].key = .{ .bytes = @splat(20) };
     views[0].types = first.view();
+    views[0].direct_import_module_keys = &.{.{ .bytes = @splat(10) }};
     views[1].key = .{ .bytes = @splat(10) };
     views[1].types = second.view();
+    views[1].direct_import_module_keys = &.{};
     var builder: Builder = undefined;
     builder.allocator = a;
     builder.borrowed_module_views = &views;
-    builder.persistent_closed_occurrences = .empty;
-    defer builder.persistent_closed_occurrences.deinit(a);
+    builder.module_closures = .empty;
+    defer builder.deinitModuleClosures();
+    builder.closed_occurrence_representatives = .empty;
+    defer builder.closed_occurrence_representatives.deinit(a);
     builder.module_index = @TypeOf(builder.module_index).init(a);
     defer builder.module_index.deinit();
     try builder.module_index.put(views[0].key.bytes, .root);
     try builder.module_index.put(views[1].key.bytes, .{ .import = 0 });
     const left = try builder.canonicalNamedOccurrence(&views[0], first_ty, owner);
     const right = try builder.canonicalNamedOccurrence(&views[1], second_ty, owner);
-    const provenance = BodyContext.PersistentProvenance{ .builder = &builder };
+    const provenance = BodyContext.PersistentProvenance{ .builder = &builder, .scope = .{ .view = &views[0] } };
     const restored = (try provenance.resolveNamedType(.{ .closed = .{ .owner = owner.bytes, .key = key } })).?;
     try std.testing.expectEqualDeep(left, right);
     try std.testing.expectEqualDeep(left, restored);
@@ -73522,6 +73693,50 @@ test "fresh closed named occurrences agree with persistent replay and preserve o
     const open = try builder.canonicalNamedOccurrence(&views[0], open_ty, owner);
     try std.testing.expectEqual(open_ty, open.ty);
     try std.testing.expectEqualSlices(u8, &views[0].key.bytes, &open.ty_module.bytes);
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12693: a closed named type
+// lowered from a module's checked occurrence must name an occurrence in that
+// module's own import closure. The stored values of a package module are
+// lowered from its occurrences and are reused by other programs that do not
+// contain the app, so the app's occurrence (the lowest-keyed holder here) is
+// never a valid representative for the package module's lowering.
+test "issue 12693 closed named occurrence lowered from an import stays inside that import's closure" {
+    const a = std.testing.allocator;
+    var app = checked.CheckedTypeStore{};
+    defer app.deinit(a);
+    var form = checked.CheckedTypeStore{};
+    defer form.deinit(a);
+    const owner = names.CheckedModuleDigest{ .bytes = @splat(42) };
+    const key: [32]u8 = @splat(73);
+    const app_ty = try ClosedOccurrenceFixture.add(&app, key, false);
+    const form_ty = try ClosedOccurrenceFixture.add(&form, key, false);
+    var views: [2]ModuleViewData = undefined;
+    // The app is the root and has the lowest key; it imports the package module.
+    views[0].key = .{ .bytes = @splat(10) };
+    views[0].types = app.view();
+    views[0].direct_import_module_keys = &.{.{ .bytes = @splat(20) }};
+    views[1].key = .{ .bytes = @splat(20) };
+    views[1].types = form.view();
+    views[1].direct_import_module_keys = &.{};
+    var builder: Builder = undefined;
+    builder.allocator = a;
+    builder.borrowed_module_views = &views;
+    builder.module_closures = .empty;
+    defer builder.deinitModuleClosures();
+    builder.closed_occurrence_representatives = .empty;
+    defer builder.closed_occurrence_representatives.deinit(a);
+    builder.module_index = @TypeOf(builder.module_index).init(a);
+    defer builder.module_index.deinit();
+    try builder.module_index.put(views[0].key.bytes, .root);
+    try builder.module_index.put(views[1].key.bytes, .{ .import = 0 });
+    const from_form = try builder.canonicalNamedOccurrence(&views[1], form_ty, owner);
+    try std.testing.expectEqualSlices(u8, &views[1].key.bytes, &from_form.ty_module.bytes);
+    try std.testing.expectEqual(form_ty, from_form.ty);
+    // The app imports the package module, so its own lowering of the same
+    // closed type is represented by the package module's occurrence too.
+    const from_app = try builder.canonicalNamedOccurrence(&views[0], app_ty, owner);
+    try std.testing.expectEqualDeep(from_form, from_app);
 }
 
 // Experimental complete-result encoding, enabled only by a diagnostic variable.
