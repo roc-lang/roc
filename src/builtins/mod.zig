@@ -10,6 +10,7 @@ pub const in_process_host = @import("in_process_host.zig");
 pub const shim_symbols = @import("shim_symbols.zig");
 pub const dec = @import("dec.zig");
 pub const crypto = @import("crypto.zig");
+pub const stack_guard = @import("stack_guard.zig");
 pub const sha256 = @import("sha256.zig");
 pub const dev_wrappers = @import("dev_wrappers.zig");
 pub const erased_callable = @import("erased_callable.zig");
@@ -28,6 +29,7 @@ pub const utils = @import("utils.zig");
 test "builtins tests" {
     std.testing.refAllDecls(@import("builtin_registry.zig"));
     std.testing.refAllDecls(@import("crypto.zig"));
+    std.testing.refAllDecls(@import("blake3_iterative.zig"));
     std.testing.refAllDecls(@import("dec.zig"));
     std.testing.refAllDecls(@import("decimal_parse.zig"));
     std.testing.refAllDecls(@import("dev_wrappers.zig"));

@@ -13,6 +13,7 @@ const base = @import("base");
 const check = @import("check");
 const can = @import("can");
 const layout = @import("layout");
+const host_boundary = layout.host_boundary_digest;
 const lir_core = @import("lir_core");
 
 const Common = @import("../common.zig");
@@ -49,6 +50,8 @@ pub const Input = struct {
     /// Allow `List.map` to reuse a unique input list's allocation (see
     /// `SolvedLirLower.Options.list_in_place_map`).
     list_in_place_map: bool = false,
+    /// Record each platform entrypoint's host boundary digest.
+    host_boundary_digests: bool = false,
     /// The values compile-time evaluation converted the program's
     /// instance-dependent literals to, when the program was evaluated.
     literal_values: ?*const @import("literal_values.zig").LiteralValues = null,
@@ -1149,16 +1152,10 @@ pub const Program = struct {
         };
     }
 
-    /// The registration of `owner.method_text` visible from `scope_module`:
-    /// its own registry, then the modules its method lookup reaches.
+    /// The registration of `owner.method_text` in `scope_module`'s registry.
     fn registeredMethod(self: *Program, scope_module: ModuleIndex, owner_module: ?ModuleIndex, owner: static_dispatch.MethodOwner, method_text: []const u8) ?static_dispatch.CheckedMethodLookup {
-        const scope = self.module(scope_module);
         const owner_names = self.module(owner_module orelse scope_module).nameStore();
-        if (methodIn(scope, owner_names, owner, method_text)) |found| return found;
-        for (scope.view.method_lookup_scope) |module_id| {
-            if (methodIn(self.moduleByKey(module_id), owner_names, owner, method_text)) |found| return found;
-        }
-        return null;
+        return methodIn(self.module(scope_module), owner_names, owner, method_text);
     }
 
     fn methodIn(view: *const types.ModuleView, owner_names: anytype, owner: static_dispatch.MethodOwner, method_text: []const u8) ?static_dispatch.CheckedMethodLookup {
@@ -1574,6 +1571,9 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         try program.result.root_procs.append(allocator, proc);
         var metadata = RootMetadata.fromCheckedRoot(request);
         metadata.test_plan = Common.testPlanMetadataForRoot(input.roots, request, index);
+        if (input.host_boundary_digests and request.abi == .platform) {
+            metadata.host_boundary_digest = try hostBoundaryDigest(&program, request, source_module);
+        }
         try program.result.root_metadata.append(allocator, metadata);
     }
     try program.drain();
@@ -1802,3 +1802,86 @@ fn lowerRoot(program: *Program, request: checked.RootRequest, index: u32, source
     }
     return program.worker(try program.rootWorker(index, request, source_module)).proc;
 }
+
+/// The host boundary digest of a platform entrypoint: the types and layouts
+/// its root procedure takes and returns.
+fn hostBoundaryDigest(program: *Program, request: checked.RootRequest, source_module: ModuleIndex) Allocator.Error!host_boundary.Digest {
+    const allocator = program.allocator;
+    const root_ty = try program.converter().convert(source_module, request.checked_type, .{ .module = source_module, .vars = &.{}, .bound = &.{} });
+    var values: std.ArrayList(HostBoundaryGraph.Edge) = .empty;
+    defer values.deinit(allocator);
+    const graph: HostBoundaryGraph = .{ .program = program };
+    switch (program.store.get(root_ty)) {
+        .function => |function| try graph.abiValues(function.args, function.ret, &values),
+        else => try values.append(allocator, .{ .node = root_ty, .position = 0, .layout = try program.layouts.layoutOf(root_ty) }),
+    }
+    var walk = host_boundary.Walk(TypeId, HostBoundaryGraph, Allocator.Error).init(allocator, &program.result.layouts, graph);
+    defer walk.deinit();
+    return try walk.signature(values.items);
+}
+
+/// The `.boxy` types a host boundary digest walks, numbered as their
+/// committed layouts number fields and variants. Every function value is an
+/// erased callable whose ABI is its function type's arguments and result.
+const HostBoundaryGraph = struct {
+    program: *Program,
+
+    const Edge = host_boundary.Edge(TypeId);
+
+    pub fn shape(self: HostBoundaryGraph, raw: TypeId, edges: *std.ArrayList(Edge)) Allocator.Error!host_boundary.Shape(TypeId) {
+        const program = self.program;
+        const allocator = program.allocator;
+        const ty = program.joins.representative(raw);
+        switch (program.store.get(ty)) {
+            .primitive, .empty_record => return .leaf,
+            .variable => invariant("a type variable reached a host boundary"),
+            .nominal => |nominal| return if (nominal.has_backing) .{ .transparent = try program.layouts.converter.backing(ty) } else .leaf,
+            .list => |elem| try edges.append(allocator, .{ .node = elem, .position = 0 }),
+            // `Box(function)` is the function's erased callable.
+            .box => |payload| {
+                if (program.store.get(payload) == .function) return .{ .transparent = payload };
+                try edges.append(allocator, .{ .node = payload, .position = 0 });
+            },
+            .tuple => |items| for (program.store.span(items), 0..) |item, index| {
+                try edges.append(allocator, .{ .node = item, .position = @intCast(index) });
+            },
+            .record => |record| {
+                if (record.ext != null) invariant("an open record reached a host boundary");
+                // Storage interning can grow the store under its own spans.
+                const fields = try allocator.dupe(types.Field, program.store.fieldSpan(record.fields));
+                defer allocator.free(fields);
+                for (fields, 0..) |field, index| {
+                    try edges.append(allocator, .{ .node = try program.layouts.fieldStorage(field), .position = @intCast(index) });
+                }
+            },
+            .tag_union => |tag_union| {
+                if (tag_union.ext != null) invariant("an open tag union reached a host boundary");
+                const tags = try allocator.dupe(types.Tag, program.store.tagSpan(tag_union.tags));
+                defer allocator.free(tags);
+                for (tags, 0..) |tag, index| {
+                    const payloads = try allocator.dupe(TypeId, program.store.span(tag.payloads));
+                    defer allocator.free(payloads);
+                    const payload = try program.layouts.tagPayload(payloads) orelse continue;
+                    try edges.append(allocator, .{ .node = payload, .position = @intCast(index) });
+                }
+            },
+            .function => |function| {
+                try self.abiValues(function.args, function.ret, edges);
+                return .erased;
+            },
+        }
+        return .container;
+    }
+
+    /// A function's ABI values: its arguments in order, then its result,
+    /// each with its committed layout.
+    fn abiValues(self: HostBoundaryGraph, args_span: types.Span, ret: TypeId, out: *std.ArrayList(Edge)) Allocator.Error!void {
+        const program = self.program;
+        const args = try program.allocator.dupe(TypeId, program.store.span(args_span));
+        defer program.allocator.free(args);
+        for (args, 0..) |arg, index| {
+            try out.append(program.allocator, .{ .node = arg, .position = @intCast(index), .layout = try program.layouts.layoutOf(arg) });
+        }
+        try out.append(program.allocator, .{ .node = ret, .position = @intCast(args.len), .layout = try program.layouts.layoutOf(ret) });
+    }
+};

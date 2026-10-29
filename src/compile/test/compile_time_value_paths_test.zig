@@ -53,7 +53,9 @@ const platform_files = [_]struct { path: []const u8, source: []const u8 }{
 /// builtin wrappers inlined, so a list operation's runtime uniqueness check
 /// sits in the procedure that calls the builtin.
 fn optimizedTarget(inline_mode: lir.CheckedPipeline.InlineMode) lir.CheckedPipeline.TargetConfig {
-    return .{ .inline_expects = .omit, .inline_mode = inline_mode };
+    // An optimized build specializes ARC modes, as `--opt=size` and
+    // `--opt=speed` do.
+    return .{ .inline_expects = .omit, .inline_mode = inline_mode, .specialize_arc_modes = true };
 }
 
 /// Both runtime programs of one app.
@@ -139,7 +141,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
             .include_provided_data_exports = true,
             .include_internal_static_data = true,
         },
-        .{ .target_usize = base.target.TargetUsize.native, .inline_mode = inline_mode },
+        .{ .target_usize = base.target.TargetUsize.native, .inline_mode = inline_mode, .specialize_arc_modes = true },
     );
     errdefer restored.deinit();
     const image = static_data_exports.buildStaticData(

@@ -27,6 +27,9 @@ import_relocations: std.ArrayList(Relocation),
 /// `resolveDeferred` when it creates the entities. A relocation whose symbol
 /// is `deferredSymbol(ref)` names the same kind of entity.
 deferred: std.ArrayList(Deferred),
+/// The shadow-stack frame this function's prologue reserves, or zero when it
+/// has no prologue.
+frame_bytes: u32 = 0,
 
 /// An operand whose value is a not-yet-created entity's index or address.
 pub const Deferred = struct {
@@ -144,6 +147,7 @@ pub fn addDeferred(self: *Self, allocator: Allocator, deferred: Deferred) Alloca
 pub fn resolveDeferred(self: *const Self, allocator: Allocator, resolved: []const Resolved) Allocator.Error!Self {
     var out = Self.init();
     errdefer out.deinit(allocator);
+    out.frame_bytes = self.frame_bytes;
     try out.preamble.appendSlice(allocator, self.preamble.items);
 
     var code = try allocator.dupe(u8, self.code.items);

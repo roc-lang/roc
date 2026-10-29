@@ -15,3 +15,5 @@ pub const CodeBuilder = @import("CodeBuilder.zig");
 pub const BodyArtifact = @import("BodyArtifact.zig");
 pub const BuiltinSignatures = @import("builtin_signatures.zig");
 pub const BoxyRuntimeSignatures = @import("boxy_runtime_signatures.zig");
+pub const StackSupport = @import("StackSupport.zig");
+pub const StackRoom = @import("StackRoom.zig");

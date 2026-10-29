@@ -133,6 +133,9 @@ pub const InstVariableOrigin = enum(u8) {
     checked_variable,
     row_extension,
     placeholder,
+    /// An explicit parameter of a detached interface relation, filled when
+    /// that relation is joined to its requesting graph. Never defaulted.
+    interface_parameter,
 };
 
 /// Defaulting evidence carried by an unresolved instantiation-graph node until
@@ -158,6 +161,10 @@ pub const InstVariable = struct {
             .origin = .row_extension,
             .row_default = default,
         };
+    }
+
+    pub fn interfaceParameter() InstVariable {
+        return .{ .origin = .interface_parameter };
     }
 
     pub fn placeholder() InstVariable {
@@ -1172,6 +1179,12 @@ pub const InterfaceConstraints = struct {
             // digest, so requests that differ only in the checked occurrence
             // through which a named type was reached share one interface.
             if (T == Type.NamedType) return self.write(names.CheckedModuleDigest, value.module);
+            if (T == @FieldType(InstNode, "tag_union")) {
+                // The actual ordered tags and their extension are constraints;
+                // the producer's memo that this order is sorted is not.
+                try self.write(@TypeOf(value.tags), value.tags);
+                return self.write(NodeId, value.ext);
+            }
             if (T == Type.TypeId) {
                 try self.leaves.append(self.graph.allocator, value);
                 const digest = self.graph.types.representationDigestCached(ns, value, null);
@@ -1397,7 +1410,7 @@ pub const InterfaceConstraints = struct {
                     self.hole_classes[hole] = root;
                     const open_index: u32 = @intCast(self.open_nodes.items.len);
                     self.nodes.items[@backingInt(id)] = .{ .open = open_index };
-                    try self.open_nodes.append(self.graph.allocator, .{ .content = .{ .unresolved = InstVariable.placeholder() } });
+                    try self.open_nodes.append(self.graph.allocator, .{ .content = .{ .unresolved = InstVariable.interfaceParameter() } });
                     return null;
                 }
             }
@@ -1909,6 +1922,22 @@ pub const InterfaceConstraints = struct {
 /// `InstGraph.diagnostics` remains null unless detailed diagnostics were
 /// requested, so ordinary lowering does not count hot-path operations.
 pub const GraphDiagnostics = struct {
+    // Request-completion and inhabitation work, separate from allocation.
+    completion_queries: u64 = 0,
+    completion_pair_entries: u64 = 0,
+    completion_pair_expansions: u64 = 0,
+    completion_memo_hits: u64 = 0,
+    completion_repeated_pairs: u64 = 0,
+    inhabitation_queries: u64 = 0,
+    inhabitation_node_entries: u64 = 0,
+    inhabitation_node_expansions: u64 = 0,
+    inhabitation_memo_hits: u64 = 0,
+    analysis_changed_nodes: u64 = 0,
+    analysis_invalidation_edges: u64 = 0,
+    analysis_peak_entries: u64 = 0,
+    analysis_peak_payload_bytes: u64 = 0,
+    analysis_invalidated_groups: u64 = 0,
+
     /// Node identities retained by argument-class snapshots.
     argument_class_members_snapshotted: u64 = 0,
     /// Visited-set slots initialized or touched by structural backing walks.
@@ -2404,6 +2433,8 @@ pub const InstGraph = struct {
     parents: std.ArrayList(NodeId),
     field_kinds: std.ArrayList(FieldKindNode),
     versions: std.ArrayList(u32),
+    /// Analysis observes content writes and order-sensitive row normalization.
+    analysis_changes: @import("../proofs.zig").Changes(NodeId) = .{},
     /// Intrusive chain of permanent node ids in each live union class. Draft
     /// request lookup indexes an open function under one permanent interface
     /// node and probes the current class members, so later unions never stale
@@ -2693,6 +2724,7 @@ pub const InstGraph = struct {
         self.parents.clearRetainingCapacity();
         self.field_kinds.clearRetainingCapacity();
         self.versions.clearRetainingCapacity();
+        self.analysis_changes.clearRetainingCapacity();
         self.class_member_next.clearRetainingCapacity();
         self.class_member_head.clearRetainingCapacity();
         self.class_member_tail.clearRetainingCapacity();
@@ -2751,7 +2783,8 @@ pub const InstGraph = struct {
         _ = self.arena_impl.reset(.retain_capacity);
     }
 
-    fn countDiagnostic(self: *InstGraph, comptime field: []const u8) void {
+    /// Count graph work only when the owner requested diagnostics.
+    pub fn countDiagnostic(self: *InstGraph, comptime field: []const u8) void {
         if (self.diagnostics) |diagnostics| {
             @field(diagnostics, field) += 1;
         }
@@ -2863,6 +2896,7 @@ pub const InstGraph = struct {
         self.class_member_head.deinit(allocator);
         self.class_member_next.deinit(allocator);
         self.versions.deinit(allocator);
+        self.analysis_changes.deinit(allocator);
         self.parents.deinit(allocator);
         self.nodes.deinit(allocator);
         self.field_kinds.deinit(allocator);
@@ -3703,7 +3737,7 @@ pub const InstGraph = struct {
             .redirect, .leaf => unreachable, // callers pass a find root, and rootContent of a find root expands a leaf, so it returns structure
             .unresolved => |variable| switch (variable.origin) {
                 .checked_variable, .row_extension => .{ .fixed = 0 },
-                .placeholder => Common.invariant("placeholder reached generated iterator representation finalization"),
+                .placeholder, .interface_parameter => Common.invariant("placeholder reached generated iterator representation finalization"),
             },
             .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole, .func => .{ .fixed = 0 },
             .list, .box => .{ .children = .{ .count = 1, .increment = 0 } },
@@ -3865,7 +3899,7 @@ pub const InstGraph = struct {
                     return switch (variable.origin) {
                         .checked_variable => true,
                         .row_extension => Common.invariant("row extension reached final demand validation without row default"),
-                        .placeholder => Common.invariant("instantiation placeholder reached final demand validation"),
+                        .placeholder, .interface_parameter => Common.invariant("instantiation placeholder reached final demand validation"),
                     };
                 },
                 .named => |named| {
@@ -3924,10 +3958,12 @@ pub const InstGraph = struct {
 
     /// Whether a finished type is proven uninhabited under `policy`.
     pub fn typeProvenUninhabited(self: *InstGraph, ty: Type.TypeId, policy: UninhabitedPolicy) Allocator.Error!bool {
+        if (base.dev_diagnostics.isSet(.fresh_type_analysis)) {
+            for (&self.proven_uninhabited_types) |*memo| memo.clearRetainingCapacity();
+        }
         const answers = &self.proven_uninhabited_types[@backingInt(policy)];
         if (answers.get(ty)) |cached| return cached;
         var scan = TypeUninhabitedScan{ .graph = self, .policy = policy };
-        defer scan.visiting.deinit(self.allocator);
         const result = try TypeUninhabitedScan.Eval.runWith(self.allocator, &self.type_uninhabited_scratch, &scan, ty);
         try answers.put(self.allocator, ty, result);
         return result;
@@ -4003,7 +4039,7 @@ pub const InstGraph = struct {
     /// leaf's structure after relations freeze adds nodes that denote parts
     /// of an already-imported finished type; that relates nothing.
     /// The per-node columns that grow with `nodes`, one entry per node.
-    const node_columns = .{ "parents", "versions", "class_member_next", "class_member_head", "class_member_tail", "containment_visit_epochs", "request_source_interfaces", "constructor_evidence_requests", "private_backing_roots", "representation_membership", "class_finished_monos" };
+    const node_columns = .{ "parents", "versions", "analysis_changes", "class_member_next", "class_member_head", "class_member_tail", "containment_visit_epochs", "request_source_interfaces", "constructor_evidence_requests", "private_backing_roots", "representation_membership", "class_finished_monos" };
 
     /// Room for one more node in `nodes` and every per-node column. Each
     /// column's capacity is kept at least `nodes`'s, so a node fitting in
@@ -4028,6 +4064,7 @@ pub const InstGraph = struct {
         self.nodes.appendAssumeCapacity(node_content);
         self.parents.appendAssumeCapacity(id);
         self.versions.appendAssumeCapacity(0);
+        self.analysis_changes.appendAssumeCapacity();
         self.class_member_next.appendAssumeCapacity(.none);
         self.class_member_head.appendAssumeCapacity(id);
         self.class_member_tail.appendAssumeCapacity(id);
@@ -4324,6 +4361,7 @@ pub const InstGraph = struct {
         self.nodes.items[@backingInt(root)] = expanded;
         self.markPrivateBacking(expanded);
         self.versions.items[@backingInt(root)] +%= 1;
+        self.analysis_changes.mark(root);
         self.structure_epoch +%= 1;
         if (self.leaf_alias_origins.fetchRemove(root)) |aliases| {
             var alias_origins = aliases.value;
@@ -4922,6 +4960,11 @@ pub const InstGraph = struct {
         const node = try self.newLeaf(.{ .ty = ty, .origin = .{ .import = .{} } });
         try self.imported_type_nodes.put(ty, node);
         return node;
+    }
+
+    /// Exact changed identities for dependency invalidation; compression is absent.
+    pub fn proofChanges(self: *InstGraph) *@import("../proofs.zig").Changes(NodeId) {
+        return &self.analysis_changes;
     }
 
     /// Current root for the node's union-find class.
@@ -6837,6 +6880,8 @@ pub const InstGraph = struct {
         self.nodes.items[@backingInt(loser)] = .{ .redirect = winner };
         self.parents.items[@backingInt(loser)] = winner;
         self.versions.items[@backingInt(winner)] +%= 1;
+        self.analysis_changes.mark(winner);
+        self.analysis_changes.mark(loser);
         self.structure_epoch +%= 1;
         self.countDiagnostic("class_unions");
         // An active snapshot exists only for a resolved class and reaches
@@ -6887,6 +6932,7 @@ pub const InstGraph = struct {
         self.nodes.items[@backingInt(root)] = new_content;
         self.markPrivateBacking(new_content);
         self.versions.items[@backingInt(root)] +%= 1;
+        self.analysis_changes.mark(root);
         self.structure_epoch +%= 1;
         return true;
     }
@@ -6962,6 +7008,39 @@ pub const InstGraph = struct {
             .tags_sorted = true,
         } });
         try self.union_(closed, wider);
+    }
+
+    /// A new row carrying every label of `raw_wider`, a row that lists each of
+    /// the closed `raw_closed` row's labels at the same payload arity plus
+    /// others. The closed row's tags keep their own payload nodes; every other
+    /// tag and the extension are the wider row's. Neither row changes and no
+    /// payloads are related, so a closed row a generated-private
+    /// representation owns can be requested at a wider public row without its
+    /// private payloads meeting their public counterparts outside the opaque
+    /// interface relation (design.md "Closed Result Rows At Template
+    /// Boundaries").
+    pub fn closedTagRowAtWiderLabels(self: *InstGraph, raw_closed: NodeId, raw_wider: NodeId) Allocator.Error!NodeId {
+        self.requireRelationProduction();
+        const closed = self.find(raw_closed);
+        if (!try self.tagRowIsClosed(closed)) Common.invariant("row relabeling received an open row as its closed row");
+        if (try self.rootContent(closed) != .tag_union) Common.invariant("row relabeling received a non-tag-union closed row");
+        const closed_tags = (try self.flattenTagRow(closed)).tags;
+        const wide = try self.flattenTagRow(self.find(raw_wider));
+        const tags = try self.arena().dupe(InstTag, wide.tags);
+        for (closed_tags) |tag| {
+            const wide_tag = for (tags) |*candidate| {
+                if (candidate.name == tag.name) break candidate;
+            } else Common.invariant("row relabeling request lacked one of the closed row's labels");
+            if (tag.payloads.len != wide_tag.payloads.len) {
+                Common.invariant("row relabeling request changed a closed row's payload arity");
+            }
+            wide_tag.* = tag;
+        }
+        return try self.newNode(.{ .tag_union = .{
+            .tags = tags,
+            .ext = wide.ext,
+            .tags_sorted = true,
+        } });
     }
 
     /// Point payload `payload_index` of the tag named `name` in a row at
@@ -7249,6 +7328,7 @@ pub const InstGraph = struct {
     fn mergeVariableOrigin(a: InstVariableOrigin, b: InstVariableOrigin) InstVariableOrigin {
         if (a == .checked_variable or b == .checked_variable) return .checked_variable;
         if (a == .row_extension or b == .row_extension) return .row_extension;
+        if (a == .interface_parameter or b == .interface_parameter) return .interface_parameter;
         return .placeholder;
     }
 
@@ -7480,7 +7560,13 @@ pub const InstGraph = struct {
                         if (left_named.backing) |left_backing| {
                             if (right_named.backing) |right_backing| {
                                 if (left_backing.authority == right_backing.authority) {
-                                    try pending.append(self.allocator, .{ .left = left_backing.node, .right = right_backing.node, .row_width = row_width });
+                                    // Each backing may pass through the other
+                                    // nominal instance after a structural lift.
+                                    // Resolve that edge before merging the two
+                                    // owners, which would turn it into a cycle.
+                                    const left_node = try self.backingBeforeNamedJoin(left, left_named, right);
+                                    const right_node = try self.backingBeforeNamedJoin(right, right_named, left);
+                                    try pending.append(self.allocator, .{ .left = left_node, .right = right_node, .row_width = row_width });
                                 } else {
                                     const private_is_left = left_backing.authority == .generated_private;
                                     const private_is_right = right_backing.authority == .generated_private;
@@ -7639,6 +7725,41 @@ pub const InstGraph = struct {
         const moved = try self.newNode(other_content);
         try self.union_(named_node, other);
         try pending.append(self.allocator, .{ .left = backing_node, .right = moved, .row_width = row_width });
+    }
+
+    /// The named relation has established that these two owner roots will
+    /// denote one instance. That explicit relation authorizes following the
+    /// other owner even before its argument pairs have been processed.
+    fn backingBeforeNamedJoin(self: *InstGraph, root: NodeId, owner: *const InstNamed, related_owner: NodeId) Allocator.Error!NodeId {
+        const declared = owner.backing.?;
+        var current = self.find(declared.node);
+        var next = (try self.namedJoinBackingNext(current, owner, related_owner)) orelse return current;
+        var seen = self.node_set_pool.acquire();
+        defer self.node_set_pool.release(&seen);
+        while (true) {
+            if ((try seen.getOrPut(current)).found_existing) {
+                // A pre-existing recursive backing remains recursive. This
+                // operation only prevents a join from creating a new cycle.
+                return declared.node;
+            }
+            current = next;
+            next = (try self.namedJoinBackingNext(current, owner, related_owner)) orelse break;
+        }
+        if (declared.node != current) {
+            var normalized = owner.*;
+            normalized.backing = .{ .node = current, .use = declared.use, .authority = declared.authority };
+            _ = try self.replaceContentWithoutSnapshotInvalidation(root, try self.namedContent(normalized));
+        }
+        return current;
+    }
+
+    fn namedJoinBackingNext(self: *InstGraph, current: NodeId, owner: *const InstNamed, related_owner: NodeId) Allocator.Error!?NodeId {
+        if (current != related_owner) return self.structuralBackingNext(current, owner);
+        const content_ = try self.rootContent(current);
+        if (content_ != .named) unreachable; // both owners were matched as named roots
+        const backing = content_.named.backing orelse
+            Common.invariant("related nominal owner has no declared backing");
+        return self.find(backing.node);
     }
 
     const StructuralBacking = struct {
@@ -7821,14 +7942,20 @@ pub const InstGraph = struct {
     }
 
     /// Normalize only a head that a row reader actually consumes. This state
-    /// changes neither type meaning nor snapshot dependencies, so recording it
-    /// does not invalidate relation stamps or observable graph snapshots.
+    /// changes neither type meaning nor snapshot dependencies. Reordering
+    /// retires order-sensitive analysis answers, but not unification stamps
+    /// or observable graph snapshots.
     pub fn sortTagHead(self: *InstGraph, root: NodeId) void {
         const row = &self.nodes.items[@backingInt(root)].tag_union;
         if (row.tags_sorted) return;
         const tags = row.tags;
         if (!std.sort.isSorted(InstTag, tags, self.name_store, instTagLessThan)) {
             std.mem.sortUnstable(InstTag, tags, self.name_store, instTagLessThan);
+            // Completion compares row entries in their stored order. Its
+            // answers must not survive a reordering, although type meaning,
+            // solver versions and resolvedness are unchanged.
+            self.structure_epoch +%= 1;
+            self.analysis_changes.mark(root);
         }
         for (tags, 0..) |tag, index| {
             if (index != 0) std.debug.assert(tags[index - 1].name != tag.name);
@@ -8842,7 +8969,7 @@ const GraphUninhabitedScan = struct {
                     break :blk switch (variable.origin) {
                         .checked_variable => .{ .value = true },
                         .row_extension => Common.invariant("row extension reached final inhabitance validation without row default"),
-                        .placeholder => Common.invariant("instantiation placeholder reached final inhabitance validation"),
+                        .placeholder, .interface_parameter => Common.invariant("instantiation placeholder reached final inhabitance validation"),
                     };
                 },
             },
@@ -8918,25 +9045,18 @@ pub const UninhabitedPolicy = enum(u2) {
 const TypeUninhabitedScan = struct {
     graph: *InstGraph,
     policy: UninhabitedPolicy,
-    /// Each type being expanded, with the number of cycle hits seen before
-    /// it was entered.
-    visiting: collections.DenseMapUnmanaged(Type.TypeId, usize) = .empty,
-    /// Re-entries of a type still being expanded. A type whose expansion saw
-    /// none answers independently of the types enclosing it, so its answer
-    /// is cached for every later scan.
-    cycle_hits: usize = 0,
-
-    const Eval = AnyAll.Evaluation(Type.TypeId, TypeUninhabitedScan);
+    const Eval = @import("../inhabitation.zig").Evaluation(Type.TypeId, TypeUninhabitedScan);
 
     fn answers(self: *TypeUninhabitedScan) *collections.DenseMapUnmanaged(Type.TypeId, bool) {
         return &self.graph.proven_uninhabited_types[@backingInt(self.policy)];
     }
 
+    /// Immutable finished types already carry their representative identity.
+    pub fn representative(_: *TypeUninhabitedScan, ty: Type.TypeId) Type.TypeId {
+        return ty;
+    }
+
     pub fn enter(self: *TypeUninhabitedScan, items: Eval.Items, ty: Type.TypeId) Allocator.Error!Eval.Expansion {
-        if (self.visiting.contains(ty)) {
-            self.cycle_hits += 1;
-            return .{ .value = false };
-        }
         if (self.answers().get(ty)) |cached| return .{ .value = cached };
         const types = self.graph.types;
         const expansion: Eval.Expansion = switch (types.get(ty)) {
@@ -8964,6 +9084,9 @@ const TypeUninhabitedScan = struct {
             .tag_union => |tags| blk: {
                 const tag_span = types.tagSpan(tags);
                 for (0..GuardedList.borrowLen(tag_span)) |tag_index| {
+                    if (GuardedList.borrowLen(types.span(GuardedList.at(tag_span, tag_index).payloads)) == 0) return .{ .value = false };
+                }
+                for (0..GuardedList.borrowLen(tag_span)) |tag_index| {
                     const payloads = types.span(GuardedList.at(tag_span, tag_index).payloads);
                     const payload_count = GuardedList.borrowLen(payloads);
                     try items.group(.any, payload_count);
@@ -8974,14 +9097,11 @@ const TypeUninhabitedScan = struct {
             // A hole stands for every type, so it is not provably uninhabited.
             .primitive, .list, .func, .erased, .zst, .hole => .{ .value = false },
         };
-        if (expansion == .group) try self.visiting.put(self.graph.allocator, ty, self.cycle_hits);
         return expansion;
     }
 
     pub fn exit(self: *TypeUninhabitedScan, ty: Type.TypeId, result: ?bool) Allocator.Error!void {
-        const hits_before = (self.visiting.fetchRemove(ty) orelse return).value;
-        const decided = result orelse return;
-        if (self.cycle_hits == hits_before) try self.answers().put(self.graph.allocator, ty, decided);
+        if (result) |decided| try self.answers().put(self.graph.allocator, ty, decided);
     }
 };
 
@@ -10198,7 +10318,7 @@ fn materializeUnresolved(variable: InstVariable) Type.Content {
     return switch (variable.origin) {
         .checked_variable => .{ .tag_union = Type.Span.empty() },
         .row_extension => Common.invariant("row extension reached Monotype materialization without row default"),
-        .placeholder => Common.invariant("instantiation placeholder reached Monotype materialization"),
+        .placeholder, .interface_parameter => Common.invariant("instantiation placeholder reached Monotype materialization"),
     };
 }
 
@@ -15279,4 +15399,77 @@ test "finished witness absence updates after registration and import and resets 
     try std.testing.expect(!try graph.containsFinishedMono(fresh));
     const reset_capture = try InterfaceConstraints.capture(graph, graph.arena(), &.{fresh});
     try std.testing.expect(reset_capture.open_nodes[0].finished == .none);
+}
+
+test "interface request identity ignores the tag sorting memo" {
+    const allocator = std.testing.allocator;
+    var types = Type.Store.init(allocator);
+    defer types.deinit();
+    var ns = names.NameStore.init(allocator);
+    defer ns.deinit();
+    const graph = try InstGraph.create(allocator, &types, &ns);
+    defer graph.destroy();
+    const label = try ns.internTagLabel("Value");
+    var ids: [2]InterfaceConstraints.Identity = undefined;
+    for (&ids, [_]bool{ false, true }) |*identity, sorted| {
+        const value = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+        const payload = try graph.arena().dupe(NodeId, &.{value});
+        const row = try graph.newNode(.{ .tag_union = .{
+            .tags = try graph.arena().dupe(InstTag, &.{.{ .name = label, .checked_name = label, .payloads = payload }}),
+            .ext = try graph.newNode(.empty_tag_union),
+            .tags_sorted = sorted,
+        } });
+        const captured = try InterfaceConstraints.captureRequest(graph, graph.arena(), &.{row});
+        identity.* = try captured.identity(graph);
+    }
+    try std.testing.expect(try ids[0].eql(ids[1], &types, &ns));
+}
+
+test "nominal joins after lifting another instance backing preserve structure in either order" {
+    const Case = struct {
+        fn run(a: Allocator) error{ OutOfMemory, TestUnexpectedResult }!void {
+            for (0..4) |variant| {
+                const reverse = variant & 1 != 0;
+                const phantom = variant & 2 != 0;
+                var types = Type.Store.init(a);
+                defer types.deinit();
+                var ns = names.NameStore.init(a);
+                defer ns.deinit();
+                const graph = try InstGraph.create(a, &types, &ns);
+                defer graph.destroy();
+                const module = try ns.internModuleIdentity(&@as([32]u8, @splat(0x74)));
+                const name = try ns.internTypeName("Wrapped");
+                const first_backing = try graph.newNode(.empty_record);
+                const second_backing = try graph.newNode(.empty_record);
+                const first = try graph.newNode(try graph.namedContent(.{
+                    .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
+                    .def = .{ .module = module, .type_name = name },
+                    .kind = .nominal,
+                    .builtin_owner = null,
+                    .args = if (phantom) try graph.arena().dupe(NodeId, &.{try graph.newNode(.{ .primitive = .u64 })}) else &.{},
+                    .backing = .{ .node = first_backing, .use = .inspectable },
+                }));
+                var second_content = (try graph.content(first)).named.*;
+                second_content.backing.?.node = second_backing;
+                if (phantom) second_content.args = try graph.arena().dupe(NodeId, &.{try graph.newNode(.{ .primitive = .u64 })});
+                const second = try graph.newNode(try graph.namedContent(second_content));
+                try graph.unify(first, second_backing);
+                if (reverse) try graph.unify(second, first) else try graph.unify(first, second);
+                const retained = (try graph.namedNodes(first)).backing.?.node;
+                try std.testing.expect(!graph.sameClass(first, retained));
+                try std.testing.expect((try graph.content(retained)) == .empty_record);
+            }
+        }
+    };
+    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    try Case.run(counting.allocator());
+    for (0..counting.alloc_index) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
+        // Optional scratch retention may fail after the relation succeeds.
+        // Both success and propagated OOM must leave no owned allocations.
+        Case.run(failing.allocator()) catch |err| switch (err) {
+            error.OutOfMemory => {},
+            else => return err,
+        };
+    }
 }

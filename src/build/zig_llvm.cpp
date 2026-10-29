@@ -395,10 +395,11 @@ static bool emitWithBinStream(LLVMTargetMachineRef targ_machine_ref, LLVMModuleR
     if (options->no_target_libcalls) {
         tlii->disableAllFunctions();
     }
-    // Compiled Roc code may call only the C routines every provider owes it
-    // (`shim_symbols.c_memory_set` and `c_math_set`). Darwin's pattern fills
-    // are not among them: neither the freestanding default platform nor the
-    // compiler's in-process loader defines them.
+    // Compiled Roc code may call only the C routines its own private runtime
+    // or its provider defines (`shim_symbols.llvm_private_runtime_set`,
+    // `c_memory_set` and `c_math_set`). Darwin's pattern fills are not among
+    // them: neither the private runtime, the freestanding default platform,
+    // nor the compiler's in-process loader defines them.
     tlii->setUnavailable(LibFunc_memset_pattern4);
     tlii->setUnavailable(LibFunc_memset_pattern8);
     tlii->setUnavailable(LibFunc_memset_pattern16);

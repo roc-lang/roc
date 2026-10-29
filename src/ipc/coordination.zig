@@ -97,25 +97,13 @@ fn readFdInfoFromFile(allocator: std.mem.Allocator, io: std.Io) CoordinationErro
     };
     defer allocator.free(exe_path);
 
-    // Get the directory containing our executable (should be "{cache}/{version}/tmp/{random}")
+    // The launcher owns the executable directory and publishes its sibling
+    // coordination file before spawning this process. The storage layout is
+    // not part of this IPC protocol.
     const exe_dir = std.fs.path.dirname(exe_path) orelse {
         std.log.err("Invalid executable path: no directory component", .{});
         return error.FdInfoReadFailed;
     };
-
-    // Verify we're in a roc scratch directory: the parent of the exe directory
-    // is the per-version scratch directory, named by
-    // `cache_config.scratch_dir_name` in the compile module.
-    const scratch_dir = std.fs.path.dirname(exe_dir) orelse {
-        std.log.err("Invalid executable path: missing scratch directory component", .{});
-        return error.FdInfoReadFailed;
-    };
-    const scratch_basename = std.fs.path.basename(scratch_dir);
-
-    if (!std.mem.eql(u8, scratch_basename, "tmp")) {
-        std.log.err("Unexpected directory structure: expected 'tmp' parent, got '{s}'", .{scratch_basename});
-        return error.FdInfoReadFailed;
-    }
 
     // Construct the fd file path by appending .txt to the directory path
     var dir_path = exe_dir;

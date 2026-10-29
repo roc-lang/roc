@@ -62,6 +62,8 @@ const DevProgram = struct {
     descriptor: ?*hot_reload.ImageDescriptor,
     descriptor_offset: usize,
     local_refs: std.atomic.Value(usize),
+    /// Whether the image's static data holds pointers to its own code.
+    static_code_references: bool,
 
     fn deinit(self: *DevProgram) void {
         self.entrypoints = &.{};
@@ -123,7 +125,7 @@ fn viewRuntimeImage(
 
     const header: *const RunImage.Header = @ptrCast(@alignCast(shm.base_ptr + image_offset));
     if (header.image_size > image_bound) return error.InvalidDevRunImage;
-    return RunImage.viewMappedImage(header, shm.base_ptr, image_bound);
+    return RunImage.viewMappedImage(header, shm.base_ptr, image_bound, shm.total_size);
 }
 
 fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
@@ -152,6 +154,7 @@ fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
         if (retained_image) |image| image.descriptor else null,
     );
     errdefer destroyDevProgram(gpa, program);
+    if (retained_image) |image| acceptHotReloadProgram(program, image.descriptor);
 
     return .{
         .shm = shm,
@@ -210,9 +213,8 @@ const RelocationContext = struct {
         for (self.view.data_symbols) |symbol| {
             const symbol_name = self.view.dataSymbolName(symbol) catch return null;
             if (std.mem.eql(u8, symbol_name, name)) {
-                return @intFromPtr(self.view.data.ptr) +
-                    @as(usize, @intCast(symbol.data_offset)) +
-                    @as(usize, @intCast(symbol.symbol_offset));
+                const bytes = self.view.dataSymbolBytes(symbol) catch return null;
+                return @intFromPtr(bytes.ptr) + @as(usize, @intCast(symbol.symbol_offset));
             }
         }
 
@@ -323,6 +325,7 @@ fn loadDevProgram(
         .descriptor = descriptor,
         .descriptor_offset = descriptor_offset,
         .local_refs = std.atomic.Value(usize).init(1),
+        .static_code_references = view.static_code_references,
     };
 }
 
@@ -564,13 +567,7 @@ fn maxDevDataAlignment(view: *const RunImage.ProgramView) RunImage.ImageError!us
     var max_alignment: usize = 1;
     for (view.data_symbols) |symbol| {
         if (symbol.alignment == 0 or !std.math.isPowerOfTwo(symbol.alignment)) return error.InvalidDevRunImage;
-        if (symbol.data_offset > std.math.maxInt(usize) or symbol.len > std.math.maxInt(usize) or symbol.symbol_offset > std.math.maxInt(usize)) {
-            return error.InvalidDevRunImage;
-        }
-        const data_offset: usize = @intCast(symbol.data_offset);
-        const len: usize = @intCast(symbol.len);
-        const symbol_offset: usize = @intCast(symbol.symbol_offset);
-        if (len > view.data.len or data_offset > view.data.len - len or symbol_offset > len) return error.InvalidDevRunImage;
+        _ = try view.dataSymbolBytes(symbol);
         max_alignment = @max(max_alignment, symbol.alignment);
     }
     return max_alignment;
@@ -665,6 +662,15 @@ fn executeDevEntrypoint(
     const func: *const fn (*anyopaque, ?*anyopaque) callconv(.c) void =
         @ptrCast(@alignCast(program.code.ptr + entry_offset));
     func(ret, arg_ptr);
+}
+
+/// Accept a loaded hot-reload image before any of its code runs. From then on
+/// values the host keeps may point into its static data. Static data that
+/// points at the image's own code is never dropped, so it holds a reference to
+/// the image for the rest of the session.
+fn acceptHotReloadProgram(program: *DevProgram, descriptor: *hot_reload.ImageDescriptor) void {
+    hot_reload.markDescriptorAccepted(descriptor);
+    if (program.static_code_references) acquireDevProgramRef(program);
 }
 
 fn devProgramContainsCodeAddress(program: *const DevProgram, address: usize) bool {
@@ -804,6 +810,7 @@ fn refreshRuntimeProgramIfNeeded(state: *RuntimeState) void {
             return;
         };
 
+        acceptHotReloadProgram(next_program, retained_image.descriptor);
         const old_program = state.program;
         state.program = next_program;
         state.retired_programs.appendAssumeCapacity(old_program);
@@ -920,6 +927,8 @@ test "loaded dev program borrows direct shared image metadata" {
         .{ .ordinal = 0, .code_offset = 0 },
     };
 
+    var plan = try RunImage.StaticDataPool.Plan.init(std.testing.allocator, &.{}, false);
+    defer plan.deinit();
     const header = try RunImage.writeToSharedMemory(
         std.testing.allocator,
         shm.allocator(),
@@ -931,8 +940,9 @@ test "loaded dev program borrows direct shared image metadata" {
         &.{},
         &.{},
         &.{},
+        &plan,
     );
-    const view = try RunImage.viewMappedImage(header, shm.base_ptr, @intCast(header.image_size));
+    const view = try RunImage.viewMappedImage(header, shm.base_ptr, @intCast(header.image_size), shm.total_size);
 
     var program = try loadDevProgram(std.testing.allocator, &view, 0, hot_reload.invalid_descriptor_offset, null);
     defer program.deinit();
@@ -984,6 +994,8 @@ test "data relocations patch data pointers" {
         .data = &data,
         .data_symbols = &data_symbols,
         .page_size = 4096,
+        .mapping = &.{},
+        .static_code_references = false,
     };
     const relocation_context = RelocationContext{
         .view = &view,
@@ -1027,6 +1039,8 @@ test "function-pointer data relocations patch generated Roc code pointers" {
         .data = &data,
         .data_symbols = &.{},
         .page_size = 4096,
+        .mapping = &.{},
+        .static_code_references = false,
     };
     const relocation_context = RelocationContext{
         .view = &view,

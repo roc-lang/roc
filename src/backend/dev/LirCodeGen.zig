@@ -555,8 +555,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Region starts of procedures spliced from object-cache entries, by
         /// identity; a second pack holding the same procedure splices nothing.
         spliced_proc_starts: std.AutoHashMap(lir.ProcIdentity, usize),
-        /// The source location each procedure placed from an artifact set
-        /// carries (`ProcArtifact.Artifact.loc`), in this program's
+        /// The source location each procedure placed from an excerpt set
+        /// carries (`CodeExcerpt.Excerpt.loc`), in this program's
         /// source-file domain, by identity.
         assembled_proc_locs: std.AutoHashMapUnmanaged(lir.ProcIdentity, base.SourceLoc) = .empty,
 
@@ -824,7 +824,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Every call or address literal that targets the buffer itself is
         /// logged with one of these, so a procedure's bytes can be lifted out
         /// of the buffer and placed in another one with its references
-        /// re-resolved (see `ProcArtifact.zig`).
+        /// re-resolved (see `CodeExcerpt.zig`).
         pub const CodeRefTarget = union(enum) {
             proc: lir.LIR.LirProcSpecId,
             /// Encoded RC helper key (`RcHelperVariant.encode`).
@@ -869,6 +869,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// One contiguous range of the code buffer with a known producer.
         pub const CodeRegion = struct {
+            payload: ?@import("CodeExcerpt.zig").AssembledPayload = null,
             start: usize,
             end: usize,
             /// Offset from `start` that references to this region resolve to.
@@ -878,7 +879,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Frame metadata carried with an assembled region so its unwind
         /// record can be re-recorded where it lands.
-        pub const AssembledFrame = @import("ProcArtifact.zig").Frame;
+        pub const AssembledFrame = @import("CodeExcerpt.zig").Frame;
 
         /// Tracks position of a BL/CALL to a compiled lambda proc.
         /// Used to re-patch relative offsets after deferred-prologue body shifts.
@@ -22350,6 +22351,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Every range of the code buffer with its producer, in emission order.
+        /// Assembly copies canonical bytes and changes only relocation sites.
+        /// The source set owns this borrow until extraction retains its owner.
+        pub fn retainAssembledPayload(self: *Self, start: usize, payload: @import("CodeExcerpt.zig").AssembledPayload) void {
+            const region = &self.code_regions.items[self.code_regions.items.len - 1];
+            std.debug.assert(region.start == start and region.end - region.start == payload.code.len);
+            region.payload = payload;
+        }
+
         pub fn codeRegions(self: *const Self) []const CodeRegion {
             return self.code_regions.items;
         }
@@ -22456,7 +22465,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (!gop.found_existing) gop.value_ptr.* = entry;
         }
 
-        /// Remember the source location a procedure placed from an artifact
+        /// Remember the source location a procedure placed from an excerpt
         /// set carries; the first placement of an identity wins, as for its
         /// code.
         pub fn registerAssembledProcLoc(self: *Self, identity: lir.ProcIdentity, loc: base.SourceLoc) Allocator.Error!void {
@@ -22464,14 +22473,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (!gop.found_existing) gop.value_ptr.* = loc;
         }
 
-        /// The source location a procedure placed from an artifact set
+        /// The source location a procedure placed from an excerpt set
         /// carries, when one was placed.
         pub fn assembledProcLoc(self: *const Self, identity: lir.ProcIdentity) ?base.SourceLoc {
             return self.assembled_proc_locs.get(identity);
         }
 
         /// The queue owns helper names through the generator's symbol table;
-        /// callers may destroy the source artifact immediately after append.
+        /// callers may destroy the source excerpt immediately after append.
         pub fn queueAssembledSymbolicRef(self: *Self, reference: anytype) Allocator.Error!void {
             var owned = SymbolicReference{
                 .site = reference.site,
@@ -22653,12 +22662,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Detached stubs belong to placement. Embedded stubs stay with their
         /// body's branch so a large body never loses its reachable reservation.
-        pub fn artifactRelocations(self: *Self, allocator: Allocator) Allocator.Error![]Relocation {
+        pub fn excerptRelocations(self: *Self, allocator: Allocator) Allocator.Error![]Relocation {
             const relocations = try allocator.dupe(Relocation, self.getRelocations());
             if (comptime target.toCpuArch() == .aarch64) {
                 for (self.codegen.extern_stubs.items) |stub| {
                     const stub_start = relocations[stub.page_relocation].linked_data.offset;
-                    if (self.artifactContainsExternStub(stub.call, stub_start)) continue;
+                    if (self.excerptContainsExternStub(stub.call, stub_start)) continue;
                     relocations[stub.original_relocation] = .{ .linked_function = .{
                         .offset = @intCast(stub.call),
                         .symbol = stub.symbol,
@@ -22671,7 +22680,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return relocations;
         }
 
-        fn artifactContainsExternStub(self: *const Self, call: usize, stub_start: u64) bool {
+        fn excerptContainsExternStub(self: *const Self, call: usize, stub_start: u64) bool {
             for (self.code_regions.items) |region| {
                 if (region.kind == .branch_island) continue;
                 if (call >= region.start and call < region.end and
@@ -22682,11 +22691,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Remove placement-specific stub displacements using producer records.
         /// Clear the placement-specific displacement of a reference at
-        /// `site` in an artifact's `bytes`, and of the in-body veneer it
+        /// `site` in an excerpt's `bytes`, and of the in-body veneer it
         /// goes through, as if it named itself. Placement patches every
-        /// reference again, so an artifact's bytes are then the same however
+        /// reference again, so an excerpt's bytes are then the same however
         /// the buffer it was lifted from was laid out.
-        pub fn normalizeArtifactRefSite(bytes: []u8, site: usize, form: CodeRefForm, veneer: ?usize) void {
+        pub fn normalizeExcerptRefSite(bytes: []u8, site: usize, form: CodeRefForm, veneer: ?usize) void {
             if (comptime target.toCpuArch() == .aarch64) {
                 const EmitT = aarch64.Emit(target);
                 switch (form) {
@@ -22722,7 +22731,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (words, 0..) |word, i| std.mem.writeInt(u32, bytes[loc + i * 4 ..][0..4], word, .little);
         }
 
-        pub fn normalizeArtifactCode(self: *const Self, start: usize, bytes: []u8) void {
+        pub fn normalizeExcerptCode(self: *const Self, start: usize, bytes: []u8) void {
             if (comptime target.toCpuArch() == .aarch64) {
                 for (self.codegen.extern_stubs.items) |stub| {
                     if (stub.call < start or stub.call >= start + bytes.len) continue;
@@ -25271,8 +25280,8 @@ test "independent fragment symbolic calls resolve after all procedures are place
     }
 }
 
-test "AArch64 finalized artifacts preserve external calls across changed placement" {
-    const Artifact = @import("ProcArtifact.zig");
+test "AArch64 finalized excerpts preserve external calls across changed placement" {
+    const Excerpt = @import("CodeExcerpt.zig");
     const allocator = std.testing.allocator;
     const CG = LirCodeGen(.arm64linux);
     var store = LirStore.init(allocator);
@@ -25283,7 +25292,7 @@ test "AArch64 finalized artifacts preserve external calls across changed placeme
         var original = try CG.init(allocator, &store, &layouts.layout_store, .{}, .default);
         defer original.deinit();
         original.codegen.branch_reach_limit = 4096;
-        const symbol = try original.internSymbolName("artifact_external_target", .shared);
+        const symbol = try original.internSymbolName("excerpt_external_target", .shared);
         while (original.codegen.currentOffset() < 4096) try original.codegen.emit.buf.appendSlice(allocator, &.{ 0x1f, 0x20, 0x03, 0xd5 });
         const call_offset = original.codegen.currentOffset();
         try original.codegen.emitExternCall(symbol);
@@ -25306,20 +25315,20 @@ test "AArch64 finalized artifacts preserve external calls across changed placeme
         });
         try original.finishImage();
         try std.testing.expectEqual(@as(usize, 1), original.codegen.extern_stubs.items.len);
-        var set = try Artifact.extract(CG, allocator, &original, &.{}, &layouts.layout_store, &.{}, &.{}, &.{});
+        var set = try Excerpt.extract(CG, allocator, &original, &.{}, &layouts.layout_store, &.{}, &.{}, &.{});
         defer set.deinit();
-        try std.testing.expectEqual(@as(usize, 1), set.artifacts.len);
-        const artifact = set.artifacts[0];
-        try std.testing.expectEqual(@as(usize, if (embedded) 2 else 1), artifact.relocations.len);
-        try std.testing.expectEqualStrings("artifact_external_target", artifact.relocations[0].name);
+        try std.testing.expectEqual(@as(usize, 1), set.excerpts.len);
+        const excerpt = set.excerpts[0];
+        try std.testing.expectEqual(@as(usize, if (embedded) 2 else 1), excerpt.relocations.len);
+        try std.testing.expectEqualStrings("excerpt_external_target", excerpt.relocations[0].name);
         if (embedded) {
-            try std.testing.expectEqual(.page21, artifact.relocations[0].kind.data);
-            try std.testing.expectEqual(.pageoff12, artifact.relocations[1].kind.data);
-            try std.testing.expectEqualSlices(u8, original.getGeneratedCode()[call_offset..][0..4], artifact.code[call_offset..][0..4]);
+            try std.testing.expectEqual(.page21, excerpt.relocations[0].kind.data);
+            try std.testing.expectEqual(.pageoff12, excerpt.relocations[1].kind.data);
+            try std.testing.expectEqualSlices(u8, original.getGeneratedCode()[call_offset..][0..4], excerpt.code[call_offset..][0..4]);
         } else {
-            try std.testing.expect(artifact.relocations[0].kind == .function);
-            try std.testing.expectEqual(@as(u32, @intCast(call_offset)), artifact.relocations[0].offset);
-            try std.testing.expectEqual(@as(u32, 0x94000000), std.mem.readInt(u32, artifact.code[call_offset..][0..4], .little));
+            try std.testing.expect(excerpt.relocations[0].kind == .function);
+            try std.testing.expectEqual(@as(u32, @intCast(call_offset)), excerpt.relocations[0].offset);
+            try std.testing.expectEqual(@as(u32, 0x94000000), std.mem.readInt(u32, excerpt.code[call_offset..][0..4], .little));
         }
 
         var placed = try CG.init(allocator, &store, &layouts.layout_store, .{}, .default);
@@ -25327,17 +25336,17 @@ test "AArch64 finalized artifacts preserve external calls across changed placeme
         placed.codegen.branch_reach_limit = 4096;
         const prefix = @as([512]u8, @splat(0));
         _ = try placed.appendAssembledRegion(&prefix, .{ .message_pool_run = 0 }, 0, null);
-        var helpers = Artifact.HelperKeys.init(allocator);
+        var helpers = Excerpt.HelperKeys.init(allocator);
         defer helpers.deinit();
-        try Artifact.assemble(CG, allocator, &placed, &set, &.{}, &helpers);
+        try Excerpt.assemble(CG, allocator, &placed, &set, &.{}, &helpers);
         try placed.finishImage();
         if (embedded) {
             try std.testing.expectEqual(@as(usize, 0), placed.codegen.extern_stubs.items.len);
             const page = placed.getRelocations()[0].linked_data;
             const pageoff = placed.getRelocations()[1].linked_data;
-            try std.testing.expectEqual(prefix.len + artifact.relocations[0].offset, page.offset);
+            try std.testing.expectEqual(prefix.len + excerpt.relocations[0].offset, page.offset);
             try std.testing.expectEqual(page.offset + 4, pageoff.offset);
-            try std.testing.expectEqualStrings("artifact_external_target", placed.symbolName(page.symbol));
+            try std.testing.expectEqualStrings("excerpt_external_target", placed.symbolName(page.symbol));
             const moved_call = prefix.len + call_offset;
             const instruction = std.mem.readInt(u32, placed.getGeneratedCode()[moved_call..][0..4], .little);
             try std.testing.expectEqual(page.offset, moved_call + (instruction & 0x03ffffff) * 4);
@@ -25348,7 +25357,7 @@ test "AArch64 finalized artifacts preserve external calls across changed placeme
         try std.testing.expectEqual(prefix.len + call_offset, stub.call);
         const page = placed.getRelocations()[stub.page_relocation].linked_data;
         const pageoff = placed.getRelocations()[stub.page_relocation + 1].linked_data;
-        try std.testing.expectEqualStrings("artifact_external_target", placed.symbolName(page.symbol));
+        try std.testing.expectEqualStrings("excerpt_external_target", placed.symbolName(page.symbol));
         try std.testing.expectEqual(page.symbol, pageoff.symbol);
         try std.testing.expectEqual(page.offset + 4, pageoff.offset);
         const instruction = std.mem.readInt(u32, placed.getGeneratedCode()[stub.call..][0..4], .little);

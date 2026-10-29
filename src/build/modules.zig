@@ -373,6 +373,7 @@ pub const ModuleType = enum {
             // compiler.
             .value_rules => .{
                 .root = "src/postcheck/value_rules/mod.zig",
+                .deps = &.{.builtins},
                 .tests = .{ .unit = .{ .aggregators = &.{"value rules declarations are referenced"} } },
             },
             // The Boxy runtime: descriptors, composition, and walkers. It must

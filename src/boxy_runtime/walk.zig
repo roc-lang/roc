@@ -250,6 +250,8 @@ const DecrefWalker = struct {
 /// releases its contents first: a list's elements, a box's payload, or a
 /// function's capture (through its `on_drop`).
 pub fn decref(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) void {
+    // Releasing a function's capture re-enters here through its `on_drop`.
+    builtins.stack_guard.check();
     if (!desc.flags.contains_refcounted) return;
     var walker: DecrefWalker = .{ .ops = ops, .element_desc = desc };
     defer walker.stack.deinit(ops);
@@ -512,6 +514,8 @@ fn scalarsEqual(scalar: desc_mod.Scalar, lhs: [*]const u8, rhs: [*]const u8, ops
 /// Structural equality of two values of the type `desc` describes, honoring
 /// nominal `is_eq` overrides.
 pub fn eq(desc: *const TypeDesc, lhs: [*]u8, rhs: [*]u8, ops: *RocOps) bool {
+    // A custom `is_eq` can compare its own components through here.
+    builtins.stack_guard.check();
     const ctx: EqCtx = .{ .ops = ops };
     return EqCtx.Eval.eq(ctx, .at(desc, lhs), .at(desc, rhs)) catch |err| switch (err) {};
 }
@@ -619,6 +623,8 @@ fn hash128(hasher: u64, domain: hash_mod.HasherDomain, ptr: [*]const u8) u64 {
 /// Feed a value of the type `desc` describes into the `Hasher` state
 /// `hasher`, honoring nominal `to_hash` overrides.
 pub fn hash(desc: *const TypeDesc, hasher: u64, ptr: [*]u8, ops: *RocOps) u64 {
+    // A custom `to_hash` can hash its own components through here.
+    builtins.stack_guard.check();
     const ctx: HashCtx = .{ .ops = ops };
     return HashCtx.Eval.hash(ctx, .at(desc, ptr), hasher) catch |err| switch (err) {};
 }
@@ -783,6 +789,8 @@ fn intText(comptime T: type, buffer: []u8, ptr: [*]const u8) []const u8 {
 /// What `Str.inspect` renders for a value of the type `desc` describes,
 /// honoring nominal `to_inspect` overrides.
 pub fn inspect(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) RocStr {
+    // A custom `to_inspect` can inspect its own components through here.
+    builtins.stack_guard.check();
     const ctx: InspectCtx = .{ .ops = ops };
     const Spec = InspectCtx.Spec;
     var out: Output = .{};

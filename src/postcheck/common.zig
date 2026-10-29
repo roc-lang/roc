@@ -454,9 +454,15 @@ pub const LiteralRootReuse = union(enum) {
 /// entry adopts as fixed.
 pub const SpecCacheHit = struct {
     identity: [32]u8,
+    /// The producer's tail-drive summary for this procedure's native body.
+    may_leave_pending: bool = false,
+    /// Producer-authored iterator normalization scope, part of source identity.
+    iterator_fusion_scope: bool = false,
     /// The entry is a linked object reached through its C-ABI entry rather
     /// than spliced code (`LIR.LirProcSpec.c_abi_entry`).
     c_abi_entry: bool = false,
+    /// Producer proved that the complete closure needs no expect instrumentation.
+    test_compatible: bool = false,
     /// Producer-owned demand summary: the compile-time roots the procedure's
     /// code reads, through every procedure it reaches. A program that takes
     /// the hit demands them as if it had lowered the body (design.md
@@ -496,6 +502,8 @@ pub const DiscoverySettlement = struct {
 pub const SpecCacheTakes = enum {
     /// Dev code only: the consumer splices code and links nothing.
     dev_code,
+    /// Native tests require a closure with no uninstrumented expects.
+    test_dev_code,
     /// Dev code only, for a producer shared with a consumer whose code is
     /// linked: no dev entry whose code includes a procedure a linked object
     /// provides, since that consumer takes the procedure from the object.
@@ -510,7 +518,7 @@ pub const SpecCacheTakes = enum {
 
     pub fn takesLinkedObjects(self: SpecCacheTakes) bool {
         return switch (self) {
-            .dev_code, .dev_code_beside_linked_objects => false,
+            .dev_code, .test_dev_code, .dev_code_beside_linked_objects => false,
             .dev_code_and_linked_objects, .linked_objects => true,
         };
     }
@@ -521,7 +529,7 @@ pub const SpecCacheTakes = enum {
     /// program through a splice.
     pub fn refusesDevCodeOfLinkedProcs(self: SpecCacheTakes) bool {
         return switch (self) {
-            .dev_code, .linked_objects => false,
+            .dev_code, .test_dev_code, .linked_objects => false,
             .dev_code_beside_linked_objects, .dev_code_and_linked_objects => true,
         };
     }
@@ -568,10 +576,21 @@ pub fn sortProgramModules(identities: [][32]u8) ProgramModules {
     return identities[0..kept];
 }
 
+/// Optional immutable interface records. Reads may run on specialization
+/// workers; publication is staged by the coordinator after accepting a result.
+/// Loaded bytes belong to the requesting allocator.
+pub const InterfaceSummaryCache = struct {
+    context: *anyopaque,
+    load: *const fn (*anyopaque, std.mem.Allocator, [32]u8, [32]u8) std.mem.Allocator.Error!?[]u8,
+    record: *const fn (*anyopaque, [32]u8, [32]u8, []const u8) std.mem.Allocator.Error!void,
+};
+
 /// The object cache's answer for a specialization key, asked when Monotype
 /// reserves the specialization and before its body exists. The consumer that
 /// owns the cache supplies the context and the lookup.
+/// Also supplies optional earlier specialization-interface summaries.
 pub const SpecCacheLookup = struct {
+    interfaces: ?InterfaceSummaryCache = null,
     context: *anyopaque,
     /// `takes`: which entries can serve the asking consumer; `modules`: the
     /// asking program's modules.

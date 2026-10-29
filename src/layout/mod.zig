@@ -70,6 +70,8 @@ pub const ScalarInfo = @import("layout.zig").ScalarInfo;
 // Per-target C-ABI parameter/return classification.
 pub const abi = @import("abi/mod.zig");
 pub const erased_call_abi = @import("erased_call_abi.zig");
+/// Digest of the binary contract a platform entrypoint shares with its host.
+pub const host_boundary_digest = @import("host_boundary_digest.zig");
 
 // The std-only shape arithmetic (alignment classes, struct and tag union
 // measuring) the layout store and the Boxy runtime share.
@@ -142,6 +144,7 @@ test "layout tests" {
     std.testing.refAllDecls(@import("rc_helper.zig"));
     std.testing.refAllDecls(@import("digest.zig"));
     std.testing.refAllDecls(@import("erased_call_abi.zig"));
+    std.testing.refAllDecls(@import("host_boundary_digest.zig"));
     std.testing.refAllDecls(@import("store.zig"));
     std.testing.refAllDecls(@import("abi/mod.zig"));
     std.testing.refAllDecls(@import("abi/aarch64.zig"));

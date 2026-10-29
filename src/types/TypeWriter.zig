@@ -1230,7 +1230,11 @@ fn RowTail(comptime kind: RowKind) type {
     };
 }
 
-fn appendRowEntries(self: *TypeWriter, comptime kind: RowKind, entries: RowEntries(kind)) std.mem.Allocator.Error!void {
+/// Append one row part's entries to the row gathered from `row_start`. A label
+/// already gathered from an outer part names the same field or tag (design.md
+/// "Row Union Normalization"), and the row means what it would mean with only
+/// the innermost occurrence, so that occurrence replaces the outer one.
+fn appendRowEntries(self: *TypeWriter, comptime kind: RowKind, entries: RowEntries(kind), row_start: usize) std.mem.Allocator.Error!void {
     const scratch = switch (kind) {
         .record => &self.scratch_record_fields,
         .tag_union => &self.scratch_tags,
@@ -1239,8 +1243,17 @@ fn appendRowEntries(self: *TypeWriter, comptime kind: RowKind, entries: RowEntri
         .record => self.types.getRecordFieldsSlice(entries),
         .tag_union => self.types.getTagsSlice(entries),
     };
+    const outer_end = scratch.items.len;
     try scratch.ensureUnusedCapacity(slice.len);
-    for (0..slice.len) |index| scratch.appendAssumeCapacity(slice.get(index));
+    for (0..slice.len) |index| {
+        const entry = slice.get(index);
+        for (scratch.items[row_start..outer_end]) |*outer| {
+            if (outer.name.eql(entry.name)) {
+                outer.* = entry;
+                break;
+            }
+        } else scratch.appendAssumeCapacity(entry);
+    }
 }
 
 /// Collect a row's entries and every entry its extension chain contributes,
@@ -1252,7 +1265,11 @@ fn gatherRow(
     initial_ext: Var,
     row_var: Var,
 ) std.mem.Allocator.Error!RowTail(kind) {
-    try self.appendRowEntries(kind, entries);
+    const row_start = switch (kind) {
+        .record => self.scratch_record_fields.items.len,
+        .tag_union => self.scratch_tags.items.len,
+    };
+    try self.appendRowEntries(kind, entries, row_start);
 
     var ext = initial_ext;
     self.ext_seen.clearRetainingCapacity();
@@ -1274,7 +1291,7 @@ fn gatherRow(
             .structure => |flat_type| switch (kind) {
                 .record => switch (flat_type) {
                     .record => |ext_record| {
-                        try self.appendRowEntries(.record, ext_record.fields);
+                        try self.appendRowEntries(.record, ext_record.fields, row_start);
                         ext = ext_record.ext;
                     },
                     .empty_record => return .empty_record,
@@ -1289,7 +1306,7 @@ fn gatherRow(
                 },
                 .tag_union => switch (flat_type) {
                     .tag_union => |ext_tag_union| {
-                        try self.appendRowEntries(.tag_union, ext_tag_union.tags);
+                        try self.appendRowEntries(.tag_union, ext_tag_union.tags, row_start);
                         ext = ext_tag_union.ext;
                     },
                     .empty_tag_union => return .empty_tag_union,

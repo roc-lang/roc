@@ -1865,6 +1865,9 @@ pub const LirProcSpec = struct {
     /// (`SpecComptimeReads.fnReads`); null for a procedure no Monotype
     /// function names.
     source_monotype_fn: ?u32 = null,
+    /// Checked defining module for an app-independent direct template offer.
+    /// Null keeps generated, nested, and app-dependent code program-scoped.
+    cache_provider_module: ?[32]u8 = null,
     /// Set on an `external` proc whose cache entry is a linked object rather
     /// than spliced code: callers reach it through its C-ABI entry
     /// (`ProcIdentity.writeCAbiEntryName`), classified from its argument and
@@ -1876,6 +1879,9 @@ pub const LirProcSpec = struct {
     /// `unless_caller_drives` statement: its entry records whether the
     /// erased-call runtime made the call.
     reads_caller_drives: bool = false,
+    /// Producer-owned tail-drive summary. Cached bodies retain this fact so
+    /// callers make a pending erased call before reading its result.
+    may_leave_pending: bool = false,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.
     tail_transform: TailTransform = .none,
     /// Set by ARC on every procedure that makes or receives a same-SCC tail

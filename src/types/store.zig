@@ -335,9 +335,29 @@ pub const Store = struct {
     /// rollback never has room to forget.
     static_dispatch_constraint_room: std.AutoHashMapUnmanaged(u32, u32) = .empty,
 
+    /// Relocate the self-contained type store and its explicit nominal lookup index.
+    pub fn rebindSourceReferences(store: *Store, mapper: anytype) @TypeOf(mapper.*).Error!void {
+        for (0..store.descs.backing.items.len) |i| {
+            var desc = store.descs.backing.items.get(i);
+            try rebindSourceReferenceValue(&desc.content, mapper);
+            store.descs.backing.items.set(i, desc);
+        }
+        for (store.nominal_decls.items.items) |*decl| try rebindSourceReferenceValue(decl, mapper);
+        for (store.nominal_decl_index.items.items) |*entry| entry.statement = try mapper.node(entry.origin_module, entry.statement);
+        const Entry = @TypeOf(store.nominal_decl_index.items.items[0]);
+        std.mem.sort(Entry, store.nominal_decl_index.items.items, {}, struct {
+            fn lessThan(_: void, a: Entry, b: Entry) bool {
+                return if (a.origin_module == b.origin_module) a.statement < b.statement else @backingInt(a.origin_module) < @backingInt(b.origin_module);
+            }
+        }.lessThan);
+        for (0..store.record_fields.items.len) |i| {
+            var field = store.record_fields.items.get(i);
+            try rebindSourceReferenceValue(&field, mapper);
+            store.record_fields.items.set(i, field);
+        }
+    }
+
     /// Init the unification table with default capacity.
-    /// For production use with source files, prefer initFromSourceLen() which
-    /// computes capacity based on source file size.
     pub fn init(gpa: Allocator) std.mem.Allocator.Error!Self {
         return try Self.initCapacity(gpa, 1024, 512);
     }
@@ -4448,4 +4468,41 @@ test "mayContainErrorState tracks error descriptors and invalid nominal declarat
     var copy = try errs.clone(gpa);
     defer copy.deinit();
     try std.testing.expect(copy.mayContainErrorState());
+}
+
+/// Translate source locators without changing a solved type relationship.
+pub fn rebindSourceReferenceValue(value: anytype, mapper: anytype) @TypeOf(mapper.*).Error!void {
+    const T = @typeInfo(@TypeOf(value)).pointer.child;
+    if (T == Alias) {
+        if (value.source_decl.present) value.source_decl.statement = @intCast(try mapper.node(value.origin_module, value.source_decl.statement));
+    } else if (T == NominalType or T == NominalDecl) {
+        if (value.source.present) value.source.statement = @intCast(try mapper.node(value.origin_module, value.source.statement));
+    } else if (T == types.DefaultId) {
+        value.expr_node = try mapper.node(value.origin_module, value.expr_node);
+    } else switch (@typeInfo(T)) {
+        .@"struct" => inline for (@typeInfo(T).@"struct".field_names) |field| try rebindSourceReferenceValue(&@field(value, field), mapper),
+        .@"union" => inline for (@typeInfo(T).@"union".field_names) |field| {
+            if (value.* == @field(std.meta.Tag(T), field)) try rebindSourceReferenceValue(&@field(value, field), mapper);
+        },
+        .optional => if (value.*) |*present| try rebindSourceReferenceValue(present, mapper),
+        .array => for (value) |*item| try rebindSourceReferenceValue(item, mapper),
+        .bool, .int, .float, .@"enum", .void => {},
+        .type,
+        .noreturn,
+        .pointer,
+        .error_union,
+        .error_set,
+        .@"fn",
+        .@"opaque",
+        .frame,
+        .@"anyframe",
+        .vector,
+        .enum_literal,
+        .comptime_int,
+        .comptime_float,
+        .undefined,
+        .null,
+        .spirv,
+        => @compileError("source-reference storage needs explicit relocation for " ++ @typeName(T)),
+    }
 }
