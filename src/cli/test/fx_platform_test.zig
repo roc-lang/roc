@@ -120,6 +120,8 @@ fn buildAndRunDevBackendApp(
     roc_file: []const u8,
     output_basename: []const u8,
     inspect_output: ?*const fn (std.mem.Allocator, []const u8) FxPlatformTestError!void,
+    /// Arguments `roc build` takes after `--opt=dev`.
+    extra_args: []const []const u8,
 ) FxPlatformTestError!std.process.RunResult {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -153,13 +155,12 @@ fn buildAndRunDevBackendApp(
     try env_map.put("ROC_CACHE_DIR", cache_path);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", zig_local_cache_path);
 
-    const build_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{
-        util.roc_binary_path,
-        "build",
-        "--opt=dev",
-        output_arg,
-        roc_file,
-    }, .{
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(allocator);
+    try argv.appendSlice(allocator, &.{ util.roc_binary_path, "build", "--opt=dev" });
+    try argv.appendSlice(allocator, extra_args);
+    try argv.appendSlice(allocator, &.{ output_arg, roc_file });
+    const build_result = try util.runChildWithTimeout(std.testing.io, allocator, argv.items, .{
         .env_map = &env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
@@ -289,6 +290,7 @@ fn expectDevRuntimeDivisionByZero() FxPlatformTestError!void {
         "test/fx/division_by_zero.roc",
         "fx_dev_division_by_zero",
         null,
+        &.{},
     );
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
@@ -561,6 +563,14 @@ test "fx platform direct run preserves RocOps after F32.abs before list allocati
 }
 
 test "provided static data exports are host-linkable readonly constants" {
+    try expectStaticDataHostConstants(&.{});
+}
+
+test "boxy provided static data exports are host-linkable readonly constants" {
+    try expectStaticDataHostConstants(&.{"--specialize=no"});
+}
+
+fn expectStaticDataHostConstants(extra_args: []const []const u8) FxPlatformTestError!void {
     const allocator = testing.allocator;
 
     const run_result = try buildAndRunDevBackendApp(
@@ -568,6 +578,7 @@ test "provided static data exports are host-linkable readonly constants" {
         "test/static-data-host/app.roc",
         "static_data_host_test",
         inspectStaticDataHostBinary,
+        extra_args,
     );
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
@@ -1557,6 +1568,7 @@ test "package consumes its app's exact platform API" {
         "test/fx/package_platform_dependency.roc",
         "package-platform-dependency",
         null,
+        &.{},
     );
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);

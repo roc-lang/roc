@@ -139,6 +139,8 @@ pub fn listElemAddr(elem: *const TypeDesc, roc_list: *const RocList, index: u64)
 /// The payload of a box whose payload `desc` describes. A box of a
 /// zero-sized payload holds no allocation.
 pub fn boxPayloadAddr(desc: *const TypeDesc, box: *const usize) [*]u8 {
+    // A box of a function is the callable itself (`compose.box`).
+    if (desc.kind == .erased_callable) return @ptrCast(@constCast(box));
     const word = box.* & ~utils.DATA_PTR_TAG_MASK;
     if (desc.size == 0 or word == 0) return walk.zeroSizedPtr();
     return @ptrFromInt(word);
@@ -206,6 +208,12 @@ pub fn buildList(elem: *const TypeDesc, dst: *RocList, elems: []const [*]const u
 }
 
 pub fn buildBox(desc: *const TypeDesc, dst: *usize, payload: [*]const u8, ops: *RocOps) void {
+    // A box of a function is the callable itself (`compose.box`), which
+    // the box takes over.
+    if (desc.kind == .erased_callable) {
+        dst.* = @as(*align(1) const usize, @ptrCast(payload)).*;
+        return;
+    }
     if (desc.size == 0) {
         dst.* = 0;
         return;

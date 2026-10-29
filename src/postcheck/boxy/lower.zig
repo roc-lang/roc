@@ -98,6 +98,9 @@ pub const WorkerKey = union(enum) {
     root: u32,
     /// A worker of a generated codec family (`Codec.Piece`, by index).
     codec: u32,
+    /// The initializer of static data request `index`: it builds the
+    /// requested constant at its type, for static data materialization.
+    static_data: u32,
     /// The method of a dictionary whose checked evidence resolves its slot
     /// to a crash: a dispatch checking rejected, or one no value can reach
     /// (design.md "Static Dispatch In Monotype"). Calling it crashes.
@@ -150,6 +153,8 @@ pub const Worker = struct {
     queued: bool = false,
     /// For a root wrapper: the root request it wraps.
     root_request: ?checked.RootRequest = null,
+    /// For a static data initializer: the request it serves.
+    static_data_request: ?Common.StaticDataRequest = null,
     /// For a lambda worker: the checked captures of its closure expression,
     /// whose values follow it in the capture record before the outer
     /// worker's descriptors.
@@ -1233,6 +1238,34 @@ pub const Program = struct {
         return id;
     }
 
+    /// The initializer of static data request `index` (see
+    /// `WorkerKey.static_data`).
+    pub fn staticDataWorker(self: *Program, index: u32, request: Common.StaticDataRequest, module_index: ModuleIndex) Allocator.Error!WorkerId {
+        const key: WorkerKey = .{ .static_data = index };
+        if (self.worker_ids.get(key)) |existing| return existing;
+        const ret = try self.converter().convert(module_index, request.checked_type, .{ .module = module_index, .vars = &.{}, .bound = &.{} });
+        const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
+        const proc = try self.result.store.addProcSpec(.{
+            .name = self.result.store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.programLocal("boxy.static_data", @backingInt(id)),
+            .args = .empty(),
+            .ret_layout = .zst,
+        }, base.SourceLoc.none);
+        try self.workers.append(self.allocator, .{
+            .key = key,
+            .proc = proc,
+            .module = module_index,
+            .scheme_vars = &.{},
+            .dictionary_params = &.{},
+            .params = &.{},
+            .ret = ret,
+            .static_data_request = request,
+        });
+        try self.worker_ids.put(self.allocator, key, id);
+        try self.worklist.append(self.allocator, id);
+        return id;
+    }
+
     /// The wrapper of root request `index` (see `WorkerKey.root`).
     pub fn rootWorker(self: *Program, index: u32, request: checked.RootRequest, module_index: ModuleIndex) Allocator.Error!WorkerId {
         const key: WorkerKey = .{ .root = index };
@@ -1548,7 +1581,31 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         const ty = try program.converter().convert(program.modules.views.items[0].index, checked_ty, .{ .module = program.modules.views.items[0].index, .vars = &.{}, .bound = &.{} });
         _ = try program.layouts.layoutOf(ty);
     }
-    if (input.roots.static_data_requests.len != 0) invariant("static data requests are not yet lowered by Boxy");
+    // Each static data request is served by an initializer that builds the
+    // requested constant, which static data materialization evaluates.
+    if (input.roots.static_data_requests.len != 0) {
+        const root_module = program.modules.views.items[0].index;
+        const initializers = try allocator.alloc(WorkerId, input.roots.static_data_requests.len);
+        defer allocator.free(initializers);
+        for (input.roots.static_data_requests, initializers, 0..) |request, *initializer, index| {
+            initializer.* = try program.staticDataWorker(@intCast(index), request, root_module);
+        }
+        try program.drain();
+        for (input.roots.static_data_requests, initializers) |request, initializer| {
+            const worker = program.worker(initializer).*;
+            program.result.store.getProcSpecPtr(worker.proc).is_static_initializer = true;
+            const plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.result.const_plans.items.len));
+            try program.result.const_plans.append(allocator, .layout_only);
+            try program.result.requested_layouts.append(allocator, .{
+                .ty = program.module(root_module).types().rootKey(request.checked_type),
+                .checked_type = request.checked_type,
+                .const_locator = request.const_locator,
+                .layout_idx = try program.layouts.layoutOf(worker.ret),
+                .plan = plan,
+                .initializer = worker.proc,
+            });
+        }
+    }
 
     if (input.proc_debug_names) {
         for (program.workers.items) |worker| {

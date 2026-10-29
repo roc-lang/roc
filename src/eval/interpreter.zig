@@ -8737,6 +8737,11 @@ pub const Interpreter = struct {
             },
             .box_payload_addr => |b| {
                 const payload = try self.descAt(frame, b.desc);
+                // A box of a function is the callable itself.
+                if (payload.kind == .erased_callable) {
+                    try self.setComponentTarget(frame, stmt_id, target, try self.localBytes(frame, b.box));
+                    return;
+                }
                 // The box word lives in the box local's bytes, which a dynamic local
                 // holds by address.
                 const word = @as(*const usize, @ptrCast(@alignCast(try self.localBytes(frame, b.box)))).* & ~builtins.utils.DATA_PTR_TAG_MASK;
@@ -8851,7 +8856,11 @@ pub const Interpreter = struct {
             },
             .box => |b| {
                 const payload = try self.descAt(frame, b.desc);
-                const word: usize = if (payload.size == 0) 0 else blk: {
+                // A box of a function is the callable itself, which the box
+                // takes over.
+                const word: usize = if (payload.kind == .erased_callable)
+                    @as(*align(1) const usize, @ptrCast(try self.localBytes(frame, b.payload))).*
+                else if (payload.size == 0) 0 else blk: {
                     const data = try self.allocRocDataWithRc(payload.size, payload.alignment, payload.containsRefcounted());
                     @memcpy(data[0..payload.size], (try self.localBytes(frame, b.payload))[0..payload.size]);
                     break :blk @intFromPtr(data);

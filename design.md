@@ -14013,7 +14013,14 @@ generic application procedure), the wrapper supplies the static descriptors
 and dictionaries the relation's instantiation names. A hosted call from a
 generic body is a direct extern call at the hosted declaration's own type.
 `Box(function)` is the erased callable above; `RocBox(RocUnknown)` is opaque
-and is only retained, moved, returned, or shallow-dropped.
+and is only retained, moved, returned, or shallow-dropped. The erased callable
+is already an allocation of its own, so `Box(function)` has the callable's
+layout and descriptor: composing the descriptor of a box whose payload
+describes an erased callable yields the payload's descriptor, boxing a
+callable is the callable, and a collapsed box's payload address is the box's
+own. A provided data export is built by an initializer worker of its own
+(`WorkerKey.static_data`) that restores the stored constant at its checked
+type, which static data materialization evaluates as it does under `.lss`.
 
 #### Runtime
 

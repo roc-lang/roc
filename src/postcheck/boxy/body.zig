@@ -1039,6 +1039,7 @@ pub const Builder = struct {
             .structural => |method| return try self.lowerStructuralMethod(method),
             .structural_map => |map| return try self.lowerStructuralMap(map),
             .root => return try self.lowerRootWrapper(),
+            .static_data => return try self.lowerStaticDataInitializer(),
             .default => |key| return try self.lowerDefaultBody(key.expr),
             .codec => |piece| return try Codec.lowerPiece(self, piece),
             .crash_dictionary => |kind| return try self.lowerCrashDictionary(kind),
@@ -1735,6 +1736,34 @@ pub const Builder = struct {
     /// A root's host-visible wrapper: its checked arguments, passed to the
     /// root's target with the hidden arguments the root's instantiation
     /// names, or to the function value compile-time evaluation stored.
+    /// A static data initializer's body: the requested stored constant,
+    /// restored at its type.
+    pub fn lowerStaticDataInitializer(self: *Builder) Allocator.Error!void {
+        const worker = self.currentWorker().*;
+        const request = worker.static_data_request.?;
+        self.entry_hole = try self.newHole();
+        const entry = self.entry_hole;
+        self.var_descs = &.{};
+        self.dict_locals = &.{};
+        const ret_layout = try self.program.layouts.layoutOf(worker.ret);
+        const body_start = try self.newHole();
+        self.hole = body_start;
+        const owner = self.program.moduleByKey(checked.constModuleId(request.const_locator));
+        try self.tasks.append(self.allocator, .ret);
+        switch (owner.view.const_templates.get(request.const_locator).state) {
+            .stored_const => |stored| try self.tasks.append(self.allocator, .{ .restore = .{ .source = .{ .module = owner.index }, .node = request.node orelse stored.node, .ty = worker.ret } }),
+            .unimplemented => |unimplemented| {
+                self.region = unimplemented.region;
+                try self.crashValue(@import("../common.zig").unimplemented_declaration_crash, worker.ret);
+            },
+            // A provided data export is a closed constant, which
+            // compile-time evaluation stores before any runtime lowering.
+            .eval_template, .reserved => invariant("a static data request names a constant compile-time evaluation did not store"),
+        }
+        try self.run();
+        try self.finishProc(entry, body_start, &.{}, ret_layout);
+    }
+
     pub fn lowerRootWrapper(self: *Builder) Allocator.Error!void {
         const worker = self.currentWorker().*;
         const request = worker.root_request.?;
@@ -1754,7 +1783,11 @@ pub const Builder = struct {
             .{ .worker = try self.program.templateRefWorker(template) }
         else if (request.procedure_binding) |binding| switch (self.view.view.top_level_procedure_bindings.bindings.items[@backingInt(binding)].body) {
             .direct_template => |direct| .{ .worker = try self.program.templateRefWorker(Program.directTemplate(direct.template)) },
-            .callable_eval_template => |template| .{ .callable_eval = .{ .module = self.module, .template = template } },
+            // An exact procedure alias calls what it names.
+            .callable_eval_template => |template| if (self.view.view.callable_eval_templates.templates[@backingInt(template)].forwarded_lookup != null)
+                try self.bindingCallee(self.forwardedBinding(self.module, template))
+            else
+                .{ .callable_eval = .{ .module = self.module, .template = template } },
             .checked_error => invariant("a root names a rejected procedure binding"),
         } else if (request.procedure_use) |use|
             try self.procedureUseCallee(use)
@@ -4166,7 +4199,13 @@ pub const Builder = struct {
     };
 
     pub fn procedureUseCallee(self: *Builder, use: checked.ProcedureUseTemplate) Allocator.Error!Callee {
-        var binding = use.binding;
+        return try self.bindingCallee(use.binding);
+    }
+
+    /// What a procedure binding calls, through the exact procedure aliases
+    /// it forwards.
+    pub fn bindingCallee(self: *Builder, start: @FieldType(checked.ProcedureUseTemplate, "binding")) Allocator.Error!Callee {
+        var binding = start;
         while (true) {
             const resolved = self.program.procedureBinding(binding);
             switch (resolved.body) {
@@ -4175,28 +4214,35 @@ pub const Builder = struct {
                 .callable_eval_template => |template_id| {
                     const owner = self.program.module(resolved.module);
                     const template = owner.view.callable_eval_templates.templates[@backingInt(template_id)];
-                    const forwarded = template.forwarded_lookup orelse
-                        return .{ .callable_eval = .{ .module = resolved.module, .template = template_id } };
-                    // An exact procedure alias calls what it names.
-                    const ref_id = owner.view.resolved_value_refs.by_checked_expr[@backingInt(forwarded)].get() orelse
-                        invariant("a procedure alias's lookup has no resolved reference");
-                    var ref = owner.view.resolved_value_refs.records[@backingInt(ref_id)].ref;
-                    while (true) switch (ref) {
-                        .local_proc => |local| {
-                            if (!local.is_alias) invariant("a top-level procedure alias names a top-level procedure, as checking forwards only those");
-                            const final = local.alias_target orelse invariant("a callable alias has no published target");
-                            ref = owner.view.resolved_value_refs.records[@backingInt(final)].ref;
-                        },
-                        else => break,
-                    };
-                    binding = switch (ref) {
-                        .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |next| next.binding,
-                        .platform_required_proc => |required| required.procedure.binding,
-                        else => invariant("a procedure alias forwards only to a procedure, as checking requires"),
-                    };
+                    if (template.forwarded_lookup == null) return .{ .callable_eval = .{ .module = resolved.module, .template = template_id } };
+                    binding = self.forwardedBinding(resolved.module, template_id);
                 },
             }
         }
+    }
+
+    /// The procedure binding that the exact procedure alias whose
+    /// callable-eval template is `template_id` of `module` forwards to.
+    fn forwardedBinding(self: *Builder, module: types.ModuleIndex, template_id: checked.CallableEvalTemplateId) @FieldType(checked.ProcedureUseTemplate, "binding") {
+        const owner = self.program.module(module);
+        const template = owner.view.callable_eval_templates.templates[@backingInt(template_id)];
+        const forwarded = template.forwarded_lookup orelse invariant("a callable-eval template that is no alias forwards nothing");
+        const ref_id = owner.view.resolved_value_refs.by_checked_expr[@backingInt(forwarded)].get() orelse
+            invariant("a procedure alias's lookup has no resolved reference");
+        var ref = owner.view.resolved_value_refs.records[@backingInt(ref_id)].ref;
+        while (true) switch (ref) {
+            .local_proc => |local| {
+                if (!local.is_alias) invariant("a top-level procedure alias names a top-level procedure, as checking forwards only those");
+                const final = local.alias_target orelse invariant("a callable alias has no published target");
+                ref = owner.view.resolved_value_refs.records[@backingInt(final)].ref;
+            },
+            else => break,
+        };
+        return switch (ref) {
+            .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |next| next.binding,
+            .platform_required_proc => |required| required.procedure.binding,
+            else => invariant("a procedure alias forwards only to a procedure, as checking requires"),
+        };
     }
 
     pub fn lowerCall(self: *Builder, expr_id: CheckedExprId, call: @FieldType(checked.CheckedExprData, "call")) Allocator.Error!void {
@@ -5235,6 +5281,13 @@ pub const Builder = struct {
             try self.emitTerminal(.{ .crash = .{ .msg = .{ .local = args[0] } } });
             return try self.pushValue(try self.localOf(result_ty, .frame));
         }
+        // `Box(function)` is the function's erased callable: boxing or
+        // unboxing one is the callable itself.
+        switch (op) {
+            .box_box => if (store.get(result_ty) == .box and store.get(store.get(result_ty).box) == .function) return try self.pushValue(args[0]),
+            .box_unbox, .box_unbox_borrowed => if (store.get(result_ty) == .function) return try self.pushValue(args[0]),
+            else => {},
+        }
         if (!open) {
             const target = try self.localOf(result_ty, .frame);
             // Source arithmetic commits to its operand type's behavior.
@@ -5257,8 +5310,11 @@ pub const Builder = struct {
             },
             else => {},
         }
+        // Every Builtin low-level whose operands or result can mention a type
+        // variable is a list or box operation; every other one is declared
+        // at closed types (`BuiltinLowLevel`).
         if (!std.mem.startsWith(u8, @tagName(op), "list_")) {
-            invariantFmt("low-level {s} over values of open types is not yet lowered by Boxy", .{@tagName(op)});
+            invariantFmt("low-level {s} over values of open types, which Builtin declares only at closed types", .{@tagName(op)});
         }
         // The element type of the operation's list: its first List operand's,
         // else its List result's.

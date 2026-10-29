@@ -338,8 +338,10 @@ pub fn list(cache: *Cache, ops: *RocOps, elem: *const TypeDesc) *const TypeDesc 
 }
 
 /// `Box(payload)`. A box of a zero-sized payload is one word and holds no
-/// allocation.
+/// allocation. A box of a function is the function's erased callable, which
+/// is an allocation of its own.
 pub fn box(cache: *Cache, ops: *RocOps, payload: *const TypeDesc) *const TypeDesc {
+    if (payload.kind == .erased_callable) return payload;
     return container(cache, ops, .box, payload, payload.size != 0);
 }
 
