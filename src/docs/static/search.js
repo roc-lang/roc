@@ -4,10 +4,12 @@ const setupSearch = () => {
   let searchForm = document.getElementById("module-search-form");
   let topSearchResultListItem = undefined;
 
-  // Hide the results whenever anyone clicks outside the search results,
-  // or on a specific search result.
+  // Keep results and their scroll position when opening a link in another tab.
+  // Ordinary result clicks and clicks outside the search still dismiss them.
   window.addEventListener("click", function (event) {
-    if (!searchForm?.contains(event.target) || event.target.closest("#search-type-ahead a")) {
+    const result = event.target.closest("#search-type-ahead a");
+    if (result && (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)) return;
+    if (!searchForm?.contains(event.target) || result) {
       searchTypeAhead.classList.add("hidden");
     }
   });
