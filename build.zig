@@ -5595,7 +5595,11 @@ fn addBoxyRuntimeObject(
             .optimize = optimize,
             .strip = program_object_strip,
             .omit_frame_pointer = program_object_omit_frame_pointer,
-            .pic = true,
+            // Native runtime objects can participate in shared-library links.
+            // Wasm uses direct data-symbol relocations, which is how the
+            // stack-checked twin's `__stack_low` bound reaches the stack room
+            // analysis (`StackRoom.fillCheckRooms`) as a relocated `i32.const`.
+            .pic = target.result.cpu.arch != .wasm32,
         }),
     });
     obj.root_module.addImport("builtins", builtins_module);
