@@ -290,34 +290,100 @@ pub const ConstFnCallableInstantiation = struct {
 pub const ConstFnStructuralEvidence = struct {
     callable_contracts: u32 = 0,
     derivation: static_dispatch.StructuralDerivation,
-    checked: ?struct {
-        /// The module that recorded the edge. Restoration reads the edge's
-        /// checked types and contract from it; a codec edge's identity is its
-        /// contract's content instead, so equal contracts recorded by
-        /// different modules are one specialization.
-        view: names.CheckedModuleDigest,
-        dispatcher_key: names.CanonicalTypeKey,
-        dispatcher_ty: checked_ids.CheckedTypeId,
-        callable_key: names.CanonicalTypeKey,
-        callable_ty: checked_ids.CheckedTypeId,
-        generated_codec_derivation: ?static_dispatch.GeneratedCodecDerivationId,
-        generated_codec_content: ?static_dispatch.GeneratedCodecContentDigest,
-    } = null,
+    checked: ?CheckedStructuralEdge = null,
 
     pub fn identityEql(left: ConstFnStructuralEvidence, right: ConstFnStructuralEvidence) bool {
         if (left.callable_contracts != right.callable_contracts) return false;
         if (!std.meta.eql(left.derivation, right.derivation) or (left.checked == null) != (right.checked == null)) return false;
         const a = left.checked orelse return true;
         const b = right.checked.?;
-        if ((a.generated_codec_content == null) != (b.generated_codec_content == null)) return false;
-        const same_origin = if (a.generated_codec_content) |content|
-            std.meta.eql(content, b.generated_codec_content.?)
+        const a_content = a.codecContent();
+        const b_content = b.codecContent();
+        if ((a_content == null) != (b_content == null)) return false;
+        const same_origin = if (a_content) |content|
+            std.meta.eql(content, b_content.?)
         else
-            std.meta.eql(a.view, b.view);
+            std.meta.eql(a.recorded.view, b.recorded.view);
         return same_origin and
-            std.meta.eql(a.dispatcher_key, b.dispatcher_key) and
-            std.meta.eql(a.callable_key, b.callable_key);
+            std.meta.eql(a.dispatcherKey(), b.dispatcherKey()) and
+            std.meta.eql(a.callableKey(), b.callableKey());
     }
+
+    /// The form a `ConstStore` keeps. A codec edge names its contract by the
+    /// contract's identity across checked modules, never by the module that
+    /// recorded it: a specialization shared by equal contracts keeps the
+    /// first recording module's edge, which a program reusing the storing
+    /// module's values need not hold.
+    pub fn storedForm(self: ConstFnStructuralEvidence) ConstFnStructuralEvidence {
+        var stored = self;
+        const checked = self.checked orelse return stored;
+        switch (checked) {
+            .recorded => |recorded| if (recorded.generated_codec_content) |content| {
+                stored.checked = .{ .codec = .{
+                    .content = content,
+                    .dispatcher_key = recorded.dispatcher_key,
+                    .callable_key = recorded.callable_key,
+                } };
+            },
+            .codec => {},
+        }
+        return stored;
+    }
+};
+
+/// The checked side of a retained structural edge.
+pub const CheckedStructuralEdge = union(enum(u8)) {
+    /// An edge read from the module that recorded it.
+    recorded: RecordedStructuralEdge,
+    /// A codec edge of a function stored in a `ConstStore`
+    /// (`ConstFnStructuralEvidence.storedForm`). Restoration reads it from
+    /// a module of the storing module's import closure that holds an equal
+    /// contract.
+    codec: StoredCodecEdge,
+
+    pub fn codecContent(self: CheckedStructuralEdge) ?static_dispatch.GeneratedCodecContentDigest {
+        return switch (self) {
+            .recorded => |recorded| recorded.generated_codec_content,
+            .codec => |codec| codec.content,
+        };
+    }
+
+    pub fn dispatcherKey(self: CheckedStructuralEdge) names.CanonicalTypeKey {
+        return switch (self) {
+            .recorded => |recorded| recorded.dispatcher_key,
+            .codec => |codec| codec.dispatcher_key,
+        };
+    }
+
+    pub fn callableKey(self: CheckedStructuralEdge) names.CanonicalTypeKey {
+        return switch (self) {
+            .recorded => |recorded| recorded.callable_key,
+            .codec => |codec| codec.callable_key,
+        };
+    }
+};
+
+/// A structural edge as the module that recorded it holds it.
+pub const RecordedStructuralEdge = struct {
+    /// The module that recorded the edge. Restoration reads the edge's
+    /// checked types and contract from it; a codec edge's identity is its
+    /// contract's content instead, so equal contracts recorded by different
+    /// modules are one specialization.
+    view: names.CheckedModuleDigest,
+    dispatcher_key: names.CanonicalTypeKey,
+    dispatcher_ty: checked_ids.CheckedTypeId,
+    callable_key: names.CanonicalTypeKey,
+    callable_ty: checked_ids.CheckedTypeId,
+    generated_codec_derivation: ?static_dispatch.GeneratedCodecDerivationId,
+    generated_codec_content: ?static_dispatch.GeneratedCodecContentDigest,
+};
+
+/// A codec edge named by its contract's identity across checked modules and
+/// the checked keys of its dispatcher and callable types.
+pub const StoredCodecEdge = struct {
+    content: static_dispatch.GeneratedCodecContentDigest,
+    dispatcher_key: names.CanonicalTypeKey,
+    callable_key: names.CanonicalTypeKey,
 };
 
 /// Exact checked method edge retained by a stored function. Target module
@@ -1408,7 +1474,10 @@ pub const ConstStore = struct {
         const captures_range = try artifact_serialize.appendSpan(ConstRange, ConstCapture, &self.capture_pool, self.allocator, fn_value.captures);
         const evidence_range = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidence, &self.evidence_pool, self.allocator, fn_value.evidence.nodes);
         const evidence_targets = try artifact_serialize.appendSpan(ConstRange, ConstFnTargetEvidence, &self.evidence_target_pool, self.allocator, fn_value.evidence.targets);
-        const evidence_structurals = try artifact_serialize.appendSpan(ConstRange, ConstFnStructuralEvidence, &self.evidence_structural_pool, self.allocator, fn_value.evidence.structurals);
+        const stored_structurals = try self.allocator.alloc(ConstFnStructuralEvidence, fn_value.evidence.structurals.len);
+        defer self.allocator.free(stored_structurals);
+        for (stored_structurals, fn_value.evidence.structurals) |*stored, structural| stored.* = structural.storedForm();
+        const evidence_structurals = try artifact_serialize.appendSpan(ConstRange, ConstFnStructuralEvidence, &self.evidence_structural_pool, self.allocator, stored_structurals);
         const evidence_frames = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidenceFrame, &self.evidence_frame_pool, self.allocator, fn_value.evidence_frames);
         try self.fns.append(self.allocator, .{
             .fn_def = fn_value.fn_def,

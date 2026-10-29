@@ -8547,6 +8547,20 @@ in several modules use at one record type is therefore one specialization. A
 caller that passes a nominal with its own encoder still records a different
 contract, so it keeps a separate specialization.
 
+That specialization's evidence keeps the edge of whichever module requested it
+first, and another module that reuses it need not import that one. A function
+stored in a module's `ConstStore` therefore keeps a codec edge as only the
+contract digest and the checked keys of its dispatcher and callable types
+(`ConstFnStructuralEvidence.storedForm`), so every module its stored values
+name lies in its import closure. Monotype restores such an edge from the first
+module of the storing module's reflexive import closure, breadth-first in
+direct-import order, that holds a contract with that digest and roots with
+those keys, at its first such contract. The stored function was lowered from
+bodies that closure reaches, so one of its modules recorded an equal contract.
+Boxy reads the edge in the module its plan names, which must hold an equal
+contract. Completed-body records retain recorded edges and are rejected when
+their recording module is absent.
+
 The checker's derived-codec walk records each nominal application whose
 backing it walks together with the generated derivation that walks it. A later
 occurrence of an equal application in the same walk (a sibling field, a list

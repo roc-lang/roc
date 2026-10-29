@@ -1750,6 +1750,13 @@ const CheckedSpecStructuralEvidence = struct {
     view: ModuleView,
     evidence: static_dispatch.StructuralEvidence,
 };
+/// `Builder.stored_codec_edges`' key: a stored codec edge and the module
+/// whose `ConstStore` holds it.
+const StoredCodecEdgeKey = struct {
+    store: [32]u8,
+    edge: check.ConstStore.StoredCodecEdge,
+    derivation: static_dispatch.StructuralDerivation,
+};
 const SpecStructuralEvidence = struct {
     derivation: static_dispatch.StructuralDerivation,
     checked: ?CheckedSpecStructuralEvidence = null,
@@ -5759,6 +5766,9 @@ const Builder = struct {
     /// Stored conversions by `Ast.fnEvidenceBucket`, each checked for exact
     /// equality before reuse.
     const_evidence_by_content: std.AutoHashMap(u64, StoredConstFnEvidence),
+    /// The checked edge each stored codec edge resolves to inside its
+    /// storing module's import closure (`storedCodecEdge`).
+    stored_codec_edges: std.AutoHashMapUnmanaged(StoredCodecEdgeKey, CheckedSpecStructuralEvidence) = .empty,
     /// Site evidence derived where it cannot depend on the lowering context
     /// (`BodyContext.deriveSiteEvidenceVector`).
     site_evidence_memo: std.AutoHashMap(SiteEvidenceMemoKey, SiteEvidenceMemo),
@@ -6208,6 +6218,7 @@ const Builder = struct {
         self.const_type_cache.deinit(self.allocator);
         self.const_evidence_memo.deinit();
         self.const_evidence_by_content.deinit();
+        self.stored_codec_edges.deinit(self.allocator);
         self.site_evidence_memo.deinit();
         self.checked_span_ground.deinit();
         self.evidence_arena.deinit();
@@ -8912,7 +8923,7 @@ const Builder = struct {
                 },
                 .structural => |structural| try nodes.appendStructural(self.allocator, .{
                     .derivation = structural.derivation,
-                    .checked = if (structural.checked) |checked_structural| .{
+                    .checked = if (structural.checked) |checked_structural| .{ .recorded = .{
                         .view = .{ .bytes = checked_structural.view.key.bytes },
                         .dispatcher_key = checked_structural.view.types.rootKey(checked_structural.evidence.dispatcher_ty),
                         .dispatcher_ty = checked_structural.evidence.dispatcher_ty,
@@ -8920,7 +8931,7 @@ const Builder = struct {
                         .callable_ty = checked_structural.evidence.callable_ty,
                         .generated_codec_derivation = checked_structural.evidence.generated_codec_derivation,
                         .generated_codec_content = codecEvidenceContent(checked_structural),
-                    } else null,
+                    } } else null,
                 }),
                 .from_callable => |use| {
                     try nodes.appendSmall(self.allocator, .{ .from_callable = .{
@@ -12968,6 +12979,55 @@ const Builder = struct {
         };
     }
 
+    /// The checked edge a codec edge of a function stored in `store_view`'s
+    /// `ConstStore` names: the first module of `store_view`'s reflexive
+    /// import closure, in breadth-first direct-import order, that holds a
+    /// contract with the edge's content and checked roots with its
+    /// dispatcher and callable keys, at its first such contract. The stored
+    /// function was lowered from bodies that closure reaches, so one of its
+    /// modules recorded the contract.
+    fn storedCodecEdge(
+        self: *Builder,
+        store_view: ModuleView,
+        derivation: static_dispatch.StructuralDerivation,
+        codec: check.ConstStore.StoredCodecEdge,
+    ) Allocator.Error!CheckedSpecStructuralEvidence {
+        const key = StoredCodecEdgeKey{ .store = store_view.key.bytes, .edge = codec, .derivation = derivation };
+        if (self.stored_codec_edges.get(key)) |known| return known;
+        var reached = std.AutoHashMapUnmanaged([32]u8, void).empty;
+        defer reached.deinit(self.allocator);
+        var pending = std.ArrayList(ModuleView).empty;
+        defer pending.deinit(self.allocator);
+        try reached.put(self.allocator, store_view.key.bytes, {});
+        try pending.append(self.allocator, store_view);
+        var next: usize = 0;
+        const edge: CheckedSpecStructuralEvidence = while (next < pending.items.len) : (next += 1) {
+            const view = pending.items[next];
+            if (codecEdgeIn(view, derivation, codec)) |found| break found;
+            for (view.direct_import_module_keys) |imported| {
+                if ((try reached.getOrPut(self.allocator, imported.bytes)).found_existing) continue;
+                try pending.append(self.allocator, self.moduleForKeyBytes(imported.bytes) orelse continue);
+            }
+        } else Common.invariant("a stored codec edge's contract was not held by its storing module's import closure");
+        try self.stored_codec_edges.put(self.allocator, key, edge);
+        return edge;
+    }
+
+    fn codecEdgeIn(view: ModuleView, derivation: static_dispatch.StructuralDerivation, codec: check.ConstStore.StoredCodecEdge) ?CheckedSpecStructuralEvidence {
+        const dispatcher_ty = view.types.rootForKey(codec.dispatcher_key) orelse return null;
+        const callable_ty = view.types.rootForKey(codec.callable_key) orelse return null;
+        for (view.static_dispatch_plans.generated_codec_derivations, 0..) |contract, index| {
+            if (!std.mem.eql(u8, &contract.content.bytes, &codec.content.bytes)) continue;
+            return .{ .view = view, .evidence = .{
+                .derivation = derivation,
+                .dispatcher_ty = dispatcher_ty,
+                .callable_ty = callable_ty,
+                .generated_codec_derivation = @fromBackingInt(@intCast(index)),
+            } };
+        }
+        return null;
+    }
+
     fn rootModuleView(self: *Builder) ModuleView {
         return &self.moduleViews()[0];
     }
@@ -13993,6 +14053,7 @@ const Builder = struct {
 
     fn lowerRestoredConstFnTemplate(
         self: *Builder,
+        store_view: ModuleView,
         fn_template: Ast.FnTemplate,
         fn_value: check.ConstStore.ConstFn,
     ) Allocator.Error!Ast.FnId {
@@ -14015,7 +14076,7 @@ const Builder = struct {
                 // materialization mode: `fn_view` is the declaring module and
                 // the site resolves against its `.default_root` owner.
                 fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
-                fn_ctx.evidence = try fn_ctx.materializeConstFnEvidence(fn_value);
+                fn_ctx.evidence = try fn_ctx.materializeConstFnEvidence(store_view, fn_value);
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
                 const draft = FinalBodyOutputGuard.begin(self);
                 const request_fn_node = try graph.importMonoIndependent(fn_template.mono_fn_ty);
@@ -14054,7 +14115,7 @@ const Builder = struct {
                 defer body_draft.deinit();
                 var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, templateForConstFnDef(fn_value.fn_def), graph, &body_draft);
                 defer fn_ctx.deinit();
-                const retained = try fn_ctx.materializeConstFnEvidence(fn_value);
+                const retained = try fn_ctx.materializeConstFnEvidence(store_view, fn_value);
                 const template_ref = switch (fn_template.fn_def) {
                     .local_template, .imported_template, .checked_generated => |template| template,
                     .local_hosted, .imported_hosted => |hosted| hosted.template,
@@ -17024,7 +17085,7 @@ const Builder = struct {
         }
         if (fn_value.captures.len == 0) {
             const template = try self.restoredConstFnTemplateToMono(store_view, fn_id, fn_value, ty, true);
-            const mono_fn_id = try self.lowerRestoredConstFnTemplate(template, fn_value);
+            const mono_fn_id = try self.lowerRestoredConstFnTemplate(store_view, template, fn_value);
             return try self.program.addExpr(.{
                 .ty = self.program.fnSource(mono_fn_id).mono_fn_ty,
                 .data = .{ .fn_def = .{ .fn_id = mono_fn_id } },
@@ -17045,7 +17106,7 @@ const Builder = struct {
         var fn_ctx = try BodyContext.init(self.allocator, self, fn_view, ownerTemplateForConstFnDef(fn_value.fn_def), graph, &body_draft);
         defer fn_ctx.deinit();
         fn_ctx.in_default_expr = constFnDefIsDefaultRoot(fn_value.fn_def);
-        fn_ctx.evidence = try fn_ctx.materializeConstFnEvidence(fn_value);
+        fn_ctx.evidence = try fn_ctx.materializeConstFnEvidence(store_view, fn_value);
         try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
         fn_ctx.current_fn_key = switch (fn_value.fn_def) {
             .nested => |nested| nested.context_fn_key,
@@ -17158,7 +17219,7 @@ const Builder = struct {
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
-        try fn_ctx.restoreGeneratedRuntimeEvidence(fn_value, plan);
+        try fn_ctx.restoreGeneratedRuntimeEvidence(store_view, fn_value, plan);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
@@ -48828,7 +48889,7 @@ const BodyContext = struct {
         if (fn_value.evidence_frames.len == 0 or fn_value.evidence_frame_head == null) {
             Common.invariant("stored checked function did not contain an explicit evidence root frame");
         }
-        const retained_evidence = try self.materializeConstFnEvidence(fn_value);
+        const retained_evidence = try self.materializeConstFnEvidence(store_view, fn_value);
         _ = self.builder.moduleForConstFnDef(fn_value.fn_def);
         const checked_template = templateForConstFnDef(fn_value.fn_def);
         // The recording owner template lives in its OWN module (for a
@@ -49312,7 +49373,7 @@ const BodyContext = struct {
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
-        try fn_ctx.restoreGeneratedRuntimeEvidence(fn_value, plan);
+        try fn_ctx.restoreGeneratedRuntimeEvidence(store_view, fn_value, plan);
         const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
         const plan_args = callable_plan.operands;
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
@@ -52703,7 +52764,9 @@ const BodyContext = struct {
         return (try self.runEvidence(.{ .callable_dispatch_result = .{ .checked_ret_ty = checked_ret_ty, .maybe_plan = null, .callable_plan = callable_plan, .expected_ret_node = expected_ret_node, .phase = phase } })).nodeValue();
     }
 
-    fn materializeConstFnEvidence(self: *BodyContext, fn_value: check.ConstStore.ConstFn) Allocator.Error!EvidenceChain {
+    /// Restore the evidence of `fn_value`, a function in `store_view`'s
+    /// `ConstStore`.
+    fn materializeConstFnEvidence(self: *BodyContext, store_view: ModuleView, fn_value: check.ConstStore.ConstFn) Allocator.Error!EvidenceChain {
         const frames = fn_value.evidence_frames;
         const head = fn_value.evidence_frame_head orelse
             Common.invariant("stored function evidence did not declare a head frame");
@@ -52719,7 +52782,7 @@ const BodyContext = struct {
             if (frame.roots_start != cursor) {
                 Common.invariant("stored function evidence frame roots were not contiguous");
             }
-            const vector = try self.materializeConstFnEvidenceVector(fn_value.evidence, &cursor, frame.roots_len);
+            const vector = try self.materializeConstFnEvidenceVector(store_view, fn_value.evidence, &cursor, frame.roots_len);
             const scope: LexicalDispatchScope = switch (frame.scope()) {
                 .root => .root,
                 .generalized => |scope_id| .{ .generalized = @fromBackingInt(@intCast(scope_id)) },
@@ -52883,8 +52946,12 @@ const BodyContext = struct {
     /// Restore a pre-order evidence tree: each entry's node, its nested
     /// evidence, then its callable contracts. Nested evidence follows type
     /// nesting, so each nested vector is a frame rather than a native call.
+    ///
+    /// `store_view` is the module whose `ConstStore` holds the evidence, or
+    /// null for evidence that never names a codec edge by content alone.
     fn materializeConstFnEvidenceVector(
         self: anytype,
+        store_view: ?ModuleView,
         evidence: check.ConstStore.ConstFnEvidenceVector,
         cursor: *usize,
         count: u32,
@@ -52947,28 +53014,35 @@ const BodyContext = struct {
                 },
                 .structural => |structural_index| blk: {
                     const stored_structural = evidence.structural(structural_index);
-                    const restored_checked: ?CheckedSpecStructuralEvidence = if (stored_structural.checked) |stored_checked| restored: {
-                        const view = self.builder.moduleForDigest(stored_checked.view);
-                        if (!std.meta.eql(view.types.rootKey(stored_checked.dispatcher_ty), stored_checked.dispatcher_key) or
-                            !std.meta.eql(view.types.rootKey(stored_checked.callable_ty), stored_checked.callable_key))
-                        {
-                            Common.invariant("stored structural evidence checked type identity changed during restoration");
-                        }
-                        const content = if (stored_checked.generated_codec_derivation) |id|
-                            view.static_dispatch_plans.generated_codec_derivations[@backingInt(id)].content
-                        else
-                            null;
-                        if (!std.meta.eql(content, stored_checked.generated_codec_content))
-                            Common.invariant("stored codec proof identity changed during restoration");
-                        break :restored .{
-                            .view = view,
-                            .evidence = static_dispatch.StructuralEvidence{
-                                .derivation = stored_structural.derivation,
-                                .dispatcher_ty = stored_checked.dispatcher_ty,
-                                .callable_ty = stored_checked.callable_ty,
-                                .generated_codec_derivation = stored_checked.generated_codec_derivation,
-                            },
-                        };
+                    const restored_checked: ?CheckedSpecStructuralEvidence = if (stored_structural.checked) |stored_checked| switch (stored_checked) {
+                        .recorded => |recorded| restored: {
+                            const view = self.builder.moduleForDigest(recorded.view);
+                            if (!std.meta.eql(view.types.rootKey(recorded.dispatcher_ty), recorded.dispatcher_key) or
+                                !std.meta.eql(view.types.rootKey(recorded.callable_ty), recorded.callable_key))
+                            {
+                                Common.invariant("stored structural evidence checked type identity changed during restoration");
+                            }
+                            const content = if (recorded.generated_codec_derivation) |id|
+                                view.static_dispatch_plans.generated_codec_derivations[@backingInt(id)].content
+                            else
+                                null;
+                            if (!std.meta.eql(content, recorded.generated_codec_content))
+                                Common.invariant("stored codec proof identity changed during restoration");
+                            break :restored .{
+                                .view = view,
+                                .evidence = static_dispatch.StructuralEvidence{
+                                    .derivation = stored_structural.derivation,
+                                    .dispatcher_ty = recorded.dispatcher_ty,
+                                    .callable_ty = recorded.callable_ty,
+                                    .generated_codec_derivation = recorded.generated_codec_derivation,
+                                },
+                            };
+                        },
+                        .codec => |codec| try self.builder.storedCodecEdge(
+                            store_view orelse Common.invariant("a stored codec edge was restored outside a ConstStore function"),
+                            stored_structural.derivation,
+                            codec,
+                        ),
                     } else null;
                     break :blk .{ .structural = .{
                         .derivation = stored_structural.derivation,
@@ -55103,11 +55177,12 @@ const BodyContext = struct {
     /// checked plan itself owns the structural evidence and codec contract.
     fn restoreGeneratedRuntimeEvidence(
         self: *BodyContext,
+        store_view: ModuleView,
         fn_value: check.ConstStore.ConstFn,
         plan: static_dispatch.StaticDispatchCallPlan,
     ) Allocator.Error!void {
         if (fn_value.evidence_frames.len != 0) {
-            self.evidence = try self.materializeConstFnEvidence(fn_value);
+            self.evidence = try self.materializeConstFnEvidence(store_view, fn_value);
             try self.replayStoredEvidenceRelations(self.evidence);
             return;
         }
@@ -74060,7 +74135,12 @@ const CompletedBodyValidation = struct {
                 if (!std.meta.eql(instantiation.callable_key, owner.types.rootKey(instantiation.callable_ty))) return rejected(@src().line);
             }
         }
-        for (stored.entries.structurals) |structural| if (structural.checked) |checked_| {
+        for (stored.entries.structurals) |structural| if (structural.checked) |stored_checked| {
+            // A completed body retains the edges its lowering recorded.
+            const checked_ = switch (stored_checked) {
+                .recorded => |recorded| recorded,
+                .codec => return rejected(@src().line),
+            };
             const view = self.builder.moduleForKeyBytes(checked_.view.bytes) orelse return rejected(@src().line);
             if (@backingInt(checked_.dispatcher_ty) >= view.types.payloadCount() or @backingInt(checked_.callable_ty) >= view.types.payloadCount()) return rejected(@src().line);
             if (!std.meta.eql(checked_.dispatcher_key, view.types.rootKey(checked_.dispatcher_ty)) or !std.meta.eql(checked_.callable_key, view.types.rootKey(checked_.callable_ty))) return rejected(@src().line);
@@ -74313,7 +74393,7 @@ const FrozenEvidenceContext = struct {
     fn restore(builder: *Builder, evidence: FrozenDispatchEvidence) Allocator.Error![]const SpecEvidence {
         var self = FrozenEvidenceContext{ .allocator = builder.allocator, .builder = builder };
         var cursor: usize = 0;
-        const vector = try BodyContext.materializeConstFnEvidenceVector(&self, evidence.stored.entries, &cursor, evidence.stored.frames[0].roots_len);
+        const vector = try BodyContext.materializeConstFnEvidenceVector(&self, null, evidence.stored.entries, &cursor, evidence.stored.frames[0].roots_len);
         try evidence.restoreSubstitutions(builder, vector);
         return vector;
     }

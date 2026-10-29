@@ -8624,11 +8624,9 @@ const Builder = struct {
             },
             .evidence_dependent => |dependent| blk: {
                 const evidence = storedStructuralEvidence(stored, dependent.index, dependent.callable_contract);
-                const checked_evidence = evidence.checked orelse
-                    boxyPlanInvariant("stored generated codec evidence had no checked structural identity");
-                if (!std.meta.eql(checked_evidence.view.bytes, view.key.bytes)) {
+                const checked_evidence = storedCheckedStructuralIn(view, evidence.checked orelse
+                    boxyPlanInvariant("stored generated codec evidence had no checked structural identity")) orelse
                     boxyPlanInvariant("stored generated codec evidence named a contract outside its runtime's module");
-                }
                 break :blk .{
                     .kind = evidence.derivation.kind(),
                     .derivation = checked_evidence.generated_codec_derivation,
@@ -8671,6 +8669,33 @@ const Builder = struct {
     /// The structural evidence entry a stored function retained at a checked
     /// evidence coordinate: `depth` frames out from its innermost frame, the
     /// `index`th root there, or that root's selected callable contract.
+    /// A stored function's checked structural edge read in `view`, the
+    /// module that must hold it: a recorded edge names that module, and a
+    /// codec edge resolves to `view`'s first contract with its content.
+    /// Null when `view` does not hold the edge.
+    fn storedCheckedStructuralIn(view: ModuleView, stored: check.ConstStore.CheckedStructuralEdge) ?check.ConstStore.RecordedStructuralEdge {
+        switch (stored) {
+            .recorded => |recorded| return if (std.meta.eql(recorded.view.bytes, view.key.bytes)) recorded else null,
+            .codec => |codec| {
+                const dispatcher_ty = view.checked_types.rootForKey(codec.dispatcher_key) orelse return null;
+                const callable_ty = view.checked_types.rootForKey(codec.callable_key) orelse return null;
+                for (view.static_dispatch_plans.generated_codec_derivations, 0..) |contract, index| {
+                    if (!std.mem.eql(u8, &contract.content.bytes, &codec.content.bytes)) continue;
+                    return .{
+                        .view = .{ .bytes = view.key.bytes },
+                        .dispatcher_key = codec.dispatcher_key,
+                        .dispatcher_ty = dispatcher_ty,
+                        .callable_key = codec.callable_key,
+                        .callable_ty = callable_ty,
+                        .generated_codec_derivation = @fromBackingInt(@intCast(index)),
+                        .generated_codec_content = codec.content,
+                    };
+                }
+                return null;
+            },
+        }
+    }
+
     fn storedStructuralEvidence(
         stored: check.ConstStore.ConstFn,
         coordinate: static_dispatch.EvidenceChainIndex,
@@ -20537,11 +20562,10 @@ const Builder = struct {
                 .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => continue,
             };
             if (structural.derivation.kind() != expected) continue;
-            const checked_evidence = structural.checked orelse continue;
-            if (checked_evidence.generated_codec_derivation == null) continue;
-            if (!std.meta.eql(checked_evidence.view.bytes, shape_view.key.bytes)) {
+            const stored_checked = structural.checked orelse continue;
+            if (stored_checked.codecContent() == null) continue;
+            const checked_evidence = storedCheckedStructuralIn(shape_view, stored_checked) orelse
                 boxyPlanInvariant("stored codec evidence named a contract outside its shape's module");
-            }
             if (!std.meta.eql(shape_view.checked_types.rootKey(checked_evidence.dispatcher_ty), shape_key)) continue;
             const evidence = static_dispatch.StructuralEvidence{
                 .derivation = structural.derivation,
