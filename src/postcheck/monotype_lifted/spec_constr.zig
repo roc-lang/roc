@@ -553,13 +553,6 @@ const ShapeProof = union(enum) {
     unknown_budget_exhausted,
 };
 
-fn shapeProofIsProven(proof: ShapeProof) bool {
-    return switch (proof) {
-        .proven => true,
-        .disproven, .unknown_budget_exhausted => false,
-    };
-}
-
 /// Maximum number of `runtime_anchor.structure` / `nominal.backing` /
 /// `static_data_candidate.structure` / callable-capture pointer edges any single
 /// value-tree strip may follow. A
@@ -18499,7 +18492,7 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
     // Every level matches its argument, so a call passing the known `Pair`
     // is a productive inline at every depth.
     const Matching = struct {
-        fn body(p: *Ast.Program, arg: Ast.LocalId, arg_ty: Type.TypeId, name: names.TagNameId, ty: Type.TypeId, arm: Ast.ExprId) !Ast.ExprId {
+        fn body(p: *Ast.Program, arg: Ast.LocalId, arg_ty: Type.TypeId, name: names.TagNameId, ty: Type.TypeId, arm: Ast.ExprId) Allocator.Error!Ast.ExprId {
             const pattern = try p.addPat(.{ .ty = arg_ty, .data = .{ .tag = .{ .name = name, .payloads = Ast.Span(Ast.PatId).empty() } } });
             return p.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
                 .scrutinee = try p.addExpr(.{ .ty = arg_ty, .data = .{ .local = arg } }),

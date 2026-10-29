@@ -35,17 +35,18 @@ pub const Consumer = enum {
     loop,
     /// A field or item read, or a record or tuple pattern. A call-pattern
     /// worker already takes a known record or tuple argument apart without
-    /// inlining, so a projection makes an inline productive only when it
+    /// inlining, so a field or item read makes an inline productive only when it
     /// reads the call's result.
     project,
 };
 
 /// The consumers a known argument or capture can meet in a callee.
 pub const argument_consumers: Consumers = .initMany(&.{ .match, .call, .loop });
+/// A set of consumers.
 pub const Consumers = std.EnumSet(Consumer);
 
 /// One step from a value into a part of it. Field and tag labels are
-/// canonical ids, so equal labels have equal ids.
+/// interned ids, so equal labels have equal ids.
 pub const Step = struct {
     kind: Kind,
     label: u32,
@@ -86,6 +87,7 @@ pub fn appendStep(allocator: Allocator, steps: *std.ArrayList(Step), step: Step)
     try steps.append(allocator, step);
 }
 
+/// An interned path of steps; `root` is the value itself.
 pub const PathId = enum(u32) { root = 0, _ };
 
 /// Interned paths, folded as `appendStep` folds them.
@@ -248,6 +250,8 @@ pub const Slot = struct {
 /// `result` is the part at `value` of its parameter or capture `slot`.
 pub const PassThrough = struct { result: PathId, slot: Slot, value: PathId };
 
+/// How one function consumes its parameters and captures and which parts
+/// of its result it constructs.
 pub const FnSummary = struct {
     /// How the body consumes each parameter, by the function's arguments.
     params: []DemandSet,
@@ -263,6 +267,8 @@ pub const FnSummary = struct {
     wrapper: bool = false,
 };
 
+/// The productivity summaries of every function in a program, computed
+/// before any clone runs.
 pub const Analysis = struct {
     arena: collections.SingleThreadArena,
     program: *const Ast.Program,
@@ -337,6 +343,7 @@ pub const Analysis = struct {
     }
 };
 
+/// Whether `steps` begins with every step of `prefix`.
 pub fn startsWith(steps: []const Step, prefix: []const Step) bool {
     if (prefix.len > steps.len) return false;
     for (prefix, steps[0..prefix.len]) |a, b| if (!a.eql(b)) return false;
@@ -1187,7 +1194,7 @@ const Builder = struct {
                     .let_ => |let_| try self.noteDefinition(defs, let_.bind, let_.value),
                     .return_ => |ret| try returns.append(self.temp(), ret.value),
                     .comptime_value => continue,
-                    else => {},
+                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
                 }
                 try Ast.appendChildren(self.temp(), program_, expr_id, &stack);
             },
@@ -1200,7 +1207,7 @@ const Builder = struct {
                 const gop = try defs.getOrPut(self.temp(), local);
                 gop.value_ptr.* = if (gop.found_existing) null else value;
             },
-            else => {},
+            .wildcard, .as, .tag, .nominal, .list, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern, .record, .tuple => {},
         }
     }
 
