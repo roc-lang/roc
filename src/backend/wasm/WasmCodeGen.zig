@@ -1204,6 +1204,7 @@ fn addTrackedDefinedFunctionSymbol(
 ) Allocator.Error!SymbolIndex {
     const symbol = self.module.addDefinedFunctionSymbol(defined.local, name, flags) catch return error.OutOfMemory;
     try self.recordFunctionSymbol(defined.function.raw(), symbol);
+    self.module.defineForwardFunction(name, defined.function.raw(), flags);
     return symbol;
 }
 

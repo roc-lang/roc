@@ -505,6 +505,10 @@ data_segments: std.ArrayList(DataSegment),
 owned_segment_names: std.ArrayList([]u8),
 /// Symbol names this module allocated (`mergeLinkedObject`).
 owned_symbol_names: std.ArrayList([]u8),
+/// The undefined function symbol, by name, of each function a static data
+/// export's function pointer names before code defines it
+/// (`defineForwardFunction`).
+forward_functions: std.StringHashMapUnmanaged(u32) = .empty,
 omit_zero_fill_data_segments: bool,
 /// Next available offset for data placement in linear memory (grows up from 0).
 data_offset: u32,
@@ -612,6 +616,7 @@ pub fn deinit(self: *Self) void {
     self.data_segments.deinit(self.allocator);
     for (self.owned_segment_names.items) |name| self.allocator.free(name);
     self.owned_segment_names.deinit(self.allocator);
+    self.forward_functions.deinit(self.allocator);
     for (self.owned_symbol_names.items) |name| self.allocator.free(name);
     self.owned_symbol_names.deinit(self.allocator);
     self.table_func_indices.deinit(self.allocator);
@@ -1322,7 +1327,18 @@ fn staticDataRelocationSymbol(
         .index = 0,
     });
     try function_index.record(relocation.target_symbol_name, raw_symbol);
+    try self.forward_functions.put(self.allocator, relocation.target_symbol_name, raw_symbol);
     return SymbolIndex.fromRaw(raw_symbol);
+}
+
+/// Define the function a static data export's function pointer named
+/// before code defined it: the export's relocations then resolve to
+/// `function`.
+pub fn defineForwardFunction(self: *Self, name: []const u8, function: u32, flags: u32) void {
+    const entry = self.forward_functions.fetchRemove(name) orelse return;
+    const sym = &self.linking.symbol_table.items[entry.value];
+    sym.flags = flags;
+    sym.index = function;
 }
 
 /// Enable the __stack_pointer global (global index 0).
@@ -2322,6 +2338,10 @@ pub fn resolveDataRelocations(self: *Self) RelocationError!void {
 
 /// Resolve both code and data relocations in place.
 pub fn resolveRelocations(self: *Self) RelocationError!void {
+    if (self.forward_functions.count() != 0) {
+        var names = self.forward_functions.keyIterator();
+        return logInvalidRelocation("static data names function {s}, which no code defines", .{names.next().?.*});
+    }
     try self.resolveCodeRelocations();
     try self.resolveDataRelocations();
 }
