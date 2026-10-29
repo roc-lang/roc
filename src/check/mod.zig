@@ -171,6 +171,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_12553_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12586_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12587_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12677_test.zig"));
     std.testing.refAllDecls(@import("test/nominal_decl_growth_test.zig"));
     std.testing.refAllDecls(@import("test/frame_owned_judgment_test.zig"));
 

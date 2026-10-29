@@ -8666,11 +8666,66 @@ fn singleLabelRow(self: *Self, name: Ident.Idx, occurrence: RowLabelOccurrence) 
 /// request has one.
 fn normalizeReportedDuplicateRow(self: *Self, value: ?Var, env: *Env) Allocator.Error!bool {
     const row = self.canonical_key_writer.takeDuplicateRow() orelse return false;
+    try self.normalizeRowUnionOrReport(row, value, env);
+    return true;
+}
+
+/// Normalize `row` during inference. Conflicting occurrences are reported at
+/// `value`, when known, and the row becomes `err`.
+fn normalizeRowUnionOrReport(self: *Self, row: Var, value: ?Var, env: *Env) Allocator.Error!void {
     if (try self.normalizeRowUnion(row, env)) |conflict| {
         try self.reportRowUnionConflict(row, conflict, value, env);
         try self.types.setVarContent(row, .err);
     }
-    return true;
+}
+
+/// Whether a tag label occurs more than once along `row`'s extension chain.
+/// Only a chain with two or more tag-bearing parts can repeat one, so a
+/// single-part row costs one walk and no label comparisons.
+fn tagRowChainRepeatsLabel(self: *Self, row: Var) bool {
+    var parts: u32 = 0;
+    var current = row;
+    var guard = types_mod.debug.IterationGuard.init("tagRowChainRepeatsLabel");
+    while (self.nextTagRowPart(&current)) |tags| {
+        guard.tick();
+        if (tags.len() > 0) parts += 1;
+    }
+    if (parts < 2) return false;
+
+    // Compare each part's labels with those of every part outside it.
+    var inner = row;
+    var inner_part: u32 = 0;
+    while (self.nextTagRowPart(&inner)) |inner_tags| : (inner_part += 1) {
+        var outer = row;
+        var outer_part: u32 = 0;
+        while (outer_part < inner_part) : (outer_part += 1) {
+            const outer_tags = self.nextTagRowPart(&outer) orelse unreachable; // the outer parts precede `inner` along the same chain
+            for (self.types.getTagsSlice(inner_tags).items(.name)) |inner_name| {
+                for (self.types.getTagsSlice(outer_tags).items(.name)) |outer_name| {
+                    if (inner_name.eql(outer_name)) return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+/// The tags of the next tag-union part along a row chain from `cursor`, which
+/// advances past it; null at the chain's end.
+fn nextTagRowPart(self: *Self, cursor: *Var) ?types_mod.Tag.SafeMultiList.Range {
+    while (true) {
+        switch (self.types.resolveVar(cursor.*).desc.content) {
+            .alias => |alias| cursor.* = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    cursor.* = tag_union.ext;
+                    return tag_union.tags;
+                },
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return null,
+            },
+            .flex, .rigid, .field_presence, .err => return null,
+        }
+    }
 }
 
 /// Reject every infinite or anonymously recursive type the settled walk
@@ -43395,11 +43450,24 @@ fn gatherTryReturnRow(self: *Self, start: Var, comptime collect_tags: bool) Allo
     }
 }
 
+/// Normalize a `?` source row whose chain repeats a label, so a gather of its
+/// heads collects each label once. A conflict is reported at `expr`.
+fn normalizeTryReturnRow(self: *Self, row: Var, expr: CIR.Expr.Idx, env: *Env) Allocator.Error!void {
+    if (!self.tagRowChainRepeatsLabel(row)) return;
+    try self.normalizeRowUnionOrReport(row, ModuleEnv.varFrom(expr), env);
+}
+
 /// A directed contribution of the gathered heads. The fresh extension is an
 /// accumulator variable, while `tail` remains the source's residual dependency.
 /// This implements design.md's Try Return-Row Composition rule, not a copy of
 /// the source type: all payload identities and the source tail are preserved.
 fn projectTryReturnRow(self: *Self, tail: Var, env: *Env, region: Region) Allocator.Error!TryReturnRows.Projection {
+    if (std.debug.runtime_safety) {
+        const tags = self.try_return_rows.tags.items;
+        for (tags, 0..) |tag, index| {
+            for (tags[0..index]) |earlier| std.debug.assert(!tag.name.eql(earlier.name));
+        }
+    }
     const ext = try self.fresh(env, region);
     const content = try self.types.mkTagUnion(self.try_return_rows.tags.items, ext);
     return .{ .row = try self.freshFromContent(content, env, region), .tail = tail };
@@ -43754,6 +43822,10 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
         try self.noteComposedBodyRelation(ok_result, lambda_body, frame.expected_result != null);
         try rows.plans.append(self.gpa, .{ .expr = lambda_body, .ok = body.ok, .err = body.err, .is_body = true });
     }
+    // A source row can repeat a label along its chain (design.md "Row Union
+    // Normalization"); the inventory and every projection below describe
+    // the normalized row, so each label is one head.
+    for (rows.plans.items) |plan| try self.normalizeTryReturnRow(plan.err, plan.expr, env);
     // No propagated errors means no graph inventory or projection work.
     if (rows.plans.items.len > 0) {
         try rows.work.append(self.gpa, .{ .var_ = composed.err, .nested = false });
@@ -43854,6 +43926,7 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
         if (self.types.resolveVar(tail).var_ == self.types.resolveVar(composed.err).var_) continue;
         // A closed source row has no residual to relate.
         if (self.varIsEmptyTagUnion(tail)) continue;
+        try self.normalizeTryReturnRow(tail, plan.expr, env);
         const gathered = try self.gatherTryReturnRow(tail, true);
         if (rows.tags.items.len > 0) {
             const projection = try self.projectTryReturnRow(gathered.tail, env, self.cir.store.getExprRegion(plan.expr));
@@ -44235,6 +44308,7 @@ fn includeTryRowDirected(self: *Self, edge: DeferredTryRowEdge, env: *Env) Alloc
     const rows = &self.try_return_rows;
     rows.clear();
     defer rows.clear();
+    try self.normalizeTryReturnRow(plan.err, plan.expr, env);
     const gathered = try self.gatherTryReturnRow(plan.err, true);
     if (rows.tags.items.len > 0) {
         const projection = try self.projectTryReturnRow(gathered.tail, env, self.cir.store.getExprRegion(plan.expr));
