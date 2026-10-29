@@ -53,6 +53,24 @@ const StrBacking = struct {
     len: usize,
 };
 
+/// The checked types of every module of the program a value was lowered in,
+/// by checked module key: the stores a Monotype named type's occurrence
+/// (`ty_module`, `ty`) indexes.
+pub const ProgramTypes = struct {
+    context: *const anyopaque,
+    find: *const fn (context: *const anyopaque, key: [32]u8) ?checked.CheckedTypeStoreView,
+};
+
+/// How a writer into a checked module's ConstStore rebinds each closed named
+/// type to the storing module's own occurrence of it (design.md
+/// "Compile-Time Value Reuse Across Edits"): the storing module, whose key
+/// and checked types the rebinding reads, and the program's checked types
+/// the lowered occurrence is read from.
+pub const OccurrenceRebinding = struct {
+    storing_module: *const checked.CheckedModuleArtifact,
+    program: ProgramTypes,
+};
+
 /// Stores interpreted compile-time roots into a checked ConstStore.
 pub const Writer = struct {
     allocator: Allocator,
@@ -61,6 +79,10 @@ pub const Writer = struct {
     /// stores values only (`storeLiteral`).
     names: ?*check.CanonicalNames.CanonicalNameStore,
     program: *const LirProgram.Result,
+    /// Present for a writer into a checked module's ConstStore. A writer into
+    /// a program-owned store (literal values, which belong to no checked
+    /// module) keeps the program's occurrences.
+    occurrences: ?OccurrenceRebinding,
     stored_values: std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId),
     visited_str_values: std.AutoHashMap(RuntimeValueAddress, void),
     str_backings: std.AutoHashMap(usize, StrBacking),
@@ -76,26 +98,35 @@ pub const Writer = struct {
 
     const ProductPlanKey = struct { plan: LirProgram.ConstPlanId, layout_idx: layout.Idx };
 
+    /// A writer into `module`'s ConstStore. `program_types` supplies the
+    /// checked types of every module the values were lowered against.
     pub fn init(
         allocator: Allocator,
         module: *checked.CheckedModuleArtifact,
         program: *const LirProgram.Result,
+        program_types: ProgramTypes,
     ) Writer {
-        return initStore(allocator, &module.const_store, &module.canonical_names, program);
+        return initStore(allocator, &module.const_store, &module.canonical_names, program, .{
+            .storing_module = module,
+            .program = program_types,
+        });
     }
 
-    /// A writer into `store`, translating stored types into `names`.
+    /// A writer into `store`, translating stored types into `names` and
+    /// named occurrences through `occurrences`.
     pub fn initStore(
         allocator: Allocator,
         store: *const_store.ConstStore,
         names: ?*check.CanonicalNames.CanonicalNameStore,
         program: *const LirProgram.Result,
+        occurrences: ?OccurrenceRebinding,
     ) Writer {
         return .{
             .allocator = allocator,
             .store = store,
             .names = names,
             .program = program,
+            .occurrences = occurrences,
             .stored_values = std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId).init(allocator),
             .visited_str_values = std.AutoHashMap(RuntimeValueAddress, void).init(allocator),
             .str_backings = std.AutoHashMap(usize, StrBacking).init(allocator),
@@ -194,8 +225,44 @@ pub const Writer = struct {
             &self.program.const_types,
             &self.program.const_type_names,
             self.typeNames(),
+            self.occurrenceTranslation(),
             root.ret_type,
         );
+    }
+
+    /// The clone-time rebinding of named occurrences into this writer's
+    /// store; none for a program-owned store.
+    fn occurrenceTranslation(self: *const Writer) ?const_store.OccurrenceTranslation {
+        if (self.occurrences == null) return null;
+        return .{ .context = self, .rebind = rebindNamedOccurrenceCallback };
+    }
+
+    fn rebindNamedOccurrenceCallback(context: *const anyopaque, named: const_store.NamedType) const_store.NamedType {
+        const self: *const Writer = @ptrCast(@alignCast(context));
+        return self.rebindNamedOccurrence(named);
+    }
+
+    /// The occurrence a stored named type carries in this writer's store. A
+    /// closed named type's occurrence is the storing module's own: the
+    /// program's representative occurrence may belong to any module of the
+    /// program the value was lowered in, which a later program reusing the
+    /// stored value need not contain. An open occurrence is exact and is
+    /// already the lowering view's, which the storing module's value identity
+    /// covers.
+    fn rebindNamedOccurrence(self: *const Writer, named: const_store.NamedType) const_store.NamedType {
+        const rebinding = self.occurrences orelse return named;
+        const storing_key = rebinding.storing_module.key;
+        if (std.mem.eql(u8, &named.ty_module.bytes, &storing_key.bytes)) return named;
+        const occurrence_types = rebinding.program.find(rebinding.program.context, named.ty_module.bytes) orelse
+            writerInvariant("a stored named type's checked occurrence named a module outside the program");
+        const root = occurrence_types.rootRows()[@backingInt(named.ty)];
+        if (root.contains_identity_variables) return named;
+        // Every closed named type in a stored value or its type is a type of
+        // the storing module's own checked root, so the module holds an
+        // occurrence under the same canonical key.
+        const local = rebinding.storing_module.checked_types.view().rootForKey(root.key) orelse
+            writerInvariant("a stored closed named type has no checked occurrence in the module storing it");
+        return .{ .module = named.module, .ty = local, .ty_module = storing_key.digest() };
     }
 
     /// One value to store or scan.
@@ -461,7 +528,7 @@ pub const Writer = struct {
             .tuple => |node| self.store.fill(node, .{ .tuple = nodes }),
             .record => |node| self.store.fill(node, .{ .record = nodes }),
             .nominal => |nominal| self.store.fill(nominal.node, .{ .nominal = .{
-                .named_type = nominal.named.named_type,
+                .named_type = self.rebindNamedOccurrence(nominal.named.named_type),
                 .backing = nodes[0],
             } }),
             .tag => |tag| {
@@ -919,6 +986,7 @@ pub const Writer = struct {
             &self.program.const_types,
             &self.program.const_type_names,
             self.typeNames(),
+            self.occurrenceTranslation(),
             ty,
         );
     }
@@ -1299,6 +1367,17 @@ fn deinitTestArtifact(artifact: *checked.CheckedModuleArtifact, allocator: Alloc
     artifact.canonical_names.deinit();
 }
 
+/// A one-module program: the artifact's own checked types under its key.
+fn testProgramTypes(artifact: *const checked.CheckedModuleArtifact) ProgramTypes {
+    return .{ .context = artifact, .find = findTestProgramTypes };
+}
+
+fn findTestProgramTypes(context: *const anyopaque, key: [32]u8) ?checked.CheckedTypeStoreView {
+    const artifact: *const checked.CheckedModuleArtifact = @ptrCast(@alignCast(context));
+    if (!std.mem.eql(u8, &artifact.key.bytes, &key)) return null;
+    return artifact.checked_types.view();
+}
+
 fn testConstRoot(plan: LirProgram.ConstPlanId, ret_layout: layout.Idx) LirProgram.ConstRootPlan {
     return .{
         .root_order = 0,
@@ -1333,7 +1412,7 @@ test "const store writer pointer memoization is scoped to one root" {
     const str_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(testing.allocator, .str);
 
-    var writer = Writer.init(testing.allocator, &artifact, &program);
+    var writer = Writer.init(testing.allocator, &artifact, &program, testProgramTypes(&artifact));
     defer writer.deinit();
 
     const root = testConstRoot(str_plan, .str);
@@ -1379,7 +1458,7 @@ test "const store writer stores every NaN as Roc's one NaN" {
     const scalar_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(testing.allocator, .scalar);
 
-    var writer = Writer.init(testing.allocator, &artifact, &program);
+    var writer = Writer.init(testing.allocator, &artifact, &program, testProgramTypes(&artifact));
     defer writer.deinit();
 
     var f64_payload: u64 = 0xfff9_2345_6789_abcd;
@@ -1421,7 +1500,7 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     const u8_list_layout = try program.layouts.insertLayout(layout.Layout.list(.u8));
     const u16_list_layout = try program.layouts.insertLayout(layout.Layout.list(.u16));
 
-    var writer = Writer.init(testing.allocator, &artifact, &program);
+    var writer = Writer.init(testing.allocator, &artifact, &program, testProgramTypes(&artifact));
     defer writer.deinit();
 
     const bytes = try testing.allocator.alloc(u8, 20 * 1024);

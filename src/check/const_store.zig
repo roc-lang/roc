@@ -494,6 +494,21 @@ pub const ConstFn = struct {
 /// the checked type producer's canonical keys before a stored value is copied.
 pub const TypeOccurrenceMap = collections.DenseMap(checked_ids.CheckedTypeId, checked_ids.CheckedTypeId);
 
+/// Explicit rebinding of a named type's checked occurrence as a type is
+/// cloned into a store with a different occurrence contract, supplied by the
+/// clone's caller: a module's ConstStore holds the storing module's own
+/// occurrence of every closed named type (design.md "Compile-Time Value Reuse
+/// Across Edits"), while the program-wide stores a value is lowered in hold
+/// the program's representative occurrence.
+pub const OccurrenceTranslation = struct {
+    context: *const anyopaque,
+    rebind: *const fn (context: *const anyopaque, named: NamedType) NamedType,
+
+    pub fn apply(self: OccurrenceTranslation, named: NamedType) NamedType {
+        return self.rebind(self.context, named);
+    }
+};
+
 /// Named type owner for a stored nominal constant.
 pub const NamedType = struct {
     /// The checked module that declares the type.
@@ -764,11 +779,16 @@ pub const ConstTypeStore = struct {
         return self.declared_field_pool.items[range.start .. range.start + range.len];
     }
 
+    /// Clone `ty` from `source`, interning its names into `target_names`
+    /// and rebinding each named type's checked occurrence through
+    /// `occurrences`; null keeps the source's occurrences, for a clone between
+    /// stores with the same occurrence contract.
     pub fn cloneTypeFromTranslated(
         self: *ConstTypeStore,
         source: *const ConstTypeStore,
         source_names: *const names.NameStore,
         target_names: *names.NameStore,
+        occurrences: ?OccurrenceTranslation,
         ty: ConstTypeId,
     ) Allocator.Error!ConstTypeId {
         var map = collections.DenseMap(ConstTypeId, ConstTypeId).init(self.allocator);
@@ -776,12 +796,14 @@ pub const ConstTypeStore = struct {
         return try self.cloneTypeFromInner(source, .{
             .source = source_names,
             .target = target_names,
+            .occurrences = occurrences,
         }, ty, &map);
     }
 
     const NameTranslation = struct {
         source: *const names.NameStore,
         target: *names.NameStore,
+        occurrences: ?OccurrenceTranslation = null,
     };
 
     /// One step of cloning a type node, in the order a direct walk takes
@@ -856,7 +878,7 @@ pub const ConstTypeStore = struct {
             }
             var finished = frames.pop().?;
             defer finished.deinit(self.allocator);
-            try self.finishClone(source, &finished);
+            try self.finishClone(source, name_translation, &finished);
         }
         return result;
     }
@@ -934,7 +956,7 @@ pub const ConstTypeStore = struct {
 
     /// Fills a reserved clone from its components' results, read back in
     /// the order `startClone` listed their steps.
-    fn finishClone(self: *ConstTypeStore, source: *const ConstTypeStore, frame: *const CloneFrame) Allocator.Error!void {
+    fn finishClone(self: *ConstTypeStore, source: *const ConstTypeStore, name_translation: ?NameTranslation, frame: *const CloneFrame) Allocator.Error!void {
         const types = frame.types.items;
         const cloned: ConstType = switch (source.get(frame.source_ty)) {
             .primitive, .zst, .erased => unreachable, // startClone fills leaf types directly and pushes no frame for them
@@ -994,7 +1016,7 @@ pub const ConstTypeStore = struct {
                     };
                 }
                 break :blk .{ .named = .{
-                    .named_type = named.named_type,
+                    .named_type = translateNamedOccurrence(name_translation, named.named_type),
                     .def = frame.def.?,
                     .kind = named.kind,
                     .builtin_owner = named.builtin_owner,
@@ -1028,6 +1050,12 @@ pub const ConstTypeStore = struct {
             .module = try translation.target.internModuleIdentity(translation.source.moduleIdentityBytes(field_default.module)),
             .expr_node = field_default.expr_node,
         };
+    }
+
+    fn translateNamedOccurrence(name_translation: ?NameTranslation, named: NamedType) NamedType {
+        const translation = name_translation orelse return named;
+        const occurrences = translation.occurrences orelse return named;
+        return occurrences.apply(named);
     }
 
     fn translateTypeDef(name_translation: ?NameTranslation, def: TypeDef) Allocator.Error!TypeDef {

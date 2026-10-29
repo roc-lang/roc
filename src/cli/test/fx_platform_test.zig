@@ -2584,6 +2584,63 @@ test "roc test passes against the object cache a roc check wrote" {
     try testing.expect(std.mem.find(u8, test_result.stdout, "All (1) tests passed") != null);
 }
 
+// repro for https://github.com/roc-lang/roc/issues/12693
+test "roc build of an app succeeds against the cache a roc check of another app sharing its package wrote" {
+    const allocator = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "roc-cache" });
+    defer allocator.free(cache_path);
+    try tmp_dir.dir.createDirPath(std.testing.io, "roc-cache");
+    var cache_env = std.process.Environ.Map.init(allocator);
+    defer cache_env.deinit();
+    try cache_env.put("ROC_CACHE_DIR", cache_path);
+
+    // Both apps import the same package. The first app's check stores the
+    // package's compile-time constant `Form.submit`, and the second app's
+    // build reuses that stored constant: it must build and run exactly as it
+    // does from an empty cache.
+    const check_result = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{"check"},
+        "test/fx/issue_12693_check_first.roc",
+        &cache_env,
+    );
+    defer allocator.free(check_result.stdout);
+    defer allocator.free(check_result.stderr);
+    try util.checkSuccess(check_result);
+
+    const output_path = try std.fs.path.join(allocator, &.{ tmp_path, "app.bin" });
+    defer allocator.free(output_path);
+    const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
+    defer allocator.free(output_arg);
+    const build_result = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{ "build", "--opt=dev", output_arg },
+        "test/fx/issue_12693_build_second.roc",
+        &cache_env,
+    );
+    defer allocator.free(build_result.stdout);
+    defer allocator.free(build_result.stderr);
+    try util.checkSuccess(build_result);
+
+    const run_result = try util.runChildWithTimeout(std.testing.io, allocator, &.{output_path}, .{
+        .max_output_bytes = 1024 * 1024,
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+    switch (run_result.term) {
+        .exited => |code| try testing.expectEqual(@as(u8, 0), code),
+        .signal, .stopped, .unknown => return error.UnexpectedTermination,
+    }
+    try testing.expectEqualStrings("400\n", run_result.stdout);
+}
+
 /// Build a compile-time demand pack test app for the dev backend against the
 /// object cache in `cache_env`, run it, and report its output and whether the
 /// build observed `table`'s `dbg`.

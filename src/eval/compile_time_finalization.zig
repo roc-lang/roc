@@ -202,7 +202,7 @@ const LiteralCapture = struct {
     fn value(self: *LiteralCapture, lowered: *const lir.CheckedPipeline.LoweredProgram, plan: LirProgram.LiteralRootPlan, completed: Value) ConstStoreWriter.Error!void {
         const index = @backingInt(plan.id);
         if (!self.wanted[index]) return;
-        var writer = ConstStoreWriter.Writer.initStore(self.allocator, &self.store, null, &lowered.lir_result);
+        var writer = ConstStoreWriter.Writer.initStore(self.allocator, &self.store, null, &lowered.lir_result, null);
         defer writer.deinit();
         self.nodes[index] = try writer.storeLiteral(plan.plan, plan.ret_layout, completed);
     }
@@ -360,6 +360,19 @@ fn loweringModuleView(lowering_modules: lir.CheckedPipeline.CheckedModuleSet, ke
     for (lowering_modules.imports) |view| if (moduleKeyBytesEqual(view.key.bytes, key.bytes)) return view;
     for (lowering_modules.root.relation_modules) |view| if (moduleKeyBytesEqual(view.key.bytes, key.bytes)) return view;
     return null;
+}
+
+/// The checked types of `lowering_modules`, by key, for a ConstStore writer
+/// to read a lowered named occurrence from. `lowering_modules` outlives the
+/// writers using the result.
+fn programTypesOf(lowering_modules: *const lir.CheckedPipeline.CheckedModuleSet) ConstStoreWriter.ProgramTypes {
+    return .{ .context = lowering_modules, .find = findProgramTypes };
+}
+
+fn findProgramTypes(context: *const anyopaque, key: [32]u8) ?checked.CheckedTypeStoreView {
+    const lowering_modules: *const lir.CheckedPipeline.CheckedModuleSet = @ptrCast(@alignCast(context));
+    const view = loweringModuleView(lowering_modules.*, .{ .bytes = key }) orelse return null;
+    return view.checked_types;
 }
 
 /// A literal root's source, at most 96 bytes of it. Owned.
@@ -1898,7 +1911,7 @@ fn evaluateBoxyLiteralRoots(
     var program_storage = try initEvaluationProgram(ProgramPtr, allocator, lowering_modules, host, .boxy_in_process, options);
     defer program_storage.deinit();
     const program = program_storage.ptr();
-    try evaluation.enterStage(host, program, &.{});
+    try evaluation.enterStage(lowering_modules, host, program, &.{});
     var graph = try evaluation.lirGraph();
     defer graph.deinit(allocator);
     var groups = try ProducerGroups.build(allocator, &evaluation, graph.deps);
@@ -2055,7 +2068,7 @@ fn evaluateStaged(
         const slots = if (ProgramPtr == *DevProgram) &program.slots else program.slotEnvironment();
         var inherited = failure_origins.iterator();
         while (inherited.next()) |entry| try slots.producer_origins.put(slots.allocator, entry.key_ptr.*, entry.value_ptr.*);
-        try evaluation.enterStage(stage, program, stage_roots.items);
+        try evaluation.enterStage(lowering_modules, stage, program, stage_roots.items);
         try evaluation.evaluateLevel(&groups, level);
         var stage_origins = slots.producer_origins.iterator();
         while (stage_origins.next()) |entry| try failure_origins.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
@@ -2139,7 +2152,9 @@ fn Evaluation(comptime ProgramPtr: type) type {
         /// reported against once every producer has run.
         literal_programs: []?*lir.CheckedPipeline.LoweredProgram,
 
-        /// The program the current level runs in.
+        /// The program the current level runs in, and the checked modules
+        /// it was lowered against.
+        lowering_modules: lir.CheckedPipeline.CheckedModuleSet = undefined,
         lowered: *lir.CheckedPipeline.LoweredProgram = undefined,
         program: ProgramPtr = undefined,
         /// The current program's plan of each producer it evaluates.
@@ -2259,7 +2274,8 @@ fn Evaluation(comptime ProgramPtr: type) type {
         /// Run the next levels in `lowered`, whose compile-time root plans
         /// are those of `root_ordinals`, in order, and whose literal root
         /// plans name their producers by id.
-        fn enterStage(self: *Self, lowered: *lir.CheckedPipeline.LoweredProgram, program: ProgramPtr, root_ordinals: []const u32) FinalizeError!void {
+        fn enterStage(self: *Self, lowering_modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, program: ProgramPtr, root_ordinals: []const u32) FinalizeError!void {
+            self.lowering_modules = lowering_modules;
             self.lowered = lowered;
             self.program = program;
             @memset(self.root_plans, null);
@@ -2407,7 +2423,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
             {
                 const previous_report_sites = self.owners.report_sites;
                 defer self.owners.report_sites = previous_report_sites;
-                _ = try evalProgramRoots(self.allocator, entry.module, requests, root_ids, &state.completion, entry.problem_store, &self.owners, self.options, self.lowered, plans, self.program);
+                _ = try evalProgramRoots(self.allocator, entry.module, requests, root_ids, &state.completion, entry.problem_store, &self.owners, self.options, self.lowered, programTypesOf(&self.lowering_modules), plans, self.program);
             }
             var alias: ?u32 = self.owners.next_alias[module_index];
             while (alias) |index| : (alias = self.owners.next_alias[index]) {
@@ -2430,7 +2446,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
                     // is repeated once it completes.
                     if (!state.completion.isDone(id)) continue;
                     const request_index = alias_state.completion.requestIndexForRoot(id);
-                    _ = try evalProgramRoots(self.allocator, alias_entry.module, alias_requests[request_index..][0..1], alias_state.completion.request_root_ids[request_index..][0..1], &alias_state.completion, alias_entry.problem_store, &self.owners, evaluation_options, self.lowered, &.{plan}, self.program);
+                    _ = try evalProgramRoots(self.allocator, alias_entry.module, alias_requests[request_index..][0..1], alias_state.completion.request_root_ids[request_index..][0..1], &alias_state.completion, alias_entry.problem_store, &self.owners, evaluation_options, self.lowered, programTypesOf(&self.lowering_modules), &.{plan}, self.program);
                 }
             }
         }
@@ -3282,7 +3298,7 @@ fn lowerEvalAndFinishRoots(
     if (comptime use_interpreter) {
         const program = try InterpreterProgram.init(allocator, lowering_modules, &lowered, options);
         defer program.deinit();
-        return evalInterpreterProgramRoots(allocator, module, requests, root_ids, state, problem_store, &owners, options, &lowered, const_roots, program);
+        return evalInterpreterProgramRoots(allocator, module, requests, root_ids, state, problem_store, &owners, options, &lowered, programTypesOf(&lowering_modules), const_roots, program);
     }
     if (const_roots.len != requests.len) {
         finalizationInvariant("LIR lowering returned a different number of compile-time roots than requested");
@@ -3290,7 +3306,7 @@ fn lowerEvalAndFinishRoots(
     var native = try DevProgram.init(allocator, lowering_modules, &lowered, .dev_object, options);
     defer native.deinit();
     native.codegen.static_strings = native.static_strings.view();
-    return evalDevProgramRoots(allocator, module, requests, root_ids, state, problem_store, &owners, options, &lowered, const_roots, &native);
+    return evalDevProgramRoots(allocator, module, requests, root_ids, state, problem_store, &owners, options, &lowered, programTypesOf(&lowering_modules), const_roots, &native);
 }
 
 fn evalInterpreterProgramRoots(
@@ -3303,6 +3319,7 @@ fn evalInterpreterProgramRoots(
     owners: *const ModuleOwners,
     options: Options,
     lowered: *lir.CheckedPipeline.LoweredProgram,
+    program_types: ConstStoreWriter.ProgramTypes,
     const_roots: []const LirProgram.ConstRootPlan,
     shared_program: *InterpreterProgram,
 ) FinalizeError!bool {
@@ -3311,7 +3328,7 @@ fn evalInterpreterProgramRoots(
     const interpreter = &program.interpreter;
     const host = &program.host;
     program.timing_io = if (options.timing) |timing| timing.std_io else null;
-    var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result);
+    var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result, program_types);
     defer writer.deinit();
     writer.setErasedCallableResolver(.{ .context = program, .resolve = InterpreterProgram.resolveStoredCallable });
 
@@ -5176,11 +5193,12 @@ fn evalProgramRoots(
     owners: *const ModuleOwners,
     options: Options,
     lowered: *lir.CheckedPipeline.LoweredProgram,
+    program_types: ConstStoreWriter.ProgramTypes,
     const_roots: []const LirProgram.ConstRootPlan,
     program: anytype,
 ) FinalizeError!bool {
-    if (@TypeOf(program) == *DevProgram) return evalDevProgramRoots(allocator, module, requests, root_ids, state, problem_store, owners, options, lowered, const_roots, program);
-    if (@TypeOf(program) == *InterpreterProgram) return evalInterpreterProgramRoots(allocator, module, requests, root_ids, state, problem_store, owners, options, lowered, const_roots, program);
+    if (@TypeOf(program) == *DevProgram) return evalDevProgramRoots(allocator, module, requests, root_ids, state, problem_store, owners, options, lowered, program_types, const_roots, program);
+    if (@TypeOf(program) == *InterpreterProgram) return evalInterpreterProgramRoots(allocator, module, requests, root_ids, state, problem_store, owners, options, lowered, program_types, const_roots, program);
     @compileError("compile-time evaluation owner must be explicit native or interpreter program");
 }
 
@@ -5194,6 +5212,7 @@ fn evalDevProgramRoots(
     owners: *const ModuleOwners,
     options: Options,
     lowered: *lir.CheckedPipeline.LoweredProgram,
+    program_types: ConstStoreWriter.ProgramTypes,
     const_roots: []const LirProgram.ConstRootPlan,
     native: *DevProgram,
 ) FinalizeError!bool {
@@ -5358,7 +5377,7 @@ fn evalDevProgramRoots(
     };
 
     const store_results_started_ns = if (options.timing) |timing| timing.start() else 0;
-    var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result);
+    var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result, program_types);
     defer writer.deinit();
     writer.setErasedCallableResolver(.{
         .context = @ptrCast(&resolver),
