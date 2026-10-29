@@ -46,11 +46,9 @@ const DerivationId = static_dispatch.GeneratedCodecDerivationId;
 
 pub const Kind = enum(u8) { parser, encoder };
 
-/// The subject of a subject-free contract call.
-const no_subject: TypeId = @fromBackingInt(std.math.maxInt(u32));
-
-/// A contract call's selection key: its method and its subject type.
-const CallKey = struct { method: NameId, subject: TypeId };
+/// A contract call's selection key: its method and its subject type, or
+/// null for a subject-free call.
+const CallKey = struct { method: NameId, subject: ?TypeId };
 
 /// What a contract call resolved to.
 const Resolved = union(enum) {
@@ -323,10 +321,10 @@ fn collectCalls(program: *Program, family_index: u32) Allocator.Error!void {
         const derivation = table.generated_codec_derivations[@backingInt(id)];
         for (derivation.callsSlice(table)) |call| {
             const method = try methodName(program, names.methodNameText(call.method));
-            const subject = if (call.subject_ty) |subject_ty|
+            const subject: ?TypeId = if (call.subject_ty) |subject_ty|
                 try subjectKey(program, method, try convertIn(program, env, subject_ty))
             else
-                no_subject;
+                null;
             const resolved: Resolved = switch (call.resolution) {
                 .pending => invariant("a generated codec contract retained an unlinked call"),
                 .checked_error => .{ .checked_error = try convertIn(program, env, call.callable_ty) },
@@ -344,7 +342,7 @@ fn collectCalls(program: *Program, family_index: u32) Allocator.Error!void {
 
 fn lookupCall(program: *Program, family_index: u32, method_text: []const u8, subject: ?TypeId) Allocator.Error!Resolved {
     const method = try methodName(program, method_text);
-    const key: CallKey = .{ .method = method, .subject = if (subject) |ty| try subjectKey(program, method, ty) else no_subject };
+    const key: CallKey = .{ .method = method, .subject = if (subject) |ty| try subjectKey(program, method, ty) else null };
     return program.codec.families.items[family_index].calls.get(key) orelse
         invariantFmt("a generated codec called {s}, which its checked contract does not record", .{method_text});
 }
