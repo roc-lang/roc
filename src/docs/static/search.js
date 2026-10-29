@@ -185,7 +185,14 @@ const setupSearch = () => {
           const button = dynamic("button", "", label);
           button.type = "button";
           button.setAttribute("aria-pressed", String(id === selectedCategory));
-          button.addEventListener("click", event => { event.stopPropagation(); selectedCategory = id; expandedCategories.clear(); search(); searchBox.focus(); });
+          button.addEventListener("click", event => {
+            event.stopPropagation();
+            if (selectedCategory === id) return;
+            const position = capturePosition();
+            selectedCategory = id;
+            search(position);
+            searchBox.focus({ preventScroll: true });
+          });
           controls.append(button);
         }
         if (prose.length) {
@@ -239,7 +246,8 @@ const setupSearch = () => {
         for (const item of matches.slice(0, limit)) { addProse(item, query); seen.add(item.href); }
         if (matches.length > 5) {
           const row = dynamic("li", "search-more");
-          const button = dynamic("button", "", expanded ? `Less ${label} matches` : `More ${label} matches (${matches.length})`);
+          const groupLabel = category === "api" ? `${label} docs` : label;
+          const button = dynamic("button", "", expanded ? `Less ${groupLabel} matches` : `More ${groupLabel} matches (${matches.length})`);
           button.type = "button";
           row.dataset.category = category;
           button.setAttribute("aria-expanded", String(expanded));
