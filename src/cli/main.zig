@@ -11993,7 +11993,6 @@ fn linkNativeBuild(
     }
     try object_files.appendSlice(extra_objects);
     const objects_ns: u64 = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - objects_started.nanoseconds);
-    if (publication) |*pending| try pending.publish();
     reporter.endWithParentBreakdown(&.{
         .{ .name = "Platform input validation", .ns = paths_ns },
         .{ .name = "Runtime object materialization", .ns = objects_ns },
