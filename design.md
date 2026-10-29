@@ -26495,6 +26495,30 @@ only retains and releases descriptor references. Calls that entered old code
 before the swap keep executing old code safely while new entrypoint calls use
 the new image.
 
+Static data outlives the image that wrote it. Its refcount is the static
+sentinel, so no increment, decrement, or drop observes when a value stops
+pointing at it, and a value the host keeps can point into the static data of an
+image that is no longer current. A hot-reload image therefore writes the static
+data entries it needs into one page-aligned static pool chunk at the end of its
+allocation, and records in that chunk each entry whose relocations reach no
+code: its bytes, alignment, symbol offset, and relocations, with a content hash.
+The shim marks a descriptor accepted before any of that image's code runs.
+Once a descriptor is accepted, the compiler parent links its chunk into the
+session's static pool, whose newest chunk the control block names, and never
+reclaims that chunk. A rejected or never-loaded image ran no code, so its whole
+allocation stays reclaimable. A rebuild worker reuses a pool entry instead of
+writing its own copy when the entry's content is exactly the export's: equal
+length, alignment, symbol offset, bytes outside pointer slots, and relocations
+whose targets are the same pool entries. The hash only finds candidates, and
+every candidate is compared exactly. An entry is reused only when the span from
+it to the new image fits a signed 32-bit displacement, which every code-to-data
+relocation encoding reaches. Reused data symbols resolve into the pool, so the
+pool grows only with distinct static content. An entry whose relocations reach
+a function pointer names its own image's code and is never reused; an image
+with such an entry records that its static data references code, and the shim
+holds a reference to it for the rest of the session once it accepts it, which
+keeps that image's code, data, and Boxy runtime alive.
+
 The compiler parent process is the sole owner of committing candidate descriptor offsets
 and shared-memory image-byte reclamation. It keeps unbounded process-local lists of descriptor offsets,
 reclaimed descriptor slots, and reclaimed image regions. After a rebuild commits
@@ -26504,9 +26528,10 @@ remains live regardless of its reference count. A non-current descriptor with a
 nonzero reference count is marked retired and left in place. A non-current
 descriptor whose reference count is zero is marked reclaimed, removed from the
 live descriptor list, its descriptor slot is returned to the descriptor-slot free
-list, and its image allocation range is added to the image free-region list. The
-parent coalesces free image regions and rewinds the shared-memory header's
-used-size high-water mark to the highest still-live image allocation. New
+list, and its image allocation range, less the static pool chunk of an accepted
+image, is added to the image free-region list. The parent coalesces free image
+regions and rewinds the shared-memory header's used-size high-water mark to the
+highest still-live image allocation or static pool chunk. New
 rebuilds prefer suitably sized reclaimed image regions and otherwise append
 below the descriptor-slot area. If filesystem changes arrive faster than the host
 can enter the shim, the newest rebuild can still commit a descriptor as long as
