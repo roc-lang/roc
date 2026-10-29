@@ -1484,7 +1484,9 @@ pub const DynOp = union(enum) {
     /// record fields may differ in storage (design.md "Field Kinds"): a
     /// field `to` stores in a presence slot is wrapped `#Present`, and a
     /// presence slot `to` stores inline is unwrapped; the program crashes
-    /// when that slot is `#Missing`.
+    /// when that slot is `#Missing`. A tag row `to` widens is re-tagged by
+    /// name under `to` (design.md "Sealed Result Rows"); a conversion
+    /// between two closed types is a static conversion worker instead.
     adapt: struct { src: LocalId, from: LocalId, to: LocalId },
 };
 

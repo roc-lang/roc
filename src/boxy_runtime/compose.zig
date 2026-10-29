@@ -268,15 +268,30 @@ fn releaseImmortal(ops: *RocOps, ptr: *anyopaque, alignment: usize) void {
     ops.dealloc(ptr, alignment);
 }
 
+/// Process-lifetime pages carved front to back. Nothing here is ever freed,
+/// so a bump pointer over whole pages is all the bookkeeping it needs.
 const PlatformImmortals = struct {
     var lock: std.atomic.Mutex = .unlocked;
-    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    var next: usize = 0;
+    var end: usize = 0;
+
+    const min_chunk_bytes = 64 * 1024;
 
     fn alloc(ops: *RocOps, size: usize, alignment: usize) [*]u8 {
         while (!lock.tryLock()) std.atomic.spinLoopHint();
         defer lock.unlock();
-        return arena.allocator().rawAlloc(size, .fromByteUnits(alignment), @returnAddress()) orelse
-            ops.crash("out of memory composing a Boxy descriptor");
+        var start = std.mem.alignForward(usize, next, alignment);
+        if (next == 0 or size > end - @min(start, end)) {
+            const page = std.heap.pageSize();
+            const chunk_len = std.mem.alignForward(usize, @max(size + alignment, min_chunk_bytes), page);
+            const chunk = std.heap.page_allocator.rawAlloc(chunk_len, .fromByteUnits(page), @returnAddress()) orelse
+                ops.crash("out of memory composing a Boxy descriptor");
+            next = @intFromPtr(chunk);
+            end = next + chunk_len;
+            start = std.mem.alignForward(usize, next, alignment);
+        }
+        next = start + size;
+        return @ptrFromInt(start);
     }
 };
 
