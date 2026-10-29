@@ -166,17 +166,17 @@ fn hoverOnLambdaParameterBindingShowsTypeDocs() integration_spec.SpecError!void 
     try expectText("hover at 7:11", text, &.{ "LogLevel", "Doc comment for `LogLevel`" }, &.{"Doc comment for `itself`"});
 }
 
-/// Complete `nam` in the body of `itself`.
+/// Complete `na` in the body of `itself`.
 fn completionOfLambdaParameterOmitsEnclosingDocs() integration_spec.SpecError!void {
     var fixture: Fixture = undefined;
     try fixture.init();
     defer fixture.deinit();
 
-    const incomplete = try std.mem.replaceOwned(u8, test_env.allocator, fixture.source, "{\n    name\n}", "{\n    nam\n}");
+    const incomplete = try std.mem.replaceOwned(u8, test_env.allocator, fixture.source, "{\n    name\n}", "{\n    na\n}");
     defer test_env.allocator.free(incomplete);
 
-    // After `nam` on line 8 (zero-based).
-    const result = try fixture.checker.getCompletionsAtPosition(fixture.file_uri, incomplete, 8, 7) orelse
+    // After `na` on line 8 (zero-based).
+    const result = try fixture.checker.getCompletionsAtPosition(fixture.file_uri, incomplete, 8, 6) orelse
         return error.TestUnexpectedResult;
     defer result.deinit();
 
@@ -187,7 +187,7 @@ fn completionOfLambdaParameterOmitsEnclosingDocs() integration_spec.SpecError!vo
         }
         return;
     }
-    std.debug.print("\nno `name` completion at 8:7\n", .{});
+    std.debug.print("\nno `name` completion at 8:6\n", .{});
     return error.TestUnexpectedResult;
 }
 
