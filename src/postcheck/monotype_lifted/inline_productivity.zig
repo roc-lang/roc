@@ -186,18 +186,28 @@ pub const Placement = struct { value: PathId, result: PathId };
 
 /// What the code around a value consumes of it.
 pub const DemandSet = struct {
-    reads: std.AutoArrayHashMapUnmanaged(PathId, Consumers) = .empty,
+    /// Each read path once, in first-read order, with its consumers at the
+    /// same position. A value's distinct read paths are few, so a scan finds
+    /// a path's position.
+    read_paths: std.ArrayList(PathId) = .empty,
+    read_consumers: std.ArrayList(Consumers) = .empty,
     placements: std.AutoArrayHashMapUnmanaged(Placement, void) = .empty,
 
     fn addRead(self: *DemandSet, allocator: Allocator, path: PathId, consumers: Consumers) Allocator.Error!bool {
-        const gop = try self.reads.getOrPut(allocator, path);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = consumers;
+        if (std.mem.findScalar(PathId, self.read_paths.items, path)) |index| {
+            const existing = &self.read_consumers.items[index];
+            if (existing.supersetOf(consumers)) return false;
+            existing.setUnion(consumers);
             return true;
         }
-        if (gop.value_ptr.supersetOf(consumers)) return false;
-        gop.value_ptr.setUnion(consumers);
+        try self.read_paths.append(allocator, path);
+        try self.read_consumers.append(allocator, consumers);
         return true;
+    }
+
+    fn removeReadAt(self: *DemandSet, index: usize) void {
+        _ = self.read_paths.swapRemove(index);
+        _ = self.read_consumers.swapRemove(index);
     }
 
     fn addPlacement(self: *DemandSet, allocator: Allocator, placement: Placement) Allocator.Error!bool {
@@ -218,8 +228,8 @@ pub const DemandSet = struct {
 
     pub fn view(self: *const DemandSet) Demand {
         return .{
-            .read_paths = self.reads.keys(),
-            .read_consumers = self.reads.values(),
+            .read_paths = self.read_paths.items,
+            .read_consumers = self.read_consumers.items,
             .placements = self.placements.keys(),
         };
     }
@@ -276,7 +286,7 @@ pub const Analysis = struct {
     fns: []FnSummary,
     /// What each direct or value call's surroundings in a source body consume
     /// of its result.
-    call_demand: std.AutoHashMapUnmanaged(Ast.ExprId, DemandSet) = .empty,
+    call_demand: collections.DenseMapUnmanaged(Ast.ExprId, DemandSet) = .empty,
 
     pub fn deinit(self: *Analysis) void {
         self.arena.deinit();
@@ -289,7 +299,7 @@ pub const Analysis = struct {
     }
 
     pub fn callDemand(self: *const Analysis, call: Ast.ExprId) Demand {
-        const set = self.call_demand.getPtr(call) orelse return .none;
+        const set = self.call_demand.getPtrConst(call) orelse return .none;
         return set.view();
     }
 
@@ -397,9 +407,9 @@ const Builder = struct {
     /// Callers of each function, recorded by the demand walk.
     callers: []std.ArrayList(Ast.FnId),
     fn_id: Ast.FnId = undefined,
-    locals: std.AutoHashMapUnmanaged(Ast.LocalId, DemandSet) = .empty,
+    locals: collections.DenseMapUnmanaged(Ast.LocalId, DemandSet) = .empty,
     locals_changed: bool = false,
-    joins: std.AutoHashMapUnmanaged(Ast.JoinPointId, Ast.Span(Ast.TypedLocal)) = .empty,
+    joins: collections.DenseMapUnmanaged(Ast.JoinPointId, Ast.Span(Ast.TypedLocal)) = .empty,
     loops: std.ArrayList(Loop) = .empty,
     tasks: std.ArrayList(Task) = .empty,
     steps: std.ArrayList(Step) = .empty,
@@ -605,7 +615,7 @@ const Builder = struct {
     }
 
     fn localDemand(self: *const Builder, local: Ast.LocalId) Demand {
-        const set = self.locals.getPtr(local) orelse return .none;
+        const set = self.locals.getPtrConst(local) orelse return .none;
         return set.view();
     }
 
@@ -874,10 +884,10 @@ const Builder = struct {
                     // The update supplies this field, so the base's field is
                     // never read.
                     var read_index: usize = 0;
-                    while (read_index < base.reads.count()) {
-                        try self.analysis.paths.stepsOf(self.temp(), base.reads.keys()[read_index], &self.steps);
+                    while (read_index < base.read_paths.items.len) {
+                        try self.analysis.paths.stepsOf(self.temp(), base.read_paths.items[read_index], &self.steps);
                         if (self.steps.items.len != 0 and self.steps.items[0].eql(field_step)) {
-                            base.reads.swapRemoveAt(read_index);
+                            base.removeReadAt(read_index);
                         } else {
                             read_index += 1;
                         }
@@ -1087,17 +1097,17 @@ const Builder = struct {
 
     fn constructedFn(self: *Builder, fn_id: Ast.FnId, body: Ast.ExprId) Allocator.Error!bool {
         self.resetFunction(fn_id);
-        var slots: std.AutoHashMapUnmanaged(Ast.LocalId, Slot) = .empty;
+        var slots: collections.DenseMapUnmanaged(Ast.LocalId, Slot) = .empty;
         const fn_ = self.program().getFn(fn_id);
         const args = self.program().typedLocalSpan(fn_.args);
         for (0..args.len) |index| try slots.put(self.temp(), GuardedList.at(args, index).local, .{ .kind = .arg, .index = @intCast(index) });
         const captures = self.program().typedLocalSpan(fn_.captures);
         for (0..captures.len) |index| try slots.put(self.temp(), GuardedList.at(captures, index).local, .{ .kind = .capture, .index = @intCast(index) });
-        var defs: std.AutoHashMapUnmanaged(Ast.LocalId, ?Ast.ExprId) = .empty;
+        var defs: collections.DenseMapUnmanaged(Ast.LocalId, ?Ast.ExprId) = .empty;
         var returns: std.ArrayList(Ast.ExprId) = .empty;
         try self.collectDefinitions(body, &defs, &returns);
         const context: BuiltContext = .{ .defs = &defs, .slots = &slots };
-        var memo: std.AutoHashMapUnmanaged(Ast.ExprId, Built) = .empty;
+        var memo: collections.DenseMapUnmanaged(Ast.ExprId, Built) = .empty;
         var result = try self.built(body, context, &memo);
         for (returns.items) |value| result = try self.meet(result, try self.built(value, context, &memo));
         // A function that never returns normally builds nothing a caller can
@@ -1127,16 +1137,16 @@ const Builder = struct {
     }
 
     const BuiltContext = struct {
-        defs: *const std.AutoHashMapUnmanaged(Ast.LocalId, ?Ast.ExprId),
-        slots: *const std.AutoHashMapUnmanaged(Ast.LocalId, Slot),
+        defs: *const collections.DenseMapUnmanaged(Ast.LocalId, ?Ast.ExprId),
+        slots: *const collections.DenseMapUnmanaged(Ast.LocalId, Slot),
     };
 
     /// `parts` with the consumers of each path merged into one read.
     fn mergedParts(self: *Builder, parts: []const Read) Allocator.Error![]const Read {
         var merged: DemandSet = .{};
         for (parts) |part| _ = try merged.addRead(self.temp(), part.path, part.consumers);
-        const out = try self.temp().alloc(Read, merged.reads.count());
-        for (out, merged.reads.keys(), merged.reads.values()) |*read, path, consumers| read.* = .{ .path = path, .consumers = consumers };
+        const out = try self.temp().alloc(Read, merged.read_paths.items.len);
+        for (out, merged.read_paths.items, merged.read_consumers.items) |*read, path, consumers| read.* = .{ .path = path, .consumers = consumers };
         return out;
     }
 
@@ -1173,7 +1183,7 @@ const Builder = struct {
     fn collectDefinitions(
         self: *Builder,
         body: Ast.ExprId,
-        defs: *std.AutoHashMapUnmanaged(Ast.LocalId, ?Ast.ExprId),
+        defs: *collections.DenseMapUnmanaged(Ast.LocalId, ?Ast.ExprId),
         returns: *std.ArrayList(Ast.ExprId),
     ) Allocator.Error!void {
         const program_ = self.program();
@@ -1201,7 +1211,7 @@ const Builder = struct {
         };
     }
 
-    fn noteDefinition(self: *Builder, defs: *std.AutoHashMapUnmanaged(Ast.LocalId, ?Ast.ExprId), pat_id: Ast.PatId, value: ?Ast.ExprId) Allocator.Error!void {
+    fn noteDefinition(self: *Builder, defs: *collections.DenseMapUnmanaged(Ast.LocalId, ?Ast.ExprId), pat_id: Ast.PatId, value: ?Ast.ExprId) Allocator.Error!void {
         switch (self.program().getPat(pat_id).data) {
             .bind => |local| {
                 const gop = try defs.getOrPut(self.temp(), local);
@@ -1284,7 +1294,7 @@ const Builder = struct {
         self: *Builder,
         root: Ast.ExprId,
         context: BuiltContext,
-        memo: *std.AutoHashMapUnmanaged(Ast.ExprId, Built),
+        memo: *collections.DenseMapUnmanaged(Ast.ExprId, Built),
     ) Allocator.Error!Built {
         const Frame = struct { expr: Ast.ExprId, expanded: bool };
         var stack: std.ArrayList(Frame) = .empty;
@@ -1371,7 +1381,7 @@ const Builder = struct {
         self: *Builder,
         expr_id: Ast.ExprId,
         context: BuiltContext,
-        memo: *const std.AutoHashMapUnmanaged(Ast.ExprId, Built),
+        memo: *const collections.DenseMapUnmanaged(Ast.ExprId, Built),
     ) Allocator.Error!Built {
         const program_ = self.program();
         const a = self.temp();
