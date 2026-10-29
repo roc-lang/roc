@@ -2147,10 +2147,11 @@ const Gen = struct {
         b.store.shapes.loop = true;
         b.hole = head_body;
 
-        // The error join, which owns the field set and the slots.
+        // The error join, which owns the field set, the field names, and the
+        // slots, so each releases once rather than at every failing call.
         const err_join = b.freshJoin();
         const err_param = try self.local(err_ty);
-        const retained = try std.mem.concat(allocator, LocalId, &.{ &.{field_set}, slots });
+        const retained = try std.mem.concat(allocator, LocalId, &.{ &.{field_set}, names, slots });
         defer allocator.free(retained);
         const err_body = try self.declareJoin(err_join, &.{err_param}, retained);
         const loop_hole = b.hole;

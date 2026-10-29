@@ -2094,13 +2094,13 @@ test "issue 11910 boxy JSON record parser lowers each field's value parser once"
 
 test "issue 11910 boxy JSON parses of one shape share its generated parser" {
     // The checker interns the two `Json.parse` contracts for `Shape` to one
-    // identity, so both functions call one generated runtime parser. The
-    // second function's parser construction still renames each field, so it
-    // adds one call per field rather than a second value parser per field.
+    // identity, so both functions call one generated runtime parser: the
+    // second function adds the same calls however wide the record is, rather
+    // than a second value parser per field.
     const allocator = std.testing.allocator;
     const narrow_second = (try boxyStructuralJsonParserCounts(allocator, 4, 2)).calls - (try boxyStructuralJsonParserCounts(allocator, 4, 1)).calls;
     const wide_second = (try boxyStructuralJsonParserCounts(allocator, 8, 2)).calls - (try boxyStructuralJsonParserCounts(allocator, 8, 1)).calls;
-    try std.testing.expectEqual(@as(usize, 4), wide_second - narrow_second);
+    try std.testing.expectEqual(narrow_second, wide_second);
 }
 
 test "boxy root that parses JSON directly receives its codec evidence" {
@@ -14134,3 +14134,4 @@ test "issue 12491 nested closure chain bound to a block local lowers under lss" 
 test "issue 12491 nested closure chain bound to a block local lowers under boxy" {
     try expectIssue12491BlockLocalClosureChain(.boxy);
 }
+
