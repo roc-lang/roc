@@ -198,7 +198,11 @@ const setupSearch = () => {
           controls.append(button);
         }
         if (prose.length) {
-          const toggle = dynamic("button", "search-snippet-toggle", showSnippets ? "Hide snippets" : "Show snippets");
+          const toggle = dynamic("button", "search-snippet-toggle", "");
+          const label = showSnippets ? "Hide snippets" : "Show snippets";
+          toggle.setAttribute("aria-label", label);
+          toggle.title = label;
+          toggle.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="M4 5h16M4 12h16M4 19h16" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 8h11M4 15h11M4 22h11" fill="none" stroke="currentColor" stroke-width="1"/></svg>';
           toggle.type = "button";
           toggle.setAttribute("aria-pressed", String(showSnippets));
           toggle.addEventListener("click", event => {

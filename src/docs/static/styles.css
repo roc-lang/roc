@@ -1368,7 +1368,7 @@ pre>code {
         justify-content: flex-start;
     }
 
-    #module-search-form:has(#module-search:focus) .menu-toggle {
+    #module-search-form:has(#module-search:focus, #search-type-ahead:not(.hidden)) .menu-toggle {
         max-width: 0;
         margin-left: 0;
         opacity: 0;
@@ -1668,4 +1668,4 @@ main > .main-content[aria-busy="true"] {
 #search-type-ahead .search-prose-result a:hover .search-result-title,
 #search-type-ahead .search-prose-result a:focus-visible .search-result-title { text-decoration: underline; }
 #search-type-ahead .search-snippet mark { color: var(--violet); background: transparent; font-weight: bold; }
-.search-snippet-toggle { margin-left: auto; }
+.search-snippet-toggle { margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
