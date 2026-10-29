@@ -1,7 +1,7 @@
 // Shared by the browser UI and the search ranking tests.
 (function (root) {
   const normalize = text => text.toLowerCase().replace(/\s+/g, " ").trim();
-  // Within each match location, prefer exact names and preserve order for ties.
+  // Within each match location, prefer exact names, then prefixes; preserve ties.
   function rankApi(entries, query) {
     const q = query.trim().toLowerCase();
     if (!q) return [];
@@ -12,7 +12,8 @@
         (entry.kind === "type" ? types : names).push(entry);
       } else if (entry.signature.includes(signatureQuery)) signatures.push(entry);
     }
-    const namePriority = entry => entry.name === q ? 0 : entry.name.endsWith(`.${q}`) ? 1 : 2;
+    const namePriority = entry => entry.name === q ? 0 : entry.name.endsWith(`.${q}`) ? 1 :
+      entry.name.startsWith(q) ? 2 : 3;
     const byName = (a, b) => namePriority(a) - namePriority(b);
     return types.sort(byName).concat(names.sort(byName), signatures);
   }

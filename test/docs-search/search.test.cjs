@@ -93,7 +93,7 @@ test('API type names precede function names, which precede signature-only matche
   {name:'str.len',kind:'value',signature:':str->u64'}
  ];
  assert.deepEqual(rankApi(api,' LIST ').map(x=>x.name),[
-  'list.list','other.list_view','str.to_list','list.len','alpha.consume','other.container'
+  'list.list','other.list_view','list.len','str.to_list','alpha.consume','other.container'
  ]);
  assert.deepEqual(rankApi(api,'str.to_list'),[api[1]]);
  assert.deepEqual(rankApi(api,'List( U8 )'),[api[0],api[1],api[4]]);
@@ -119,5 +119,25 @@ test('exact API names beat qualified and partial matches within each kind',()=>{
  ]);
  assert.deepEqual(rankApi(api,'fold').map(x=>x.name),['list.fold','iter.fold','list.fold_try']);
  assert.equal(rankApi(api,'crypto.sha256.hasher')[0],api[0]);
- assert.deepEqual(rankApi(api,'hash').slice(0,4),api.slice(0,4));
+ assert.deepEqual(rankApi(api,'hash').slice(0,4),[api[2],api[3],api[0],api[1]]);
+});
+
+
+test('full-name prefixes precede nested matches without displacing types or exact names',()=>{
+ const api = [
+  {name:'crypto.sha256.hasher',kind:'type',signature:''},
+  {name:'crypto.sha256.hasher.empty',kind:'value',signature:':()->hasher'},
+  {name:'hasher.write',kind:'value',signature:':hasher->hasher'},
+  {name:'hasher',kind:'type',signature:''},
+  {name:'hasher.empty',kind:'value',signature:':()->hasher'},
+  {name:'other.make',kind:'value',signature:':()->hasher'},
+  {name:'other.hasher',kind:'value',signature:''}
+ ];
+ assert.deepEqual(rankApi(api,'Hasher').map(x=>x.name),[
+  'hasher','crypto.sha256.hasher','other.hasher','hasher.write','hasher.empty',
+  'crypto.sha256.hasher.empty','other.make'
+ ]);
+ assert.deepEqual(rankApi(api,'hasher.').map(x=>x.name),[
+  'hasher.write','hasher.empty','crypto.sha256.hasher.empty'
+ ]);
 });
