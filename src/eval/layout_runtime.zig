@@ -405,6 +405,7 @@ pub const LayoutRuntime = struct {
     }
 
     pub fn rcHelperForLayout(self: *const LayoutRuntime, op: RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
+        builtins.stack_guard.check();
         const layout_val = self.layout_store.getLayout(layout_idx);
         if (layout_val.tag == .closure) {
             return self.rcHelperForLayout(nestedDropOp(op), layout_val.getClosure().captures_layout_idx);
@@ -424,6 +425,7 @@ pub const LayoutRuntime = struct {
     }
 
     pub fn performRcPlan(self: *const LayoutRuntime, hooks: anytype, rc_plan: layout_mod.RcHelperPlan, val: Value, count: u32, atomicity: RcAtomicity) void {
+        builtins.stack_guard.check();
         const utils = builtins.utils;
         switch (rc_plan) {
             .noop => {},
@@ -565,6 +567,7 @@ pub const LayoutRuntime = struct {
         count: u32,
         atomicity: RcAtomicity,
     ) void {
+        builtins.stack_guard.check();
         if (rl.getAllocationDataPtr(self.roc_ops)) |source| {
             const elem_count = rl.getAllocationElementCount(true, self.roc_ops);
             const child_plan = hooks.rcPlanFor(child_key);

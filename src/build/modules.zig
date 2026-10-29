@@ -364,6 +364,7 @@ pub const ModuleType = enum {
             // runtime object, so it imports nothing from the compiler.
             .value_rules => .{
                 .root = "src/postcheck/value_rules/mod.zig",
+                .deps = &.{.builtins},
                 .tests = .{ .unit = .{ .aggregators = &.{"value rules declarations are referenced"} } },
             },
             .postcheck => .{

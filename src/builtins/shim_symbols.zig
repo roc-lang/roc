@@ -12,6 +12,15 @@
 
 const std = @import("std");
 
+/// Returns a WebAssembly 1.0 module's stack pointer, which it cannot export
+/// as a mutable global.
+pub const roc_wasm_stack_pointer = "roc_wasm_stack_pointer";
+/// Replaces a WebAssembly 1.0 module's stack pointer, which it cannot export
+/// as a mutable global.
+pub const roc_wasm_set_stack_pointer = "roc_wasm_set_stack_pointer";
+/// Called by a failed stack-bound check in a wasm module whose platform
+/// reserves low memory; leaves the stack pointer below `__stack_low` and traps.
+pub const roc_wasm_stack_overflow = "roc_wasm_stack_overflow";
 /// Returns the process-global `RocOps` built by the prelinked shim.
 pub const roc_shim_get_ops = "roc_shim_get_ops";
 /// Dispatches an entrypoint index into the prelinked shim.
@@ -96,10 +105,11 @@ pub const runtime_set = [_][:0]const u8{
 };
 
 /// The C memory routines native code generation calls instead of copying,
-/// moving, filling, comparing or measuring bytes inline. Whatever completes a
-/// compiled Roc program defines them: a platform's C runtime, the freestanding
-/// default platform's compiler-rt carrier, or the compiler itself for an
-/// object it loads into its own process.
+/// moving, filling, comparing or measuring bytes inline. A native object the
+/// LLVM backend builds defines them itself (`llvm_private_runtime_set`); for
+/// every other compiled Roc program, whatever completes it defines them: a
+/// platform's C runtime, the freestanding default platform's compiler-rt
+/// carrier, or the compiler itself for an object it loads into its own process.
 pub const c_memory_set = [_][:0]const u8{
     "memcpy",
     "memmove",
@@ -123,6 +133,25 @@ pub const c_math_set = [_][:0]const u8{
     "truncf",
     "sqrt",
     "sqrtf",
+};
+
+/// The routines a native object the LLVM backend builds defines for itself,
+/// with internal linkage, from its private runtime
+/// (src/builtins/llvm_private_runtime.zig): every routine LLVM's code
+/// generator may call on a target Roc builds native LLVM objects for. The
+/// object therefore leaves only `roc_*` symbols for its platform to supply. A
+/// name the target's runtime does not define is one that target's code
+/// generator never calls.
+pub const llvm_private_runtime_set = c_memory_set ++ c_math_set ++ [_][:0]const u8{
+    // Darwin lowers a zero fill of unknown length to `bzero`.
+    "bzero",
+    // MSVC objects that use floating point reference `_fltused`.
+    "_fltused",
+    // Windows functions with frames larger than a page probe the stack
+    // through these: `__chkstk` for MSVC and ARM64 MinGW, `___chkstk_ms` for
+    // x64 MinGW.
+    "__chkstk",
+    "___chkstk_ms",
 };
 
 /// Export the six fixed host callbacks using canonical names. Callback types

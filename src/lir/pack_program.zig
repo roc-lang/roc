@@ -500,73 +500,108 @@ pub fn procCopiesSiteCode(allocator: Allocator, store: *const LirStore, proc: LI
 /// procedure without a code key carries one. The entry's identity names none
 /// of that copied code. Caller owns the result.
 pub fn siteCodeCarriers(allocator: Allocator, store: *const LirStore) Allocator.Error![]bool {
-    const proc_count = store.procSpecCount();
-    const carries = try allocator.alloc(bool, proc_count);
-    errdefer allocator.free(carries);
-    @memset(carries, false);
-    const seen = try allocator.alloc(bool, store.cfStmtCount());
-    defer allocator.free(seen);
-    @memset(seen, false);
-    var visited = std.ArrayList(LIR.CFStmtId).empty;
-    defer visited.deinit(allocator);
-    var work = std.ArrayList(LIR.CFStmtId).empty;
-    defer work.deinit(allocator);
-    const Edge = struct { caller: LIR.LirProcSpecId, callee: LIR.LirProcSpecId };
-    var edges = std.ArrayList(Edge).empty;
-    defer edges.deinit(allocator);
-    var carriers = std.ArrayList(LIR.LirProcSpecId).empty;
-    defer carriers.deinit(allocator);
-    for (carries, 0..) |*carried, index| {
-        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
-        const proc = store.getProcSpecImmediate(proc_id);
-        if (proc.code_key != null) continue;
-        const body = proc.body orelse continue;
-        for (visited.items) |stmt_id| seen[@backingInt(stmt_id)] = false;
-        visited.clearRetainingCapacity();
-        work.clearRetainingCapacity();
-        try work.append(allocator, body);
-        while (work.pop()) |stmt_id| {
-            if (seen[@backingInt(stmt_id)]) continue;
-            seen[@backingInt(stmt_id)] = true;
-            try visited.append(allocator, stmt_id);
-            var scope = store.stmtInlineScope(stmt_id);
-            while (scope != LIR.InlineScopeId.none) {
-                const inline_scope = store.inlineScope(scope);
-                if (inline_scope.copies_site_code) carried.* = true;
-                scope = inline_scope.parent;
-            }
-            if (stmtDirectCallee(store, stmt_id)) |callee| {
-                if (store.getProcSpecImmediate(callee).code_key == null) try edges.append(allocator, .{ .caller = proc_id, .callee = callee });
-            }
-            try BodyClone.appendSuccessors(store, &work, stmt_id, allocator);
-        }
-        if (carried.*) try carriers.append(allocator, proc_id);
+    var facts = try OfferFacts.init(allocator, store);
+    defer facts.deinit();
+    return allocator.dupe(bool, facts.site_code);
+}
+
+/// Exact publication facts for one frozen LIR store. No per-root closure table
+/// is retained; each boolean propagates once along the reverse call graph.
+pub const OfferFacts = struct {
+    arena: collections.SingleThreadArena,
+    literal_conversion: []bool,
+    site_code: []bool,
+    reaches_linked: []bool,
+    reaches_observation: []bool,
+    /// Direct reads of evaluation-owned slots. Native publication propagates
+    /// this restriction over the actual excerpt graph, including lifted calls.
+    reads_evaluation_value: []bool,
+    statements_visited: usize = 0,
+    call_edges: usize = 0,
+    propagation_edges: usize = 0,
+
+    pub fn deinit(self: *OfferFacts) void {
+        self.arena.deinit();
     }
 
-    // Each carrier's callers carry its copy too.
-    const caller_starts = try allocator.alloc(u32, proc_count + 1);
-    defer allocator.free(caller_starts);
-    @memset(caller_starts, 0);
-    for (edges.items) |edge| caller_starts[@backingInt(edge.callee) + 1] += 1;
-    for (1..caller_starts.len) |index| caller_starts[index] += caller_starts[index - 1];
-    const callers = try allocator.alloc(LIR.LirProcSpecId, edges.items.len);
-    defer allocator.free(callers);
-    const fill = try allocator.dupe(u32, caller_starts[0..proc_count]);
-    defer allocator.free(fill);
-    for (edges.items) |edge| {
-        callers[fill[@backingInt(edge.callee)]] = edge.caller;
-        fill[@backingInt(edge.callee)] += 1;
+    pub fn init(allocator: Allocator, store: *const LirStore) Allocator.Error!OfferFacts {
+        return initWithSlots(allocator, store, &.{});
     }
-    while (carriers.pop()) |carrier| {
-        const raw = @backingInt(carrier);
-        for (callers[caller_starts[raw]..caller_starts[raw + 1]]) |caller| {
-            if (carries[@backingInt(caller)]) continue;
-            carries[@backingInt(caller)] = true;
-            try carriers.append(allocator, caller);
+
+    pub fn initProgram(allocator: Allocator, program: *const core.Program.Result) Allocator.Error!OfferFacts {
+        return initWithSlots(allocator, &program.store, program.static_data_values.items);
+    }
+
+    fn initWithSlots(allocator: Allocator, store: *const LirStore, slots: []const core.Program.StaticDataValue) Allocator.Error!OfferFacts {
+        var arena = collections.SingleThreadArena.init(allocator);
+        errdefer arena.deinit();
+        const a = arena.allocator();
+        const n = store.procSpecCount();
+        const converts = try a.alloc(bool, n);
+        const carries = try a.alloc(bool, n);
+        const linked = try a.alloc(bool, n);
+        const observed = try a.alloc(bool, n);
+        const evaluation_reads = try a.alloc(bool, n);
+        @memset(evaluation_reads, false);
+        @memset(converts, false);
+        @memset(carries, false);
+        const starts = try a.alloc(u32, n + 1);
+        var targets = std.ArrayList(u32).empty;
+        const seen = try a.alloc(bool, store.cfStmtCount());
+        @memset(seen, false);
+        var visited = std.ArrayList(LIR.CFStmtId).empty;
+        var work = std.ArrayList(LIR.CFStmtId).empty;
+        var statements: usize = 0;
+        for (store.getProcSpecs(), 0..) |proc, index| {
+            starts[index] = std.math.cast(u32, targets.items.len) orelse return error.OutOfMemory;
+            linked[index] = proc.c_abi_entry;
+            observed[index] = proc.body == null;
+            for (visited.items) |id| seen[@backingInt(id)] = false;
+            visited.clearRetainingCapacity();
+            if (proc.body) |body| try work.append(a, body);
+            while (work.pop()) |id| {
+                if (seen[@backingInt(id)]) continue;
+                seen[@backingInt(id)] = true;
+                try visited.append(a, id);
+                statements += 1;
+                const stmt = store.getCFStmtImmediate(id);
+                if (stmt.* == .expect or stmt.* == .expect_err) observed[index] = true;
+                if (stmt.* == .assign_literal and stmt.assign_literal.value == .static_data and slots.len != 0) {
+                    const slot = slots[@backingInt(stmt.assign_literal.value.static_data.id)];
+                    if (slot.compile_time_root != null) evaluation_reads[index] = true;
+                }
+                if (stmt.* == .crash and store.stmtRowOrDefault(stmt.crash.extra).literal_rejection != null) converts[index] = true;
+                if (proc.code_key == null) {
+                    var scope = store.stmtInlineScope(id);
+                    while (scope != LIR.InlineScopeId.none) {
+                        const inlined = store.inlineScope(scope);
+                        if (inlined.copies_site_code) carries[index] = true;
+                        scope = inlined.parent;
+                    }
+                }
+                if (stmtDirectCallee(store, id)) |callee| try targets.append(a, @backingInt(callee));
+                try BodyClone.appendSuccessors(store, &work, id, a);
+            }
         }
+        starts[n] = std.math.cast(u32, targets.items.len) orelse return error.OutOfMemory;
+        const reverse = try collections.csr.transpose(a, starts, targets.items);
+        var propagation_edges: usize = 0;
+        var pending = std.ArrayList(u32).empty;
+        for ([_][]bool{ linked, carries, observed }, 0..) |marks, property| {
+            for (marks, 0..) |marked, index| if (marked) try pending.append(a, @intCast(index));
+            while (pending.pop()) |callee| {
+                for (reverse.targets[reverse.starts[callee]..reverse.starts[callee + 1]]) |caller| {
+                    propagation_edges += 1;
+                    if (marks[caller]) continue;
+                    if (property == 1 and (store.getProcSpecs()[callee].code_key != null or store.getProcSpecs()[caller].code_key != null)) continue;
+                    marks[caller] = true;
+                    try pending.append(a, caller);
+                }
+            }
+        }
+        return .{ .arena = arena, .literal_conversion = converts, .site_code = carries, .reaches_linked = linked, .reaches_observation = observed, .reads_evaluation_value = evaluation_reads, .statements_visited = statements, .call_edges = targets.items.len, .propagation_edges = propagation_edges };
     }
-    return carries;
-}
+};
 
 /// The procedure statement `stmt_id` calls directly, if any.
 fn stmtDirectCallee(store: *const LirStore, stmt_id: LIR.CFStmtId) ?LIR.LirProcSpecId {
@@ -696,6 +731,65 @@ pub fn literalConvertingProcs(allocator: Allocator, store: *const LirStore) Allo
     return converts;
 }
 
+/// Local bodies whose native code needs no test observation ABI. External
+/// bodies are opaque here; publication never guesses what they observe.
+/// The pack producer closes these facts over its explicit procedure graph.
+pub fn observationIndependentProcs(allocator: Allocator, store: *const LirStore) Allocator.Error![]bool {
+    const independent = try allocator.alloc(bool, store.procSpecCount());
+    errdefer allocator.free(independent);
+    var seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
+    defer seen.deinit(allocator);
+    var visited = std.ArrayList(LIR.CFStmtId).empty;
+    defer visited.deinit(allocator);
+    var work = std.ArrayList(LIR.CFStmtId).empty;
+    defer work.deinit(allocator);
+    for (store.getProcSpecs(), independent) |proc, *result| {
+        result.* = false;
+        const body = proc.body orelse continue;
+        for (visited.items) |stmt| seen.unset(@backingInt(stmt));
+        visited.clearRetainingCapacity();
+        work.clearRetainingCapacity();
+        result.* = true;
+        try work.append(allocator, body);
+        while (work.pop()) |id| {
+            if (seen.isSet(@backingInt(id))) continue;
+            seen.set(@backingInt(id));
+            try visited.append(allocator, id);
+            const stmt = store.getCFStmtImmediate(id).*;
+            if (stmt == .expect or stmt == .expect_err) {
+                result.* = false;
+                break;
+            }
+            try BodyClone.appendSuccessors(store, &work, id, allocator);
+        }
+    }
+    return independent;
+}
+
+test "native test eligibility distinguishes generic debug code from expect instrumentation and external bodies" {
+    const a = std.testing.allocator;
+    var store = LirStore.init(a);
+    defer store.deinit();
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+    const debug = try store.addCFStmt(.{ .debug = .{ .message = value, .next = ret } }, .test_fixture);
+    const expect = try store.addCFStmt(.{ .expect = .{ .condition = value, .next = ret, .site = null } }, .test_fixture);
+    const observed = try store.addCFStmt(.{ .expect = .{ .condition = value, .next = ret, .site = @fromBackingInt(7) } }, .test_fixture);
+    for ([_]?LIR.CFStmtId{ ret, debug, expect, observed, null }, 0..) |body, index| {
+        _ = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(@intCast(index)),
+            .args = try store.addLocalSpan(&.{}),
+            .body = body,
+            .frame_locals = try store.addLocalSpan(&.{}),
+            .ret_layout = .u64,
+        }, .none);
+    }
+    const eligible = try observationIndependentProcs(a, &store);
+    defer a.free(eligible);
+    try std.testing.expectEqualSlices(bool, &.{ true, true, false, false, false }, eligible);
+}
+
 /// Convert an intentional fixture-table position while preserving enum inference.
 fn fixtureTableIndex(comptime index: u32) u32 {
     return index;
@@ -760,4 +854,118 @@ test "site code carriers follow calls to procedures without a code key" {
     try testing.expect(!carries[@backingInt(keyed)]);
     try testing.expect(!carries[@backingInt(keyed_caller)]);
     try testing.expect(!carries[@backingInt(plain)]);
+}
+
+test "offer facts visit shared cyclic call graphs once and retain all admission facts" {
+    const a = std.testing.allocator;
+    var store = LirStore.init(a);
+    defer store.deinit();
+    const local = try store.addLocal(.{ .layout_idx = .u64 });
+    const args = try store.addLocalSpan(&.{});
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    const count = 128;
+    for (0..count) |i| {
+        _ = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(@intCast(i)),
+            .args = args,
+            .body = ret,
+            .frame_locals = args,
+            .ret_layout = .u64,
+        }, .none);
+    }
+    for (0..count) |i| {
+        // All callers share the cycle 0 <-> 1, which reaches a linked entry.
+        const callee: LIR.LirProcSpecId = @fromBackingInt(if (i == 0) 1 else 0);
+        const body = try store.addCFStmt(.{ .assign_call = .{ .target = local, .proc = callee, .args = args, .next = ret } }, .test_fixture);
+        store.getProcSpecPtr(@fromBackingInt(@intCast(i))).body = body;
+    }
+    store.getProcSpecPtr(@fromBackingInt(1)).c_abi_entry = true;
+    var facts = try OfferFacts.init(a, &store);
+    defer facts.deinit();
+    try std.testing.expectEqual(@as(usize, count * 2), facts.statements_visited);
+    try std.testing.expectEqual(@as(usize, count), facts.call_edges);
+    try std.testing.expectEqual(@as(usize, count), facts.propagation_edges);
+    for (facts.reaches_linked) |marked| try std.testing.expect(marked);
+    for (facts.literal_conversion) |marked| try std.testing.expect(!marked);
+    for (facts.site_code) |marked| try std.testing.expect(!marked);
+    // Compare the exact old per-root semantics, including the cyclic roots.
+    for (0..count) |i| {
+        const closure = try procCallClosure(a, &store, @fromBackingInt(@intCast(i)));
+        defer a.free(closure);
+        var linked = false;
+        for (closure, store.getProcSpecs()) |reached, proc| linked = linked or (reached and proc.c_abi_entry);
+        try std.testing.expectEqual(linked, facts.reaches_linked[i]);
+    }
+}
+
+test "native offers record evaluation-owned slots even without Monotype read summaries" {
+    const a = std.testing.allocator;
+    var program = try core.Program.Result.init(a, .u64);
+    defer program.deinit();
+    const store = &program.store;
+    try program.static_data_values.append(a, .{
+        .initializer = null,
+        .layout_idx = .u64,
+        .compile_time_root = .{
+            .module = .{},
+            .root = .{ .literal = @fromBackingInt(1) },
+            .const_locator = null,
+            .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 0, .failed_offset = 0, .message_offset = 0 } },
+        },
+    });
+    try program.static_data_values.append(a, .{ .initializer = null, .layout_idx = .u64 });
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+    for (0..2) |i| {
+        const read = try store.addCFStmt(.{ .assign_literal = .{
+            .target = value,
+            .value = .{ .static_data = .{ .id = @fromBackingInt(@intCast(i)) } },
+            .next = ret,
+        } }, .test_fixture);
+        _ = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(@intCast(i)),
+            .args = .empty(),
+            .body = read,
+            .ret_layout = .u64,
+        }, .none);
+    }
+    var facts = try OfferFacts.initProgram(a, &program);
+    defer facts.deinit();
+    try std.testing.expectEqualSlices(bool, &.{ true, false }, facts.reads_evaluation_value);
+    try std.testing.expectEqualSlices(bool, &.{ false, false }, facts.reaches_observation);
+}
+
+test "native observation admission propagates through shared cycles once" {
+    const a = std.testing.allocator;
+    var store = LirStore.init(a);
+    defer store.deinit();
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+    const observed = try store.addCFStmt(.{ .expect = .{ .condition = value, .next = ret, .site = null } }, .test_fixture);
+    const n = 128;
+    for (0..n + 1) |i| {
+        _ = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(@intCast(i)),
+            .args = .empty(),
+            .body = ret,
+            .ret_layout = .u64,
+        }, .none);
+    }
+    for (0..n) |i| {
+        const call = try store.addCFStmt(.{ .assign_call = .{
+            .target = value,
+            .proc = @fromBackingInt(@intCast((i + 1) % n)),
+            .args = .empty(),
+            .next = if (i == 0) observed else ret,
+        } }, .test_fixture);
+        store.getProcSpecPtr(@fromBackingInt(@intCast(i))).body = call;
+    }
+    var facts = try OfferFacts.init(a, &store);
+    defer facts.deinit();
+    for (facts.reaches_observation[0..n]) |marked| try std.testing.expect(marked);
+    try std.testing.expect(!facts.reaches_observation[n]);
+    try std.testing.expectEqual(@as(usize, n), facts.propagation_edges);
 }

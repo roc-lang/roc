@@ -2,7 +2,7 @@
 //!
 //! `SpecBuilder` is the single index that answers every specialization reuse
 //! question in the Monotype pass. A specialization's identity—its callable,
-//! the method scope and codec context its body resolves dispatch in, its
+//! the codec context its body resolves dispatch in, its
 //! exact dispatch evidence, and the closed monomorphic function type
 //! REQUESTED by the call site that reserved it—is written once at `reserve`
 //! and never rewritten. The checked source function type a call site
@@ -65,6 +65,20 @@ pub const Counters = struct {
     interface_replay_digest_root_requests: u64 = 0,
     interface_replay_digest_node_misses: u64 = 0,
     interface_summary_hits: u64 = 0,
+    interface_persistent_hits: u64 = 0,
+    interface_persistent_misses: u64 = 0,
+    interface_persistent_invalid: u64 = 0,
+    interface_persistent_records: u64 = 0,
+    interface_persistent_bytes: u64 = 0,
+    interface_persistent_types: u64 = 0,
+    interface_persistent_references: u64 = 0,
+    interface_persistent_composite_records: u64 = 0,
+    interface_persistent_default_records: u64 = 0,
+    interface_persistent_composite_hits: u64 = 0,
+    interface_persistent_default_hits: u64 = 0,
+
+    interface_persistent_unrepresentable: u64 = 0,
+
     /// Summary hits whose expansion contributed no constraint beyond its input.
     interface_summary_unchanged_hits: u64 = 0,
     /// Relation requests whose settled parametric instantiations were captured as holes.
@@ -203,7 +217,6 @@ pub const LookupResult = union(enum(u8)) {
 pub const SpecLookupAddress = struct {
     callable_kind: u8,
     module_bytes: [32]u8,
-    method_scope: [32]u8,
     index_a: u32,
     index_b: u32,
     index_c: u32,
@@ -220,12 +233,11 @@ pub const SpecLookupAddress = struct {
     /// Share the durable identity bucket between reservation and draft commit.
     /// Exact type and evidence equality remain the caller's collision checks.
     pub fn fromIdentity(identity: Ast.SpecIdentity) SpecLookupAddress {
-        return from(identity.callable, identity.method_scope, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
+        return from(identity.callable, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
     }
 
     fn from(
         callable: Ast.CallableIdentity,
-        method_scope: names.CheckedModuleDigest,
         evidence_digest: Ast.EvidenceDigest,
         codec_contract_digest: names.TypeDigest,
         type_digest: names.TypeDigest,
@@ -233,7 +245,6 @@ pub const SpecLookupAddress = struct {
         var key: SpecLookupAddress = .{
             .callable_kind = @backingInt(callable),
             .module_bytes = @splat(0),
-            .method_scope = method_scope.bytes,
             .index_a = 0,
             .index_b = 0,
             .index_c = 0,
@@ -280,7 +291,7 @@ const SpecLookupAddressContext = struct {
         var hasher = std.hash.Wyhash.init(0);
         const scalars = [_]u32{ address.callable_kind, address.index_a, address.index_b, address.index_c, @intFromBool(address.default_root) };
         hasher.update(std.mem.asBytes(&scalars));
-        inline for (.{ "module_bytes", "method_scope", "owner_fn_digest", "default_root_module", "evidence_digest", "codec_contract_digest", "type_digest" }) |field| {
+        inline for (.{ "module_bytes", "owner_fn_digest", "default_root_module", "evidence_digest", "codec_contract_digest", "type_digest" }) |field| {
             hasher.update(@field(address, field)[0..8]);
         }
         return hasher.final();
@@ -379,7 +390,7 @@ pub const SpecBuilder = struct {
         fn_id: Ast.FnId,
     ) std.mem.Allocator.Error!ReserveResult {
         if (!evidenceDigestMatches(identity, evidence)) invariant("Monotype specialization evidence digest did not match its exact topology");
-        const address = SpecLookupAddress.from(identity.callable, identity.method_scope, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
+        const address = SpecLookupAddress.from(identity.callable, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
         if (try self.matchInBucket(self.lookup.get(address), identity, evidence)) |hit| {
             return .{
                 .spec = hit.local.spec,
@@ -433,7 +444,7 @@ pub const SpecBuilder = struct {
         evidence: EvidenceView,
     ) std.mem.Allocator.Error!?LookupResult {
         if (!evidenceDigestMatches(identity, evidence)) invariant("Monotype specialization lookup evidence digest did not match its exact topology");
-        const address = SpecLookupAddress.from(identity.callable, identity.method_scope, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
+        const address = SpecLookupAddress.from(identity.callable, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
         const entries = self.lookup.get(address);
         if (entries.isEmpty()) return null;
         if (self.counters != null) {
@@ -565,7 +576,7 @@ pub const SpecBuilder = struct {
         record.solved_fn_ty_digest = solved_fn_ty_digest;
         record.status = .ready;
         if (!digestEql(solved_fn_ty_digest, record.identity.request_fn_ty_digest)) {
-            try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, solved_fn_ty_digest, spec);
+            try self.appendAliasEntry(record.identity.callable, record.identity.evidence_digest, record.identity.codec_contract_digest, solved_fn_ty_digest, spec);
         }
     }
 
@@ -575,13 +586,12 @@ pub const SpecBuilder = struct {
     fn appendAliasEntry(
         self: *SpecBuilder,
         callable: Ast.CallableIdentity,
-        method_scope: names.CheckedModuleDigest,
         evidence_digest: Ast.EvidenceDigest,
         codec_contract_digest: names.TypeDigest,
         type_digest: names.TypeDigest,
         spec: Ast.SpecId,
     ) std.mem.Allocator.Error!void {
-        const address = SpecLookupAddress.from(callable, method_scope, evidence_digest, codec_contract_digest, type_digest);
+        const address = SpecLookupAddress.from(callable, evidence_digest, codec_contract_digest, type_digest);
         var existing = self.lookup.get(address);
         while (existing.next()) |entry_spec| if (entry_spec == spec) return;
         try self.lookup.append(self.allocator, address, spec);
@@ -713,7 +723,7 @@ pub const SpecBuilder = struct {
     }
 
     fn recordReachableAt(self: *const SpecBuilder, spec: Ast.SpecId, record: Ast.SpecRecord, digest: names.TypeDigest) bool {
-        const address = SpecLookupAddress.from(record.identity.callable, record.identity.method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, digest);
+        const address = SpecLookupAddress.from(record.identity.callable, record.identity.evidence_digest, record.identity.codec_contract_digest, digest);
         var entries = self.lookup.get(address);
         while (entries.next()) |entry_spec| if (entry_spec == spec) return true;
         return false;
@@ -721,9 +731,8 @@ pub const SpecBuilder = struct {
 
     fn addressInRecordHistory(record: Ast.SpecRecord, address: SpecLookupAddress) bool {
         const callable = record.identity.callable;
-        const method_scope = record.identity.method_scope;
-        if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, record.identity.request_fn_ty_digest))) return true;
-        if (record.status == .ready and std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, record.solved_fn_ty_digest))) return true;
+        if (std.meta.eql(address, SpecLookupAddress.from(callable, record.identity.evidence_digest, record.identity.codec_contract_digest, record.identity.request_fn_ty_digest))) return true;
+        if (record.status == .ready and std.meta.eql(address, SpecLookupAddress.from(callable, record.identity.evidence_digest, record.identity.codec_contract_digest, record.solved_fn_ty_digest))) return true;
         return false;
     }
 };
@@ -740,7 +749,6 @@ fn localResult(spec: Ast.SpecId, record: *const Ast.SpecRecord, match_ty: Type.T
 
 fn identityEql(left: Ast.SpecIdentity, right: Ast.SpecIdentity) bool {
     return std.meta.eql(left.callable, right.callable) and
-        std.meta.eql(left.method_scope, right.method_scope) and
         std.meta.eql(left.evidence_digest, right.evidence_digest) and
         digestEql(left.codec_contract_digest, right.codec_contract_digest) and
         std.meta.eql(left.codec_contract, right.codec_contract) and
@@ -1030,37 +1038,6 @@ test "monotype spec builder keeps checked module boundary in callable identity" 
     builder.validateLookupIntegrity();
 }
 
-test "monotype spec builder keeps method scope in specialization identity" {
-    var name_store = names.NameStore.init(std.testing.allocator);
-    defer name_store.deinit();
-
-    var type_store = Type.Store.init(std.testing.allocator);
-    defer type_store.deinit();
-
-    const unit_ty = try type_store.add(.zst);
-    var first_scope = testSpecIdentity(unit_ty, digestWithFirstByte(2));
-    first_scope.method_scope = moduleDigestWithFirstByte(1);
-    var second_scope = first_scope;
-    second_scope.method_scope = moduleDigestWithFirstByte(2);
-
-    var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
-    defer records.deinit(std.testing.allocator);
-
-    var builder = SpecBuilder.init(std.testing.allocator, &name_store, &type_store, &records);
-    defer builder.deinit();
-
-    const first = try builder.reserve(first_scope, testEvidenceView(), @fromBackingInt(@intCast(1)));
-    const second = try builder.reserve(second_scope, testEvidenceView(), @fromBackingInt(@intCast(2)));
-    const repeated_first = try builder.reserve(first_scope, testEvidenceView(), @fromBackingInt(@intCast(3)));
-
-    try std.testing.expect(first.created);
-    try std.testing.expect(second.created);
-    try std.testing.expect(!repeated_first.created);
-    try std.testing.expect(first.spec != second.spec);
-    try std.testing.expectEqual(first.spec, repeated_first.spec);
-    builder.validateLookupIntegrity();
-}
-
 test "monotype spec builder keeps dispatch evidence in specialization identity" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
@@ -1332,7 +1309,6 @@ fn testSpecIdentityWithModuleAndEvidence(
             .proc_base = 0,
             .template = 1,
         } },
-        .method_scope = .{},
         .evidence_digest = Ast.fnEvidenceDigest(evidence.entries, evidence.frames, evidence.head),
         .codec_contract_digest = .{},
         .codec_contract = null,

@@ -159,8 +159,11 @@ jobs:
           command: zig build run-test-eval -- --llvm --timeout 120000
           retry_count: 3
 
-      - name: Run CLI platform tests (LLVM size/speed backends)
-        run: zig build run-test-cli -- --include-llvm --filter "[size]" --filter "[speed]"
+      - name: Run CLI tests (LLVM size/speed backends)
+        run: zig build run-test-cli -- --llvm-only
+
+      - name: Run focused test outcome cache regressions
+        run: zig build run-test-outcome-cache -j2
 
       # run-test-dylib and run-test-archive are MiniCI phases, so PR CI runs
       # them on these same three OSes; they are not repeated here.

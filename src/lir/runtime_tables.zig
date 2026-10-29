@@ -1,14 +1,14 @@
-//! The Boxy runtime table numbers a canonical dev image uses (design.md
-//! "Canonical Dev Images").
+//! The Boxy runtime table numbers a arranged dev image uses (design.md
+//! "Deterministic Dev Images").
 //!
 //! A program numbers its layouts, and the runs of erased argument layouts its
 //! erased procedures take, in the order lowering happened to reach them, and
 //! which procedures a build lowered depends on what the object cache served
 //! it. The image's code passes those numbers to the Boxy runtime, which reads
-//! the sidecar tables by them, so a canonical image renumbers what its placed
-//! code uses: each number in the order the canonical code first loads it.
+//! the sidecar tables by them, so a arranged image renumbers what its placed
+//! code uses: each number in the order the arranged code first loads it.
 //! The sidecar is then built from exactly those entries
-//! (`LirImage.buildCanonicalSidecarBlob`).
+//! (`LirImage.buildArrangedSidecarBlob`).
 
 const std = @import("std");
 const core = @import("lir_core");
@@ -21,12 +21,12 @@ const Allocator = std.mem.Allocator;
 /// program and never renumbered.
 pub const fixed_layout_count: u32 = @backingInt(layout.Idx.i64x2) + 1;
 
-/// What a canonical image's code loads, in canonical order.
+/// What a arranged image's code loads, in arranged order.
 pub const Order = struct {
     /// The program layout each canonical layout index past the fixed ones
     /// names, by canonical index minus `fixed_layout_count`.
     layouts: std.ArrayList(layout.Idx) = .empty,
-    /// The program's erased argument layout runs, in canonical order; each
+    /// The program's erased argument layout runs, in arranged order; each
     /// one's canonical start is the sum of the lengths before it.
     erased_arg_layouts: std.ArrayList(LIR.BoxySpan) = .empty,
 

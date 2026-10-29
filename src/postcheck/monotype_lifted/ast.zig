@@ -1241,6 +1241,11 @@ pub const Program = struct {
         return self.literal_roots.unsafeRawItemsForView();
     }
 
+    pub fn layoutRequestsView(self: *const Program) []const LayoutRequest {
+        if (self.body_prefix) |prefix| return prefix.source.layoutRequestsView();
+        return self.layout_requests.unsafeRawItemsForView();
+    }
+
     pub fn fnCount(self: *const Program) usize {
         return self.rowCount("fns");
     }

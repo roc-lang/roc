@@ -23,7 +23,7 @@ pub const Entry = struct {
 pub const View = struct {
     entries: []const Entry = &.{},
     index: ?*const Index = null,
-    /// Borrowed immutable backing records for owned native artifact capture.
+    /// Borrowed immutable backing records for owned native excerpt capture.
     exports: []const StaticDataExport = &.{},
 
     pub fn ordinal(self: View, id: base.StringLiteral.Idx) ?u32 {

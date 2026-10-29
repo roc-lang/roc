@@ -1,8 +1,8 @@
-//! Shared native procedure compilation and owned, same-program artifact reuse.
+//! Shared native procedure compilation and owned, same-program excerpt reuse.
 //!
 //! A reuse handle is a capability supplied by the caller: its LIR and layout
 //! domain must be the very same transferred program, never an independently
-//! lowered program with matching identities. Artifacts outlive executable images.
+//! lowered program with matching identities. Excerpts outlive executable images.
 //! Each wave freezes borrowed inputs until every accepted callback has drained;
 //! only then may the coordinator append code or destroy fragment owners.
 
@@ -12,7 +12,7 @@ const lir = @import("lir");
 const layout = @import("layout");
 const roc_target = @import("roc_target");
 const Emitter = @import("LirCodeGen.zig");
-const Artifact = @import("ProcArtifact.zig");
+const Excerpt = @import("CodeExcerpt.zig");
 const task_waves = @import("../task_waves.zig");
 const StackPlan = lir.StackPlan;
 const tasks = base.post_check_task_executor;
@@ -63,13 +63,13 @@ pub const Procedure = struct {
     id: ProcId,
     identity: lir.ProcIdentity,
     revision: u64,
-    fragment: Artifact.Fragment,
+    fragment: Excerpt.Fragment,
 };
 
 /// An owned explicit LIR reference-count helper fragment.
 pub const Helper = struct {
     key: u64,
-    fragment: Artifact.Fragment,
+    fragment: Excerpt.Fragment,
 };
 
 /// Owns reusable fragments independently of workers and executable images.
@@ -81,8 +81,8 @@ pub const Retained = struct {
 
     /// Final image/object linking consumes carried data separately from code.
     /// The returned slice is caller-owned; its fields borrow this retained owner.
-    pub fn dataItems(self: *const Retained, allocator: Allocator) Allocator.Error![]const Artifact.DataItem {
-        var items: std.ArrayList(Artifact.DataItem) = .empty;
+    pub fn dataItems(self: *const Retained, allocator: Allocator) Allocator.Error![]const Excerpt.DataItem {
+        var items: std.ArrayList(Excerpt.DataItem) = .empty;
         errdefer items.deinit(allocator);
         var names = std.StringHashMap(void).init(allocator);
         defer names.deinit();
@@ -91,9 +91,9 @@ pub const Retained = struct {
         return items.toOwnedSlice(allocator);
     }
 
-    fn collectData(allocator: Allocator, fragment: *const Artifact.Fragment, items: *std.ArrayList(Artifact.DataItem), names: *std.StringHashMap(void)) Allocator.Error!void {
-        for (fragment.set.artifacts) |artifact| {
-            for (artifact.data) |item| {
+    fn collectData(allocator: Allocator, fragment: *const Excerpt.Fragment, items: *std.ArrayList(Excerpt.DataItem), names: *std.StringHashMap(void)) Allocator.Error!void {
+        for (fragment.set.excerpts) |excerpt| {
+            for (excerpt.data) |item| {
                 const entry = try names.getOrPut(item.name);
                 if (!entry.found_existing) try items.append(allocator, item);
             }
@@ -110,7 +110,7 @@ pub const Retained = struct {
     }
 };
 
-fn invariant(err: (Artifact.ExtractError || Artifact.AssembleError)) Allocator.Error {
+fn invariant(err: (Excerpt.ExtractError || Excerpt.AssembleError)) Allocator.Error {
     return switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         else => base.invariant("native fragment compiler invariant: {s}", .{@errorName(err)}),
@@ -139,10 +139,10 @@ fn reusable(source: Emitter.FragmentContract, target: Emitter.FragmentContract, 
 fn Job(comptime CG: type) type {
     return struct {
         source: *const CG,
-        data: *const Artifact.PreparedData,
+        data: *const Excerpt.PreparedData,
         proc: ?ProcId = null,
         helper: u64 = 0,
-        fragment: ?Artifact.Fragment = null,
+        fragment: ?Excerpt.Fragment = null,
         oom: bool = false,
         reused: bool = false,
 
@@ -160,7 +160,7 @@ fn Job(comptime CG: type) type {
             return self;
         }
 
-        fn compile(self: *@This(), worker: tasks.Worker) Artifact.ExtractError!void {
+        fn compile(self: *@This(), worker: tasks.Worker) Excerpt.ExtractError!void {
             const source = self.source;
             var cg = try CG.initWithBoxyMetadata(
                 worker.scratch,
@@ -179,9 +179,9 @@ fn Job(comptime CG: type) type {
             cg.enable_default_platform_runtime = source.enable_default_platform_runtime;
             cg.borrowStaticDataSymbolsFrom(source);
             self.fragment = if (self.proc) |id|
-                try Artifact.compileProcFragmentPrepared(CG, worker.allocator, &cg, id, source.store.getProcSpecs(), source.layout_store, self.data)
+                try Excerpt.compileProcFragmentPrepared(CG, worker.allocator, &cg, id, source.store.getProcSpecs(), source.layout_store, self.data)
             else
-                try Artifact.compileRcHelperFragmentPrepared(CG, worker.allocator, &cg, self.helper, source.store.getProcSpecs(), source.layout_store, self.data);
+                try Excerpt.compileRcHelperFragmentPrepared(CG, worker.allocator, &cg, self.helper, source.store.getProcSpecs(), source.layout_store, self.data);
         }
     };
 }
@@ -221,16 +221,16 @@ fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executo
     return task_waves.execute(Job(CG), allocator, jobs, executor, sequential_lane, sequential_scratch, &admission);
 }
 
-fn requireHelpers(allocator: Allocator, fragment: *const Artifact.Fragment, queue: *std.ArrayList(u64), seen: *std.AutoHashMap(u64, void)) Allocator.Error!void {
+fn requireHelpers(allocator: Allocator, fragment: *const Excerpt.Fragment, queue: *std.ArrayList(u64), seen: *std.AutoHashMap(u64, void)) Allocator.Error!void {
     for (fragment.required_helpers) |key| {
         const entry = try seen.getOrPut(key);
         if (!entry.found_existing) try queue.append(allocator, key);
     }
 }
 
-fn account(metrics: *Metrics, fragment: *const Artifact.Fragment, reused: bool, helper: bool) void {
+fn account(metrics: *Metrics, fragment: *const Excerpt.Fragment, reused: bool, helper: bool) void {
     var bytes: u64 = 0;
-    for (fragment.set.artifacts) |artifact| bytes +|= artifact.code.len;
+    for (fragment.set.excerpts) |excerpt| bytes +|= excerpt.code.len;
     if (reused) {
         metrics.code_bytes_reused +|= bytes;
         if (helper) metrics.helpers_reused +|= 1 else metrics.procedures_reused +|= 1;
@@ -262,7 +262,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
     // Index immutable backing once; workers capture only reached data. Execution
     // callers leave mutable static roots external, never copied placeholder values.
     std.debug.assert(contract.static_data_readonly or options.constant_exports.len == 0);
-    var data = Artifact.PreparedData.init(allocator, destination.static_strings.exports, options.constant_exports, &.{}) catch |err| return invariant(err);
+    var data = Excerpt.PreparedData.init(allocator, destination.static_strings.exports, options.constant_exports, &.{}) catch |err| return invariant(err);
     defer data.deinit();
     const specs = destination.store.getProcSpecs();
     var demanded = try std.DynamicBitSetUnmanaged.initEmpty(allocator, specs.len);
@@ -278,7 +278,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
         for (cache.procedures.items) |*proc| try cached_procs.putNoClobber(proc.identity, proc);
         for (cache.helpers.items) |*helper| try cached_helpers.putNoClobber(helper.key, helper);
     }
-    var helper_keys = Artifact.HelperKeys.init(allocator);
+    var helper_keys = Excerpt.HelperKeys.init(allocator);
     defer {
         var names = helper_keys.keyIterator();
         while (names.next()) |name| allocator.free(name.*);
@@ -324,7 +324,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
             const fragment = &job.fragment.?;
             try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
             destination.boxy_runtime_used = destination.boxy_runtime_used or fragment.context_dependencies.boxy_runtime;
-            Artifact.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
+            Excerpt.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
             const id = job.proc.?;
             const spec = specs[@backingInt(id)];
             try retained.procedures.append(allocator, .{ .id = id, .identity = spec.identity, .revision = spec.native_code_revision, .fragment = fragment.* });
@@ -366,7 +366,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
                 return err;
             };
             destination.boxy_runtime_used = destination.boxy_runtime_used or fragment.context_dependencies.boxy_runtime;
-            Artifact.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
+            Excerpt.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
             try retained.helpers.append(allocator, .{ .key = job.helper, .fragment = fragment.* });
             account(&metrics, fragment, job.reused, true);
             job.fragment = null;
@@ -442,7 +442,7 @@ fn testProc(store: *lir.LirStore, value: i64) Allocator.Error!ProcId {
     }, .none);
 }
 
-test "native driver serial reverse lanes own identical executable artifacts and reuse" {
+test "native driver serial reverse lanes own identical executable excerpts and reuse" {
     if (comptime !Emitter.host_lir_codegen_available) return error.SkipZigTest;
     const a = std.testing.allocator;
     var store = lir.LirStore.init(a);
@@ -657,7 +657,7 @@ test "native driver owns and reuses complete static helper closure" {
             try std.testing.expectEqual(@as(u64, 0), metrics.tasks_submitted);
             for (cache.?.helpers.items, retained.helpers.items) |old, new| {
                 try std.testing.expectEqual(old.key, new.key);
-                try std.testing.expectEqualSlices(u8, old.fragment.set.artifacts[0].code, new.fragment.set.artifacts[0].code);
+                try std.testing.expectEqualSlices(u8, old.fragment.set.excerpts[0].code, new.fragment.set.excerpts[0].code);
             }
         }
         if (cache) |*owner| owner.deinit();
@@ -706,7 +706,7 @@ test "native driver helper waves keep the serial queue order at every lane count
         // region bounds mean an identical code buffer.
         var layout_record: std.ArrayList(u8) = .empty;
         defer layout_record.deinit(a);
-        for (retained.helpers.items) |helper| try layout_record.appendSlice(a, helper.fragment.set.artifacts[0].code);
+        for (retained.helpers.items) |helper| try layout_record.appendSlice(a, helper.fragment.set.excerpts[0].code);
         for (cg.codeRegions()) |region| try layout_record.appendSlice(a, std.mem.asBytes(&[2]usize{ region.start, region.end }));
         if (baseline_code) |expected| {
             try std.testing.expectEqual(baseline_keys.items.len, retained.helpers.items.len);
