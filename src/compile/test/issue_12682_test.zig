@@ -9,9 +9,15 @@ const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
 const BuildEnv = compile_build.BuildEnv;
 
+const MismatchTestError = compile_build.InitError ||
+    compile_build.BuildRootError ||
+    std.Io.Dir.WriteFileError ||
+    std.Io.Dir.RealPathFileAllocError ||
+    error{TestExpectedEqual};
+
 /// Build `source` as `main.roc` and require exactly one "Type Mismatch"
 /// report, with every other report only a warning.
-fn expectSingleTypeMismatch(source: []const u8) !void {
+fn expectSingleTypeMismatch(source: []const u8) MismatchTestError!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
