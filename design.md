@@ -11816,7 +11816,13 @@ Five consumers keep the rule exact:
 
 - Unification relates every repeated occurrence it gathers to the first one
   (`relateChainDuplicateTags` / `relateChainDuplicateFields`), so a relation
-  that flattens a chain never discards a repeated occurrence's payload.
+  that flattens a chain never discards a repeated occurrence's payload. When
+  occurrences fail to relate, the conflict belongs to the row, not to the
+  relation: the unifier stops and names the row (`Scratch.repeatedLabelRow`),
+  and the checker, outside speculative probes, normalizes that row and relates
+  the operands again. A conflicting repeat is reported once, as the row's
+  conflicting-label report, never also as a mismatch of the relation that
+  found it.
 - `normalizeRowUnion` relates each repeated occurrence to the next one out,
   then rewrites the row part that holds the outer copy to omit it. Inner
   parts may be shared by other types (a callback's own error row) and keep
@@ -11881,19 +11887,20 @@ call, is reported at the output root whose walk found it, and one of the
 cycle's variables becomes `.err` after every report has its snapshot.
 
 Normalization needs no metadata on type variables and adds no work where no
-label repeats: detection rides on the unifier's gather,
-the key writer's row sort, and the settled row walk, which already compare
-labels, and the `?` composition compares labels only along a source chain
-with two or more tag-bearing parts. A conflict is reported as a conflicting
-tag or field: each occurrence is shown as a closed single-label row at the
-source of the row part holding it, so the report names where each copy of
-the label came from. Its location is the value whose type holds the row when
-the settled walk reached the row from an output root, and otherwise the
-outer occurrence. The walk finishes each root before starting the next, in
-source-node order, so the value is the
-earliest source node whose type reaches the row; choosing it is a reporting
-decision and changes nothing about which programs check. The row is poisoned
-once every diagnostic has snapshotted the settled graph.
+label repeats: detection rides on the unifier's gather, the key writer's row
+sort, and the settled row walk, which already compare labels, and the `?`
+composition compares labels only along a source chain with two or more
+tag-bearing parts. A conflict is reported as a conflicting tag or field: each
+occurrence is shown as a closed single-label row at the source of the row part
+holding it, so the report names where each copy of the label came from. Its
+location is the value whose type holds the row: the actual operand of the
+relation that found the conflict, the contribution of a `?` composition, or the
+output root the settled walk reached the row from; and otherwise the outer
+occurrence. The walk finishes each root before starting the next, in source-node
+order, so the value is the earliest source node whose type reaches the row;
+choosing it is a reporting decision and changes nothing about which programs
+check. The row is poisoned once every diagnostic has snapshotted the settled
+graph.
 
 The accepted side is pinned by `src/check/test/row_union_normalization_test.zig`
 (a callback raising the tag its wrapper adds, a repeated tag reaching a method
@@ -11902,6 +11909,9 @@ repeated two extensions down), by `src/check/test/issue_11621_test.zig`
 (recursive functions using `?`, directly, mutually, through a generalized
 helper, and through dispatch), and by the chain-duplicate unifier tests and the
 `normalizeRowUnion` test in `src/check/Check.zig`, which cover records.
+`src/check/test/issue_12677_test.zig` pins `?` composition and rendering of
+a repeated tag, and a conflicting repeat reported once whether a `?`
+composition or a plain relation finds it.
 `src/compile/test/issue_11621_test.zig` pins the output of a mutually
 recursive group's substitution rows, and
 `test/fx-open/issue_11621_recursive_try.roc` runs those programs on every

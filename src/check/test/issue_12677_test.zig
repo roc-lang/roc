@@ -116,3 +116,17 @@ test "issue 12677: a type whose row repeats a tag renders the tag once" {
         \\
     );
 }
+
+test "issue 12677: a repeated tag with conflicting payloads related without ? is one conflict" {
+    var env = try TestEnv.init("Test",
+        \\run : Bool, (Bool -> Try(value, [Bad(Str)])) -> Try(value, [Bad(Str)])
+        \\run = |flag, parse| decode_num(flag, parse)
+        \\
+        \\decode_num = |flag, parse| {
+        \\    value = parse(flag)?
+        \\    if flag { Err(Bad(flag)) } else { Ok(value) }
+        \\}
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Conflicting Tag");
+}

@@ -7278,7 +7278,20 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     // needs the same owner the absorption will later be attributed to.
     var unify_opts = opts;
     unify_opts.record_construction_var = construction_var;
-    const result = try unifier.unify(&unify_env, a, b, unify_opts);
+    // A row repeating a label whose occurrences do not relate conflicts on
+    // its own, whatever it is related to: normalizing it reports that
+    // conflict once (design.md "Row Union Normalization"), and the operands
+    // are related again with the row normalized or poisoned.
+    if (self.probe_depth == 0 or self.commit_probe_active) {
+        unify_opts.repeated_label_rows = .return_row;
+    }
+    var result = try unifier.unify(&unify_env, a, b, unify_opts);
+    while (unify_opts.repeated_label_rows == .return_row and result == .mismatch) {
+        const row = self.unify_scratch.repeatedLabelRow() orelse break;
+        try self.adoptUnifyScratch(env, b, owner);
+        try self.normalizeRowUnionOrReport(row, b, env);
+        result = try unifier.unify(&unify_env, a, b, unify_opts);
+    }
     switch (result) {
         .problem => |problem_idx| {
             const mismatch = &self.problems.problems.items[@backingInt(problem_idx)].type_mismatch;
@@ -7295,9 +7308,20 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     if (result.isAccepted()) {
         try self.recordAbsorbedDefaults(construction_var, a, b);
     }
+    try self.adoptUnifyScratch(env, b, owner);
+
+    // Ensure arrays are in sync
+    self.debugAssertArraysInSync();
+
+    return result;
+}
+
+/// Give the fresh variables and deferred constraints the last unification
+/// created to the checker. Fresh variables take `actual`'s region.
+fn adoptUnifyScratch(self: *Self, env: *Env, actual: Var, owner: DeferredDispatchObligationOwner) Allocator.Error!void {
     // Set regions and add to the current rank all variables created during unification.
     //
-    // We assign all fresh variables the region of `b` (the "actual" type), since `a` is
+    // We assign all fresh variables the region of `actual`, since the other operand is
     // typically the "expected" type from an annotation. This policy works well for
     // most cases but can be imprecise for deeply nested unifications where fresh variables
     // are created for sub-components (e.g., record fields, tag payloads). In those cases,
@@ -7306,7 +7330,7 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     // A more precise solution would track the origin of each fresh variable during
     // unification and propagate that back, but the current approach is sufficient for
     // typical error reporting scenarios.
-    const region = self.getRegionAt(b);
+    const region = self.getRegionAt(actual);
     for (self.unify_scratch.fresh_vars.items.items) |fresh_var| {
         // Set the rank
         const fresh_rank = self.types.resolveVar(fresh_var).desc.rank;
@@ -7337,11 +7361,6 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
         }
         try self.enqueueUseOwnedDeferredConstraint(env, deferred_constraint, expr_idx, owner);
     }
-
-    // Ensure arrays are in sync
-    self.debugAssertArraysInSync();
-
-    return result;
 }
 
 /// Mark a recorded mismatch that a use's conflicting interpolation values
