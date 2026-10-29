@@ -2279,6 +2279,12 @@ const SchemeRequirementCandidate = struct {
     source: Source,
 
     const Source = enum { creation, scheme_copy };
+    /// How a candidate came to be, with the expression a rejection of a
+    /// copied relation poisons.
+    const Provenance = union(Source) {
+        creation,
+        scheme_copy: ?CIR.Expr.Idx,
+    };
     const none: u32 = std.math.maxInt(u32);
 };
 
@@ -2778,10 +2784,11 @@ fn recordSchemeRequirementCandidate(
     self: *Self,
     receiver_var: Var,
     constraint: StaticDispatchConstraint,
-    source: SchemeRequirementCandidate.Source,
+    provenance: SchemeRequirementCandidate.Provenance,
     structural_origin: ?StructuralSchemeRequirementOrigin,
     deferred_generated_codec: bool,
 ) Allocator.Error!void {
+    const source: SchemeRequirementCandidate.Source = provenance;
     try self.recordDispatchRelationOwner(constraint.fn_var);
     if (self.constraintIsLiteralConversion(constraint)) return;
     std.debug.assert((source == .creation) == (structural_origin == null));
@@ -2807,9 +2814,9 @@ fn recordSchemeRequirementCandidate(
             .receiver_var = receiver_var,
             .constraint_fn_var = constraint.fn_var,
         },
-        .failure_expr = switch (source) {
+        .failure_expr = switch (provenance) {
             .creation => constraintIntroExpr(constraint),
-            .scheme_copy => self.discarded_binding_rhs_expr orelse self.instantiation_source_expr,
+            .scheme_copy => |failure_expr| failure_expr,
         },
         .source = source,
         .deferred_generated_codec = deferred_generated_codec,
@@ -3015,7 +3022,7 @@ fn registerInstantiatedSchemeRequirement(
     try self.recordSchemeRequirementCandidate(
         requirement.receiver_var,
         requirement.constraint,
-        .scheme_copy,
+        .{ .scheme_copy = self.discarded_binding_rhs_expr orelse self.instantiation_source_expr },
         requirement.structural_origin,
         requirement.deferred_generated_codec,
     );
@@ -41330,10 +41337,12 @@ fn retireNonGeneralizedTypeSchemes(self: *Self, roots: []const BoundaryRoot) All
         // Recording a candidate never adds or removes a scheme, so the index
         // and the requirements list stay valid across the loop.
         for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |requirement| {
+            // The relation moves outward unchanged, so it keeps the
+            // expression a rejection poisons.
             try self.recordSchemeRequirementCandidate(
                 requirement.receiver_var,
                 requirement.constraint,
-                .scheme_copy,
+                .{ .scheme_copy = requirement.failure_expr },
                 requirement.structural_origin,
                 requirement.deferred_generated_codec,
             );
