@@ -101,3 +101,23 @@ test('API type names precede function names, which precede signature-only matche
  assert.deepEqual(rankApi(api,''),[]);
  assert.deepEqual(rankApi(api,'missing'),[]);
 });
+
+
+test('exact API names beat qualified and partial matches within each kind',()=>{
+ const api = [
+  {name:'crypto.sha256.hasher',kind:'type',signature:''},
+  {name:'crypto.blake3.hasher',kind:'type',signature:''},
+  {name:'hasher_state',kind:'type',signature:''},
+  {name:'hasher',kind:'type',signature:''},
+  {name:'list.fold_try',kind:'value',signature:':hasher'},
+  {name:'list.fold',kind:'value',signature:':hasher'},
+  {name:'iter.fold',kind:'value',signature:':hasher'}
+ ];
+ assert.deepEqual(rankApi(api,' HASHER ').map(x=>x.name),[
+  'hasher','crypto.sha256.hasher','crypto.blake3.hasher','hasher_state',
+  'list.fold_try','list.fold','iter.fold'
+ ]);
+ assert.deepEqual(rankApi(api,'fold').map(x=>x.name),['list.fold','iter.fold','list.fold_try']);
+ assert.equal(rankApi(api,'crypto.sha256.hasher')[0],api[0]);
+ assert.deepEqual(rankApi(api,'hash').slice(0,4),api.slice(0,4));
+});

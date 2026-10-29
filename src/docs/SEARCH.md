@@ -50,8 +50,9 @@ pages. Documents with different source files may share a destination, e.g. an
 example's README and its Roc source; search deduplicates destination links.
 
 API results prioritize matches in type names, then value/function names, then
-signatures. Names include their module qualification. Ties retain generator order,
-and prose matches follow these compact API results.
+signatures. Within each name group, exact qualified names come first, then exact
+unqualified names, then partial matches. Ties retain generator order, and prose
+matches follow these compact API results.
 
 Curated terms match case-insensitively and rank before incidental prose matches.
 Exact aliases always match. Word aliases also match prefixes when there are no

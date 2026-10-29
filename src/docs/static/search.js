@@ -44,8 +44,8 @@ const setupSearch = () => {
     const apiEntries = Array.from(searchTypeAhead.querySelectorAll("li")).map(li => ({
       li,
       href: new URL(li.querySelector("a").getAttribute("href"), location.href).href,
-      name: ((li.querySelector(".type-ahead-module-name")?.textContent || "") + "." +
-        (li.querySelector(".type-ahead-def-name")?.textContent || "")).toLowerCase(),
+      name: [li.querySelector(".type-ahead-module-name")?.textContent,
+        li.querySelector(".type-ahead-def-name")?.textContent].filter(Boolean).join(".").toLowerCase(),
       signature: (li.querySelector(".type-ahead-signature")?.textContent || "").toLowerCase().replace(/\s+/g, ""),
       category: "api",
       kind: li.dataset.searchKind,

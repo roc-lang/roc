@@ -1,7 +1,7 @@
 // Shared by the browser UI and the search ranking tests.
 (function (root) {
   const normalize = text => text.toLowerCase().replace(/\s+/g, " ").trim();
-  // Preserve generator order within each match location.
+  // Within each match location, prefer exact names and preserve order for ties.
   function rankApi(entries, query) {
     const q = query.trim().toLowerCase();
     if (!q) return [];
@@ -12,7 +12,9 @@
         (entry.kind === "type" ? types : names).push(entry);
       } else if (entry.signature.includes(signatureQuery)) signatures.push(entry);
     }
-    return types.concat(names, signatures);
+    const namePriority = entry => entry.name === q ? 0 : entry.name.endsWith(`.${q}`) ? 1 : 2;
+    const byName = (a, b) => namePriority(a) - namePriority(b);
+    return types.sort(byName).concat(names.sort(byName), signatures);
   }
   function rank(documents, query, { allowAliasPrefixes = true } = {}) {
     const q = normalize(query);
