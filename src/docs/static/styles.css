@@ -1658,8 +1658,8 @@ main > .main-content[aria-busy="true"] {
 #search-type-ahead .search-filters {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 4px 8px;
+  gap: 0;
+  padding: 0;
   position: sticky;
   top: 0;
   background: var(--body-bg-color);
@@ -1678,9 +1678,25 @@ main > .main-content[aria-busy="true"] {
   padding: 3px 6px;
 }
 
+.search-filters button {
+  border: 0;
+  border-radius: 0;
+  border-right: 1px solid var(--violet-border-subtle);
+  padding: 7px 10px;
+}
+
 .search-filters button[aria-pressed="true"] {
   background: var(--violet-bg);
-  border-color: var(--violet);
+}
+
+.search-filters button:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: -2px;
+}
+
+.search-filters .search-snippet-toggle {
+  border-right: 0;
+  border-left: 1px solid var(--violet-border-subtle);
 }
 
 .search-group-label, .search-status, .search-more {
