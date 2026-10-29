@@ -10,19 +10,19 @@ const base = @import("base");
 const can = @import("can");
 const CIR = can.CIR;
 const NodeStore = can.NodeStore;
+const Binding = @import("scope_map.zig").Binding;
 const Allocator = std.mem.Allocator;
 
 /// The doc comment block of the definition at `offset`, joined with newlines
 /// and with bidirectional control characters made visible, or null if the
 /// definition has none.
 ///
-/// `offset` may be where the definition's pattern starts even when a type
-/// annotation line sits between the doc block and the pattern.
+/// `offset` is where the definition starts: its type annotation when it has
+/// one, otherwise its pattern.
 ///
 /// The caller owns the returned memory and must free it with the provided allocator.
 pub fn extractDocCommentBefore(allocator: Allocator, source: []const u8, offset: u32) Allocator.Error!?[]const u8 {
-    const def_start = aboveAnnotationLines(source, @min(offset, @as(u32, @intCast(source.len))));
-    const block = (try base.doc_comment.gatherBlockBefore(allocator, source, def_start)) orelse return null;
+    const block = (try base.doc_comment.gatherBlockBefore(allocator, source, @min(offset, @as(u32, @intCast(source.len))))) orelse return null;
     defer block.deinit(allocator);
 
     var visible = std.Io.Writer.Allocating.init(allocator);
@@ -34,83 +34,31 @@ pub fn extractDocCommentBefore(allocator: Allocator, source: []const u8, offset:
     return try visible.toOwnedSlice();
 }
 
-/// Move `offset` up over the type annotation lines directly above its line.
-///
-/// Hover and completion sometimes know only where a binding's pattern starts,
-/// not whether the binding is annotated:
-///
-///     ## Doc comment
-///     add : I64, I64 -> I64
-///     add = |a, b| a + b
-///
-/// The doc block of `add` sits above the annotation, so that is where
-/// gathering has to start.
-fn aboveAnnotationLines(source: []const u8, offset: u32) u32 {
-    var current = offset;
-    while (true) {
-        const line_start = findLineStart(source, current);
-        if (line_start == 0) return current;
-        const above_start = findLineStart(source, line_start - 1);
-        const above = std.mem.trim(u8, source[above_start .. line_start - 1], " \t\r");
-        if (!isTypeAnnotation(above)) return current;
-        current = above_start;
-    }
-}
-
-/// Checks if a trimmed line is a type annotation (has ':' but no '=')
-/// Type annotations in Roc look like: `add : I64, I64 -> I64`
-fn isTypeAnnotation(trimmed: []const u8) bool {
-    // A comment that mentions a colon is not an annotation.
-    if (trimmed.len == 0 or trimmed[0] == '#') return false;
-
-    // Look for ':' character
-    const colon_pos = std.mem.findScalar(u8, trimmed, ':') orelse return false;
-
-    // Make sure there's no '=' after the colon (which would indicate a definition like `x : I64 = 42`)
-    const equals_pos = std.mem.findScalarPos(u8, trimmed, colon_pos, '=');
-    return equals_pos == null;
-}
-
-/// Finds the start of the line containing the given position
-fn findLineStart(source: []const u8, pos: u32) u32 {
-    var i = pos;
-    while (i > 0) {
-        if (source[i - 1] == '\n') {
-            return i;
-        }
-        i -= 1;
-    }
-    return 0;
-}
-
 // CIR-aware doc offset helpers
 
+/// Where a binding declared by `pattern` with optional annotation `anno`
+/// starts: the annotated name when the annotation records one, which sits on
+/// the annotation line above the pattern, otherwise the pattern itself.
+fn bindingStart(store: *const NodeStore, anno: ?CIR.Annotation.Idx, pattern: CIR.Pattern.Idx) u32 {
+    if (anno) |anno_idx| {
+        if (store.getAnnotation(anno_idx).name_region) |name_region| return name_region.start.offset;
+    }
+    return store.getPatternRegion(pattern).start.offset;
+}
+
 /// Compute the source offset where doc comments should be found for a Def.
-/// Prefers annotation region (doc comments precede type annotations),
-/// otherwise falls back to pattern region.
 pub fn docOffsetForDef(store: *const NodeStore, def: CIR.Def) u32 {
-    if (def.annotation) |anno_idx|
-        return store.getAnnotationRegion(anno_idx).start.offset;
-    return store.getPatternRegion(def.pattern).start.offset;
+    return bindingStart(store, def.annotation, def.pattern);
 }
 
 /// Compute the source offset where doc comments should be found for a Statement.
-/// Handles annotation-bearing statements (s_decl, s_var) by preferring the
-/// annotation region, and falls back to the statement region for other types.
+/// Declarations start where `bindingStart` says; other statements start at
+/// their own region.
 pub fn docOffsetForStatement(store: *const NodeStore, stmt: CIR.Statement, stmt_idx: CIR.Statement.Idx) u32 {
     return switch (stmt) {
-        .s_decl => |d| if (d.anno) |a|
-            store.getAnnotationRegion(a).start.offset
-        else
-            store.getPatternRegion(d.pattern).start.offset,
-        .s_var => |v| if (v.anno) |a|
-            store.getAnnotationRegion(a).start.offset
-        else
-            store.getPatternRegion(v.pattern_idx).start.offset,
-        .s_var_uninitialized => |v| if (v.anno) |a|
-            store.getAnnotationRegion(a).start.offset
-        else
-            store.getPatternRegion(v.pattern_idx).start.offset,
+        .s_decl => |d| bindingStart(store, d.anno, d.pattern),
+        .s_var => |v| bindingStart(store, v.anno, v.pattern_idx),
+        .s_var_uninitialized => |v| bindingStart(store, v.anno, v.pattern_idx),
         .s_reassign,
         .s_crash,
         .s_dbg,
@@ -141,6 +89,16 @@ pub fn extractDocForDef(allocator: Allocator, source: []const u8, store: *const 
 /// Extract doc comments for a Statement (combines offset computation + source extraction).
 pub fn extractDocForStatement(allocator: Allocator, source: []const u8, store: *const NodeStore, stmt: CIR.Statement, stmt_idx: CIR.Statement.Idx) Allocator.Error!?[]const u8 {
     return extractDocCommentBefore(allocator, source, docOffsetForStatement(store, stmt, stmt_idx));
+}
+
+/// Extract doc comments for a scope binding from the declaration that owns it.
+/// Parameters and pattern binders have no doc comments of their own.
+pub fn extractDocForBinding(allocator: Allocator, source: []const u8, store: *const NodeStore, owner: Binding.Owner) Allocator.Error!?[]const u8 {
+    return switch (owner) {
+        .def => |def_idx| try extractDocForDef(allocator, source, store, store.getDef(def_idx)),
+        .statement => |stmt_idx| try extractDocForStatement(allocator, source, store, store.getSourceStatement(stmt_idx), stmt_idx),
+        .parameter, .binder => null,
+    };
 }
 
 // Unit Tests
@@ -253,7 +211,7 @@ test "extractDocCommentBefore: stops at regular comment before doc" {
     try std.testing.expectEqualStrings("Doc comment", result.?);
 }
 
-test "extractDocCommentBefore: handles type annotation between doc and definition" {
+test "extractDocCommentBefore: an annotated definition starts at its annotation" {
     const allocator = std.testing.allocator;
     const source =
         \\## Adds two numbers together.
@@ -261,8 +219,8 @@ test "extractDocCommentBefore: handles type annotation between doc and definitio
         \\add : I64, I64 -> I64
         \\add = |a, b| a + b
     ;
-    // Find offset of the definition line (not the type annotation)
-    const offset: u32 = @intCast(std.mem.find(u8, source, "add = |a, b|") orelse return error.TestUnexpectedResult);
+    // Find offset of the type annotation, where the definition starts
+    const offset: u32 = @intCast(std.mem.find(u8, source, "add : I64") orelse return error.TestUnexpectedResult);
     const result = try extractDocCommentBefore(allocator, source, offset);
     defer if (result) |r| allocator.free(r);
 
@@ -314,16 +272,6 @@ test "extractDocCommentBefore: a blank line ends the doc block" {
     defer if (result) |r| allocator.free(r);
 
     try std.testing.expectEqualStrings("Doc comment", result.?);
-}
-
-test "isTypeAnnotation: various cases" {
-    try std.testing.expect(isTypeAnnotation("add : I64, I64 -> I64"));
-    try std.testing.expect(isTypeAnnotation("len : Str -> U64"));
-    try std.testing.expect(isTypeAnnotation("identity : a -> a"));
-    try std.testing.expect(!isTypeAnnotation("add = |a, b| a + b"));
-    try std.testing.expect(!isTypeAnnotation("x : I64 = 42")); // definition with type, not just annotation
-    try std.testing.expect(!isTypeAnnotation("## doc comment"));
-    try std.testing.expect(!isTypeAnnotation("no colon here"));
 }
 
 test "bidi doc comments display controls visibly" {
