@@ -11101,6 +11101,53 @@ value's own tags is the value itself, and its record is dropped
 (`Check.settleUnwidenedResults`); a row whose tail is quantified with the
 function's result may widen in a specialization, so its record stays.
 
+**Deferred result relations.** The coercion decides from the value's type,
+and a nested annotated function's body can have a type that is not yet
+known where the body is checked: a variable the ENCLOSING function owns—its
+parameter, a binder destructured out of a record it captured (Field Kinds),
+a tuple access or dispatch result of its data—which that function may still
+determine later in its own body, through a judgment of its own or an
+ordinary unification. Relating the body to the annotation at that moment
+would bind the enclosing function's variable to the annotation's own result
+row, and the nested function's generalization could no longer quantify that
+row: every use of the nested function inside the enclosing one would share
+one bounded row, and a match with a tag the annotation does not list would
+be rejected there, while the same match on the same signature is accepted
+everywhere else. The interface of an annotated definition is its
+annotation, whatever the body is, so the body's relation to it is a
+verification, and a verification can run whenever its inputs are known. A
+flex variable the widening copy reaches whose rank is below the current
+rank (`Check.reachedVarEscapesResultRelation`) is therefore not related:
+the copy stands a fresh variable at the current rank in its place
+(`Check.deferredResultPlaceholder`), the relation binds that placeholder to
+the result position the variable must fit, and the definition's scheme
+quantifies the position with the rest of its annotation. The variable's
+own relation to that position is recorded (`Check.DeferredResultRelation`)
+for the generalization boundary that owns the variable, which discharges
+it after its field-kind judgments and before its literal defaulting
+(`Check.dischargeDeferredResultRelations`): the target is the position as
+the annotation wrote it, instantiated at the boundary's rank with its
+bounded extensions closed and its quantified type variables fresh rigids,
+and the variable relates to it through a widening copy of its type exactly
+as the body would have. A variable still undetermined at the boundary takes
+the annotation's row, closed: the enclosing function would otherwise
+generalize it, and the body cannot deliver the annotation for every row. A
+variable the relation would bind to one of the target's rigids is the body
+delivering a result the annotation promised for every type for one type
+only, and is reported as the body not fitting the annotation. A rejection
+is reported at the body value and retires it, exactly as an immediate
+rejection does, after the relation is rolled back so the report shows the
+type the enclosing function determined. Only a relation to an ANNOTATED
+result waits (`Check.ResultTarget`); a relation that infers a result is
+what determines it, and relates the value's type as it stands. The body's
+coercion record names the annotated result itself as the wide type, since
+the body's type is the enclosing function's data and never the result's own
+class, so its `row_coerce` always stands and is lowered at the result's
+cell (Closed Result Rows At Template Boundaries).
+`test/snapshots/deferred_result_relation.md` pins the accepted and rejected
+sides, and `test/cli/DestructuredStepWidenedMatch.roc` runs the widened
+calls inside the enclosing function on every backend.
+
 A forwarder's argument and result rows can be one class. The copy separates
 only the result, so the argument row stays closed, and a call at a tag the
 argument does not list is still rejected. The function's result is its
@@ -13097,7 +13144,11 @@ The kind rules:
   boundary retains for an enclosing owner pins every class its binder's
   type reaches at the owner's rank: whichever binding the owner makes
   relates that type to the field's value there, so no boundary nested
-  inside the owner may quantify it first.
+  inside the owner may quantify it first. The result relation of a value
+  whose type reaches such a binder then waits for that owner (Row
+  Subsumption, "Deferred result relations"), so the owner's judgment,
+  including a kind another statement of the owner makes optional, is what
+  the relation sees.
   Binding a destructure can also ground a deferred static-dispatch receiver
   without adding an ordinary equality constraint. Every literal-defaulting
   boundary therefore begins with a ROUND-ZERO constraint quiescence: ordinary
