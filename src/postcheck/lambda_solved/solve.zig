@@ -3672,26 +3672,7 @@ const Solver = struct {
             },
             .tag_union => |public_tags| {
                 if (private_content_tag != .tag_union) Common.invariant("generated-private evidence relation received different type structure");
-                const private_tags = private.tag_union;
-                if (public_tags.count() != private_tags.count()) {
-                    Common.invariant("generated-private evidence relation received tag unions with different tags");
-                }
-                for (0..public_tags.count()) |tag_index| {
-                    const public_tag = self.program.types.tagItem(public_tags, tag_index);
-                    const private_tag = self.program.types.tagItem(private_tags, tag_index);
-                    if (public_tag.name != private_tag.name or public_tag.checked_name != private_tag.checked_name or
-                        public_tag.payloads.count() != private_tag.payloads.count())
-                    {
-                        Common.invariant("generated-private evidence relation received tag unions with different tags");
-                    }
-                    for (0..public_tag.payloads.count()) |payload_index| {
-                        try self.pushRelate(
-                            stack,
-                            self.program.types.spanItem(public_tag.payloads, payload_index),
-                            self.program.types.spanItem(private_tag.payloads, payload_index),
-                        );
-                    }
-                }
+                try self.relateTagRows(stack, public_tags, private_root, private.tag_union);
             },
             .func => |public_fn| {
                 if (private_content_tag != .func) Common.invariant("generated-private evidence relation received different type structure");
@@ -3770,6 +3751,53 @@ const Solver = struct {
                 }
             },
         }
+    }
+
+    /// Relate a public tag row to the private row representing the same
+    /// values. Monotype related the two rows exactly, but a row join can grow
+    /// either one afterwards (design.md "Row Joins"): a widened result joined
+    /// into an iterator's step row grows the private representation, and a
+    /// join that reached the public view before the relation grows the view.
+    /// The private row is the representation, so it carries every tag either
+    /// row holds. A tag both rows list relates its payloads; a tag only the
+    /// private row lists was joined into the representation; a tag only the
+    /// public view lists joins the private row here, as unifying the two rows
+    /// would.
+    fn relateTagRows(
+        self: *Solver,
+        stack: *std.ArrayList(UnifyFrame),
+        public_tags: Type.Span,
+        private_root: Type.TypeVarId,
+        private_tags: Type.Span,
+    ) Allocator.Error!void {
+        self.countWork(.row_members, public_tags.count() + private_tags.count());
+        const private_index = try self.tagRowIndex(private_tags);
+        const joined = &self.merge_tags;
+        joined.clearRetainingCapacity();
+        for (0..public_tags.count()) |public_index| {
+            const public_tag = self.program.types.tagItem(public_tags, public_index);
+            var private_positions = private_index.positions(public_tag.name);
+            const private_tag = while (private_positions.next()) |private_position| {
+                const candidate = self.program.types.tagItem(private_tags, private_position);
+                if (candidate.checked_name == public_tag.checked_name and
+                    candidate.payloads.count() == public_tag.payloads.count()) break candidate;
+            } else {
+                try joined.append(self.allocator, public_tag);
+                continue;
+            };
+            for (0..public_tag.payloads.count()) |payload_index| {
+                try self.pushRelate(
+                    stack,
+                    self.program.types.spanItem(public_tag.payloads, payload_index),
+                    self.program.types.spanItem(private_tag.payloads, payload_index),
+                );
+            }
+        }
+        if (joined.items.len == 0) return;
+        for (0..private_tags.count()) |position| {
+            try joined.append(self.allocator, self.program.types.tagItem(private_tags, position));
+        }
+        try self.program.types.set(private_root, .{ .tag_union = try self.addLabelOrderedTags(joined.items) });
     }
 
     fn unifyIteratorOwnerStampedPublic(
@@ -4159,15 +4187,20 @@ const Solver = struct {
         // Every right tag already sits in the left row: the merge is the
         // left row itself.
         if (merged.items.len == lhs.count()) return lhs;
-        // A row's tags are ordered by label, as Monotype orders them, so two
-        // rows holding the same tags are one representation.
+        return try self.addLabelOrderedTags(merged.items);
+    }
+
+    /// Store a joined row's tags. A row's tags are ordered by label, as
+    /// Monotype orders them, so two rows holding the same tags are one
+    /// representation.
+    fn addLabelOrderedTags(self: *Solver, tags: []Type.Tag) Allocator.Error!Type.Span {
         const name_store = self.lifted.names;
-        std.mem.sort(Type.Tag, merged.items, name_store, struct {
+        std.mem.sort(Type.Tag, tags, name_store, struct {
             fn lessThan(store: @TypeOf(name_store), a: Type.Tag, b: Type.Tag) bool {
                 return store.tagLabelTextLessThan(a.name, b.name);
             }
         }.lessThan);
-        return try self.program.types.addTags(merged.items);
+        return try self.program.types.addTags(tags);
     }
 
     /// Merge two lambda sets. Every member naming a lambda carries the one

@@ -7010,6 +7010,39 @@ pub const InstGraph = struct {
         try self.union_(closed, wider);
     }
 
+    /// A new row carrying every label of `raw_wider`, a row that lists each of
+    /// the closed `raw_closed` row's labels at the same payload arity plus
+    /// others. The closed row's tags keep their own payload nodes; every other
+    /// tag and the extension are the wider row's. Neither row changes and no
+    /// payloads are related, so a closed row a generated-private
+    /// representation owns can be requested at a wider public row without its
+    /// private payloads meeting their public counterparts outside the opaque
+    /// interface relation (design.md "Closed Result Rows At Template
+    /// Boundaries").
+    pub fn closedTagRowAtWiderLabels(self: *InstGraph, raw_closed: NodeId, raw_wider: NodeId) Allocator.Error!NodeId {
+        self.requireRelationProduction();
+        const closed = self.find(raw_closed);
+        if (!try self.tagRowIsClosed(closed)) Common.invariant("row relabeling received an open row as its closed row");
+        if (try self.rootContent(closed) != .tag_union) Common.invariant("row relabeling received a non-tag-union closed row");
+        const closed_tags = (try self.flattenTagRow(closed)).tags;
+        const wide = try self.flattenTagRow(self.find(raw_wider));
+        const tags = try self.arena().dupe(InstTag, wide.tags);
+        for (closed_tags) |tag| {
+            const wide_tag = for (tags) |*candidate| {
+                if (candidate.name == tag.name) break candidate;
+            } else Common.invariant("row relabeling request lacked one of the closed row's labels");
+            if (tag.payloads.len != wide_tag.payloads.len) {
+                Common.invariant("row relabeling request changed a closed row's payload arity");
+            }
+            wide_tag.* = tag;
+        }
+        return try self.newNode(.{ .tag_union = .{
+            .tags = tags,
+            .ext = wide.ext,
+            .tags_sorted = true,
+        } });
+    }
+
     /// Point payload `payload_index` of the tag named `name` in a row at
     /// `new_payload`, rewriting only the row's own content: the payload node
     /// it pointed at is untouched, since an empty row's node stands for every
