@@ -602,14 +602,14 @@ const Builder = struct {
     fn bodySpecializesCall(self: *Builder, fn_id: Ast.FnId, body: Ast.ExprId) Allocator.Error!bool {
         self.resetFunction(fn_id);
         const program_ = self.program();
-        var slots: std.AutoHashMapUnmanaged(Ast.LocalId, Slot) = .empty;
+        var slots: collections.DenseMapUnmanaged(Ast.LocalId, Slot) = .empty;
         const args = program_.typedLocalSpan(program_.getFn(fn_id).args);
         for (0..args.len) |index| try slots.put(self.temp(), GuardedList.at(args, index).local, .{ .kind = .arg, .index = @intCast(index) });
-        var defs: std.AutoHashMapUnmanaged(Ast.LocalId, ?Ast.ExprId) = .empty;
+        var defs: collections.DenseMapUnmanaged(Ast.LocalId, ?Ast.ExprId) = .empty;
         var returns: std.ArrayList(Ast.ExprId) = .empty;
         try self.collectDefinitions(body, &defs, &returns);
         const context: BuiltContext = .{ .defs = &defs, .slots = &slots };
-        var memo: std.AutoHashMapUnmanaged(Ast.ExprId, Built) = .empty;
+        var memo: collections.DenseMapUnmanaged(Ast.ExprId, Built) = .empty;
 
         var stack: std.ArrayList(Ast.ExprChild) = .empty;
         try stack.append(self.temp(), .{ .expr = body });
@@ -631,7 +631,9 @@ const Builder = struct {
                             if (meetsDemand(value, callee_summary.captures[self.analysis.captureSlot(callee, operand.id)].view())) return true;
                         }
                     },
-                    else => {},
+                    // A compile-time value is an opaque leaf to the clone.
+                    .comptime_value => continue,
+                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
                 }
                 try Ast.appendChildren(self.temp(), program_, expr_id, &stack);
             },
