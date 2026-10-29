@@ -10019,10 +10019,14 @@ A clone that admits only productive direct inlines (every clone outside
 `.none`'s fusion pass) inlines a direct call only when the copied body pays for
 itself. Three kinds of call always qualify: the checker-stamped iterator
 protocol (`IteratorProcedureId`), a wrapper whose body does less work than its
-call (the definition solved inline analysis uses, shared in `wrapper_body.zig`)
-and that lies on no cycle of direct calls, where inlining it would only unroll
-the recursion, and a call whose captures the context substituted, which cannot
-stay residual.
+call (the definition solved inline analysis uses, shared in `wrapper_body.zig`),
+that lies on no cycle of direct calls, where inlining it would only unroll the
+recursion, and that passes none of its own calls a value it builds itself where
+the callee consumes it, and a call whose captures the context substituted,
+which cannot stay residual. A body like `|msg| for_each!(msg, Stdout.line!)`
+inlines `for_each!` into itself on the function reference it supplies, so its
+clone is a whole loop wherever it lands; it stays one procedure, and copies of
+it at each caller are admitted only where they are productive there.
 Any other call qualifies only when inlining lets a known value meet a consumer
 that gains from it:
 
