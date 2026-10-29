@@ -25663,15 +25663,19 @@ runs only when something calls a function value, so it joins a producer's
 evaluation exactly when that evaluation makes a value call: then every
 function value the evaluation creates, and every one a value it reads holds,
 may run. The graph over-approximates any one lowering's reads, and lowering
-checks that every compile-time slot a program declares is either completed or
-one of its own roots'. An erased callable type's member set names every
-function the whole program may put in a value of that type, so a program
-compiles a member only when its own code creates it or a completed value it
-reads holds it (`CompletedErasedMembers`, collected from each stage's frozen
-image); its erased callable plans keep only the members it compiled. A member
-a completed value holds was compiled by the stage that created it, so every
-value that member reads is already complete. A Boxy program has no Solved program; its literal roots
-take the same order from its own LIR (`CompileTimeRootGraph`), where a Boxy
+checks that every compile-time slot a program declares is completed, one of
+its own roots', or one a later level evaluates. An erased callable type's
+member set names every function the whole program may put in a value of that
+type, so a program compiles a member only when its own code creates it or a
+completed value it reads holds it (`CompletedErasedMembers`, collected from
+each stage's frozen image); its erased callable plans keep only the members it
+compiled. A compiled member runs in a stage only when the stage makes a value
+call, and then the graph orders the member's reads before the stage, so a
+member that does not run may read a value a later level evaluates. The stage
+reserves that value's slot uninitialized: no code it runs reads it, and later
+levels and the runtime consumer compile their own members against the
+completed value. A Boxy program has no Solved program; its literal roots take
+the same order from its own LIR (`CompileTimeRootGraph`), where a Boxy
 dictionary call, comparison, hash, inspection, or adaptation is a value call
 that may run any of the program's Boxy workers.
 
