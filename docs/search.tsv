@@ -6,3 +6,30 @@ term	guides	::	langref/types/#opaque-nominal-types	Types › Opaque Nominal Type
 term	api	lreduce	List/#fold	List.fold
 term	guides	nominal	langref/types/#nominal-types	Types › Nominal Types
 term	guides	opaque	langref/types/#opaque-nominal-types	Types › Opaque Nominal Types
+
+# Operators; ambiguous symbols intentionally link to both forms.
+term	guides	+	langref/operators/#arithmetic-operators	Operators › Arithmetic Operators
+term	guides	-	langref/operators/#arithmetic-operators	Operators › Arithmetic Operators
+term	guides	*	langref/operators/#arithmetic-operators	Operators › Arithmetic Operators
+term	guides	/	langref/operators/#arithmetic-operators	Operators › Arithmetic Operators
+term	guides	//	langref/operators/#arithmetic-operators	Operators › Arithmetic Operators
+term	guides	%	langref/operators/#arithmetic-operators	Operators › Arithmetic Operators
+term	guides	==	langref/operators/#comparison-operators	Operators › Comparison Operators
+term	guides	!=	langref/operators/#comparison-operators	Operators › Comparison Operators
+term	guides	<	langref/operators/#comparison-operators	Operators › Comparison Operators
+term	guides	<=	langref/operators/#comparison-operators	Operators › Comparison Operators
+term	guides	>	langref/operators/#comparison-operators	Operators › Comparison Operators
+term	guides	>=	langref/operators/#comparison-operators	Operators › Comparison Operators
+term	guides	..<	langref/operators/#range-operators	Operators › Range Operators
+term	guides	..=	langref/operators/#range-operators	Operators › Range Operators
+term	guides	and	langref/operators/#and	Operators › and
+term	guides	or	langref/operators/#or	Operators › or
+term	guides	??	langref/operators/#-default-value-on-err	Operators › ?? (default value on Err)
+term	guides	?	langref/operators/#-unwrap-if-ok-early-return-if-err	Operators › ? (unwrap or return Err)
+term	guides	?	langref/operators/#-with-a-handler	Operators › ? with a Handler
+term	guides	|>	langref/operators/#-pipe	Operators › |> (pipe)
+term	guides	-	langref/operators/#--negate	Operators › - (negation)
+term	guides	!	langref/operators/#-not	Operators › ! (not)
+term	guides	[]	langref/operators/#…-subscript-operator	Operators › Subscript Operator (not yet implemented)
+term	guides	[…]	langref/operators/#…-subscript-operator	Operators › Subscript Operator (not yet implemented)
+term	guides	[...]	langref/operators/#…-subscript-operator	Operators › Subscript Operator (not yet implemented)
