@@ -5402,7 +5402,9 @@ const Pass = struct {
 
     fn modelLowLevel(self: *Pass, stmt: CFStmtId, s: anytype) ResourceError!void {
         const args = self.store.getLocalSpan(s.args);
-        const arg_count = GuardedList.borrowLen(args);
+        // An operation over a list of dynamic elements takes the element
+        // descriptor as a trailing argument after its value operands.
+        const arg_count = GuardedList.borrowLen(args) - @intFromBool(self.store.stmtRowOrDefault(s.extra).dyn_elem_desc);
 
         switch (s.op) {
             .simd_concat_shift_bytes => {
