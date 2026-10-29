@@ -15,6 +15,7 @@
 //! runs before the dynamic frame region is allocated and before the body.
 
 const std = @import("std");
+const collections = @import("collections");
 const base = @import("base");
 const check = @import("check");
 const layout = @import("layout");
@@ -236,7 +237,7 @@ pub const Builder = struct {
     env: types.Env,
     store: *LirStore,
     frame_locals: std.ArrayList(LocalId) = .empty,
-    binders: std.AutoHashMapUnmanaged(checked.PatternBinderId, LocalId) = .empty,
+    binders: collections.DenseMapUnmanaged(checked.PatternBinderId, LocalId) = .empty,
     /// The descriptor local of each scope variable (its hidden parameter).
     var_descs: []LocalId = &.{},
     /// The dictionaries in scope (`Worker.scope_dictionary_indices` order).
@@ -248,19 +249,19 @@ pub const Builder = struct {
     /// The slot of each recursive value binder in scope (design.md
     /// "Recursive values"): a `Box` of a one-item tuple holding the value,
     /// which callables capture in place of the value.
-    recursive_slots: std.AutoHashMapUnmanaged(checked.PatternBinderId, LocalId) = .empty,
+    recursive_slots: collections.DenseMapUnmanaged(checked.PatternBinderId, LocalId) = .empty,
     /// What each lambda this body declares captured where it was declared:
     /// a `var`'s value then, whatever the `var` holds where the procedure is
     /// later used.
-    declared_captures: std.AutoHashMapUnmanaged(CheckedExprId, []const LocalId) = .empty,
+    declared_captures: collections.DenseMapUnmanaged(CheckedExprId, []const LocalId) = .empty,
     /// While lowering an exact procedure alias's forwarded lookup in the
     /// alias's own module (`aliasTargetHidden`): where that alias's scopes
     /// start in `alias_scopes`. Its lookup reaches no scope outside them.
     foreign_scopes: ?usize = null,
-    type_descs: std.AutoHashMapUnmanaged(TypeId, LocalId) = .empty,
+    type_descs: collections.DenseMapUnmanaged(TypeId, LocalId) = .empty,
     /// The locals the entry chain defines, which every statement of the
     /// body can read.
-    entry_locals: std.AutoHashMapUnmanaged(LocalId, void) = .empty,
+    entry_locals: collections.DenseMapUnmanaged(LocalId, void) = .empty,
     /// Whether straight-line statements currently go to the entry chain
     /// (`emitIntoEntry`), whose end is then the current hole.
     emitting_entry: bool = false,
@@ -276,15 +277,15 @@ pub const Builder = struct {
     opened_components: std.AutoHashMapUnmanaged(u32, void) = .empty,
     /// The recursive members whose placeholder descriptor this body has
     /// opened and not yet closed.
-    open_members: std.AutoHashMapUnmanaged(TypeId, OpenMember) = .empty,
+    open_members: collections.DenseMapUnmanaged(TypeId, OpenMember) = .empty,
     /// The recursion box over each descriptor local that has one.
-    recursive_boxes: std.AutoHashMapUnmanaged(LocalId, LocalId) = .empty,
+    recursive_boxes: collections.DenseMapUnmanaged(LocalId, LocalId) = .empty,
     opaque_word_desc: ?LocalId = null,
     /// Expressions whose value is built at a row coercion's destination
     /// type rather than their own (design.md "Row Coercion Primitive").
-    destination_types: std.AutoHashMapUnmanaged(CheckedExprId, TypeId) = .empty,
+    destination_types: collections.DenseMapUnmanaged(CheckedExprId, TypeId) = .empty,
     /// The expressions whose value is the procedure's result.
-    tail_exprs: std.AutoHashMapUnmanaged(CheckedExprId, void) = .empty,
+    tail_exprs: collections.DenseMapUnmanaged(CheckedExprId, void) = .empty,
     /// The procedure's calls and joins as emitted, for its tail calls.
     tail_calls: lir_core.TailCallBuilder,
     /// The statement emitted last, while nothing follows it.
@@ -292,7 +293,7 @@ pub const Builder = struct {
     /// How many branching statements (terminals and joins) this body has
     /// emitted.
     branch_count: u32 = 0,
-    name_locals: std.AutoHashMapUnmanaged(types.NameId, LocalId) = .empty,
+    name_locals: collections.DenseMapUnmanaged(types.NameId, LocalId) = .empty,
     entry_hole: CFStmtId = undefined,
     hole: ?CFStmtId = null,
     join_points: std.ArrayList(LIR.JoinPoint) = .empty,
@@ -661,7 +662,7 @@ pub const Builder = struct {
             // read into a local of its own before any parameter is written.
             const sources = try self.allocator.alloc(LocalId, m.params.len);
             defer self.allocator.free(sources);
-            var params: std.AutoHashMapUnmanaged(LocalId, void) = .empty;
+            var params: collections.DenseMapUnmanaged(LocalId, void) = .empty;
             defer params.deinit(self.allocator);
             for (m.params) |param| try params.put(self.allocator, param, {});
             for (m.binders, m.params, sources) |binder, param, *source| {
@@ -713,7 +714,7 @@ pub const Builder = struct {
         const Step = enum { fresh, expanded, close_fresh, close_expanded };
         var pending: std.ArrayList(struct { ty: TypeId, step: Step }) = .empty;
         defer pending.deinit(self.allocator);
-        var expanding: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+        var expanding: collections.DenseMapUnmanaged(TypeId, void) = .empty;
         defer expanding.deinit(self.allocator);
         try pending.append(self.allocator, .{ .ty = root, .step = .fresh });
         while (pending.items.len > 0) {
@@ -792,7 +793,7 @@ pub const Builder = struct {
         const overrides = try self.program.nominalOverrides(ty);
         var pending: std.ArrayList(TypeId) = .empty;
         defer pending.deinit(self.allocator);
-        var seen: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
         defer seen.deinit(self.allocator);
         for (overrides) |maybe| switch (maybe orelse continue) {
             .procedure => |override| {
@@ -1192,7 +1193,7 @@ pub const Builder = struct {
     fn hostAbiLayout(self: *Builder, root: TypeId) Allocator.Error!layout.Idx {
         const store = &self.program.store;
         const layouts = &self.program.result.layouts;
-        var done: std.AutoHashMapUnmanaged(TypeId, layout.Idx) = .empty;
+        var done: collections.DenseMapUnmanaged(TypeId, layout.Idx) = .empty;
         defer done.deinit(self.allocator);
         const Frame = struct { ty: TypeId, expanded: bool };
         var stack: std.ArrayList(Frame) = .empty;
@@ -4845,7 +4846,7 @@ pub const Builder = struct {
         const const_types = &self.program.constStore(source).type_store;
         var stack: std.ArrayList(check.ConstStore.ConstTypeId) = .empty;
         defer stack.deinit(self.allocator);
-        var seen: std.AutoHashMapUnmanaged(check.ConstStore.ConstTypeId, void) = .empty;
+        var seen: collections.DenseMapUnmanaged(check.ConstStore.ConstTypeId, void) = .empty;
         defer seen.deinit(self.allocator);
         try stack.append(self.allocator, root);
         while (stack.pop()) |id| {
@@ -4876,7 +4877,7 @@ pub const Builder = struct {
         const const_types = &self.program.constStore(source).type_store;
         const names = self.program.constNames(source);
         const store = &self.program.store;
-        var done: std.AutoHashMapUnmanaged(check.ConstStore.ConstTypeId, TypeId) = .empty;
+        var done: collections.DenseMapUnmanaged(check.ConstStore.ConstTypeId, TypeId) = .empty;
         defer done.deinit(self.allocator);
         const Frame = struct { id: check.ConstStore.ConstTypeId, expanded: bool };
         var stack: std.ArrayList(Frame) = .empty;

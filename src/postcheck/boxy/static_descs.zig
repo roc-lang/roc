@@ -11,6 +11,7 @@
 //! reserved before any is filled.
 
 const std = @import("std");
+const collections = @import("collections");
 const base = @import("base");
 const layout = @import("layout");
 const lir_core = @import("lir_core");
@@ -30,6 +31,7 @@ const StaticDataExport = LirProgram.StaticDataExport;
 const StaticDataRelocation = LirProgram.StaticDataRelocation;
 const ExportIndex = u32;
 
+/// The static descriptors and dictionaries the program carries as static data.
 pub const StaticDescs = struct {
     allocator: Allocator,
     store: *types.Store,
@@ -39,7 +41,7 @@ pub const StaticDescs = struct {
     exports: std.ArrayList(StaticDataExport) = .empty,
     /// Descriptor slot and node of each closed type, by representative.
     desc_slots: std.AutoHashMapUnmanaged(Key, Reserved) = .empty,
-    name_slots: std.AutoHashMapUnmanaged(NameId, Reserved) = .empty,
+    name_slots: collections.DenseMapUnmanaged(NameId, Reserved) = .empty,
     pending: std.ArrayList(Pending) = .empty,
     opaque_word: ?LIR.StaticDataId = null,
     null_word: ?LIR.StaticDataId = null,
@@ -48,7 +50,7 @@ pub const StaticDescs = struct {
     extra_nodes: u32 = 0,
     numeral_tables: std.StringHashMapUnmanaged(LIR.StaticDataId) = .empty,
     /// The key word of each recursive member type composed at runtime.
-    recursion_keys: std.AutoHashMapUnmanaged(TypeId, LIR.StaticDataId) = .empty,
+    recursion_keys: collections.DenseMapUnmanaged(TypeId, LIR.StaticDataId) = .empty,
 
     /// A descriptor's identity: a type, or the recursion box around one.
     const Key = struct { ty: TypeId, recursive_box: bool };

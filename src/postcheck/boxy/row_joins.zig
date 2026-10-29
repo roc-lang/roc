@@ -5,18 +5,20 @@
 //! member's tags.
 
 const std = @import("std");
+const collections = @import("collections");
 const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
 const TypeId = types.TypeId;
 
+/// The program's row joins over Boxy types.
 pub const Joins = struct {
     allocator: Allocator,
     /// Union-find parent of each joined type; absent types are their own
     /// singleton set.
-    parent: std.AutoHashMapUnmanaged(TypeId, TypeId) = .empty,
+    parent: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty,
     /// The representative of each joined ground type, filled by `seal`.
-    representatives: std.AutoHashMapUnmanaged(TypeId, TypeId) = .empty,
+    representatives: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty,
     sealed: bool = false,
 
     pub fn init(allocator: Allocator) Joins {
@@ -121,7 +123,7 @@ pub const Joins = struct {
     /// in label order; any other set by its least member.
     pub fn seal(self: *Joins, store: *types.Store) Allocator.Error!void {
         self.sealed = true;
-        var members: std.AutoHashMapUnmanaged(TypeId, std.ArrayList(TypeId)) = .empty;
+        var members: collections.DenseMapUnmanaged(TypeId, std.ArrayList(TypeId)) = .empty;
         defer {
             var it = members.valueIterator();
             while (it.next()) |list| list.deinit(self.allocator);
@@ -204,12 +206,12 @@ pub const Joins = struct {
 pub fn compatible(allocator: Allocator, store: *const types.Store, a: TypeId, b: TypeId) Allocator.Error!bool {
     var pending: std.ArrayList([2]TypeId) = .empty;
     defer pending.deinit(allocator);
-    var seen: std.AutoHashMapUnmanaged([2]TypeId, void) = .empty;
+    var seen: std.AutoHashMapUnmanaged(struct { TypeId, TypeId }, void) = .empty;
     defer seen.deinit(allocator);
     try pending.append(allocator, .{ a, b });
     while (pending.pop()) |pair| {
         if (pair[0] == pair[1]) continue;
-        if ((try seen.getOrPut(allocator, pair)).found_existing) continue;
+        if ((try seen.getOrPut(allocator, .{ pair[0], pair[1] })).found_existing) continue;
         const left = store.get(pair[0]);
         const right = store.get(pair[1]);
         if (left == .variable or right == .variable) continue;

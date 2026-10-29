@@ -5,37 +5,42 @@
 //! layouts do.
 
 const std = @import("std");
+const collections = @import("collections");
 const layout = @import("layout");
 const types = @import("types.zig");
 const RowJoins = @import("row_joins.zig");
 const Common = @import("../common.zig");
 
+/// The layout of a primitive type.
 pub const primitiveLayout = Common.primitiveLayout;
 
 const Allocator = std.mem.Allocator;
 const TypeId = types.TypeId;
 
+/// The presence slot variant of an omitted optional field.
 pub const missing_label = "#Missing";
+/// The presence slot variant of a supplied optional field.
 pub const present_label = "#Present";
 
+/// Committed layouts of closed Boxy types, memoized per joined type.
 pub const Layouts = struct {
     allocator: Allocator,
     store: *types.Store,
     converter: types.Converter,
     joins: *const RowJoins.Joins,
     layouts: *layout.Store,
-    memo: std.AutoHashMapUnmanaged(TypeId, Committed) = .empty,
-    slot_memo: std.AutoHashMapUnmanaged(TypeId, TypeId) = .empty,
+    memo: collections.DenseMapUnmanaged(TypeId, Committed) = .empty,
+    slot_memo: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty,
     /// The payload of each presence-slot type.
-    slot_payloads: std.AutoHashMapUnmanaged(TypeId, TypeId) = .empty,
+    slot_payloads: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty,
     /// The recursive component of each open type `recursiveComponent` has
     /// placed, or `no_component` for one in no cycle.
-    components: std.AutoHashMapUnmanaged(TypeId, u32) = .empty,
+    components: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
     /// The members of each recursive component that a boxed slot of the
     /// component points at, by component.
     component_targets: std.ArrayList([]const TypeId) = .empty,
     /// The type variables of each recursive member asked about.
-    member_vars: std.AutoHashMapUnmanaged(TypeId, []const TypeId) = .empty,
+    member_vars: collections.DenseMapUnmanaged(TypeId, []const TypeId) = .empty,
 
     const Committed = struct { idx: layout.Idx, digest: ?layout.GraphDigest };
 
@@ -131,11 +136,11 @@ pub const Layouts = struct {
             for (frames.items) |frame| self.allocator.free(frame.edges);
             frames.deinit(self.allocator);
         }
-        var index_of: std.AutoHashMapUnmanaged(TypeId, u32) = .empty;
+        var index_of: collections.DenseMapUnmanaged(TypeId, u32) = .empty;
         defer index_of.deinit(self.allocator);
-        var low: std.AutoHashMapUnmanaged(TypeId, u32) = .empty;
+        var low: collections.DenseMapUnmanaged(TypeId, u32) = .empty;
         defer low.deinit(self.allocator);
-        var on_stack: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+        var on_stack: collections.DenseMapUnmanaged(TypeId, void) = .empty;
         defer on_stack.deinit(self.allocator);
         var stack: std.ArrayList(TypeId) = .empty;
         defer stack.deinit(self.allocator);
@@ -206,7 +211,7 @@ pub const Layouts = struct {
     fn boxedTargets(self: *Layouts, members: []const TypeId) Allocator.Error![]const TypeId {
         var targets: std.ArrayList(TypeId) = .empty;
         errdefer targets.deinit(self.allocator);
-        var seen: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
         defer seen.deinit(self.allocator);
         var edges: std.ArrayList(InlineEdge) = .empty;
         defer edges.deinit(self.allocator);
@@ -228,7 +233,7 @@ pub const Layouts = struct {
         if (self.member_vars.get(ty)) |vars| return vars;
         var vars: std.ArrayList(TypeId) = .empty;
         errdefer vars.deinit(self.allocator);
-        var seen: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
         defer seen.deinit(self.allocator);
         var pending: std.ArrayList(TypeId) = .empty;
         defer pending.deinit(self.allocator);
@@ -325,7 +330,7 @@ pub const Layouts = struct {
 
         var graph = layout.Graph{};
         defer graph.deinit(self.allocator);
-        var nodes: std.AutoHashMapUnmanaged(TypeId, layout.GraphNodeId) = .empty;
+        var nodes: collections.DenseMapUnmanaged(TypeId, layout.GraphNodeId) = .empty;
         defer nodes.deinit(self.allocator);
         var order: std.ArrayList(TypeId) = .empty;
         defer order.deinit(self.allocator);
@@ -367,7 +372,7 @@ pub const Layouts = struct {
         };
     }
 
-    fn input(self: *Layouts, graph: *layout.Graph, nodes: *std.AutoHashMapUnmanaged(TypeId, layout.GraphNodeId), order: *std.ArrayList(TypeId), raw: TypeId) Allocator.Error!layout.GraphInput {
+    fn input(self: *Layouts, graph: *layout.Graph, nodes: *collections.DenseMapUnmanaged(TypeId, layout.GraphNodeId), order: *std.ArrayList(TypeId), raw: TypeId) Allocator.Error!layout.GraphInput {
         const ty = self.joins.representative(raw);
         if (nodes.get(ty)) |node| return layout.localGraphInput(node);
         if (self.memo.get(ty)) |committed| {
@@ -385,7 +390,7 @@ pub const Layouts = struct {
         return layout.localGraphInput(node);
     }
 
-    fn nodeContent(self: *Layouts, graph: *layout.Graph, nodes: *std.AutoHashMapUnmanaged(TypeId, layout.GraphNodeId), order: *std.ArrayList(TypeId), ty: TypeId) Allocator.Error!layout.GraphNode {
+    fn nodeContent(self: *Layouts, graph: *layout.Graph, nodes: *collections.DenseMapUnmanaged(TypeId, layout.GraphNodeId), order: *std.ArrayList(TypeId), ty: TypeId) Allocator.Error!layout.GraphNode {
         switch (self.store.get(ty)) {
             .list => |elem| return .{ .list = try self.input(graph, nodes, order, elem) },
             .box => |payload| return .{ .box = try self.input(graph, nodes, order, payload) },

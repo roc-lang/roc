@@ -8,6 +8,7 @@
 //! statements the emitter then links.
 
 const std = @import("std");
+const collections = @import("collections");
 const check = @import("check");
 const layout = @import("layout");
 const lir_core = @import("lir_core");
@@ -42,16 +43,16 @@ pub const State = struct {
     /// The hole the decision tree goes into.
     remainder: CFStmtId,
     /// The type of each occurrence local.
-    occ_types: std.AutoHashMapUnmanaged(LocalId, TypeId) = .empty,
+    occ_types: collections.DenseMapUnmanaged(LocalId, TypeId) = .empty,
     /// The local each pattern binder is bound to.
-    binder_locals: std.AutoHashMapUnmanaged(checked.PatternBinderId, LocalId) = .empty,
+    binder_locals: collections.DenseMapUnmanaged(checked.PatternBinderId, LocalId) = .empty,
     /// The representative binder of each later alternative's binder: a
     /// branch's alternatives bind one local per name, which its body reads.
-    representatives: std.AutoHashMapUnmanaged(checked.PatternBinderId, checked.PatternBinderId) = .empty,
+    representatives: collections.DenseMapUnmanaged(checked.PatternBinderId, checked.PatternBinderId) = .empty,
     /// How many of the match's branch patterns each body belongs to.
-    alternatives: std.AutoHashMapUnmanaged(CheckedExprId, u32) = .empty,
+    alternatives: collections.DenseMapUnmanaged(CheckedExprId, u32) = .empty,
     /// The join holding the one lowering of a body several patterns share.
-    shared_bodies: std.AutoHashMapUnmanaged(CheckedExprId, LIR.JoinPointId) = .empty,
+    shared_bodies: collections.DenseMapUnmanaged(CheckedExprId, LIR.JoinPointId) = .empty,
     /// The shared bodies' joins, in the order they were lowered, with their
     /// bodies' holes.
     shared_joins: std.ArrayList(struct { id: LIR.JoinPointId, body: CFStmtId }) = .empty,
@@ -61,12 +62,13 @@ pub const State = struct {
     /// String pattern shapes, by their encoding.
     shapes: std.StringHashMapUnmanaged(u32) = .empty,
     /// The field-reading destructs of each record pattern.
-    field_destructs: std.AutoHashMapUnmanaged(CheckedPatternId, []const checked.CheckedRecordDestruct) = .empty,
+    field_destructs: collections.DenseMapUnmanaged(CheckedPatternId, []const checked.CheckedRecordDestruct) = .empty,
 };
 
 /// Field indices at and past this one name an open row's field by name.
 const named_field_base: u32 = 1 << 31;
 
+/// The decision-tree compiler over Boxy patterns.
 pub const Compiler = match_tree.Compiler(Ctx);
 
 /// The accessor context the decision-tree compiler reads patterns and emits

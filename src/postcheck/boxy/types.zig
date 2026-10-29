@@ -17,6 +17,7 @@
 //! the arguments, so a recursive declaration never expands without end.
 
 const std = @import("std");
+const collections = @import("collections");
 const base = @import("base");
 const check = @import("check");
 
@@ -86,7 +87,7 @@ pub const TypeId = enum(u32) { _ };
 
 /// A nominal declaration: its module and its id in that module's checked
 /// type store.
-pub const DeclId = struct {
+pub const NominalDeclKey = struct {
     module: ModuleIndex,
     decl: checked.CheckedNominalDeclarationId,
 };
@@ -105,12 +106,14 @@ pub const FieldKind = enum(u8) {
 /// A field of a record type, by the record's type and the field's name.
 pub const FieldDefaultKey = struct { record: TypeId, name: NameId };
 
+/// One field of a record type: its name, type, and storage kind.
 pub const Field = struct {
     name: NameId,
     ty: TypeId,
     kind: FieldKind,
 };
 
+/// One tag of a tag union type: its name and payload types.
 pub const Tag = struct {
     name: NameId,
     payloads: Span,
@@ -125,7 +128,7 @@ pub const TagSpan = struct { start: u32, len: u32 };
 
 /// A named type: a nominal or opaque declaration instantiated at `args`.
 pub const Nominal = struct {
-    decl: DeclId,
+    decl: NominalDeclKey,
     args: Span,
     /// The type's name, for `Str.inspect` of an override-free opaque.
     name: NameId,
@@ -137,6 +140,7 @@ pub const Nominal = struct {
     has_backing: bool,
 };
 
+/// One interned Boxy type.
 pub const Node = union(enum) {
     primitive: Primitive,
     /// The empty record (and every other zero-field record).
@@ -198,21 +202,21 @@ pub const Store = struct {
     /// Each nominal declaration's name, its own whatever its text: a
     /// descriptor compares nominals by name, and two declarations can share
     /// a name's text.
-    decl_name_ids: std.AutoHashMapUnmanaged(DeclId, NameId) = .empty,
+    decl_name_ids: std.AutoHashMapUnmanaged(NominalDeclKey, NameId) = .empty,
     name_arena: std.heap.ArenaAllocator,
 
     /// Converted closed checked types, by module and checked id.
     closed_memo: std.AutoHashMapUnmanaged(ClosedKey, TypeId) = .empty,
     /// The backing of each instantiated nominal node.
-    backing_memo: std.AutoHashMapUnmanaged(TypeId, TypeId) = .empty,
+    backing_memo: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty,
     /// The variables of an enclosing scope each nominal declaration's
     /// backing mentions (`Converter.outerVariables`).
-    decl_outer_vars: std.AutoHashMapUnmanaged(DeclId, []const checked.CheckedTypeId) = .empty,
+    decl_outer_vars: std.AutoHashMapUnmanaged(NominalDeclKey, []const checked.CheckedTypeId) = .empty,
     /// The `??` default identity of each defaulted field of a record type
     /// conversion produced (design.md "Defaulted Fields").
     field_defaults: std.AutoHashMapUnmanaged(FieldDefaultKey, checked.CheckedFieldDefault) = .empty,
     /// `Converter.representationClosed` of each type asked about.
-    representation_closed: std.AutoHashMapUnmanaged(TypeId, bool) = .empty,
+    representation_closed: collections.DenseMapUnmanaged(TypeId, bool) = .empty,
     /// Each module's nominal declarations by nominal key, filled once per
     /// module on first use.
     decl_by_key: std.AutoHashMapUnmanaged(DeclKey, checked.CheckedNominalDeclarationId) = .empty,
@@ -301,7 +305,7 @@ pub const Store = struct {
     }
 
     /// The name of nominal declaration `decl`, whose text is `text`.
-    pub fn internDeclName(self: *Store, decl: DeclId, text: []const u8) Allocator.Error!NameId {
+    pub fn internDeclName(self: *Store, decl: NominalDeclKey, text: []const u8) Allocator.Error!NameId {
         if (self.decl_name_ids.get(decl)) |existing| return existing;
         const owned = try self.name_arena.allocator().dupe(u8, text);
         const id: NameId = @fromBackingInt(@intCast(self.name_texts.items.len));
@@ -496,6 +500,7 @@ pub const Store = struct {
     }
 };
 
+/// A tag to intern: its name and payload types.
 pub const TagInput = struct {
     name: NameId,
     payloads: []const TypeId,
@@ -511,7 +516,7 @@ pub const NodeInput = union(enum) {
     list: TypeId,
     box: TypeId,
     nominal: struct {
-        decl: DeclId,
+        decl: NominalDeclKey,
         args: []const TypeId,
         name: NameId,
         is_opaque: bool,
@@ -522,10 +527,12 @@ pub const NodeInput = union(enum) {
     variable: u32,
 };
 
+/// Report a Boxy lowering invariant violation.
 pub fn invariant(comptime message: []const u8) noreturn {
     base.invariant("Boxy lowering invariant violated: " ++ message, .{});
 }
 
+/// Report a formatted Boxy lowering invariant violation.
 pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
     base.invariant("Boxy lowering invariant violated: " ++ fmt, args);
 }
@@ -538,7 +545,7 @@ pub const Converter = struct {
     /// module being seeded. A variable among them is a scheme variable in the
     /// body lowering converts it in, so it seeds as a variable, keeping the
     /// types it occurs in out of every ground join set.
-    seed_scheme_vars: ?*const std.AutoHashMapUnmanaged(checked.CheckedTypeId, void) = null,
+    seed_scheme_vars: ?*const collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = null,
     /// Whether an undetermined field kind outside every scheme commits to
     /// `required` (a generated codec contract's snapshot, whose kinds no
     /// caller can pin), rather than keeping its presence-slot representation.
@@ -671,7 +678,7 @@ pub const Converter = struct {
     pub fn hasError(self: Converter, module: ModuleIndex, root: checked.CheckedTypeId) Allocator.Error!bool {
         const allocator = self.store.allocator;
         const types = self.modules.get(module).types();
-        var seen: std.AutoHashMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
         defer seen.deinit(allocator);
         var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
         defer pending.deinit(allocator);
@@ -952,8 +959,8 @@ pub const Converter = struct {
                     },
                     .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
                 }
-                const decl = try self.declarationId(view, nominal);
-                const decl_id = decl orelse DeclId{ .module = module, .decl = @fromBackingInt(std.math.maxInt(u32)) };
+                const decl = try self.declarationKey(view, nominal);
+                const decl_key = decl orelse NominalDeclKey{ .module = module, .decl = @fromBackingInt(std.math.maxInt(u32)) };
                 // A declaration in a function body whose backing mentions
                 // the body's variables is instantiated at their types here
                 // too: they follow its own arguments.
@@ -961,11 +968,11 @@ pub const Converter = struct {
                 const args = try allocator.alloc(TypeId, children.len + outer.len);
                 defer allocator.free(args);
                 @memcpy(args[0..children.len], children);
-                for (outer, args[children.len..]) |variable, *arg| arg.* = (try self.leaf(decl_id.module, variable, env)).?;
+                for (outer, args[children.len..]) |variable, *arg| arg.* = (try self.leaf(decl_key.module, variable, env)).?;
                 return try self.store.intern(.{ .nominal = .{
-                    .decl = decl_id,
+                    .decl = decl_key,
                     .args = args,
-                    .name = if (decl != null) try self.store.internDeclName(decl_id, name_store.typeNameText(nominal.name)) else try self.store.internName(name_store.typeNameText(nominal.name)),
+                    .name = if (decl != null) try self.store.internDeclName(decl_key, name_store.typeNameText(nominal.name)) else try self.store.internName(name_store.typeNameText(nominal.name)),
                     .is_opaque = nominal.is_opaque,
                     .builtin = nominal.builtin,
                     .has_backing = decl != null,
@@ -1002,7 +1009,7 @@ pub const Converter = struct {
 
     /// The declaration a nominal payload names, or null for an opaque type
     /// with no backing.
-    fn declarationId(self: Converter, view: *const ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!?DeclId {
+    fn declarationKey(self: Converter, view: *const ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!?NominalDeclKey {
         return switch (nominal.representation) {
             .opaque_without_backing => null,
             .local_declaration => |decl| .{ .module = view.index, .decl = decl },
@@ -1043,7 +1050,7 @@ pub const Converter = struct {
         const store = self.store;
         if (store.isClosed(root)) return true;
         if (store.representation_closed.get(root)) |memo| return memo;
-        var seen: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
         defer seen.deinit(store.allocator);
         var pending: std.ArrayList(TypeId) = .empty;
         defer pending.deinit(store.allocator);
@@ -1097,16 +1104,16 @@ pub const Converter = struct {
     /// backings of the declarations it names: the variables its backing
     /// reaches that are no reached declaration's formal. A top-level
     /// declaration has none.
-    pub fn outerVariables(self: Converter, decl: DeclId) Allocator.Error![]const checked.CheckedTypeId {
+    pub fn outerVariables(self: Converter, decl: NominalDeclKey) Allocator.Error![]const checked.CheckedTypeId {
         if (self.store.decl_outer_vars.get(decl)) |known| return known;
         const allocator = self.store.allocator;
         const view = self.modules.get(decl.module);
         const types = view.types();
-        var seen: std.AutoHashMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
         defer seen.deinit(allocator);
-        var decls: std.AutoHashMapUnmanaged(checked.CheckedNominalDeclarationId, void) = .empty;
+        var decls: collections.DenseMapUnmanaged(checked.CheckedNominalDeclarationId, void) = .empty;
         defer decls.deinit(allocator);
-        var formals: std.AutoHashMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        var formals: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
         defer formals.deinit(allocator);
         var variables: std.ArrayList(checked.CheckedTypeId) = .empty;
         defer variables.deinit(allocator);

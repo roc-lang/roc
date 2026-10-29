@@ -31,6 +31,7 @@ pub const Ownership = union(enum) {
     call_erased,
 };
 
+/// How `op` treats the ownership of its operands and target.
 pub fn ownership(op: DynOp) Ownership {
     return switch (op) {
         .frame_alloc,

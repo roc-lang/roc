@@ -10,8 +10,11 @@ pub const Body = @import("body.zig");
 pub const Match = @import("match.zig");
 pub const LiteralValues = @import("literal_values.zig").LiteralValues;
 
+/// Lower checked modules to LIR under `.boxy`.
 pub const run = Lower.run;
+/// Everything one `.boxy` lowering reads.
 pub const Input = Lower.Input;
+/// The lowered program and the static data it carries.
 pub const Output = Lower.Output;
 
 test "boxy declarations are referenced" {

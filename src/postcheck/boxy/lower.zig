@@ -9,6 +9,7 @@
 //! `body.zig`).
 
 const std = @import("std");
+const collections = @import("collections");
 const base = @import("base");
 const check = @import("check");
 const can = @import("can");
@@ -134,6 +135,7 @@ pub const StructuralMethod = enum { is_eq, to_hash, to_inspect };
 /// input payloads', and the transformed payload's output type's.
 pub const StructuralMap = struct { name: types.NameId, payload_index: u32, arity: u32, effectful: bool };
 
+/// Names a worker by its index among the program's workers.
 pub const WorkerId = enum(u32) { _ };
 
 /// One worker: its procedure and the signature callers use.
@@ -265,6 +267,7 @@ pub const TemplateKey = struct { module: ModuleIndex, template: checked_names.Ch
 /// table, or null when the platform's hosted section omits it.
 pub const HostedEntry = struct { symbol: []const u8, dispatch_index: ?u32 };
 
+/// One `.boxy` lowering: its workers, types, layouts, and output.
 pub const Program = struct {
     allocator: Allocator,
     input: Input,
@@ -307,11 +310,11 @@ pub const Program = struct {
     local_procs: std.AutoHashMapUnmanaged(ExprKey, void) = .empty,
     /// Whether each worker asked about stores a record field of its
     /// signature in a presence slot (`signatureHasSlots`).
-    signature_slots: std.AutoHashMapUnmanaged(WorkerId, bool) = .empty,
+    signature_slots: collections.DenseMapUnmanaged(WorkerId, bool) = .empty,
     /// `nominalOverrides` of each nominal type asked about.
-    nominal_overrides: std.AutoHashMapUnmanaged(TypeId, NominalOverrides) = .empty,
+    nominal_overrides: collections.DenseMapUnmanaged(TypeId, NominalOverrides) = .empty,
     /// `composedInBody` of each type asked about.
-    composed_in_body: std.AutoHashMapUnmanaged(TypeId, bool) = .empty,
+    composed_in_body: collections.DenseMapUnmanaged(TypeId, bool) = .empty,
     /// The nested procedure site of each lambda and closure expression.
     sites_by_expr: std.AutoHashMapUnmanaged(ExprKey, u32) = .empty,
     /// Modules by their stable identity hash.
@@ -595,7 +598,7 @@ pub const Program = struct {
         const target = self.worker(id).*;
         var pending: std.ArrayList(TypeId) = .empty;
         defer pending.deinit(self.allocator);
-        var seen: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
         defer seen.deinit(self.allocator);
         try pending.appendSlice(self.allocator, target.params);
         try pending.append(self.allocator, target.ret);
@@ -631,7 +634,7 @@ pub const Program = struct {
     /// `ty` with each variable `i` replaced by `bound[i]`. A row whose
     /// remainder becomes a row joins it.
     pub fn substitute(self: *Program, allocator: Allocator, root: TypeId, bound: []const TypeId) Allocator.Error!TypeId {
-        var done: std.AutoHashMapUnmanaged(TypeId, TypeId) = .empty;
+        var done: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty;
         defer done.deinit(allocator);
         const Frame = struct { ty: TypeId, expanded: bool };
         var stack: std.ArrayList(Frame) = .empty;
@@ -872,7 +875,7 @@ pub const Program = struct {
     /// describes `ty`.
     pub fn composedInBody(self: *Program, root: TypeId) Allocator.Error!bool {
         if (self.composed_in_body.get(root)) |memo| return memo;
-        var seen: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
         defer seen.deinit(self.allocator);
         var pending: std.ArrayList(TypeId) = .empty;
         defer pending.deinit(self.allocator);
@@ -1042,7 +1045,7 @@ pub const Program = struct {
 
     /// Whether `root` names a placeholder variable (`placeholder_base`).
     fn mentionsPlaceholder(self: *Program, root: TypeId) Allocator.Error!bool {
-        var visited: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+        var visited: collections.DenseMapUnmanaged(TypeId, void) = .empty;
         defer visited.deinit(self.allocator);
         var stack: std.ArrayList(TypeId) = .empty;
         defer stack.deinit(self.allocator);
@@ -1418,6 +1421,7 @@ pub const Program = struct {
     }
 };
 
+/// The items of `pool` that `span` names.
 pub fn poolSlice(comptime T: type, pool: []const T, span: anytype) []const T {
     return pool[span.start..][0..span.len];
 }
@@ -1667,7 +1671,7 @@ fn seedSourceFiles(program: *Program) Allocator.Error!void {
 fn seedRowJoins(program: *Program) Allocator.Error!void {
     const allocator = program.allocator;
     for (program.modules.views.items) |*view| {
-        var scheme_vars: std.AutoHashMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        var scheme_vars: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
         defer scheme_vars.deinit(allocator);
         for (view.view.checked_procedure_templates.scheme_vars_pool) |variable| try scheme_vars.put(allocator, variable, {});
         var converter = program.converter();

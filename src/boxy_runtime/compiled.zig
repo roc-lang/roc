@@ -88,6 +88,7 @@ fn writeDiscriminant(desc: *const TypeDesc, bytes: [*]u8, discriminant: u32) voi
 
 // Component addresses.
 
+/// The address of field `field_index` of the record or tuple at `base`.
 pub fn fieldAddr(desc: *const TypeDesc, base: [*]u8, field_index: u32, ops: *RocOps) [*]u8 {
     const record = recordOf(desc, ops);
     if (field_index >= record.count) invariant(ops, "a field index past its record's fields");
@@ -95,6 +96,7 @@ pub fn fieldAddr(desc: *const TypeDesc, base: [*]u8, field_index: u32, ops: *Roc
     return componentAddr(field.desc, base + field.offset);
 }
 
+/// The address of the field named `name` of the record at `base`.
 pub fn fieldAddrNamed(desc: *const TypeDesc, base: [*]u8, name: *const Name, ops: *RocOps) [*]u8 {
     const record = recordOf(desc, ops);
     for (record.fields()) |*field| {
@@ -104,12 +106,14 @@ pub fn fieldAddrNamed(desc: *const TypeDesc, base: [*]u8, name: *const Name, ops
     invariant(ops, "a field name that is not in its record's descriptor");
 }
 
+/// The discriminant of the tag union value at `base`.
 pub fn tagDiscriminant(desc: *const TypeDesc, base: [*]const u8, ops: *RocOps) u32 {
     const union_desc = backing(desc);
     if (union_desc.kind != .tag_union and union_desc.kind != .bool) invariant(ops, "a discriminant of a descriptor that is not a tag union");
     return union_desc.readDiscriminant(base);
 }
 
+/// The discriminant of the variant named `name` in `desc`'s union.
 pub fn tagDiscriminantOf(desc: *const TypeDesc, name: *const Name, ops: *RocOps) u32 {
     return variantNamed(desc, name, ops).variant.discriminant;
 }
@@ -125,12 +129,15 @@ pub fn descIndex(desc: *const TypeDesc, candidates: *const TypeDesc, ops: *RocOp
     return candidates.count;
 }
 
+/// The address of payload `payload_index` of the variant named `name` of
+/// the tag union value at `base`.
 pub fn tagPayloadAddr(desc: *const TypeDesc, base: [*]u8, name: *const Name, payload_index: u32, ops: *RocOps) [*]u8 {
     const variant = variantNamed(desc, name, ops).variant;
     if (payload_index >= variant.payload_count) invariant(ops, "a tag argument index past its tag's arguments");
     return componentAddr(payloadDesc(variant, payload_index), base + payloadOffset(variant, payload_index));
 }
 
+/// The address of item `index` of a list whose items `elem` describes.
 pub fn listElemAddr(elem: *const TypeDesc, roc_list: *const RocList, index: u64) [*]u8 {
     if (elem.size == 0) return walk.zeroSizedPtr();
     return roc_list.bytes.? + @as(usize, @intCast(index)) * elem.size;
@@ -148,6 +155,7 @@ pub fn boxPayloadAddr(desc: *const TypeDesc, box: *const usize) [*]u8 {
 
 // Construction. Every value operand is the address of its bytes.
 
+/// Write the record `desc` describes to `dst` from its fields' bytes.
 pub fn buildRecord(desc: *const TypeDesc, dst: [*]u8, fields: []const [*]const u8, ops: *RocOps) void {
     const record = recordOf(desc, ops);
     if (fields.len > record.count) invariant(ops, "a record built from more fields than its descriptor has");
@@ -185,6 +193,8 @@ pub fn updateRecord(base_desc: *const TypeDesc, base: [*]u8, desc: *const TypeDe
     walk.decref(base_desc, base, ops);
 }
 
+/// Write the variant named `name` of `desc`'s union to `dst` from its
+/// payloads' bytes.
 pub fn buildTag(desc: *const TypeDesc, name: *const Name, dst: [*]u8, payloads: []const [*]const u8, ops: *RocOps) void {
     const found = variantNamed(desc, name, ops);
     if (payloads.len != found.variant.payload_count) invariant(ops, "a tag built with a different number of arguments than its descriptor has");
@@ -195,6 +205,7 @@ pub fn buildTag(desc: *const TypeDesc, name: *const Name, dst: [*]u8, payloads: 
     writeDiscriminant(found.union_desc, dst, found.variant.discriminant);
 }
 
+/// Write a list of the given items, which `elem` describes, to `dst`.
 pub fn buildList(elem: *const TypeDesc, dst: *RocList, elems: []const [*]const u8, ops: *RocOps) void {
     if (elems.len == 0 or elem.size == 0) {
         dst.* = zstList(elems.len);
@@ -207,6 +218,7 @@ pub fn buildList(elem: *const TypeDesc, dst: *RocList, elems: []const [*]const u
     dst.* = .{ .bytes = data, .length = elems.len, .capacity_or_alloc_ptr = RocList.encodeCapacity(elems.len) };
 }
 
+/// Write a box holding the payload `desc` describes to `dst`.
 pub fn buildBox(desc: *const TypeDesc, dst: *usize, payload: [*]const u8, ops: *RocOps) void {
     // A box of a function is the callable itself (`compose.box`), which
     // the box takes over.
@@ -543,6 +555,7 @@ fn writeU64(out: [*]u8, value: u64) void {
     std.mem.writeInt(u64, out[0..8], value, .little);
 }
 
+/// Run the list operation `req` names over items its descriptor describes.
 pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
     const e = ElemFacts.of(req.elem);
     const a: RocList = if (req.list) |l| l.* else RocList.empty();

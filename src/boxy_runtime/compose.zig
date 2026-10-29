@@ -94,18 +94,22 @@ pub fn zstDesc() *const TypeDesc {
     return &zst_leaf;
 }
 
+/// The descriptor of `Str`.
 pub fn strDesc() *const TypeDesc {
     return &str_leaf;
 }
 
+/// The descriptor of `Bool`.
 pub fn boolDesc() *const TypeDesc {
     return &bool_leaf;
 }
 
+/// The descriptor every function value shares.
 pub fn erasedCallableDesc() *const TypeDesc {
     return &erased_callable_leaf;
 }
 
+/// The descriptor of a value whose type the runtime never learns.
 pub fn opaqueUnknownDesc() *const TypeDesc {
     return &opaque_unknown_leaf;
 }

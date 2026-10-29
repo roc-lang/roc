@@ -17,6 +17,7 @@
 //! takes the encoding and the names as trailing arguments.
 
 const std = @import("std");
+const collections = @import("collections");
 const base = @import("base");
 const check = @import("check");
 const layout = @import("layout");
@@ -44,6 +45,7 @@ const invariantFmt = types.invariantFmt;
 
 const DerivationId = static_dispatch.GeneratedCodecDerivationId;
 
+/// Whether a generated codec parses or encodes.
 pub const Kind = enum(u8) { parser, encoder };
 
 /// A contract call's selection key: its method and its subject type, or
@@ -70,6 +72,7 @@ const NameEntry = struct { record: TypeId, label: NameId };
 /// A local procedure the family calls, at the family's type `fn_ty`.
 const LocalCall = struct { node: static_dispatch.EvidenceNodeId, fn_ty: TypeId };
 
+/// The generated codec workers of one derivation at one instantiation.
 pub const Family = struct {
     module: ModuleIndex,
     /// The family's type variables (the derivation's), which every family
@@ -88,7 +91,7 @@ pub const Family = struct {
     calls: std.AutoHashMapUnmanaged(CallKey, Resolved) = .empty,
     names: std.ArrayList(NameEntry) = .empty,
     /// The first name of each record's fields, by record type.
-    record_names: std.AutoHashMapUnmanaged(TypeId, u32) = .empty,
+    record_names: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
     /// The local procedures the family calls. A use builds their function
     /// values in its own body, where they are declared, and the constructor
     /// captures them.
@@ -100,6 +103,7 @@ pub const Family = struct {
     try_template: TypeId,
 };
 
+/// What one generated codec worker does.
 pub const PieceKind = enum(u8) {
     /// The erased `parser_for`/`encoder_for` entry.
     constructor,
@@ -129,10 +133,12 @@ pub const PieceKind = enum(u8) {
     field_names_step,
 };
 
+/// One generated codec worker: its family, kind, and kind-specific operands.
 pub const Piece = struct { family: u32, kind: PieceKind, a: u32 = 0, b: u32 = 0 };
 
 const no_family = std.math.maxInt(u32);
 
+/// The program's generated codec families and workers.
 pub const State = struct {
     families: std.ArrayList(Family) = .empty,
     family_ids: std.AutoHashMapUnmanaged(FamilyKey, u32) = .empty,
@@ -176,7 +182,7 @@ fn contractEnv(program: *Program, module: ModuleIndex, constructor_ty: checked.C
     const store = program.module(module).types();
     var vars: std.ArrayList(checked.CheckedTypeId) = .empty;
     defer vars.deinit(allocator);
-    var seen: std.AutoHashMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+    var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
     defer seen.deinit(allocator);
     var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
     defer pending.deinit(allocator);
@@ -325,7 +331,7 @@ fn collectCalls(program: *Program, family_index: u32) Allocator.Error!void {
     const env = program.codec.families.items[family_index].env;
     const table = program.module(module).view.static_dispatch_plans;
     const names = program.module(module).nameStore();
-    var visited: std.AutoHashMapUnmanaged(DerivationId, void) = .empty;
+    var visited: collections.DenseMapUnmanaged(DerivationId, void) = .empty;
     defer visited.deinit(allocator);
     var pending: std.ArrayList(DerivationId) = .empty;
     defer pending.deinit(allocator);
@@ -526,7 +532,7 @@ fn planNames(program: *Program, family_index: u32) Allocator.Error!void {
     const allocator = program.allocator;
     const kind = program.codec.families.items[family_index].kind;
     const Step = struct { ty: TypeId, field_payload: bool };
-    var seen: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+    var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
     defer seen.deinit(allocator);
     var pending: std.ArrayList(Step) = .empty;
     defer pending.deinit(allocator);

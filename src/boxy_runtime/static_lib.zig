@@ -9,9 +9,13 @@ const boxy_runtime = @import("boxy_runtime");
 
 pub const panic = std.debug.no_panic;
 
+/// Debug info search paths for the static archive build.
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
+/// The debug I/O the static archive build uses.
 pub const std_options_debug_io = shim_io.io();
+/// The static archive build has no threaded debug I/O.
 pub const std_options_debug_threaded_io = null;
+/// Standard library options for the static archive build.
 pub const std_options = shim_io.std_options_static_archive;
 
 /// The host that links this object defines the runtime symbols.

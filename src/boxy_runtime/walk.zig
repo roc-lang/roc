@@ -123,6 +123,8 @@ pub fn sameShape(a: *const TypeDesc, b: *const TypeDesc, ops: *RocOps) bool {
     return true;
 }
 
+/// An explicit work stack that keeps `inline_count` items inline and grows
+/// through `ops` past that, so walks never recurse.
 pub fn Stack(comptime T: type, comptime inline_count: usize) type {
     return struct {
         inline_items: [inline_count]T = undefined,
@@ -189,6 +191,7 @@ pub fn numeral(desc: *const TypeDesc, table: [*]const u8, dst: [*]u8, ops: *RocO
     @memcpy(dst[0..desc.size], table[offset..][0..desc.size]);
 }
 
+/// Copy the bytes of a value described by `desc` from `src` to `dst`.
 pub fn copy(desc: *const TypeDesc, dst: [*]u8, src: [*]const u8) void {
     @memmove(dst[0..desc.size], src[0..desc.size]);
 }
@@ -323,11 +326,13 @@ pub fn captureDrop(capture: ?[*]u8, ops: *RocOps) callconv(.c) void {
 // builtins pass no `RocOps`, so these reach the host through
 // `in_process_host.ops()`.
 
+/// Increment one list item, described by the context descriptor.
 pub fn elemIncref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
     const elem_desc: *const TypeDesc = @ptrCast(@alignCast(context.?));
     incref(elem_desc, element orelse zeroSizedPtr(), 1, builtins.in_process_host.ops());
 }
 
+/// Release one list item, described by the context descriptor.
 pub fn elemDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
     const elem_desc: *const TypeDesc = @ptrCast(@alignCast(context.?));
     decref(elem_desc, element orelse zeroSizedPtr(), builtins.in_process_host.ops());

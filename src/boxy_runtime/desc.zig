@@ -94,6 +94,7 @@ pub const Scalar = enum(u8) {
     }
 };
 
+/// Facts about a type that walks read without descending into it.
 pub const Flags = packed struct(u8) {
     /// Some value of this type directly or transitively holds a refcounted
     /// allocation: a `Str`, a `List`, a non-zero-sized `Box`, or a function.
@@ -125,6 +126,7 @@ pub const Name = extern struct {
     }
 };
 
+/// An immutable, immortal description of one type's representation.
 pub const TypeDesc = extern struct {
     size: u32,
     /// In bytes.
@@ -193,6 +195,7 @@ pub const TypeDesc = extern struct {
     }
 };
 
+/// One field of a record or tuple descriptor, in memory order.
 pub const Field = extern struct {
     /// A record field's alphabetical rank among the record's named fields; a
     /// tuple element's index; for a padding field, a rank past every named
@@ -214,6 +217,7 @@ pub const Field = extern struct {
     }
 };
 
+/// One variant of a tag union descriptor.
 pub const Variant = extern struct {
     discriminant: u32,
     /// The number of tag arguments.
@@ -293,6 +297,7 @@ fn fieldSize(comptime F: type, width: PointerWidth) u32 {
     };
 }
 
+/// The offsets and size of the extern struct `T` at pointer width `width`.
 pub fn externLayout(comptime T: type, width: PointerWidth) ExternLayout(T) {
     const info = @typeInfo(T).@"struct";
     comptime std.debug.assert(info.layout == .@"extern");
