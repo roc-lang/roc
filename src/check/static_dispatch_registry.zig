@@ -824,7 +824,6 @@ pub const MethodRegistry = struct {
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
         local_templates: *const ProcedureTemplateLookup,
-        available_artifacts: anytype,
         checked_types: anytype,
         checked_bodies: anytype,
     ) Allocator.Error!MethodRegistry {
@@ -852,12 +851,7 @@ pub const MethodRegistry = struct {
             };
             const def_idx = entry.value.def_idx;
             if (unsupportedGeneratedMethodBinding(module, entry.value)) continue;
-            const method_owner = try methodOwnerForRegistryEntry(
-                module,
-                names,
-                available_artifacts,
-                entry.key.ownerIdent(),
-            );
+            const method_owner = try methodOwnerForRegistryEntry(module, names, entry.key.ownerIdent());
             const method_key: MethodKey = .{
                 .owner = method_owner,
                 .method = try names.internMethodIdent(idents, entry.key.methodIdent()),
@@ -1231,10 +1225,9 @@ fn statementDeclForBoundPattern(module: TypedCIR.Module, pattern_idx: CIR.Patter
 fn methodOwnerForRegistryEntry(
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    available_artifacts: anytype,
     owner: ModuleEnv.MethodOwner,
 ) Allocator.Error!MethodOwner {
-    const owner_env = methodOwnerEnvForRegistryEntry(module, available_artifacts, owner);
+    const owner_env = module.moduleEnvConst();
     if (builtinOwnerForRegistryEntry(owner_env, owner.owner)) |builtin_owner| {
         return .{ .builtin = builtin_owner };
     }
@@ -1256,47 +1249,6 @@ fn methodOwnerForRegistryEntry(
         .module = try names.internModuleIdentity(identity_hash),
         .source_decl = @backingInt(owner.owner),
     } };
-}
-
-fn methodOwnerEnvForRegistryEntry(
-    module: TypedCIR.Module,
-    available_artifacts: anytype,
-    owner: ModuleEnv.MethodOwner,
-) *const ModuleEnv {
-    const module_env = module.moduleEnvConst();
-    const owner_hash = methodOwnerIdentityHashForRegistryEntry(module_env, owner);
-
-    if (ownerEnvIdentityMatches(module_env, owner_hash)) return module_env;
-
-    for (available_artifacts) |artifact| {
-        const candidate = artifact.module_env;
-        if (ownerEnvIdentityMatches(candidate, owner_hash)) return candidate;
-    }
-
-    base.invariant(
-        "checked static dispatch registry invariant violated: could not find owner module for receiver method on declaration {d} of module '{s}'",
-        .{ @backingInt(owner.owner), module_env.module_name },
-    );
-}
-
-fn methodOwnerIdentityHashForRegistryEntry(
-    module_env: *const ModuleEnv,
-    owner: ModuleEnv.MethodOwner,
-) *const base.ModuleIdentity.Hash {
-    const owner_identity = owner.moduleIdentity() orelse {
-        return module_env.contentIdentityHash() orelse {
-            base.invariant(
-                "checked static dispatch registry invariant violated: local module '{s}' has no content identity",
-                .{module_env.module_name},
-            );
-        };
-    };
-    return module_env.moduleIdentityHash(owner_identity);
-}
-
-fn ownerEnvIdentityMatches(candidate: *const ModuleEnv, owner_hash: *const base.ModuleIdentity.Hash) bool {
-    const candidate_hash = candidate.contentIdentityHash() orelse return false;
-    return base.ModuleIdentity.eql(candidate_hash, owner_hash);
 }
 
 fn builtinOwnerForRegistryEntry(

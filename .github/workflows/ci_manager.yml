@@ -434,7 +434,9 @@ jobs:
     if: needs.check-changes.outputs.heavy == 'true' && !github.event.pull_request.draft
     name: minici-build (macos-15)
     runs-on: macos-15
-    timeout-minutes: 120
+    # The Zig 0.17 build takes about 110 to 120 minutes here, so 120 leaves no
+    # margin.
+    timeout-minutes: 180
     steps: *minici_build_steps
 
   minici-build-windows:

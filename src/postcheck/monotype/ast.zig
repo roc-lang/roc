@@ -341,6 +341,12 @@ pub const FnTemplate = struct {
     /// whose closed types commit the same layouts share one procedure
     /// (design.md "Layout-Keyed Builtin Procedures").
     procedure_keyed_by_layout: bool = false,
+    /// Set for a specialization of a Builtin template whose body is its
+    /// checked provided low-level operation
+    /// (`CheckedProcedureTemplate.provided_low_level`). The compiler defines
+    /// that body, so a caller that substitutes it at a call depends on no
+    /// source but its own.
+    provides_low_level: bool = false,
     /// The checked template is called at exactly one site of its module's
     /// source and from nowhere else (`templateHasSingleSourceCall`), stamped
     /// when Monotype finalizes the program. Dev inline analysis decides
@@ -429,7 +435,7 @@ pub const CallableIdentity = union(enum(u8)) {
 /// from is deliberately absent. The callable says which checked body to
 /// lower; that type is the requesting graph's instantiation context, which
 /// the graph may memoize by. Two call sites reaching the same callable at the
-/// same closed Monotype type, evidence, codec context, and method scope name
+/// same closed Monotype type, evidence, and codec context name
 /// ONE specialization even when their checked source types differ—as they do
 /// when one is annotated with a transparent alias of the other's type
 /// (`design.md`). No identity derived from the record may reintroduce that
@@ -442,7 +448,6 @@ pub const CallableIdentity = union(enum(u8)) {
 /// additional lookup alias—never a rekey of this identity.
 pub const SpecIdentity = struct {
     callable: CallableIdentity,
-    method_scope: names.CheckedModuleDigest,
     evidence_digest: EvidenceDigest,
     /// Exact lowering-only context required by generated codec method bodies.
     /// Zero for ordinary specializations.
@@ -455,10 +460,8 @@ pub const SpecIdentity = struct {
 };
 
 /// Content key of a specialization identity: the callable rendered by tag
-/// and content plus every digest field except the requesting method scope.
-/// The scope only decides how
-/// dispatch evidence was derived, and the evidence digest already names the
-/// result, so two modules requesting the same specialization get one key.
+/// and content plus every digest field, so two modules requesting the same
+/// specialization get one key.
 /// The request type uses the same cached equality digest as local reservation,
 /// so checked type ids and alias provenance do not change the key. Identical
 /// for the same request in every program, and computable at reservation.
@@ -616,6 +619,33 @@ pub fn fnEvidenceDigest(
 ) EvidenceDigest {
     var hasher = TypeDigestHasher.init();
     writeFnEvidence(&hasher, evidence, frames, head, ContentEvidenceNames{});
+    return .{ .bytes = hasher.finalResult() };
+}
+
+/// Name evidence's checked type views by explicit producer value contexts.
+/// Procedure targets keep their exact body identities. Callers must exclude
+/// local-procedure targets, whose view also owns the local body address.
+pub fn fnEvidenceContextDigest(
+    evidence: check.ConstStore.ConstFnEvidenceVector,
+    frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    head: ?u32,
+    contexts: anytype,
+) EvidenceDigest {
+    const ContextNames = struct {
+        contexts: @TypeOf(contexts),
+        fn module(_: @This(), _: *const [32]u8) ?void {
+            return null;
+        }
+        fn template(_: @This(), _: names.ProcTemplate) ?names.TypeDigest {
+            return null;
+        }
+        /// Producer context for an evidence view, when supplied.
+        pub fn moduleContext(self: @This(), key: *const [32]u8) ?[32]u8 {
+            return self.contexts.get(key.*);
+        }
+    };
+    var hasher = TypeDigestHasher.init();
+    writeFnEvidence(&hasher, evidence, frames, head, ContextNames{ .contexts = contexts });
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -840,6 +870,13 @@ fn methodTargetIdentityEql(
 }
 
 fn writeEvidenceModule(hasher: anytype, bytes: *const [32]u8, site_names: anytype) void {
+    if (comptime @hasDecl(@TypeOf(site_names), "moduleContext")) {
+        if (site_names.moduleContext(bytes)) |context| {
+            writeBytes(hasher, "checked-value-context");
+            writeBytes(hasher, &context);
+            return;
+        }
+    }
     if (site_names.module(bytes)) |_| {
         writeBytes(hasher, "app-module");
     } else {
@@ -2900,7 +2937,6 @@ test "monotype program view exposes read-only side arrays" {
     _ = try program.addSpec(.{
         .identity = .{
             .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 0, .template = 0 } },
-            .method_scope = .{},
             .evidence_digest = fnEvidenceDigest(.{}, &.{}, null),
             .codec_contract_digest = .{},
             .codec_contract = null,

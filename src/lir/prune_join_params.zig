@@ -9,10 +9,16 @@
 //! has a value to store, and the call sees a shared value it must copy.
 //!
 //! This pass runs after direct LIR lowering and before ARC insertion. A join
-//! parameter qualifies when no reachable statement reads it and every write
-//! to it is an explicit `set_local`: the parameter is removed from its join,
-//! and each of its writes is deleted by routing the write's incoming edges to
-//! the write's successor.
+//! parameter qualifies when no live statement reads it and every write to it
+//! is an explicit `set_local`: the parameter is removed from its join, and
+//! each of its writes is deleted by routing the write's incoming edges to the
+//! write's successor. A pure definition whose target nothing live reads is
+//! dead, and its reads are not live: a join body that binds an unread
+//! variable's value to a local nothing uses still leaves the variable unread.
+//! Every round in a procedure with join parameters deletes the dead
+//! definitions, whether or not a parameter qualifies, since a dead alias is
+//! still a read ARC keeps its value alive for. A procedure without join
+//! parameters is left unchanged.
 //!
 //! Deleting a write can leave the written value unread. When that value is
 //! defined once, by a statement that only computes it from its operands, the
@@ -62,9 +68,10 @@ const Pass = struct {
     /// Locals read somewhere other than an operand position.
     observed: LocalSet,
     /// Each defined local's defining statement when it has exactly one
-    /// definition and that statement is pure, else null. Collected only in
-    /// rounds that delete writes.
+    /// definition and that statement is pure, else null.
     defs: collections.DenseMap(LocalId, ?CFStmtId),
+    /// Pure definitions whose targets nothing live reads.
+    dead: std.ArrayList(CFStmtId) = .empty,
     /// Locals that lost a read to a deleted statement, one entry per read.
     orphans: std.ArrayList(LocalId) = .empty,
     /// Parameters this round removes.
@@ -95,11 +102,13 @@ const Pass = struct {
         self.observed.deinit();
         self.defs.deinit();
         self.orphans.deinit(self.allocator);
+        self.dead.deinit(self.allocator);
         self.pruned.deinit();
         self.deleted.deinit();
     }
 
-    /// Prune every parameter that qualifies now; report whether any did.
+    /// Prune every parameter that qualifies now and delete every dead
+    /// definition; report whether anything changed.
     fn round(self: *Pass) Allocator.Error!bool {
         self.stmts.clearRetainingCapacity();
         self.reads.clearRetainingCapacity();
@@ -108,6 +117,7 @@ const Pass = struct {
         self.observed.clearRetainingCapacity();
         self.defs.clearRetainingCapacity();
         self.orphans.clearRetainingCapacity();
+        self.dead.clearRetainingCapacity();
         self.pruned.clearRetainingCapacity();
         self.deleted.clearRetainingCapacity();
 
@@ -183,6 +193,13 @@ const Pass = struct {
             }
         }
 
+        if (self.params.count() == 0) return false;
+        for (self.stmts.items) |stmt_id| {
+            var defs: DefCollector = .{ .pass = self, .stmt = stmt_id };
+            try BodyClone.tryForEachStmtDef(store, store.getCFStmt(stmt_id), &defs, DefCollector.note);
+        }
+        try self.markDeadDefs();
+
         var params = self.params.iterator();
         while (params.next()) |entry| {
             const param = entry.key_ptr.*;
@@ -190,8 +207,9 @@ const Pass = struct {
             if ((self.reads.get(param) orelse 0) != 0) continue;
             try self.pruned.put(param, {});
         }
-        if (self.pruned.count() == 0) return false;
+        if (self.pruned.count() == 0 and self.dead.items.len == 0) return false;
 
+        for (self.dead.items) |def_id| try self.deleted.put(def_id, pureNext(store.getCFStmt(def_id)).?);
         for (self.stmts.items) |stmt_id| {
             const stmt = store.getCFStmt(stmt_id);
             if (stmt == .join) try self.pruneJoinParams(stmt_id, stmt.join.params);
@@ -210,14 +228,31 @@ const Pass = struct {
         return true;
     }
 
+    /// Collect every pure definition nothing live reads, withdrawing its own
+    /// reads so the definitions it alone fed are dead in turn.
+    fn markDeadDefs(self: *Pass) Allocator.Error!void {
+        var defs = self.defs.iterator();
+        while (defs.next()) |entry| {
+            if ((self.reads.get(entry.key_ptr.*) orelse 0) == 0) try self.markDead(entry.key_ptr.*);
+        }
+        while (self.orphans.pop()) |local| {
+            const reads = self.reads.getPtr(local).?;
+            reads.* -= 1;
+            if (reads.* == 0) try self.markDead(local);
+        }
+    }
+
+    fn markDead(self: *Pass, local: LocalId) Allocator.Error!void {
+        if (self.observed.contains(local) or self.params.contains(local)) return;
+        const def_id = (self.defs.get(local) orelse return) orelse return;
+        try self.dead.append(self.allocator, def_id);
+        try BodyClone.tryForEachStmtRead(self.store, self.store.getCFStmt(def_id), self, Pass.noteOrphan);
+    }
+
     /// Delete each pure definition whose last read was a deleted statement,
     /// following the deleted definitions' own operands.
     fn deleteOrphanedDefs(self: *Pass) Allocator.Error!void {
         const store = self.store;
-        for (self.stmts.items) |stmt_id| {
-            var defs: DefCollector = .{ .pass = self, .stmt = stmt_id };
-            try BodyClone.tryForEachStmtDef(store, store.getCFStmt(stmt_id), &defs, DefCollector.note);
-        }
         while (self.orphans.pop()) |local| {
             const reads = self.reads.getPtr(local).?;
             reads.* -= 1;

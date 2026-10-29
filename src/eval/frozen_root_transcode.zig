@@ -144,10 +144,8 @@ const Builder = struct {
         const source_plan = self.source_program.const_plans.items[@backingInt(job.source_plan)];
         const plan = self.graph.program.const_plans.items[@backingInt(job.plan)];
         if (std.meta.activeTag(source_plan) != std.meta.activeTag(plan)) invariant("paired canonical const plan shapes differ");
-        // An explicit `Box` is part of the value; any other box breaks a
-        // recursive type's cycle in that program's layout.
-        const source_boxed = job.source_storage == .recursive_box or (source_physical.tag == .box and source_plan != .box);
-        const target_boxed = job.storage == .recursive_box or (physical.tag == .box and plan != .box);
+        const source_boxed = job.source_storage == .recursive_box or (source_physical.tag == .box and recursionBoxSite(source_plan));
+        const target_boxed = job.storage == .recursive_box or (physical.tag == .box and recursionBoxSite(plan));
         if (try self.recursionBoxed(job, source_boxed, if (source_physical.tag == .box) source_physical.getIdx() else job.source_layout, target_boxed, if (physical.tag == .box) physical.getIdx() else job.layout_idx)) return;
         switch (plan) {
             .pending, .layout_only => invariant("incomplete paired const plan"),
@@ -340,6 +338,17 @@ const Builder = struct {
         invariant("target erased callable correspondence absent");
     }
 };
+/// Whether a box layout under this plan breaks a recursive type's cycle.
+/// Only the shapes that recurse through their own payloads are boxed for
+/// recursion. An explicit `Box` is part of the value, and a named type's
+/// layout is its backing's, so its backing plan decides.
+fn recursionBoxSite(plan: Program.ConstPlan) bool {
+    return switch (plan) {
+        .tuple, .record, .tag_union, .fn_value => true,
+        .pending, .layout_only, .zst, .scalar, .str, .list, .box, .boxy_box, .named, .erased_fn => false,
+    };
+}
+
 fn invariant(comptime message: []const u8) noreturn {
     compilerInvariant("frozen root transcode invariant violated: {s}", .{message});
 }
@@ -530,6 +539,39 @@ test "frozen root transcode preserves fixed U64 values on 32-bit targets" {
     const converted = try transcodeRoot(allocator, &source, testRoot(plan, .u64), native, try testRootSymbol(native), &target, testRoot(plan, .u64), try testSlot(&target, .u64));
     defer static_data.deinitStaticData(allocator, converted);
     try std.testing.expectEqual(value, std.mem.readInt(u64, converted[0].bytes[0..8], .little));
+}
+
+test "frozen root transcode keeps a named type's explicit Box as part of the value" {
+    // `Handle :: Box(U64)` lays out as its backing's box, which is the
+    // user's `Box` rather than one breaking a recursive cycle.
+    const allocator = std.testing.allocator;
+    var source = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
+    defer source.deinit();
+    var target = try Program.Result.init(allocator, .u32);
+    defer target.deinit();
+    const plan: Program.ConstPlanId = @fromBackingInt(2);
+    var boxes: [2]layout.Idx = undefined;
+    for ([_]*Program.Result{ &source, &target }, 0..) |program, side| {
+        const scalar: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+        try program.const_plans.append(allocator, .scalar);
+        const box: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+        try program.const_plans.append(allocator, .{ .box = scalar });
+        // Graph transcode follows only the backing plan, not the checked name.
+        std.debug.assert(@backingInt(plan) == program.const_plans.items.len);
+        try program.const_plans.append(allocator, .{ .named = .{ .named_type = undefined, .backing = box } });
+        boxes[side] = try program.layouts.insertBox(.u64);
+    }
+    var payload: u64 = 0x123456789abcdef0;
+    var handle: *u64 = &payload;
+    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, boxes[0]), testRoot(plan, boxes[0]), .{ .ptr = @ptrCast(&handle) }, .{});
+    defer static_data.deinitStaticData(allocator, native);
+    const converted = try transcodeRoot(allocator, &source, testRoot(plan, boxes[0]), native, try testRootSymbol(native), &target, testRoot(plan, boxes[1]), try testSlot(&target, boxes[1]));
+    defer static_data.deinitStaticData(allocator, converted);
+    try std.testing.expectEqual(@as(usize, 4), converted[0].bytes.len);
+    try std.testing.expectEqual(@as(usize, 1), converted[0].relocations.len);
+    const pointer = converted[0].relocations[0];
+    const pointee = converted[@backingInt(pointer.target.data_symbol)].bytes[@intCast(pointer.addend)..];
+    try std.testing.expectEqual(payload, std.mem.readInt(u64, pointee[0..8], .little));
 }
 
 fn recursiveCallable(allocator: Allocator, program: *Program.Result) Allocator.Error!layout.Idx {

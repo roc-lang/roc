@@ -9,7 +9,7 @@ pub const MAGIC: u32 = 0x4843_4F52;
 pub const DESCRIPTOR_MAGIC: u32 = 0x4443_4F52;
 
 /// Version of the control block layout stored in shared-memory header padding.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Sentinel used before any image descriptor has been published. Offset zero is
 /// the shared-memory header, so a valid image descriptor is never stored there.
@@ -33,17 +33,24 @@ pub const DescriptorState = enum(u32) {
 /// Metadata for one shared-memory image allocation and its active shim refs.
 ///
 /// This lives in the shared-memory allocation region, not in the fixed control
-/// block. The compiler parent owns byte reclamation; the shim only updates refs.
+/// block. The compiler parent owns byte reclamation; the shim only updates refs
+/// and records acceptance.
 pub const ImageDescriptor = extern struct {
     magic: u32 = DESCRIPTOR_MAGIC,
     state: u32 = @backingInt(DescriptorState.reclaimed),
     refs: u32 = 0,
-    _padding: u32 = 0,
+    /// Nonzero once the host shim accepted the image, before any of its code
+    /// ran. Values the host keeps may then point into its static pool chunk.
+    accepted: u32 = 0,
     generation: u64 = 0,
     image_offset: u64 = 0,
     image_size: u64 = 0,
     allocation_start: u64 = 0,
     allocation_end: u64 = 0,
+    /// The image's static pool chunk, which lasts for the rest of the session
+    /// once the image is accepted. Empty when the image has no chunk.
+    static_pool_start: u64 = 0,
+    static_pool_end: u64 = 0,
 };
 
 /// Shared-memory control block used to publish replacement executable images.
@@ -55,6 +62,9 @@ pub const Control = extern struct {
     published_descriptor_offset: u64 = invalid_descriptor_offset,
     image_offset: u64 = 0,
     image_size: u64 = 0,
+    /// Offset of the newest static pool chunk, or zero while the pool is empty.
+    /// Only the compiler parent writes it; rebuild workers read it.
+    static_pool_head: u64 = 0,
     ack_sequence: u64 = 0,
     acknowledged_generation: u64 = 0,
     status: u32 = @backingInt(Status.none),
@@ -140,17 +150,21 @@ pub fn prepareDescriptor(
     image_size: usize,
     allocation_start: usize,
     allocation_end: usize,
+    static_pool_start: usize,
+    static_pool_end: usize,
     reset_refs: bool,
 ) void {
     descriptor.magic = DESCRIPTOR_MAGIC;
     storeU32(&descriptor.state, @backingInt(DescriptorState.writing), .release);
     if (reset_refs) storeU32(&descriptor.refs, 0, .release);
-    descriptor._padding = 0;
+    storeU32(&descriptor.accepted, 0, .release);
     storeU64(&descriptor.generation, generation, .release);
     storeU64(&descriptor.image_offset, @intCast(image_offset), .release);
     storeU64(&descriptor.image_size, @intCast(image_size), .release);
     storeU64(&descriptor.allocation_start, @intCast(allocation_start), .release);
     storeU64(&descriptor.allocation_end, @intCast(allocation_end), .release);
+    storeU64(&descriptor.static_pool_start, @intCast(static_pool_start), .release);
+    storeU64(&descriptor.static_pool_end, @intCast(static_pool_end), .release);
 }
 
 /// Publish a prepared descriptor for the host shim to load at the next safe point.
@@ -259,24 +273,51 @@ pub fn descriptorFromOffset(base_ptr: [*]align(1) u8, total_size: usize, descrip
 pub const ImageDescriptorSnapshot = struct {
     state: DescriptorState,
     refs: u32,
+    accepted: bool,
     generation: u64,
     image_offset: usize,
     image_size: usize,
     allocation_start: usize,
     allocation_end: usize,
+    static_pool_start: usize,
+    static_pool_end: usize,
 };
 
 /// Return the current state of a shared-memory image descriptor.
 pub fn descriptorSnapshot(descriptor: *const ImageDescriptor) ImageDescriptorSnapshot {
+    // `refs` is read before `accepted`: the shim records acceptance while it
+    // holds a reference, so a snapshot that sees the last reference released
+    // also sees the acceptance.
+    const refs = loadU32(&descriptor.refs, .acquire);
     return .{
         .state = descriptorStateFromRaw(loadU32(&descriptor.state, .acquire)),
-        .refs = loadU32(&descriptor.refs, .acquire),
+        .refs = refs,
+        .accepted = loadU32(&descriptor.accepted, .acquire) != 0,
         .generation = loadU64(&descriptor.generation, .acquire),
         .image_offset = @intCast(loadU64(&descriptor.image_offset, .acquire)),
         .image_size = @intCast(loadU64(&descriptor.image_size, .acquire)),
         .allocation_start = @intCast(loadU64(&descriptor.allocation_start, .acquire)),
         .allocation_end = @intCast(loadU64(&descriptor.allocation_end, .acquire)),
+        .static_pool_start = @intCast(loadU64(&descriptor.static_pool_start, .acquire)),
+        .static_pool_end = @intCast(loadU64(&descriptor.static_pool_end, .acquire)),
     };
+}
+
+/// Record that the host shim accepted a retained descriptor's image. The shim
+/// calls this before running any of the image's code.
+pub fn markDescriptorAccepted(descriptor: *ImageDescriptor) void {
+    storeU32(&descriptor.accepted, 1, .release);
+}
+
+/// Acquire-load the offset of the newest static pool chunk, or zero.
+pub fn staticPoolHead(control: *const Control) usize {
+    return @intCast(loadU64(&control.static_pool_head, .acquire));
+}
+
+/// Make `chunk_offset` the newest static pool chunk. The caller has already
+/// linked the chunk to the previous head.
+pub fn setStaticPoolHead(control: *Control, chunk_offset: usize) void {
+    storeU64(&control.static_pool_head, @intCast(chunk_offset), .release);
 }
 
 /// Mark a descriptor as no longer published but not yet known reusable.
@@ -414,7 +455,7 @@ test "hot reload control publishes and acknowledges generations" {
 
     const desc0_offset: usize = 512;
     const desc0 = testDescriptor(base, desc0_offset);
-    prepareDescriptor(desc0, 1, 1024, 4096, 512, 8192, true);
+    prepareDescriptor(desc0, 1, 1024, 4096, 512, 8192, 0, 0, true);
     init(&control, desc0_offset, desc0);
     try std.testing.expect(initialized(&control));
     try std.testing.expectEqual(@as(u64, 1), publishedGeneration(&control));
@@ -425,7 +466,7 @@ test "hot reload control publishes and acknowledges generations" {
 
     const desc1_offset: usize = 2048;
     const desc1 = testDescriptor(base, desc1_offset);
-    prepareDescriptor(desc1, 2, 8192, 2048, 2048, 12288, true);
+    prepareDescriptor(desc1, 2, 8192, 2048, 2048, 12288, 0, 0, true);
     publishDescriptor(&control, 2, desc1_offset, desc1);
     try std.testing.expectEqual(@as(u64, 2), publishedGeneration(&control));
     try std.testing.expectEqual(@as(usize, 8192), imageOffset(&control));
@@ -483,7 +524,7 @@ test "hot reload image descriptors can be retained and released" {
 
     const desc0_offset: usize = 512;
     const desc0 = testDescriptor(base, desc0_offset);
-    prepareDescriptor(desc0, 1, 1024, 4096, 512, 8192, true);
+    prepareDescriptor(desc0, 1, 1024, 4096, 512, 8192, 0, 0, true);
     init(&control, desc0_offset, desc0);
 
     const retained = acquirePublishedImage(&control, base, bytes.len).?;
@@ -502,12 +543,12 @@ test "hot reload image retain rejects descriptors that stopped being current" {
 
     const desc0_offset: usize = 512;
     const desc0 = testDescriptor(base, desc0_offset);
-    prepareDescriptor(desc0, 1, 1024, 4096, 512, 4096, true);
+    prepareDescriptor(desc0, 1, 1024, 4096, 512, 4096, 0, 0, true);
     init(&control, desc0_offset, desc0);
 
     const desc1_offset: usize = 4096;
     const desc1 = testDescriptor(base, desc1_offset);
-    prepareDescriptor(desc1, 2, 4608, 8192, 4096, 8192, true);
+    prepareDescriptor(desc1, 2, 4608, 8192, 4096, 8192, 0, 0, true);
     publishDescriptor(&control, 2, desc1_offset, desc1);
     markDescriptorRetired(desc0);
 

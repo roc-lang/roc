@@ -323,7 +323,7 @@ fn expectDevRuntimeDivisionByZero() FxPlatformTestError!void {
 fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) FxPlatformTestError!void {
     const allocator = testing.allocator;
 
-    const result = util.runRocCommand(std.testing.io, allocator, &.{ opt_flag, spec.roc_file, "--", "--test", spec.io_spec }) catch |err| {
+    const result = util.runRocCommand(std.testing.io, allocator, &.{ opt_flag, spec.roc_file, "--test", spec.io_spec }) catch |err| {
         std.debug.print("\n[FAIL] {s} ({s}): failed to run: {}\n", .{ spec.roc_file, opt_flag, err });
         return err;
     };
@@ -550,7 +550,6 @@ test "fx platform direct run preserves RocOps after F32.abs before list allocati
     // direct-run should preserve RocOps across F32.abs and the later list allocation.
     const result = try util.runRocCommand(std.testing.io, allocator, &.{
         "test/fx/issue_9846_direct_abs_list.roc",
-        "--",
         "--test",
         "1>count 1",
     });

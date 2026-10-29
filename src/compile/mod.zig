@@ -1,10 +1,10 @@
 //! Compilation-related types and functionality, such as cache management and package building.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const threading_mod = @import("threading.zig");
 
 pub const package = @import("compile_package.zig");
+pub const completed_compilation = @import("completed_compilation.zig");
 pub const build = @import("compile_build.zig");
 pub const targets_config = @import("targets_config.zig");
 pub const TargetsConfig = targets_config.TargetsConfig;
@@ -28,30 +28,9 @@ pub const app_header = @import("app_header.zig");
 pub const key = @import("cache_key.zig");
 pub const config = @import("cache_config.zig");
 pub const manager = @import("cache_manager.zig");
-pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.zig") else struct {
-    pub const CleanupStats = struct {
-        temp_dirs_deleted: u32 = 0,
-        temp_files_deleted: u32 = 0,
-        cache_files_deleted: u32 = 0,
-        stale_namespaces_deleted: u32 = 0,
-        evicted_files_deleted: u32 = 0,
-        empty_dirs_deleted: u32 = 0,
-        errors: u32 = 0,
-    };
-
-    pub const CleanupThread = struct {};
-
-    pub const Limits = struct {
-        object_pack_format_version: u32,
-        max_size_bytes: u64,
-    };
-
-    pub fn startBackgroundCleanup(_: []const u8, _: std.Io, _: Limits) Allocator.Error!?CleanupThread {
-        return null;
-    }
-
-    pub fn deleteTempDir(_: std.Io, _: []const u8) void {}
-};
+pub const artifacts = @import("artifact_store.zig");
+pub const maintenance = @import("cache_maintenance.zig");
+pub const cleanup = @import("cache_cleanup.zig");
 
 pub const CacheManager = manager.CacheManager;
 pub const CacheConfig = config.CacheConfig;
@@ -84,12 +63,15 @@ pub const CoreCtx = @import("ctx").CoreCtx;
 test "compile tests" {
     if (!threading_mod.is_freestanding) {
         std.testing.refAllDecls(@import("cache_cleanup.zig"));
+        std.testing.refAllDecls(artifacts);
+        std.testing.refAllDecls(maintenance);
     }
     std.testing.refAllDecls(@import("cache_config.zig"));
     std.testing.refAllDecls(@import("cache_key.zig"));
     std.testing.refAllDecls(@import("cache_manager.zig"));
     std.testing.refAllDecls(@import("cache_module.zig"));
     std.testing.refAllDecls(@import("cache_versioning.zig"));
+    std.testing.refAllDecls(@import("inference_cache.zig"));
     std.testing.refAllDecls(@import("canonicalized_cache_entry.zig"));
     std.testing.refAllDecls(@import("compile_build.zig"));
     std.testing.refAllDecls(@import("targets_config.zig"));
@@ -166,6 +148,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_12229_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12237_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12371_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12583_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12423_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12348_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11438_test.zig"));
@@ -228,6 +211,9 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_12569_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12585_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12631_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12624_test.zig"));
+    std.testing.refAllDecls(@import("test/boxy_dictionary_evidence_order_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12617_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11292_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11295_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11294_test.zig"));
@@ -298,5 +284,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_12230_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12147_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12455_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12625_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12638_test.zig"));
     std.testing.refAllDecls(@import("test/import_cycle_checked_test.zig"));
 }

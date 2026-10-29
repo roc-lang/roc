@@ -5,7 +5,7 @@
 //! callable layout selected by direct LIR lowering.
 
 const std = @import("std");
-const DigestGraph = @import("../type_digest.zig").Graph;
+const recursive_digest = @import("base").recursive_digest;
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const check = @import("check");
 const collections = @import("collections");
@@ -537,7 +537,7 @@ pub const Store = struct {
             .zst => writeBytes(hasher, "zst"),
             .hole => writeBytes(hasher, "hole"),
         }
-        scratch.graph.setScalar(scratch.node_by_type.get(ty).?, hasher.finalResult());
+        scratch.graph.endNode(scratch.node_by_type.get(ty).?, hasher.finalResult());
     }
 
     fn writeTypeSpanDigest(
@@ -559,22 +559,30 @@ pub const Store = struct {
 /// resolved identity survives a request because Lambda Mono types are mutable.
 const DigestScratch = struct {
     allocator: std.mem.Allocator,
-    graph: DigestGraph,
+    graph: recursive_digest.Graph,
+    settled: recursive_digest.Settled,
     node_by_type: collections.DenseMap(TypeId, u32),
     pending: std.ArrayList(TypeId) = .empty,
 
     fn init(allocator: std.mem.Allocator) DigestScratch {
-        return .{ .allocator = allocator, .graph = DigestGraph.init(allocator), .node_by_type = collections.DenseMap(TypeId, u32).init(allocator) };
+        return .{
+            .allocator = allocator,
+            .graph = recursive_digest.Graph.init(allocator),
+            .settled = recursive_digest.Settled.init(allocator, "roc.lambda-mono.type.v3"),
+            .node_by_type = collections.DenseMap(TypeId, u32).init(allocator),
+        };
     }
 
     fn deinit(self: *DigestScratch) void {
         self.graph.deinit();
+        self.settled.deinit();
         self.node_by_type.deinit();
         self.pending.deinit(self.allocator);
     }
 
     fn reset(self: *DigestScratch) void {
         self.graph.reset();
+        self.settled.clear();
         self.node_by_type.clearRetainingCapacity();
         self.pending.clearRetainingCapacity();
     }
@@ -592,7 +600,7 @@ const DigestScratch = struct {
         // Mark the position of every edge among the scalar data, while the
         // graph separately retains the exact ordered child identities.
         writeBytes(hasher, "child");
-        try self.graph.putChild(try self.discover(ty));
+        try self.graph.putChild(.{ .node = try self.discover(ty) });
     }
 
     fn run(self: *DigestScratch, store: *const Store, name_store: *const names.NameStore, ty: TypeId, targets: ?Store.CallableTargets) std.mem.Allocator.Error!names.TypeDigest {
@@ -602,9 +610,9 @@ const DigestScratch = struct {
             const node = self.node_by_type.get(pending_ty).?;
             self.graph.beginNode(node);
             try store.encodeDigestNode(name_store, self, targets, pending_ty);
-            self.graph.endNode(node);
         }
-        return .{ .bytes = try self.graph.resolve(root) };
+        try self.graph.resolve(&self.settled, null);
+        return .{ .bytes = self.graph.digest(root) };
     }
 };
 

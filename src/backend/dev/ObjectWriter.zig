@@ -138,7 +138,7 @@ pub fn generateIndexedObjectFileWithDebug(
                 switch (rel) {
                     .linked_function => |f| try elf.addTextRelocation(rel.getOffset(), target_indices[@backingInt(f.symbol)], f.kind),
                     .linked_data => |d| try elf.addTextDataRelocation(rel.getOffset(), target_indices[@backingInt(d.symbol)], d.kind),
-                    .local_data, .retired, .runtime_ref => {},
+                    .local_data, .retired, .runtime_number => {},
                 }
             }
             for (rodata_relocations) |rel| try elf.addRodataRelocation(rel.offset, target_indices[@backingInt(rel.symbol)], rel.addend);
@@ -170,7 +170,7 @@ pub fn generateIndexedObjectFileWithDebug(
                 .linked_data => |d| {
                     referenced[@backingInt(d.symbol)] = true;
                 },
-                .local_data, .retired, .runtime_ref => {},
+                .local_data, .retired, .runtime_number => {},
             };
             for (rodata_relocations) |rel| referenced[@backingInt(rel.symbol)] = true;
 
@@ -190,7 +190,7 @@ pub fn generateIndexedObjectFileWithDebug(
                 switch (rel) {
                     .linked_function => |f| try macho.addTextRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(f.symbol)], true, f.kind),
                     .linked_data => |d| try macho.addTextDataRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(d.symbol)], true, d.kind),
-                    .local_data, .retired, .runtime_ref => {},
+                    .local_data, .retired, .runtime_number => {},
                 }
             }
             for (rodata_relocations) |rel| try macho.addRodataRelocation(@intCast(rel.offset), target_indices[@backingInt(rel.symbol)], true, rel.addend);
@@ -265,7 +265,7 @@ pub fn generateIndexedObjectFileWithDebug(
                 switch (rel) {
                     .linked_function => |f| try coff_writer.addTextRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(f.symbol)], f.kind),
                     .linked_data => |d| try coff_writer.addTextDataRelocation(@intCast(rel.getOffset()), target_indices[@backingInt(d.symbol)], d.kind),
-                    .local_data, .retired, .runtime_ref => {},
+                    .local_data, .retired, .runtime_number => {},
                 }
             }
             for (rodata_relocations) |rel| try coff_writer.addRdataRelocation(@intCast(rel.offset), target_indices[@backingInt(rel.symbol)], rel.addend);

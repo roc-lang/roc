@@ -653,8 +653,9 @@ fn gatherTagsFromUnion(
             .structure => |flat| switch (flat) {
                 .tag_union => |ext_union| {
                     const ext_tags = snap_store.sliceTags(ext_union.tags);
+                    const outer_end = tags.len();
                     for (ext_tags.items(.name), ext_tags.items(.args), ext_tags.items(.formatted)) |name, args, formatted| {
-                        _ = try tags.append(gpa, .{ .name = name, .args = args, .formatted = formatted });
+                        try snapshot.appendRowLabel(snapshot.SnapshotTag, tags, gpa, start, outer_end, .{ .name = name, .args = args, .formatted = formatted });
                     }
                     ext_idx = ext_union.ext;
                 },
