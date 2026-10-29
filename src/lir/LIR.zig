@@ -1373,15 +1373,15 @@ pub const DynOp = union(enum) {
     /// Copy `desc.size` bytes from `src` to the target. Reference counts are
     /// separate (`incref`/`decref` of the target as of any alias).
     copy: struct { src: LocalId, desc: LocalId },
-    /// Field `semantic_index` of the record or tuple `base` described by
+    /// Field `field_index` of the record or tuple `base` described by
     /// `desc`. The target is a `view` dynamic local, or a closed local the
     /// field's bytes are loaded into.
-    field_addr: struct { base: LocalId, desc: LocalId, semantic_index: u32 },
+    field_addr: struct { base: LocalId, desc: LocalId, field_index: u32 },
     /// The field named `name` of the record `base` described by `desc`.
     field_addr_named: struct { base: LocalId, desc: LocalId, name: LocalId },
     /// Element `index` (a `u64` local) of the list `list`, whose elements
     /// `elem_desc` describes. The caller has checked the bound.
-    list_elem_addr: struct { list: LocalId, elem_desc: LocalId, index: LocalId },
+    list_item_addr: struct { list: LocalId, elem_desc: LocalId, index: LocalId },
     /// The payload of the box `box`, whose payload `desc` describes.
     box_payload_addr: struct { box: LocalId, desc: LocalId },
     /// The discriminant (target: `u32`) of the tag union `base`.

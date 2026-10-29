@@ -19,7 +19,6 @@
 const std = @import("std");
 const base = @import("base");
 const check = @import("check");
-const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
@@ -87,7 +86,7 @@ pub const TypeId = enum(u32) { _ };
 
 /// A nominal declaration: its module and its id in that module's checked
 /// type store.
-pub const DeclRef = struct {
+pub const DeclId = struct {
     module: ModuleIndex,
     decl: checked.CheckedNominalDeclarationId,
 };
@@ -126,7 +125,7 @@ pub const TagSpan = struct { start: u32, len: u32 };
 
 /// A named type: a nominal or opaque declaration instantiated at `args`.
 pub const Nominal = struct {
-    decl: DeclRef,
+    decl: DeclId,
     args: Span,
     /// The type's name, for `Str.inspect` of an override-free opaque.
     name: NameId,
@@ -199,7 +198,7 @@ pub const Store = struct {
     /// Each nominal declaration's name, its own whatever its text: a
     /// descriptor compares nominals by name, and two declarations can share
     /// a name's text.
-    decl_name_ids: std.AutoHashMapUnmanaged(DeclRef, NameId) = .empty,
+    decl_name_ids: std.AutoHashMapUnmanaged(DeclId, NameId) = .empty,
     name_arena: std.heap.ArenaAllocator,
 
     /// Converted closed checked types, by module and checked id.
@@ -208,7 +207,7 @@ pub const Store = struct {
     backing_memo: std.AutoHashMapUnmanaged(TypeId, TypeId) = .empty,
     /// The variables of an enclosing scope each nominal declaration's
     /// backing mentions (`Converter.outerVariables`).
-    decl_outer_vars: std.AutoHashMapUnmanaged(DeclRef, []const checked.CheckedTypeId) = .empty,
+    decl_outer_vars: std.AutoHashMapUnmanaged(DeclId, []const checked.CheckedTypeId) = .empty,
     /// The `??` default identity of each defaulted field of a record type
     /// conversion produced (design.md "Defaulted Fields").
     field_defaults: std.AutoHashMapUnmanaged(FieldDefaultKey, checked.CheckedFieldDefault) = .empty,
@@ -302,7 +301,7 @@ pub const Store = struct {
     }
 
     /// The name of nominal declaration `decl`, whose text is `text`.
-    pub fn internDeclName(self: *Store, decl: DeclRef, text: []const u8) Allocator.Error!NameId {
+    pub fn internDeclName(self: *Store, decl: DeclId, text: []const u8) Allocator.Error!NameId {
         if (self.decl_name_ids.get(decl)) |existing| return existing;
         const owned = try self.name_arena.allocator().dupe(u8, text);
         const id: NameId = @fromBackingInt(@intCast(self.name_texts.items.len));
@@ -512,7 +511,7 @@ pub const NodeInput = union(enum) {
     list: TypeId,
     box: TypeId,
     nominal: struct {
-        decl: DeclRef,
+        decl: DeclId,
         args: []const TypeId,
         name: NameId,
         is_opaque: bool,
@@ -953,8 +952,8 @@ pub const Converter = struct {
                     },
                     .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
                 }
-                const decl = try self.declarationRef(view, nominal);
-                const decl_ref = decl orelse DeclRef{ .module = module, .decl = @fromBackingInt(std.math.maxInt(u32)) };
+                const decl = try self.declarationId(view, nominal);
+                const decl_id = decl orelse DeclId{ .module = module, .decl = @fromBackingInt(std.math.maxInt(u32)) };
                 // A declaration in a function body whose backing mentions
                 // the body's variables is instantiated at their types here
                 // too: they follow its own arguments.
@@ -962,11 +961,11 @@ pub const Converter = struct {
                 const args = try allocator.alloc(TypeId, children.len + outer.len);
                 defer allocator.free(args);
                 @memcpy(args[0..children.len], children);
-                for (outer, args[children.len..]) |variable, *arg| arg.* = (try self.leaf(decl_ref.module, variable, env)).?;
+                for (outer, args[children.len..]) |variable, *arg| arg.* = (try self.leaf(decl_id.module, variable, env)).?;
                 return try self.store.intern(.{ .nominal = .{
-                    .decl = decl_ref,
+                    .decl = decl_id,
                     .args = args,
-                    .name = if (decl != null) try self.store.internDeclName(decl_ref, name_store.typeNameText(nominal.name)) else try self.store.internName(name_store.typeNameText(nominal.name)),
+                    .name = if (decl != null) try self.store.internDeclName(decl_id, name_store.typeNameText(nominal.name)) else try self.store.internName(name_store.typeNameText(nominal.name)),
                     .is_opaque = nominal.is_opaque,
                     .builtin = nominal.builtin,
                     .has_backing = decl != null,
@@ -1003,7 +1002,7 @@ pub const Converter = struct {
 
     /// The declaration a nominal payload names, or null for an opaque type
     /// with no backing.
-    fn declarationRef(self: Converter, view: *const ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!?DeclRef {
+    fn declarationId(self: Converter, view: *const ModuleView, nominal: checked.CheckedNominalType) Allocator.Error!?DeclId {
         return switch (nominal.representation) {
             .opaque_without_backing => null,
             .local_declaration => |decl| .{ .module = view.index, .decl = decl },
@@ -1098,7 +1097,7 @@ pub const Converter = struct {
     /// backings of the declarations it names: the variables its backing
     /// reaches that are no reached declaration's formal. A top-level
     /// declaration has none.
-    pub fn outerVariables(self: Converter, decl: DeclRef) Allocator.Error![]const checked.CheckedTypeId {
+    pub fn outerVariables(self: Converter, decl: DeclId) Allocator.Error![]const checked.CheckedTypeId {
         if (self.store.decl_outer_vars.get(decl)) |known| return known;
         const allocator = self.store.allocator;
         const view = self.modules.get(decl.module);

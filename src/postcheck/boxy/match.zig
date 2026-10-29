@@ -13,9 +13,7 @@ const layout = @import("layout");
 const lir_core = @import("lir_core");
 
 const types = @import("types.zig");
-const lower = @import("lower.zig");
 const body_mod = @import("body.zig");
-const layouts_mod = @import("layouts.zig");
 const match_tree = @import("../match_tree.zig");
 
 const Allocator = std.mem.Allocator;
@@ -26,7 +24,6 @@ const CFStmtId = LIR.CFStmtId;
 const TypeId = types.TypeId;
 const Builder = body_mod.Builder;
 const invariant = types.invariant;
-const invariantFmt = types.invariantFmt;
 
 const CheckedExprId = checked.CheckedExprId;
 const CheckedPatternId = checked.CheckedPatternId;

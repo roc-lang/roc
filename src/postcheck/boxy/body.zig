@@ -59,6 +59,7 @@ pub fn lowerWorker(program: *Program, id: WorkerId) Allocator.Error!void {
     try builder.lowerBody();
 }
 
+/// One unit of pending lowering work on the builder's task stack.
 pub const Task = union(enum) {
     expr: CheckedExprId,
     stmt: CheckedStatementId,
@@ -189,6 +190,7 @@ pub const Merge = struct {
     params: []LocalId,
 };
 
+/// Names a `Merge` by its index among the builder's merges.
 pub const MergeId = u32;
 
 /// What a join's parameters are: an optional value, then the binders of its
@@ -198,18 +200,18 @@ pub const JoinInfo = struct {
     merge: ?MergeId,
 };
 
-/// A value a pattern tests, with the value's type.
 /// A loop being lowered: its exit join, and whether anything leaves through
 /// it (a failed condition, or a break).
 pub const LoopExit = struct { join: LIR.JoinPointId, reached: bool };
 
+/// A value a pattern tests, with the value's type.
 pub const PatternItem = struct { pattern: CheckedPatternId, value: LocalId, ty: TypeId };
 
 /// The key and variable descriptors a recursive member's placeholder was
 /// opened with, which its close repeats.
 const OpenMember = struct { key: LocalId, vars: LIR.LocalSpan };
 
-/// A scheme alias's scope as one use instantiates it: the canonical evidence
+/// A scheme alias's scope as one use instantiates it: the checked evidence
 /// parameters its dictionaries stand for, those dictionaries, and the
 /// environment it extends.
 const AliasScope = struct { params: []const u32, dicts: []const LocalId, saved_env: types.Env };
@@ -224,6 +226,7 @@ const AliasStep = struct {
     params: []const static_dispatch.EvidenceParamRecord,
 };
 
+/// Lowers one worker's checked body to LIR.
 pub const Builder = struct {
     program: *Program,
     allocator: Allocator,
@@ -352,7 +355,7 @@ pub const Builder = struct {
         return self.view.bodies();
     }
 
-    /// The inline-expect mode the program's divergence facts are read in.
+    /// The inline-expect mode the program's divergence data is read in.
     pub fn inlineExpectMode(self: *const Builder) checked.InlineExpectMode {
         return switch (self.program.input.inline_expects) {
             .run => .run,
@@ -794,7 +797,7 @@ pub const Builder = struct {
         for (overrides) |maybe| switch (maybe orelse continue) {
             .procedure => |override| {
                 try pending.appendSlice(self.allocator, override.bound);
-                for (override.dicts) |obligation| try pending.appendSlice(self.allocator, &.{ obligation.dispatcher, obligation.callable });
+                for (override.dicts) |requirement| try pending.appendSlice(self.allocator, &.{ requirement.dispatcher, requirement.callable });
             },
             .local => |override| try pending.append(self.allocator, override.interface),
         };
@@ -1008,7 +1011,7 @@ pub const Builder = struct {
                     const hidden = try self.allocator.alloc(LocalId, procedure.bound.len + procedure.dicts.len);
                     defer self.allocator.free(hidden);
                     for (procedure.bound, hidden[0..procedure.bound.len]) |bound_ty, *desc| desc.* = try self.descOf(bound_ty);
-                    for (procedure.dicts, hidden[procedure.bound.len..]) |obligation, *local| local.* = try self.dictionaryFromType(obligation);
+                    for (procedure.dicts, hidden[procedure.bound.len..]) |requirement, *local| local.* = try self.dictionaryFromType(requirement);
                     callable.* = try self.composeDictionary(procedure.entry, hidden);
                 },
                 // A local procedure's function value is built in the entry
@@ -1271,7 +1274,7 @@ pub const Builder = struct {
         return done.get(root).?;
     }
 
-    /// Link the entry chain to the body and publish the procedure.
+    /// Link the entry chain to the body and finish the procedure.
     pub fn finishProc(self: *Builder, entry: CFStmtId, body_start: CFStmtId, args: []const LocalId, ret_layout: layout.Idx) Allocator.Error!void {
         const worker = self.currentWorker().*;
         // Entry chain, then the dynamic frame region, then the body.
@@ -1414,7 +1417,7 @@ pub const Builder = struct {
         for (lambda.args, worker.params, 0..) |pattern, param_ty, index| {
             const value = if (own_words != 0) blk: {
                 const local = try self.localOf(param_ty, .view);
-                try self.emitDyn(local, .{ .field_addr = .{ .base = record_param.?, .desc = self.store.localDyn(record_param.?).?.desc, .semantic_index = @intCast(own_words + index) } });
+                try self.emitDyn(local, .{ .field_addr = .{ .base = record_param.?, .desc = self.store.localDyn(record_param.?).?.desc, .field_index = @intCast(own_words + index) } });
                 break :blk local;
             } else try self.argsRecordField(worker.params, record_param.?, @intCast(index), param_ty);
             try self.bindIrrefutable(pattern, value, param_ty);
@@ -1644,7 +1647,7 @@ pub const Builder = struct {
         try self.emitEntry(.{ .dyn = .{ .target = prefix_desc, .data = try self.store.addStmtRow(LIR.DynOp, .{ .desc_args = .{ .elems = try self.store.addLocalSpan(words) } }), .next = undefined } });
         for (0..own_words) |index| {
             const local = try self.closedLocal(if (index < worker.own_descs) .opaque_ptr else try self.erasedLayout());
-            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = prefix_desc, .semantic_index = @intCast(index) } }), .next = undefined } });
+            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = prefix_desc, .field_index = @intCast(index) } }), .next = undefined } });
             if (index < worker.own_descs) self.var_descs[outer_descs + index] = local else self.dict_locals[index - worker.own_descs] = local;
         }
         const elems = try self.allocator.alloc(LocalId, own_words + worker.params.len);
@@ -1671,14 +1674,14 @@ pub const Builder = struct {
         const values = try self.allocator.alloc(LocalId, worker.capture_types.len + word_count);
         for (0..word_count) |index| {
             const word = try self.closedLocal(if (index < outer_descs) .opaque_ptr else try self.erasedLayout());
-            try self.emitEntry(.{ .dyn = .{ .target = word, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .semantic_index = @intCast(1 + index) } }), .next = undefined } });
+            try self.emitEntry(.{ .dyn = .{ .target = word, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = @intCast(1 + index) } }), .next = undefined } });
             values[worker.capture_types.len + index] = word;
         }
         // The captured values' types mention only the outer scope.
         @memcpy(self.var_descs[0..outer_descs], values[worker.capture_types.len..][0..outer_descs]);
         for (worker.capture_types, 0..) |ty, index| {
             const local = try self.localOf(ty, .view);
-            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .semantic_index = @intCast(1 + word_count + index) } }), .next = undefined } });
+            try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = record, .desc = record_desc, .field_index = @intCast(1 + word_count + index) } }), .next = undefined } });
             values[index] = local;
         }
         return values;
@@ -2056,7 +2059,7 @@ pub const Builder = struct {
 
     /// The closed layout of a lambda's capture record: the captured values,
     /// then one descriptor pointer per scope variable, in that order of
-    /// semantic indices.
+    /// checked field indices.
     pub fn captureLayout(self: *Builder, capture_types: []const TypeId, descriptor_count: usize, dictionary_count: usize) Allocator.Error!layout.Idx {
         const fields = try self.allocator.alloc(layout.StructField, capture_types.len + descriptor_count + dictionary_count);
         defer self.allocator.free(fields);
@@ -2111,7 +2114,7 @@ pub const Builder = struct {
     pub fn argsRecordField(self: *Builder, params: []const TypeId, record: LocalId, index: u32, param_ty: TypeId) Allocator.Error!LocalId {
         if (self.store.localDyn(record)) |dyn| {
             const local = try self.localOf(param_ty, .view);
-            try self.emitDyn(local, .{ .field_addr = .{ .base = record, .desc = dyn.desc, .semantic_index = index } });
+            try self.emitDyn(local, .{ .field_addr = .{ .base = record, .desc = dyn.desc, .field_index = index } });
             return local;
         }
         _ = params;
@@ -3343,7 +3346,7 @@ pub const Builder = struct {
         const payload = try self.localOf(tuple_ty, .view);
         try self.emitEntry(.{ .dyn = .{ .target = payload, .data = try self.store.addStmtRow(LIR.DynOp, .{ .box_payload_addr = .{ .box = slot, .desc = try self.descOf(tuple_ty) } }), .next = undefined } });
         const value = try self.localOf(value_ty, .view);
-        try self.emitEntry(.{ .dyn = .{ .target = value, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = payload, .desc = try self.descOf(tuple_ty), .semantic_index = 0 } }), .next = undefined } });
+        try self.emitEntry(.{ .dyn = .{ .target = value, .data = try self.store.addStmtRow(LIR.DynOp, .{ .field_addr = .{ .base = payload, .desc = try self.descOf(tuple_ty), .field_index = 0 } }), .next = undefined } });
         return value;
     }
 
@@ -3419,7 +3422,7 @@ pub const Builder = struct {
             if (!self.emitting_entry or self.entry_locals.contains(value)) return value;
         }
         if (local.is_alias) invariant("an alias is used only after its declaration binds it");
-        // Referenced inside its own body or a nested function: rebuild the
+        // Referenced inside its own body or a nested function: build the
         // procedure's function value from its captures, which the checker
         // makes visible wherever the procedure is, and the scope it was
         // declared in, whose descriptors and dictionaries this body holds.
@@ -3783,8 +3786,8 @@ pub const Builder = struct {
                 const target = try self.program.templateRefWorker(ref);
                 const target_worker = self.program.worker(target).*;
                 const formal = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
-                // A scheme variable only the target's obligations mention is
-                // fixed by relating those obligations' methods.
+                // A scheme variable only the target's requirements mention is
+                // fixed by relating those requirements' methods.
                 const bound = (try self.program.instantiateTarget(target, formal, fn_ty)).bound;
                 const dicts = try self.storedDictionaries(stored, target, bound);
                 defer self.allocator.free(dicts);
@@ -3869,9 +3872,9 @@ pub const Builder = struct {
                 // relates.
                 const related = try self.relateVariablesPartial(relations.items, scope_vars.len);
                 defer self.allocator.free(related);
-                // A variable only the closure's obligations mention (its own
+                // A variable only the closure's requirements mention (its own
                 // scheme's, then its owner's) is fixed by relating those
-                // obligations' methods.
+                // requirements' methods.
                 {
                     var params: std.ArrayList(static_dispatch.EvidenceParamRecord) = .empty;
                     defer params.deinit(self.allocator);
@@ -3905,7 +3908,7 @@ pub const Builder = struct {
                     for (related, from_edges) |*slot, determined| {
                         if (slot.* == null) slot.* = determined;
                     }
-                    try self.program.relateThroughObligations(owner.module, scope_vars, params.items, related);
+                    try self.program.relateThroughRequirements(owner.module, scope_vars, params.items, related);
                 }
                 const bound = try self.allocator.alloc(TypeId, scope_vars.len);
                 defer self.allocator.free(bound);
@@ -4148,8 +4151,8 @@ pub const Builder = struct {
                     const target_worker = self.program.worker(target).*;
                     const formal = try self.program.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
                     entry.target = target;
-                    // A scheme variable only the target's own obligations
-                    // mention is fixed by relating those obligations'
+                    // A scheme variable only the target's own requirements
+                    // mention is fixed by relating those requirements'
                     // methods (`Program.instantiateTarget`).
                     entry.bound = try self.allocator.dupe(TypeId, (try self.program.instantiateTarget(target, formal, callable.*.?)).bound);
                 },
@@ -4254,7 +4257,7 @@ pub const Builder = struct {
         while (true) switch (ref) {
             .local_proc => |local| {
                 if (!local.is_alias) invariant("a top-level procedure alias names a top-level procedure, as checking forwards only those");
-                const final = local.alias_target orelse invariant("a callable alias has no published target");
+                const final = local.alias_target orelse invariant("a callable alias has no recorded target");
                 ref = owner.view.resolved_value_refs.records[@backingInt(final)].ref;
             },
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => break,
@@ -4486,7 +4489,7 @@ pub const Builder = struct {
             .checked_error => return try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .checked_error), &.{}),
             .unreachable_value => return try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, .unreachable_value), &.{}),
             .from_callable => invariant("callable-derived evidence is resolved with the parameter it stands for (`paramDictionary`)"),
-            .from_scheme => invariant("an abstract scheme requirement reached executable code without its use's evidence"),
+            .from_scheme => invariant("an abstract scheme requirement reached lowered code without its use's evidence"),
         }
     }
 
@@ -4556,10 +4559,10 @@ pub const Builder = struct {
     }
 
     /// The dictionary of `root`, resolved from its dispatcher's type
-    /// (`Program.resolveObligation`), with each method target's own
-    /// obligations resolved the same way. Nested obligations are resolved
+    /// (`Program.resolveRequirement`), with each method target's own
+    /// requirements resolved the same way. Nested requirements are resolved
     /// with an explicit stack.
-    pub fn dictionaryFromType(self: *Builder, root: lower.DictObligation) Allocator.Error!LocalId {
+    pub fn dictionaryFromType(self: *Builder, root: lower.DictRequirement) Allocator.Error!LocalId {
         const Frame = struct {
             target: WorkerId,
             callable: TypeId,
@@ -4572,21 +4575,21 @@ pub const Builder = struct {
             for (frames.items) |*frame| frame.hidden.deinit(self.allocator);
             frames.deinit(self.allocator);
         }
-        var pending: ?lower.DictObligation = root;
+        var pending: ?lower.DictRequirement = root;
         var delivered: ?LocalId = null;
         while (true) {
-            if (pending) |obligation| {
+            if (pending) |requirement| {
                 pending = null;
-                switch (try self.program.resolveObligation(obligation)) {
+                switch (try self.program.resolveRequirement(requirement)) {
                     .structural => |structural| delivered = try self.composeDictionary(try self.program.structuralWorker(self.module, structural.method), &.{try self.descOf(structural.over)}),
                     .crash => |kind| delivered = try self.composeDictionary(try self.program.crashDictionaryWorker(self.module, kind), &.{}),
-                    .scope_variable => |index| delivered = self.variableDictionary(index, self.program.module(obligation.module).nameStore().methodNameText(obligation.method)),
+                    .scope_variable => |index| delivered = self.variableDictionary(index, self.program.module(requirement.module).nameStore().methodNameText(requirement.method)),
                     .derived => invariant("a derived codec or map dictionary is resolved from a type alone, but checking records each with its plan at the dispatch it serves"),
                     .target => |target| {
-                        const instance = try self.program.targetAt(target, obligation.callable);
+                        const instance = try self.program.targetAt(target, requirement.callable);
                         var hidden: std.ArrayList(LocalId) = .empty;
                         for (instance.bound) |ty| try hidden.append(self.allocator, try self.descOf(ty));
-                        try frames.append(self.allocator, .{ .target = target, .callable = obligation.callable, .instance = instance, .hidden = hidden, .next = 0 });
+                        try frames.append(self.allocator, .{ .target = target, .callable = requirement.callable, .instance = instance, .hidden = hidden, .next = 0 });
                     },
                 }
             }
@@ -4596,8 +4599,8 @@ pub const Builder = struct {
                 try frames.items[frames.items.len - 1].hidden.append(self.allocator, dictionary);
             }
             const frame = &frames.items[frames.items.len - 1];
-            if (frame.next < frame.instance.obligations.len) {
-                pending = frame.instance.obligations[frame.next];
+            if (frame.next < frame.instance.requirements.len) {
+                pending = frame.instance.requirements[frame.next];
                 frame.next += 1;
                 continue;
             }
@@ -4625,7 +4628,7 @@ pub const Builder = struct {
             }
             offset += scope.len;
         }
-        invariant("a scope variable's method obligation has no dictionary in its scope, which checking requires");
+        invariant("a scope variable's method requirement has no dictionary in its scope, which checking requires");
     }
 
     /// The dictionary of a derived map with the checked selection `plan`,
@@ -4672,7 +4675,7 @@ pub const Builder = struct {
     /// The hidden arguments of `callee`, the procedure a dispatch edge
     /// reached through the exact procedure alias the method is bound to
     /// (`EvidenceTargetInstantiation.alias`). The edge instantiated the
-    /// alias's scope (`node.subst`) and resolved its obligations
+    /// alias's scope (`node.subst`) and resolved its requirements
     /// (`through_alias`); each alias's forwarded lookup recorded its own
     /// substitution and evidence over that scope, so lowering the lookup's
     /// in the scope so instantiated gives the next alias's, alias by alias,
@@ -4820,7 +4823,7 @@ pub const Builder = struct {
 
     /// The hidden arguments of `callee` instantiated at `subst` (or, with
     /// none recorded, at what `call_fn` relates its variables to), its
-    /// dictionaries derived from those types: each obligation dispatches on
+    /// dictionaries derived from those types: each requirement dispatches on
     /// its dispatcher's type at the instantiation, as checking selects
     /// targets.
     pub fn callableDerivedHidden(self: *Builder, callee: WorkerId, subst: []const checked.CheckedTypeId, call_fn: ?TypeId) Allocator.Error![]LocalId {
@@ -4831,8 +4834,8 @@ pub const Builder = struct {
         errdefer self.allocator.free(hidden);
         for (bound, hidden[0..bound.len]) |ty, *desc| desc.* = try self.descOf(ty);
         if (target.dictionary_params.len == 0) return hidden;
-        const instance = try self.program.targetObligations(callee, try self.program.arena.allocator().dupe(TypeId, bound));
-        for (instance.obligations, hidden[bound.len..]) |obligation, *dict| dict.* = try self.dictionaryFromType(obligation);
+        const instance = try self.program.targetRequirements(callee, try self.program.arena.allocator().dupe(TypeId, bound));
+        for (instance.requirements, hidden[bound.len..]) |requirement, *dict| dict.* = try self.dictionaryFromType(requirement);
         return hidden;
     }
 
@@ -5026,7 +5029,7 @@ pub const Builder = struct {
         return try self.convert(params[index.index].callable_ty);
     }
 
-    /// The dictionary in scope for canonical evidence parameter `index`.
+    /// The dictionary in scope for checked evidence parameter `index`.
     /// Depth 0 is the innermost scope: an entered scheme alias's, then the
     /// worker's own.
     pub fn scopeDictionary(self: *Builder, index: static_dispatch.EvidenceChainIndex) LocalId {
@@ -5258,7 +5261,7 @@ pub const Builder = struct {
                     try self.pushOperand(operands[index], operand_types[index]);
                 }
             },
-            .direct_pending => invariant("a checked artifact holds a pending dispatch resolution"),
+            .direct_pending => invariant("a checked module holds a pending dispatch resolution"),
         }
     }
 
@@ -5729,7 +5732,7 @@ pub const Builder = struct {
         };
         const fields = try self.allocator.dupe(types.Field, self.program.store.fieldSpan(record_ty.fields));
         defer self.allocator.free(fields);
-        // Values arrive in source order; store them by semantic index. An
+        // Values arrive in source order; store them by checked field index. An
         // optional field's slot holds `#Present(value)`, or `#Missing` when
         // the literal omits it (design.md "Field Kinds").
         const ordered = try self.allocator.alloc(?LocalId, fields.len);
@@ -5738,12 +5741,12 @@ pub const Builder = struct {
         const name_store = self.view.nameStore();
         for (record.fields, values) |field, value| {
             const name = try self.program.store.internName(name_store.recordFieldLabelText(field.label));
-            const semantic = for (fields, 0..) |candidate, index| {
+            const position = for (fields, 0..) |candidate, index| {
                 if (candidate.name == name) break index;
             } else invariant("a record expression's field is absent from its type");
-            ordered[semantic] = switch (fields[semantic].kind) {
+            ordered[position] = switch (fields[position].kind) {
                 .inline_slot => value,
-                .presence_slot => try self.buildTag(try self.program.layouts.presenceSlot(fields[semantic].ty), try self.program.store.internName(@import("layouts.zig").present_label), &.{value}),
+                .presence_slot => try self.buildTag(try self.program.layouts.presenceSlot(fields[position].ty), try self.program.store.internName(@import("layouts.zig").present_label), &.{value}),
             };
         }
         // Unset fields (`name: _`) are missing.
@@ -5814,7 +5817,7 @@ pub const Builder = struct {
         try self.pushValue(try self.buildStruct(ty, slots));
     }
 
-    /// A record or tuple of `ty` from its fields in semantic order.
+    /// A record or tuple of `ty` from its fields in checked field order.
     pub fn buildStruct(self: *Builder, ty: TypeId, fields: []const LocalId) Allocator.Error!LocalId {
         const target = try self.localOf(ty, .frame);
         if (try self.closed(ty)) {
@@ -6237,10 +6240,10 @@ pub const Builder = struct {
                                 continue;
                             },
                         };
-                        const semantic = for (fields, 0..) |field, index| {
+                        const position = for (fields, 0..) |field, index| {
                             if (field.name == name) break index;
                         } else null;
-                        if (semantic) |index| {
+                        if (position) |index| {
                             if (fields[index].kind == .presence_slot) {
                                 // An optional field destructures to its
                                 // presence as `Try(value, [MissingField])`.
@@ -6480,7 +6483,7 @@ pub const Builder = struct {
                 .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => invariant("a field access's receiver is not a record"),
             };
             const fields = self.program.store.fieldSpan(record.fields);
-            const semantic = for (fields, 0..) |field, index| {
+            const position = for (fields, 0..) |field, index| {
                 if (field.name == name) break index;
             } else null;
             const field_ty = try self.convert(segment.success_ty);
@@ -6491,13 +6494,13 @@ pub const Builder = struct {
                 .optional => try self.program.layouts.presenceSlot(field_ty),
             };
             var stored: LocalId = undefined;
-            if (record.ext != null and semantic == null) {
+            if (record.ext != null and position == null) {
                 // A field of an open row's remainder: only the record's
                 // descriptor knows where it is.
                 stored = try self.localOf(slot_ty, .view);
                 try self.emitDyn(stored, .{ .field_addr_named = .{ .base = value, .desc = try self.descOf(structural), .name = try self.nameDesc(name) } });
             } else {
-                const index = semantic orelse invariant("a field access's field is absent from its record type");
+                const index = position orelse invariant("a field access's field is absent from its record type");
                 const expected_kind: types.FieldKind = switch (segment.mode) {
                     .required => .inline_slot,
                     .optional => .presence_slot,
@@ -6534,7 +6537,7 @@ pub const Builder = struct {
         try self.pushValue(exit.result);
     }
 
-    /// The stored types of a record's or tuple's components, by semantic
+    /// The stored types of a record's or tuple's components, by checked field
     /// index.
     pub fn structComponentTypes(self: *Builder, raw_ty: TypeId) Allocator.Error![]TypeId {
         const ty = try self.structuralType(raw_ty);
@@ -6559,34 +6562,34 @@ pub const Builder = struct {
         return current;
     }
 
-    /// Field `semantic_index` (of type `field_ty`) of the record or tuple
+    /// Field `field_index` (of type `field_ty`) of the record or tuple
     /// `base` of type `ty`, as a borrowed read.
-    pub fn readField(self: *Builder, ty: TypeId, base_local: LocalId, semantic_index: u32, field_ty: TypeId) Allocator.Error!LocalId {
+    pub fn readField(self: *Builder, ty: TypeId, base_local: LocalId, field_index: u32, field_ty: TypeId) Allocator.Error!LocalId {
         const local = try self.localOf(field_ty, if (try self.closed(ty)) .frame else .view);
-        try self.readFieldInto(local, ty, base_local, semantic_index, field_ty);
+        try self.readFieldInto(local, ty, base_local, field_index, field_ty);
         return local;
     }
 
     /// `readField` into `target`.
-    pub fn readFieldInto(self: *Builder, target: LocalId, ty: TypeId, base_local: LocalId, semantic_index: u32, field_ty: TypeId) Allocator.Error!void {
+    pub fn readFieldInto(self: *Builder, target: LocalId, ty: TypeId, base_local: LocalId, field_index: u32, field_ty: TypeId) Allocator.Error!void {
         if (try self.closed(ty)) {
             const base_layout = self.store.getLocal(base_local).layout_idx;
             if (self.program.result.layouts.getLayout(base_layout).tag != .struct_) {
-                try self.emitLinear(.{ .assign_ref = .{ .target = target, .op = LIR.RefOp.field(base_local, semantic_index), .next = undefined } });
+                try self.emitLinear(.{ .assign_ref = .{ .target = target, .op = LIR.RefOp.field(base_local, field_index), .next = undefined } });
                 return;
             }
-            return try self.readSlotInto(target, LIR.RefOp.field(base_local, semantic_index), field_ty, self.structFieldLayout(base_layout, semantic_index));
+            return try self.readSlotInto(target, LIR.RefOp.field(base_local, field_index), field_ty, self.structFieldLayout(base_layout, field_index));
         }
         // A field of an open row ranks among the remainder's fields too, so
         // it is addressed by name.
         switch (self.program.store.get(try self.structuralType(ty))) {
             .record => |record| if (record.ext != null) {
-                const name = self.program.store.fieldSpan(record.fields)[semantic_index].name;
+                const name = self.program.store.fieldSpan(record.fields)[field_index].name;
                 return try self.emitDyn(target, .{ .field_addr_named = .{ .base = base_local, .desc = try self.descOf(ty), .name = try self.nameDesc(name) } });
             },
             .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => {},
         }
-        try self.emitDyn(target, .{ .field_addr = .{ .base = base_local, .desc = try self.descOf(ty), .semantic_index = semantic_index } });
+        try self.emitDyn(target, .{ .field_addr = .{ .base = base_local, .desc = try self.descOf(ty), .field_index = field_index } });
     }
 
     /// Test that the dynamic tag union `value` holds tag `name`, and queue
@@ -6992,7 +6995,7 @@ pub const Builder = struct {
         try self.readSlotInto(target, LIR.RefOp.field(payload_struct, @intCast(index)), payloads[index], field_layout);
     }
 
-    /// The committed layout of field `index` (by semantic index) of the
+    /// The committed layout of field `index` (by checked field index) of the
     /// struct layout `struct_layout`. Every field of a zero-sized struct is
     /// zero-sized.
     pub fn structFieldLayout(self: *Builder, struct_layout: layout.Idx, index: u32) layout.Idx {
@@ -7057,7 +7060,7 @@ pub const Builder = struct {
                 return try self.localOf(result_ty, .frame);
             },
             .structural => invariant("an iterator dispatch resolved to a structural derivation, which no iterator method has"),
-            .direct_pending => invariant("a checked artifact holds a pending dispatch resolution"),
+            .direct_pending => invariant("a checked module holds a pending dispatch resolution"),
         }
     }
 

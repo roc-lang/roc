@@ -917,12 +917,6 @@ const Gen = struct {
         return self.b.intValue(value, try self.u64Ty());
     }
 
-    fn lowLevel(self: *Gen, op: LIR.LowLevel, args: []const LocalId, result_ty: TypeId) Allocator.Error!LocalId {
-        const target = try self.local(result_ty);
-        try self.b.emitLowLevel(target, op, args);
-        return target;
-    }
-
     fn lowLevelLayout(self: *Gen, op: LIR.LowLevel, args: []const LocalId, result_layout: layout.Idx) Allocator.Error!LocalId {
         const target = try self.b.closedLocal(result_layout);
         try self.b.emitLowLevel(target, op, args);
@@ -1874,7 +1868,8 @@ const Gen = struct {
         var buf: [40]u8 = undefined;
         // A set is read as a list whose contract subject is the set.
         const subject = set_ty orelse container_ty;
-        const started = try self.callFormat(std.fmt.bufPrint(&buf, "{s}start", .{prefix}) catch unreachable, subject, &.{ self.encoding, state }); // short names
+        const start_method = std.fmt.bufPrint(&buf, "{s}start", .{prefix}) catch unreachable; // format method names are short
+        const started = try self.callFormat(start_method, subject, &.{ self.encoding, state });
         const event = try self.unwrap(started.value, started.ty, on_err);
         const event_ty = (try requireTry(self.program(), started.ty)).ok;
 
@@ -1910,7 +1905,8 @@ const Gen = struct {
         try self.parseEntry(container, container_ty, cursor, acc, head, &params, try self.subOne(remaining), true, ret_ty, set_ty);
         // Uncounted: ask the format whether another entry follows.
         self.b.hole = uncounted_hole;
-        const next = try self.callFormat(std.fmt.bufPrint(&buf, "{s}next", .{prefix}) catch unreachable, subject, &.{ self.encoding, cursor });
+        const next_method = std.fmt.bufPrint(&buf, "{s}next", .{prefix}) catch unreachable; // format method names are short
+        const next = try self.callFormat(next_method, subject, &.{ self.encoding, cursor });
         const next_event = try self.unwrap(next.value, next.ty, on_err);
         const next_ty = (try requireTry(self.program(), next.ty)).ok;
         const item_text = switch (container) {

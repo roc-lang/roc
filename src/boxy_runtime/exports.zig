@@ -147,15 +147,15 @@ pub fn roc_desc_elem_decref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) 
     walk.elemDecref(context, element);
 }
 
-pub fn roc_desc_field_addr(desc: *const TypeDesc, base: ?[*]u8, semantic_index: u32) callconv(.c) [*]u8 {
-    return compiled.fieldAddr(desc, valuePtr(base), semantic_index, ops());
+pub fn roc_desc_field_addr(desc: *const TypeDesc, base: ?[*]u8, field_index: u32) callconv(.c) [*]u8 {
+    return compiled.fieldAddr(desc, valuePtr(base), field_index, ops());
 }
 
 pub fn roc_desc_field_addr_named(desc: *const TypeDesc, base: ?[*]u8, name: *const Name) callconv(.c) [*]u8 {
     return compiled.fieldAddrNamed(desc, valuePtr(base), name, ops());
 }
 
-pub fn roc_desc_list_elem_addr(elem: *const TypeDesc, list: *const RocList, index: u64) callconv(.c) [*]u8 {
+pub fn roc_desc_list_item_addr(elem: *const TypeDesc, list: *const RocList, index: u64) callconv(.c) [*]u8 {
     return compiled.listElemAddr(elem, list, index);
 }
 

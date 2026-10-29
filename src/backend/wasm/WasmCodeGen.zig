@@ -8840,7 +8840,7 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
         .field_addr => |f| {
             try self.emitProcLocal(f.desc);
             try self.emitBytesAddress(f.base);
-            try self.emitI32Const(@bitCast(f.semantic_index));
+            try self.emitI32Const(@bitCast(f.field_index));
             try self.emitBoxyRuntimeCall(.field_addr);
             try self.bindComponentAddress(dst);
         },
@@ -8851,11 +8851,11 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             try self.emitBoxyRuntimeCall(.field_addr_named);
             try self.bindComponentAddress(dst);
         },
-        .list_elem_addr => |e| {
+        .list_item_addr => |e| {
             try self.emitProcLocal(e.elem_desc);
             try self.emitBytesAddress(e.list);
             try self.emitProcLocal(e.index);
-            try self.emitBoxyRuntimeCall(.list_elem_addr);
+            try self.emitBoxyRuntimeCall(.list_item_addr);
             try self.bindComponentAddress(dst);
         },
         .box_payload_addr => |b| {

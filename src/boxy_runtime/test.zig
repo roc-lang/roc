@@ -32,6 +32,9 @@ const name_ok = name(10, "Ok");
 const name_err = name(11, "Err");
 const name_point = name(20, "Point");
 
+/// The errors these tests' helpers return.
+const TestError = std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult };
+
 /// A test host: allocation tracking plus a fresh composition cache.
 const Env = struct {
     test_env: TestEnv,
@@ -67,8 +70,8 @@ const Slot = struct {
     }
 };
 
-fn fieldOffset(d: *const TypeDesc, semantic_index: u32) u32 {
-    return d.fieldBySemanticIndex(semantic_index).offset;
+fn fieldOffset(d: *const TypeDesc, field_index: u32) u32 {
+    return d.fieldBySemanticIndex(field_index).offset;
 }
 
 fn bigStr(text: []const u8, ops: *RocOps) RocStr {
@@ -82,7 +85,7 @@ fn i64List(values: []const i64, ops: *RocOps) RocList {
     return list;
 }
 
-fn expectInspect(env: *Env, d: *const TypeDesc, ptr: [*]u8, expected: []const u8) !void {
+fn expectInspect(env: *Env, d: *const TypeDesc, ptr: [*]u8, expected: []const u8) TestError!void {
     const rendered = walk.inspect(d, ptr, env.ops());
     defer rendered.decref(env.ops());
     try testing.expectEqualStrings(expected, rendered.asSlice());
@@ -147,11 +150,11 @@ test "a record lays out by descending alignment, then field name" {
     try testing.expectEqual(@as(u32, 16), record.size);
     try testing.expectEqual(@as(u32, 8), record.alignment);
     const fields = record.fields();
-    try testing.expectEqual(@as(u32, 1), fields[0].semantic_index);
+    try testing.expectEqual(@as(u32, 1), fields[0].field_index);
     try testing.expectEqual(@as(u32, 0), fields[0].offset);
-    try testing.expectEqual(@as(u32, 0), fields[1].semantic_index);
+    try testing.expectEqual(@as(u32, 0), fields[1].field_index);
     try testing.expectEqual(@as(u32, 8), fields[1].offset);
-    try testing.expectEqual(@as(u32, 2), fields[2].semantic_index);
+    try testing.expectEqual(@as(u32, 2), fields[2].field_index);
     try testing.expectEqual(@as(u32, 9), fields[2].offset);
     try testing.expectEqual(@as(u32, 8), fieldOffset(record, 0));
     try testing.expectEqual(@as(u32, 9), fieldOffset(record, 2));

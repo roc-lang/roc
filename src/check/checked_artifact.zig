@@ -36254,10 +36254,10 @@ pub const LoweringModuleView = struct {
     relation_modules: []const ImportedModuleView = &.{},
 };
 
-/// Public `importedView` function.
 const empty_platform_type_inputs: PlatformTypeInputs = .{};
 const empty_platform_requirement_solutions: PlatformRequirementSolutionTable = .{};
 
+/// Public `importedView` function.
 pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
     return .{
         .code_generation_key = if (artifact.pairing_arena != null) artifact.codeGenerationKey() else null,

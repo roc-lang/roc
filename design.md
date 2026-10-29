@@ -4341,7 +4341,7 @@ phrases `executable binary` and `executable program`. Use the precise stage or
 data name instead: Monotype, Lambda Mono, LIR, direct call target, lowered
 value, runtime layout, or checked function template.
 
-The word `obligation` is banned in new post-check docs and code. Use the exact
+The word `requirement` is banned in new post-check docs and code. Use the exact
 owner instead: checked dispatch plan, erased callable requirement,
 specialization queue entry, or debug assertion.
 
@@ -9157,7 +9157,7 @@ A proven call to the procedure being built is a self-tail site, recorded as
 described below, except in a `.boxy` procedure with a dynamic frame region:
 there the next call's dynamic arguments live in the region, which a loop
 iteration would allocate again while they are still read, so the call is
-published like a tail call to any other procedure and replaces the frame
+lowered like a tail call to any other procedure and replaces the frame
 (see "Frame-Replacing Calls"), whose dynamic arguments each backend moves out
 of the dying frame. A proven call to any other procedure has its continuation
 replaced by a `ret` of the call's target, so the tail position is structural:
@@ -10016,7 +10016,7 @@ each parameter and capture, either directly or by placing it in the function's
 result, and which result parts the body constructs or passes through on every
 path that returns; it records each call's demand on its result too. Demand
 flows from consumers to the values that reach them through bindings,
-projections, constructors, branches, loops, join points, and calls, including
+field and payload reads, constructors, branches, loops, join points, and calls, including
 a function value's captures when the value may be called. Parts are paths of
 field, item, and tag-payload steps. A value's parts recur only through a tag
 payload, so a path that repeats a payload step folds to that step's first
@@ -11740,7 +11740,7 @@ two, so that variable does not seal to its row default either. The use
 then never counts as closed, and the call keeps its own row and is
 widened by a `row_widen`. The template side and the use side apply the
 same discharge rule (`row_default_discharges_constraints`, which the
-checked artifact records for flex and rigid variables alike).
+checked module data records for flex and rigid variables alike).
 Specialization therefore never meets a request wider than a template
 that cannot take it.
 
@@ -11819,7 +11819,7 @@ Five consumers keep the rule exact:
   source row's heads into one projected row, so it normalizes every source
   row whose chain repeats a label before inventorying the batch, and every
   source tail it gathers after relating heads, which those relations can
-  expose. A conflict is reported at the contribution. A projection never
+  expose. A conflict is reported at the contribution. A projected row never
   holds a label twice.
 - Type rendering (`TypeWriter`, and the snapshot diff's row gatherers) shows
   each label once, with its innermost occurrence, since that is what the row
@@ -14525,7 +14525,7 @@ checked modules
 It does not create Monotype IR, Monotype Lifted IR, Lambda Solved IR, Lambda
 Mono decisions, lambda sets, finite callable tag unions, specializations, or
 any program-wide representation table. There is no planning stage: the
-lowerer walks reachable procedure bodies, and every fact it needs about a
+lowerer walks reachable procedure bodies, and everything it needs to know about a
 checked type is a direct structural function of that type and of the hidden
 parameters in scope.
 
@@ -14533,7 +14533,7 @@ The strategy exists for one reason: build time. Its runtime cost is confined
 to generic bodies and is the cost every non-specializing compiler of a
 language with polymorphism pays (OCaml, Swift's unspecialized generics, Go's
 shape-shared generics): a copy or drop of a value of variable type goes through
-its descriptor instead of being inlined, and a field or element of variable
+its descriptor instead of being inlined, and a field or item of variable
 type is addressed through an offset the descriptor supplies. Monomorphic code
 is lowered exactly as `.lss` lowers it, with the same layouts, the same LIR
 statements, and the same ARC behavior, so an application that is mostly
@@ -14545,7 +14545,7 @@ Every checked type has exactly one runtime representation under `.boxy`: the
 committed layout, in the layout store, of its row-join set's representative
 (Row Joins), which for a type whose rows flow nowhere wider is the layout
 `.lss` gives that type. A `List(U64)` is a list of inline 64-bit integers whether the
-code touching it is monomorphic, generic over the element type, a host entry
+code touching it is monomorphic, generic over the item type, a host entry
 wrapper, or a hosted call. A record is the same flat struct, with the same
 field order, in a generic body and in a monomorphic one.
 
@@ -14590,11 +14590,11 @@ A worker's signature is its explicit checked parameters followed by its hidden
 parameters:
 
 - one descriptor parameter per quantified variable of its scheme, in the
-  scheme's canonical `scheme_vars` order;
+  scheme's checked `scheme_vars` order;
 - one dictionary parameter per evidence parameter of its scheme, in the
-  canonical `evidence_params` order the checker publishes.
+  checked `evidence_params` order the checker records.
 
-A generalized local function (a `DispatchRefScope` with its own `scheme_vars`
+A generalized local function (a dispatch scope with its own `scheme_vars`
 and `evidence_params`) is a worker with its own hidden parameters in the same
 way. A nested lambda that is not generalized has no scheme of its own: the
 descriptors and dictionaries its body mentions belong to the enclosing worker
@@ -14626,7 +14626,7 @@ A direct call to a known template reads the checked site evidence of the use
   descriptor when the type is closed, otherwise a composed descriptor built
   from the enclosing worker's hidden descriptor parameters.
 - the node's nested evidence names, for each evidence parameter of the target
-  scheme in canonical order, how the obligation was discharged. The lowerer
+  scheme in checked order, how the requirement was discharged. The lowerer
   passes the dictionary that discharge denotes (see Dictionaries).
 
 A call whose target is a type variable's method (a dispatch the checker
@@ -14653,12 +14653,12 @@ cannot inline:
 ```text
 TypeDesc {
     size, alignment, sort_key,
-    kind: scalar(int|frac|str|opaque_ptr) | zst | list(elem) | box(payload)
+    kind: scalar(int|frac|str|opaque_ptr) | zst | list(item) | box(payload)
         | record(fields) | tag_union(variants) | erased_callable
         | nominal(backing, methods, inspect name)
     contains_refcounted: bool,
     record fields: ordered by memory position, each
-        { semantic_index, name, offset, desc },
+        { field_index, name, offset, desc },
     tag union: discriminant offset and width, variants ordered by
         discriminant, each { name, payload fields as a record },
     methods: optional erased callables for `is_eq`, `to_hash`, `to_inspect`
@@ -14686,7 +14686,7 @@ Descriptors come from two sources and nowhere else:
 - *Composed descriptors.* When a body needs the descriptor of a type that
   mentions one of its type variables, the lowerer emits a composition
   statement whose operands are static descriptors and hidden descriptor
-  parameters: `desc_list(elem)`, `desc_box(payload)`, `desc_record(fields)`,
+  parameters: `desc_list(item)`, `desc_box(payload)`, `desc_record(fields)`,
   `desc_tag_union(variants)`, `desc_nominal(declaration, args)`,
   `desc_erased_callable`. The runtime composes the layout with the shared
   layout code and interns the result in a process-global immortal cache keyed
@@ -14695,7 +14695,7 @@ Descriptors come from two sources and nowhere else:
 
 A recursive type composes through placeholders. The lowerer finds the
 type's recursive component in the graph of inline components (record fields,
-tuple elements, tag payloads, nominal backings) and boxes exactly the slots
+tuple items, tag payloads, nominal backings) and boxes exactly the slots
 the shared layout store boxes for that component: a struct slot leading back
 into it, and a non-struct tag payload leading back into it. Each member a
 boxed slot points at is opened first (`desc_recursive_open`, keyed by a static
@@ -14762,9 +14762,9 @@ descriptor explicitly as an operand:
 
 - `dyn_copy(dst, src, desc)` copies `desc.size` bytes; reference counting is
   separate, through `incref`/`decref` as for every other local.
-- `dyn_field_addr(dst, base, desc, semantic_index)` and
+- `dyn_field_addr(dst, base, desc, field_index)` and
   `dyn_field_addr_named(dst, base, desc, name)` yield a field's address in a
-  record; `dyn_list_elem_addr(dst, list, elem_desc, index)` an element's;
+  record; `dyn_list_item_addr(dst, list, item_desc, index)` an item's;
   `dyn_box_payload_addr(dst, box, desc)` a box payload's.
 - `dyn_tag_discriminant(dst, base, desc)` reads a tag union's discriminant;
   `dyn_tag_discriminant_of(dst, desc, name)` is the discriminant a tag name
@@ -14773,9 +14773,9 @@ descriptor explicitly as an operand:
   address; `dyn_tag_write(base, desc, name)` writes a discriminant.
 - `dyn_eq`, `dyn_hash`, and `dyn_inspect` call the descriptor-guided runtime
   walkers, which honor nominal method overrides recorded in the descriptor.
-- The list low-level operations a generic body emits pass the element
-  descriptor where their monomorphic forms pass a static element layout; the
-  builtin list runtime is already layout-polymorphic (element width,
+- The list low-level operations a generic body emits pass the item
+  descriptor where their monomorphic forms pass a static item layout; the
+  builtin list runtime is already layout-polymorphic (item width,
   alignment, and refcount callbacks are runtime arguments), so no second set
   of list builtins exists.
 - `dyn_record_update(dst, base, base_desc, desc, names, values)` builds an
@@ -14832,7 +14832,7 @@ body is ordinary LIR with a dynamic island per variable-typed value.
 Pattern matching in a generic body follows the same statements: a tag pattern
 on a dynamic union compares the read discriminant with the name's
 discriminant under the descriptor, then addresses the payload by name; a
-record pattern addresses fields by semantic index or name; a bound binder of
+record pattern addresses fields by checked field index or name; a bound binder of
 variable type is a dynamic local written with `dyn_copy`.
 
 #### Dictionaries
@@ -14877,14 +14877,14 @@ the alias's scope, alias by alias.
 
 Evidence the checker leaves to the concrete callable (`from_callable`, a
 target `derived_from_callable`, nested `from_callable` evidence) and the
-obligations of a nominal's overrides are resolved from the dispatcher's type,
+requirements of a nominal's overrides are resolved from the dispatcher's type,
 as checking selects targets: the method the dispatcher's owner registers,
-with that method's own obligations resolved the same way; a structural
+with that method's own requirements resolved the same way; a structural
 derivation where the owner registers none; a crashing dictionary where no
 value of the dispatcher can exist; and for a scope variable, a structural
 method over its descriptor for a method descriptors carry, or else its
 scope's dictionary. A target's scheme variables its callable leaves open are
-fixed by relating each resolved obligation's method back to the obligation's
+fixed by relating each resolved requirement's method back to the requirement's
 callable. A nominal override is instantiated at its method's interface:
 `is_eq` at `T, T -> Bool`, `to_hash` at `T, Hasher -> Hasher` with the
 Builtin hasher every runtime hash threads, and `to_inspect` at `T -> Str`. A
@@ -14990,7 +14990,7 @@ check` produces (including `ConstStore` constants and the compile-time object
 cache that evaluation itself uses) are written exactly as `roc check` writes
 them. Lowered output, dev packs, run object caches, optimized packs, and
 recorded program outputs are not written, and the compile-time packs and
-discovery summaries are filed under `roc check`'s publisher whatever the
+discovery summaries are filed where `roc check` files them, whatever the
 command. `roc check`, `roc build`, and `roc run` with `--specialize=no`
 therefore leave identical cache contents for the same sources. `roc test`
 checks its root for explicit test roots (`Validation.explicit_roots`), which is
@@ -17793,7 +17793,7 @@ is reachable through the function's own callable type is not
 `unreachable`. Two edges do this: a value use of a procedure, and the
 construction edge of an expression-position function stored in a containing
 value (`hooks = { shout: |s| s.concat("!") }`), whose instantiated scheme is
-the dispatch scope that function owns. Both publish their record through one
+the dispatch scope that function owns. Both record their evidence through one
 rule (`UnpinnedRecordEvidence.from_callable`). A lambda that a stored
 conditional, match, or block selects has no construction edge and shares its
 variables with the value holding it, yet an importing use copies that value's
@@ -17801,7 +17801,7 @@ type exactly as it copies a construction edge's instance. When its own type
 reaches the receiver of a dispatch plan whose variable checking left
 unquantified, the lambda owns a callable-derived dispatch scope whose schema
 is enumerated over its own type (`collectCallableDerivedSchemes`); the
-lambda's own construction then publishes that scope's evidence, forwarding a
+lambda's own construction then outputs that scope's evidence, forwarding a
 receiver an enclosing scope binds and recording `from_callable` for the
 rest. A template's root function never owns one, and a module with no
 unquantified dispatch receiver walks no types for it. Checker output records a
@@ -22187,7 +22187,7 @@ or not the backend can schedule the loop as one block.
 allocating an output list when the input and output item representations are
 interchangeable in one allocation. Fully concrete items require the same
 stride, allocation alignment class, and refcounted-items header shape.
-Dynamic items additionally require the same element descriptor local and
+Dynamic items additionally require the same item descriptor local and
 therefore the same descriptor behavior. Two distinct dynamic types are not
 interchangeable merely because both are dynamic: their descriptors can
 require different payload layouts and RC header shapes. The hidden header in front of a

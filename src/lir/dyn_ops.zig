@@ -59,7 +59,7 @@ pub fn ownership(op: DynOp) Ownership {
         .copy => |copy| .{ .alias = copy.src },
         .field_addr => |field| .{ .borrow_component = field.base },
         .field_addr_named => |field| .{ .borrow_component = field.base },
-        .list_elem_addr => |elem| .{ .borrow_component = elem.list },
+        .list_item_addr => |elem| .{ .borrow_component = elem.list },
         .box_payload_addr => |payload| .{ .borrow_component = payload.box },
         .tag_payload_addr => |payload| .{ .borrow_component = payload.base },
         .view => |view| .{ .borrow_component = view.address },
@@ -143,7 +143,7 @@ pub const Operands = struct {
                 result.single(field.desc);
                 result.single(field.name);
             },
-            .list_elem_addr => |elem| {
+            .list_item_addr => |elem| {
                 result.single(elem.list);
                 result.single(elem.elem_desc);
                 result.single(elem.index);
@@ -266,7 +266,7 @@ pub fn constructedValues(store: *const LirStore, allocator: std.mem.Allocator, o
         .slot_store => |slot| try out.appendSlice(allocator, &.{ slot.slot, slot.value }),
         .dict_compose => |dict| try appendSpan(store, allocator, dict.captures, out),
         .closure => |closure| try out.append(allocator, closure.capture),
-        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_elem_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .desc_index, .tag_payload_addr, .eq, .hash, .inspect, .call_erased, .view, .numeral, .adapt => unreachable, // only construct operations consume value operands
+        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .desc_index, .tag_payload_addr, .eq, .hash, .inspect, .call_erased, .view, .numeral, .adapt => unreachable, // only construct operations consume value operands
     }
 }
 
@@ -280,7 +280,7 @@ pub fn borrowedValues(store: *const LirStore, allocator: std.mem.Allocator, op: 
         .numeral => {},
         .adapt => |adapt| try out.append(allocator, adapt.src),
         .dict_record => |dict| try appendSpan(store, allocator, dict.methods, out),
-        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_compose, .dict_method, .copy, .field_addr, .field_addr_named, .list_elem_addr, .box_payload_addr, .tag_discriminant_of, .desc_index, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .call_erased, .closure, .view => unreachable, // only borrow_operands operations borrow value operands
+        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_compose, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant_of, .desc_index, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .call_erased, .closure, .view => unreachable, // only borrow_operands operations borrow value operands
     }
 }
 
@@ -289,18 +289,25 @@ fn appendSpan(store: *const LirStore, allocator: std.mem.Allocator, span: LocalS
     for (0..locals.len) |index| try out.append(allocator, LirStore.GuardedList.at(locals, index));
 }
 
+/// The errors `remapOperands` returns: those of `map`, and allocation's.
+fn RemapError(comptime map: anytype) type {
+    const Return = @typeInfo(@TypeOf(map)).@"fn".return_type.?;
+    return @typeInfo(Return).error_union.error_set || std.mem.Allocator.Error;
+}
+
 /// Replace every operand local of `op` through `map` (which may fail),
 /// storing new spans in `store`.
-pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map: anytype) !DynOp {
+pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map: anytype) RemapError(map)!DynOp {
     const Ctx = @TypeOf(context);
+    const Error = RemapError(map);
     const Remap = struct {
-        fn one(ctx: Ctx, local: LocalId) !LocalId {
+        fn one(ctx: Ctx, local: LocalId) Error!LocalId {
             return try map(ctx, local);
         }
-        fn opt(ctx: Ctx, local: ?LocalId) !?LocalId {
+        fn opt(ctx: Ctx, local: ?LocalId) Error!?LocalId {
             return if (local) |value| try map(ctx, value) else null;
         }
-        fn span(s: *LirStore, ctx: Ctx, value: LocalSpan) !LocalSpan {
+        fn span(s: *LirStore, ctx: Ctx, value: LocalSpan) Error!LocalSpan {
             if (value.len == 0) return value;
             var items: std.ArrayList(LocalId) = .empty;
             defer items.deinit(s.allocator);
@@ -351,9 +358,9 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
         .dict_record => |dict| .{ .dict_record = .{ .methods = try Remap.span(store, context, dict.methods) } },
         .dict_method => |method| .{ .dict_method = .{ .dict = try Remap.one(context, method.dict), .index = method.index } },
         .copy => |copy| .{ .copy = .{ .src = try Remap.one(context, copy.src), .desc = try Remap.one(context, copy.desc) } },
-        .field_addr => |field| .{ .field_addr = .{ .base = try Remap.one(context, field.base), .desc = try Remap.one(context, field.desc), .semantic_index = field.semantic_index } },
+        .field_addr => |field| .{ .field_addr = .{ .base = try Remap.one(context, field.base), .desc = try Remap.one(context, field.desc), .field_index = field.field_index } },
         .field_addr_named => |field| .{ .field_addr_named = .{ .base = try Remap.one(context, field.base), .desc = try Remap.one(context, field.desc), .name = try Remap.one(context, field.name) } },
-        .list_elem_addr => |elem| .{ .list_elem_addr = .{ .list = try Remap.one(context, elem.list), .elem_desc = try Remap.one(context, elem.elem_desc), .index = try Remap.one(context, elem.index) } },
+        .list_item_addr => |elem| .{ .list_item_addr = .{ .list = try Remap.one(context, elem.list), .elem_desc = try Remap.one(context, elem.elem_desc), .index = try Remap.one(context, elem.index) } },
         .box_payload_addr => |payload| .{ .box_payload_addr = .{ .box = try Remap.one(context, payload.box), .desc = try Remap.one(context, payload.desc) } },
         .tag_discriminant => |tag| .{ .tag_discriminant = .{ .base = try Remap.one(context, tag.base), .desc = try Remap.one(context, tag.desc) } },
         .tag_discriminant_of => |tag| .{ .tag_discriminant_of = .{ .desc = try Remap.one(context, tag.desc), .name = try Remap.one(context, tag.name) } },

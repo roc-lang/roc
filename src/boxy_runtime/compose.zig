@@ -30,7 +30,6 @@ const Name = desc_mod.Name;
 const Methods = desc_mod.Methods;
 const Kind = desc_mod.Kind;
 const Scalar = desc_mod.Scalar;
-const Flags = desc_mod.Flags;
 
 const pointer_size: u32 = @sizeOf(usize);
 
@@ -431,7 +430,7 @@ pub fn record(cache: *Cache, ops: *RocOps, fields: []const FieldInput) *const Ty
     const members = member_scratch.get(fields.len, ops);
     for (by_name, 0..) |input_index, rank| {
         const field = fields[input_index];
-        members[input_index] = .{ .name = field.name, .desc = field.desc, .semantic_index = @intCast(rank), .is_padding = false };
+        members[input_index] = .{ .name = field.name, .desc = field.desc, .field_index = @intCast(rank), .is_padding = false };
     }
     const built = buildStruct(ops, .record, .structural, members);
     return cache.intern(key, built, ops);
@@ -558,12 +557,12 @@ pub fn declaredRecord(cache: *Cache, ops: *RocOps, fields: []const DeclaredField
     const members = member_scratch.get(fields.len, ops);
     for (by_name, 0..) |named_index, rank| {
         const position = named_positions[named_index];
-        members[position] = .{ .name = fields[position].name, .desc = fields[position].desc, .semantic_index = @intCast(rank), .is_padding = false };
+        members[position] = .{ .name = fields[position].name, .desc = fields[position].desc, .field_index = @intCast(rank), .is_padding = false };
     }
     var padding_rank = named_count;
     for (fields, 0..) |field, position| {
         if (field.is_padding == 0) continue;
-        members[position] = .{ .name = null, .desc = field.desc, .semantic_index = padding_rank, .is_padding = true };
+        members[position] = .{ .name = null, .desc = field.desc, .field_index = padding_rank, .is_padding = true };
         padding_rank += 1;
     }
     const built = buildStruct(ops, .record, .declared, members);
@@ -594,7 +593,7 @@ fn positional(cache: *Cache, ops: *RocOps, comptime tag: KeyTag, descs: []const 
     var member_scratch: Scratch(Member, 32) = .{};
     defer member_scratch.deinit(ops);
     const members = member_scratch.get(descs.len, ops);
-    for (descs, 0..) |d, index| members[index] = .{ .name = null, .desc = d, .semantic_index = @intCast(index), .is_padding = false };
+    for (descs, 0..) |d, index| members[index] = .{ .name = null, .desc = d, .field_index = @intCast(index), .is_padding = false };
     const order: Order = if (tag == .args) .declared else .structural;
     const built = buildStruct(ops, .tuple, order, members);
     return cache.intern(key, built, ops);
@@ -723,7 +722,7 @@ const Order = enum { structural, declared };
 const Member = struct {
     name: ?*const Name,
     desc: *const TypeDesc,
-    semantic_index: u32,
+    field_index: u32,
     is_padding: bool,
 };
 
@@ -758,7 +757,7 @@ fn buildStruct(ops: *RocOps, kind: Kind, order: Order, members: []const Member) 
             const keys = keys_scratch.get(members.len, ops);
             for (members, keys) |member, *key| key.* = .{
                 .sort_key = if (member.is_padding) .align_1 else sortKeyOf(member.desc),
-                .semantic_index = member.semantic_index,
+                .semantic_index = member.field_index,
             };
             field_order.computeStructuralFieldOrder(keys, memory_order);
         },
@@ -777,19 +776,19 @@ fn buildStruct(ops: *RocOps, kind: Kind, order: Order, members: []const Member) 
         });
         if (!member.is_padding) contains_refcounted = contains_refcounted or member.desc.flags.contains_refcounted;
         block.entries[slot] = .{
-            .semantic_index = member.semantic_index,
+            .field_index = member.field_index,
             .offset = offset,
             .is_padding = @intFromBool(member.is_padding),
-            .semantic_order = std.math.maxInt(u32),
+            .field_slot = std.math.maxInt(u32),
             .name = member.name,
             .desc = member.desc,
         };
     }
     for (block.entries[0..members.len], 0..) |entry, slot| {
-        if (entry.semantic_index >= members.len or block.entries[entry.semantic_index].semantic_order != std.math.maxInt(u32)) {
+        if (entry.field_index >= members.len or block.entries[entry.field_index].field_slot != std.math.maxInt(u32)) {
             invariant(ops, "a composed struct's semantic indices are not a permutation of its fields");
         }
-        block.entries[entry.semantic_index].semantic_order = @intCast(slot);
+        block.entries[entry.field_index].field_slot = @intCast(slot);
     }
 
     const metrics = measure.finish();

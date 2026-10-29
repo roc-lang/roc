@@ -34,6 +34,26 @@ const Name = boxy.Name;
 const allocator = std.testing.allocator;
 const StaticDataExport = backend.StaticDataExport;
 const StaticDataRelocation = lir.Program.StaticDataRelocation;
+
+/// The errors these tests' helpers return.
+const TestError = std.mem.Allocator.Error || Interpreter.Error || @import("llvm_compile").Error || object_image.LoadError || error{
+    TestExpectedEqual,
+    TestUnexpectedResult,
+    MissingSymbol,
+    CompilationFailed,
+    UnsupportedLowLevel,
+    EmptyCode,
+    MmapFailed,
+    MprotectFailed,
+    UnsupportedPlatform,
+    UnwindRegistrationFailed,
+    VirtualAllocFailed,
+    VirtualProtectFailed,
+    HostedFunctionTypeMismatch,
+    UnsupportedTarget,
+    WasmExecFailed,
+    MissingEntrypoint,
+};
 const wasm_word_size: u32 = base.target.TargetUsize.u32.size();
 
 fn testName(comptime text: []const u8, comptime id: u32) boxy.Name {
@@ -64,8 +84,10 @@ const Builder = struct {
     proc_locals: std.ArrayList(LocalId) = .empty,
     dynamic: layout_mod.Idx,
     next_identity: u32 = 1,
+    next_join_point: u32 = 0,
+    next_tail_group: u32 = 0,
 
-    fn init(target_usize: base.target.TargetUsize) !Builder {
+    fn init(target_usize: base.target.TargetUsize) TestError!Builder {
         var layouts = try layout_mod.Store.init(allocator, target_usize);
         errdefer layouts.deinit();
         const dynamic = try layouts.insertLayout(layout_mod.Layout.dynamic());
@@ -84,13 +106,13 @@ const Builder = struct {
         self.store.deinit();
     }
 
-    fn local(self: *Builder, layout_idx: layout_mod.Idx) !LocalId {
+    fn local(self: *Builder, layout_idx: layout_mod.Idx) TestError!LocalId {
         const id = try self.store.addLocal(.{ .layout_idx = layout_idx });
         try self.proc_locals.append(allocator, id);
         return id;
     }
 
-    fn dynLocal(self: *Builder, desc: LocalId, storage: LIR.DynStorage) !LocalId {
+    fn dynLocal(self: *Builder, desc: LocalId, storage: LIR.DynStorage) TestError!LocalId {
         const id = try self.store.addLocal(.{ .layout_idx = self.dynamic, .dyn = .{ .desc = desc, .storage = storage } });
         try self.proc_locals.append(allocator, id);
         return id;
@@ -102,7 +124,7 @@ const Builder = struct {
         abi: LIR.ProcAbi = .roc,
         erased_capture_arg: ?LocalId = null,
         tail_group: ?LIR.TailGroupId = null,
-    }) !LirProcSpecId {
+    }) TestError!LirProcSpecId {
         defer self.proc_locals.clearRetainingCapacity();
         self.next_identity += 1;
         return self.store.addProcSpec(.{
@@ -120,25 +142,37 @@ const Builder = struct {
         }, .none);
     }
 
-    fn ret(self: *Builder, value: LocalId) !CFStmtId {
+    fn freshJoinPointId(self: *Builder) LIR.JoinPointId {
+        const id: LIR.JoinPointId = @fromBackingInt(self.next_join_point);
+        self.next_join_point += 1;
+        return id;
+    }
+
+    fn freshTailGroupId(self: *Builder) LIR.TailGroupId {
+        const id: LIR.TailGroupId = @fromBackingInt(self.next_tail_group);
+        self.next_tail_group += 1;
+        return id;
+    }
+
+    fn ret(self: *Builder, value: LocalId) TestError!CFStmtId {
         return self.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     }
 
-    fn literal(self: *Builder, target: LocalId, value: LIR.LiteralValue, next: CFStmtId) !CFStmtId {
+    fn literal(self: *Builder, target: LocalId, value: LIR.LiteralValue, next: CFStmtId) TestError!CFStmtId {
         return self.store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = value, .next = next } }, .test_fixture);
     }
 
-    fn int(self: *Builder, target: LocalId, value: i64, next: CFStmtId) !CFStmtId {
+    fn int(self: *Builder, target: LocalId, value: i64, next: CFStmtId) TestError!CFStmtId {
         return self.literal(target, .{ .i64_literal = .{ .value = value, .layout_idx = self.store.getLocal(target).layout_idx } }, next);
     }
 
-    fn str(self: *Builder, target: LocalId, text: []const u8, next: CFStmtId) !CFStmtId {
+    fn str(self: *Builder, target: LocalId, text: []const u8, next: CFStmtId) TestError!CFStmtId {
         return self.literal(target, .{ .str_literal = try self.store.insertStringView(text, 0, @intCast(text.len)) }, next);
     }
 
     /// `target` = the address of an immortal object (a static descriptor or
     /// name), read as static data.
-    fn static(self: *Builder, target: LocalId, object: StaticObject, next: CFStmtId) !CFStmtId {
+    fn static(self: *Builder, target: LocalId, object: StaticObject, next: CFStmtId) TestError!CFStmtId {
         const id: LIR.StaticDataId = @fromBackingInt(@intCast(self.statics.items.len));
         const cell = try allocator.create(usize);
         cell.* = switch (object) {
@@ -154,7 +188,7 @@ const Builder = struct {
     /// The static data of the wasm program: each slot's word addresses its
     /// object, serialized in the descriptor format at the wasm32 pointer
     /// width (`roc__d{slot}_1`), and a name's text follows (`roc__d{slot}_2`).
-    fn wasmStaticData(self: *Builder) ![]StaticDataExport {
+    fn wasmStaticData(self: *Builder) TestError![]StaticDataExport {
         var exports: std.ArrayList(StaticDataExport) = .empty;
         errdefer {
             for (exports.items) |item| freeExport(item);
@@ -187,7 +221,7 @@ const Builder = struct {
     }
 
     /// A pointer-sized word holding the address of `target`.
-    fn wordExport(symbol_name: []u8, target: []const u8) !StaticDataExport {
+    fn wordExport(symbol_name: []u8, target: []const u8) TestError!StaticDataExport {
         const relocations = try allocator.alloc(StaticDataRelocation, 1);
         errdefer allocator.free(relocations);
         relocations[0] = .{ .offset = 0, .target_symbol_name = target };
@@ -204,7 +238,7 @@ const Builder = struct {
 
     /// A leaf descriptor (one without children) at the wasm32 width: a
     /// `Str` is three words there, every other leaf keeps its native size.
-    fn descExport(symbol_name: []u8, desc: *const TypeDesc) !StaticDataExport {
+    fn descExport(symbol_name: []u8, desc: *const TypeDesc) TestError!StaticDataExport {
         std.debug.assert(desc.child == null and desc.entries == null and desc.name == null and desc.methods == null);
         const desc_layout = TypeDesc.layout(.u32);
         const bytes = try allocator.alloc(u8, desc_layout.size);
@@ -227,7 +261,7 @@ const Builder = struct {
         };
     }
 
-    fn nameExport(symbol_name: []u8, text_symbol: []const u8, name: *const Name) !StaticDataExport {
+    fn nameExport(symbol_name: []u8, text_symbol: []const u8, name: *const Name) TestError!StaticDataExport {
         const name_layout = boxy.desc.externLayout(Name, .u32);
         const bytes = try allocator.alloc(u8, name_layout.size);
         errdefer allocator.free(bytes);
@@ -257,16 +291,16 @@ const Builder = struct {
         allocator.free(exports);
     }
 
-    fn dyn(self: *Builder, target: ?LocalId, op: DynOp, next: CFStmtId) !CFStmtId {
+    fn dyn(self: *Builder, target: ?LocalId, op: DynOp, next: CFStmtId) TestError!CFStmtId {
         return self.store.addDynStmt(target, op, next, .test_fixture);
     }
 
-    fn call(self: *Builder, target: LocalId, proc_id: LirProcSpecId, args: []const LocalId, next: CFStmtId) !CFStmtId {
+    fn call(self: *Builder, target: LocalId, proc_id: LirProcSpecId, args: []const LocalId, next: CFStmtId) TestError!CFStmtId {
         return self.store.addCFStmt(.{ .assign_call = .{ .target = target, .proc = proc_id, .args = try self.store.addLocalSpan(args), .next = next } }, .test_fixture);
     }
 
     /// A call that replaces this procedure's frame with the callee's.
-    fn tailCall(self: *Builder, target: LocalId, proc_id: LirProcSpecId, args: []const LocalId, next: CFStmtId) !CFStmtId {
+    fn tailCall(self: *Builder, target: LocalId, proc_id: LirProcSpecId, args: []const LocalId, next: CFStmtId) TestError!CFStmtId {
         return self.store.addCFStmt(.{ .assign_call = .{
             .target = target,
             .proc = proc_id,
@@ -276,7 +310,7 @@ const Builder = struct {
         } }, .test_fixture);
     }
 
-    fn lowLevel(self: *Builder, target: LocalId, op: base.LowLevel, args: []const LocalId, dyn_elem_desc: bool, next: CFStmtId) !CFStmtId {
+    fn lowLevel(self: *Builder, target: LocalId, op: base.LowLevel, args: []const LocalId, dyn_elem_desc: bool, next: CFStmtId) TestError!CFStmtId {
         return self.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
@@ -287,11 +321,11 @@ const Builder = struct {
         } }, .test_fixture);
     }
 
-    fn setLocal(self: *Builder, target: LocalId, value: LocalId, mode: LIR.SetLocalWriteMode, next: CFStmtId) !CFStmtId {
+    fn setLocal(self: *Builder, target: LocalId, value: LocalId, mode: LIR.SetLocalWriteMode, next: CFStmtId) TestError!CFStmtId {
         return self.store.addCFStmt(.{ .set_local = .{ .target = target, .value = value, .mode = mode, .next = next } }, .test_fixture);
     }
 
-    fn decref(self: *Builder, value: LocalId, next: CFStmtId) !CFStmtId {
+    fn decref(self: *Builder, value: LocalId, next: CFStmtId) TestError!CFStmtId {
         return self.store.addCFStmt(.{ .decref = .{
             .value = value,
             .rc = .{ .concrete = .{ .op = .decref, .layout_idx = self.store.getLocal(value).layout_idx } },
@@ -299,7 +333,7 @@ const Builder = struct {
         } }, .test_fixture);
     }
 
-    fn span(self: *Builder, locals: []const LocalId) !LIR.LocalSpan {
+    fn span(self: *Builder, locals: []const LocalId) TestError!LIR.LocalSpan {
         return self.store.addLocalSpan(locals);
     }
 };
@@ -310,7 +344,7 @@ const Run = struct {
     interpreter: Interpreter,
     builder: *Builder,
 
-    fn init(self: *Run, b: *Builder) !void {
+    fn init(self: *Run, b: *Builder) TestError!void {
         self.builder = b;
         self.env = RuntimeHostEnv.init(allocator);
         self.static_strings = try Interpreter.buildStaticStrings(allocator, &b.store);
@@ -326,7 +360,7 @@ const Run = struct {
 
     /// The interpreter's result, after checking the LLVM and dev backends'
     /// match it.
-    fn eval(self: *Run, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx) !Interpreter.EvalResult {
+    fn eval(self: *Run, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx) TestError!Interpreter.EvalResult {
         const result = try self.interpreter.eval(.{ .proc_id = proc_id, .ret_layout = ret_layout });
         try self.expectSame(result, ret_layout, try self.runLlvm(proc_id, ret_layout));
         if (comptime !backend.host_lir_codegen_available) return result;
@@ -336,7 +370,7 @@ const Run = struct {
 
     /// Check a backend's result bytes against the interpreter's, and release
     /// them.
-    fn expectSame(self: *Run, result: Interpreter.EvalResult, ret_layout: layout_mod.Idx, bytes: []align(16) u8) !void {
+    fn expectSame(self: *Run, result: Interpreter.EvalResult, ret_layout: layout_mod.Idx, bytes: []align(16) u8) TestError!void {
         defer allocator.free(bytes);
         const size = self.builder.layouts.layoutSize(self.builder.layouts.getLayout(ret_layout));
         if (ret_layout == .str) {
@@ -349,7 +383,7 @@ const Run = struct {
     }
 
     /// Zeroed storage for a result of `ret_layout`.
-    fn resultBytes(self: *Run, ret_layout: layout_mod.Idx) ![]align(16) u8 {
+    fn resultBytes(self: *Run, ret_layout: layout_mod.Idx) TestError![]align(16) u8 {
         const size = self.builder.layouts.layoutSize(self.builder.layouts.getLayout(ret_layout));
         const bytes = try allocator.alignedAlloc(u8, .@"16", @max(size, 1));
         @memset(bytes, 0);
@@ -358,7 +392,7 @@ const Run = struct {
 
     /// Compile every procedure with the LLVM backend and run `proc_id` in
     /// this process, returning its result bytes.
-    fn runLlvm(self: *Run, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx) ![]align(16) u8 {
+    fn runLlvm(self: *Run, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx) TestError![]align(16) u8 {
         const llvm_compile = @import("llvm_compile");
         const b = self.builder;
         const entrypoints = [_]llvm_compile.MonoLlvmCodeGen.Entrypoint{.{
@@ -393,7 +427,7 @@ const Run = struct {
 
     /// Compile every procedure with the dev backend and run `proc_id` in this
     /// process, returning its result bytes.
-    fn runDev(self: *Run, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx) ![]align(16) u8 {
+    fn runDev(self: *Run, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx) TestError![]align(16) u8 {
         const b = self.builder;
         var static_strings = try backend.StaticStringData.build(allocator, &b.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
         defer static_strings.deinit();
@@ -426,7 +460,7 @@ fn readStr(value: anytype) []const u8 {
 /// Compile every procedure of the wasm32-width program `b` with the wasm
 /// backend, run `proc_id` on bytebox, and return its result: a string's
 /// text, or a scalar's little-endian bytes. The caller owns the bytes.
-fn runWasm(b: *Builder, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx) ![]u8 {
+fn runWasm(b: *Builder, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx) TestError![]u8 {
     std.debug.assert(b.layouts.targetUsize() == .u32);
     var codegen = backend.wasm.WasmCodeGen.init(allocator, &b.store, &b.layouts, .default);
     defer codegen.deinit();
@@ -446,7 +480,7 @@ fn runWasm(b: *Builder, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx) ![]u
     return WasmRunner.runWasmRaw(allocator, generated.wasm_bytes, generated.heap_base, generated.has_imports, shape);
 }
 
-fn expectWasmInt(b: *Builder, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx, expected: i64) !void {
+fn expectWasmInt(b: *Builder, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx, expected: i64) TestError!void {
     const bytes = try runWasm(b, proc_id, ret_layout);
     defer allocator.free(bytes);
     const actual: i64 = switch (bytes.len) {
@@ -457,7 +491,7 @@ fn expectWasmInt(b: *Builder, proc_id: LirProcSpecId, ret_layout: layout_mod.Idx
     try std.testing.expectEqual(expected, actual);
 }
 
-fn expectWasmStr(b: *Builder, proc_id: LirProcSpecId, expected: []const u8) !void {
+fn expectWasmStr(b: *Builder, proc_id: LirProcSpecId, expected: []const u8) TestError!void {
     const text = try runWasm(b, proc_id, .str);
     defer allocator.free(text);
     try std.testing.expectEqualStrings(expected, text);
@@ -465,7 +499,7 @@ fn expectWasmStr(b: *Builder, proc_id: LirProcSpecId, expected: []const u8) !voi
 
 /// `id : a -> a`, lowered once: its parameter is the caller's storage and its
 /// result is written to the storage the caller passes.
-fn buildIdentity(b: *Builder) !LirProcSpecId {
+fn buildIdentity(b: *Builder) TestError!LirProcSpecId {
     const desc = try b.local(.opaque_ptr);
     const x = try b.dynLocal(desc, .param);
     const result = try b.dynLocal(desc, .result);
@@ -476,7 +510,7 @@ const IdentityProgram = struct {
     int_proc: LirProcSpecId,
     str_proc: LirProcSpecId,
 
-    fn build(b: *Builder) !IdentityProgram {
+    fn build(b: *Builder) TestError!IdentityProgram {
         const id = try buildIdentity(b);
 
         const int_desc = try b.local(.opaque_ptr);
@@ -529,7 +563,7 @@ const RecordFixture = struct {
 
     /// Statements composing the descriptor and building the record, then
     /// `next`.
-    fn build(b: *Builder, next_after: fn (*Builder, RecordFixture) anyerror!CFStmtId) !CFStmtId {
+    fn build(b: *Builder, next_after: fn (*Builder, RecordFixture) TestError!CFStmtId) TestError!CFStmtId {
         const int_desc = try b.local(.opaque_ptr);
         const str_desc = try b.local(.opaque_ptr);
         const a = try b.local(.opaque_ptr);
@@ -557,9 +591,9 @@ const RecordReadProgram = struct {
     int_proc: LirProcSpecId,
     str_proc: LirProcSpecId,
 
-    fn build(b: *Builder) !RecordReadProgram {
+    fn build(b: *Builder) TestError!RecordReadProgram {
         const ReadInt = struct {
-            fn next(builder: *Builder, f: RecordFixture) anyerror!CFStmtId {
+            fn next(builder: *Builder, f: RecordFixture) TestError!CFStmtId {
                 const a = try builder.local(.opaque_ptr);
                 const out = try builder.local(.i64);
                 return builder.static(a, .{ .name = &name_a }, try builder.dyn(out, .{ .field_addr_named = .{ .base = f.record, .desc = f.record_desc, .name = a } }, try builder.ret(out)));
@@ -568,11 +602,11 @@ const RecordReadProgram = struct {
         const int_proc = try b.proc(&.{}, try RecordFixture.build(b, ReadInt.next), .i64, .{});
 
         const ReadStr = struct {
-            fn next(builder: *Builder, f: RecordFixture) anyerror!CFStmtId {
+            fn next(builder: *Builder, f: RecordFixture) TestError!CFStmtId {
                 const field_desc = try builder.local(.opaque_ptr);
                 const view = try builder.dynLocal(field_desc, .view);
                 const out = try builder.local(.str);
-                return builder.static(field_desc, .{ .desc = boxy.compose.strDesc() }, try builder.dyn(view, .{ .field_addr = .{ .base = f.record, .desc = f.record_desc, .semantic_index = 1 } }, try builder.dyn(out, .{ .copy = .{ .src = view, .desc = field_desc } }, try builder.ret(out))));
+                return builder.static(field_desc, .{ .desc = boxy.compose.strDesc() }, try builder.dyn(view, .{ .field_addr = .{ .base = f.record, .desc = f.record_desc, .field_index = 1 } }, try builder.dyn(out, .{ .copy = .{ .src = view, .desc = field_desc } }, try builder.ret(out))));
             }
         };
         const str_proc = try b.proc(&.{}, try RecordFixture.build(b, ReadStr.next), .str, .{});
@@ -606,9 +640,9 @@ const RecordValueProgram = struct {
     hash_proc: LirProcSpecId,
     inspect_proc: LirProcSpecId,
 
-    fn build(b: *Builder) !RecordValueProgram {
+    fn build(b: *Builder) TestError!RecordValueProgram {
         const Eq = struct {
-            fn next(builder: *Builder, f: RecordFixture) anyerror!CFStmtId {
+            fn next(builder: *Builder, f: RecordFixture) TestError!CFStmtId {
                 const out = try builder.local(.bool);
                 return builder.dyn(out, .{ .eq = .{ .lhs = f.record, .rhs = f.record, .desc = f.record_desc } }, try builder.ret(out));
             }
@@ -616,7 +650,7 @@ const RecordValueProgram = struct {
         const eq_proc = try b.proc(&.{}, try RecordFixture.build(b, Eq.next), .bool, .{});
 
         const Hash = struct {
-            fn next(builder: *Builder, f: RecordFixture) anyerror!CFStmtId {
+            fn next(builder: *Builder, f: RecordFixture) TestError!CFStmtId {
                 const seed = try builder.local(.u64);
                 const out = try builder.local(.u64);
                 return builder.int(seed, 99, try builder.dyn(out, .{ .hash = .{ .hasher = seed, .value = f.record, .desc = f.record_desc } }, try builder.ret(out)));
@@ -625,7 +659,7 @@ const RecordValueProgram = struct {
         const hash_proc = try b.proc(&.{}, try RecordFixture.build(b, Hash.next), .u64, .{});
 
         const Inspect = struct {
-            fn next(builder: *Builder, f: RecordFixture) anyerror!CFStmtId {
+            fn next(builder: *Builder, f: RecordFixture) TestError!CFStmtId {
                 const out = try builder.local(.str);
                 return builder.dyn(out, .{ .inspect = .{ .value = f.record, .desc = f.record_desc } }, try builder.ret(out));
             }
@@ -669,7 +703,7 @@ test "boxy wasm: eq, hash, and inspect of a dynamic record" {
 
 /// Procedures reading a tag union's discriminant, a tag's discriminant
 /// under its descriptor, and a payload, in that order.
-fn buildTagUnionProgram(b: *Builder) ![3]LirProcSpecId {
+fn buildTagUnionProgram(b: *Builder) TestError![3]LirProcSpecId {
     const Proc = enum { discriminant, discriminant_of, payload };
     var procs: [3]LirProcSpecId = undefined;
     inline for (.{ Proc.discriminant, Proc.discriminant_of, Proc.payload }, 0..) |which, index| {
@@ -729,7 +763,7 @@ test "boxy wasm: a tag union's discriminant and payload" {
 }
 
 /// acc = 5; i = 3; loop { if i == 0 then return acc else i -= 1; acc = acc }
-fn buildJoinProgram(b: *Builder) !LirProcSpecId {
+fn buildJoinProgram(b: *Builder) TestError!LirProcSpecId {
     const desc = try b.local(.opaque_ptr);
     const start = try b.local(.i64);
     const acc = try b.dynLocal(desc, .frame);
@@ -738,7 +772,7 @@ fn buildJoinProgram(b: *Builder) !LirProcSpecId {
     const one = try b.local(.i64);
     const next_i = try b.local(.i64);
     const out = try b.local(.i64);
-    const join_id: LIR.JoinPointId = @fromBackingInt(0);
+    const join_id = b.freshJoinPointId();
 
     const jump = try b.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const step = try b.int(one, 1, try b.lowLevel(next_i, .num_int_sub_wrap, &.{ i, one }, false, try b.setLocal(i, next_i, .replace_existing, try b.setLocal(acc, acc, .replace_existing, jump))));
@@ -774,7 +808,7 @@ test "boxy wasm: a dynamic join parameter carried around a loop" {
 }
 
 /// Procedures taking a two-string list's length and its second element.
-fn buildListProgram(b: *Builder) ![2]LirProcSpecId {
+fn buildListProgram(b: *Builder) TestError![2]LirProcSpecId {
     const ListProc = enum { len, get };
     var procs: [2]LirProcSpecId = undefined;
     inline for (.{ ListProc.len, ListProc.get }, 0..) |which, index| {
@@ -826,14 +860,14 @@ test "boxy wasm: list operations through an element descriptor" {
 
 /// A caller of `\(x) -> x`, a worker over a type variable whose descriptor
 /// is its one capture, through a composed dictionary record.
-fn buildDictionaryProgram(b: *Builder) !LirProcSpecId {
+fn buildDictionaryProgram(b: *Builder) TestError!LirProcSpecId {
     const capture = try b.local(.opaque_ptr);
     const elem_desc = try b.local(.opaque_ptr);
     const args_desc = try b.local(.opaque_ptr);
     const args = try b.dynLocal(args_desc, .param);
     const x = try b.dynLocal(elem_desc, .view);
     const result = try b.dynLocal(elem_desc, .result);
-    const worker_body = try b.lowLevel(elem_desc, .erased_capture_load, &.{capture}, false, try b.dyn(args_desc, .{ .desc_args = .{ .elems = try b.span(&.{elem_desc}) } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .semantic_index = 0 } }, try b.ret(x))));
+    const worker_body = try b.lowLevel(elem_desc, .erased_capture_load, &.{capture}, false, try b.dyn(args_desc, .{ .desc_args = .{ .elems = try b.span(&.{elem_desc}) } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .field_index = 0 } }, try b.ret(x))));
     const worker = try b.proc(&.{ args, capture }, worker_body, b.dynamic, .{ .dyn_result = result, .abi = .erased_record, .erased_capture_arg = capture });
 
     const record_layout = try b.layouts.putTuple(&.{b.layouts.getLayout(.i64)});
@@ -872,8 +906,8 @@ const TailProgram = struct {
     int_proc: LirProcSpecId,
     str_proc: LirProcSpecId,
 
-    fn build(b: *Builder) !TailProgram {
-        const group: LIR.TailGroupId = @fromBackingInt(@intCast(0));
+    fn build(b: *Builder) TestError!TailProgram {
+        const group = b.freshTailGroupId();
 
         // `leaf(x) = x`, entered by a frame-replacing call.
         const leaf_desc = try b.local(.opaque_ptr);

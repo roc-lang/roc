@@ -37,6 +37,9 @@ const NamedTy = struct { name: []const u8, ty: Ty };
 const DeclaredTy = struct { name: ?[]const u8, ty: Ty };
 const TagTy = struct { name: []const u8, payloads: []const Ty };
 
+/// The errors these tests' helpers return.
+const TestError = std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult };
+
 const Builder = struct {
     store: *Store,
     test_env: *builtins.utils.TestEnv,
@@ -48,7 +51,7 @@ const Builder = struct {
         return self.test_env.getOps();
     }
 
-    fn name(self: *Builder, text: []const u8) !*const Name {
+    fn name(self: *Builder, text: []const u8) TestError!*const Name {
         if (self.names.get(text)) |existing| return existing;
         const created = try self.arena.create(Name);
         created.* = .{ .id = self.names.count(), .len = @intCast(text.len), .bytes = text.ptr };
@@ -57,7 +60,7 @@ const Builder = struct {
     }
 
     /// Each name's rank in byte-wise text order among `names`.
-    fn ranks(self: *Builder, names: []const []const u8) ![]u32 {
+    fn ranks(self: *Builder, names: []const []const u8) TestError![]u32 {
         const order = try self.arena.alloc(u32, names.len);
         for (order, 0..) |*slot, index| slot.* = @intCast(index);
         std.mem.sort(u32, order, names, struct {
@@ -70,7 +73,7 @@ const Builder = struct {
         return result;
     }
 
-    fn desc(self: *Builder, ty: Ty) !*const TypeDesc {
+    fn desc(self: *Builder, ty: Ty) TestError!*const TypeDesc {
         return switch (ty) {
             .scalar => |scalar| compose.scalarDesc(scalar),
             .str => compose.strDesc(),
@@ -108,7 +111,7 @@ const Builder = struct {
         };
     }
 
-    fn layoutOf(self: *Builder, ty: Ty) !Idx {
+    fn layoutOf(self: *Builder, ty: Ty) TestError!Idx {
         return switch (ty) {
             .scalar => |scalar| switch (scalar) {
                 inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .opaque_ptr => |s| @field(Idx, @tagName(s)),
@@ -175,7 +178,7 @@ const Builder = struct {
 
     /// Require the composed descriptor and the committed layout to describe
     /// the same memory shape.
-    fn expectSame(self: *Builder, d: *const TypeDesc, idx: Idx) !void {
+    fn expectSame(self: *Builder, d: *const TypeDesc, idx: Idx) TestError!void {
         const l = self.store.getLayout(idx);
         try testing.expectEqual(self.store.layoutSize(l), d.size);
         try testing.expectEqual(@as(u32, @intCast(l.alignment(target_usize).toByteUnits())), d.alignment);
@@ -190,7 +193,7 @@ const Builder = struct {
                 try testing.expectEqual(self.store.getStructData(struct_idx).fields.count, @as(u32, @intCast(fields.len)));
                 for (fields, 0..) |field, slot| {
                     const committed = self.store.getStructField(struct_idx, @intCast(slot));
-                    try testing.expectEqual(committed.index, field.semantic_index);
+                    try testing.expectEqual(committed.index, field.field_index);
                     try testing.expectEqual(committed.is_padding, field.is_padding != 0);
                     try testing.expectEqual(self.store.getStructFieldOffset(struct_idx, @intCast(slot)), field.offset);
                     try self.expectSame(field.desc, committed.layout);

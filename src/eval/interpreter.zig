@@ -8715,7 +8715,7 @@ pub const Interpreter = struct {
                 }
             },
             .field_addr => |f| {
-                const field = try self.fieldBySemanticIndex(try self.descAt(frame, f.desc), f.semantic_index);
+                const field = try self.fieldBySemanticIndex(try self.descAt(frame, f.desc), f.field_index);
                 try self.setComponentTarget(frame, stmt_id, target, boxy.compiled.componentAddr(field.desc, (try self.localBytes(frame, f.base)) + field.offset));
             },
             .field_addr_named => |f| {
@@ -8728,7 +8728,7 @@ pub const Interpreter = struct {
                 } else return self.invariantFailedError("LIR/interpreter invariant violated: field {s} is not in its record's descriptor", .{name.text()});
                 try self.setComponentTarget(frame, stmt_id, target, boxy.compiled.componentAddr(field.desc, (try self.localBytes(frame, f.base)) + field.offset));
             },
-            .list_elem_addr => |e| {
+            .list_item_addr => |e| {
                 const elem = try self.descAt(frame, e.elem_desc);
                 const list = valueToRocList(.{ .ptr = try self.localBytes(frame, e.list) });
                 const index = (try self.getLocalChecked(frame, e.index)).read(u64);

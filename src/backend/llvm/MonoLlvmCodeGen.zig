@@ -11835,14 +11835,14 @@ pub const MonoLlvmCodeGen = struct {
             .field_addr => |f| try self.bindComponentAddress(target, try self.callBoxyRuntime("roc_desc_field_addr", ptr_ty, &.{ ptr_ty, ptr_ty, .i32 }, &.{
                 try self.wordValue(f.desc),
                 try self.bytesAddress(f.base),
-                try self.intValue(.i32, f.semantic_index),
+                try self.intValue(.i32, f.field_index),
             })),
             .field_addr_named => |f| try self.bindComponentAddress(target, try self.callBoxyRuntime("roc_desc_field_addr_named", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty }, &.{
                 try self.wordValue(f.desc),
                 try self.bytesAddress(f.base),
                 try self.wordValue(f.name),
             })),
-            .list_elem_addr => |e| try self.bindComponentAddress(target, try self.callBoxyRuntime("roc_desc_list_elem_addr", ptr_ty, &.{ ptr_ty, ptr_ty, .i64 }, &.{
+            .list_item_addr => |e| try self.bindComponentAddress(target, try self.callBoxyRuntime("roc_desc_list_item_addr", ptr_ty, &.{ ptr_ty, ptr_ty, .i64 }, &.{
                 try self.wordValue(e.elem_desc),
                 try self.bytesAddress(e.list),
                 try self.loadLocalScalar(e.index, .u64),

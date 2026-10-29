@@ -88,10 +88,10 @@ fn writeDiscriminant(desc: *const TypeDesc, bytes: [*]u8, discriminant: u32) voi
 
 // Component addresses.
 
-pub fn fieldAddr(desc: *const TypeDesc, base: [*]u8, semantic_index: u32, ops: *RocOps) [*]u8 {
+pub fn fieldAddr(desc: *const TypeDesc, base: [*]u8, field_index: u32, ops: *RocOps) [*]u8 {
     const record = recordOf(desc, ops);
-    if (semantic_index >= record.count) invariant(ops, "a field index past its record's fields");
-    const field = record.fieldBySemanticIndex(semantic_index);
+    if (field_index >= record.count) invariant(ops, "a field index past its record's fields");
+    const field = record.fieldBySemanticIndex(field_index);
     return componentAddr(field.desc, base + field.offset);
 }
 
@@ -304,7 +304,7 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
                 for (t.fields()) |*to_field| {
                     if (to_field.is_padding != 0) continue;
                     // Fields match by name, tuple elements by position.
-                    const from_field: ?*const Field = if (t.kind == .tuple) f.fieldBySemanticIndex(to_field.semantic_index) else for (f.fields()) |*candidate| {
+                    const from_field: ?*const Field = if (t.kind == .tuple) f.fieldBySemanticIndex(to_field.field_index) else for (f.fields()) |*candidate| {
                         if (candidate.name != null and candidate.name.?.id == to_field.name.?.id) break candidate;
                     } else null;
                     if (from_field) |source| {

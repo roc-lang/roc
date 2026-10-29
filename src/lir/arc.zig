@@ -5123,18 +5123,6 @@ const Inserter = struct {
         return current;
     }
 
-    fn retainSpanExcept(self: *Inserter, span: LIR.LocalSpan, skip_mask: u64, cause: RcCause, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
-        var current = next;
-        const locals = self.store.getLocalSpan(span);
-        var i = locals.len;
-        while (i > 0) {
-            i -= 1;
-            if (i < 64 and (skip_mask & argMaskBit(i)) != 0) continue;
-            current = try self.retainLocalIfRc(GuardedList.at(locals, i), cause, current);
-        }
-        return current;
-    }
-
     fn retainPlanned(self: *Inserter, stmt: LIR.CFStmtId, retains: []const PreRetain, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         var current = next;
         var i = retains.len;
@@ -8502,54 +8490,6 @@ const ArcTest = struct {
                 .crash,
                 => if (fixtureTerminal(stmt.*)) error.ExpectedConditionalDecref else error.NonLinearPath,
             };
-        }
-        return error.CyclicPath;
-    }
-
-    fn expectReachableDecrefBeforeSet(
-        self: *const ArcTest,
-        start: LIR.CFStmtId,
-        value: LIR.LocalId,
-        set_target: LIR.LocalId,
-    ) error{ ExpectedDecref, SetBeforeDecref, NonLinearPath, CyclicPath }!void {
-        var cursor = start;
-        var remaining = self.store.cfStmtCount() + 1;
-        while (remaining > 0) : (remaining -= 1) {
-            const stmt = self.store.getCFStmtImmediate(cursor);
-            switch (stmt.*) {
-                .decref => |rc| if (rc.value == value) return,
-                .set_local => |set| if (set.target == set_target) return error.SetBeforeDecref,
-                .init_uninitialized,
-                .assign_ref,
-                .assign_literal,
-                .assign_call,
-                .assign_call_erased,
-                .assign_packed_erased_fn,
-                .assign_low_level,
-                .assign_list,
-                .assign_struct,
-                .assign_tag,
-                .store_struct,
-                .store_tag,
-                .debug,
-                .expect,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .incref,
-                .decref_if_initialized,
-                .free,
-                .switch_stmt,
-                .switch_initialized_payload,
-                .str_match,
-                .str_match_set,
-                .join,
-                .jump,
-                .ret,
-                .crash,
-                => {},
-            }
-            cursor = body_clone.linearNextOrNull(stmt.*) orelse return if (fixtureTerminal(stmt.*)) error.ExpectedDecref else error.NonLinearPath;
         }
         return error.CyclicPath;
     }
@@ -17374,7 +17314,7 @@ test "ARC dyn field view returned through a copy is retained and its base releas
     const result = try d.value(field_desc, .result);
     const ret = try d.f.ret(result);
     const copy = try d.op(result, .{ .copy = .{ .src = view, .desc = field_desc } }, ret);
-    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .semantic_index = 0 } }, copy);
+    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .field_index = 0 } }, copy);
     const proc = try d.proc(&.{ desc, field_desc, param }, read, d.dynamic, result);
     try d.run(&.{proc});
     // The field borrows from the record until one retain gives the result

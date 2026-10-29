@@ -17288,7 +17288,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .field_addr => |f| {
                     try self.addWordArg(&builder, f.desc);
                     try self.addBytesArg(&builder, f.base);
-                    try builder.addImmArg(f.semantic_index);
+                    try builder.addImmArg(f.field_index);
                     try self.callBoxyRuntime(&builder, "roc_desc_field_addr");
                     try self.bindComponentAddress(dst_local);
                 },
@@ -17299,11 +17299,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBoxyRuntime(&builder, "roc_desc_field_addr_named");
                     try self.bindComponentAddress(dst_local);
                 },
-                .list_elem_addr => |e| {
+                .list_item_addr => |e| {
                     try self.addWordArg(&builder, e.elem_desc);
                     try self.addBytesArg(&builder, e.list);
                     try self.addWordArg(&builder, e.index);
-                    try self.callBoxyRuntime(&builder, "roc_desc_list_elem_addr");
+                    try self.callBoxyRuntime(&builder, "roc_desc_list_item_addr");
                     try self.bindComponentAddress(dst_local);
                 },
                 .box_payload_addr => |b| {
@@ -21729,17 +21729,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .epilogue_offset = epilogue_offset,
                 .uses_frame_pointer = true,
             };
-        }
-
-        fn paramSlotForLocal(
-            param_refs: lir.LirStore.StoreSpanBorrow(lir.LIR.LocalId, "local_ids"),
-            param_slots: []const ?i32,
-            local: lir.LIR.LocalId,
-        ) ?i32 {
-            for (0..GuardedList.borrowLen(param_refs)) |i| {
-                if (GuardedList.at(param_refs, i) == local) return param_slots[i];
-            }
-            return null;
         }
 
         const EntrypointArgOrder = struct {

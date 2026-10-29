@@ -253,14 +253,14 @@ pub const StaticDescs = struct {
     /// An immortal erased callable of `override`'s entry whose capture is
     /// the descriptors of its scheme's types then its dictionaries, one word
     /// each. Each dictionary is resolved from its dispatcher's closed type
-    /// (`Program.resolveObligation`) into a static callable of its own,
-    /// with an explicit stack for the obligations of the method targets
+    /// (`Program.resolveRequirement`) into a static callable of its own,
+    /// with an explicit stack for the requirements of the method targets
     /// that resolve them.
     fn staticCallable(self: *StaticDescs, owner: u32, index: u32, override: @FieldType(lower.NominalOverride, "procedure")) Allocator.Error!ExportIndex {
         const Frame = struct {
             proc: LIR.LirProcSpecId,
             module: types.ModuleIndex,
-            obligations: []const lower.DictObligation,
+            requirements: []const lower.DictRequirement,
             words: std.ArrayList(CaptureWord),
             next: usize,
         };
@@ -271,11 +271,11 @@ pub const StaticDescs = struct {
         }
         const program_ = self.program();
         const root_entry = program_.worker(override.entry).*;
-        try frames.append(self.allocator, .{ .proc = root_entry.proc, .module = root_entry.module, .obligations = override.dicts, .words = .empty, .next = 0 });
+        try frames.append(self.allocator, .{ .proc = root_entry.proc, .module = root_entry.module, .requirements = override.dicts, .words = .empty, .next = 0 });
         for (override.bound) |ty| try frames.items[0].words.append(self.allocator, .{ .desc = ty });
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
-            if (frame.next == frame.obligations.len) {
+            if (frame.next == frame.requirements.len) {
                 var done = frames.pop().?;
                 defer done.words.deinit(self.allocator);
                 // Each node index past the slot's own names one callable.
@@ -288,10 +288,10 @@ pub const StaticDescs = struct {
                 try frames.items[frames.items.len - 1].words.append(self.allocator, .{ .callable = callable });
                 continue;
             }
-            const obligation = frame.obligations[frame.next];
+            const requirement = frame.requirements[frame.next];
             frame.next += 1;
             const module = frame.module;
-            switch (try program_.resolveObligation(obligation)) {
+            switch (try program_.resolveRequirement(requirement)) {
                 .structural => |structural| {
                     self.extra_nodes += 1;
                     const worker = program_.worker(try program_.structuralWorker(module, structural.method)).*;
@@ -304,14 +304,14 @@ pub const StaticDescs = struct {
                     const callable = try self.staticCallableOf(owner, 16 + self.extra_nodes, worker.proc, &.{});
                     try frames.items[frames.items.len - 1].words.append(self.allocator, .{ .callable = callable });
                 },
-                .derived => types.invariant("a closed nominal's override obligation names a derived codec or map, which checking records with its plan at the dispatch it serves"),
+                .derived => types.invariant("a closed nominal's override requirement names a derived codec or map, which checking records with its plan at the dispatch it serves"),
                 .scope_variable => types.invariant("a closed nominal's override names a scope variable"),
                 .target => |target| {
-                    const instance = try program_.targetAt(target, obligation.callable);
+                    const instance = try program_.targetAt(target, requirement.callable);
                     const entry = program_.worker(try program_.methodEntryWorker(target)).*;
                     var words: std.ArrayList(CaptureWord) = .empty;
                     for (instance.bound) |ty| try words.append(self.allocator, .{ .desc = ty });
-                    try frames.append(self.allocator, .{ .proc = entry.proc, .module = entry.module, .obligations = instance.obligations, .words = words, .next = 0 });
+                    try frames.append(self.allocator, .{ .proc = entry.proc, .module = entry.module, .requirements = instance.requirements, .words = words, .next = 0 });
                 },
             }
         }
@@ -550,11 +550,11 @@ pub const StaticDescs = struct {
                 const field = layouts.getStructField(struct_idx, position);
                 const base_offset = position * field_layout.size;
                 const bytes = @constCast(self.exports.items[entries].bytes);
-                writeU32(bytes, base_offset + field_layout.of(.semantic_index), field.index);
+                writeU32(bytes, base_offset + field_layout.of(.field_index), field.index);
                 writeU32(bytes, base_offset + field_layout.of(.offset), layouts.getStructFieldOffset(struct_idx, position));
                 writeU32(bytes, base_offset + field_layout.of(.is_padding), @intFromBool(field.is_padding));
                 // The entry at memory position `field.index` names this slot.
-                writeU32(bytes, field.index * field_layout.size + field_layout.of(.semantic_order), position);
+                writeU32(bytes, field.index * field_layout.size + field_layout.of(.field_slot), position);
                 const component = storage[field.index];
                 try entry_pointers.append(self.allocator, .{ .offset = base_offset + field_layout.of(.desc), .target = try self.componentNode(component, field.layout) });
                 if (names) |record_fields| {
@@ -562,12 +562,12 @@ pub const StaticDescs = struct {
                 }
             }
         } else {
-            // Every field is zero-sized: each sits at offset 0, in semantic order.
+            // Every field is zero-sized: each sits at offset 0, in checked field order.
             for (storage, 0..) |component, index| {
                 const base_offset: u32 = @as(u32, @intCast(index)) * field_layout.size;
                 const bytes = @constCast(self.exports.items[entries].bytes);
-                writeU32(bytes, base_offset + field_layout.of(.semantic_index), @intCast(index));
-                writeU32(bytes, base_offset + field_layout.of(.semantic_order), @intCast(index));
+                writeU32(bytes, base_offset + field_layout.of(.field_index), @intCast(index));
+                writeU32(bytes, base_offset + field_layout.of(.field_slot), @intCast(index));
                 try entry_pointers.append(self.allocator, .{ .offset = base_offset + field_layout.of(.desc), .target = try self.componentNode(component, try self.layouts.layoutOf(component)) });
                 if (names) |record_fields| {
                     try entry_pointers.append(self.allocator, .{ .offset = base_offset + field_layout.of(.name), .target = (try self.reserveName(record_fields[index].name)).node });

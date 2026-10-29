@@ -164,10 +164,10 @@ pub const TypeDesc = extern struct {
         return first[0..self.count];
     }
 
-    /// The field whose semantic index is `semantic_index`.
-    pub fn fieldBySemanticIndex(self: *const TypeDesc, semantic_index: u32) *const Field {
+    /// The field whose semantic index is `field_index`.
+    pub fn fieldBySemanticIndex(self: *const TypeDesc, field_index: u32) *const Field {
         const all = self.fields();
-        return &all[all[semantic_index].semantic_order];
+        return &all[all[field_index].field_slot];
     }
 
     pub fn containsRefcounted(self: *const TypeDesc) bool {
@@ -197,14 +197,14 @@ pub const Field = extern struct {
     /// A record field's alphabetical rank among the record's named fields; a
     /// tuple element's index; for a padding field, a rank past every named
     /// field, in declared order.
-    semantic_index: u32,
+    field_index: u32,
     offset: u32,
     /// 0 or 1.
     is_padding: u32,
     /// The memory slot (index into the record's fields) of the field whose
-    /// `semantic_index` equals this entry's own index, so walks in semantic
+    /// `field_index` equals this entry's own index, so walks in semantic
     /// order need no search.
-    semantic_order: u32,
+    field_slot: u32,
     /// Null for tuple elements and padding.
     name: ?*const Name,
     desc: *const TypeDesc,
