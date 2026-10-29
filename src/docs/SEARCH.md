@@ -7,7 +7,10 @@ API module and entry documentation is indexed at its existing destination.
 
 The dropdown keeps API matches in compact signature rows. Other matches appear in
 separate groups, with five prose results per category in the initial All view.
-“More” selects that category and adds context snippets (up to 50 results).
+“More” selects that category (up to 50 results). “Show snippets” / “Hide snippets”
+toggles context independently of the category, keeping the choice while searching.
+Snippets highlight query words case-insensitively and keep only the title underlined
+on hover. API name/signature matches retain their compact layout.
 Category filters disappear when only one category has entries. Loading the prose
 index never replaces results while keyboard focus is in the result list.
 

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {rank, snippet} = require('../../src/docs/static/search-core.js');
+const {rank, snippet, highlightParts} = require('../../src/docs/static/search-core.js');
 const entries = [
  {title:'Some example', text:'A := B and Token :: Str', href:'example/', category:'guides'},
  {title:'Types › Nominal Types', text:'A nominal type uses :=', terms:[':='], href:'types/#nominal-types',category:'guides'},
@@ -48,4 +48,21 @@ test('aliases match every prefix and preserve their full display label',()=>{
 });
 test('partial punctuation does not activate curated symbols',()=>{
  assert.ok(rank(entries,':').every(entry=>!entry.matchedTerm));
+});
+
+test('snippets highlight separate words case-insensitively without interpreting markup',()=>{
+ const text='<b>JSON</b> and parsing json';
+ const parts=highlightParts(text,'json parsing');
+ assert.equal(parts.map(p=>p.text).join(''),text);
+ assert.deepEqual(parts.filter(p=>p.match).map(p=>p.text),['JSON','parsing','json']);
+});
+test('highlighting treats operator and regex characters literally',()=>{
+ for(const query of ['?', '??', '|>', '[]', '+', '.', '*', '(', '\\']) {
+  assert.deepEqual(highlightParts('a '+query+' b',query).filter(p=>p.match).map(p=>p.text),[query]);
+ }
+ assert.deepEqual(highlightParts('text','  '),[{text:'text',match:false}]);
+});
+test('multiword snippets center on a matching word even without the exact phrase',()=>{
+ const result=snippet('prefix '.repeat(50)+'JSON input needs careful parsing','json parsing');
+ assert.ok(result.includes('JSON'));
 });

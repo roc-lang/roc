@@ -1660,3 +1660,10 @@ main > .main-content[aria-busy="true"] {
 #search-type-ahead .search-prose-result .type-ahead-link { font-family: var(--font-sans); }
 #search-type-ahead .search-snippet { display: block; white-space: normal; line-height: 1.4; font-size: var(--font-sm); }
 .search-match-note { font-family: var(--font-sans); font-size: var(--font-sm); }
+
+#search-type-ahead .search-prose-result a:hover,
+#search-type-ahead .search-prose-result a:focus-visible { text-decoration: none; }
+#search-type-ahead .search-prose-result a:hover .search-result-title,
+#search-type-ahead .search-prose-result a:focus-visible .search-result-title { text-decoration: underline; }
+#search-type-ahead .search-snippet mark { color: var(--text-color); background: var(--violet-bg); font-weight: bold; }
+.search-snippet-toggle { margin-left: auto; }

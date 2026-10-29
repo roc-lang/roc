@@ -35,6 +35,7 @@ const setupSearch = () => {
     let allLabel = "All";
     let selectedCategory = "";
     let expanded = false;
+    let showSnippets = false;
     let prose = [];
     let loaded = false;
     let loading;
@@ -130,7 +131,13 @@ const setupSearch = () => {
       if (entry.matchedTerm && engine.normalize(entry.title) !== engine.normalize(entry.matchedTerm)) {
         link.append(dynamic("small", "search-match-note", ` — search term: ${entry.matchedTerm}`));
       }
-      if (expanded) link.append(dynamic("small", "search-snippet", engine.snippet(entry.text, query)));
+      if (showSnippets && entry.text.trim()) {
+        const snippet = dynamic("small", "search-snippet");
+        for (const part of engine.highlightParts(engine.snippet(entry.text, query), query)) {
+          snippet.append(part.match ? dynamic("mark", "", part.text) : document.createTextNode(part.text));
+        }
+        link.append(snippet);
+      }
       item.append(link);
       appendItem(item);
       shownItems.push(item);
@@ -149,15 +156,27 @@ const setupSearch = () => {
       const ranked = engine.rank(prose, query);
       const curatedSymbol = !/[\p{L}\p{N}]/u.test(query) && ranked.some(item => item.exactTerm);
       const used = new Set([...(apiEntries.length ? ["api"] : []), ...prose.map(item => item.category)]);
-      if (loaded && used.size > 1) {
+      if (loaded && (used.size > 1 || prose.length)) {
         const controls = dynamic("li", "search-filters");
-        controls.setAttribute("aria-label", "Search categories");
-        for (const [id, label] of [["", allLabel], ...Array.from(categories).filter(([id]) => used.has(id))]) {
+        controls.setAttribute("aria-label", "Search options");
+        for (const [id, label] of (used.size > 1 ? [["", allLabel], ...Array.from(categories).filter(([id]) => used.has(id))] : [])) {
           const button = dynamic("button", "", label);
           button.type = "button";
           button.setAttribute("aria-pressed", String(id === selectedCategory));
           button.addEventListener("click", event => { event.stopPropagation(); selectedCategory = id; expanded = false; search(); searchBox.focus(); });
           controls.append(button);
+        }
+        if (prose.length) {
+          const toggle = dynamic("button", "search-snippet-toggle", showSnippets ? "Hide snippets" : "Show snippets");
+          toggle.type = "button";
+          toggle.setAttribute("aria-pressed", String(showSnippets));
+          toggle.addEventListener("click", event => {
+            event.stopPropagation();
+            showSnippets = !showSnippets;
+            search();
+            searchTypeAhead.querySelector(".search-snippet-toggle").focus({ preventScroll: true });
+          });
+          controls.append(toggle);
         }
         appendItem(controls);
       }

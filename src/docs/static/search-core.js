@@ -26,13 +26,34 @@
       return true;
     });
   }
+  function queryPattern(query) {
+    const words = [...new Set(query.trim().split(/\s+/).filter(Boolean))];
+    if (!words.length) return null;
+    const escaped = words.sort((a, b) => b.length - a.length)
+      .map(word => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    return new RegExp(escaped.join("|"), "giu");
+  }
   function snippet(text, query) {
     const clean = text.replace(/\s+/g, " ").trim();
-    const position = normalize(clean).indexOf(normalize(query));
+    const pattern = queryPattern(query);
+    const position = pattern ? clean.search(pattern) : -1;
     const start = Math.max(0, position - 45);
     return `${start ? "…" : ""}${clean.slice(start, start + 170)}${clean.length > start + 170 ? "…" : ""}`;
   }
-  const api = { normalize, rank, snippet };
+  function highlightParts(text, query) {
+    const pattern = queryPattern(query);
+    if (!pattern) return [{ text, match: false }];
+    const parts = [];
+    let offset = 0;
+    for (const match of text.matchAll(pattern)) {
+      if (match.index > offset) parts.push({ text: text.slice(offset, match.index), match: false });
+      parts.push({ text: match[0], match: true });
+      offset = match.index + match[0].length;
+    }
+    if (offset < text.length) parts.push({ text: text.slice(offset), match: false });
+    return parts;
+  }
+  const api = { normalize, rank, snippet, highlightParts };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.rocDocsSearch = api;
 })(globalThis);
