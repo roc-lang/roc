@@ -14161,7 +14161,7 @@ test "issue 12491 nested closure chain bound to a block local lowers under boxy"
 }
 
 /// The procedure template of `artifact` exported as `name`.
-fn templateNamed(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, name: []const u8) !check.CheckedArtifact.CheckedProcedureTemplate {
+fn templateNamed(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, name: []const u8) error{TestUnexpectedResult}!check.CheckedArtifact.CheckedProcedureTemplate {
     for (artifact.checked_procedure_templates.templates.items) |template| {
         const export_name = artifact.canonical_names.procBase(template.proc_base).export_name orelse continue;
         if (std.mem.eql(u8, artifact.canonical_names.exportNameText(export_name), name)) return template;
@@ -14171,7 +14171,7 @@ fn templateNamed(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, n
 }
 
 /// The procedures of `result` whose debug name is `name`.
-fn procsNamed(allocator: Allocator, result: *const lir.Program.Result, name: []const u8) ![]LIR.LirProcSpecId {
+fn procsNamed(allocator: Allocator, result: *const lir.Program.Result, name: []const u8) Allocator.Error![]LIR.LirProcSpecId {
     var found: std.ArrayList(LIR.LirProcSpecId) = .empty;
     errdefer found.deinit(allocator);
     for (0..result.store.procSpecCount()) |index| {
