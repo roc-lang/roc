@@ -3802,7 +3802,12 @@ pub const Builder = struct {
                         if (std.meta.eql(candidate.id, capture.capture_id)) break candidate;
                     } else invariant("a stored closure lacks one of its site's captures");
                     if (stored_capture.kind != .lexical) invariant("restoring a closure capturing its own recursive binding is not yet lowered by Boxy");
-                    try relations.append(self.allocator, .{ capture_ty.*, try self.constType(source, stored_capture.ty) });
+                    // A capture of erased function type names no signature
+                    // to relate; its type is its site's, at the variables
+                    // the rest relates.
+                    if (!try self.constTypeHasErased(source, stored_capture.ty)) {
+                        try relations.append(self.allocator, .{ capture_ty.*, try self.constType(source, stored_capture.ty) });
+                    }
                 }
                 // A scheme variable neither the value's type nor its captures
                 // mention reaches no value of the restored closure from
@@ -4764,6 +4769,37 @@ pub const Builder = struct {
         return hidden;
     }
 
+    /// Whether stored type evidence `root` of `source` holds an erased
+    /// function type, which names no signature.
+    fn constTypeHasErased(self: *Builder, source: lower.ConstSource, root: check.ConstStore.ConstTypeId) Allocator.Error!bool {
+        const const_types = &self.program.constStore(source).type_store;
+        var stack: std.ArrayList(check.ConstStore.ConstTypeId) = .empty;
+        defer stack.deinit(self.allocator);
+        var seen: std.AutoHashMapUnmanaged(check.ConstStore.ConstTypeId, void) = .empty;
+        defer seen.deinit(self.allocator);
+        try stack.append(self.allocator, root);
+        while (stack.pop()) |id| {
+            if ((try seen.getOrPut(self.allocator, id)).found_existing) continue;
+            switch (const_types.get(id)) {
+                .erased => return true,
+                .primitive, .zst => {},
+                .list, .box => |child| try stack.append(self.allocator, child),
+                .tuple => |range| try stack.appendSlice(self.allocator, const_types.typeSpan(range)),
+                .record => |range| for (const_types.fieldSpan(range)) |field| {
+                    try stack.append(self.allocator, field.ty);
+                    if (field.value_ty) |value_ty| try stack.append(self.allocator, value_ty);
+                },
+                .tag_union => |range| for (const_types.tagSpan(range)) |tag| try stack.appendSlice(self.allocator, const_types.typeSpan(tag.payloads)),
+                .func => |func| {
+                    try stack.appendSlice(self.allocator, const_types.typeSpan(func.args));
+                    try stack.append(self.allocator, func.ret);
+                },
+                .named => |named| try stack.appendSlice(self.allocator, const_types.typeSpan(named.args)),
+            }
+        }
+        return false;
+    }
+
     /// The Boxy type of a stored constant's type evidence `root` in the
     /// constant store of `source`.
     pub fn constType(self: *Builder, source: lower.ConstSource, root: check.ConstStore.ConstTypeId) Allocator.Error!TypeId {
@@ -4784,7 +4820,10 @@ pub const Builder = struct {
                 switch (ty) {
                     .list, .box => |child| try stack.append(self.allocator, .{ .id = child, .expanded = false }),
                     .tuple => |range| for (const_types.typeSpan(range)) |child| try stack.append(self.allocator, .{ .id = child, .expanded = false }),
-                    .record => |range| for (const_types.fieldSpan(range)) |field| try stack.append(self.allocator, .{ .id = field.ty, .expanded = false }),
+                    .record => |range| for (const_types.fieldSpan(range)) |field| {
+                        try stack.append(self.allocator, .{ .id = field.ty, .expanded = false });
+                        if (field.value_ty) |value_ty| try stack.append(self.allocator, .{ .id = value_ty, .expanded = false });
+                    },
                     .tag_union => |range| for (const_types.tagSpan(range)) |tag| {
                         for (const_types.typeSpan(tag.payloads)) |child| try stack.append(self.allocator, .{ .id = child, .expanded = false });
                     },
@@ -4812,8 +4851,13 @@ pub const Builder = struct {
                     const fields = try self.allocator.alloc(types.Field, range.len);
                     defer self.allocator.free(fields);
                     for (const_types.fieldSpan(range), fields) |field, *out| {
-                        if (field.value_ty != null or field.default != null) invariant("restoring optional or defaulted record fields of a stored capture type is not yet lowered by Boxy");
-                        out.* = .{ .name = try store.internName(names.recordFieldLabelText(field.name)), .ty = done.get(field.ty).?, .kind = .inline_slot };
+                        // An optional field is stored as its presence slot
+                        // over the value type; a defaulted field is stored
+                        // inline like a required one.
+                        out.* = if (field.value_ty) |value_ty|
+                            .{ .name = try store.internName(names.recordFieldLabelText(field.name)), .ty = done.get(value_ty).?, .kind = .presence_slot }
+                        else
+                            .{ .name = try store.internName(names.recordFieldLabelText(field.name)), .ty = done.get(field.ty).?, .kind = .inline_slot };
                     }
                     std.mem.sort(types.Field, fields, store, struct {
                         fn lessThan(s: *types.Store, a: types.Field, b: types.Field) bool {
@@ -4858,7 +4902,9 @@ pub const Builder = struct {
                     for (const_types.typeSpan(named.args), args) |child, *arg| arg.* = done.get(child).?;
                     break :blk try self.program.converter().nominalAt(owner.index, named.named_type.ty, args, self.env);
                 },
-                .erased => invariant("restoring a stored capture of erased function type is not yet lowered by Boxy"),
+                // Only a closure's capture holds an erased function type, and
+                // its restore relates no such capture (`constTypeHasErased`).
+                .erased => invariant("a stored type converted for Boxy holds an erased function type, which only captures, which relate none, hold"),
             };
             try done.put(self.allocator, frame.id, converted);
         }
