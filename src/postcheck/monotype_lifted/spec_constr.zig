@@ -289,7 +289,9 @@ fn isForcedDynamicIteratorType(program: *const Ast.Program, ty: Type.TypeId) boo
     return type_ == .named and type_.named.def.iterator_representation == .forced_dynamic;
 }
 
-/// Exact post-SpecConstr use information for one lifted procedure.
+/// Exact post-SpecConstr use information for one lifted procedure. Uses are
+/// counted only in functions the program's roots reach: a function SpecConstr
+/// inlined at every call is left unreferenced, and its body is never lowered.
 pub const ProcedureUse = struct {
     external_calls: usize = 0,
     external_call_expr: ?Ast.ExprId = null,
@@ -15395,7 +15397,25 @@ const ProgramProcedureUsage = struct {
             }
             fn_uses[owner_index].contains_return = shapes.contains_return;
             tail_self_calls[owner_index] = if (shapes.self_call) try tailSelfCallSummary(allocator, program, body, owner) else .{};
-            try collectAllFnUsesInExpr(allocator, program, body, owner, fn_uses);
+        }
+
+        // Count uses in the functions the roots reach, following each direct
+        // call and function reference as lowering does.
+        var reached = try std.DynamicBitSetUnmanaged.initEmpty(allocator, fn_count);
+        defer reached.deinit(allocator);
+        var pending: std.ArrayList(Ast.FnId) = .empty;
+        defer pending.deinit(allocator);
+        for (program.rootsView()) |root| try reachFn(allocator, root.fn_id, &reached, &pending);
+        for (program.literalRootsView()) |root| try reachFn(allocator, root.fn_id, &reached, &pending);
+        for (program.layoutRequestsView()) |request| {
+            if (request.fn_id) |fn_id| try reachFn(allocator, fn_id, &reached, &pending);
+        }
+        while (pending.pop()) |owner| {
+            const body = switch (program.getFn(owner).body) {
+                .roc => |body| body,
+                .hosted => continue,
+            };
+            try collectAllFnUsesInExpr(allocator, program, body, owner, fn_uses, &reached, &pending);
         }
         for (program.rootsView()) |root| {
             fn_uses[@backingInt(root.fn_id)].value_refs += 1;
@@ -15419,15 +15439,25 @@ const ProgramProcedureUsage = struct {
     }
 };
 
-/// Count every procedure use in `expr_id` into `uses`. Only a procedure's
-/// counts and its single external call site are recorded, so visiting order
-/// does not matter and the walk runs on its own work stack.
+fn reachFn(allocator: Allocator, fn_id: Ast.FnId, reached: *std.DynamicBitSetUnmanaged, pending: *std.ArrayList(Ast.FnId)) Allocator.Error!void {
+    const index = @backingInt(fn_id);
+    if (reached.isSet(index)) return;
+    reached.set(index);
+    try pending.append(allocator, fn_id);
+}
+
+/// Count every procedure use in `expr_id` into `uses`, and queue each
+/// function it uses on `pending` the first time any body reaches it. Only a
+/// procedure's counts and its single external call site are recorded, so
+/// visiting order does not matter and the walk runs on its own work stack.
 fn collectAllFnUsesInExpr(
     allocator: Allocator,
     program: *const Ast.Program,
     expr_id: Ast.ExprId,
     owner: Ast.FnId,
     uses: []ProcedureUse,
+    reached: *std.DynamicBitSetUnmanaged,
+    pending: *std.ArrayList(Ast.FnId),
 ) Allocator.Error!void {
     var stack: std.ArrayList(Ast.ExprChild) = .empty;
     defer stack.deinit(allocator);
@@ -15440,8 +15470,12 @@ fn collectAllFnUsesInExpr(
                 .def_ref,
                 .fn_def,
                 => Common.invariant("pre-lift function expression reached specialized-worker use analysis"),
-                .fn_ref => |fn_ref| uses[@backingInt(fn_ref.fn_id)].value_refs += 1,
+                .fn_ref => |fn_ref| {
+                    uses[@backingInt(fn_ref.fn_id)].value_refs += 1;
+                    try reachFn(allocator, fn_ref.fn_id, reached, pending);
+                },
                 .call_proc => |call| if (Ast.localDirectCallee(call)) |callee| {
+                    try reachFn(allocator, callee, reached, pending);
                     if (callee != owner) {
                         const summary = &uses[@backingInt(callee)];
                         summary.external_calls += 1;
@@ -18097,6 +18131,58 @@ test "a specialization call redirected to its own body records the self call in 
     try std.testing.expectEqual(@as(usize, 1), tail.count);
 }
 
+test "procedure uses count only calls in functions the roots reach" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const callee = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(1),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = try program.addExpr(.{ .ty = unit_ty, .data = .unit }) },
+        .ret = unit_ty,
+    });
+    var callers: [2]Ast.FnId = undefined;
+    for (&callers, 0..) |*caller, index| {
+        const call = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+            .callee = .{ .lifted = callee },
+            .args = Ast.Span(Ast.ExprId).empty(),
+        } } });
+        caller.* = try program.addFn(.{
+            .shapes = program.finishFnShapes(.{}),
+            .symbol = @fromBackingInt(@intCast(2 + index)),
+            .args = Ast.Span(Ast.TypedLocal).empty(),
+            .captures = Ast.Span(Ast.TypedLocal).empty(),
+            .body = .{ .roc = call },
+            .ret = unit_ty,
+        });
+    }
+    // Only the first caller is a root; nothing references the second, as
+    // when SpecConstr has inlined a function at every call it had.
+    try program.addRoot(.{
+        .fn_id = callers[0],
+        .request = .{
+            .order = 0,
+            .module_idx = 0,
+            .kind = .dev_expr,
+            .source = undefined, // Use counting never reads a root's checked source.
+            .checked_type = undefined, // Use counting never reads a root's checked type.
+            .abi = .roc,
+            .exposure = .private,
+        },
+        .owner = .first,
+    });
+
+    var usage = try ProgramProcedureUsage.collect(allocator, &program);
+    defer usage.deinit(allocator);
+    const use = usage.fn_uses[@backingInt(callee)];
+    try std.testing.expectEqual(@as(usize, 1), use.external_calls);
+    try std.testing.expectEqual(@as(?Ast.FnId, callers[0]), use.external_call_owner);
+}
+
 test "SpecConstr admission uses body size and worker count before cloning" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
@@ -18663,7 +18749,6 @@ test "a direct call inlines only where its surroundings consume the result it co
 
     const union_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
     const unit_ty = try program.types.add(.zst);
-    const single_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{union_ty}) });
     const tag_name = try program.names.internTagLabel("Result");
     const tag = try program.addExpr(.{
         .ty = union_ty,
@@ -18672,12 +18757,18 @@ test "a direct call inlines only where its surroundings consume the result it co
             .payloads = Ast.Span(Ast.ExprId).empty(),
         } },
     });
+    // A statement before the tag keeps the callee from being a wrapper,
+    // which would inline wherever it is called.
+    const callee_body = try program.addExpr(.{ .ty = union_ty, .data = .{ .block = .{
+        .statements = try program.addStmtSpan(&.{try program.addStmt(.{ .expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit }) })}),
+        .final_expr = tag,
+    } } });
     const callee = try program.addFn(.{
         .shapes = program.finishFnShapes(.{}),
         .symbol = @fromBackingInt(@intCast(1)),
         .args = Ast.Span(Ast.TypedLocal).empty(),
         .captures = Ast.Span(Ast.TypedLocal).empty(),
-        .body = .{ .roc = tag },
+        .body = .{ .roc = callee_body },
         .ret = union_ty,
     });
     const unconsumed_call = try program.addExpr(.{
@@ -18692,8 +18783,11 @@ test "a direct call inlines only where its surroundings consume the result it co
         .symbol = @fromBackingInt(@intCast(2)),
         .args = Ast.Span(Ast.TypedLocal).empty(),
         .captures = Ast.Span(Ast.TypedLocal).empty(),
-        .body = .{ .roc = try program.addExpr(.{ .ty = single_ty, .data = .{ .tuple = try program.addExprSpan(&.{unconsumed_call}) } }) },
-        .ret = single_ty,
+        .body = .{ .roc = try program.addExpr(.{ .ty = unit_ty, .data = .{ .block = .{
+            .statements = try program.addStmtSpan(&.{try program.addStmt(.{ .expr = unconsumed_call })}),
+            .final_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit }),
+        } } }) },
+        .ret = unit_ty,
     });
     const matched_call = try program.addExpr(.{
         .ty = union_ty,
@@ -18728,8 +18822,7 @@ test "a direct call inlines only where its surroundings consume the result it co
     defer cloner.deinit();
     cloner.inline_direct_requires_productivity = true;
 
-    // A result only stored in another function's result gains nothing from
-    // the constructed tag.
+    // A result the caller discards gains nothing from the constructed tag.
     const unconsumed = try cloner.cloneExprValueDemandingShape(unconsumed_call);
     if (unconsumed.value != .expr) return error.TestUnexpectedResult;
     try std.testing.expect(program.getExpr(unconsumed.value.expr).data == .call_proc);

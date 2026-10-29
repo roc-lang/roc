@@ -8498,7 +8498,10 @@ The explicit `InlineMode` controls the optional specialization work:
 - `.none` skips Monotype Lifted SpecConstr and produces an empty solved inline
   plan. The interpreter selects this.
 - `.wrappers` runs SpecConstr and produces wrapper and exact-single-use inline
-  decisions from Lambda Solved. Size and speed modes select this.
+  decisions from Lambda Solved. Size and speed modes select this. A body is
+  single-use when the functions the program's roots reach, by direct calls
+  and function references, call it once: a function SpecConstr inlined at
+  every call is unreferenced, and its body is never lowered.
 - `.wrappers_and_source_single_use` makes the same wrapper decisions, and
   decides single use by the source instead of the program (below). Dev mode
   selects this, because the object cache links dev procedures into programs
