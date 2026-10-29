@@ -13013,6 +13013,12 @@ fn expectKeyedContainersEvaluate(source: []const u8, expected: u64) (TestError |
         {
             var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
             defer static_strings.deinit();
+            // The descriptors, dictionaries, and name table a `.boxy` program froze.
+            var static_data: ?eval.InterpreterStaticData = if (lowered.lowered.frozen_static_data) |frozen|
+                try eval.InterpreterStaticData.init(allocator, frozen.exports, result.static_data_values.items.len)
+            else
+                null;
+            defer if (static_data) |*data| data.deinit();
             var interpreter = try eval.Interpreter.init(
                 allocator,
                 &result.store,
@@ -13021,6 +13027,10 @@ fn expectKeyedContainersEvaluate(source: []const u8, expected: u64) (TestError |
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
+            if (static_data) |*data| {
+                data.install(&interpreter);
+                data.ownByInterpreter(&interpreter);
+            }
             var count: u64 = 40;
             const evaluated = try interpreter.eval(.{
                 .proc_id = try rootProc(&lowered.lowered),
@@ -13521,6 +13531,12 @@ test "issue 11470: tagged shared error composition executes in both strategies" 
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
         defer static_strings.deinit();
         {
+            // The descriptors, dictionaries, and name table a `.boxy` program froze.
+            var static_data: ?eval.InterpreterStaticData = if (lowered.lowered.frozen_static_data) |frozen|
+                try eval.InterpreterStaticData.init(allocator, frozen.exports, result.static_data_values.items.len)
+            else
+                null;
+            defer if (static_data) |*data| data.deinit();
             var interpreter = try eval.Interpreter.init(
                 allocator,
                 &result.store,
@@ -13529,6 +13545,10 @@ test "issue 11470: tagged shared error composition executes in both strategies" 
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
+            if (static_data) |*data| {
+                data.install(&interpreter);
+                data.ownByInterpreter(&interpreter);
+            }
             for ([_]u64{ 40, 1, 2, 3, 4 }, 0..) |expected, mode| {
                 var argument: u64 = @intCast(mode);
                 const evaluated = try interpreter.eval(.{
@@ -13602,6 +13622,12 @@ fn expectStampedRowCoercionResults(source: []const u8, expectations: []const [2]
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
         defer static_strings.deinit();
         {
+            // The descriptors, dictionaries, and name table a `.boxy` program froze.
+            var static_data: ?eval.InterpreterStaticData = if (lowered.lowered.frozen_static_data) |frozen|
+                try eval.InterpreterStaticData.init(allocator, frozen.exports, result.static_data_values.items.len)
+            else
+                null;
+            defer if (static_data) |*data| data.deinit();
             var interpreter = try eval.Interpreter.init(
                 allocator,
                 &result.store,
@@ -13610,6 +13636,10 @@ fn expectStampedRowCoercionResults(source: []const u8, expectations: []const [2]
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
+            if (static_data) |*data| {
+                data.install(&interpreter);
+                data.ownByInterpreter(&interpreter);
+            }
             for (expectations) |expectation| {
                 var argument: u64 = expectation[0];
                 const evaluated = try interpreter.eval(.{
@@ -13681,6 +13711,12 @@ fn expectStampedRowCoercionCrash(source: []const u8, expected_message: []const u
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
         defer static_strings.deinit();
         {
+            // The descriptors, dictionaries, and name table a `.boxy` program froze.
+            var static_data: ?eval.InterpreterStaticData = if (lowered.lowered.frozen_static_data) |frozen|
+                try eval.InterpreterStaticData.init(allocator, frozen.exports, result.static_data_values.items.len)
+            else
+                null;
+            defer if (static_data) |*data| data.deinit();
             var interpreter = try eval.Interpreter.init(
                 allocator,
                 &result.store,
@@ -13689,6 +13725,10 @@ fn expectStampedRowCoercionCrash(source: []const u8, expected_message: []const u
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
+            if (static_data) |*data| {
+                data.install(&interpreter);
+                data.ownByInterpreter(&interpreter);
+            }
             var argument: u64 = 0;
             if (interpreter.eval(.{
                 .proc_id = try rootProc(&lowered.lowered),
