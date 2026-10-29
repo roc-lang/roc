@@ -1,0 +1,8 @@
+# directive\tcategory\tterm\tdestination\tlabel (fields separated by tabs)
+category	api	API
+category	guides	Guides & examples
+term	guides	:=	langref/types/#nominal-types	Types › Nominal Types
+term	guides	::	langref/types/#opaque-nominal-types	Types › Opaque Nominal Types
+term	api	lreduce	List/#fold	List.fold
+term	guides	nominal	langref/types/#nominal-types	Types › Nominal Types
+term	guides	opaque	langref/types/#opaque-nominal-types	Types › Opaque Nominal Types

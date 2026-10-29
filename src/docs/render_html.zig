@@ -64,6 +64,7 @@ const examples_url = "https://roc-lang.org/examples/";
 
 // Static assets embedded at compile time
 const embedded_css = @embedFile("static/styles.css");
+const embedded_search_core = @embedFile("static/search-core.js");
 const embedded_js = @embedFile("static/search.js");
 const embedded_favicon = @embedFile("static/favicon.svg");
 
@@ -556,6 +557,8 @@ pub fn renderPackageDocs(
         ctx.leaveModule();
     }
 
+    try writeSearchIndex(&ctx, gpa, io, output_dir);
+
     // Language Reference articles (rendered into a `langref/` subdirectory).
     if (langref) |lr| {
         try writeLangRefPages(&ctx, gpa, io, output_dir, lr);
@@ -637,6 +640,7 @@ fn writeLangRefArticlePage(
 fn writeStaticAssets(io: std.Io, dir: std.Io.Dir) RenderError!void {
     try dir.writeFile(io, .{ .sub_path = "styles.css", .data = embedded_css });
     try dir.writeFile(io, .{ .sub_path = "search.js", .data = embedded_js });
+    try dir.writeFile(io, .{ .sub_path = "search-core.js", .data = embedded_search_core });
     try dir.writeFile(io, .{ .sub_path = "favicon.svg", .data = embedded_favicon });
 }
 
@@ -770,6 +774,9 @@ fn writeHtmlHead(w: Writer, title: []const u8, base: []const u8) (Allocator.Erro
     try w.writeAll("styles.css\">\n");
     try w.writeAll("    <script src=\"");
     try w.writeAll(base);
+    try w.writeAll("search-core.js\" defer></script>\n");
+    try w.writeAll("    <script src=\"");
+    try reporting.writeEscapedHtml(w, base);
     try w.writeAll("search.js\" defer></script>\n");
     try w.writeAll("</head>\n");
 }
@@ -815,7 +822,9 @@ const menu_toggle_svg =
 fn writeMainOpen(w: Writer, ctx: *const RenderContext, gpa: Allocator, base: []const u8) (Allocator.Error || error{WriteFailed})!void {
     try w.writeAll("    <main>\n");
 
-    try w.writeAll("        <form id=\"module-search-form\">\n");
+    try w.writeAll("        <form id=\"module-search-form\" data-search-index=\"");
+    try reporting.writeEscapedHtml(w, base);
+    try w.writeAll("search-index.html\">\n");
     try w.writeAll("            <input type=\"search\" id=\"module-search\" placeholder=\"Search Documentation\" autocomplete=\"off\" />\n");
     // The no-JS input must be a sibling (not nested inside <noscript>) so it
     // participates in the form's flex layout. With JS enabled it is hidden by
@@ -3183,4 +3192,74 @@ test "bidi controls render as visible text in documentation" {
     const start = output.written().len;
     try reporting.writeEscapedHtml(&output.writer, "שלום مرحبا");
     try std.testing.expectEqualStrings("שלום مرحبا", output.written()[start..]);
+}
+
+// Prose is stored once per site, separately from the immediately available API rows.
+fn writeSearchIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir) RenderError!void {
+    const file = try dir.createFile(io, "search-index.html", .{});
+    defer file.close(io);
+    var buf: [4096]u8 = undefined;
+    var bw = file.writer(io, &buf);
+    const w = &bw.interface;
+    try w.writeAll("<meta charset=\"utf-8\"><nav data-search-categories><span data-category=\"api\">API</span><span data-category=\"guides\">Guides &amp; examples</span></nav>\n");
+    for (ctx.package_docs.modules) |mod| {
+        if (mod.module_doc) |doc| {
+            try w.writeAll("<article data-category=\"api\" data-title=\"");
+            try reporting.writeEscapedHtml(w, mod.name);
+            try w.writeAll("\" data-href=\"");
+            if (!ctx.single_module_at_root) {
+                try reporting.writeEscapedHtml(w, mod.name);
+                try w.writeAll("/");
+            }
+            try w.writeAll("\"><p>");
+            try reporting.writeEscapedHtml(w, doc);
+            try w.writeAll("</p></article>\n");
+        }
+        const tree = try buildEntryTree(gpa, mod.entries, mod.name, mod.builtin_derived);
+        defer tree.deinit(gpa);
+        try writeSearchProseTree(w, ctx, mod.name, tree.root);
+    }
+    if (ctx.langref) |lr| {
+        for (lr.articles) |*article| {
+            try w.writeAll("<article data-category=\"guides\" data-sections data-title=\"");
+            const title = try render_markdown.titlePlainText(gpa, article);
+            defer gpa.free(title);
+            try reporting.writeEscapedHtml(w, title);
+            try w.writeAll("\" data-href=\"langref/");
+            if (!article.is_index) {
+                try reporting.writeEscapedHtml(w, article.slug);
+                try w.writeAll("/");
+            }
+            try w.writeAll("\">");
+            try render_markdown.renderArticleBody(w, gpa, lr.articles, article, "");
+            try w.writeAll("</article>\n");
+        }
+    }
+    try w.flush();
+}
+
+fn writeSearchProseTree(w: Writer, ctx: *const RenderContext, module_name: []const u8, node: *const SidebarNode) (Allocator.Error || error{WriteFailed})!void {
+    if (node.entry) |entry| {
+        if (entry.doc_comment) |doc| {
+            try w.writeAll("<article data-category=\"api\" data-title=\"");
+            if (!std.mem.eql(u8, node.full_path, module_name) and
+                !(std.mem.startsWith(u8, node.full_path, module_name) and node.full_path.len > module_name.len and node.full_path[module_name.len] == '.'))
+            {
+                try reporting.writeEscapedHtml(w, module_name);
+                try w.writeAll(".");
+            }
+            try reporting.writeEscapedHtml(w, node.full_path);
+            try w.writeAll("\" data-href=\"");
+            if (!ctx.single_module_at_root) {
+                try reporting.writeEscapedHtml(w, module_name);
+                try w.writeAll("/");
+            }
+            try w.writeAll("#");
+            try reporting.writeEscapedHtml(w, node.full_path);
+            try w.writeAll("\"><p>");
+            try reporting.writeEscapedHtml(w, doc);
+            try w.writeAll("</p></article>\n");
+        }
+    }
+    for (node.children.items) |child| try writeSearchProseTree(w, ctx, module_name, child);
 }

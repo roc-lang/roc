@@ -21303,6 +21303,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
 
     if (args_in.builtins) {
         try generateBuiltinDocs(ctx, args_in.output, args_in.with_lang_ref);
+        try configureDocsSearch(ctx, args_in);
         ctx.io.stdout().print("\nGenerated docs for the builtins\n", .{}) catch {};
         if (args_in.serve) {
             try serveDocumentation(ctx, args_in.output);
@@ -21383,6 +21384,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
 
     // Generate documentation for all packages and modules
     try generateDocs(ctx, &result_with_env.build_env, args.path, args.output, args.with_lang_ref);
+    try configureDocsSearch(ctx, args);
 
     stdout.print("\nGenerated docs for {s}\n", .{try ctx.displayPath(args.path)}) catch {};
 
@@ -21956,5 +21958,14 @@ test "dev ARC specialization is independent of source inlining" {
         try std.testing.expectEqual(expected, config.target.specialize_arc_modes);
         try std.testing.expectEqual(expected, lir.CheckedPipeline.LirPolicy.fromTarget(config.target).specialize_arc_modes);
         if (opt == .dev) try std.testing.expect(config.target.inline_mode != .none);
+    }
+}
+
+fn configureDocsSearch(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
+    if (args.search_config) |path| {
+        docs.search_config.apply(ctx.gpa, ctx.io.std_io, args.output, path) catch |err| {
+            std.debug.print("Error: could not configure documentation search: {}\n", .{err});
+            return error.DocsFailed;
+        };
     }
 }

@@ -14,189 +14,195 @@ const setupSearch = () => {
 
   if (searchBox != null) {
     function searchKeyDown(event) {
-      switch (event.key) {
-        case "ArrowDown": {
-          event.preventDefault();
-
-          const focused = document.querySelector(
-            "#search-type-ahead > li:not([class*='hidden']) > a:focus",
-          );
-
-          // Find the next element to focus.
-          let nextToFocus = focused?.parentElement?.nextElementSibling;
-
-          while (
-            nextToFocus != null &&
-            nextToFocus.classList.contains("hidden")
-          ) {
-            nextToFocus = nextToFocus.nextElementSibling;
-          }
-
-          if (nextToFocus == null) {
-            // If none of the links were focused, focus the first one.
-            // Also if we've reached the last one in the list, wrap around to the first.
-            document
-              .querySelector(
-                "#search-type-ahead > li:not([class*='hidden']) > a",
-              )
-              ?.focus();
-          } else {
-            nextToFocus.querySelector("a").focus();
-          }
-
-          break;
-        }
-        case "ArrowUp": {
-          event.preventDefault();
-
-          const focused = document.querySelector(
-            "#search-type-ahead > li:not([class*='hidden']) > a:focus",
-          );
-
-          // Find the next element to focus.
-          let nextToFocus = focused?.parentElement?.previousElementSibling;
-          while (
-            nextToFocus != null &&
-            nextToFocus.classList.contains("hidden")
-          ) {
-            nextToFocus = nextToFocus.previousElementSibling;
-          }
-
-          if (nextToFocus == null) {
-            // If none of the links were focused, or we're at the first one, focus the search box again.
-            searchBox?.focus();
-          } else {
-            // If one of the links was focused, focus the previous one
-            nextToFocus.querySelector("a").focus();
-          }
-
-          break;
-        }
-        case "Enter": {
-          // In case this is just an anchor link (which will move the scroll bar but not
-          // reload the page), hide the search bar.
-          searchTypeAhead.classList.add("hidden");
-          break;
-        }
-      }
+      if (event.key === "Escape") { searchTypeAhead.classList.add("hidden"); searchBox.focus(); return; }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      event.preventDefault();
+      const links = Array.from(searchTypeAhead.querySelectorAll("li:not(.hidden) > a.type-ahead-link"));
+      const current = links.indexOf(document.activeElement);
+      const next = event.key === "ArrowDown" ? (current + 1) % links.length : current - 1;
+      if (next < 0 || !links.length) searchBox.focus();
+      else links[next]?.focus();
     }
 
     searchForm.addEventListener("keydown", searchKeyDown);
 
-    function addLangRefSearchEntries() {
-      if (searchTypeAhead.dataset.langRefReady === "true") return;
-
-      document
-        .querySelectorAll("#sidebar-nav .langref-articles a[href]")
-        .forEach((sidebarLink) => {
-          const name = sidebarLink.textContent.replace(/\s+/g, " ").trim();
-          if (name === "") return;
-
-          const item = document.createElement("li");
-          item.classList.add("hidden");
-
-          const link = document.createElement("a");
-          link.classList.add("type-ahead-link", "type-ahead-langref");
-          link.href = sidebarLink.getAttribute("href");
-
-          const defName = document.createElement("span");
-          defName.classList.add("type-ahead-def-name", "type-ahead-langref-title");
-          defName.textContent = name;
-
-          const context = document.createElement("span");
-          context.classList.add("type-ahead-langref-context");
-          context.textContent = "Language Reference";
-
-          const signature = document.createElement("span");
-          signature.classList.add("type-ahead-signature");
-          signature.textContent = "Language Reference";
-          signature.hidden = true;
-
-          link.append(defName, " in ", context, signature);
-          item.appendChild(link);
-          searchTypeAhead.appendChild(item);
-        });
-
-      searchTypeAhead.dataset.langRefReady = "true";
-    }
-
-    addLangRefSearchEntries();
-
-    // Precompute a lowercase search haystack for every entry once. The old code
-    // re-read the DOM (querySelector + textContent) for all ~1500 entries on
-    // every keystroke, which was needless work per input. The entry <li>s are
-    // static (server-rendered, plus the langref entries appended above) and
-    // persist across soft navigations, so this only has to happen once.
-    const searchEntries = Array.from(
-      searchTypeAhead.querySelectorAll("li"),
-    ).map((li) => {
-      const entryModule =
-        li.querySelector(".type-ahead-module-name")?.textContent?.toLowerCase() ??
-        "";
-      const entryName =
-        li.querySelector(".type-ahead-def-name")?.textContent?.toLowerCase() ?? "";
-      const signature =
-        li
-          .querySelector(".type-ahead-signature")
-          ?.textContent?.toLowerCase()
-          ?.replace(/\s+/g, "") ?? "";
-      const qualifiedName = entryModule ? `${entryModule}.${entryName}` : entryName;
-      return { li, qualifiedName, signature };
-    });
-
-    // Cap how many results we reveal at once. Broad queries (e.g. a single "m")
-    // match well over a thousand entries, and laying out and painting that many
-    // list items is what made the first keystroke freeze. The dropdown scrolls
-    // and typing more characters narrows things down fast, so a modest cap keeps
-    // the type-ahead responsive without meaningfully hurting usability.
+    const engine = window.rocDocsSearch;
+    const indexUrl = new URL(searchForm.dataset.searchIndex, location.href);
+    const docsBase = new URL("./", indexUrl);
+    const categories = new Map([["api", "API"], ["guides", "Guides & examples"]]);
+    let allLabel = "All";
+    let selectedCategory = "";
+    let expanded = false;
+    let prose = [];
+    let loaded = false;
+    let loading;
+    let failed = false;
+    let dynamicItems = [];
+    const apiEntries = Array.from(searchTypeAhead.querySelectorAll("li")).map(li => ({
+      li,
+      href: new URL(li.querySelector("a").getAttribute("href"), location.href).href,
+      name: ((li.querySelector(".type-ahead-module-name")?.textContent || "") + "." +
+        (li.querySelector(".type-ahead-def-name")?.textContent || "")).toLowerCase(),
+      signature: (li.querySelector(".type-ahead-signature")?.textContent || "").toLowerCase().replace(/\s+/g, ""),
+      category: "api",
+    }));
+    let shownItems = [];
     const MAX_RESULTS = 50;
 
-    // The entries currently revealed, so each search only re-hides the handful it
-    // previously showed instead of touching every entry in the list.
-    let shownItems = [];
-
-    function search() {
-      topSearchResultListItem = undefined;
-      const text = searchBox.value.toLowerCase(); // Search is case-insensitive.
-
-      // Hide whatever the previous search revealed before revealing new matches.
-      for (const li of shownItems) {
-        li.classList.add("hidden");
-      }
-      shownItems = [];
-
-      if (text === "") {
-        searchTypeAhead.classList.add("hidden");
+    function addDocument(article) {
+      const category = article.dataset.category;
+      const href = new URL(article.dataset.href, docsBase).href;
+      const title = article.dataset.title;
+      if (!article.hasAttribute("data-sections")) {
+        prose.push({ category, href, title, text: article.textContent, terms: [] });
         return;
       }
-
-      const signatureText = text.replace(/\s+/g, "");
-      for (const entry of searchEntries) {
-        if (
-          entry.qualifiedName.includes(text) ||
-          (signatureText !== "" && entry.signature.includes(signatureText))
-        ) {
-          entry.li.classList.remove("hidden");
-          shownItems.push(entry.li);
-          if (topSearchResultListItem === undefined) {
-            topSearchResultListItem = entry.li;
-          }
-          if (shownItems.length >= MAX_RESULTS) {
-            break;
-          }
-        }
+      let section = { category, href, title, text: "", terms: [] };
+      for (const node of article.querySelectorAll("h1,h2,h3,h4,h5,h6,p,pre,li,table")) {
+        // Don't count nested list items and paragraphs twice.
+        if (node.parentElement.closest("li,pre,table")) continue;
+        if (/^H[1-6]$/.test(node.tagName) && node.id) {
+          if (section.text.trim()) prose.push(section);
+          section = { category, href: `${href.split("#")[0]}#${encodeURIComponent(node.id)}`,
+            title: `${title} › ${node.textContent}`, text: "", terms: [] };
+        } else section.text += ` ${node.textContent}`;
       }
-
-      if (shownItems.length === 0) {
-        searchTypeAhead.classList.add("hidden");
-      } else {
-        searchTypeAhead.scrollTop = 0;
-        searchTypeAhead.classList.remove("hidden");
-      }
+      if (section.text.trim()) prose.push(section);
     }
 
-    searchBox.addEventListener("input", search);
+    function loadIndex() {
+      if (loading) return loading;
+      loading = fetch(indexUrl, { credentials: "same-origin" }).then(response => {
+        if (!response.ok) throw new Error(`Search index: ${response.status}`);
+        return response.text();
+      }).then(text => {
+        const doc = new DOMParser().parseFromString(text, "text/html");
+        doc.querySelectorAll("[data-search-categories] [data-category]").forEach(node => {
+          categories.delete(node.dataset.category);
+          categories.set(node.dataset.category, node.textContent);
+        });
+        const label = doc.querySelector("[data-search-all-label]");
+        if (label) allLabel = label.textContent;
+        doc.querySelectorAll("article[data-href]").forEach(addDocument);
+        doc.querySelectorAll("[data-search-term]").forEach(node => {
+          const href = new URL(node.dataset.href, docsBase).href;
+          let entry = prose.find(item => item.href === href && item.category === node.dataset.category);
+          if (!entry) {
+            entry = { category: node.dataset.category, href, title: node.textContent, text: "", terms: [] };
+            prose.push(entry);
+          }
+          entry.terms.push(node.dataset.searchTerm);
+        });
+        loaded = true;
+      }).catch(() => { failed = true; }).then(() => {
+        // Never replace a result while someone is navigating it with the keyboard.
+        if (!searchTypeAhead.contains(document.activeElement) && document.activeElement === searchBox) search();
+      });
+      return loading;
+    }
+    searchBox.addEventListener("focus", loadIndex, { once: true });
 
+    function dynamic(tag, className, text) {
+      const node = document.createElement(tag);
+      node.className = className;
+      if (text) node.textContent = text;
+      return node;
+    }
+    function appendItem(node) {
+      searchTypeAhead.appendChild(node);
+      dynamicItems.push(node);
+    }
+    function addHeading(label) {
+      appendItem(dynamic("li", "search-group-label", label));
+    }
+    function addProse(entry, query) {
+      const item = dynamic("li", "search-prose-result");
+      const link = dynamic("a", "type-ahead-link type-ahead-langref");
+      link.href = entry.href;
+      link.append(dynamic("span", "search-result-title", entry.title));
+      if (entry.exactTerm && engine.normalize(entry.title) !== engine.normalize(query)) {
+        link.append(dynamic("small", "search-match-note", ` — search term: ${query}`));
+      }
+      if (expanded) link.append(dynamic("small", "search-snippet", engine.snippet(entry.text, query)));
+      item.append(link);
+      appendItem(item);
+      shownItems.push(item);
+    }
+    function search() {
+      topSearchResultListItem = undefined;
+      for (const item of shownItems) item.classList.add("hidden");
+      for (const item of dynamicItems) item.remove();
+      shownItems = [];
+      dynamicItems = [];
+      const query = searchBox.value.trim();
+      if (!query) { searchTypeAhead.classList.add("hidden"); return; }
+      loadIndex();
+      const q = query.toLowerCase();
+      const signatureQuery = q.replace(/\s+/g, "");
+      const ranked = engine.rank(prose, query);
+      const curatedSymbol = !/[\p{L}\p{N}]/u.test(query) && ranked.some(item => item.exactTerm);
+      const used = new Set([...(apiEntries.length ? ["api"] : []), ...prose.map(item => item.category)]);
+      if (loaded && used.size > 1) {
+        const controls = dynamic("li", "search-filters");
+        controls.setAttribute("aria-label", "Search categories");
+        for (const [id, label] of [["", allLabel], ...Array.from(categories).filter(([id]) => used.has(id))]) {
+          const button = dynamic("button", "", label);
+          button.type = "button";
+          button.setAttribute("aria-pressed", String(id === selectedCategory));
+          button.addEventListener("click", event => { event.stopPropagation(); selectedCategory = id; expanded = false; search(); searchBox.focus(); });
+          controls.append(button);
+        }
+        appendItem(controls);
+      }
+      // Explicit symbols/synonyms take precedence; names and signatures otherwise remain first.
+      const exact = ranked.filter(item => item.exactTerm && (!selectedCategory || item.category === selectedCategory));
+      const seen = new Set();
+      for (const item of exact.slice(0, MAX_RESULTS)) {
+        const api = apiEntries.find(entry => entry.href === item.href);
+        if (api) {
+          api.li.classList.remove("hidden");
+          searchTypeAhead.appendChild(api.li);
+          shownItems.push(api.li);
+          const note = dynamic("small", "search-match-note", ` — also known as ${query}`);
+          api.li.querySelector("a").append(note);
+          dynamicItems.push(note);
+        } else addProse(item, query);
+        seen.add(item.href);
+      }
+      if (!curatedSymbol && (!selectedCategory || selectedCategory === "api")) {
+        const matches = apiEntries.filter(item => !seen.has(item.href) &&
+          (item.name.includes(q) || item.signature.includes(signatureQuery))).slice(0, MAX_RESULTS);
+        if (matches.length && loaded && used.size > 1) addHeading(categories.get("api"));
+        for (const item of matches) {
+          item.li.classList.remove("hidden");
+          searchTypeAhead.appendChild(item.li);
+          shownItems.push(item.li);
+          seen.add(item.href);
+        }
+      }
+      for (const [category, label] of categories) {
+        if (selectedCategory && category !== selectedCategory) continue;
+        const matches = ranked.filter(item => item.category === category && !seen.has(item.href));
+        if (!matches.length) continue;
+        addHeading(category === "api" ? `${label} — documentation` : label);
+        const limit = expanded || selectedCategory ? MAX_RESULTS : 5;
+        for (const item of matches.slice(0, limit)) { addProse(item, query); seen.add(item.href); }
+        if (matches.length > limit) {
+          const row = dynamic("li", "search-more");
+          const button = dynamic("button", "", `More ${label} matches (${matches.length})`);
+          button.type = "button";
+          button.addEventListener("click", event => { event.stopPropagation(); selectedCategory = category; expanded = true; search(); searchBox.focus(); });
+          row.append(button);
+          appendItem(row);
+        }
+      }
+      if (!loaded) appendItem(dynamic("li", "search-status", failed ? "Additional documentation search is unavailable. API search still works." : "Searching documentation…"));
+      if (!shownItems.length && loaded) appendItem(dynamic("li", "search-status", "No matching documentation."));
+      topSearchResultListItem = shownItems[0];
+      searchTypeAhead.scrollTop = 0;
+      searchTypeAhead.classList.remove("hidden");
+    }
+    searchBox.addEventListener("input", () => { expanded = false; search(); });
     search();
 
     function searchSubmit(e) {
