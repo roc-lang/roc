@@ -37,3 +37,15 @@ test('multiple sources for one destination yield one result',()=>{
  const results = rank([...entries,duplicate],'nominal');
  assert.equal(results.filter(item=>item.href===entries[1].href).length,1);
 });
+
+test('aliases match every prefix and preserve their full display label',()=>{
+ for (let length=1;length<='lreduce'.length;length++) {
+  const match=rank(entries,'LREDUCE'.slice(0,length))[0];
+  assert.equal(match.href,'List/#fold');
+  assert.equal(match.matchedTerm,'lreduce');
+  assert.equal(match.exactTerm,length==='lreduce'.length);
+ }
+});
+test('partial punctuation does not activate curated symbols',()=>{
+ assert.ok(rank(entries,':').every(entry=>!entry.matchedTerm));
+});

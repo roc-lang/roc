@@ -43,6 +43,8 @@ pages. Documents with different source files may share a destination, e.g. an
 example's README and its Roc source; search deduplicates destination links.
 
 Curated terms match case-insensitively and rank before incidental prose matches.
+Word aliases also match prefixes from the first letter, displaying the complete
+alias alongside the result. Punctuation-only terms require an exact match.
 For a curated punctuation-only query, incidental matches are suppressed.
 Their destinations must be relative paths into the generated site, with an
 optional fragment. Generation checks that the target file and anchor exist.

@@ -14,7 +14,7 @@ const setupSearch = () => {
 
   if (searchBox != null) {
     function searchKeyDown(event) {
-      if (event.key === "Escape") { searchTypeAhead.classList.add("hidden"); searchBox.focus(); return; }
+      if (event.key === "Escape") { searchBox.focus(); searchTypeAhead.classList.add("hidden"); return; }
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
       event.preventDefault();
       const links = Array.from(searchTypeAhead.querySelectorAll("li:not(.hidden) > a.type-ahead-link"));
@@ -100,7 +100,12 @@ const setupSearch = () => {
       });
       return loading;
     }
-    searchBox.addEventListener("focus", loadIndex, { once: true });
+    function reopenSearch() {
+      loadIndex();
+      if (searchTypeAhead.classList.contains("hidden")) search();
+    }
+    searchBox.addEventListener("focus", reopenSearch);
+    searchBox.addEventListener("click", reopenSearch);
 
     function dynamic(tag, className, text) {
       const node = document.createElement(tag);
@@ -120,8 +125,8 @@ const setupSearch = () => {
       const link = dynamic("a", "type-ahead-link type-ahead-langref");
       link.href = entry.href;
       link.append(dynamic("span", "search-result-title", entry.title));
-      if (entry.exactTerm && engine.normalize(entry.title) !== engine.normalize(query)) {
-        link.append(dynamic("small", "search-match-note", ` — search term: ${query}`));
+      if (entry.matchedTerm && engine.normalize(entry.title) !== engine.normalize(entry.matchedTerm)) {
+        link.append(dynamic("small", "search-match-note", ` — search term: ${entry.matchedTerm}`));
       }
       if (expanded) link.append(dynamic("small", "search-snippet", engine.snippet(entry.text, query)));
       item.append(link);
@@ -155,15 +160,15 @@ const setupSearch = () => {
         appendItem(controls);
       }
       // Explicit symbols/synonyms take precedence; names and signatures otherwise remain first.
-      const exact = ranked.filter(item => item.exactTerm && (!selectedCategory || item.category === selectedCategory));
+      const curated = ranked.filter(item => item.matchedTerm && (!selectedCategory || item.category === selectedCategory));
       const seen = new Set();
-      for (const item of exact.slice(0, MAX_RESULTS)) {
+      for (const item of curated.slice(0, MAX_RESULTS)) {
         const api = apiEntries.find(entry => entry.href === item.href);
         if (api) {
           api.li.classList.remove("hidden");
           searchTypeAhead.appendChild(api.li);
           shownItems.push(api.li);
-          const note = dynamic("small", "search-match-note", ` (alias: ${query})`);
+          const note = dynamic("small", "search-match-note", ` (alias: ${item.matchedTerm})`);
           api.li.querySelector(".type-ahead-def-name").after(note);
           dynamicItems.push(note);
         } else addProse(item, query);

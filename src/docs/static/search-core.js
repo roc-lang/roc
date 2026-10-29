@@ -8,10 +8,13 @@
     const matches = documents.flatMap((entry, order) => {
       const title = normalize(entry.title);
       const body = normalize(entry.text);
-      const exactTerm = (entry.terms || []).some(term => normalize(term) === q);
-      let score = exactTerm ? 1000 : title === q ? 800 : title.includes(q) ? 600 : 0;
+      const terms = entry.terms || [];
+      const matchedTerm = terms.find(term => normalize(term) === q) ||
+        terms.find(term => /[\p{L}\p{N}]/u.test(q) && normalize(term).startsWith(q));
+      const exactTerm = matchedTerm !== undefined && normalize(matchedTerm) === q;
+      let score = exactTerm ? 1000 : matchedTerm ? 900 : title === q ? 800 : title.includes(q) ? 600 : 0;
       if (!score && words.every(word => `${title} ${body}`.includes(word))) score = 100;
-      return score ? [{ ...entry, score, order, exactTerm }] : [];
+      return score ? [{ ...entry, score, order, exactTerm, matchedTerm }] : [];
     }).sort((a, b) => b.score - a.score || a.order - b.order);
     const curatedSymbol = !/[\p{L}\p{N}]/u.test(q) && matches.some(item => item.exactTerm);
     const seen = new Set();
