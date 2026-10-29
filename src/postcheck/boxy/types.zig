@@ -23,6 +23,7 @@ const check = @import("check");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
+const static_dispatch = check.StaticDispatchRegistry;
 const names = check.CheckedNames;
 
 /// Dense index of a checked module in one lowering.
@@ -671,12 +672,166 @@ pub const Converter = struct {
     /// and takes no descriptor for it; omitting it from the worker's scheme
     /// variables is exactly that, since a flex no scope binds seals to its
     /// row default (`sealVariable`).
-    pub fn sealedSchemeVar(self: Converter, module: ModuleIndex, variable: checked.CheckedTypeId) bool {
-        const payload = self.modules.get(module).types().payload(variable);
-        return switch (payload) {
+    pub fn sealedSchemeVar(self: Converter, module: ModuleIndex, variable: checked.CheckedTypeId, fn_root: checked.CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord) Allocator.Error!bool {
+        const types = self.modules.get(module).types();
+        const payload = types.payload(variable);
+        const bounded = switch (payload) {
             .flex => |flex| flex.bounded_row_ext and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
             .rigid, .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
         };
+        if (!bounded) return false;
+        // Polarity also opens a row in a callback's parameter, which the
+        // definition produces but which no instantiation of its result
+        // converts: a variable at such a position, or anywhere else outside
+        // the result's reach, keeps its descriptor.
+        if (try self.occursOutsideResultReach(module, fn_root, variable)) return false;
+        // A callable the worker receives from its caller carries the caller's
+        // instantiation of every variable its interface mentions. A function
+        // parameter shows that interface and is excluded above; a `where`
+        // dictionary's interface is its evidence parameter's callable, and a
+        // nominal over a callable payload hides its callable's interface in
+        // its methods, so a parameter holding one may involve any variable.
+        for (evidence_params) |param| {
+            if (try self.mentionsVariable(module, param.callable_ty, variable)) return false;
+        }
+        return !try self.argumentsHoldCallablePayload(module, fn_root);
+    }
+
+    /// Whether any argument of the function type `fn_root` holds a nominal
+    /// over a callable payload (`local_box_payload_capability`,
+    /// `imported_box_payload_capability`): a function value whose
+    /// interface the signature does not show.
+    fn argumentsHoldCallablePayload(self: Converter, module: ModuleIndex, fn_root: checked.CheckedTypeId) Allocator.Error!bool {
+        const types = self.modules.get(module).types();
+        const allocator = self.store.allocator;
+        var root = fn_root;
+        const function = while (true) switch (types.payload(root)) {
+            .alias => |alias| root = alias.backing,
+            .function => |function| break function,
+            .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return true,
+        };
+        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(allocator);
+        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        defer seen.deinit(allocator);
+        try pending.appendSlice(allocator, function.args);
+        while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+            switch (types.payload(ty)) {
+                .alias => |alias| {
+                    try pending.appendSlice(allocator, alias.args);
+                    try pending.append(allocator, alias.backing);
+                },
+                .record => |record| {
+                    for (record.fields) |field| try pending.append(allocator, field.ty);
+                    try pending.append(allocator, record.ext);
+                },
+                .tuple => |items| try pending.appendSlice(allocator, items),
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(types));
+                    try pending.append(allocator, tag_union.ext);
+                },
+                .function => |inner| {
+                    try pending.appendSlice(allocator, inner.args);
+                    try pending.append(allocator, inner.ret);
+                },
+                .nominal => |nominal| switch (nominal.representation) {
+                    .local_box_payload_capability, .imported_box_payload_capability => return true,
+                    .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => try pending.appendSlice(allocator, nominal.args),
+                },
+                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+            }
+        }
+        return false;
+    }
+
+    /// Whether `variable` occurs in the function type `fn_root` anywhere but
+    /// along its result's coercion reach: an argument, or a position under
+    /// the result that a row coercion does not reach (design.md "Row
+    /// Coercion Primitive": the root row, tag payload rows, the error
+    /// argument of a `Try`, and alias backings are reached; records, tuples,
+    /// lists, boxes, functions, and other named types' arguments are not).
+    fn occursOutsideResultReach(self: Converter, module: ModuleIndex, fn_root: checked.CheckedTypeId, variable: checked.CheckedTypeId) Allocator.Error!bool {
+        const types = self.modules.get(module).types();
+        const allocator = self.store.allocator;
+        var root = fn_root;
+        const function = while (true) switch (types.payload(root)) {
+            .alias => |alias| root = alias.backing,
+            .function => |function| break function,
+            .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return true,
+        };
+        for (function.args) |arg| {
+            if (try self.mentionsVariable(module, arg, variable)) return true;
+        }
+        // Reached positions under the result, in which only the variable's
+        // own occurrence as a row extension is on the reach.
+        var reached: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer reached.deinit(allocator);
+        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        defer seen.deinit(allocator);
+        try reached.append(allocator, function.ret);
+        while (reached.pop()) |ty| {
+            if (ty == variable) continue;
+            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+            switch (types.payload(ty)) {
+                .alias => |alias| try reached.append(allocator, alias.backing),
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| try reached.appendSlice(allocator, tag.argsSlice(types));
+                    try reached.append(allocator, tag_union.ext);
+                },
+                .nominal => |nominal| switch (nominal.representation) {
+                    .builtin => |builtin_nominal| if (checked.builtinRuntimeEncoding(builtin_nominal) == .try_nominal and nominal.args.len == 2) {
+                        if (try self.mentionsVariable(module, nominal.args[0], variable)) return true;
+                        try reached.append(allocator, nominal.args[1]);
+                    } else {
+                        for (nominal.args) |arg| if (try self.mentionsVariable(module, arg, variable)) return true;
+                    },
+                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {
+                        for (nominal.args) |arg| if (try self.mentionsVariable(module, arg, variable)) return true;
+                    },
+                },
+                .flex, .rigid, .pending, .err, .empty_record, .empty_tag_union => {},
+                .record, .tuple, .function => if (try self.mentionsVariable(module, ty, variable)) return true,
+            }
+        }
+        return false;
+    }
+
+    /// Whether `variable` occurs anywhere in `root`.
+    fn mentionsVariable(self: Converter, module: ModuleIndex, root: checked.CheckedTypeId, variable: checked.CheckedTypeId) Allocator.Error!bool {
+        const types = self.modules.get(module).types();
+        const allocator = self.store.allocator;
+        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(allocator);
+        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+        defer seen.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |ty| {
+            if (ty == variable) return true;
+            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+            switch (types.payload(ty)) {
+                .alias => |alias| {
+                    try pending.appendSlice(allocator, alias.args);
+                    try pending.append(allocator, alias.backing);
+                },
+                .record => |record| {
+                    for (record.fields) |field| try pending.append(allocator, field.ty);
+                    try pending.append(allocator, record.ext);
+                },
+                .tuple => |items| try pending.appendSlice(allocator, items),
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(types));
+                    try pending.append(allocator, tag_union.ext);
+                },
+                .function => |function| {
+                    try pending.appendSlice(allocator, function.args);
+                    try pending.append(allocator, function.ret);
+                },
+                .nominal => |nominal| try pending.appendSlice(allocator, nominal.args),
+                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+            }
+        }
+        return false;
     }
 
     /// The type a scheme variable takes where nothing relates it to a use:
