@@ -22,6 +22,9 @@ const TypeDesc = desc_mod.TypeDesc;
 const Name = desc_mod.Name;
 
 fn name(comptime text: []const u8) Name {
+    // The id is a SHA-256 digest; computing one at compile time takes far
+    // more branches than the default quota allows.
+    @setEvalBranchQuota(200_000);
     return .{ .id = desc_mod.labelId(text), .len = text.len, .bytes = text.ptr };
 }
 
