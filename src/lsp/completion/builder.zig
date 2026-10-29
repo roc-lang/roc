@@ -487,10 +487,11 @@ pub const CompletionBuilder = struct {
                 tw.reset();
             }
 
-            const documentation = try doc_comments.extractDocCommentBefore(
+            const documentation = try doc_comments.extractDocForBinding(
                 self.strings,
                 module_env.common.source,
-                module_env.store.getPatternRegion(binding.pattern_idx).start.offset,
+                &module_env.store,
+                binding.owner,
             );
 
             _ = try self.addItem(.{
