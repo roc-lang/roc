@@ -10050,7 +10050,7 @@ each parameter and capture, either directly or by placing it in the function's
 result, and which result parts the body constructs or passes through on every
 path that returns; it records each call's demand on its result too. Demand
 flows from consumers to the values that reach them through bindings,
-projections, constructors, branches, loops, join points, and calls, including
+field and payload reads, constructors, branches, loops, join points, and calls, including
 a function value's captures when the value may be called. Parts are paths of
 field, item, and tag-payload steps. A value's parts recur only through a tag
 payload, so a path that repeats a payload step folds to that step's first
@@ -11759,7 +11759,7 @@ two, so that variable does not seal to its row default either. The use
 then never counts as closed, and the call keeps its own row and is
 widened by a `row_widen`. The template side and the use side apply the
 same discharge rule (`row_default_discharges_constraints`, which the
-checked artifact records for flex and rigid variables alike).
+checked module data records for flex and rigid variables alike).
 Specialization therefore never meets a request wider than a template
 that cannot take it.
 
@@ -11838,7 +11838,7 @@ Five consumers keep the rule exact:
   source row's heads into one projected row, so it normalizes every source
   row whose chain repeats a label before inventorying the batch, and every
   source tail it gathers after relating heads, which those relations can
-  expose. A conflict is reported at the contribution. A projection never
+  expose. A conflict is reported at the contribution. A projected row never
   holds a label twice.
 - Type rendering (`TypeWriter`, and the snapshot diff's row gatherers) shows
   each label once, with its innermost occurrence, since that is what the row
@@ -17999,7 +17999,7 @@ is reachable through the function's own callable type is not
 `unreachable`. Two edges do this: a value use of a procedure, and the
 construction edge of an expression-position function stored in a containing
 value (`hooks = { shout: |s| s.concat("!") }`), whose instantiated scheme is
-the dispatch scope that function owns. Both publish their record through one
+the dispatch scope that function owns. Both record their evidence through one
 rule (`UnpinnedRecordEvidence.from_callable`). A lambda that a stored
 conditional, match, or block selects has no construction edge and shares its
 variables with the value holding it, yet an importing use copies that value's
@@ -18007,7 +18007,7 @@ type exactly as it copies a construction edge's instance. When its own type
 reaches the receiver of a dispatch plan whose variable checking left
 unquantified, the lambda owns a callable-derived dispatch scope whose schema
 is enumerated over its own type (`collectCallableDerivedSchemes`); the
-lambda's own construction then publishes that scope's evidence, forwarding a
+lambda's own construction then outputs that scope's evidence, forwarding a
 receiver an enclosing scope binds and recording `from_callable` for the
 rest. A template's root function never owns one, and a module with no
 unquantified dispatch receiver walks no types for it. Checker output records a
