@@ -731,12 +731,13 @@ choice does not move with other modules' keys as they are edited, and
 otherwise the occurrence in the lowest-keyed module that holds one. Freshly
 lowered, replayed and restored named types of one closed type are then one
 Monotype, with one full and one specialization digest. The coordinator builds
-the index from canonical key to representative (`ClosedOccurrenceIndex`) once,
+the index from checked type key to representative (`ClosedOccurrenceIndex`) once,
 from every module view's named root rows, before any body is lowered; workers
 borrow it, and a persistent summary's closed occurrence resolves through it on
 decode. Open occurrences keep their exact lowering-view witness. The
 representative is a property of one program and is never persisted in a
-module's own artifact ("Compile-Time Value Reuse Across Edits").
+module's own checked module cache entry ("Compile-Time Value Reuse Across
+Edits").
 
 ### Persistent Specialization Interface Summaries
 
@@ -3659,14 +3660,14 @@ Monotype type's full and specialization digests. In a stored value and its
 stored type, every closed named type's occurrence is the storing module's own
 (`ConstStoreWriter.rebindNamedOccurrence`): the stored root's checked type is
 the module's, so the module holds an occurrence of each closed named type in
-it under the same canonical key, and the module's cache entry then names only
+it under the same checked type key, and the module's cache entry then names only
 modules its own identity covers. Monotype's in-memory occurrence of a closed
 type is instead one representative per program ("Closed Named Occurrences"
-below), which may belong to any module of the program the value was lowered
+above), which may belong to any module of the program the value was lowered
 in, so a module's entry must not retain it: a later program reusing the entry
 need not contain that module. An open occurrence is exact, lowered from a
 view the storing module's value identity covers, and is stored as it is.
-Restoring a stored type canonicalizes each occurrence back to the current
+Restoring a stored type resolves each occurrence back to the current
 program's representative, so a restored type and a freshly lowered one are
 one Monotype. An occurrence in the module's own store names a type of the
 version that stored it: after an edit the same id names another type of the

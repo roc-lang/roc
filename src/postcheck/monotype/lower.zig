@@ -5450,7 +5450,7 @@ const LoweringModuleIds = std.AutoHashMap([32]u8, Common.LoweringModuleId);
 const CheckedOccurrence = struct { module: checked.ModuleId, ty: checked.CheckedTypeId };
 
 /// The program's representative checked occurrence of every closed named
-/// type, by canonical type key: the declaring module's own occurrence when
+/// type, by checked type key: the declaring module's own occurrence when
 /// that module holds one, so the choice does not move with other modules'
 /// keys as they are edited, and otherwise the occurrence in the lowest-keyed
 /// module that holds one. Closed occurrences have no instantiation identity,

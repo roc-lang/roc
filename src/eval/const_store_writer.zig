@@ -252,14 +252,14 @@ pub const Writer = struct {
     fn rebindNamedOccurrence(self: *const Writer, named: const_store.NamedType) const_store.NamedType {
         const rebinding = self.occurrences orelse return named;
         const storing_key = rebinding.storing_module.key;
-        if (std.mem.eql(u8, &named.ty_module.bytes, &storing_key.bytes)) return named;
+        if (std.meta.eql(named.ty_module.bytes, storing_key.bytes)) return named;
         const occurrence_types = rebinding.program.find(rebinding.program.context, named.ty_module.bytes) orelse
             writerInvariant("a stored named type's checked occurrence named a module outside the program");
         const root = occurrence_types.rootRows()[@backingInt(named.ty)];
         if (root.contains_identity_variables) return named;
         // Every closed named type in a stored value or its type is a type of
         // the storing module's own checked root, so the module holds an
-        // occurrence under the same canonical key.
+        // occurrence under the same checked type key.
         const local = rebinding.storing_module.checked_types.view().rootForKey(root.key) orelse
             writerInvariant("a stored closed named type has no checked occurrence in the module storing it");
         return .{ .module = named.module, .ty = local, .ty_module = storing_key.digest() };
@@ -1367,14 +1367,14 @@ fn deinitTestArtifact(artifact: *checked.CheckedModuleArtifact, allocator: Alloc
     artifact.canonical_names.deinit();
 }
 
-/// A one-module program: the artifact's own checked types under its key.
+/// A one-module program: the module's own checked types under its key.
 fn testProgramTypes(artifact: *const checked.CheckedModuleArtifact) ProgramTypes {
     return .{ .context = artifact, .find = findTestProgramTypes };
 }
 
 fn findTestProgramTypes(context: *const anyopaque, key: [32]u8) ?checked.CheckedTypeStoreView {
     const artifact: *const checked.CheckedModuleArtifact = @ptrCast(@alignCast(context));
-    if (!std.mem.eql(u8, &artifact.key.bytes, &key)) return null;
+    if (!std.meta.eql(artifact.key.bytes, key)) return null;
     return artifact.checked_types.view();
 }
 
