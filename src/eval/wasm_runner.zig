@@ -90,6 +90,11 @@ pub const RunWasmOutcomeResult = struct {
 const WasmRunState = struct {
     allocator: std.mem.Allocator,
     heap_ptr: u32,
+    /// The end of the linear memory this host claimed through
+    /// `memory.grow`. The program may grow memory itself (its runtime's
+    /// page allocator does), so pages past this end belong to whoever grew
+    /// them.
+    owned_end: u32,
     allocation_count: u32 = 0,
     crashed: bool = false,
     crash_message: ?[]u8 = null,
@@ -97,7 +102,7 @@ const WasmRunState = struct {
     events: std.ArrayListUnmanaged(HostEvent) = .empty,
 
     fn init(allocator: std.mem.Allocator, heap_base: u32) WasmRunState {
-        return .{ .allocator = allocator, .heap_ptr = heap_base };
+        return .{ .allocator = allocator, .heap_ptr = heap_base, .owned_end = heap_base };
     }
 
     fn deinit(self: *WasmRunState) void {
@@ -388,15 +393,23 @@ fn allocWasmData(state: *WasmRunState, module: *bytebox.ModuleInstance, alignmen
     state.allocation_count += 1;
     const align_val: u32 = if (alignment > 4) alignment else 4;
     const extra_bytes = allocExtraBytes(alignment);
-    const alloc_ptr = (state.heap_ptr + align_val - 1) & ~(align_val - 1);
-    const data_ptr = alloc_ptr + extra_bytes;
-    const end: u64 = @as(u64, data_ptr) + length;
-    if (end > std.math.maxInt(u32)) @panic("wasm evaluator exhausted the wasm32 address space");
-    const current_len = module.memoryAll().len;
-    if (end > current_len) {
+    var alloc_ptr = (state.heap_ptr + align_val - 1) & ~(align_val - 1);
+    var data_ptr = alloc_ptr + extra_bytes;
+    var end: u64 = @as(u64, data_ptr) + length;
+    if (end > state.owned_end) {
+        // Claim new pages. When the program grew memory past this host's
+        // pages, the allocation starts at the new pages instead.
+        const current_len: u32 = @intCast(module.memoryAll().len);
+        if (current_len != state.owned_end) {
+            alloc_ptr = (current_len + align_val - 1) & ~(align_val - 1);
+            data_ptr = alloc_ptr + extra_bytes;
+            end = @as(u64, data_ptr) + length;
+        }
+        if (end > std.math.maxInt(u32)) @panic("wasm evaluator exhausted the wasm32 address space");
         const missing = end - current_len;
         const pages = (missing + 65535) / 65536;
         if (!module.memoryGrow(@intCast(pages))) @panic("wasm evaluator could not grow linear memory");
+        state.owned_end = @intCast(module.memoryAll().len);
     }
     state.heap_ptr = @intCast(end);
     const buffer = module.memoryAll();
