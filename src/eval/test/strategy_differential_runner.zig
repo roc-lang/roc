@@ -15,10 +15,8 @@
 //! and the harness's own cases (`strategy_differential_corpus.zig`), which pin
 //! `to_inspect` override selection, shape coverage for inspect, equality, and
 //! hashing, and match lowering. A case that a strategy or backend cannot run
-//! is counted and reported per reason, never silently skipped. Eval cases
-//! whose `.boxy` executions do not yet agree are listed with their failure
-//! and reason in `strategy_differential_gaps.zig`; the run counts them per
-//! reason and fails on any unlisted failure and on any stale entry.
+//! is counted and reported per reason, never silently skipped. Every eval
+//! case's `.boxy` executions must agree with its `.lss` executions.
 //!
 //! Cases run through `test_harness.ProcessPool`: forked children on POSIX,
 //! persistent `--worker-stream` worker processes on Windows. Each case is
@@ -38,7 +36,6 @@ const InspectedRun = eval.InspectedRun;
 const eval_tests = @import("eval_tests.zig");
 const host_effects_tests = @import("host_effects_tests.zig");
 const corpus = @import("strategy_differential_corpus.zig");
-const known_gaps = @import("strategy_differential_gaps.zig");
 
 const posix = std.posix;
 
@@ -46,7 +43,6 @@ const RunnerError = std.mem.Allocator.Error || std.fmt.ParseIntError || test_har
     InvalidArgument,
     Diverged,
     NothingExecuted,
-    StaleKnownGap,
     UnexpectedChildFailure,
     Unexpected,
 };
@@ -104,10 +100,6 @@ const Totals = struct {
     wrong: usize = 0,
     compile_skip: usize = 0,
     child_failed: usize = 0,
-    /// Failures a known strategy gap states, counted by reason.
-    known_gap: usize = 0,
-    /// Known gaps whose case now agrees, or that name no case.
-    stale_gap: usize = 0,
 };
 
 const ReasonEntry = struct {
@@ -396,33 +388,16 @@ const Report = struct {
     gpa: std.mem.Allocator,
     totals: Totals = .{},
     reasons: std.StringHashMap(ReasonEntry),
-    /// Each known gap by case name, with whether a case it names ran.
-    gaps: std.StringHashMap(GapState),
-    gap_counts: [std.enums.values(known_gaps.Reason).len]usize = @splat(0),
     saw_failure: bool = false,
 
-    const GapState = struct {
-        gap: known_gaps.Gap,
-        seen: bool = false,
-    };
-
     fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Report {
-        var report = Report{ .gpa = gpa, .reasons = .init(gpa), .gaps = .init(gpa) };
-        errdefer report.deinit();
-        for (known_gaps.gaps) |gap| {
-            const entry = try report.gaps.getOrPut(gap.case);
-            // Each case is listed once.
-            std.debug.assert(!entry.found_existing);
-            entry.value_ptr.* = .{ .gap = gap };
-        }
-        return report;
+        return .{ .gpa = gpa, .reasons = .init(gpa) };
     }
 
     fn deinit(self: *Report) void {
         var it = self.reasons.iterator();
         while (it.next()) |entry| self.gpa.free(entry.key_ptr.*);
         self.reasons.deinit();
-        self.gaps.deinit();
     }
 
     fn record(self: *Report, case: Case, result: CaseResult) std.mem.Allocator.Error!void {
@@ -446,23 +421,6 @@ const Report = struct {
                     entry.value_ptr.* = .{ .count = 1, .examples = .{ case.name, undefined, undefined }, .example_count = 1 };
                 }
             }
-        }
-
-        if (self.gaps.getPtr(case.name)) |state| {
-            state.seen = true;
-            if (gapStatesStatus(state.gap.status, result.status)) {
-                self.totals.known_gap += 1;
-                self.gap_counts[@backingInt(state.gap.reason)] += 1;
-                logVerbose("KNOWN-GAP  {s}: {s}\n", .{ case.name, state.gap.reason.text() });
-                return;
-            }
-            if (result.status == .pass) {
-                self.totals.stale_gap += 1;
-                self.saw_failure = true;
-                std.debug.print("STALE-GAP  {s}: now agrees under both strategies; delete its entry in strategy_differential_gaps.zig\n", .{case.name});
-                return;
-            }
-            // A failure the gap does not state is reported like any other.
         }
 
         switch (result.status) {
@@ -496,13 +454,6 @@ const Report = struct {
         }
     }
 };
-
-fn gapStatesStatus(gap_status: known_gaps.Status, status: CaseStatus) bool {
-    return switch (gap_status) {
-        .diverged => status == .diverged,
-        .child_failed => status == .child_failed,
-    };
-}
 
 fn statusByte(status: CaseStatus) u8 {
     return switch (status) {
@@ -605,8 +556,8 @@ const Pool = test_harness.ProcessPool(Case, CaseResult, .{
     .stabilizeResult = &stabilizeCaseResult,
     .getName = &getCaseName,
     .use_process_groups = true,
-    // A known strategy gap can end its case's process; on Windows each case
-    // gets its own process so that ends only that case.
+    // A failing case can end its process; on Windows each case gets its own
+    // process so that ends only that case.
     .windows_persistent_workers = false,
 });
 
@@ -757,8 +708,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
             "  diverged:            {d}\n" ++
             "  agreed but wrong:    {d}\n" ++
             "  did not compile:     {d}\n" ++
-            "  child failures:      {d}\n" ++
-            "  known strategy gaps: {d}\n",
+            "  child failures:      {d}\n",
         .{
             run_list.items.len,
             timer.read() / std.time.ns_per_ms,
@@ -767,28 +717,8 @@ pub fn main(init: std.process.Init) RunnerError!void {
             totals.wrong,
             totals.compile_skip,
             totals.child_failed,
-            totals.known_gap,
         },
     );
-
-    // Every gap names a case of the full run.
-    if (cli.filters.len == 0 and !harness_only) {
-        var it = report.gaps.iterator();
-        while (it.next()) |entry| {
-            if (entry.value_ptr.seen) continue;
-            report.totals.stale_gap += 1;
-            std.debug.print("STALE-GAP  {s}: names no case; delete its entry in strategy_differential_gaps.zig\n", .{entry.key_ptr.*});
-        }
-    }
-
-    if (report.totals.known_gap > 0) {
-        std.debug.print("\nknown strategy gaps (counted, not skipped):\n", .{});
-        for (report.gap_counts, 0..) |count, index| {
-            if (count == 0) continue;
-            const reason: known_gaps.Reason = @fromBackingInt(@intCast(index));
-            std.debug.print("  {d:>5}  {s}\n", .{ count, reason.text() });
-        }
-    }
 
     std.debug.print("\nshape coverage exemptions:\n", .{});
     for (corpus.equality_exemptions) |exemption| std.debug.print("  equality {s}: {s}\n", .{ @tagName(exemption.kind), exemption.reason });
@@ -813,10 +743,6 @@ pub fn main(init: std.process.Init) RunnerError!void {
     if (totals.child_failed > 0) {
         std.debug.print("\nFAILED: {d} case(s) died (compiler panic, backend crash, or timeout)\n", .{totals.child_failed});
         return error.UnexpectedChildFailure;
-    }
-    if (report.totals.stale_gap > 0) {
-        std.debug.print("\nFAILED: {d} stale known gap(s)\n", .{report.totals.stale_gap});
-        return error.StaleKnownGap;
     }
     if (totals.pass == 0) {
         std.debug.print("\nFAILED: no case executed under both strategies\n", .{});
