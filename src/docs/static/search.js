@@ -163,8 +163,8 @@ const setupSearch = () => {
           api.li.classList.remove("hidden");
           searchTypeAhead.appendChild(api.li);
           shownItems.push(api.li);
-          const note = dynamic("small", "search-match-note", ` — also known as ${query}`);
-          api.li.querySelector("a").append(note);
+          const note = dynamic("small", "search-match-note", ` (alias: ${query})`);
+          api.li.querySelector(".type-ahead-def-name").after(note);
           dynamicItems.push(note);
         } else addProse(item, query);
         seen.add(item.href);
