@@ -1307,6 +1307,28 @@ fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     return decision orelse error.TestUnexpectedResult;
 }
 
+/// The static data a `.boxy` program froze (its descriptors, dictionaries,
+/// and name table), installed in an interpreter as every real pipeline
+/// installs it; a `.lss` program freezes none.
+const FrozenStaticData = struct {
+    data: ?eval.InterpreterStaticData,
+
+    fn init(allocator: Allocator, lowered: *const lir.CheckedPipeline.LoweredProgram) !FrozenStaticData {
+        const frozen = lowered.frozen_static_data orelse return .{ .data = null };
+        return .{ .data = try eval.InterpreterStaticData.init(allocator, frozen.exports, lowered.lir_result.static_data_values.items.len) };
+    }
+
+    fn install(self: *FrozenStaticData, interpreter: *eval.Interpreter) void {
+        const data = &(self.data orelse return);
+        data.install(interpreter);
+        data.ownByInterpreter(interpreter);
+    }
+
+    fn deinit(self: *FrozenStaticData) void {
+        if (self.data) |*data| data.deinit();
+    }
+};
+
 fn rootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) TestError!LIR.LirProcSpecId {
     return lowered.main_proc orelse error.MissingRootProcedure;
 }
@@ -13011,6 +13033,8 @@ fn expectKeyedContainersEvaluate(source: []const u8, expected: u64) (TestError |
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
         {
+            var static_data = try FrozenStaticData.init(allocator, &lowered.lowered);
+            defer static_data.deinit();
             var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
             defer static_strings.deinit();
             var interpreter = try eval.Interpreter.init(
@@ -13021,6 +13045,7 @@ fn expectKeyedContainersEvaluate(source: []const u8, expected: u64) (TestError |
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
+            static_data.install(&interpreter);
             var count: u64 = 40;
             const evaluated = try interpreter.eval(.{
                 .proc_id = try rootProc(&lowered.lowered),
@@ -13521,6 +13546,8 @@ test "issue 11470: tagged shared error composition executes in both strategies" 
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
         defer static_strings.deinit();
         {
+            var static_data = try FrozenStaticData.init(allocator, &lowered.lowered);
+            defer static_data.deinit();
             var interpreter = try eval.Interpreter.init(
                 allocator,
                 &result.store,
@@ -13529,6 +13556,7 @@ test "issue 11470: tagged shared error composition executes in both strategies" 
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
+            static_data.install(&interpreter);
             for ([_]u64{ 40, 1, 2, 3, 4 }, 0..) |expected, mode| {
                 var argument: u64 = @intCast(mode);
                 const evaluated = try interpreter.eval(.{
@@ -13602,12 +13630,8 @@ fn expectStampedRowCoercionResults(source: []const u8, expectations: []const [2]
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
         defer static_strings.deinit();
         {
-            // The descriptors, dictionaries, and name table a `.boxy` program froze.
-            var static_data: ?eval.InterpreterStaticData = if (lowered.lowered.frozen_static_data) |frozen|
-                try eval.InterpreterStaticData.init(allocator, frozen.exports, result.static_data_values.items.len)
-            else
-                null;
-            defer if (static_data) |*data| data.deinit();
+            var static_data = try FrozenStaticData.init(allocator, &lowered.lowered);
+            defer static_data.deinit();
             var interpreter = try eval.Interpreter.init(
                 allocator,
                 &result.store,
@@ -13616,10 +13640,7 @@ fn expectStampedRowCoercionResults(source: []const u8, expectations: []const [2]
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
-            if (static_data) |*data| {
-                data.install(&interpreter);
-                data.ownByInterpreter(&interpreter);
-            }
+            static_data.install(&interpreter);
             for (expectations) |expectation| {
                 var argument: u64 = expectation[0];
                 const evaluated = try interpreter.eval(.{
@@ -13691,6 +13712,8 @@ fn expectStampedRowCoercionCrash(source: []const u8, expected_message: []const u
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
         defer static_strings.deinit();
         {
+            var static_data = try FrozenStaticData.init(allocator, &lowered.lowered);
+            defer static_data.deinit();
             var interpreter = try eval.Interpreter.init(
                 allocator,
                 &result.store,
@@ -13699,6 +13722,7 @@ fn expectStampedRowCoercionCrash(source: []const u8, expected_message: []const u
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
+            static_data.install(&interpreter);
             var argument: u64 = 0;
             if (interpreter.eval(.{
                 .proc_id = try rootProc(&lowered.lowered),
@@ -14274,11 +14298,8 @@ test "sealed result rows: an annotated result row is a static worker and widenin
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
     {
-        var static_data: ?eval.InterpreterStaticData = if (lowered.lowered.frozen_static_data) |frozen|
-            try eval.InterpreterStaticData.init(allocator, frozen.exports, result.static_data_values.items.len)
-        else
-            null;
-        defer if (static_data) |*data| data.deinit();
+        var static_data = try FrozenStaticData.init(allocator, &lowered.lowered);
+        defer static_data.deinit();
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
         defer static_strings.deinit();
         var interpreter = try eval.Interpreter.init(
@@ -14289,10 +14310,7 @@ test "sealed result rows: an annotated result row is a static worker and widenin
             runtime_env.get_ops(),
         );
         defer interpreter.deinit();
-        if (static_data) |*data| {
-            data.install(&interpreter);
-            data.ownByInterpreter(&interpreter);
-        }
+        static_data.install(&interpreter);
         for ([_][2]u64{ .{ 0, 7 }, .{ 1, 1100 }, .{ 2, 1200 } }) |expectation| {
             var argument: u64 = expectation[0];
             const evaluated = try interpreter.eval(.{

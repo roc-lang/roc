@@ -1529,7 +1529,19 @@ pub const Builder = struct {
             if (pair.from == pair.to) continue;
             const from = store.get(pair.from);
             const to = store.get(pair.to);
-            if (from == .variable or to == .variable) continue;
+            if ((from == .variable) != (to == .variable)) {
+                // A value whose type a variable of the body leaves open, flowing
+                // into a tag row or out of one (a `?` return's error into the
+                // function's composed row): the variable's tags are known
+                // only at run time, so the value is re-tagged by name under
+                // the destination's descriptor. Elsewhere a variable has the
+                // one representation every type has.
+                if (pair.place == .data and try self.isTagRow(if (from == .variable) pair.to else pair.from)) {
+                    if (result == .none) result = .rows;
+                }
+                continue;
+            }
+            if (from == .variable) continue;
             if (std.meta.activeTag(from) != std.meta.activeTag(to)) {
                 // A nominal shares its backing's representation.
                 if (from == .nominal and from.nominal.has_backing) {
@@ -1601,6 +1613,15 @@ pub const Builder = struct {
             }
         }
         return result;
+    }
+
+    /// Whether `ty` is a tag union, through the backing of a nominal.
+    fn isTagRow(self: *Builder, ty: TypeId) Allocator.Error!bool {
+        return switch (self.program.store.get(ty)) {
+            .tag_union => true,
+            .nominal => |nominal| nominal.has_backing and try self.isTagRow(try self.program.converter().backing(ty)),
+            .primitive, .empty_record, .record, .tuple, .list, .box, .function, .variable => false,
+        };
     }
 
     /// The value `value` of type `from` at type `to`, a type of the same
