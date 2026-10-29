@@ -420,7 +420,7 @@ pub const Program = struct {
         const evidence_params = poolSlice(static_dispatch.EvidenceParamRecord, view.view.checked_procedure_templates.evidence_params_pool, template.evidence_params);
         for (evidence_params, 0..) |param, index| {
             if (!param.runtime_dictionary) continue;
-            const sealed_dispatcher = if (param.slot) |slot| std.mem.indexOfScalar(u32, sealed_slots.items, slot) != null else false;
+            const sealed_dispatcher = if (param.slot) |slot| std.mem.findScalar(u32, sealed_slots.items, slot) != null else false;
             if (sealed_dispatcher) continue;
             try dictionary_params.append(self.arena.allocator(), @intCast(index));
         }

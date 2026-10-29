@@ -10483,72 +10483,72 @@ test "RC emission units: a call demands an owned variant only within its callee'
         .{ .caller = .program, .callee = .program, .variants = 1 },
     };
     for (cases) |case| {
-    var f = try ArcTest.init(testing.allocator);
-    defer f.deinit();
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
 
-    // Each callee parameter is a pair whose owned variant takes its first
-    // list; the caller passes two different fields of one dying record.
-    const left = try f.local(f.pair_list);
-    const right = try f.local(f.pair_list);
-    const left_field = try f.local(f.list_i64);
-    const right_field = try f.local(f.list_i64);
-    const elem = try f.local(.i64);
-    const left_appended = try f.local(f.list_i64);
-    const right_appended = try f.local(f.list_i64);
-    const callee_result = try f.local(.i64);
-    const callee_ret = try f.ret(callee_result);
-    const result_assign = try f.assignI64(callee_result, 1, callee_ret);
-    const append_right = try f.assignLowLevel(right_appended, &.{ right_field, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
-    const read_right = try f.assignRefField(right_field, right, 0, append_right);
-    const append_left = try f.assignLowLevel(left_appended, &.{ left_field, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), read_right);
-    const elem_assign = try f.assignI64(elem, 5, append_left);
-    const read_left = try f.assignRefField(left_field, left, 0, elem_assign);
-    const callee = try f.addProc(&.{ left, right }, read_left, .i64);
+        // Each callee parameter is a pair whose owned variant takes its first
+        // list; the caller passes two different fields of one dying record.
+        const left = try f.local(f.pair_list);
+        const right = try f.local(f.pair_list);
+        const left_field = try f.local(f.list_i64);
+        const right_field = try f.local(f.list_i64);
+        const elem = try f.local(.i64);
+        const left_appended = try f.local(f.list_i64);
+        const right_appended = try f.local(f.list_i64);
+        const callee_result = try f.local(.i64);
+        const callee_ret = try f.ret(callee_result);
+        const result_assign = try f.assignI64(callee_result, 1, callee_ret);
+        const append_right = try f.assignLowLevel(right_appended, &.{ right_field, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+        const read_right = try f.assignRefField(right_field, right, 0, append_right);
+        const append_left = try f.assignLowLevel(left_appended, &.{ left_field, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), read_right);
+        const elem_assign = try f.assignI64(elem, 5, append_left);
+        const read_left = try f.assignRefField(left_field, left, 0, elem_assign);
+        const callee = try f.addProc(&.{ left, right }, read_left, .i64);
 
-    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
-        .{ .index = 0, .layout = f.pair_list },
-        .{ .index = 1, .layout = f.pair_list },
-    });
-    const a = try f.local(f.list_i64);
-    const b = try f.local(f.list_i64);
-    const c = try f.local(f.list_i64);
-    const d = try f.local(f.list_i64);
-    const first_pair = try f.local(f.pair_list);
-    const second_pair = try f.local(f.pair_list);
-    const record = try f.local(record_layout);
-    const first_arg = try f.local(f.pair_list);
-    const second_arg = try f.local(f.pair_list);
-    const caller_result = try f.local(.i64);
-    const caller_ret = try f.ret(caller_result);
-    const call = try f.store.addCFStmt(.{ .assign_call = .{
-        .target = caller_result,
-        .proc = callee,
-        .args = try f.span(&.{ first_arg, second_arg }),
-        .next = caller_ret,
-    } }, .test_fixture);
-    const read_second = try f.assignRefField(second_arg, record, 1, call);
-    const read_first = try f.assignRefField(first_arg, record, 0, read_second);
-    const record_assign = try f.assignStruct(record, &.{ first_pair, second_pair }, read_first);
-    const second_assign = try f.assignStruct(second_pair, &.{ c, d }, record_assign);
-    const first_assign = try f.assignStruct(first_pair, &.{ a, b }, second_assign);
-    const d_assign = try f.assignList(d, &.{}, first_assign);
-    const c_assign = try f.assignList(c, &.{}, d_assign);
-    const b_assign = try f.assignList(b, &.{}, c_assign);
-    const caller_body = try f.assignList(a, &.{}, b_assign);
-    const caller = try f.addProc(&.{}, caller_body, .i64);
-    f.store.getProcSpecPtr(callee).emission_unit = case.callee;
-    f.store.getProcSpecPtr(caller).emission_unit = case.caller;
+        const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+            .{ .index = 0, .layout = f.pair_list },
+            .{ .index = 1, .layout = f.pair_list },
+        });
+        const a = try f.local(f.list_i64);
+        const b = try f.local(f.list_i64);
+        const c = try f.local(f.list_i64);
+        const d = try f.local(f.list_i64);
+        const first_pair = try f.local(f.pair_list);
+        const second_pair = try f.local(f.pair_list);
+        const record = try f.local(record_layout);
+        const first_arg = try f.local(f.pair_list);
+        const second_arg = try f.local(f.pair_list);
+        const caller_result = try f.local(.i64);
+        const caller_ret = try f.ret(caller_result);
+        const call = try f.store.addCFStmt(.{ .assign_call = .{
+            .target = caller_result,
+            .proc = callee,
+            .args = try f.span(&.{ first_arg, second_arg }),
+            .next = caller_ret,
+        } }, .test_fixture);
+        const read_second = try f.assignRefField(second_arg, record, 1, call);
+        const read_first = try f.assignRefField(first_arg, record, 0, read_second);
+        const record_assign = try f.assignStruct(record, &.{ first_pair, second_pair }, read_first);
+        const second_assign = try f.assignStruct(second_pair, &.{ c, d }, record_assign);
+        const first_assign = try f.assignStruct(first_pair, &.{ a, b }, second_assign);
+        const d_assign = try f.assignList(d, &.{}, first_assign);
+        const c_assign = try f.assignList(c, &.{}, d_assign);
+        const b_assign = try f.assignList(b, &.{}, c_assign);
+        const caller_body = try f.assignList(a, &.{}, b_assign);
+        const caller = try f.addProc(&.{}, caller_body, .i64);
+        f.store.getProcSpecPtr(callee).emission_unit = case.callee;
+        f.store.getProcSpecPtr(caller).emission_unit = case.caller;
 
-    const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = true });
+        const base_proc_count = f.store.procSpecCount();
+        try insert(&f.store, &f.layouts, .{ .specialize = true });
 
-    try testing.expectEqual(base_proc_count + case.variants, f.store.procSpecCount());
-    // The base proc keeps its borrowed signature either way and retains
-    // each borrowed field once.
-    try testing.expectEqual(@as(u64, 0b11), f.store.getProcSpec(callee).rc_borrowed_params);
-    try testing.expectEqual(@as(usize, 1), f.countRc(left_field, .incref));
-    try testing.expectEqual(@as(usize, 1), f.countRc(right_field, .incref));
-    if (case.variants == 1) try f.expectRc(record, 0, 0, 0);
+        try testing.expectEqual(base_proc_count + case.variants, f.store.procSpecCount());
+        // The base proc keeps its borrowed signature either way and retains
+        // each borrowed field once.
+        try testing.expectEqual(@as(u64, 0b11), f.store.getProcSpec(callee).rc_borrowed_params);
+        try testing.expectEqual(@as(usize, 1), f.countRc(left_field, .incref));
+        try testing.expectEqual(@as(usize, 1), f.countRc(right_field, .incref));
+        if (case.variants == 1) try f.expectRc(record, 0, 0, 0);
     }
 }
 

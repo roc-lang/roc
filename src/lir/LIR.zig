@@ -974,7 +974,7 @@ pub const EmissionUnit = enum(u32) {
 
     /// The unit of lowering module `index`.
     pub fn module(index: u32) EmissionUnit {
-        return @enumFromInt(index + 2);
+        return @fromBackingInt(@intCast(index + 2));
     }
 
     /// Whether a call from a procedure in `caller` may demand a variant of a
