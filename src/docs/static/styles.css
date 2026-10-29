@@ -1656,7 +1656,7 @@ main > .main-content[aria-busy="true"] {
 /* Search filters and prose results preserve the compact API row layout. */
 #search-type-ahead .search-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 8px; position: sticky; top: 0; background: var(--body-bg-color); z-index: 2; }
 .search-filters button, .search-more button { font: inherit; color: var(--link-color); background: transparent; border: 1px solid var(--violet-border-subtle); border-radius: 4px; padding: 4px 8px; cursor: pointer; }
-.search-filters button { font-size: var(--font-sm); line-height: 1.25; padding: 3px 6px; }
+.search-filters button, .search-more button { font-size: var(--font-sm); line-height: 1.25; padding: 3px 6px; }
 .search-filters button[aria-pressed="true"] { background: var(--violet-bg); border-color: var(--violet); }
 .search-group-label, .search-status, .search-more { padding: 8px; font-family: var(--font-sans); }
 .search-group-label { font-weight: bold; font-size: var(--font-sm); border-top: 1px solid var(--violet-border-subtle); }
