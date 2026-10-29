@@ -197,6 +197,10 @@ pub const TypeCheckTask = struct {
     /// an app root's entrypoint contract with its platform is enforced, and
     /// participates in the checked-artifact cache identity.
     validation: can.Can.Validation = .checking,
+    /// The source-pin validation input canonicalization reported against.
+    /// Inference admission keys it, as checked-entry admission does, because
+    /// a reused inference result replaces the canonicalized environment.
+    source_pin_validation: [32]u8,
 };
 
 /// The platform root's requirement surface, borrowed from its completed
@@ -349,6 +353,11 @@ pub const OwnedSemanticModuleData = struct {
 
 /// Result of successfully type-checking a module
 pub const TypeCheckedResult = struct {
+    /// A hit republishes against current artifacts without invoking inference.
+    inference_reused: bool = false,
+    owner_bindings: u32 = 0,
+    reference_bindings: u32 = 0,
+    diagnostics_replayed: u32 = 0,
     /// Package this module belongs to
     package_name: []const u8,
     /// Module identifier

@@ -1164,7 +1164,9 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
         "pub const GraphTypeFinals = struct {",
     );
     try expectContains(durable_scan, "const types = self.graph.types;");
-    try expectContains(durable_scan, "self.visiting.fetchRemove(ty)");
+    // Cycles are resolved by the shared emptiness evaluation, not a local
+    // visiting set.
+    try expectContains(durable_scan, "@import(\"../inhabitation.zig\").Evaluation(Type.TypeId, TypeUninhabitedScan)");
     try expectNotContains(durable_scan, "activeNodeFromType");
     try expectNotContains(durable_scan, "self.graph.content(");
     const inspect_call = sourceSliceBetween(

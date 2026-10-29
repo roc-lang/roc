@@ -2,8 +2,8 @@
 
 const mingw_runtime = @import("mingw_runtime.zig");
 
-/// Startup, TLS directory, and compiler-rt, built from
-/// `src/default_platform/msvc_runtime/`.
+/// Startup, TLS directory, the routines vcruntime supplies, and compiler-rt,
+/// built from `src/default_platform/msvc_runtime/`.
 pub const runtime_archive = "msvc_runtime.lib";
 
 /// UCRT and Win32 import libraries, shared with the matching MinGW target.
