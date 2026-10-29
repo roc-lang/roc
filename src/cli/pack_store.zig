@@ -276,6 +276,10 @@ pub const Store = struct {
             }
             advertised[slot] = true;
         }
+        var payloads = NativePublication.init(self);
+        defer payloads.deinit();
+        var metadata = NativePublication.init(self);
+        defer metadata.deinit();
         var published = std.AutoHashMap([32]u8, void).init(allocator);
         defer published.deinit();
         for (union_indices) |index| {
@@ -287,7 +291,7 @@ pub const Store = struct {
                 payload_hashes[index] = record.digest;
                 if ((try published.getOrPut(record.digest)).found_existing) continue;
                 const id = self.indexedIdentity(.local, @splat(0), record.digest, .payload);
-                if (std.mem.eql(u8, &record.storage_identity, &self.retainedIdentity(id.indexedKey()))) stats.validated_references += 1 else _ = try self.publishIndexedHeld(id, record.bytes, stats, &pins);
+                if (std.mem.eql(u8, &record.storage_identity, &self.retainedIdentity(id.indexedKey()))) stats.validated_references += 1 else _ = try payloads.append(id, record.bytes, stats, &pins);
                 continue;
             }
             const bytes = try Index.payload(allocator, artifact);
@@ -300,8 +304,9 @@ pub const Store = struct {
             payload_hashes[index] = hash;
             if ((try published.getOrPut(hash)).found_existing) continue;
             const id = self.indexedIdentity(.local, @splat(0), hash, .payload);
-            _ = try self.publishIndexedHeld(id, bytes, stats, &pins);
+            _ = try payloads.append(id, bytes, stats, &pins);
         }
+        try payloads.publish();
         var names: ?backend.dev.CodeExcerpt.ContentNames = null;
         defer if (names) |*value| value.deinit();
         var remaining = graph.components.count();
@@ -312,7 +317,7 @@ pub const Store = struct {
             if (Index.reusableComponent(set, &graph, &closure, c, component_hashes, payload_hashes)) |record| {
                 component_hashes[c] = record.digest;
                 const id = self.indexedIdentity(.local, @splat(0), record.digest, .metadata);
-                if (std.mem.eql(u8, &record.storage_identity, &self.retainedIdentity(id.indexedKey()))) stats.validated_references += 1 else _ = try self.publishIndexedHeld(id, record.bytes, stats, &pins);
+                if (std.mem.eql(u8, &record.storage_identity, &self.retainedIdentity(id.indexedKey()))) stats.validated_references += 1 else _ = try metadata.append(id, record.bytes, stats, &pins);
                 continue;
             }
             if (names == null) names = try backend.dev.CodeExcerpt.ContentNames.init(allocator, set);
@@ -325,8 +330,9 @@ pub const Store = struct {
             const hash = Index.digest(bytes);
             component_hashes[c] = hash;
             const id = self.indexedIdentity(.local, @splat(0), hash, .metadata);
-            _ = try self.publishIndexedHeld(id, bytes, stats, &pins);
+            _ = try metadata.append(id, bytes, stats, &pins);
         }
+        try metadata.publish();
         for (specs, 0..) |spec, i| {
             const provider = if (providers) |locations| locations[i] else compile.BuildEnv.PackPlacement{ .origin = origin, .identity = identity };
             const hash = component_hashes[graph.components.component_of[spec.excerpt]];
@@ -408,6 +414,63 @@ pub const Store = struct {
         held.artifact.store = &held.store;
         return owner.take(bytes, key[32..].*, kind, self.retainedIdentity(key), .{ .context = held, .deinit = RetainedArtifact.release });
     }
+
+    /// Keep validation and retained references unchanged while coalescing only
+    /// newly produced component records into immutable physical containers.
+    const NativePublication = struct {
+        store: *const Store,
+        writer: compile.artifacts.ContainerWriter,
+        reads: ?compile.artifacts.RetentionBatch = null,
+
+        fn init(store: *const Store) NativePublication {
+            return .{ .store = store, .writer = .{ .store = &store.native } };
+        }
+
+        fn deinit(self: *NativePublication) void {
+            if (self.reads) |*reads| reads.deinit();
+            self.writer.deinit();
+        }
+
+        fn append(self: *NativePublication, id: compile.artifacts.Identity, bytes: []const u8, stats: *PublicationStats, pins: *std.ArrayList(compile.artifacts.Artifact)) (Allocator.Error || error{PackWriteFailed})!bool {
+            const allocator = self.store.allocator;
+            try pins.ensureUnusedCapacity(allocator, 1);
+            if (self.reads == null) self.reads = try compile.artifacts.RetentionBatch.init(&self.store.native);
+            stats.records_read += 1;
+            if (self.reads.?.acquireKey(id.indexedKey(), self.store.read_timestamp) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.PackWriteFailed,
+            }) |value| {
+                var acquired = value;
+                var transferred = false;
+                defer if (!transferred) acquired.deinit();
+                const existing = acquired.read(allocator) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.PackWriteFailed,
+                };
+                defer allocator.free(existing);
+                stats.bytes_read += existing.len;
+                if (std.mem.eql(u8, existing, bytes)) {
+                    pins.appendAssumeCapacity(acquired);
+                    transferred = true;
+                    return false;
+                }
+            }
+            self.writer.append(id, bytes) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.PackWriteFailed,
+            };
+            stats.records_written += 1;
+            stats.bytes_written += bytes.len;
+            return true;
+        }
+
+        fn publish(self: *NativePublication) (Allocator.Error || error{PackWriteFailed})!void {
+            self.writer.publish() catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.PackWriteFailed,
+            };
+        }
+    };
 
     fn publishIndexed(self: *const Store, id: compile.artifacts.Identity, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!bool {
         var stats: PublicationStats = .{};
@@ -2161,6 +2224,8 @@ pub const LoadedPacks = struct {
         self.lookup_profile.report();
         if (base.dev_diagnostics.isSet(.pack_stats)) {
             const stats = self.index_stats;
+            var sessions = self.retention_batches.valueIterator();
+            while (sessions.next()) |batch| std.debug.print("pack physical: containers={d}\n", .{batch.*.containerCount()});
             if (self.record_owner) |owner| std.debug.print("pack acquisitions: {any}\n", .{owner.metrics});
             std.debug.print("pack index: index_bytes={d} bucket_opens={d} bucket_absent={d} negative_hits={d} metadata_opens={d} metadata_bytes={d} candidates={d} duplicates={d} payload_opens={d} payload_files={d} payload_bytes={d} decoded_artifacts={d} requested_artifacts={d} served_artifacts={d} allocation_failures={d} requested={d} served={d} misses={d} source_ineligible={d} linked_ineligible={d} corrupt={d} missing={d}\n", .{ stats.index_bytes, stats.bucket_opens, stats.bucket_absent, stats.negative_hits, stats.metadata_opens, stats.metadata_bytes, stats.candidates, stats.duplicates, stats.payload_opens, stats.payload_files, stats.payload_bytes, stats.decoded_artifacts, stats.requested_artifacts, stats.served_artifacts, stats.allocation_failures, stats.requested, stats.served, stats.misses, stats.source_ineligible, stats.linked_ineligible, stats.corrupt, stats.missing });
         }
@@ -2946,13 +3011,16 @@ test "indexed object cache requires complete intact payloads and owns hits acros
     _ = pinned.specCacheLookup().lookup(spec.key, .dev_code, &.{}) orelse return error.TestUnexpectedResult;
     const path = try fixture.payloadPath(dep);
     defer F.allocator.free(path);
+    const physical_bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, F.allocator, .unlimited);
+    defer F.allocator.free(physical_bytes);
+    physical_bytes[0] ^= 0xff;
     try std.Io.Dir.cwd().deleteFile(std.testing.io, path);
     var missing = try fixture.loader();
     defer missing.deinit();
     try std.testing.expect(missing.specCacheLookup().lookup(spec.key, .dev_code, &.{}) == null);
-    try std.testing.expectEqual(@as(u64, 1), missing.index_stats.missing);
+    try std.testing.expect(missing.index_stats.missing >= 1);
     try std.testing.expect(!missing.excerpts.contains(spec.key));
-    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = "corrupt" });
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = physical_bytes });
     var corrupt = try fixture.loader();
     defer corrupt.deinit();
     try std.testing.expect(corrupt.specCacheLookup().lookup(spec.key, .dev_code, &.{}) == null);
@@ -3393,7 +3461,9 @@ test "native publication retained files survive cleanup until their last owner e
     copy.deinit();
     copy_live = false;
     try fixture.store.native.invalidate(id);
-    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().openFile(std.testing.io, path, .{}));
+    // The logical record is gone; the immutable container is reclaimed as a
+    // whole by maintenance rather than deleting other records' physical bytes.
+    try std.Io.Dir.cwd().access(std.testing.io, path, .{});
     var missing = try fixture.loader();
     defer missing.deinit();
     try std.testing.expect(missing.specCacheLookup().lookup(spec.key, .dev_code, &.{}) == null);

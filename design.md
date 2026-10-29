@@ -27730,3 +27730,46 @@ and callable-contract evidence. ConstStore's function-value evidence encoding
 alone is insufficient: it omits edge-local substitutions still consumed when
 a deferred target specializes. The body record validates and restores these
 inputs, with storage that outlives the shard when global requests retain it.
+
+
+### Immutable native record containers
+
+Native component payloads and metadata are streamed directly into private,
+registered containers by their publication producer. A container belongs to one
+artifact group and retention family. Logical records retain their exact content
+identities and individual checked catalog entries; each entry supplies an explicit
+container slot, generation, byte offset and length. Native decoding and content
+hash validation still apply to the requested record. No directory scan, source
+reconstruction or eager loading of unrequested records establishes a hit.
+
+A container is sealed before publishing its slices. Slice publication uses the
+existing bounded redo transactions; concurrent publishers preserve unrelated
+keys. Incomplete containers cannot serve readers. Replacement never mutates
+published bytes. The reader validates the container generation and range while
+holding shard ownership, then shares one open file and lease across its slices.
+Captured code retains that lease independently of the reader session. Bulk I/O
+and native decoding run outside shard ownership.
+
+Only containers account physical payload bytes; slice records account zero.
+Every streaming extension registers its exact reserved size before writing.
+Abandoned writers remain ordinary registered staging generations. Maintenance
+can independently retire slice indexes and whole containers. A missing or
+recycled container makes a slice unavailable. A live reader prevents container
+retirement even when a logical record is replaced or retired. Whole-container
+retention deliberately keeps unused ranges while other ranges remain hot; no
+foreground compaction or history scan is introduced. Future relocation must
+publish a new immutable container and compare the old slice generation before
+repointing it, never overwrite a newer publisher's placement.
+
+The artifacts-v3 namespace separates this physical format from standalone-only
+stores. Existing source, ABI, provider precedence, eligibility and dependency
+validation contracts are unchanged.
+
+Native dev links produce their executable in an invocation-private sibling
+of the output directory, preserving the basename and filesystem. After link
+completion and host-input validation, one atomic rename replaces the public
+name. Concurrent builds, including identical working directories and output
+paths, never truncate or delete each other's completed executable. A failed
+build leaves the last completed publication intact and reports failure. No
+cache or build-wide lock is held through linking. Scratch object and native
+container ownership remains independent of the public executable name.

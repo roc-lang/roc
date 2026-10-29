@@ -213,8 +213,10 @@ fn step(store: *const artifacts.Store, limits: Limits, now: i64, checkpoint: *Ch
             stats.records += 1;
             var missing = false;
             if (metadata.state == .published and metadata.family != .scratch) {
+                const physical = if (metadata.storage == .slice) try artifacts.sliceContainer(&tx, metadata) else metadata;
+                if (physical == null) missing = true;
                 var stem_buffer: [128]u8 = undefined;
-                const stem = try artifacts.slotStem(&stem_buffer, metadata.slot);
+                const stem = try artifacts.slotStem(&stem_buffer, if (physical) |owner| owner.slot else metadata.slot);
                 var buffer: [140]u8 = undefined;
                 const path = std.fmt.bufPrint(&buffer, "{s}.data", .{stem}) catch return error.PathTooLong;
                 stats.metadata += 1;

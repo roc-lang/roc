@@ -11073,23 +11073,44 @@ fn failLink(ctx: *CliCtx, err: linker.LinkError, target: []const u8) CliError {
     };
 }
 
-/// Removes whatever a previous build left at the output path before this
-/// build does anything else, so a build that fails cannot leave the earlier
-/// program behind looking like its result. An absent output file is fine,
-/// but an absent parent directory is an output-path error.
-fn removeStaleBuildOutput(ctx: *CliCtx, final_output_path: []const u8) CliError!void {
-    std.Io.Dir.cwd().deleteFile(ctx.io.std_io, final_output_path) catch |err| switch (err) {
-        error.FileNotFound => {
-            // Deleting a missing file and deleting through a missing parent
-            // both return FileNotFound. Only the former is ready for a build.
-            const parent = std.fs.path.dirname(final_output_path) orelse ".";
-            var dir = std.Io.Dir.cwd().openDir(ctx.io.std_io, parent, .{}) catch |open_err|
-                return ctx.fail(.{ .file_write_failed = .{ .path = final_output_path, .err = open_err } });
-            dir.close(ctx.io.std_io);
-        },
-        else => return ctx.fail(.{ .file_write_failed = .{ .path = final_output_path, .err = err } }),
-    };
+/// Validate the destination without deleting another invocation's completed
+/// output. Failed builds report failure and leave the last publication intact.
+fn prepareBuildOutput(ctx: *CliCtx, final_output_path: []const u8) CliError!void {
+    const parent = std.fs.path.dirname(final_output_path) orelse ".";
+    var dir = std.Io.Dir.cwd().openDir(ctx.io.std_io, parent, .{}) catch |err|
+        return ctx.fail(.{ .file_write_failed = .{ .path = final_output_path, .err = err } });
+    dir.close(ctx.io.std_io);
 }
+
+/// A private link destination on the output filesystem. Rename is the only
+/// operation that modifies the user-visible name; the last complete publisher
+/// wins. The linker never opens a competing build's executable for writing.
+const BuildOutputPublication = struct {
+    ctx: *CliCtx,
+    destination: []const u8,
+    path: []const u8,
+    directory: []const u8,
+
+    fn init(ctx: *CliCtx, destination: []const u8) CliMainError!BuildOutputPublication {
+        var nonce: [16]u8 = undefined;
+        ctx.io.std_io.random(&nonce);
+        const directory = try std.fmt.allocPrint(ctx.arena, "{s}/.roc-link-{s}", .{ std.fs.path.dirname(destination) orelse ".", std.fmt.bytesToHex(nonce, .lower) });
+        std.Io.Dir.cwd().createDir(ctx.io.std_io, directory, .default_dir) catch |err|
+            return ctx.fail(.{ .file_write_failed = .{ .path = destination, .err = err } });
+        errdefer std.Io.Dir.cwd().deleteDir(ctx.io.std_io, directory) catch {};
+        return .{ .ctx = ctx, .destination = destination, .directory = directory, .path = try std.fs.path.join(ctx.arena, &.{ directory, std.fs.path.basename(destination) }) };
+    }
+
+    fn deinit(self: *BuildOutputPublication) void {
+        std.Io.Dir.cwd().deleteFile(self.ctx.io.std_io, self.path) catch {};
+        std.Io.Dir.cwd().deleteDir(self.ctx.io.std_io, self.directory) catch {};
+    }
+
+    fn publish(self: *BuildOutputPublication) CliError!void {
+        std.Io.Dir.cwd().rename(self.path, std.Io.Dir.cwd(), self.destination, self.ctx.io.std_io) catch |err|
+            return self.ctx.fail(.{ .file_write_failed = .{ .path = self.destination, .err = err } });
+    }
+};
 
 test "build output preparation reports a missing parent directory" {
     const testing = std.testing;
@@ -11108,19 +11129,48 @@ test "build output preparation reports a missing parent directory" {
 
     // https://github.com/roc-lang/roc/issues/12476: an absent parent must be
     // reported as an output-path failure before compilation or linking.
-    try testing.expectError(error.CliError, removeStaleBuildOutput(&ctx, output_path));
+    try testing.expectError(error.CliError, prepareBuildOutput(&ctx, output_path));
     try testing.expectEqual(@as(usize, 1), ctx.problems.items.len);
     const problem = ctx.problems.items[0].file_write_failed;
     try testing.expectEqualStrings(output_path, problem.path);
     try testing.expectEqual(error.FileNotFound, problem.err);
 
     try tmp.dir.createDir(testing.io, "missing", .default_dir);
-    try removeStaleBuildOutput(&ctx, output_path);
+    try prepareBuildOutput(&ctx, output_path);
 
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "missing/app", .data = "old output" });
-    try removeStaleBuildOutput(&ctx, output_path);
-    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "missing/app", .{}));
+    try prepareBuildOutput(&ctx, output_path);
+    try tmp.dir.access(testing.io, "missing/app", .{});
     try testing.expectEqual(@as(usize, 1), ctx.problems.items.len);
+}
+
+test "native output publication isolates concurrent writers and preserves completed output" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(testing.allocator, arena.allocator(), &io_state, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", arena.allocator());
+    const destination = try std.fs.path.join(arena.allocator(), &.{ root, "app" });
+    var first = try BuildOutputPublication.init(&ctx, destination);
+    defer first.deinit();
+    var second = try BuildOutputPublication.init(&ctx, destination);
+    defer second.deinit();
+    try testing.expect(!std.mem.eql(u8, first.path, second.path));
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = first.path, .data = "first complete" });
+    try first.publish();
+    try prepareBuildOutput(&ctx, destination);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = second.path, .data = "second partial" });
+    const before = try std.Io.Dir.cwd().readFileAlloc(testing.io, destination, arena.allocator(), .limited(128));
+    try testing.expectEqualStrings("first complete", before);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = second.path, .data = "second complete" });
+    try second.publish();
+    const after = try std.Io.Dir.cwd().readFileAlloc(testing.io, destination, arena.allocator(), .limited(128));
+    try testing.expectEqualStrings("second complete", after);
 }
 
 /// Final output path for `roc build`: an explicit `--output` is used as-is,
@@ -11372,7 +11422,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     }
 
     const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
-    try removeStaleBuildOutput(ctx, final_output_path);
+    try prepareBuildOutput(ctx, final_output_path);
 
     build_env.setTarget(target);
     build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
@@ -11599,7 +11649,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const code_generation_phase_name = devBackendPhaseName(target_arch);
 
     const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
-    try removeStaleBuildOutput(ctx, final_output_path);
+    try prepareBuildOutput(ctx, final_output_path);
 
     build_env.setTarget(target);
     // `ROC_DEV_PACK_HITS` names a directory of pack files to serve closed
@@ -11913,6 +11963,11 @@ fn linkNativeBuild(
     extra_objects: []const []const u8,
     facts: ProgramOutput.LinkFacts,
 ) CliMainError!void {
+    // Executables have one publication unit. Shared libraries can also emit
+    // import libraries, so their existing multi-output path remains separate.
+    var publication: ?BuildOutputPublication = if (link_type == .exe) try BuildOutputPublication.init(ctx, final_output_path) else null;
+    defer if (publication) |*pending| pending.deinit();
+    const link_output_path = if (publication) |pending| pending.path else final_output_path;
     const target_os = target.toOsTag();
     const target_arch = target.toCpuArch();
     const paths_started = std.Io.Timestamp.now(ctx.io.std_io, .awake);
@@ -11938,6 +11993,7 @@ fn linkNativeBuild(
     }
     try object_files.appendSlice(extra_objects);
     const objects_ns: u64 = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - objects_started.nanoseconds);
+    if (publication) |*pending| try pending.publish();
     reporter.endWithParentBreakdown(&.{
         .{ .name = "Platform input validation", .ns = paths_ns },
         .{ .name = "Runtime object materialization", .ns = objects_ns },
@@ -11948,7 +12004,7 @@ fn linkNativeBuild(
     var inspection_counters: host_symbols.Counters = .{};
     if (link_type == .archive) {
         const started = std.Io.Timestamp.now(ctx.io.std_io, .awake);
-        try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
+        try writeArchiveOutput(ctx, target, link_output_path, link_inputs, object_files.items);
         timing.finalization_ns = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - started.nanoseconds);
     } else {
         const inspection_started = std.Io.Timestamp.now(ctx.io.std_io, .awake);
@@ -11980,7 +12036,7 @@ fn linkNativeBuild(
             .target_abi = buildLinkAbi(target, args.synthetic_default_platform),
             .target_os = target_os,
             .target_arch = target_arch,
-            .output_path = final_output_path,
+            .output_path = link_output_path,
             .output_kind = linkerOutputKind(link_type),
             // Dev output uses the symbol ABI, so host archives resolve by
             // symbol reference and unused host code can be stripped.
@@ -12007,6 +12063,7 @@ fn linkNativeBuild(
         };
     }
     try validateLinkInputStates(ctx, host_paths, input_states, link_inputs.target_name);
+    if (publication) |*pending| try pending.publish();
     reporter.endWithParentBreakdown(&.{
         .{ .name = "Host symbols and exports", .ns = inspection_ns },
         .{ .name = "Link arguments", .ns = timing.arguments_ns },
@@ -12592,7 +12649,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const target_arch = target.toCpuArch();
     const target_os = target.toOsTag();
     const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
-    try removeStaleBuildOutput(ctx, final_output_path);
+    try prepareBuildOutput(ctx, final_output_path);
 
     build_env.setTarget(target);
     build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
