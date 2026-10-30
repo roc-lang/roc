@@ -512,6 +512,7 @@ pub const Solution = struct {
     pub fn outcomeSpanForCall(self: *const Solution, store: *const LirStore, caller: LIR.LirProcSpecId, callee: LIR.LirProcSpecId) arc_sig.OutcomeSpan {
         const index = @backingInt(callee);
         if (index < self.stability_pinned.capacity() and self.stability_pinned.isSet(index) and store.getProcSpec(caller).code_key == null) return .empty;
+        if (!sharesEmissionUnit(store, caller, callee)) return .empty;
         return self.availableOutcomeSpanOf(callee);
     }
 
@@ -7819,4 +7820,12 @@ test "ARC shared predicates have one definition across the ARC stage" {
             try std.testing.expectEqual(expected, std.mem.count(u8, module.source, decl));
         }
     }
+}
+
+/// Whether a direct call from `caller` to `callee` may demand an ownership
+/// variant of `callee`: the two share an emission unit (design.md "Mode
+/// Specialization", emission units). A call across units adapts to the
+/// callee's solved base signature.
+pub fn sharesEmissionUnit(store: *const LirStore, caller: LIR.LirProcSpecId, callee: LIR.LirProcSpecId) bool {
+    return LIR.EmissionUnit.shares(store.getProcSpec(caller).emission_unit, store.getProcSpec(callee).emission_unit);
 }

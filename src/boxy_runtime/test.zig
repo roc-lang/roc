@@ -7,6 +7,7 @@ const desc_mod = @import("desc.zig");
 const compose = @import("compose.zig");
 const walk = @import("walk.zig");
 const exports = @import("exports.zig");
+const compiled = @import("compiled.zig");
 
 const testing = std.testing;
 const RocOps = builtins.host_abi.RocOps;
@@ -21,16 +22,19 @@ const hash_mod = builtins.hash;
 const TypeDesc = desc_mod.TypeDesc;
 const Name = desc_mod.Name;
 
-fn name(comptime id: u32, comptime text: []const u8) Name {
-    return .{ .id = id, .len = text.len, .bytes = text.ptr };
+fn name(comptime text: []const u8) Name {
+    // The id is a SHA-256 digest; computing one at compile time takes far
+    // more branches than the default quota allows.
+    @setEvalBranchQuota(200_000);
+    return .{ .id = desc_mod.labelId(text), .len = text.len, .bytes = text.ptr };
 }
 
-const name_a = name(1, "a");
-const name_b = name(2, "b");
-const name_c = name(3, "c");
-const name_ok = name(10, "Ok");
-const name_err = name(11, "Err");
-const name_point = name(20, "Point");
+const name_a = name("a");
+const name_b = name("b");
+const name_c = name("c");
+const name_ok = name("Ok");
+const name_err = name("Err");
+const name_point = name("Point");
 
 /// The errors these tests' helpers return.
 const TestError = std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult };
@@ -504,6 +508,10 @@ test "list element callbacks and C entry points reach the entered host" {
     const ops = env.ops();
     const saved = builtins.in_process_host.enter(ops, null);
     defer builtins.in_process_host.leave(saved);
+    const state = try compiled.InProcessState.create(testing.allocator);
+    defer state.destroy();
+    const entered = state.enter();
+    defer compiled.InProcessState.leave(entered);
 
     const str_desc = compose.strDesc();
     var element = bigStr("an element string long enough for the heap", ops);

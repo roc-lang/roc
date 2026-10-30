@@ -112,11 +112,16 @@ pub const Flags = packed struct(u8) {
     _: u4 = 0,
 };
 
-/// A field label or tag name. Static and immortal.
+/// A field label, tag name, or nominal type name. Static and immortal.
+///
+/// A name's identity is its content (design.md "Name Identity"): the SHA-256
+/// digest of a label's or tag's text, or of a nominal declaration's declaring
+/// module content identity and declaration. Two names are equal exactly when
+/// their ids are, whichever object file or lowering each node came from, so
+/// nodes are never interned, numbered, or merged at link time.
 pub const Name = extern struct {
-    /// Program-wide interned id: two names are equal exactly when their ids
-    /// are.
-    id: u32,
+    /// The content digest, as four little-endian words.
+    id: NameId,
     len: u32,
     /// UTF-8 text, used for ordering and inspection.
     bytes: [*]const u8,
@@ -124,7 +129,84 @@ pub const Name = extern struct {
     pub fn text(self: *const Name) []const u8 {
         return self.bytes[0..self.len];
     }
+
+    /// Whether two names are one name.
+    pub fn eql(a: *const Name, b: *const Name) bool {
+        if (a == b) return true;
+        return a.id[0] == b.id[0] and a.id[1] == b.id[1] and a.id[2] == b.id[2] and a.id[3] == b.id[3];
+    }
 };
+
+/// A name's content digest: 32 bytes as four words, so a comparison is four
+/// word compares and a composition key embeds it as four key words.
+pub const NameId = [4]u64;
+
+/// The `NameId` of the 32-byte digest `digest`.
+pub fn nameIdFromDigest(digest: [32]u8) NameId {
+    var id: NameId = undefined;
+    for (&id, 0..) |*word, index| word.* = std.mem.readInt(u64, digest[index * 8 ..][0..8], .little);
+    return id;
+}
+
+/// The 32-byte digest of `id`.
+pub fn nameIdDigest(id: NameId) [32]u8 {
+    var digest: [32]u8 = undefined;
+    for (id, 0..) |word, index| std.mem.writeInt(u64, digest[index * 8 ..][0..8], word, .little);
+    return digest;
+}
+
+/// The domain a label's or tag's id is hashed under: the SHA-256 of this
+/// text followed by the name's text.
+pub const label_name_domain = "roc.boxy.name.label.v1";
+
+/// The domain a nominal declaration's id is hashed under: the SHA-256 of
+/// this text, the declaring module's 32-byte content identity, the
+/// declaration's little-endian `u32` source declaration index, and the
+/// declaration's name text.
+pub const nominal_name_domain = "roc.boxy.name.nominal.v1";
+
+/// The id of the label or tag `text` (design.md "Name Identity"). The
+/// compiler computes the same digest with its own SHA-256; this definition
+/// is the one tests and the runtime's own fixtures use.
+pub fn labelId(text: []const u8) NameId {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(label_name_domain);
+    hasher.update(text);
+    return nameIdFromDigest(hasher.finalResult());
+}
+
+/// The id of the nominal declaration `source_decl` of the module whose
+/// content identity is `module_identity`, named `text` (design.md "Name
+/// Identity").
+pub fn nominalId(module_identity: [32]u8, source_decl: u32, text: []const u8) NameId {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(nominal_name_domain);
+    hasher.update(&module_identity);
+    var index_bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &index_bytes, source_decl, .little);
+    hasher.update(&index_bytes);
+    hasher.update(text);
+    return nameIdFromDigest(hasher.finalResult());
+}
+
+test "a name id round-trips through its digest and tells names apart by content" {
+    const a = labelId("a");
+    try std.testing.expectEqual(a, nameIdFromDigest(nameIdDigest(a)));
+    try std.testing.expectEqual(a, labelId("a"));
+    try std.testing.expect(!std.meta.eql(a, labelId("b")));
+    // A nominal named like a label is a different name.
+    try std.testing.expect(!std.meta.eql(labelId("Point"), nominalId(@splat(1), 0, "Point")));
+    // Two declarations of one name in two modules, or at two places in one
+    // module, are different names.
+    try std.testing.expect(!std.meta.eql(nominalId(@splat(1), 0, "Point"), nominalId(@splat(2), 0, "Point")));
+    try std.testing.expect(!std.meta.eql(nominalId(@splat(1), 0, "Point"), nominalId(@splat(1), 1, "Point")));
+    const text = "label";
+    const node_a: Name = .{ .id = labelId(text), .len = text.len, .bytes = text.ptr };
+    const node_b: Name = .{ .id = labelId(text), .len = text.len, .bytes = text.ptr };
+    try std.testing.expect(node_a.eql(&node_b));
+    const other: Name = .{ .id = labelId("other"), .len = 5, .bytes = "other" };
+    try std.testing.expect(!node_a.eql(&other));
+}
 
 /// An immutable, immortal description of one type's representation.
 pub const TypeDesc = extern struct {
@@ -285,7 +367,8 @@ pub fn ExternLayout(comptime T: type) type {
 }
 
 /// The size of one field of a descriptor struct at `width`: pointers take the
-/// target's width, every other field its own fixed size.
+/// target's width, an array its element count times its element's size, and
+/// every other field its own fixed size.
 fn fieldSize(comptime F: type, width: PointerWidth) u32 {
     return switch (@typeInfo(F)) {
         .pointer => width.bytes(),
@@ -293,7 +376,19 @@ fn fieldSize(comptime F: type, width: PointerWidth) u32 {
             .pointer => width.bytes(),
             .type, .void, .bool, .noreturn, .int, .float, .array, .@"struct", .comptime_float, .comptime_int, .undefined, .null, .optional, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @compileError("descriptor fields are optional only when they are pointers"),
         },
-        .type, .void, .bool, .noreturn, .int, .float, .array, .@"struct", .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @sizeOf(F),
+        .array => |array| @as(u32, @intCast(array.len)) * fieldSize(array.child, width),
+        .type, .void, .bool, .noreturn, .int, .float, .@"struct", .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => @sizeOf(F),
+    };
+}
+
+/// The alignment of one field of a descriptor struct at `width`: an array
+/// aligns as its element does; every other field is a pointer or a
+/// power-of-two-sized scalar no wider than a pointer, whose alignment is its
+/// size.
+fn fieldAlignment(comptime F: type, width: PointerWidth) u32 {
+    return switch (@typeInfo(F)) {
+        .array => |array| fieldAlignment(array.child, width),
+        else => fieldSize(F, width),
     };
 }
 
@@ -306,9 +401,7 @@ pub fn externLayout(comptime T: type, width: PointerWidth) ExternLayout(T) {
     var max_alignment: u32 = 1;
     inline for (info.field_names, info.field_types, 0..) |_, F, index| {
         const size = fieldSize(F, width);
-        // Every descriptor field is a pointer or a power-of-two-sized scalar
-        // no wider than a pointer, so its alignment is its size.
-        const alignment = size;
+        const alignment = fieldAlignment(F, width);
         end = std.mem.alignForward(u32, end, alignment);
         result.offsets[index] = end;
         end += size;

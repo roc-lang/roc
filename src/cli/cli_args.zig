@@ -216,7 +216,7 @@ pub const CheckArgs = struct {
     root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
     main_source_url: ?[]const u8 = null, // internal: bundle URL provenance when --main was a URL or installed shorthand
     opt: OptLevel = default_dev_opt, // accepted so one command line serves every command; checking ignores it
-    specialization_strategy: ?SpecializationStrategy = null, // accepted so one command line serves every command; checking ignores it
+    specialization_strategy: ?SpecializationStrategy = null, // the strategy whose evaluator completes compile-time roots; part of the checked-module cache identity
 };
 
 /// Arguments for `roc build`

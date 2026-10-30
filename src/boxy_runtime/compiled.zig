@@ -43,7 +43,7 @@ fn variantNamed(desc: *const TypeDesc, name: *const Name, ops: *RocOps) struct {
     const union_desc = backing(desc);
     if (union_desc.kind != .tag_union) invariant(ops, "a tag of a descriptor that is not a tag union");
     for (union_desc.variants()) |*variant| {
-        if (variant.name.id == name.id) return .{ .union_desc = union_desc, .variant = variant };
+        if (variant.name.eql(name)) return .{ .union_desc = union_desc, .variant = variant };
     }
     invariant(ops, "a tag that is not in its union's descriptor");
 }
@@ -101,7 +101,7 @@ pub fn fieldAddrNamed(desc: *const TypeDesc, base: [*]u8, name: *const Name, ops
     const record = recordOf(desc, ops);
     for (record.fields()) |*field| {
         const field_name = field.name orelse continue;
-        if (field_name.id == name.id) return componentAddr(field.desc, base + field.offset);
+        if (field_name.eql(name)) return componentAddr(field.desc, base + field.offset);
     }
     invariant(ops, "a field name that is not in its record's descriptor");
 }
@@ -178,14 +178,14 @@ pub fn updateRecord(base_desc: *const TypeDesc, base: [*]u8, desc: *const TypeDe
         if (field.is_padding != 0) continue;
         const name = field.name orelse invariant(ops, "an updated record has an unnamed field");
         const updated = for (names, values) |candidate, value| {
-            if (candidate.id == name.id) break value;
+            if (candidate.eql(name)) break value;
         } else null;
         if (updated) |value| {
             writeComponent(field.desc, dst + field.offset, value, ops);
             continue;
         }
         const source = for (base_record.fields()) |*candidate| {
-            if (candidate.name != null and candidate.name.?.id == name.id) break candidate;
+            if (candidate.name != null and candidate.name.?.eql(name)) break candidate;
         } else invariant(ops, "an updated record's field is absent from its base");
         @memcpy(dst[field.offset..][0..field.desc.size], base[source.offset..][0..field.desc.size]);
         walk.incref(field.desc, dst + field.offset, 1, ops);
@@ -317,7 +317,7 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
                     if (to_field.is_padding != 0) continue;
                     // Fields match by name, tuple elements by position.
                     const from_field: ?*const Field = if (t.kind == .tuple) f.fieldBySemanticIndex(to_field.field_index) else for (f.fields()) |*candidate| {
-                        if (candidate.name != null and candidate.name.?.id == to_field.name.?.id) break candidate;
+                        if (candidate.name != null and candidate.name.?.eql(to_field.name.?)) break candidate;
                     } else null;
                     if (from_field) |source| {
                         stack.push(.{ .from = source.desc, .to = to_field.desc, .src = work.src + source.offset, .dst = work.dst + to_field.offset }, ops);
@@ -371,16 +371,13 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
 }
 
 /// The variant of the tag union `to` a value of variant `source` is
-/// re-tagged as: the one with its name and payload count, and among several,
-/// the one whose payload has the source payload's shape.
+/// re-tagged as: the one with its name and payload count, which a row names
+/// once (design.md "Row Joins", "One label, two payload types").
 fn targetVariant(to: *const TypeDesc, source: *const Variant, ops: *RocOps) *const Variant {
     var found: ?*const Variant = null;
     for (to.variants()) |*candidate| {
-        if (candidate.name.id != source.name.id or candidate.payload_count != source.payload_count) continue;
-        if (found != null) {
-            if (!walk.sameShape(candidate.payload, source.payload, ops)) continue;
-            if (walk.sameShape(found.?.payload, source.payload, ops)) invariant(ops, "a re-tagged variant matches two destination variants");
-        }
+        if (!candidate.name.eql(source.name) or candidate.payload_count != source.payload_count) continue;
+        if (found != null) invariant(ops, "a re-tagged variant matches two destination variants");
         found = candidate;
     }
     return found orelse invariant(ops, "a re-tagged variant is not in its destination's row");
@@ -388,8 +385,8 @@ fn targetVariant(to: *const TypeDesc, source: *const Variant, ops: *RocOps) *con
 
 // Dictionaries.
 
-/// Dictionary callables and dictionary records, interned by constructor and
-/// operand words. Both are immortal.
+/// A platform's dictionary callables and dictionary records, interned by
+/// constructor and operand words. Both are immortal.
 var dictionary_cache: compose.Cache = .{};
 
 const dict_compose_tag: u64 = 1;
@@ -417,7 +414,7 @@ pub fn dictCompose(callable_fn: erased_callable.CallableFnPtr, capture_prefix: u
     key[1] = @intFromPtr(callable_fn);
     key[2] = capture_prefix;
     for (captures, key[3..]) |capture, *word| word.* = capture;
-    if (dictionary_cache.lookup(key)) |existing| return @ptrCast(@constCast(existing));
+    if (dictionaryCache().lookup(key)) |existing| return @ptrCast(@constCast(existing));
 
     const capture_size = capture_prefix + captures.len * @sizeOf(usize);
     const payload_size = erased_callable.payloadSize(capture_size);
@@ -429,7 +426,7 @@ pub fn dictCompose(callable_fn: erased_callable.CallableFnPtr, capture_prefix: u
     @memset(capture_bytes[0..capture_prefix], 0);
     const words: [*]align(1) usize = @ptrCast(capture_bytes + capture_prefix);
     for (captures, 0..) |capture, index| words[index] = capture;
-    return @ptrCast(@constCast(dictionary_cache.intern(key, @ptrCast(@alignCast(data)), immortal_ops)));
+    return @ptrCast(@constCast(dictionaryCache().intern(key, @ptrCast(@alignCast(data)), immortal_ops)));
 }
 
 /// An immortal record of method callables, interned by its callables.
@@ -445,11 +442,11 @@ pub fn dictRecord(methods: []const usize, immortal_ops: *RocOps) [*]const usize 
     defer if (scratch) |words| immortal_ops.dealloc(@ptrCast(words), @alignOf(u64));
     key[0] = dict_record_tag;
     for (methods, key[1..]) |method, *word| word.* = method;
-    if (dictionary_cache.lookup(key)) |existing| return @ptrCast(@alignCast(existing));
+    if (dictionaryCache().lookup(key)) |existing| return @ptrCast(@alignCast(existing));
 
     const record: [*]usize = @ptrCast(@alignCast(compose.immortalBytes(immortal_ops, @max(methods.len, 1) * @sizeOf(usize), @alignOf(usize))));
     @memcpy(record[0..methods.len], methods);
-    return @ptrCast(@alignCast(dictionary_cache.intern(key, @ptrCast(@alignCast(record)), immortal_ops)));
+    return @ptrCast(@alignCast(dictionaryCache().intern(key, @ptrCast(@alignCast(record)), immortal_ops)));
 }
 
 // List operations through an element descriptor.
@@ -718,41 +715,125 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
     }
 }
 
-// Immortal memory for the compiler's own process.
+// Composition state.
 
 /// Where composed descriptors and dictionaries are allocated. They are
-/// immortal. A platform's runtime allocates them through its host, whose
-/// allocations live as long as the process. In the compiler's process,
-/// evaluations come and go with their own allocators while the composition
-/// caches are process-global, so composition allocates from process-lifetime
-/// memory and delivers a crash to the evaluation running on its thread.
+/// immortal to the code composing them. A platform's runtime allocates them
+/// through its host, whose allocations live as long as the process. In the
+/// compiler's process they live as long as the program composing them: its
+/// `InProcessState`, current on the thread while the program's code runs.
 pub fn immortalOps() *RocOps {
     if (comptime builtins.host_abi.host_role == .platform) return builtins.in_process_host.ops();
-    return &InProcessImmortals.ops;
+    return &InProcessState.current().ops;
 }
 
-const InProcessImmortals = struct {
-    var lock: std.atomic.Mutex = .unlocked;
-    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
-    var ops: RocOps = .{
-        .env = undefined,
-        .roc_alloc = &alloc,
-        .roc_dealloc = &dealloc,
-        .roc_realloc = &realloc,
-        .roc_dbg = &dbg,
-        .roc_expect_failed = &expectFailed,
-        .roc_crashed = &crashed,
-        .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
+/// The interning table descriptor composition fills: the process's in a
+/// platform build, the current program's in the compiler's process.
+pub fn descriptorCache() *compose.Cache {
+    if (comptime builtins.host_abi.host_role == .platform) return &compose.process_cache;
+    return &InProcessState.current().descriptors;
+}
+
+/// The interning table dictionary composition fills, chosen as
+/// `descriptorCache` is.
+fn dictionaryCache() *compose.Cache {
+    if (comptime builtins.host_abi.host_role == .platform) return &dictionary_cache;
+    return &InProcessState.current().dictionaries;
+}
+
+/// What one program's code composes while it runs in the compiler's own
+/// process: its descriptors, dictionary callables, and dictionary records,
+/// with their interning tables and the memory holding them. The tables key
+/// on addresses in the program's code and static data, which the process
+/// reuses once the program is gone, so the state lives exactly as long as
+/// the program: whoever runs the program creates one, makes it current on
+/// every thread that runs the program's code (`enter`), and destroys it
+/// after the program. Threads running the program's code at once share it.
+pub const InProcessState = struct {
+    allocator: std.mem.Allocator,
+    lock: std.atomic.Mutex = .unlocked,
+    arena: std.heap.ArenaAllocator,
+    /// Composition allocates through these ops: arena memory, with a crash
+    /// delivered to the evaluation entered on the composing thread.
+    ops: RocOps,
+    descriptors: compose.Cache = .{},
+    dictionaries: compose.Cache = .{},
+
+    threadlocal var current_state: ?*InProcessState = null;
+
+    /// What `enter` displaced; `leave` restores it.
+    pub const Entered = struct {
+        saved: ?*InProcessState,
     };
 
-    fn alloc(_: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
-        while (!lock.tryLock()) std.atomic.spinLoopHint();
-        defer lock.unlock();
-        return arena.allocator().rawAlloc(length, .fromByteUnits(alignment), @returnAddress()) orelse
+    pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!*InProcessState {
+        comptime assertInProcess("create");
+        const self = try allocator.create(InProcessState);
+        self.* = .{
+            .allocator = allocator,
+            .arena = .init(allocator),
+            .ops = .{
+                .env = @ptrCast(self),
+                .roc_alloc = &alloc,
+                .roc_dealloc = &dealloc,
+                .roc_realloc = &realloc,
+                .roc_dbg = &dbg,
+                .roc_expect_failed = &expectFailed,
+                .roc_crashed = &crashed,
+                .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
+            },
+        };
+        return self;
+    }
+
+    /// Release everything the program composed. Nothing of the program may
+    /// run afterwards.
+    pub fn destroy(self: *InProcessState) void {
+        const allocator = self.allocator;
+        self.arena.deinit();
+        allocator.destroy(self);
+    }
+
+    /// Make this the state of every composition on this thread until
+    /// `leave`. A program that runs another program nests: the inner one
+    /// enters, runs, and leaves, restoring the outer one.
+    pub fn enter(self: *InProcessState) Entered {
+        comptime assertInProcess("enter");
+        const entered = Entered{ .saved = current_state };
+        current_state = self;
+        return entered;
+    }
+
+    /// Restore what `enter` displaced.
+    pub fn leave(entered: Entered) void {
+        comptime assertInProcess("leave");
+        current_state = entered.saved;
+    }
+
+    fn current() *InProcessState {
+        comptime assertInProcess("current");
+        return current_state orelse invariant(builtins.in_process_host.ops(), "a program composed on a thread that entered no program's composition state");
+    }
+
+    fn assertInProcess(comptime operation: []const u8) void {
+        if (builtins.host_abi.host_role == .platform) {
+            @compileError("InProcessState." ++ operation ++ " touches thread-local storage, which a platform build must never do");
+        }
+    }
+
+    fn fromOps(ops: *RocOps) *InProcessState {
+        return @ptrCast(@alignCast(ops.env));
+    }
+
+    fn alloc(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
+        const self = fromOps(ops);
+        while (!self.lock.tryLock()) std.atomic.spinLoopHint();
+        defer self.lock.unlock();
+        return self.arena.allocator().rawAlloc(length, .fromByteUnits(alignment), @returnAddress()) orelse
             builtins.in_process_host.ops().crash("out of memory composing a Boxy descriptor");
     }
 
-    /// Process-lifetime memory is never released.
+    /// Arena memory is released with the state.
     fn dealloc(_: *RocOps, _: *anyopaque, _: usize) callconv(.c) void {}
 
     fn realloc(_: *RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) *anyopaque {

@@ -297,7 +297,10 @@ fn compileWithCodeGen(
     executor: ?Executor,
     reuse_same_program: ?*const NativeProcCompiler.Retained,
 ) CompilationError!CompilationResult {
-    if (!pack_mode and entrypoints.len == 0 and static_data_exports.len == 0) {
+    const exports_procs = for (proc_specs) |proc| {
+        if (proc.exported) break true;
+    } else false;
+    if (!pack_mode and entrypoints.len == 0 and static_data_exports.len == 0 and !exports_procs) {
         return CompilationError.NoEntrypoints;
     }
 
@@ -345,7 +348,9 @@ fn compileWithCodeGen(
     var demand = std.ArrayList(lir.LIR.LirProcSpecId).empty;
     defer demand.deinit(allocator);
     for (proc_specs, 0..) |proc, index| {
-        if (proc.is_static_initializer or (proc.external and !proc.c_abi_entry)) continue;
+        // A procedure another object of the link defines is a symbol here,
+        // never code (`LIR.LirProcSpec.linked`).
+        if (proc.is_static_initializer or proc.linked or (proc.external and !proc.c_abi_entry)) continue;
         demand.append(allocator, @fromBackingInt(@intCast(index))) catch return CompilationError.OutOfMemory;
     }
     var native_metrics: NativeProcCompiler.Metrics = .{};
@@ -431,14 +436,19 @@ fn compileWithCodeGen(
     var reachable: ?CodeExcerpt.Set = null;
     defer if (reachable) |*retained_set| retained_set.deinit();
     if (!pack_mode) {
-        const root_procs = allocator.alloc(lir.ProcIdentity, entrypoints.len) catch return CompilationError.OutOfMemory;
-        defer allocator.free(root_procs);
-        for (entrypoints, root_procs) |entrypoint, *identity| identity.* = proc_specs[@backingInt(entrypoint.proc)].identity;
+        // The code the program's roots reach: its entrypoints', and that of
+        // every procedure it defines for other objects of its link.
+        var root_procs = std.ArrayList(lir.ProcIdentity).empty;
+        defer root_procs.deinit(allocator);
+        for (entrypoints) |entrypoint| root_procs.append(allocator, proc_specs[@backingInt(entrypoint.proc)].identity) catch return CompilationError.OutOfMemory;
+        for (proc_specs) |proc| {
+            if (proc.exported) root_procs.append(allocator, proc.identity) catch return CompilationError.OutOfMemory;
+        }
         var root_data = std.ArrayList([]const u8).empty;
         defer root_data.deinit(allocator);
         for (host_visible.items) |item| root_data.append(allocator, item.name) catch return CompilationError.OutOfMemory;
         reachable = CodeExcerpt.retainReachable(allocator, &staged, &catalog, .{
-            .procs = root_procs,
+            .procs = root_procs.items,
             .data = root_data.items,
             .helper_aliases = &helper_aliases,
         }) catch return CompilationError.OutOfMemory;
@@ -461,7 +471,7 @@ fn compileWithCodeGen(
     var procs_by_identity = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
     defer procs_by_identity.deinit();
     for (proc_specs, 0..) |proc, index| {
-        if (proc.is_static_initializer) continue;
+        if (proc.is_static_initializer or proc.linked) continue;
         procs_by_identity.put(proc.identity, @fromBackingInt(@intCast(@as(u32, @intCast(index))))) catch return CompilationError.OutOfMemory;
     }
     var helper_keys = CodeExcerpt.HelperKeys.init(allocator);
@@ -559,11 +569,14 @@ fn compileWithCodeGen(
                 if ((seen_proc_symbol_names.getOrPut(symbol_name) catch return CompilationError.OutOfMemory).found_existing) {
                     invariant("ObjectFileCompiler invariant violated: two procedures share the symbol {s}", .{symbol_name});
                 }
+                // A procedure the program defines for other objects of its
+                // link (`LIR.LirProcSpec.exported`) binds globally.
+                const exported = if (procs_by_identity.get(identity)) |proc_id| proc_specs[@backingInt(proc_id)].exported else false;
                 appendDefinition(allocator, &final.codegen.symbols, &symbols, .{
                     .name = symbol_name,
                     .offset = start,
                     .size = excerpt.code.len,
-                    .is_global = pack_mode,
+                    .is_global = pack_mode or exported,
                     .is_function = true,
                     .is_external = false,
                     .section = .text,

@@ -1248,6 +1248,7 @@ const TypeDigest = struct {
                 hashValue(hasher, variable.numeric_default_phase);
                 hashValue(hasher, variable.row_default);
                 hashValue(hasher, variable.row_default_discharges_constraints);
+                hashValue(hasher, variable.bounded_row_ext);
                 hashU32(hasher, @intCast(variable.constraints.len));
                 for (variable.constraints) |constraint| {
                     hashBytes(hasher, names.methodNameText(constraint.fn_name));

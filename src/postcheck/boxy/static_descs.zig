@@ -96,7 +96,7 @@ pub const StaticDescs = struct {
 
     /// The static-data slot holding the descriptor of closed type `ty`.
     pub fn descriptorSlot(self: *StaticDescs, ty: TypeId) Allocator.Error!LIR.StaticDataId {
-        const reserved = try self.reserveDescriptor(.{ .ty = self.layouts.joins.representative(ty), .recursive_box = false });
+        const reserved = try self.reserveDescriptor(.{ .ty = ty, .recursive_box = false });
         try self.drain();
         return reserved.slot;
     }
@@ -338,7 +338,7 @@ pub const StaticDescs = struct {
         };
         for (words, relocations[1..], 0..) |word, *relocation, position| {
             const target, const addend = switch (word) {
-                .desc => |ty| .{ (try self.reserveDescriptor(.{ .ty = self.layouts.joins.representative(ty), .recursive_box = false })).node, 0 },
+                .desc => |ty| .{ (try self.reserveDescriptor(.{ .ty = ty, .recursive_box = false })).node, 0 },
                 .callable => |callable| .{ callable, static_callable_header },
             };
             relocation.* = .{
@@ -365,7 +365,7 @@ pub const StaticDescs = struct {
         );
         @memcpy(@constCast(self.exports.items[text_node].bytes)[0..text.len], text);
         const bytes = @constCast(self.exports.items[reserved.node].bytes);
-        writeU32(bytes, name_layout.of(.id), @backingInt(name));
+        @memcpy(bytes[name_layout.of(.id)..][0..32], &desc_format.nameIdDigest(self.store.nameContentId(name)));
         writeU32(bytes, name_layout.of(.len), @intCast(text.len));
         try self.setRelocations(reserved.node, &.{.{ .offset = name_layout.of(.bytes), .target = text_node }});
         try self.name_slots.put(self.allocator, name, reserved);
@@ -389,9 +389,8 @@ pub const StaticDescs = struct {
     /// component type's own descriptor, or the recursion box around it when
     /// the committed layout boxed a component the type does not box.
     fn componentNode(self: *StaticDescs, ty: TypeId, committed: layout.Idx) Allocator.Error!ExportIndex {
-        const rep = self.layouts.joins.representative(ty);
-        const boxed_by_layout = self.layouts.layouts.getLayout(committed).tag == .box and self.store.get(rep) != .box;
-        return (try self.reserveDescriptor(.{ .ty = rep, .recursive_box = boxed_by_layout })).node;
+        const boxed_by_layout = self.layouts.layouts.getLayout(committed).tag == .box and self.store.get(ty) != .box;
+        return (try self.reserveDescriptor(.{ .ty = ty, .recursive_box = boxed_by_layout })).node;
     }
 
     fn fill(self: *StaticDescs, item: Pending) Allocator.Error!void {
@@ -497,7 +496,7 @@ pub const StaticDescs = struct {
                     kind = .nominal;
                     flags.inspect_opaque = nominal.is_opaque;
                     const backing = try self.layouts.converter.backing(ty);
-                    const backing_node = (try self.reserveDescriptor(.{ .ty = self.layouts.joins.representative(backing), .recursive_box = false })).node;
+                    const backing_node = (try self.reserveDescriptor(.{ .ty = backing, .recursive_box = false })).node;
                     try pointers.append(self.allocator, .{ .offset = desc_layout.of(.child), .target = backing_node });
                     try pointers.append(self.allocator, .{ .offset = desc_layout.of(.name), .target = (try self.reserveName(nominal.name)).node });
                     if (try self.methodsNode(ty)) |methods| try pointers.append(self.allocator, .{ .offset = desc_layout.of(.methods), .target = methods });

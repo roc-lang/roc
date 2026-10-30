@@ -39,6 +39,8 @@ pub const Family = enum(u8) {
     package_discovery,
     program_output,
     scratch,
+    /// A module's Boxy object (`compile.boxy_object_cache`).
+    boxy_object,
 
     pub fn age(self: Family) i64 {
         return switch (self) {
@@ -56,6 +58,7 @@ pub const Family = enum(u8) {
             .package_pack,
             .optimized_pack,
             .package_discovery,
+            .boxy_object,
             => 30 * day_ns,
         };
     }
@@ -63,7 +66,7 @@ pub const Family = enum(u8) {
     pub fn isPack(self: Family) bool {
         return switch (self) {
             .local_pack, .package_pack, .optimized_pack, .local_discovery, .package_discovery, .program_output => true,
-            .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .scratch => false,
+            .checked, .canonicalized, .placement, .literals, .pairing, .executable, .test_result, .wasm_host, .glue_plugin, .scratch, .boxy_object => false,
         };
     }
 

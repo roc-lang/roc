@@ -1307,6 +1307,28 @@ fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     return decision orelse error.TestUnexpectedResult;
 }
 
+/// The static data a `.boxy` program froze (its descriptors, dictionaries,
+/// and name table), installed in an interpreter as every real pipeline
+/// installs it; a `.lss` program freezes none.
+const FrozenStaticData = struct {
+    data: ?eval.InterpreterStaticData,
+
+    fn init(allocator: Allocator, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!FrozenStaticData {
+        const frozen = lowered.frozen_static_data orelse return .{ .data = null };
+        return .{ .data = try eval.InterpreterStaticData.init(allocator, frozen.exports, lowered.lir_result.static_data_values.items.len) };
+    }
+
+    fn install(self: *FrozenStaticData, interpreter: *eval.Interpreter) void {
+        const data = &(self.data orelse return);
+        data.install(interpreter);
+        data.ownByInterpreter(interpreter);
+    }
+
+    fn deinit(self: *FrozenStaticData) void {
+        if (self.data) |*data| data.deinit();
+    }
+};
+
 fn rootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) TestError!LIR.LirProcSpecId {
     return lowered.main_proc orelse error.MissingRootProcedure;
 }
@@ -13011,14 +13033,10 @@ fn expectKeyedContainersEvaluate(source: []const u8, expected: u64) (TestError |
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
         {
+            var static_data = try FrozenStaticData.init(allocator, &lowered.lowered);
+            defer static_data.deinit();
             var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
             defer static_strings.deinit();
-            // The descriptors, dictionaries, and name table a `.boxy` program froze.
-            var static_data: ?eval.InterpreterStaticData = if (lowered.lowered.frozen_static_data) |frozen|
-                try eval.InterpreterStaticData.init(allocator, frozen.exports, result.static_data_values.items.len)
-            else
-                null;
-            defer if (static_data) |*data| data.deinit();
             var interpreter = try eval.Interpreter.init(
                 allocator,
                 &result.store,
@@ -13027,10 +13045,7 @@ fn expectKeyedContainersEvaluate(source: []const u8, expected: u64) (TestError |
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
-            if (static_data) |*data| {
-                data.install(&interpreter);
-                data.ownByInterpreter(&interpreter);
-            }
+            static_data.install(&interpreter);
             var count: u64 = 40;
             const evaluated = try interpreter.eval(.{
                 .proc_id = try rootProc(&lowered.lowered),
@@ -13531,12 +13546,8 @@ test "issue 11470: tagged shared error composition executes in both strategies" 
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
         defer static_strings.deinit();
         {
-            // The descriptors, dictionaries, and name table a `.boxy` program froze.
-            var static_data: ?eval.InterpreterStaticData = if (lowered.lowered.frozen_static_data) |frozen|
-                try eval.InterpreterStaticData.init(allocator, frozen.exports, result.static_data_values.items.len)
-            else
-                null;
-            defer if (static_data) |*data| data.deinit();
+            var static_data = try FrozenStaticData.init(allocator, &lowered.lowered);
+            defer static_data.deinit();
             var interpreter = try eval.Interpreter.init(
                 allocator,
                 &result.store,
@@ -13545,10 +13556,7 @@ test "issue 11470: tagged shared error composition executes in both strategies" 
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
-            if (static_data) |*data| {
-                data.install(&interpreter);
-                data.ownByInterpreter(&interpreter);
-            }
+            static_data.install(&interpreter);
             for ([_]u64{ 40, 1, 2, 3, 4 }, 0..) |expected, mode| {
                 var argument: u64 = @intCast(mode);
                 const evaluated = try interpreter.eval(.{
@@ -13622,12 +13630,8 @@ fn expectStampedRowCoercionResults(source: []const u8, expectations: []const [2]
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
         defer static_strings.deinit();
         {
-            // The descriptors, dictionaries, and name table a `.boxy` program froze.
-            var static_data: ?eval.InterpreterStaticData = if (lowered.lowered.frozen_static_data) |frozen|
-                try eval.InterpreterStaticData.init(allocator, frozen.exports, result.static_data_values.items.len)
-            else
-                null;
-            defer if (static_data) |*data| data.deinit();
+            var static_data = try FrozenStaticData.init(allocator, &lowered.lowered);
+            defer static_data.deinit();
             var interpreter = try eval.Interpreter.init(
                 allocator,
                 &result.store,
@@ -13636,10 +13640,7 @@ fn expectStampedRowCoercionResults(source: []const u8, expectations: []const [2]
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
-            if (static_data) |*data| {
-                data.install(&interpreter);
-                data.ownByInterpreter(&interpreter);
-            }
+            static_data.install(&interpreter);
             for (expectations) |expectation| {
                 var argument: u64 = expectation[0];
                 const evaluated = try interpreter.eval(.{
@@ -13711,12 +13712,8 @@ fn expectStampedRowCoercionCrash(source: []const u8, expected_message: []const u
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
         defer static_strings.deinit();
         {
-            // The descriptors, dictionaries, and name table a `.boxy` program froze.
-            var static_data: ?eval.InterpreterStaticData = if (lowered.lowered.frozen_static_data) |frozen|
-                try eval.InterpreterStaticData.init(allocator, frozen.exports, result.static_data_values.items.len)
-            else
-                null;
-            defer if (static_data) |*data| data.deinit();
+            var static_data = try FrozenStaticData.init(allocator, &lowered.lowered);
+            defer static_data.deinit();
             var interpreter = try eval.Interpreter.init(
                 allocator,
                 &result.store,
@@ -13725,10 +13722,7 @@ fn expectStampedRowCoercionCrash(source: []const u8, expected_message: []const u
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
-            if (static_data) |*data| {
-                data.install(&interpreter);
-                data.ownByInterpreter(&interpreter);
-            }
+            static_data.install(&interpreter);
             var argument: u64 = 0;
             if (interpreter.eval(.{
                 .proc_id = try rootProc(&lowered.lowered),
@@ -14188,4 +14182,144 @@ test "issue 12491 nested closure chain bound to a block local lowers under lss" 
 
 test "issue 12491 nested closure chain bound to a block local lowers under boxy" {
     try expectIssue12491BlockLocalClosureChain(.boxy);
+}
+
+/// The procedure template of `artifact` exported as `name`.
+fn templateNamed(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, name: []const u8) error{TestUnexpectedResult}!check.CheckedArtifact.CheckedProcedureTemplate {
+    for (artifact.checked_procedure_templates.templates.items) |template| {
+        const export_name = artifact.canonical_names.procBase(template.proc_base).export_name orelse continue;
+        if (std.mem.eql(u8, artifact.canonical_names.exportNameText(export_name), name)) return template;
+    }
+    std.debug.print("no template named {s}\n", .{name});
+    return error.TestUnexpectedResult;
+}
+
+/// The procedures of `result` whose debug name is `name`.
+fn procsNamed(allocator: Allocator, result: *const lir.Program.Result, name: []const u8) Allocator.Error![]LIR.LirProcSpecId {
+    var found: std.ArrayList(LIR.LirProcSpecId) = .empty;
+    errdefer found.deinit(allocator);
+    for (0..result.store.procSpecCount()) |index| {
+        const id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
+        const debug_name = result.store.procDebugName(id) orelse continue;
+        if (std.mem.eql(u8, debug_name, name)) try found.append(allocator, id);
+    }
+    return try found.toOwnedSlice(allocator);
+}
+
+test "sealed result rows: an annotated result row is a static worker and widening converts" {
+    // `parse` and `read` quantify a bounded row variable each (design.md
+    // "Polarity"), which the checked artifact publishes as such and `.boxy`
+    // seals (design.md "Sealed Result Rows"): neither worker takes a hidden
+    // descriptor, and `load`, whose instantiations widen both results,
+    // converts them through static conversion workers. `pass` quantifies a
+    // named (rigid) extension, genuine row polymorphism, and keeps its
+    // descriptor.
+    const allocator = std.testing.allocator;
+    const source =
+        \\read : Str -> Try(Str, [NotFound])
+        \\read = |path| if path == "missing" Err(NotFound) else Ok(path)
+        \\
+        \\parse : Str -> Try(U8, [InvalidU8])
+        \\parse = |s| if s == "bad" Err(InvalidU8) else Ok(7)
+        \\
+        \\load : Str -> Try(U8, [NotFound, InvalidU8])
+        \\load = |path| {
+        \\    text = read(path)?
+        \\    parse(text)
+        \\}
+        \\
+        \\pass : [A, ..r] -> [A, ..r]
+        \\pass = |x| x
+        \\
+        \\main : U64 -> U64
+        \\main = |mode| {
+        \\    path = if mode == 0 "ok" else if mode == 1 "missing" else "bad"
+        \\    base = match load(path) {
+        \\        Ok(n) => n.to_u64()
+        \\        Err(NotFound) => 100
+        \\        Err(InvalidU8) => 200
+        \\    }
+        \\    match pass(if mode == 0 A else B) {
+        \\        A => base
+        \\        B => base + 1000
+        \\    }
+        \\}
+    ;
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = .boxy, .proc_debug_names = true });
+    defer lowered.deinit(allocator);
+    const artifact = &lowered.resources.checked_artifact;
+    for ([_][]const u8{ "read", "parse" }) |name| {
+        const template = try templateNamed(artifact, name);
+        const scheme_vars = artifact.checked_procedure_templates.scheme_vars_pool[template.scheme_vars.start..][0..template.scheme_vars.len];
+        try std.testing.expectEqual(@as(usize, 1), scheme_vars.len);
+        const payload = artifact.checked_types.payload(scheme_vars[0]);
+        try std.testing.expect(payload == .flex);
+        try std.testing.expect(payload.flex.bounded_row_ext);
+        try std.testing.expectEqual(check.CheckedArtifact.RowDefault.empty_tag_union, payload.flex.row_default.?);
+    }
+    {
+        const template = try templateNamed(artifact, "pass");
+        const scheme_vars = artifact.checked_procedure_templates.scheme_vars_pool[template.scheme_vars.start..][0..template.scheme_vars.len];
+        try std.testing.expectEqual(@as(usize, 1), scheme_vars.len);
+        try std.testing.expect(artifact.checked_types.payload(scheme_vars[0]) == .rigid);
+    }
+
+    const result = &lowered.lowered.lir_result;
+    for ([_][]const u8{ "read", "parse" }) |name| {
+        const procs = try procsNamed(allocator, result, name);
+        defer allocator.free(procs);
+        try std.testing.expectEqual(@as(usize, 1), procs.len);
+        // The explicit `Str` parameter and nothing hidden.
+        try std.testing.expectEqual(@as(usize, 1), result.store.getLocalSpan(result.store.getProcSpec(procs[0]).args).len);
+    }
+    {
+        const procs = try procsNamed(allocator, result, "pass");
+        defer allocator.free(procs);
+        try std.testing.expectEqual(@as(usize, 1), procs.len);
+        // The explicit parameter and the row variable's descriptor.
+        try std.testing.expectEqual(@as(usize, 2), result.store.getLocalSpan(result.store.getProcSpec(procs[0]).args).len);
+    }
+    {
+        const conversions = try procsNamed(allocator, result, "boxy.convert");
+        defer allocator.free(conversions);
+        try std.testing.expect(conversions.len >= 2);
+        for (conversions) |proc| {
+            const spec = result.store.getProcSpec(proc);
+            try std.testing.expectEqual(@as(usize, 1), result.store.getLocalSpan(spec.args).len);
+            try std.testing.expectEqual(LIR.EmissionUnit.module(0), spec.emission_unit);
+        }
+    }
+    for ([_][]const u8{ "read", "parse", "load", "main" }) |name| {
+        const procs = try procsNamed(allocator, result, name);
+        defer allocator.free(procs);
+        try std.testing.expectEqual(LIR.EmissionUnit.module(0), result.store.getProcSpec(procs[0]).emission_unit);
+    }
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    {
+        var static_data = try FrozenStaticData.init(allocator, &lowered.lowered);
+        defer static_data.deinit();
+        var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+        defer static_strings.deinit();
+        var interpreter = try eval.Interpreter.init(
+            allocator,
+            &result.store,
+            &result.layouts,
+            static_strings.view(),
+            runtime_env.get_ops(),
+        );
+        defer interpreter.deinit();
+        static_data.install(&interpreter);
+        for ([_][2]u64{ .{ 0, 7 }, .{ 1, 1100 }, .{ 2, 1200 } }) |expectation| {
+            var argument: u64 = expectation[0];
+            const evaluated = try interpreter.eval(.{
+                .proc_id = try rootProc(&lowered.lowered),
+                .arg_layouts = &.{.u64},
+                .arg_ptr = @ptrCast(&argument),
+            });
+            try std.testing.expectEqual(expectation[1], evaluated.value.read(u64));
+        }
+    }
+    try runtime_env.checkForLeaks();
 }

@@ -8,7 +8,6 @@ const std = @import("std");
 const collections = @import("collections");
 const layout = @import("layout");
 const types = @import("types.zig");
-const RowJoins = @import("row_joins.zig");
 const Common = @import("../common.zig");
 
 /// The layout of a primitive type.
@@ -27,7 +26,6 @@ pub const Layouts = struct {
     allocator: Allocator,
     store: *types.Store,
     converter: types.Converter,
-    joins: *const RowJoins.Joins,
     layouts: *layout.Store,
     memo: collections.DenseMapUnmanaged(TypeId, Committed) = .empty,
     slot_memo: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty,
@@ -324,9 +322,8 @@ pub const Layouts = struct {
     }
 
     /// The committed layout of the closed type `ty`.
-    pub fn layoutOf(self: *Layouts, raw: TypeId) Allocator.Error!layout.Idx {
-        if (!try self.converter.representationClosed(raw)) types.invariant("asked for the committed layout of an open type");
-        const ty = self.joins.representative(raw);
+    pub fn layoutOf(self: *Layouts, ty: TypeId) Allocator.Error!layout.Idx {
+        if (!try self.converter.representationClosed(ty)) types.invariant("asked for the committed layout of an open type");
         if (self.memo.get(ty)) |committed| return committed.idx;
         if (try self.directLayout(ty)) |idx| {
             try self.memo.put(self.allocator, ty, .{ .idx = idx, .digest = null });
@@ -378,8 +375,7 @@ pub const Layouts = struct {
         };
     }
 
-    fn input(self: *Layouts, graph: *layout.Graph, nodes: *collections.DenseMapUnmanaged(TypeId, layout.GraphNodeId), order: *std.ArrayList(TypeId), raw: TypeId) Allocator.Error!layout.GraphInput {
-        const ty = self.joins.representative(raw);
+    fn input(self: *Layouts, graph: *layout.Graph, nodes: *collections.DenseMapUnmanaged(TypeId, layout.GraphNodeId), order: *std.ArrayList(TypeId), ty: TypeId) Allocator.Error!layout.GraphInput {
         if (nodes.get(ty)) |node| return layout.localGraphInput(node);
         if (self.memo.get(ty)) |committed| {
             if (committed.digest) |digest| {
