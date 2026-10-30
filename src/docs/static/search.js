@@ -62,7 +62,7 @@ const setupSearch = () => {
       if (event.key === "Escape") { searchBox.focus(); searchTypeAhead.classList.add("hidden"); return; }
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
       event.preventDefault();
-      const links = Array.from(searchTypeAhead.querySelectorAll("li:not(.hidden) > a.type-ahead-link"));
+      const links = Array.from(searchTypeAhead.querySelectorAll("li:not(.hidden) > a.type-ahead-link, .search-suggestion > button"));
       const current = links.indexOf(document.activeElement);
       const next = event.key === "ArrowDown" ? (current + 1) % links.length : current - 1;
       if (next < 0 || !links.length) searchBox.focus();
@@ -80,6 +80,7 @@ const setupSearch = () => {
     const expandedCategories = new Set();
     let showSnippets = false;
     let prose = [];
+    let suggestions = [];
     const apiDocumentation = new Map();
     let loaded = false;
     let loading;
@@ -130,6 +131,9 @@ const setupSearch = () => {
           categories.delete(node.dataset.category);
           categories.set(node.dataset.category, node.textContent);
         });
+        suggestions = Array.from(doc.querySelectorAll("[data-search-suggestion]"), node => ({
+          query: node.dataset.searchSuggestion, description: node.textContent,
+        }));
         const label = doc.querySelector("[data-search-all-label]");
         if (label) allLabel = label.textContent;
         doc.querySelectorAll("article[data-href]").forEach(addDocument);
@@ -258,8 +262,41 @@ const setupSearch = () => {
       shownItems = [];
       dynamicItems = [];
       const query = searchBox.value.trim();
-      if (!query) { searchTypeAhead.classList.add("hidden"); return; }
+      if (!query && document.activeElement !== searchBox && !searchDialog.open) {
+        searchTypeAhead.classList.add("hidden");
+        return;
+      }
       loadIndex();
+      if (!query) {
+        appendItem(dynamic("li", "search-status", suggestions.length ? "Try searching for…" :
+          loaded ? "Search types, functions, and documentation." :
+          failed ? "Search types and functions." : "Loading search suggestions…"));
+        const groups = new Map();
+        for (const suggestion of suggestions) {
+          let row = groups.get(suggestion.description);
+          if (!row) {
+            row = dynamic("li", "search-suggestion");
+            row.append(dynamic("span", "search-suggestion-label", `${suggestion.description}: `));
+            groups.set(suggestion.description, row);
+            appendItem(row);
+          } else row.append(document.createTextNode(", "));
+
+          const button = dynamic("button", "");
+          button.type = "button";
+          button.append(dynamic("code", "", suggestion.query));
+          button.addEventListener("click", () => {
+            searchBox.value = suggestion.query;
+            selectedCategory = "";
+            expandedCategories.clear();
+            search();
+            searchBox.focus({ preventScroll: true });
+          });
+          row.append(button);
+        }
+        searchTypeAhead.classList.toggle("hidden", document.activeElement !== searchBox && !searchDialog.open);
+        restorePosition(position);
+        return;
+      }
       const apiMatches = engine.rankApi(apiEntries, query);
       const ranked = engine.rank(prose, query, { allowAliasPrefixes: apiMatches.length === 0 });
       const curatedSymbol = !/[\p{L}\p{N}]/u.test(query) && ranked.some(item => item.exactTerm);

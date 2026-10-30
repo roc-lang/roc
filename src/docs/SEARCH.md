@@ -27,10 +27,16 @@ Records:
 
 | Record | Fields after the record name |
 | --- | --- |
+| `suggestion` | Search query, group label |
 | `all` | Display label for the aggregate filter |
 | `category` | Stable ID, display label |
 | `document` | Category ID, title, destination URL, source file |
 | `term` | Category ID, exact search term, destination URL, result title |
+
+Suggestions sharing a group label appear on one line with individually clickable
+queries. Groups and queries follow declaration order when search is empty. Selecting
+one fills the field and searches all categories. They are optional; no Roc-specific
+suggestions are added unless configured.
 
 Built-in category IDs are `api` and `guides`. Change their display labels or add
 categories such as `recipes` or `architecture`. Categories are shown in declaration

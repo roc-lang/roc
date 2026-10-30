@@ -80,6 +80,12 @@ fn renderLine(gpa: Allocator, io: std.Io, directory: std.Io.Dir, config_path: []
         try w.writeAll("<span data-search-all-label>");
         try escaped(w, fields[1]);
         try w.writeAll("</span>\n");
+    } else if (std.mem.eql(u8, fields[0], "suggestion") and count == 3) {
+        try w.writeAll("<span data-search-suggestion=\"");
+        try escaped(w, fields[1]);
+        try w.writeAll("\">");
+        try escaped(w, fields[2]);
+        try w.writeAll("</span>\n");
     } else if (std.mem.eql(u8, fields[0], "category") and count == 3) {
         try w.writeAll("<nav data-search-categories><span data-category=\"");
         try escaped(w, fields[1]);
@@ -176,6 +182,7 @@ test "search config indexes relative sources and validates curated anchors" {
         .data = "all\tEverything\n" ++
             "document\trecipes\tExample\t/examples/demo/\texample.roc\n" ++
             "category\trecipes\tRecipes & examples\n" ++
+            "suggestion\t|>\tLook up <syntax>\n" ++
             "term\tapi\tlreduce\t#fold\tfold\n",
     });
     var diagnostic: Diagnostic = .{};
@@ -186,6 +193,7 @@ test "search config indexes relative sources and validates curated anchors" {
     try std.testing.expect(std.mem.find(u8, index, "<article data-full-navigation") != null);
     try std.testing.expect(std.mem.find(u8, index, "&lt;script&gt; &amp; text") != null);
     try std.testing.expect(std.mem.find(u8, index, "data-search-term=\"lreduce\"") != null);
+    try std.testing.expect(std.mem.find(u8, index, "data-search-suggestion=\"|&gt;\">Look up &lt;syntax&gt;") != null);
     try std.testing.expectError(error.UnknownSearchAnchor, validateTarget(gpa, io, tmp.dir, "#missing"));
     try std.testing.expectError(error.TermTargetMustBeRelative, validateTarget(gpa, io, tmp.dir, "../index.html"));
     try tmp.dir.writeFile(io, .{ .sub_path = "search.tsv", .data = "term\tunknown\tx\t#fold\tfold\n" });
@@ -206,6 +214,9 @@ test "search config failures leave the index unchanged and identify the record" 
     try tmp.dir.writeFile(io, .{ .sub_path = "search-index.html", .data = original });
     try tmp.dir.writeFile(io, .{ .sub_path = "index.html", .data = "<h2 id=\"fold\">fold</h2>" });
     const cases = .{
+        .{ "suggestion\tquery", error.InvalidSearchConfig },
+        .{ "suggestion\t\tDescription", error.InvalidSearchConfig },
+        .{ "suggestion\tquery\tDescription\textra", error.InvalidSearchConfig },
         .{ "category", error.InvalidSearchConfig },
         .{ "category\t\tEmpty", error.InvalidSearchConfig },
         .{ "all\tEverything\textra", error.InvalidSearchConfig },

@@ -1889,3 +1889,31 @@ html:has(.mobile-search-dialog[open]) {
   max-height: none;
   border: 0;
 }
+
+.search-suggestion {
+  padding: 10px;
+  font-family: var(--font-sans);
+  color: var(--faded-color);
+  line-height: 1.8;
+}
+
+.search-suggestion button {
+  display: inline-block;
+  padding: 2px 0;
+  text-align: left;
+  font: var(--font-base) var(--font-sans);
+  color: var(--faded-color);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.search-suggestion code {
+  color: var(--violet);
+  font-weight: bold;
+}
+
+.search-suggestion button:hover,
+.search-suggestion button:focus-visible {
+  background: var(--violet-bg);
+}

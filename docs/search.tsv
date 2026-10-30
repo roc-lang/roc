@@ -69,3 +69,22 @@ term	guides	andThen	langref/operators/#-unwrap-if-ok-early-return-if-err	?
 term	guides	(>>=)	langref/operators/#-unwrap-if-ok-early-return-if-err	?
 term	guides	Result.try	langref/operators/#-unwrap-if-ok-early-return-if-err	?
 term	api	zip	List/#map2	List.map2(x, y, |a, b| (a, b))
+
+# Empty-search suggestions: query and group label.
+suggestion	List	a type
+suggestion	Dict	a type
+suggestion	Set	a type
+suggestion	Str	a type
+suggestion	map	a function
+suggestion	keep_if	a function
+suggestion	fold	a function
+suggestion	Str.split_on	a function
+suggestion	JSON	a task
+suggestion	CLI args	a task
+suggestion	random numbers	a task
+suggestion	pattern matching	a language concept
+suggestion	opaque	a language concept
+suggestion	error handling	a language concept
+suggestion	|>	an operator
+suggestion	?	an operator
+suggestion	??	an operator
