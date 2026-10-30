@@ -779,6 +779,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test for #12438: a list passed through cursor records into helper calls is not decremented more often than it is owned",
     },
     .{
+        .roc_file = "test/fx/issue_12692_handle_shape.roc",
+        .io_spec = "1>method call: closed|1>qualified call: closed|1>recursive helper: closed|1>wrapper call: closed",
+        .description = "Regression test for #12692: a record argument returned to its caller on a switched result outcome keeps the field its callee passed to a hosted call",
+    },
+    .{
         .roc_file = "test/fx/tailcc_stack_args.roc",
         .io_spec = "0<x x default 41|1>PASS",
         .description = "Regression test for #12191: an AArch64 spill reload right after a call that passes arguments on the stack reads the right slot",

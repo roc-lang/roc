@@ -320,10 +320,10 @@ pub fn rootHoldsFunction(
 
 fn typesOf(modules: []const *checked.CheckedModuleArtifact, imports: []const checked.ImportedModuleView, key: canonical.CheckedModuleDigest) ?checked.CheckedTypeStoreView {
     for (modules) |module| {
-        if (std.mem.eql(u8, &module.key.digest().bytes, &key.bytes)) return module.checked_types.view();
+        if (std.meta.eql(module.key.digest().bytes, key.bytes)) return module.checked_types.view();
     }
     for (imports) |import| {
-        if (std.mem.eql(u8, &import.key.digest().bytes, &key.bytes)) return import.checked_types;
+        if (std.meta.eql(import.key.digest().bytes, key.bytes)) return import.checked_types;
     }
     return null;
 }

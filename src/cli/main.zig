@@ -11527,17 +11527,6 @@ fn boxyPlatformView(
     return platform;
 }
 
-/// One module's object for the link, and the hosted symbols it references.
-const BoxyUnitObject = struct {
-    /// Whether the object came from the cache rather than this build.
-    restored: bool,
-    object: []const u8,
-    hosted_symbols: []const []const u8,
-    /// For the root program's object (`buildBoxyRootObject`).
-    link_root_symbols: []const []const u8 = &.{},
-    app_export_symbols: []const []const u8 = &.{},
-};
-
 /// The key of `artifact`'s object under this build's target and policy.
 /// A module declaring hosted functions is lowered against the platform
 /// header's hosted section, which binds them to their host symbols, so its
@@ -21933,12 +21922,29 @@ test "renderDependencyTree shows declared sources, provenance, and shared subtre
     try std.testing.expect(std.mem.find(u8, out.items, "characters") == null);
 }
 
+/// Apply optional search metadata after all documentation destinations exist.
+fn configureDocsSearch(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
+    if (args.search_config) |path| {
+        var diagnostic: docs.search_config.Diagnostic = .{};
+        docs.search_config.apply(ctx.gpa, ctx.io.std_io, args.output, path, &diagnostic) catch |err| {
+            const stderr = ctx.io.stderr();
+            if (diagnostic.line > 0) {
+                stderr.print("{s}:{d}: could not configure documentation search: {}\n", .{ path, diagnostic.line, err }) catch {};
+            } else {
+                stderr.print("{s}: could not configure documentation search: {}\n", .{ path, err }) catch {};
+            }
+            return error.DocsFailed;
+        };
+    }
+}
+
 fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     if (args_in.builtins) {
         try generateBuiltinDocs(ctx, args_in.output, args_in.with_lang_ref);
+        try configureDocsSearch(ctx, args_in);
         ctx.io.stdout().print("\nGenerated docs for the builtins\n", .{}) catch {};
         if (args_in.serve) {
             try serveDocumentation(ctx, args_in.output);
@@ -22020,6 +22026,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
 
     // Generate documentation for all packages and modules
     try generateDocs(ctx, &result_with_env.build_env, args.path, args.output, args.with_lang_ref);
+    try configureDocsSearch(ctx, args);
 
     stdout.print("\nGenerated docs for {s}\n", .{try ctx.displayPath(args.path)}) catch {};
 

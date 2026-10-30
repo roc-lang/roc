@@ -702,6 +702,13 @@ pub const Converter = struct {
 
     const Child = struct { module: ModuleIndex, ty: checked.CheckedTypeId };
 
+    /// The app type the program solves platform requirement identity
+    /// variable `ty` to, or null for any other type.
+    pub fn platformIdentity(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId) ?TypeId {
+        const identities = self.platform_identities orelse return null;
+        return identities.get(.{ .module = module, .ty = ty });
+    }
+
     fn rootHasIdentityVariables(view: *const ModuleView, ty: checked.CheckedTypeId) bool {
         const roots = view.types().rootRows();
         const index: usize = @backingInt(ty);
@@ -712,9 +719,7 @@ pub const Converter = struct {
     /// The node for `ty` when it needs no children converted first.
     fn leaf(self: Converter, module: ModuleIndex, ty: checked.CheckedTypeId, env: Env) Allocator.Error!?TypeId {
         if (env.lookup(module, ty)) |bound| return bound;
-        if (self.platform_identities) |identities| {
-            if (identities.get(.{ .module = module, .ty = ty })) |solved| return solved;
-        }
+        if (self.platformIdentity(module, ty)) |solved| return solved;
         const view = self.modules.get(module);
         if (!self.seal_undetermined_kinds and !rootHasIdentityVariables(view, ty)) {
             if (self.store.closed_memo.get(.{ .module = module, .ty = ty })) |memo| return memo;

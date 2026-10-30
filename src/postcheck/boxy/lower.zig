@@ -691,6 +691,9 @@ pub const Program = struct {
         defer sealed_slots.deinit(self.allocator);
         const evidence_params = poolSlice(static_dispatch.EvidenceParamRecord, view.view.checked_procedure_templates.evidence_params_pool, template.evidence_params);
         for (checked_scheme_vars, 0..) |variable, slot| {
+            // A platform requirement's identity variable has one solution in
+            // the program, which the converter reads wherever it appears.
+            if (self.converter().platformIdentity(module_index, variable) != null) continue;
             if (try self.converter().sealedSchemeVar(module_index, variable, template.checked_fn_root, evidence_params)) {
                 try sealed_slots.append(self.allocator, @intCast(slot));
                 continue;

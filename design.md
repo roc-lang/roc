@@ -725,20 +725,12 @@ layout ownership, CPU, static-data and runtime-context checks are unchanged.
 ### Closed Named Occurrences
 
 A closed checked occurrence (a root without identity variables) has no
-instantiation identity, so lowering gives every closed named type one
-representative occurrence per program (`Builder.canonicalNamedOccurrence`):
-the declaring module's own occurrence when that module holds one, so the
-choice does not move with other modules' keys as they are edited, and
-otherwise the occurrence in the lowest-keyed module that holds one. Freshly
-lowered, replayed and restored named types of one closed type are then one
-Monotype, with one full and one specialization digest. The coordinator builds
-the index from checked type key to representative (`ClosedOccurrenceIndex`) once,
-from every module view's named root rows, before any body is lowered; workers
-borrow it, and a persistent summary's closed occurrence resolves through it on
-decode. Open occurrences keep their exact lowering-view witness. The
-representative is a property of one program and is never persisted in a
-module's own checked module cache entry ("Compile-Time Value Reuse Across
-Edits").
+instantiation identity, so lowering chooses one representative for each
+closed named type inside each lowering's occurrence scope
+(`Builder.canonicalNamedOccurrence`, "Occurrence scope"). The candidates come
+from an index of every module view's closed named roots by checked type key
+(`ClosedOccurrenceIndex`), each key's holders sorted by module key. The
+coordinator builds it once, before any body is lowered, and workers borrow it.
 
 ### Persistent Specialization Interface Summaries
 
@@ -3641,28 +3633,17 @@ carries a checked occurrence: `named_type.ty`, an id in the type store of
 `named_type.ty_module`, the module whose checked types the occurrence is in,
 which is explicit and need not be `named_type.module`. Static data planning
 re-enters `ty_module`'s store at `ty`, and the occurrence takes part in a
-Monotype type's full and specialization digests. In a stored value and its
-stored type, every closed named type's occurrence is one the storing module's
-identity covers (`ConstStoreWriter.rebindNamedOccurrence`): the storing
-module's own, which holds every closed named type of the stored root's
-checked type under the same checked type key, or, for a stored closure's
-captures, which are lowered in the callee's module, the occurrence in the
-lowest-keyed module of the storing module's transitive imports that holds
-one. The module's cache entry then names only modules its own identity
-covers. Monotype's in-memory occurrence of a closed
-type is instead one representative per program ("Closed Named Occurrences"
-above), which may belong to any module of the program the value was lowered
-in, so a module's entry must not retain it: a later program reusing the entry
-need not contain that module. An open occurrence is exact, lowered from a
-view the storing module's value identity covers, and is stored as it is.
-Restoring a stored type resolves each occurrence back to the current
-program's representative, so a restored type and a freshly lowered one are
-one Monotype. An occurrence in the module's own store names a type of the
-version that stored it: after an edit the same id names another type of the
-new version, or none. A root holding one is therefore not portable without
-the key relocation above. Compilers with runtime safety check, for every
-transplanted root, that each named type's occurrence re-enters a store of the
-compilation at the nominal type it names.
+Monotype type's full and specialization digests. Monotype lowering names only
+occurrences inside the storing module's import closure ("Occurrence scope"),
+so the module's cache entry names only modules its own identity covers, and a
+stored type is restored with the occurrences it holds. An occurrence in the
+module's own store names a type of the version that stored it: after an edit
+the same id names another type of the new version, or none. A root holding
+one is therefore not portable without the key relocation above. An occurrence
+in another module's store stays valid, because the value identity covers that
+module's key. Compilers with runtime safety check, for every transplanted
+root, that each named type's occurrence re-enters a store of the compilation
+at the nominal type it names.
 A literal conversion stores no type, so its value is portable when its checked
 type mentions one of the module's own types only where the value holds nothing
 of it (a phantom parameter of an imported nominal); its value identity still
@@ -8551,6 +8532,23 @@ in several modules use at one record type is therefore one specialization. A
 caller that passes a nominal with its own encoder still records a different
 contract, so it keeps a separate specialization.
 
+That specialization's evidence keeps the edge of whichever module requested it
+first, and another module that reuses it need not import that one. A function
+stored in a module's `ConstStore` therefore keeps a codec edge as only the
+contract digest and the checked keys of its dispatcher and callable types
+(`ConstFnStructuralEvidence.storedForm`), so every module its stored values
+name lies in its import closure. Monotype restores such an edge from the first
+module of the storing module's reflexive import closure, breadth-first in
+direct-import order, that holds a contract with that digest and roots with
+those keys, at its first such contract. The stored function was lowered from
+bodies that closure reaches, so one of its modules recorded an equal contract.
+Boxy resolves a stored function's codec dictionary edge from the same module,
+and builds the generated codec worker in it: the dictionary's requirement comes
+from the template's module and the shape from the use's module, and neither
+need hold the contract. A generated codec runtime body reads its edge in that
+body's module, which must hold an equal contract. Completed-body records
+retain recorded edges and are rejected when their recording module is absent.
+
 The checker's derived-codec walk records each nominal application whose
 backing it walks together with the generated derivation that walks it. A later
 occurrence of an equal application in the same walk (a sibling field, a list
@@ -11102,6 +11100,59 @@ value's own tags is the value itself, and its record is dropped
 (`Check.settleUnwidenedResults`); a row whose tail is quantified with the
 function's result may widen in a specialization, so its record stays.
 
+**Deferred result relations.** The coercion decides from the value's type,
+and a nested annotated function's body can have a type that is not yet
+known where the body is checked: a variable the ENCLOSING function owns—its
+parameter, a binder destructured out of a record it captured (Field Kinds),
+a tuple access or dispatch result of its data—which that function may still
+determine later in its own body, through a judgment of its own or an
+ordinary unification. Relating the body to the annotation at that moment
+would bind the enclosing function's variable to the annotation's own result
+row, and the nested function's generalization could no longer quantify that
+row: every use of the nested function inside the enclosing one would share
+one bounded row, and a match with a tag the annotation does not list would
+be rejected there, while the same match on the same signature is accepted
+everywhere else. The interface of an annotated definition is its
+annotation, whatever the body is, so the body's relation to it is a
+verification, and a verification can run whenever its inputs are known. A
+flex variable the widening copy reaches whose rank is below the current
+rank (`Check.reachedVarEscapesResultRelation`) is therefore not related:
+the copy stands a fresh variable at the current rank in its place
+(`Check.deferredResultPlaceholder`), the relation binds that placeholder to
+the result position the variable must fit, and the definition's scheme
+quantifies the position with the rest of its annotation. A row's open TAIL
+is not such a variable, whichever scope owns it: the tags the row holds
+relate now, the tail stays shared with the value's own row or is re-opened
+in a copy exactly as above, and every tag the row gains later joins
+through that tail or propagates into the copy (Row Joins,
+`Check.propagateValueRowsToWidenedUses`), so a top-level value forwarded
+into several results keeps one row of its own. The variable's
+own relation to that position is recorded (`Check.DeferredResultRelation`)
+for the generalization boundary that owns the variable, which discharges
+it after its field-kind judgments and before its literal defaulting
+(`Check.dischargeDeferredResultRelations`): the target is the position as
+the annotation wrote it, instantiated at the boundary's rank with its
+bounded extensions closed and its quantified type variables fresh rigids,
+and the variable relates to it through a widening copy of its type exactly
+as the body would have. A variable still undetermined at the boundary takes
+the annotation's row, closed: the enclosing function would otherwise
+generalize it, and the body cannot deliver the annotation for every row. A
+variable the relation would bind to one of the target's rigids is the body
+delivering a result the annotation promised for every type for one type
+only, and is reported as the body not fitting the annotation. A rejection
+is reported at the body value and retires it, exactly as an immediate
+rejection does, after the relation is rolled back so the report shows the
+type the enclosing function determined. Only a relation to an ANNOTATED
+result waits (`Check.ResultTarget`); a relation that infers a result is
+what determines it, and relates the value's type as it stands. The body's
+coercion record names the annotated result itself as the wide type, since
+the body's type is the enclosing function's data and never the result's own
+class, so its `row_coerce` always stands and is lowered at the result's
+cell (Closed Result Rows At Template Boundaries).
+`test/snapshots/deferred_result_relation.md` pins the accepted and rejected
+sides, and `test/cli/DestructuredStepWidenedMatch.roc` runs the widened
+calls inside the enclosing function on every backend.
+
 A forwarder's argument and result rows can be one class. The copy separates
 only the result, so the argument row stays closed, and a call at a tag the
 argument does not list is still rejected. The function's result is its
@@ -13112,7 +13163,11 @@ The kind rules:
   boundary retains for an enclosing owner pins every class its binder's
   type reaches at the owner's rank: whichever binding the owner makes
   relates that type to the field's value there, so no boundary nested
-  inside the owner may quantify it first.
+  inside the owner may quantify it first. The result relation of a value
+  whose type reaches such a binder then waits for that owner (Row
+  Subsumption, "Deferred result relations"), so the owner's judgment,
+  including a kind another statement of the owner makes optional, is what
+  the relation sees.
   Binding a destructure can also ground a deferred static-dispatch receiver
   without adding an ordinary equality constraint. Every literal-defaulting
   boundary therefore begins with a ROUND-ZERO constraint quiescence: ordinary
@@ -14816,10 +14871,10 @@ Descriptors come from two sources and nowhere else:
 
 A recursive type composes through placeholders. The lowerer finds the
 type's recursive component in the graph of descriptor components (record
-fields, tuple items, tag payloads, nominal backings, list elements, box
+fields, tuple items, tag payloads, nominal backings, list items, box
 payloads) and breaks the cycle at exactly its pointer slots: the slots the
 shared layout store boxes for that component, a struct slot leading back into
-it and a non-struct tag payload leading back into it, and the list elements
+it and a non-struct tag payload leading back into it, and the list items
 and box payloads leading back into it, which are pointers already. Each member
 a pointer slot points at is opened first (`desc_recursive_open`, keyed by a
 static word naming the member and the descriptors of its variables), which
@@ -21262,7 +21317,17 @@ an ordinary owned call and targets the outcome-specialized variant. The
 matching switch edge places that same unit back in the must-owned state. On
 the variant's callee side, a return carrying the signature's bit omits the
 parameter's terminal release; the base procedure and all other outcomes
-consume or release it normally. These are compile-time ownership-state transitions only. The
+consume or release it normally.
+
+A return carrying the bit hands back the parameter's exact entry unit, every
+field place included, so field-take analysis records each such restitution
+boundary as a whole use of the parameter: no field take of it may run before
+the boundary on any path. The restitution solve counts only consumption of the
+parameter and its same-value aliases, and a field read passed to a consuming
+position retains the field under that count; a take would instead move the
+field's stored unit out of the parameter that the boundary returns. Field-take
+decisions and the uniqueness they settle are shared by every emission of a
+procedure, so the boundary constrains the base procedure's takes too. These are compile-time ownership-state transitions only. The
 post-ARC program contains ordinary calls, switches, `incref`, and `decref`
 statements, and backends continue to follow those statements without knowing
 about conditional ownership.
@@ -26082,14 +26147,35 @@ Persistent interface records distinguish checked occurrence provenance from
 nominal ownership. An occurrence of a closed checked type is serialized by its
 normalized checked type key and its nominal owner's exact entry key. Reopening
 binds that key only to a current committed closed root with the same key and
-owner. The representative is the owner's own occurrence when the owner holds
-the closed root, so it does not move when another module's entry key changes
-with an edit; a closed root the owner does not hold is represented by the
-lowest-keyed module that holds it. Representatives are memoized for the
-immutable lowering input set. A missing key rejects the optional
-record. Types containing identity variables keep their exact entry and root id;
-no variable identity is reconstructed or merged. Nominal declaration, generated
-representation and default-expression validation remain mandatory after rebinding.
+owner, chosen inside the reader's occurrence scope (below). Types containing
+identity variables keep their exact entry and root id, which must lie inside
+that scope as well; no variable identity is reconstructed or merged. A key the
+scope does not hold, or an exact occurrence outside it, rejects the optional
+record. Nominal declaration, generated representation and default-expression
+validation remain mandatory after rebinding.
+
+**Occurrence scope.** A Monotype named type names the checked occurrence it
+was lowered from (`named_type.ty`, an id in `ty_module`'s store). Every
+occurrence a lowering names lies in that lowering's occurrence scope: the
+reflexive import closure of the module whose checked types or body it lowers
+(`direct_import_module_keys`, restricted to the lowering input), together with
+the modules that the lowering's input types already name (a replayed request's
+leaves, a completed body's requested function type). The scope is what keeps
+stored results reusable elsewhere: a compile-time value of module M is lowered
+from M's types and the bodies M's closure reaches, so every occurrence it
+stores names a module M's checked key covers, and any program holding M holds
+that module too. The program-wide module set is never a scope: a lowering must
+not name a module merely because the current program happens to contain it,
+since another program that reuses the stored result need not. A closed checked
+occurrence has no instantiation identity, so a fresh lowering and a persistent
+replay of one closed type are given the same current witness: the owner's own
+occurrence when the owner holds the closed root inside the scope's closure, so
+the witness does not move when another module's entry key changes with an
+edit; otherwise the closure's holder that imports no other holder in the
+closure, the lowest-keyed one when several qualify; and only when the closure
+holds no such root, the same choice among the modules the input types name.
+Representatives inside a closure are memoized per module for the immutable
+lowering input set.
 
 Each Monotype builder indexes its immutable input views by module content
 identity before lowering. The first view in root/import/relation order wins,

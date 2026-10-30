@@ -4153,7 +4153,7 @@ pub const Builder = struct {
                 // A scheme variable only the target's requirements mention is
                 // fixed by relating those requirements' methods.
                 const bound = (try self.program.instantiateTarget(target, formal, fn_ty)).bound;
-                const dicts = try self.storedDictionaries(stored, target, bound);
+                const dicts = try self.storedDictionaries(source, stored, target, bound);
                 defer self.allocator.free(dicts);
                 const hidden = try self.allocator.alloc(LocalId, bound.len + dicts.len);
                 defer self.allocator.free(hidden);
@@ -4260,12 +4260,12 @@ pub const Builder = struct {
                         const head = stored.evidence_frame_head orelse invariant("a stored generalized lambda with dictionaries has no evidence");
                         const templates = owner_view.view.checked_procedure_templates;
                         const scope_params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.dispatch_scopes[@backingInt(own_scope.?)].evidence_params);
-                        try self.recordedDerivedCallables(stored, head, scope_params, owner.module, generic, &recorded);
+                        try self.recordedDerivedCallables(source, stored, head, scope_params, owner.module, generic, &recorded);
                     };
                     if (owner.dictionary_params.len != 0) {
                         var frame_index = stored.evidence_frame_head orelse invariant("a stored function value with dictionaries has no evidence");
                         while (stored.evidence_frames[frame_index].parent) |parent| frame_index = parent;
-                        try self.recordedDerivedCallables(stored, frame_index, self.templateEvidenceParams(owner_worker), owner.module, generic, &recorded);
+                        try self.recordedDerivedCallables(source, stored, frame_index, self.templateEvidenceParams(owner_worker), owner.module, generic, &recorded);
                     }
                     const from_edges = try self.relateVariablesPartial(recorded.items, scope_vars.len);
                     defer self.allocator.free(from_edges);
@@ -4286,7 +4286,7 @@ pub const Builder = struct {
                 const worker = try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, own);
                 const descs = try self.program.arena.allocator().alloc(LocalId, bound.len);
                 for (bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
-                const owner_dicts = if (nested.default_root != null) try self.allocator.alloc(LocalId, 0) else try self.storedDictionaries(stored, owner_worker, bound[0..owner.scheme_vars.len]);
+                const owner_dicts = if (nested.default_root != null) try self.allocator.alloc(LocalId, 0) else try self.storedDictionaries(source, stored, owner_worker, bound[0..owner.scheme_vars.len]);
                 defer self.allocator.free(owner_dicts);
                 // A generalized lambda's own dictionaries are the stored
                 // evidence's innermost frame, its own scope's, ahead of its
@@ -4298,7 +4298,7 @@ pub const Builder = struct {
                     if (frame.scope() == .root) invariant("a stored generalized lambda's innermost evidence frame is its procedure's");
                     const templates = owner_view.view.checked_procedure_templates;
                     const params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.dispatch_scopes[@backingInt(own_scope.?)].evidence_params);
-                    const roots = try self.storedEvidenceTrees(stored.evidence, frame.roots_start, frame.roots_len, params, concrete);
+                    const roots = try self.storedEvidenceTrees(source, stored.evidence, frame.roots_start, frame.roots_len, params, concrete);
                     defer self.allocator.free(roots);
                     const out = try self.allocator.alloc(LocalId, scheme.dictionaries.len);
                     for (scheme.dictionaries, out) |param_index, *dict| dict.* = roots[param_index] orelse invariant("a stored dictionary's evidence denotes no dictionary");
@@ -4330,7 +4330,7 @@ pub const Builder = struct {
     /// instantiated with: for each of the worker `owner`'s dictionary
     /// parameters, the dictionary its stored evidence denotes, with the
     /// owner's scheme variables bound to `bound`.
-    pub fn storedDictionaries(self: *Builder, stored: check.ConstStore.ConstFn, owner: WorkerId, bound: []const TypeId) Allocator.Error![]LocalId {
+    pub fn storedDictionaries(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFn, owner: WorkerId, bound: []const TypeId) Allocator.Error![]LocalId {
         const owner_worker = self.program.worker(owner).*;
         const dicts = try self.allocator.alloc(LocalId, owner_worker.dictionary_params.len);
         errdefer self.allocator.free(dicts);
@@ -4341,7 +4341,7 @@ pub const Builder = struct {
         const frame = stored.evidence_frames[frame_index];
         if (frame.scope() != .root) invariant("a stored function value's outermost evidence frame is not its procedure's");
         const owner_record = self.program.worker(owner).*;
-        const roots = try self.storedEvidenceTrees(stored.evidence, frame.roots_start, frame.roots_len, self.templateEvidenceParams(owner), .{ .module = owner_record.module, .vars = owner_record.scheme_vars, .bound = bound });
+        const roots = try self.storedEvidenceTrees(source, stored.evidence, frame.roots_start, frame.roots_len, self.templateEvidenceParams(owner), .{ .module = owner_record.module, .vars = owner_record.scheme_vars, .bound = bound });
         defer self.allocator.free(roots);
         for (owner_worker.dictionary_params, dicts) |param_index, *dict| {
             dict.* = roots[param_index] orelse invariant("a stored dictionary's evidence denotes no dictionary");
@@ -4353,15 +4353,15 @@ pub const Builder = struct {
     /// `frame_index` (whose roots are `params`, over `env`), the parameter's
     /// callable type paired with the instantiated callable its stored edge
     /// recorded.
-    fn recordedDerivedCallables(self: *Builder, stored: check.ConstStore.ConstFn, frame_index: u32, params: []const static_dispatch.EvidenceParamRecord, module_index: types.ModuleIndex, env: types.Env, out: *std.ArrayList([2]TypeId)) Allocator.Error!void {
+    fn recordedDerivedCallables(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFn, frame_index: u32, params: []const static_dispatch.EvidenceParamRecord, module_index: types.ModuleIndex, env: types.Env, out: *std.ArrayList([2]TypeId)) Allocator.Error!void {
         const frame = stored.evidence_frames[frame_index];
         const roots = try self.storedEvidenceRoots(stored.evidence, frame.roots_start, frame.roots_len);
         defer self.allocator.free(roots);
         for (roots, 0..) |node_index, position| switch (stored.evidence.nodes[node_index]) {
-            .structural => |index| if (stored.evidence.structural(index).checked) |edge| {
+            .structural => |index| if (stored.evidence.structural(index).checked) |checked_edge| {
                 if (position >= params.len) invariant("stored evidence has more entries than its scope has evidence parameters");
-                const edge_view = self.program.moduleByKey(.{ .bytes = edge.view.bytes });
-                const edge_callable = try self.program.converter().convert(edge_view.index, edge.callable_ty, .{ .module = edge_view.index, .vars = &.{}, .bound = &.{} });
+                const edge = try Codec.storedEdge(self, source, checked_edge);
+                const edge_callable = try self.program.converter().convert(edge.module, edge.callable_ty, .{ .module = edge.module, .vars = &.{}, .bound = &.{} });
                 try out.append(self.allocator, .{ try self.program.converter().convert(module_index, params[position].callable_ty, env), edge_callable });
             },
             .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
@@ -4425,7 +4425,7 @@ pub const Builder = struct {
     /// each entry's callable contracts, which no dictionary reads, follow
     /// it. A target takes the instantiation its parameter's callable type,
     /// bound by its owner's instantiation, relates it to.
-    pub fn storedEvidenceTrees(self: *Builder, evidence: check.ConstStore.ConstFnEvidenceVector, start: u32, count: u32, root_params: []const static_dispatch.EvidenceParamRecord, root_env: types.Env) Allocator.Error![]?LocalId {
+    pub fn storedEvidenceTrees(self: *Builder, source: lower.ConstSource, evidence: check.ConstStore.ConstFnEvidenceVector, start: u32, count: u32, root_params: []const static_dispatch.EvidenceParamRecord, root_env: types.Env) Allocator.Error![]?LocalId {
         const Parsed = struct {
             node: u32,
             /// The parsed target whose nested vector holds this entry and
@@ -4545,7 +4545,7 @@ pub const Builder = struct {
                     }
                     break :blk try self.composeDictionary(try self.program.methodEntryWorker(entry.target.?), hidden);
                 },
-                .structural => |structural_index| try self.storedStructuralDictionary(evidence.structural(structural_index).*, dispatchers[index].?, callables[index].?),
+                .structural => |structural_index| try self.storedStructuralDictionary(source, evidence.structural(structural_index).*, dispatchers[index].?, callables[index].?),
                 // Evidence no dictionary reads restores to none.
                 .from_callable, .from_scheme, .unreachable_value, .checked_error => null,
             };
@@ -4555,15 +4555,13 @@ pub const Builder = struct {
         return result;
     }
 
-    pub fn storedStructuralDictionary(self: *Builder, stored: check.ConstStore.ConstFnStructuralEvidence, dispatcher: TypeId, callable: TypeId) Allocator.Error!?LocalId {
+    pub fn storedStructuralDictionary(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFnStructuralEvidence, dispatcher: TypeId, callable: TypeId) Allocator.Error!?LocalId {
         const method: lower.StructuralMethod = switch (stored.derivation) {
             .equality => .is_eq,
             .hash => .to_hash,
             .parser, .encoder => {
-                const recorded = stored.checked orelse invariant("stored structural codec evidence records no checked edge");
-                const view = self.program.moduleByKey(.{ .bytes = recorded.view.bytes });
-                const id = recorded.generated_codec_derivation orelse invariant("stored structural codec evidence names no generated derivation");
-                return try Codec.dictionaryAt(self, view.index, id, callable);
+                const edge = try Codec.storedEdge(self, source, stored.checked orelse invariant("stored structural codec evidence records no checked edge"));
+                return try Codec.dictionaryAt(self, edge.module, edge.id orelse invariant("stored structural codec evidence names no generated derivation"), callable);
             },
             .map, .map_effectful => |plan| return try self.structuralMapDictionary(plan, stored.derivation == .map_effectful, callable),
         };

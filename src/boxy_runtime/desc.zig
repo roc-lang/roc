@@ -388,7 +388,7 @@ fn fieldSize(comptime F: type, width: PointerWidth) u32 {
 fn fieldAlignment(comptime F: type, width: PointerWidth) u32 {
     return switch (@typeInfo(F)) {
         .array => |array| fieldAlignment(array.child, width),
-        else => fieldSize(F, width),
+        .pointer, .optional, .type, .void, .bool, .noreturn, .int, .float, .@"struct", .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => fieldSize(F, width),
     };
 }
 
