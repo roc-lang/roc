@@ -14784,17 +14784,19 @@ Descriptors come from two sources and nowhere else:
   and static data.
 
 A recursive type composes through placeholders. The lowerer finds the
-type's recursive component in the graph of inline components (record fields,
-tuple items, tag payloads, nominal backings) and boxes exactly the slots
-the shared layout store boxes for that component: a struct slot leading back
-into it, and a non-struct tag payload leading back into it. Each member a
-boxed slot points at is opened first (`desc_recursive_open`, keyed by a static
-word naming the member and the descriptors of its variables), which yields
-the finished descriptor when an earlier composition interned it and a
+type's recursive component in the graph of descriptor components (record
+fields, tuple items, tag payloads, nominal backings, list elements, box
+payloads) and breaks the cycle at exactly its pointer slots: the slots the
+shared layout store boxes for that component, a struct slot leading back into
+it and a non-struct tag payload leading back into it, and the list elements
+and box payloads leading back into it, which are pointers already. Each member
+a pointer slot points at is opened first (`desc_recursive_open`, keyed by a
+static word naming the member and the descriptors of its variables), which
+yields the finished descriptor when an earlier composition interned it and a
 placeholder otherwise. The boxed slots compose as `desc_recursive_box` over
-the placeholder, which reads nothing from it, and once the member's own
-composition is done `desc_recursive_close` fills the placeholder and interns
-it. A composed recursive type therefore has the layout its closed instances
+the placeholder, a list or box composes over the placeholder directly, and
+neither reads anything from it; once the member's own composition is done
+`desc_recursive_close` fills the placeholder and interns it. A composed recursive type therefore has the layout its closed instances
 commit. Component addressing and construction see through recursion boxes: a
 field or payload address is the boxed value's, and building a value boxes
 the components its descriptor's slots box.

@@ -711,8 +711,9 @@ pub const Builder = struct {
     /// for a scope variable, and a composition of its components'
     /// descriptors otherwise (design.md "Type Descriptors"). Components are
     /// composed before the types that contain them, with an explicit stack.
-    /// The members of a recursive type that its layout's boxed slots point
-    /// at are opened as placeholders first, and each is closed once its own
+    /// The members of a recursive type that its pointer slots (the slots its
+    /// layout boxes, and its list elements and box payloads) point at are
+    /// opened as placeholders first, and each is closed once its own
     /// components are composed.
     pub fn descOf(self: *Builder, root: TypeId) Allocator.Error!LocalId {
         if (self.type_descs.get(root)) |existing| return existing;
@@ -931,6 +932,8 @@ pub const Builder = struct {
             return local;
         }
         const op: LIR.DynOp = switch (store.get(ty)) {
+            // A list or box points at its component, so an open recursive
+            // member's placeholder stands in for it directly.
             .list => |elem| .{ .desc_list = .{ .elem = self.type_descs.get(elem).? } },
             .box => |payload| .{ .desc_box = .{ .payload = self.type_descs.get(payload).? } },
             .tuple => |items_span| blk: {
@@ -4697,8 +4700,11 @@ pub const Builder = struct {
         if (target.dictionary_params.len != 0) {
             const context = self.templateParamContext(callee, bound);
             for (target.dictionary_params, hidden[bound.len..]) |param_index, *dict| {
-                if (param_index >= evidence.len) invariant("a call's checked evidence does not cover its target's dictionaries");
-                dict.* = try self.paramDictionary(evidence, param_index, context);
+                // A call of a platform requirement is checked before the app
+                // binding it names is paired, so checking records no evidence
+                // at it: each dictionary is resolved from the call's
+                // instantiation of the requirement's scheme.
+                dict.* = if (param_index < evidence.len) try self.paramDictionary(evidence, param_index, context) else try self.derivedParamDictionary(param_index, context);
             }
         }
         return .{ .hidden = hidden, .bound = bound, .ret = try self.program.substitute(self.allocator, target.ret, bound) };
@@ -4882,6 +4888,13 @@ pub const Builder = struct {
             return try self.dictionaryOfAt(evidence[index], interface);
         }
         if (index >= context.params.len) invariant("callable-derived evidence names a parameter its scheme does not have");
+        return try self.derivedParamDictionary(index, context);
+    }
+
+    /// The dictionary of scheme parameter `index`, resolved from the types
+    /// its instantiation `context` binds its requirement at.
+    fn derivedParamDictionary(self: *Builder, index: u32, context: ParamContext) Allocator.Error!LocalId {
+        if (index >= context.params.len) invariant("a dictionary parameter names a requirement its scheme does not have");
         const param = context.params[index];
         const converter = self.program.converter();
         return try self.dictionaryFromType(.{
@@ -5942,9 +5955,10 @@ pub const Builder = struct {
         var own_dicts: std.ArrayList(LocalId) = .empty;
         defer own_dicts.deinit(self.allocator);
         if (generalized) |scheme| if (!scheme.per_call) {
-            // A construction the checker recorded no instantiation for (no
-            // use relates the value's variables) seals each of them as a
-            // variable no use relates.
+            // A variable the construction's checked instantiation fixes takes
+            // that type; one it fixes none for (no use relates the value's
+            // variables, or the requirement it carried was retired, leaving
+            // an erroneous type) seals as a variable no use relates.
             const subst = self.siteSubstitution(expr_id);
             if (subst.len != 0 and subst.len != scheme.scheme_vars.len) invariant("a generalized lambda's construction substitution differs from its scheme");
             const evidence = self.view.view.static_dispatch_plans.siteEvidence(expr_id) orelse &.{};
@@ -5952,7 +5966,10 @@ pub const Builder = struct {
             const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
             defer self.allocator.free(own_types);
             for (own_types, scheme.scheme_vars, 0..) |*own_ty, variable, index| {
-                own_ty.* = if (subst.len != 0) try self.convert(subst[index]) else try self.program.converter().sealedScheme(self.module, variable);
+                own_ty.* = if (index < subst.len and self.view.types().payload(subst[index]) != .err)
+                    try self.convert(subst[index])
+                else
+                    try self.program.converter().sealedScheme(self.module, variable);
                 try own_descs.append(self.allocator, try self.descOf(own_ty.*));
             }
             const scope_id = self.program.local_scopes.get(.{ .module = self.module, .expr = lambda_expr }).?;
