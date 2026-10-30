@@ -5524,14 +5524,32 @@ pub const Builder = struct {
         for (scopes[depth], 0..) |param_index, position| {
             if (param_index == index.index) return self.dict_locals[offset + position];
         }
-        invariantFmt("evidence named dictionary parameter {d} at depth {d}, which worker {s} (scope depth {d} of {d}, {d} dictionaries, {d} sealed) does not have", .{
+        const worker = self.currentWorker().*;
+        const named: []const u8 = switch (worker.key) {
+            .template => |key| blk: {
+                const view = self.program.module(key.module);
+                const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+                const export_name = view.nameStore().procBase(template.proc_base).export_name orelse break :blk "a template";
+                break :blk view.nameStore().exportNameText(export_name);
+            },
+            inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert => |_, kind| @tagName(kind),
+        };
+        const evidence_params = if (worker.key == .template) self.templateEvidenceParams(self.worker_id) else &.{};
+        var listing: [2048]u8 = undefined;
+        var written: usize = 0;
+        for (evidence_params, 0..) |param, position| {
+            const text = std.fmt.bufPrint(listing[written..], " [{d}] {s} runtime_dictionary={}", .{ position, self.view.nameStore().methodNameText(param.method), param.runtime_dictionary }) catch break;
+            written += text.len;
+        }
+        invariantFmt("evidence named dictionary parameter {d} at depth {d}, which worker {s} (scope depth {d} of {d}, {d} dictionaries, {d} sealed; evidence params:{s}) does not have", .{
             index.index,
             index.depth,
-            @tagName(self.currentWorker().key),
+            named,
             depth,
             scopes.len,
             scopes[depth].len,
-            self.currentWorker().checked_scheme_count - self.currentWorker().checked_slots.len,
+            worker.checked_scheme_count - worker.checked_slots.len,
+            listing[0..written],
         });
     }
 

@@ -19939,7 +19939,7 @@ const EvidencePass = struct {
                 .callable_ty = self.checked_types.rootForSourceVar(self.module, param.constraint.fn_var) orelse
                     checkedArtifactInvariant("checked evidence parameter callable type was not published", .{}),
                 .slot = if (source == .scheme_requirement) null else self.schemeVarSlot(param.dispatcher_var),
-                .runtime_dictionary = source == .constraint_callable or static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
+                .runtime_dictionary = static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
                 .structural = self.structuralKindForMethodIdent(param.constraint.fn_name),
                 .source = source,
                 .path = published_path,
@@ -20508,8 +20508,7 @@ const EvidencePass = struct {
                 checkedArtifactInvariant("forwarded evidence owner was not published", .{});
             const schema = self.templates.evidence_params_pool[owner];
             return .{ .resolved = .{ .evidence_dependent = .{
-                .scheme_param = if (match.callable_contract != null or
-                    (schema.runtime_dictionary and schema.source != .scheme_callable)) owner else null,
+                .scheme_param = if (match.callable_contract != null or static_dispatch.namedAsSchemeParam(schema)) owner else null,
                 .index = match.index,
                 .independent_callable = independent_callable,
                 .reuse_slot_nested_evidence = match.callable_relation == .independent_reuse_slot_nested,
@@ -34988,7 +34987,7 @@ pub const CheckedModuleArtifact = struct {
                     if (dependent.scheme_param) |param_index| {
                         const pool = self.checked_procedure_templates.evidence_params_pool;
                         if (param_index >= pool.len or pool[param_index].method != plan.method or
-                            (if (dependent.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else (!pool[param_index].runtime_dictionary or pool[param_index].source == .scheme_callable)))
+                            (if (dependent.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else !static_dispatch.namedAsSchemeParam(pool[param_index])))
                             return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
                     }
                 },
@@ -35219,7 +35218,7 @@ pub const CheckedModuleArtifact = struct {
                     if (constraint.scheme_param) |param_index| {
                         const pool = self.checked_procedure_templates.evidence_params_pool;
                         if (param_index >= pool.len or
-                            (if (constraint.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else (!pool[param_index].runtime_dictionary or pool[param_index].source == .scheme_callable)))
+                            (if (constraint.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else !static_dispatch.namedAsSchemeParam(pool[param_index])))
                             return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
                     }
                 },
@@ -40596,8 +40595,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x5E, 0xD4, 0x7A, 0x70, 0x3E, 0x50, 0x47, 0x7A, 0x5C, 0x1D, 0xB1, 0x01, 0xD3, 0xB9, 0x6D, 0x06,
-        0x2B, 0x96, 0xDF, 0x9A, 0xE6, 0xFE, 0xBA, 0x66, 0xFA, 0x49, 0x94, 0x4F, 0xE1, 0x4C, 0x9F, 0x9A,
+        0x1B, 0x5F, 0xCC, 0x35, 0xEE, 0x70, 0x3F, 0x0C, 0x5F, 0x3D, 0x63, 0xB3, 0x45, 0x17, 0xE1, 0xD3,
+        0x34, 0x02, 0xF9, 0x73, 0x9E, 0x53, 0xD4, 0xD2, 0xC9, 0xAB, 0xE9, 0x41, 0x44, 0x1A, 0x26, 0x70,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
