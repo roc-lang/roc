@@ -1,7 +1,7 @@
 //! Cache configuration and directory management for the Roc compiler cache system.
 //!
-//! This module provides platform-specific cache directory logic that matches
-//! the Rust implementation, ensuring consistency across the codebase.
+//! Resolves the shared native store root and explicit logical cache scopes.
+//! Artifact scopes are identity data; only tooling/package paths are directories.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -9,20 +9,6 @@ const build_options = @import("build_options");
 const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
-
-/// Name of the per-version subdirectory that holds per-invocation scratch
-/// directories (see `CacheConfig.getScratchDir`).
-pub const scratch_dir_name = "tmp";
-
-/// Prefix of the per-version subdirectories that hold object-cache packs. One
-/// namespace exists per pack format, named by appending the format version, so
-/// packs of different formats never share a directory.
-pub const object_pack_namespace_prefix = "objects-v";
-
-/// The object-cache namespace of pack format `format_version`.
-pub fn objectPackNamespace(comptime format_version: u32) []const u8 {
-    return std.fmt.comptimePrint(object_pack_namespace_prefix ++ "{d}", .{format_version});
-}
 
 const CacheOs = enum { windows, macos, other };
 
@@ -336,11 +322,33 @@ pub const Constants = struct {
     /// 153: a package or platform header's qualified exposures record a
     ///      deferred reference, and canonical diagnostics gain
     ///      `public_type_not_defined`.
-    /// 154: canonical diagnostics drop `execution_requires_app_or_default_app`,
+    /// 154: Type stores keep each slot's kind in a column beside its payload,
+    ///      and numeric literal facts in a table that static dispatch
+    ///      constraints index.
+    /// 155: Identifier stores assign serial indices, keep each name's end
+    ///      offset and probe fingerprints in columns of their own, and drop
+    ///      the per-identifier attribute column.
+    /// 156: Type stores keep each derived map payload selection in a table
+    ///      keyed by its callable's class instead of on every static
+    ///      dispatch constraint.
+    /// 157: canonical diagnostics drop `execution_requires_app_or_default_app`,
     ///      and file-level diagnostics store no region.
-    /// 155: Module environments record row-coerced results in place of
+    /// 158: Module environments record row-coerced results in place of
     ///      row-coerced callees and closed-result definitions.
-    pub const CACHE_VERSION = 155;
+    /// 159: a module records which top-level definitions' calls can invoke a
+    ///      function value they do not name, and its strict-demand relation
+    ///      follows function values and every selected dispatch; type stores
+    ///      keep interpolation metadata in a table that static dispatch
+    ///      constraints index.
+    /// 160: procedure templates record how much of each quantified variable
+    ///      their bodies demand.
+    /// 161: generated codec derivations record the renaming their snapshot
+    ///      applied to every type that holds a variable.
+    /// 162: modules publish checking interfaces and imported callable eligibility.
+    /// 163: producer-owned declaration slots and stored checking diagnostics.
+    /// 164: sorted array builders serialize zeroed entry padding and an
+    ///      integer offset that the cache validator checks.
+    pub const CACHE_VERSION = 164;
 };
 
 /// Configuration for the Roc cache system.
@@ -426,12 +434,19 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ base_dir, version_dir });
     }
 
-    /// Get the checked-artifact cache directory.
+    /// Logical checked-artifact scope within this compiler compatibility identity.
     pub fn getCheckedArtifactCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
 
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "mod" });
+    }
+
+    /// Inference capsules share the checked artifact compatibility domain.
+    pub fn getInferenceCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+        return std.fs.path.join(allocator, &.{ version_dir, "inference" });
     }
 
     /// Exact platform/app composition results, separate from reusable modules.
@@ -441,7 +456,7 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &.{ version_dir, "pair" });
     }
 
-    /// Get the canonicalized-module cache directory.
+    /// Logical canonicalized-module scope.
     ///
     /// Separate from the checked-artifact directory because the two caches key
     /// their entries on different inputs: a canonicalized entry names one
@@ -470,21 +485,7 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "exe" });
     }
 
-    /// Get the scratch directory for per-invocation build outputs and runtime
-    /// executables. Each invocation creates its own unique subdirectory here.
-    ///
-    /// This lives under the user's own cache root rather than the system temp
-    /// directory, so no other user can create or rename entries along the path,
-    /// and executables built here are on the same filesystem as the exe cache
-    /// they get hardlinked into.
-    pub fn getScratchDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
-        const version_dir = try self.getVersionCacheDir(allocator);
-        defer allocator.free(version_dir);
-
-        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, scratch_dir_name });
-    }
-
-    /// Get the test cache directory (for cached test results).
+    /// Logical scope for cached test results.
     pub fn getTestCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
@@ -522,11 +523,20 @@ pub const CacheStats = struct {
     canonicalized_bytes_read: u64 = 0,
     canonicalized_bytes_written: u64 = 0,
 
+    /// Inference capsules, separately from fully checked artifacts.
+    inference_hits: u64 = 0,
+    inference_misses: u64 = 0,
+    inference_invalidations: u64 = 0,
+    inference_stores: u64 = 0,
+    inference_store_failures: u64 = 0,
+    inference_bytes_read: u64 = 0,
+    inference_bytes_written: u64 = 0,
+
     const Self = @This();
 
     /// Which cache an operation belongs to. Every recording call names one, so
-    /// no counter is ever shared between the two caches.
-    pub const Kind = enum { checked, canonicalized };
+    /// no counter is shared between caches.
+    pub const Kind = enum { checked, canonicalized, inference };
 
     /// Record a cache miss.
     pub fn recordMiss(self: *Self) void {
@@ -554,6 +564,10 @@ pub const CacheStats = struct {
                 self.canonicalized_hits += 1;
                 self.canonicalized_bytes_read += bytes_read;
             },
+            .inference => {
+                self.inference_hits += 1;
+                self.inference_bytes_read += bytes_read;
+            },
         }
     }
 
@@ -562,6 +576,7 @@ pub const CacheStats = struct {
         switch (kind) {
             .checked => self.misses += 1,
             .canonicalized => self.canonicalized_misses += 1,
+            .inference => self.inference_misses += 1,
         }
     }
 
@@ -570,6 +585,7 @@ pub const CacheStats = struct {
         switch (kind) {
             .checked => self.invalidations += 1,
             .canonicalized => self.canonicalized_invalidations += 1,
+            .inference => self.inference_invalidations += 1,
         }
     }
 
@@ -584,6 +600,10 @@ pub const CacheStats = struct {
                 self.canonicalized_stores += 1;
                 self.canonicalized_bytes_written += bytes_written;
             },
+            .inference => {
+                self.inference_stores += 1;
+                self.inference_bytes_written += bytes_written;
+            },
         }
     }
 
@@ -592,6 +612,7 @@ pub const CacheStats = struct {
         switch (kind) {
             .checked => self.store_failures += 1,
             .canonicalized => self.canonicalized_store_failures += 1,
+            .inference => self.inference_store_failures += 1,
         }
     }
 };

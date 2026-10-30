@@ -5,12 +5,33 @@
 
 const std = @import("std");
 
+/// Producer-selected encoding of a linked function call.
+pub const FunctionRelocationKind = enum(u8) {
+    /// Offset names the four-byte operand following the E8 opcode.
+    /// The displacement is relative to the end of that operand.
+    x86_call_rel32,
+    /// Offset names the BL instruction. Its signed 26-bit immediate counts
+    /// four-byte words relative to the instruction address.
+    aarch64_call26,
+};
+
 /// Machine encoding used for a data-address relocation in generated code.
 pub const DataRelocationKind = enum {
     abs64,
     rel32,
     page21,
     pageoff12,
+};
+
+/// A number the Boxy runtime reads its sidecar tables by, loaded into a
+/// register by a fixed-width instruction sequence at the relocation's offset.
+/// An arranged image renumbers what its code uses (design.md "Deterministic Dev
+/// Images") and patches each load, so these are never linker relocations.
+pub const RuntimeNumber = union(enum) {
+    /// A layout index.
+    layout: u32,
+    /// The start of a run of the program's erased argument layouts.
+    erased_arg_layouts: struct { start: u32, len: u32 },
 };
 
 /// A named relocation at a linker or process boundary. Machine-code producers
@@ -32,6 +53,7 @@ pub const Relocation = union(enum) {
         offset: u64,
         /// Name of the function to link to
         name: []const u8,
+        kind: FunctionRelocationKind,
     },
 
     /// Reference to data that will be linked.
@@ -44,22 +66,10 @@ pub const Relocation = union(enum) {
         kind: DataRelocationKind = .abs64,
     },
 
-    /// A jump to the function's return sequence.
-    /// Used for early returns in the middle of a function.
-    jmp_to_return: struct {
-        /// Location of the jump instruction
-        inst_loc: u64,
-        /// Size of the jump instruction (for calculating relative offset)
-        inst_size: u64,
-        /// Offset to the return sequence from the start of the function
-        offset: u64,
-    },
-
     /// Get the offset in the code where this relocation applies
     pub fn getOffset(self: Relocation) u64 {
         return switch (self) {
             inline .local_data, .linked_function, .linked_data => |r| r.offset,
-            .jmp_to_return => |r| r.inst_loc,
         };
     }
 
@@ -67,10 +77,6 @@ pub const Relocation = union(enum) {
     pub fn adjustOffset(self: *Relocation, delta: u64) void {
         switch (self.*) {
             inline .local_data, .linked_function, .linked_data => |*r| r.offset += delta,
-            .jmp_to_return => |*r| {
-                r.inst_loc += delta;
-                r.offset += delta;
-            },
         }
     }
 };
@@ -78,14 +84,16 @@ pub const Relocation = union(enum) {
 /// A relocation whose producer has already assigned its target identity.
 /// Symbol IDs are scoped to the accompanying SymbolTable name column.
 pub const IndexedRelocation = union(enum) {
-    linked_function: struct { offset: u64, symbol: @import("SymbolTable.zig").Id },
+    linked_function: struct { offset: u64, symbol: @import("SymbolTable.zig").Id, kind: FunctionRelocationKind },
     linked_data: struct {
         offset: u64,
         symbol: @import("SymbolTable.zig").Id,
         kind: DataRelocationKind = .abs64,
     },
     local_data: @FieldType(Relocation, "local_data"),
-    jmp_to_return: @FieldType(Relocation, "jmp_to_return"),
+    /// A runtime table number's patchable load; `offset` is the encoding's
+    /// patch site (`CodeGen.patchRuntimeNumber`).
+    runtime_number: struct { offset: u64, ref: RuntimeNumber },
     /// A relocation superseded by a stub that carries its own relocations.
     /// Consumers skip it; it keeps its slot so recorded relocation indices
     /// stay valid.
@@ -93,19 +101,14 @@ pub const IndexedRelocation = union(enum) {
 
     pub fn getOffset(self: IndexedRelocation) u64 {
         return switch (self) {
-            inline .linked_function, .linked_data, .local_data => |r| r.offset,
-            .jmp_to_return => |r| r.inst_loc,
+            inline .linked_function, .linked_data, .local_data, .runtime_number => |r| r.offset,
             .retired => 0,
         };
     }
 
     pub fn adjustOffset(self: *IndexedRelocation, delta: u64) void {
         switch (self.*) {
-            inline .linked_function, .linked_data, .local_data => |*r| r.offset += delta,
-            .jmp_to_return => |*r| {
-                r.inst_loc += delta;
-                r.offset += delta;
-            },
+            inline .linked_function, .linked_data, .local_data, .runtime_number => |*r| r.offset += delta,
             .retired => {},
         }
     }
@@ -166,7 +169,7 @@ pub fn applyRelocationsWithContext(
                 const target_addr = resolver(resolver_ctx, func_reloc.name) orelse {
                     return error.UnresolvedSymbol;
                 };
-                try patchLinkedFunctionRelocation(code, code_base_addr, func_reloc.offset, target_addr);
+                try patchLinkedFunctionRelocation(code, code_base_addr, func_reloc.offset, target_addr, func_reloc.kind);
             },
             .linked_data => |data_reloc| {
                 const target_addr = resolver(resolver_ctx, data_reloc.name) orelse {
@@ -181,33 +184,19 @@ pub fn applyRelocationsWithContext(
                 const target_addr = @intFromPtr(local_reloc.data.ptr);
                 try patchLinkedDataRelocation(code, code_base_addr, local_reloc.offset, target_addr, .abs64);
             },
-            .jmp_to_return => |jmp_reloc| {
-                try patchJumpToReturnRelocation(code, code_base_addr, jmp_reloc.inst_loc, jmp_reloc.inst_size, jmp_reloc.offset);
-            },
         }
     }
 }
 
-fn patchLinkedFunctionRelocation(code: []u8, code_base_addr: usize, reloc_offset_u64: u64, target_addr: usize) ApplyRelocationsError!void {
+fn patchLinkedFunctionRelocation(code: []u8, code_base_addr: usize, reloc_offset_u64: u64, target_addr: usize, kind: FunctionRelocationKind) ApplyRelocationsError!void {
     const reloc_offset = try asCodeOffset(reloc_offset_u64, code.len);
-
-    if (reloc_offset > 0 and reloc_offset + 4 <= code.len) {
-        const prev = code[reloc_offset - 1];
-        if (prev == 0xE8) {
-            const next_instr = code_base_addr + reloc_offset + 4;
-            return patchX86Rel32Operand(code, reloc_offset, next_instr, target_addr);
-        }
+    switch (kind) {
+        .x86_call_rel32 => {
+            std.debug.assert(reloc_offset > 0 and code[reloc_offset - 1] == 0xE8);
+            return patchX86Rel32Operand(code, reloc_offset, code_base_addr + reloc_offset + 4, target_addr);
+        },
+        .aarch64_call26 => return patchAarch64Call26(code, reloc_offset, code_base_addr + reloc_offset, target_addr),
     }
-
-    if (reloc_offset + 4 <= code.len) {
-        const inst = std.mem.readInt(u32, code[reloc_offset..][0..4], .little);
-        if ((inst >> 26) == 0b100101) {
-            const inst_addr = code_base_addr + reloc_offset;
-            return patchAarch64BranchInstruction(code, reloc_offset, inst_addr, target_addr);
-        }
-    }
-
-    return error.UnsupportedRelocationEncoding;
 }
 
 fn patchLinkedDataRelocation(
@@ -230,54 +219,6 @@ fn patchLinkedDataRelocation(
     }
 }
 
-fn patchJumpToReturnRelocation(
-    code: []u8,
-    code_base_addr: usize,
-    inst_loc_u64: u64,
-    inst_size_u64: u64,
-    target_offset_u64: u64,
-) ApplyRelocationsError!void {
-    const inst_loc = try asCodeOffset(inst_loc_u64, code.len);
-    const inst_size = try asCodeSize(inst_size_u64);
-    if (inst_loc + inst_size > code.len) return error.InvalidOffset;
-
-    const target_offset = try asCodeOffset(target_offset_u64, code.len);
-    const target_addr = code_base_addr + target_offset;
-    const inst_addr = code_base_addr + inst_loc;
-
-    switch (inst_size) {
-        2 => {
-            if (inst_loc + 2 > code.len) return error.InvalidOffset;
-            const opcode = code[inst_loc];
-            if (opcode == 0xEB or (opcode >= 0x70 and opcode <= 0x7F)) {
-                return patchX86Rel8Operand(code, inst_loc + 1, inst_addr + 2, target_addr);
-            }
-            return error.UnsupportedRelocationEncoding;
-        },
-        4 => {
-            return patchAarch64BranchInstruction(code, inst_loc, inst_addr, target_addr);
-        },
-        5 => {
-            if (inst_loc + 5 > code.len) return error.InvalidOffset;
-            const opcode = code[inst_loc];
-            if (opcode == 0xE9 or opcode == 0xE8) {
-                return patchX86Rel32Operand(code, inst_loc + 1, inst_addr + 5, target_addr);
-            }
-            return error.UnsupportedRelocationEncoding;
-        },
-        6 => {
-            if (inst_loc + 6 > code.len) return error.InvalidOffset;
-            const first = code[inst_loc];
-            const second = code[inst_loc + 1];
-            if (first == 0x0F and second >= 0x80 and second <= 0x8F) {
-                return patchX86Rel32Operand(code, inst_loc + 2, inst_addr + 6, target_addr);
-            }
-            return error.UnsupportedRelocationEncoding;
-        },
-        else => return error.UnsupportedRelocationEncoding,
-    }
-}
-
 fn patchX86Rel32Operand(code: []u8, operand_offset: usize, next_instr_addr: usize, target_addr: usize) ApplyRelocationsError!void {
     if (operand_offset + 4 > code.len) return error.InvalidOffset;
 
@@ -289,17 +230,7 @@ fn patchX86Rel32Operand(code: []u8, operand_offset: usize, next_instr_addr: usiz
     @memcpy(code[operand_offset..][0..4], &rel_bytes);
 }
 
-fn patchX86Rel8Operand(code: []u8, operand_offset: usize, next_instr_addr: usize, target_addr: usize) ApplyRelocationsError!void {
-    if (operand_offset + 1 > code.len) return error.InvalidOffset;
-
-    const rel_i128 = @as(i128, @intCast(target_addr)) - @as(i128, @intCast(next_instr_addr));
-    if (rel_i128 < std.math.minInt(i8) or rel_i128 > std.math.maxInt(i8)) return error.BranchOutOfRange;
-
-    const rel: i8 = @intCast(rel_i128);
-    code[operand_offset] = @bitCast(rel);
-}
-
-fn patchAarch64BranchInstruction(code: []u8, inst_offset: usize, inst_addr: usize, target_addr: usize) ApplyRelocationsError!void {
+fn patchAarch64Call26(code: []u8, inst_offset: usize, inst_addr: usize, target_addr: usize) ApplyRelocationsError!void {
     if (inst_offset + 4 > code.len) return error.InvalidOffset;
 
     var inst = std.mem.readInt(u32, code[inst_offset..][0..4], .little);
@@ -309,19 +240,11 @@ fn patchAarch64BranchInstruction(code: []u8, inst_offset: usize, inst_addr: usiz
     // word displacement directly, without a debug-build i128 division libcall.
     const rel_words_i128 = rel_bytes_i128 >> 2;
 
-    if ((inst >> 26) == 0b000101 or (inst >> 26) == 0b100101) {
-        if (!fitsSignedBits(rel_words_i128, 26)) return error.BranchOutOfRange;
-        const rel_words_i26: i26 = @intCast(rel_words_i128);
-        const imm26: u26 = @bitCast(rel_words_i26);
-        inst = (inst & 0xFC000000) | @as(u32, imm26);
-    } else if ((inst >> 24) == 0b01010100 or (((inst >> 24) & 0b01111111) == 0b0110100) or (((inst >> 24) & 0b01111111) == 0b0110101)) {
-        if (!fitsSignedBits(rel_words_i128, 19)) return error.BranchOutOfRange;
-        const rel_words_i19: i19 = @intCast(rel_words_i128);
-        const imm19: u19 = @bitCast(rel_words_i19);
-        inst = (inst & 0xFF00001F) | (@as(u32, imm19) << 5);
-    } else {
-        return error.UnsupportedRelocationEncoding;
-    }
+    std.debug.assert((inst >> 26) == 0b100101);
+    if (!fitsSignedBits(rel_words_i128, 26)) return error.BranchOutOfRange;
+    const rel_words_i26: i26 = @intCast(rel_words_i128);
+    const imm26: u26 = @bitCast(rel_words_i26);
+    inst = (inst & 0xFC000000) | @as(u32, imm26);
 
     std.mem.writeInt(u32, code[inst_offset..][0..4], inst, .little);
 }
@@ -390,11 +313,6 @@ fn asCodeOffset(offset: u64, code_len: usize) ApplyRelocationsError!usize {
     return idx;
 }
 
-fn asCodeSize(size: u64) ApplyRelocationsError!usize {
-    if (size > std.math.maxInt(usize)) return error.InvalidOffset;
-    return @intCast(size);
-}
-
 fn fitsSignedBits(value: i128, comptime bits: comptime_int) bool {
     const min = -(@as(i128, 1) << (bits - 1));
     const max = (@as(i128, 1) << (bits - 1)) - 1;
@@ -412,6 +330,7 @@ test "relocation creation" {
     const func = Relocation{ .linked_function = .{
         .offset = 200,
         .name = @import("builtins").shim_symbols.roc_alloc,
+        .kind = .x86_call_rel32,
     } };
     try std.testing.expectEqual(@as(u64, 200), func.getOffset());
 }
@@ -445,7 +364,7 @@ test "applyRelocations patches x86_64 linked_function call" {
     }.resolve;
 
     const relocs = [_]Relocation{
-        .{ .linked_function = .{ .offset = 1, .name = "callee" } },
+        .{ .linked_function = .{ .offset = 1, .name = "callee", .kind = .x86_call_rel32 } },
     };
 
     try applyRelocations(&code, code_base, &relocs, resolver);
@@ -467,7 +386,7 @@ test "applyRelocations patches aarch64 linked_function bl" {
     }.resolve;
 
     const relocs = [_]Relocation{
-        .{ .linked_function = .{ .offset = 0, .name = "callee" } },
+        .{ .linked_function = .{ .offset = 0, .name = "callee", .kind = .aarch64_call26 } },
     };
 
     try applyRelocations(&code, code_base, &relocs, resolver);
@@ -512,61 +431,19 @@ test "applyRelocations patches local_data pointer and stores bytes" {
     try std.testing.expectEqualSlices(u8, &bytes, data_ptr[0..bytes.len]);
 }
 
-test "applyRelocations patches x86_64 jmp_to_return" {
-    var code = [_]u8{
-        0xE9, 0x00, 0x00, 0x00, 0x00, // jmp rel32
-        0x90, // nop
-        0xC3, // ret
-    };
-    const relocs = [_]Relocation{
-        .{
-            .jmp_to_return = .{
-                .inst_loc = 0,
-                .inst_size = 5,
-                .offset = 6, // target ret
-            },
-        },
-    };
-
-    try applyRelocations(&code, 0, &relocs, testNullResolver);
-    try std.testing.expectEqual(@as(i32, 1), std.mem.readInt(i32, code[1..5], .little));
-}
-
-test "applyRelocations patches aarch64 jmp_to_return" {
-    var code = [_]u8{
-        0x00, 0x00, 0x00, 0x14, // B #0
-        0x1F, 0x20, 0x03, 0xD5, // NOP
-        0xC0, 0x03, 0x5F, 0xD6, // RET
-    };
-
-    const relocs = [_]Relocation{
-        .{ .jmp_to_return = .{
-            .inst_loc = 0,
-            .inst_size = 4,
-            .offset = 8,
-        } },
-    };
-
-    try applyRelocations(&code, 0, &relocs, testNullResolver);
-
-    const inst = std.mem.readInt(u32, code[0..4], .little);
-    try std.testing.expectEqual(@as(u32, 0b000101), inst >> 26); // B
-    try std.testing.expectEqual(@as(u32, 2), inst & 0x03FF_FFFF); // 8-byte delta / 4
-}
-
 test "aarch64 signed branch and page displacements preserve exact units" {
     var code: [4]u8 = undefined;
     for ([_]i64{ -0x8000000, -4, 0, 4, 0x7fffffc }) |displacement| {
         std.mem.writeInt(u32, &code, 0x94000000, .little); // BL
         const base: usize = 0x8000000;
         const target: usize = @intCast(@as(i64, base) + displacement);
-        try patchAarch64BranchInstruction(&code, 0, base, target);
+        try patchAarch64Call26(&code, 0, base, target);
         const words: i26 = @bitCast(@as(u26, @truncate(std.mem.readInt(u32, &code, .little))));
         try std.testing.expectEqual(displacement, @as(i64, words) * 4);
     }
     std.mem.writeInt(u32, &code, 0x94000000, .little);
-    try std.testing.expectError(error.MisalignedBranchTarget, patchAarch64BranchInstruction(&code, 0, 0, 2));
-    try std.testing.expectError(error.BranchOutOfRange, patchAarch64BranchInstruction(&code, 0, 0, 0x8000000));
+    try std.testing.expectError(error.MisalignedBranchTarget, patchAarch64Call26(&code, 0, 0, 2));
+    try std.testing.expectError(error.BranchOutOfRange, patchAarch64Call26(&code, 0, 0, 0x8000000));
     if (@sizeOf(usize) < 8) return;
     for ([_]i64{ -0x100000, -1, 0, 1, 0xfffff }) |pages| {
         std.mem.writeInt(u32, &code, 0x90000000, .little); // ADRP

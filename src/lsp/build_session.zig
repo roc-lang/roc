@@ -82,10 +82,11 @@ pub const BuildSession = struct {
         // Record the states actually consumed, including inputs of failed builds.
         env.setWatchInputTracking(true);
 
-        // Build
+        // Build. A canceled build has no result to report.
         const build_succeeded = blk: {
             env.buildResolvingMain(absolute_path, preferred_main) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
+                error.Canceled => return error.Canceled,
                 else => break :blk false,
             };
             break :blk true;

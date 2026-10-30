@@ -133,7 +133,12 @@ fn distinctUnion() LiveSpecError!void {
         const one = try expectPublication(&f, dep, 1, false);
         env.allocator.free(one);
         try f.write("Dep.roc", second_error);
+        // A semantic request would refresh the first root and remove the
+        // distinct report, so this boundary waits for the check instead.
+        const checks = f.control.count(.after_check);
         try f.open(other, source, 1);
+        try f.control.wait(.after_check, checks + 1, live.deadline(30000));
+        f.scheduled_uri = null;
         const combined = try expectPublication(&f, dep, 2, false);
         defer env.allocator.free(combined);
         // Payloads have no absolute paths: stable ordering must be independent
@@ -172,7 +177,8 @@ fn bufferErrorOwnership() LiveSpecError!void {
             const p = try expectPublication(&f, dep, 1, false);
             env.allocator.free(p);
         } else {
-            try f.synchronize();
+            const importer = try publicationBoundary(&f, dep);
+            if (importer.payload) |p| env.allocator.free(p);
             try f.open(dep, broken, 1);
             const p = try expectPublication(&f, dep, 1, false);
             env.allocator.free(p);
@@ -236,7 +242,13 @@ fn ownershipDependencyFirst() LiveSpecError!void {
 
 const Publication = struct { payload: ?[]u8 = null, count: usize = 0, nonempty: usize = 0 };
 fn publicationBoundary(f: *Fixture, uri: []const u8) live.WaitError!Publication {
-    try f.h.sendBody("{\"jsonrpc\":\"2.0\",\"id\":92,\"method\":\"ownership-boundary\"}");
+    // A semantic request runs its document's scheduled check before it responds.
+    if (f.scheduled_uri) |scheduled| {
+        f.scheduled_uri = null;
+        try f.h.send(.{ .jsonrpc = "2.0", .id = 92, .method = "textDocument/hover", .params = .{ .textDocument = .{ .uri = scheduled }, .position = .{ .line = 0, .character = 0 } } });
+    } else {
+        try f.h.sendBody("{\"jsonrpc\":\"2.0\",\"id\":92,\"method\":\"ownership-boundary\"}");
+    }
     var result: Publication = .{};
     errdefer if (result.payload) |p| env.allocator.free(p);
     const until = live.deadline(30000);
@@ -704,6 +716,8 @@ const Fixture = struct {
     uri: []u8 = undefined,
     h: live.Live = undefined,
     control: live.Control = .{},
+    /// The document whose scheduled check the next publication boundary runs.
+    scheduled_uri: ?[]const u8 = null,
     fn init(f: *Fixture) (std.Io.Dir.RealPathFileAllocError || std.mem.Allocator.Error)!void {
         f.* = .{};
         f.tmp = env.tmpDir(.{});
@@ -735,12 +749,15 @@ const Fixture = struct {
         return std.fmt.allocPrint(env.allocator, "app [process_string] {{ pf: platform \"{s}\" }}\n{s}\nprocess_string = |text| text\n", .{ env.tmp_dir_platform_path, imports });
     }
     fn open(f: *Fixture, uri: []const u8, text: []const u8, version: i64) error{ OutOfMemory, Closed }!void {
+        f.scheduled_uri = uri;
         try f.h.send(.{ .jsonrpc = "2.0", .method = "textDocument/didOpen", .params = .{ .textDocument = .{ .uri = uri, .text = text, .version = version } } });
     }
     fn change(f: *Fixture, text: []const u8, version: i64) error{ OutOfMemory, Closed }!void {
+        f.scheduled_uri = f.uri;
         try f.h.send(.{ .jsonrpc = "2.0", .method = "textDocument/didChange", .params = .{ .textDocument = .{ .uri = f.uri, .version = version }, .contentChanges = .{.{ .text = text }} } });
     }
     fn close(f: *Fixture, uri: []const u8) error{ OutOfMemory, Closed }!void {
+        f.scheduled_uri = null;
         try f.h.send(.{ .jsonrpc = "2.0", .method = "textDocument/didClose", .params = .{ .textDocument = .{ .uri = uri } } });
     }
     fn synchronize(f: *Fixture) live.WaitError!void {
@@ -750,8 +767,8 @@ const Fixture = struct {
     }
     fn consumeWatchReadiness(f: *Fixture) (live.WaitError || error{TestUnexpectedResult})!void {
         const until = live.deadline(5000).deadline;
-        f.h.server.watch_event.set(env.io);
-        while (f.h.server.watch_event.isSet()) {
+        f.h.server.wakeForTesting();
+        while (f.h.server.inbox.inputsChangePending()) {
             if (std.Io.Clock.Timestamp.now(env.io, .awake).compare(.gte, until)) return error.Timeout;
             std.atomic.spinLoopHint();
         }

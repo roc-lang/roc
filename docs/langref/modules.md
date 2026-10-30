@@ -548,6 +548,36 @@ targets: {
   a platform you downloaded could make `roc build` link in any file on your computer.
 - WebAssembly targets that get linked must list the functions the final module exports to the
   outside world, using `exports`. (`exports: []` exports none.)
+- WebAssembly targets can also set how the module's memory is laid out: `import_memory`,
+  `minimum_memory`, `maximum_memory`, `initial_stack_size`, and `global_base`.
+- A target can't have any other fields, and the WebAssembly ones only go on WebAssembly targets.
+  A misspelled or misplaced field is an "Invalid Target Configuration" error rather than something
+  `roc build` quietly ignores.
+
+`global_base` is the first memory address the Roc program may use. Every address below it belongs
+to the host, which is what consoles like [WASM-4](https://wasm4.org) need: their hardware registers
+and framebuffer sit at fixed addresses at the bottom of memory. It has to be greater than 0; a
+platform whose host doesn't reserve any memory leaves it out.
+
+Where the stack goes depends on it:
+
+- Without `global_base`, the stack sits at the very bottom of memory and grows down toward address
+  0. A stack overflow runs off the bottom, and the very first write past it traps, so detecting
+  an overflow costs nothing at runtime. The module's maximum memory stays below 4 GiB minus the
+  stack's size, so that write always lands outside memory.
+- With `global_base`, the stack has to sit above the program's static data, where an overflow
+  wouldn't trap by itself. So the compiled program checks the stack's bounds wherever the stack can
+  grow without limit (in functions that can recurse, and wherever the host calls in), and traps
+  instead of overwriting anything.
+
+Either way, a stack overflow stops the program before it writes anything outside the stack. Every
+module exports `__stack_pointer`, `__stack_low`, and `__stack_high`, so after a trap the host can
+tell whether the stack overflowed: if `__stack_pointer` is outside the range from `__stack_low`
+plus 128 to `__stack_high`, it did. (WebAssembly 1.0 can't export a mutable value like
+`__stack_pointer`, so a `wasm32v1` module exports `roc_wasm_stack_pointer` and
+`roc_wasm_set_stack_pointer` functions to read and reset it instead.) A host that keeps running
+after the overflow resets `__stack_pointer` to `__stack_high` before it calls into the module
+again.
 
 The `output` field says what kind of file the target produces:
 

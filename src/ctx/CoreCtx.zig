@@ -52,6 +52,10 @@ pub const VTable = struct {
     /// truncating it if it does.
     writeFile: *const fn (?*anyopaque, std.Io, []const u8, []const u8) WriteError!void,
 
+    /// Exclusively create a unique sibling of `path`, write and close it.
+    /// Caller owns the returned path and file. Failure removes only this
+    /// operation's file; collisions never truncate or delete another file.
+    writeTempFile: *const fn (?*anyopaque, std.Io, Allocator, []const u8, []const u8) (Allocator.Error || WriteError)![]u8 = &testingWriteTempFile,
     /// Produce a file incrementally. Implementations must consume the stream
     /// before returning; no producer or buffer pointers escape this call.
     writeFileStream: *const fn (?*anyopaque, std.Io, []const u8, FileStream) WriteError!void = &missingWriteFileStream,
@@ -91,6 +95,11 @@ pub const VTable = struct {
 
     /// Atomically rename `old_path` to `new_path`.
     rename: *const fn (?*anyopaque, std.Io, []const u8, []const u8) RenameError!void,
+
+    /// Add `new_path` as another name for the file `old_path` names, without
+    /// replacing an existing `new_path` or following a final symbolic link.
+    /// Defaults to `error.OperationUnsupported` for backends without hard links.
+    hardLink: *const fn (?*anyopaque, std.Io, []const u8, []const u8) HardLinkError!void = &missingHardLink,
 
     /// Look up environment variable `key`. Caller owns the returned slice.
     getEnvVar: *const fn (?*anyopaque, std.Io, []const u8, Allocator) GetEnvVarError![]u8,
@@ -199,6 +208,13 @@ pub fn writeFile(self: Self, path: []const u8, data: []const u8) WriteError!void
     return self.vtable.writeFile(self.ctx, self.std_io, path, data);
 }
 
+/// Write a closed, exclusively owned staging file beside `path`.
+/// Matches writeFile's durability: no fsync guarantee. On success the caller
+/// must rename or remove the file, then free the returned path with allocator.
+pub fn writeTempFile(self: Self, allocator: Allocator, path: []const u8, data: []const u8) (Allocator.Error || WriteError)![]u8 {
+    return self.vtable.writeTempFile(self.ctx, self.std_io, allocator, path, data);
+}
+
 /// A borrowed producer for a file's complete contents.
 pub const FileStream = struct {
     context: *const anyopaque,
@@ -267,6 +283,12 @@ pub fn makePath(self: Self, path: []const u8) MakePathError!void {
 /// Atomically rename `old_path` to `new_path`.
 pub fn rename(self: Self, old_path: []const u8, new_path: []const u8) RenameError!void {
     return self.vtable.rename(self.ctx, self.std_io, old_path, new_path);
+}
+
+/// Add `new_path` as another name for the file `old_path` names. An existing
+/// `new_path` is never replaced: it fails with `error.PathAlreadyExists`.
+pub fn hardLink(self: Self, old_path: []const u8, new_path: []const u8) HardLinkError!void {
+    return self.vtable.hardLink(self.ctx, self.std_io, old_path, new_path);
 }
 
 /// Look up environment variable `key`. Caller owns the returned slice.
@@ -398,6 +420,9 @@ pub const RenameError = std.Io.Dir.RenameError || error{
     IoError,
 };
 
+/// Errors that can occur when adding a hard link to a file.
+pub const HardLinkError = std.Io.Dir.HardLinkError;
+
 /// Errors that can occur when deleting a file or directory.
 pub const DeleteError = error{
     FileNotFound,
@@ -520,6 +545,7 @@ const os_vtable = VTable{
     .readFile = &osReadFile,
     .readFileInto = &osReadFileInto,
     .writeFile = &osWriteFile,
+    .writeTempFile = &osWriteTempFile,
     .writeFileStream = &osWriteFileStream,
     .fileExists = &osFileExists,
     .stat = &osStat,
@@ -531,6 +557,7 @@ const os_vtable = VTable{
     .canonicalize = &osCanonicalize,
     .makePath = &osMakePath,
     .rename = &osRename,
+    .hardLink = &osHardLink,
     .getEnvVar = &osGetEnvVar,
     .queryEnvVar = &osQueryEnvVar,
     .fetchUrl = &osFetchUrl,
@@ -581,6 +608,7 @@ const freestanding_vtable = VTable{
     .readFile = &freestandingReadFile,
     .readFileInto = &freestandingReadFileInto,
     .writeFile = &freestandingWriteFile,
+    .writeTempFile = &freestandingWriteTempFile,
     .fileExists = &freestandingFileExists,
     .stat = &freestandingStat,
     .listDir = &freestandingListDir,
@@ -748,6 +776,33 @@ fn osWriteFile(_: ?*anyopaque, std_io: std.Io, path: []const u8, data: []const u
     const file = try std.Io.Dir.cwd().createFile(std_io, path, .{ .permissions = private_file_permissions });
     defer file.close(std_io);
 
+    try writeFileContents(std_io, file, data);
+}
+
+fn osWriteTempFile(_: ?*anyopaque, io: std.Io, allocator: Allocator, path: []const u8, data: []const u8) (Allocator.Error || WriteError)![]u8 {
+    while (true) {
+        var nonce: [16]u8 = undefined;
+        io.random(&nonce);
+        const staging = try std.fmt.allocPrint(allocator, "{s}.{s}.tmp", .{ path, std.fmt.bytesToHex(nonce, .lower) });
+        errdefer allocator.free(staging);
+        const file = std.Io.Dir.cwd().createFile(io, staging, .{ .exclusive = true, .permissions = private_file_permissions }) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                allocator.free(staging);
+                continue;
+            },
+            else => return err,
+        };
+        // Close before removing a failed write, including on Windows.
+        errdefer std.Io.Dir.cwd().deleteFile(io, staging) catch {};
+        {
+            defer file.close(io);
+            try writeFileContents(io, file, data);
+        }
+        return staging;
+    }
+}
+
+fn writeFileContents(std_io: std.Io, file: std.Io.File, data: []const u8) WriteError!void {
     const limit = hostFileWriteRequestLimit();
     // Bound each submission to the host limit; writeStreamingAll still handles
     // partial progress below that limit. No copying or repeated truncation.
@@ -1006,6 +1061,104 @@ fn osMakePath(_: ?*anyopaque, std_io: std.Io, path: []const u8) MakePathError!vo
 
 fn osRename(_: ?*anyopaque, std_io: std.Io, old_path: []const u8, new_path: []const u8) RenameError!void {
     return std.Io.Dir.cwd().rename(old_path, std.Io.Dir.cwd(), new_path, std_io);
+}
+
+fn osHardLink(_: ?*anyopaque, std_io: std.Io, old_path: []const u8, new_path: []const u8) HardLinkError!void {
+    if (comptime builtin.os.tag == .windows) return windowsHardLink(old_path, new_path);
+    return std.Io.Dir.cwd().hardLink(old_path, .cwd(), new_path, std_io, .{});
+}
+
+/// `std.Io` reports hard links as unsupported on Windows, so this asks NTFS
+/// directly, as `CreateHardLinkW` does: open the existing file without data
+/// access, sharing every mode so open readers and linkers are unaffected, and
+/// add the new name with `FileLinkInformation`. ReplaceIfExists is false, so an
+/// existing name is never unlinked or replaced; it fails as a collision. The
+/// new name refers to the same file record, so removing or renaming any other
+/// name leaves the file's bytes reachable through it.
+fn windowsHardLink(old_path: []const u8, new_path: []const u8) HardLinkError!void {
+    const w = std.os.windows;
+    const cwd = std.Io.Dir.cwd().handle;
+    const old_w = try std.Io.Threaded.sliceToPrefixedFileW(cwd, old_path, .{});
+    const new_w = try std.Io.Threaded.sliceToPrefixedFileW(cwd, new_path, .{});
+    const attributes: w.OBJECT.ATTRIBUTES = .{
+        .RootDirectory = if (std.fs.path.isAbsoluteWindowsWtf16(old_w.span())) null else cwd,
+        .ObjectName = @constCast(&old_w.string()),
+    };
+    var io_status: w.IO_STATUS_BLOCK = undefined;
+    var handle: w.HANDLE = undefined;
+    const opened = w.ntdll.NtCreateFile(
+        &handle,
+        .{
+            .SPECIFIC = .{ .FILE = .{ .WRITE_ATTRIBUTES = true } },
+            .STANDARD = .{ .SYNCHRONIZE = true },
+        },
+        &attributes,
+        &io_status,
+        null,
+        .{ .NORMAL = true },
+        .VALID_FLAGS,
+        .OPEN,
+        .{
+            .NON_DIRECTORY_FILE = true,
+            .IO = .SYNCHRONOUS_NONALERT,
+            .OPEN_REPARSE_POINT = true,
+        },
+        null,
+        0,
+    );
+    if (opened != .SUCCESS) return windowsHardLinkFailure(opened);
+    defer w.CloseHandle(handle);
+
+    // FILE_LINK_INFORMATION: ReplaceIfExists (a BOOLEAN padded to the
+    // pointer's alignment), RootDirectory, FileNameLength, FileName.
+    const LinkInformation = extern struct {
+        replace_if_exists: w.BOOLEAN,
+        root_directory: ?w.HANDLE,
+        file_name_length: w.ULONG,
+        file_name: [w.PATH_MAX_WIDE]w.WCHAR,
+    };
+    const new_name = new_w.span();
+    var info: LinkInformation = .{
+        .replace_if_exists = .FALSE,
+        .root_directory = if (std.fs.path.isAbsoluteWindowsWtf16(new_name)) null else cwd,
+        .file_name_length = @intCast(new_name.len * @sizeOf(w.WCHAR)),
+        .file_name = undefined,
+    };
+    @memcpy(info.file_name[0..new_name.len], new_name);
+    // NtSetInformationFile rejects a length below the documented struct's
+    // ABI size, whose FileName holds one character.
+    const documented_size = std.mem.alignForward(usize, @offsetOf(LinkInformation, "file_name") + @sizeOf(w.WCHAR), @alignOf(LinkInformation));
+    const length = @max(documented_size, @offsetOf(LinkInformation, "file_name") + info.file_name_length);
+    const linked = w.ntdll.NtSetInformationFile(handle, &io_status, &info, @intCast(length), .Link);
+    if (linked != .SUCCESS) return windowsHardLinkFailure(linked);
+}
+
+/// The failure an unsuccessful status from opening the existing file or adding
+/// its new name reports. NTSTATUS is an open set of codes, so this is a table of
+/// the documented causes; every other status is unexpected.
+fn windowsHardLinkFailure(status: std.os.windows.NTSTATUS) HardLinkError {
+    const causes = [_]struct { std.os.windows.NTSTATUS, HardLinkError }{
+        .{ .OBJECT_NAME_COLLISION, error.PathAlreadyExists },
+        .{ .OBJECT_NAME_NOT_FOUND, error.FileNotFound },
+        .{ .OBJECT_PATH_NOT_FOUND, error.FileNotFound },
+        .{ .DELETE_PENDING, error.FileNotFound },
+        .{ .OBJECT_NAME_INVALID, error.BadPathName },
+        .{ .ACCESS_DENIED, error.AccessDenied },
+        .{ .SHARING_VIOLATION, error.AccessDenied },
+        .{ .NOT_A_DIRECTORY, error.NotDir },
+        .{ .NOT_SAME_DEVICE, error.CrossDevice },
+        .{ .TOO_MANY_LINKS, error.LinkQuotaExceeded },
+        .{ .DISK_FULL, error.NoSpaceLeft },
+        .{ .MEDIA_WRITE_PROTECTED, error.ReadOnlyFileSystem },
+        .{ .NOT_SUPPORTED, error.OperationUnsupported },
+        .{ .INVALID_DEVICE_REQUEST, error.OperationUnsupported },
+    };
+    for (causes) |cause| if (cause[0] == status) return cause[1];
+    return std.os.windows.unexpectedStatus(status);
+}
+
+fn missingHardLink(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) HardLinkError!void {
+    return error.OperationUnsupported;
 }
 
 fn osGetEnvVar(_: ?*anyopaque, _: std.Io, key: []const u8, allocator: Allocator) GetEnvVarError![]u8 {
@@ -1294,6 +1447,10 @@ fn testingWriteFile(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) Wri
     @panic("writeFile should not be called in this test");
 }
 
+fn testingWriteTempFile(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8) (Allocator.Error || WriteError)![]u8 {
+    @panic("writeTempFile should not be called in this test");
+}
+
 fn testingFileExists(_: ?*anyopaque, _: std.Io, _: []const u8) bool {
     @panic("fileExists should not be called in this test");
 }
@@ -1409,6 +1566,10 @@ fn freestandingReadFileInto(_: ?*anyopaque, _: std.Io, _: []const u8, _: []u8) R
 }
 
 fn freestandingWriteFile(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) WriteError!void {
+    return error.AccessDenied;
+}
+
+fn freestandingWriteTempFile(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8) (Allocator.Error || WriteError)![]u8 {
     return error.AccessDenied;
 }
 
@@ -1559,6 +1720,40 @@ test "OS filesystem mutations preserve NotDir" {
     try std.testing.expectError(error.NotDir, fs.rename(source_path, blocked_path));
 }
 
+test "OS hardLink names one file through removal of other names and never replaces a name" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const fs = os(allocator, a, io);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    const original = try std.fs.path.join(a, &.{ root, "original" });
+    const alias = try std.fs.path.join(a, &.{ root, "alias" });
+    const pin = try std.fs.path.join(a, &.{ root, "pin" });
+    const other = try std.fs.path.join(a, &.{ root, "other" });
+    try fs.writeFile(original, "linked bytes");
+    try fs.writeFile(other, "other bytes");
+
+    try fs.hardLink(original, alias);
+    try std.testing.expectError(error.PathAlreadyExists, fs.hardLink(original, other));
+    try std.testing.expectEqualStrings("other bytes", try fs.readFile(other, a));
+    try std.testing.expectError(error.FileNotFound, fs.hardLink(try std.fs.path.join(a, &.{ root, "missing" }), pin));
+
+    // A reader keeps its handle while the file gains a name and loses two.
+    const reader = try std.Io.Dir.cwd().openFile(io, alias, .{});
+    defer reader.close(io);
+    try fs.hardLink(alias, pin);
+    try fs.deleteFile(original);
+    try fs.deleteFile(alias);
+    var buffer: [32]u8 = undefined;
+    const count = try reader.readPositionalAll(io, &buffer, 0);
+    try std.testing.expectEqualStrings("linked bytes", buffer[0..count]);
+    try std.testing.expectEqualStrings("linked bytes", try fs.readFile(pin, a));
+}
+
 test "OS writeFile preserves IsDir" {
     // Opening a directory for writing has platform-specific error semantics.
     if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
@@ -1599,7 +1794,7 @@ const BoundedWriteTestIo = struct {
         const self: *@This() = @ptrCast(@alignCast(context.?));
         const request = switch (operation) {
             .file_write_streaming => |request| request,
-            .file_read_streaming, .device_io_control, .net_receive, .net_send, .net_read, .net_write => unreachable,
+            .file_read_streaming, .device_io_control, .net_receive, .net_send, .net_read, .net_write => std.debug.panic("BoundedWriteTestIo serves only streaming file writes, got {t}", .{std.meta.activeTag(operation)}),
         };
         std.debug.assert(request.header.len == 0 and request.data.len == 1 and request.splat == 1);
         const bytes = request.data[0];
@@ -1624,6 +1819,87 @@ const BoundedWriteTestIo = struct {
     }
 };
 
+test "OS writeTempFile retries exclusive collisions and cleans only its closed file" {
+    const Hook = struct {
+        creates: usize = 0,
+        closes: usize = 0,
+        deletes: usize = 0,
+        fail_write: bool,
+
+        fn random(context: ?*anyopaque, buffer: []u8) void {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            @memset(buffer, @intCast(self.creates));
+        }
+
+        fn create(context: ?*anyopaque, dir: std.Io.Dir, path: []const u8, options: std.Io.Dir.CreateFileOptions) std.Io.File.OpenError!std.Io.File {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            std.debug.assert(options.exclusive);
+            self.creates += 1;
+            return std.testing.io.vtable.dirCreateFile(std.testing.io.userdata, dir, path, options);
+        }
+
+        fn close(context: ?*anyopaque, files: []const std.Io.File) void {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.closes += files.len;
+            std.testing.io.vtable.fileClose(std.testing.io.userdata, files);
+        }
+
+        fn delete(context: ?*anyopaque, dir: std.Io.Dir, path: []const u8) std.Io.Dir.DeleteFileError!void {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            std.debug.assert(self.closes == 1);
+            std.debug.assert(std.mem.endsWith(u8, path, ".01010101010101010101010101010101.tmp"));
+            self.deletes += 1;
+            return std.testing.io.vtable.dirDeleteFile(std.testing.io.userdata, dir, path);
+        }
+
+        fn operate(context: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            if (self.fail_write) return .{ .file_write_streaming = error.DiskQuota };
+            return std.testing.io.vtable.operate(std.testing.io.userdata, operation);
+        }
+    };
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    for ([_]bool{ false, true }) |fail_write| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+        defer allocator.free(root);
+        const path = try std.fs.path.join(allocator, &.{ root, "pack.rpk" });
+        defer allocator.free(path);
+        const collision = try std.fmt.allocPrint(allocator, "{s}.00000000000000000000000000000000.tmp", .{path});
+        defer allocator.free(collision);
+        const base = os(allocator, allocator, io);
+        try base.writeFile(collision, "another writer");
+        var hook = Hook{ .fail_write = fail_write };
+        var vtable = io.vtable.*;
+        vtable.random = &Hook.random;
+        vtable.dirCreateFile = &Hook.create;
+        vtable.fileClose = &Hook.close;
+        vtable.dirDeleteFile = &Hook.delete;
+        vtable.operate = &Hook.operate;
+        const fs = os(allocator, allocator, .{ .userdata = &hook, .vtable = &vtable });
+        if (fail_write) {
+            try std.testing.expectError(error.DiskQuota, fs.writeTempFile(allocator, path, "complete"));
+            try std.testing.expectEqual(@as(usize, 1), hook.deletes);
+        } else {
+            const staging = try fs.writeTempFile(allocator, path, "complete");
+            defer allocator.free(staging);
+            const bytes = try base.readFile(staging, allocator);
+            defer allocator.free(bytes);
+            try std.testing.expectEqualStrings("complete", bytes);
+            try base.deleteFile(staging);
+            try std.testing.expectEqual(@as(usize, 0), hook.deletes);
+        }
+        try std.testing.expectEqual(@as(usize, 2), hook.creates);
+        try std.testing.expectEqual(@as(usize, 1), hook.closes);
+        try std.testing.expect(!base.fileExists(path));
+        const untouched = try base.readFile(collision, allocator);
+        defer allocator.free(untouched);
+        try std.testing.expectEqualStrings("another writer", untouched);
+    }
+}
+
 test "OS writeFile bounds large writes and preserves short-write progress" {
     if (comptime (builtin.os.tag != .linux and !builtin.os.tag.isDarwin()) or @bitSizeOf(usize) < 64) return error.SkipZigTest;
     const limit = fileWriteRequestLimit(builtin.os.tag, std.heap.pageSize());
@@ -1638,7 +1914,7 @@ test "OS writeFile bounds large writes and preserves short-write progress" {
             try std.testing.expectEqual(size, mock.written);
             try std.testing.expectEqual(@as(usize, 1), mock.creates);
             try std.testing.expectEqual(@as(usize, 1), mock.closes);
-            if (!short_writes) try std.testing.expectEqual(std.math.divCeil(usize, size, limit) catch unreachable, mock.calls);
+            if (!short_writes) try std.testing.expectEqual(try std.math.divCeil(usize, size, limit), mock.calls);
         }
     }
 }

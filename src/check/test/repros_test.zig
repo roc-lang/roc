@@ -1571,3 +1571,79 @@ test "codec row equality - independent expect parser and function error rows" {
     defer test_env.deinit();
     try test_env.assertNoErrors();
 }
+
+test "check - repro - issue 12521 - set of an annotated tag union built by a called function" {
+    // https://github.com/roc-lang/roc/issues/12521
+    // `make`'s annotation fixes its result as `Set([X, Y])`, so the call
+    // `make(0)` has a concrete element type and its `to_hash` and `is_eq`
+    // requirements resolve to that tag union's methods.
+    const src =
+        \\make : U64 -> Set([X, Y])
+        \\make = |_n| Set.empty().insert(X)
+        \\
+        \\count : U64
+        \\count = make(0).len()
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - issue 12521 - an annotated open row's hashed tail is closed at an unpinned call" {
+    // The annotation names the row's tail and declares its `to_hash` and
+    // `is_eq` requirements. A call that adds no tags leaves the tail to its row
+    // default, the empty row, which satisfies both.
+    const src =
+        \\make : U64 -> Set([X, Y, ..others])
+        \\    where [others.to_hash : others, Hasher -> Hasher, others.is_eq : others, others -> Bool]
+        \\make = |_n| Set.empty().insert(X)
+        \\
+        \\count : U64
+        \\count = make(0).len()
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - issue 12521 - an inferred open row's hashed tail is closed at an unpinned call" {
+    const src =
+        \\make = |_n| Set.empty().insert(X)
+        \\
+        \\count : U64
+        \\count = make(0).len()
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - issue 12521 - a hashed payload in an unpinned call's open row stays undetermined" {
+    // The row's tail closes by its row default, but the payload's element type
+    // has no default, so its `to_hash` has no owner.
+    const src =
+        \\make = |_n| Set.empty().insert(Wrap([]))
+        \\
+        \\count : U64
+        \\count = make(0).len()
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Missing Method");
+}
+
+test "check - issue 12521 - a hashed row tail that is also a value type is closed at an unpinned call" {
+    // `others` ends the first set's row and is the second set's element type.
+    // Its row default closes every occurrence to the empty row.
+    const src =
+        \\make : U64 -> (Set([X, ..others]), Set(others))
+        \\    where [others.to_hash : others, Hasher -> Hasher, others.is_eq : others, others -> Bool]
+        \\make = |_n| (Set.empty().insert(X), Set.empty())
+        \\
+        \\count : U64
+        \\count = make(0).1.len()
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}

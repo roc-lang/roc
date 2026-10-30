@@ -257,8 +257,8 @@ DOES NOT EXIST - fuzz_crash_028.md:134:2:134:7
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:28:1:31:2
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:47:1:47:21
 NAME NOT BOUND IN EVERY ALTERNATIVE - fuzz_crash_028.md:64:17:64:20
-MISSING METHOD - fuzz_crash_028.md:68:3:68:8
-MISSING METHOD - fuzz_crash_028.md:70:3:70:8
+TYPE MISMATCH - fuzz_crash_028.md:68:3:68:8
+TYPE MISMATCH - fuzz_crash_028.md:68:3:68:8
 TYPE MISMATCH - fuzz_crash_028.md:64:2:64:2
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:95:1:95:34
 TYPE MISMATCH - fuzz_crash_028.md:102:8:102:11
@@ -2115,22 +2115,14 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(reflow "in a branch must give values the same names, so the branch can use those names no matter which pattern matched.")))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 68 3) (end 68 8))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
 			(source-region (file "fuzz_crash_028.md") (start 68 3) (end 68 8) (annotation error) (line-text "\t\t\"foo\" => # ent"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -2139,22 +2131,14 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(annotation-end)))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 70 3) (end 70 8))
+		(title "Type Mismatch")
+		(region (start 68 3) (end 68 8))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
-			(source-region (file "fuzz_crash_028.md") (start 70 3) (end 70 8) (annotation error) (line-text "\t\t\"foo\" | \"bar\" => 20[1, 2, 3, .. as rest] # t"))
+			(source-region (file "fuzz_crash_028.md") (start 68 3) (end 68 8) (annotation error) (line-text "\t\t\"foo\" => # ent"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -3214,7 +3198,7 @@ EndOfFile,
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1366) (dispatcher-var 281)
+						(e-interpolation (constraint-fn-var 1364) (dispatcher-var 281)
 							(first
 								(e-literal (string "H, ")))
 							(parts
@@ -3271,11 +3255,11 @@ EndOfFile,
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1549)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1547)
 									(receiver
 										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 1546)
+										(e-dispatch-call (method "times") (constraint-fn-var 1544)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -3290,18 +3274,18 @@ EndOfFile,
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 1582)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1580)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1572)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1570)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1609)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1607)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 1599)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1597)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -3316,11 +3300,11 @@ EndOfFile,
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 1648)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1646)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 1645)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1643)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -3335,12 +3319,12 @@ EndOfFile,
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1714)
+													(e-dispatch-call (method "ned") (constraint-fn-var 1712)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 1684)
+																		(e-dispatch-call (method "od") (constraint-fn-var 1682)
 																			(receiver
 																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))

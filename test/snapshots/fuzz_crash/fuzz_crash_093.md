@@ -90,7 +90,7 @@ d = (0, || ())
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(Dec, ({}) -> _ret)")))
+		(patt (type "(Dec, () -> _ret)")))
 	(expressions
-		(expr (type "(Dec, ({}) -> _ret)"))))
+		(expr (type "(Dec, () -> _ret)"))))
 ~~~

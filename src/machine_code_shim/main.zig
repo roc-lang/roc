@@ -77,6 +77,8 @@ const DevProgram = struct {
     descriptor_offset: usize,
     local_refs: std.atomic.Value(usize),
     boxy: ?BoxyProgramRuntime,
+    /// Whether the image's static data holds pointers to its own code.
+    static_code_references: bool,
 
     fn deinit(self: *DevProgram, gpa: Allocator) void {
         if (self.boxy) |*boxy| boxy.deinit(gpa);
@@ -145,7 +147,7 @@ fn viewRuntimeImage(
 
     const header: *const RunImage.Header = @ptrCast(@alignCast(shm.base_ptr + image_offset));
     if (header.image_size > image_bound) return error.InvalidDevRunImage;
-    return RunImage.viewMappedImage(header, shm.base_ptr, image_bound);
+    return RunImage.viewMappedImage(header, shm.base_ptr, image_bound, shm.total_size);
 }
 
 /// Decode and own the boxy runtime paired with one run image. Generated table
@@ -197,6 +199,7 @@ fn openRuntimeState(gpa: Allocator, ops: *RocOps) RuntimeStateError!RuntimeState
         if (retained_image) |image| image.descriptor else null,
     );
     errdefer destroyDevProgram(gpa, program);
+    if (retained_image) |image| acceptHotReloadProgram(program, image.descriptor);
 
     return .{
         .shm = shm,
@@ -255,9 +258,8 @@ const RelocationContext = struct {
         for (self.view.data_symbols) |symbol| {
             const symbol_name = self.view.dataSymbolName(symbol) catch return null;
             if (std.mem.eql(u8, symbol_name, name)) {
-                return @intFromPtr(self.view.data.ptr) +
-                    @as(usize, @intCast(symbol.data_offset)) +
-                    @as(usize, @intCast(symbol.symbol_offset));
+                const bytes = self.view.dataSymbolBytes(symbol) catch return null;
+                return @intFromPtr(bytes.ptr) + @as(usize, @intCast(symbol.symbol_offset));
             }
         }
 
@@ -297,8 +299,9 @@ fn loadDevProgram(
     for (view.relocations, relocation_records) |record, *relocation| {
         const name = try view.symbolName(record.symbol);
         const shim_function_addr = resolveShimFunction(name);
-        const data_kind: ?@FieldType(@FieldType(backend.Relocation, "linked_data"), "kind") = switch (try record.relocationKind()) {
-            .linked_function => null,
+        const encoding = try record.relocationKind();
+        const data_kind: ?@FieldType(@FieldType(backend.Relocation, "linked_data"), "kind") = switch (encoding) {
+            .linked_function_x86_call_rel32, .linked_function_aarch64_call26 => null,
             .linked_data_abs64 => .abs64,
             .linked_data_rel32 => .rel32,
             .linked_data_page21 => .page21,
@@ -316,10 +319,17 @@ fn loadDevProgram(
         } else {
             const target_addr = shim_function_addr orelse return unresolvedSymbol(name);
             try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
-            relocation.* = .{ .linked_function = .{
-                .offset = record.code_offset,
-                .name = name,
-            } };
+            relocation.* = .{
+                .linked_function = .{
+                    .offset = record.code_offset,
+                    .name = name,
+                    .kind = switch (encoding) {
+                        .linked_function_x86_call_rel32 => .x86_call_rel32,
+                        .linked_function_aarch64_call26 => .aarch64_call26,
+                        .linked_data_abs64, .linked_data_rel32, .linked_data_page21, .linked_data_pageoff12 => unreachable, // data encodings were handled above
+                    },
+                },
+            };
         }
     }
     const stub_size = try jumpStubSize();
@@ -361,6 +371,7 @@ fn loadDevProgram(
         .descriptor_offset = descriptor_offset,
         .local_refs = std.atomic.Value(usize).init(1),
         .boxy = null,
+        .static_code_references = view.static_code_references,
     };
 }
 
@@ -618,13 +629,7 @@ fn maxDevDataAlignment(view: *const RunImage.ProgramView) RunImage.ImageError!us
     var max_alignment: usize = 1;
     for (view.data_symbols) |symbol| {
         if (symbol.alignment == 0 or !std.math.isPowerOfTwo(symbol.alignment)) return error.InvalidDevRunImage;
-        if (symbol.data_offset > std.math.maxInt(usize) or symbol.len > std.math.maxInt(usize) or symbol.symbol_offset > std.math.maxInt(usize)) {
-            return error.InvalidDevRunImage;
-        }
-        const data_offset: usize = @intCast(symbol.data_offset);
-        const len: usize = @intCast(symbol.len);
-        const symbol_offset: usize = @intCast(symbol.symbol_offset);
-        if (len > view.data.len or data_offset > view.data.len - len or symbol_offset > len) return error.InvalidDevRunImage;
+        _ = try view.dataSymbolBytes(symbol);
         max_alignment = @max(max_alignment, symbol.alignment);
     }
     return max_alignment;
@@ -702,10 +707,7 @@ fn executeDevEntrypoint(
     arg_ptr: ?*anyopaque,
 ) void {
     const entrypoint = devEntrypointForOrdinal(program.entrypoints, entry_idx) orelse {
-        if (builtin.mode == .debug) {
-            invariant("machine-code shim invariant violated: missing dev entrypoint ordinal {d}", .{entry_idx});
-        }
-        unreachable;
+        invariant("machine-code shim invariant violated: missing dev entrypoint ordinal {d}", .{entry_idx});
     };
     if (entrypoint.code_offset > std.math.maxInt(usize)) {
         ops.crash("Machine-code shim received an invalid dev entrypoint offset");
@@ -725,6 +727,15 @@ fn executeDevEntrypoint(
     const previous_runtime = eval.boxy_abi.swapActiveRuntime(runtime);
     defer _ = eval.boxy_abi.swapActiveRuntime(previous_runtime);
     func(ret, arg_ptr);
+}
+
+/// Accept a loaded hot-reload image before any of its code runs. From then on
+/// values the host keeps may point into its static data. Static data that
+/// points at the image's own code is never dropped, so it holds a reference to
+/// the image for the rest of the session.
+fn acceptHotReloadProgram(program: *DevProgram, descriptor: *hot_reload.ImageDescriptor) void {
+    hot_reload.markDescriptorAccepted(descriptor);
+    if (program.static_code_references) acquireDevProgramRef(program);
 }
 
 fn devProgramContainsCodeAddress(program: *const DevProgram, address: usize) bool {
@@ -747,10 +758,7 @@ fn acquireDevProgramRef(program: *DevProgram) void {
         hot_reload.retainDescriptor(descriptor);
         return;
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .debug) {
-            invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
-        }
-        unreachable;
+        invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
     }
 
     const previous = program.local_refs.fetchAdd(1, .acquire);
@@ -763,10 +771,7 @@ fn releaseDevProgramRefLocked(state: *RuntimeState, program: *DevProgram) void {
     if (program.descriptor) |descriptor| {
         hot_reload.releaseDescriptor(descriptor);
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .debug) {
-            invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
-        }
-        unreachable;
+        invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
     } else {
         const previous = program.local_refs.fetchSub(1, .acq_rel);
         if (builtin.mode == .debug and previous == 0) {
@@ -783,10 +788,7 @@ fn releaseDevProgramRef(program: *DevProgram) void {
     if (program.descriptor) |descriptor| {
         hot_reload.releaseDescriptor(descriptor);
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .debug) {
-            invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
-        }
-        unreachable;
+        invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
     } else {
         const previous = program.local_refs.fetchSub(1, .acq_rel);
         if (builtin.mode == .debug and previous == 0) {
@@ -877,6 +879,7 @@ fn refreshRuntimeProgramIfNeeded(
             return;
         };
 
+        acceptHotReloadProgram(next_program, retained_image.descriptor);
         const old_program = state.program;
         state.program = next_program;
         state.retired_programs.appendAssumeCapacity(old_program);
@@ -1016,6 +1019,8 @@ test "loaded dev program borrows direct shared image metadata" {
         .{ .ordinal = 0, .code_offset = 0 },
     };
 
+    var plan = try RunImage.StaticDataPool.Plan.init(std.testing.allocator, &.{}, false);
+    defer plan.deinit();
     const header = try RunImage.writeToSharedMemory(
         std.testing.allocator,
         shm.allocator(),
@@ -1027,10 +1032,11 @@ test "loaded dev program borrows direct shared image metadata" {
         &.{},
         &.{},
         &.{},
+        &plan,
         &.{},
         std.mem.zeroes(RunImage.BoxySidecar),
     );
-    const view = try RunImage.viewMappedImage(header, shm.base_ptr, @intCast(header.image_size));
+    const view = try RunImage.viewMappedImage(header, shm.base_ptr, @intCast(header.image_size), shm.total_size);
 
     var program = try loadDevProgram(std.testing.allocator, &view, 0, hot_reload.invalid_descriptor_offset, null);
     defer program.deinit(std.testing.allocator);
@@ -1095,6 +1101,8 @@ test "data relocations patch data pointers" {
         .page_size = 4096,
         .boxy_blob = &.{},
         .boxy_sidecar = std.mem.zeroes(RunImage.BoxySidecar),
+        .mapping = &.{},
+        .static_code_references = false,
     };
     const relocation_context = RelocationContext{
         .view = &view,
@@ -1140,6 +1148,8 @@ test "function-pointer data relocations patch generated Roc code pointers" {
         .page_size = 4096,
         .boxy_blob = &.{},
         .boxy_sidecar = std.mem.zeroes(RunImage.BoxySidecar),
+        .mapping = &.{},
+        .static_code_references = false,
     };
     const relocation_context = RelocationContext{
         .view = &view,

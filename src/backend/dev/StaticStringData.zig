@@ -23,7 +23,7 @@ pub const Entry = struct {
 pub const View = struct {
     entries: []const Entry = &.{},
     index: ?*const Index = null,
-    /// Borrowed immutable backing records for owned native artifact capture.
+    /// Borrowed immutable backing records for owned native excerpt capture.
     exports: []const StaticDataExport = &.{},
 
     pub fn ordinal(self: View, id: base.StringLiteral.Idx) ?u32 {
@@ -87,7 +87,12 @@ pub fn literalSymbolName(allocator: Allocator, bytes: []const u8, alignment: u32
     hasher.update(&alignment_bytes);
     hasher.update(bytes);
     const digest = hasher.finalResult();
-    return std.fmt.allocPrint(allocator, lir.Program.content_data_symbol_prefix ++ "{s}", .{&std.fmt.bytesToHex(digest[0..16].*, .lower)});
+    const prefix = lir.Program.content_data_symbol_prefix;
+    const hex = std.fmt.bytesToHex(digest[0..16].*, .lower);
+    const name = try allocator.alloc(u8, prefix.len + hex.len);
+    @memcpy(name[0..prefix.len], prefix);
+    @memcpy(name[prefix.len..], &hex);
+    return name;
 }
 
 /// Build readonly data exports from the exact LIR procedure backing demand.
@@ -208,7 +213,7 @@ fn writeSignedWord(word_size: u32, bytes: []u8, offset: u32, value: isize) void 
     switch (word_size) {
         4 => std.mem.writeInt(i32, bytes[offset..][0..4], @intCast(value), .little),
         8 => std.mem.writeInt(i64, bytes[offset..][0..8], @intCast(value), .little),
-        else => unreachable,
+        else => unreachable, // build derives word_size from RocTarget.ptrBitWidth, which is 32 or 64
     }
 }
 

@@ -112,12 +112,12 @@ pub const Store = struct {
 
     /// Get a stored pattern string by its range
     pub fn getExtraString(self: *const Self, idx: ExtraStringIdx) []const u8 {
-        return self.extra_strings_backing.items[idx.start..][0..idx.count];
+        return self.extra_strings_backing.items[@as(usize, @intCast(idx.start))..][0..@as(usize, @intCast(idx.count))];
     }
 
     /// Get the slice of missing pattern indices by range
     pub fn getMissingPatterns(self: *const Self, range: MissingPatternsRange) []const ExtraStringIdx {
-        return self.missing_patterns_backing.items[range.start..][0..range.count];
+        return self.missing_patterns_backing.items[@as(usize, @intCast(range.start))..][0..@as(usize, @intCast(range.count))];
     }
 
     /// Create a deep snapshot from a Var, storing it in this SnapshotStore
@@ -154,10 +154,7 @@ pub const Store = struct {
             pending.site = site;
             return;
         }
-        if (@import("builtin").mode == .debug) {
-            base.invariant("checked artifact invariant violated: exhaustiveness site source had no pending diagnostic", .{});
-        }
-        unreachable;
+        base.invariant("checked artifact invariant violated: exhaustiveness site source had no pending diagnostic", .{});
     }
 
     /// Record that a checker-selected compile-time root will execute this site.
@@ -172,28 +169,7 @@ pub const Store = struct {
             pending.mode = .empirical;
             return;
         }
-        if (@import("builtin").mode == .debug) {
-            base.invariant("checked artifact invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
-        }
-        unreachable;
-    }
-
-    /// Record that the compile-time root selected to execute this site failed
-    /// and left its code to runtime, so the diagnostic is decided statically.
-    pub fn markPendingStaticExhaustivenessStatic(self: *Self, site: CheckedExhaustivenessSiteId) void {
-        for (self.pending_static_exhaustiveness.items) |*pending| {
-            if (pending.site != null and pending.site.? == site) pending.mode = .static;
-        }
-    }
-
-    pub fn resolvePendingStaticExhaustiveness(self: *Self, site: CheckedExhaustivenessSiteId) void {
-        var write: usize = 0;
-        for (self.pending_static_exhaustiveness.items) |pending| {
-            if (pending.site != null and pending.site.? == site) continue;
-            self.pending_static_exhaustiveness.items[write] = pending;
-            write += 1;
-        }
-        self.pending_static_exhaustiveness.shrinkRetainingCapacity(write);
+        base.invariant("checked artifact invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
     }
 
     pub fn discardPendingStaticExhaustiveness(self: *Self, site: CheckedExhaustivenessSiteId) void {
@@ -289,13 +265,12 @@ pub const Store = struct {
                     .unmatchable_pattern,
                     .match_alt_binder_missing,
                     .discarded_var_update,
-                    .comptime_unused_branch,
                     .comptime_condition,
                     .derived_parser_error_row,
                     .derived_codec_open_record,
                     .associated_item_not_found,
                     .redundant_open_tag_union,
-                    => unreachable,
+                    => unreachable, // the checker queues only non-exhaustive match and destructure problems as pending exhaustiveness diagnostics
                 }
             }
             if (!pending.reported) _ = try self.appendProblem(problem);

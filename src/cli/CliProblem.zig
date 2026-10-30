@@ -54,7 +54,6 @@ pub const ReportedError =
         CheckFailed,
         CliError,
         CompilationFailed,
-        ComptimeExhaustiveness,
         Crash,
         DivisionByZero,
         DocsFailed,
@@ -216,6 +215,16 @@ pub const CliProblem = union(enum) {
         target: []const u8,
     },
 
+    /// A stack-first wasm platform's maximum memory reaches the addresses a
+    /// stack pointer wrapped below 0 lands on, so an overflow could write
+    /// memory instead of trapping.
+    wasm_maximum_memory_too_large: struct {
+        target: []const u8,
+        maximum_memory: usize,
+        limit: usize,
+        stack_size: usize,
+    },
+
     /// The requested optimization level is not implemented for this command
     unsupported_opt_level: struct {
         command: []const u8,
@@ -239,6 +248,13 @@ pub const CliProblem = union(enum) {
     linker_failed: struct {
         err: ReportedError,
         target: []const u8,
+    },
+
+    /// The link needed symbols in the compiler's own namespace that nothing
+    /// defined, which only a compiler bug can cause
+    undefined_compiler_symbols: struct {
+        symbols: []const []const u8,
+        target_format: []const u8,
     },
 
     /// The platform's host inputs do not define symbols the app references
@@ -396,9 +412,11 @@ pub const CliProblem = union(enum) {
             .build_not_supported_for_headerless,
             .unsupported_default_platform_target,
             .unsupported_opt_level,
+            .wasm_maximum_memory_too_large,
             .compilation_failed,
             .unreported_error,
             .linker_failed,
+            .undefined_compiler_symbols,
             .missing_host_symbols,
             => .fatal,
 
@@ -461,9 +479,11 @@ pub const CliProblem = union(enum) {
             .build_not_supported_for_headerless => |info| try createBuildNotSupportedForHeaderlessReport(allocator, info),
             .unsupported_default_platform_target => |info| try createUnsupportedDefaultPlatformTargetReport(allocator, info),
             .unsupported_opt_level => |info| try createUnsupportedOptLevelReport(allocator, info),
+            .wasm_maximum_memory_too_large => |info| try createWasmMaximumMemoryTooLargeReport(allocator, info),
             .compilation_failed => |info| try createCompilationFailedReport(allocator, info),
             .unreported_error => |info| try createUnreportedErrorReport(allocator, info),
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
+            .undefined_compiler_symbols => |info| try createUndefinedCompilerSymbolsReport(allocator, info),
             .missing_host_symbols => |info| try createMissingHostSymbolsReport(allocator, info),
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
             .shim_generation_failed => |info| try createShimGenerationFailedReport(allocator, info),
@@ -559,7 +579,7 @@ fn createUnknownFlagReport(allocator: Allocator, info: anytype) Allocator.Error!
         try report.document.addLineBreaks(2);
     }
     if (info.passes_args_to_app) {
-        const app_hint = try std.fmt.allocPrint(allocator, "To pass `{s}` to the app, write it after `--`, as in `roc{s}{s} app.roc -- {s}`.", .{ info.arg, separator, info.cmd, info.arg });
+        const app_hint = try std.fmt.allocPrint(allocator, "To pass `{s}` to the app, write it after the app's file, as in `roc{s}{s} app.roc {s}`.", .{ info.arg, separator, info.cmd, info.arg });
         defer allocator.free(app_hint);
         try report.document.addSuggestion(app_hint);
         try report.document.addLineBreak();
@@ -696,7 +716,171 @@ fn createFileReadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
 }
 
 fn createFileWriteFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    return createPathErrorNameReport(allocator, "File Write Failed", "I could not write to the file ", info.path, ".", .runtime_error, @errorName(info.err));
+    var report = try createPathErrorNameReport(allocator, "File Write Failed", "I could not write to the file ", info.path, ".", .runtime_error, @errorName(info.err));
+    errdefer report.deinit();
+
+    const directory_missing = switch (info.err) {
+        error.FileNotFound => true,
+        error.InvalidHash,
+        error.AccessDenied,
+        error.AmbiguousVersion,
+        error.AntivirusInterference,
+        error.ApiLevelQueryFailed,
+        error.ArchiveWriteFailed,
+        error.BadPathName,
+        error.BrokenDocLinks,
+        error.BrokenPipe,
+        error.BuiltinsExtractionFailed,
+        error.Canceled,
+        error.CheckFailed,
+        error.ChecksumFailure,
+        error.CliError,
+        error.CompilationFailed,
+        error.ConcurrencyUnavailable,
+        error.ConnectionResetByPeer,
+        error.Crash,
+        error.CrossDevice,
+        error.DecompressionFailed,
+        error.DeviceBusy,
+        error.DictionaryIdFlagUnsupported,
+        error.DirNotEmpty,
+        error.DirectoryCreateFailed,
+        error.DiskQuota,
+        error.DivisionByZero,
+        error.DocsFailed,
+        error.DuplicateSymbol,
+        error.EmptyArchive,
+        error.EndOfStream,
+        error.EntrypointNotFound,
+        error.ExpandedSizeLimitExceeded,
+        error.ExpectErr,
+        error.ExpectedAppHeader,
+        error.ExpectedPlatformString,
+        error.FailedToCreateUniqueTempDir,
+        error.FdConfigFailed,
+        error.FileBusy,
+        error.FileCreateFailed,
+        error.FileError,
+        error.FileLocksUnsupported,
+        error.FileSystem,
+        error.FileTooBig,
+        error.FileTooLarge,
+        error.FileWriteFailed,
+        error.FormattingFailed,
+        error.FunctionTypeMismatch,
+        error.HandleInheritanceFailed,
+        error.HardwareFailure,
+        error.HasInternalGlobals,
+        error.HashMismatch,
+        error.HttpError,
+        error.InputOutput,
+        error.Internal,
+        error.InvalidArguments,
+        error.InvalidBatchScriptArg,
+        error.InvalidDependency,
+        error.InvalidExe,
+        error.InvalidFileName,
+        error.InvalidFilename,
+        error.InvalidLinkingVersion,
+        error.InvalidLirImage,
+        error.InvalidMagic,
+        error.InvalidName,
+        error.InvalidPackageName,
+        error.InvalidPath,
+        error.InvalidProcessGroupId,
+        error.InvalidProxyUrl,
+        error.InvalidSection,
+        error.InvalidTarHeader,
+        error.InvalidTarget,
+        error.InvalidUrl,
+        error.InvalidUserId,
+        error.InvalidUtf8,
+        error.InvalidVersion,
+        error.InvalidWtf8,
+        error.IsDir,
+        error.LLVMCompilationFailed,
+        error.LLVMNotAvailable,
+        error.LinkFailed,
+        error.LinkQuotaExceeded,
+        error.LocalhostWasNotLoopback,
+        error.LockViolation,
+        error.MalformedBlock,
+        error.MalformedFrame,
+        error.MissingBundleFiles,
+        error.MissingFilesDirectory,
+        error.MissingLinkingSection,
+        error.MissingTargetFile,
+        error.MissingTargetsSection,
+        error.NameTooLong,
+        error.NativeCompilationFailed,
+        error.NetworkError,
+        error.NetworkNotFound,
+        error.NoCacheDir,
+        error.NoDataExtracted,
+        error.NoDevice,
+        error.NoHashInUrl,
+        error.NoHomeDirectory,
+        error.NoPlatformSource,
+        error.NoSpaceLeft,
+        error.NotAnAppHeader,
+        error.SourceTokenizationFailed,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OSVersionDetectionFail,
+        error.OperationUnsupported,
+        error.OutOfMemory,
+        error.Overflow,
+        error.PathAlreadyExists,
+        error.PathOutsideWorkspace,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.PlatformNotSupported,
+        error.ProcessAlreadyExec,
+        error.ProcessCreationFailed,
+        error.ProcessExitCodeFailed,
+        error.ProcessFdQuotaExceeded,
+        error.ProcessWaitFailed,
+        error.ReadFailed,
+        error.ReadOnlyFileSystem,
+        error.ResolutionFailed,
+        error.ResourceLimitReached,
+        error.RuntimeError,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.TempDirCreation,
+        error.TestsFailed,
+        error.Timeout,
+        error.TypeCheckingFailed,
+        error.UnbundleFailed,
+        error.UndefinedCompilerSymbols,
+        error.Unexpected,
+        error.UnexpectedEnd,
+        error.UnexpectedEndOfStream,
+        error.UnexpectedResult,
+        error.UnrecognizedVolume,
+        error.Unseekable,
+        error.UnsupportedCrossCompilation,
+        error.UnsupportedHeader,
+        error.UnsupportedLirImageVersion,
+        error.UnsupportedLowLevel,
+        error.UnsupportedTarget,
+        error.UnsupportedWatchMode,
+        error.WasmOutputWriteFailed,
+        error.WouldBlock,
+        error.WriteFailed,
+        => false,
+    };
+    if (directory_missing) {
+        try report.document.addLineBreaks(2);
+        try report.document.addText("A directory in this path does not exist. Create the missing directory and try again.");
+    }
+
+    return report;
 }
 
 fn createDirectoryCreateFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
@@ -857,6 +1041,27 @@ fn createUnsupportedOptLevelReport(allocator: Allocator, info: anytype) Allocato
     return report;
 }
 
+fn createWasmMaximumMemoryTooLargeReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(
+        allocator,
+        "The {s} target's maximum memory of {d} bytes is larger than the {d} bytes its stack layout allows.",
+        .{ info.target, info.maximum_memory, info.limit },
+    );
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Invalid Target Configuration", headline, .fatal);
+    errdefer report.deinit();
+
+    const explanation = try std.fmt.allocPrint(
+        allocator,
+        "The platform sets no `global_base`, so the stack starts at address 0 and a stack overflow wraps the stack pointer to just below 4 GiB, where the first write traps. Memory must stay below 4 GiB minus the {d}-byte stack for that write to trap instead of overwriting memory.",
+        .{info.stack_size},
+    );
+    defer allocator.free(explanation);
+    try report.document.addReflowingTextWithBackticks(explanation);
+
+    return report;
+}
+
 fn createCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = try Report.initWithPath(allocator, "Compilation Failed", "Compilation of ", info.path, " failed.", .fatal);
 
@@ -902,6 +1107,27 @@ fn createMissingHostSymbolsReport(allocator: Allocator, info: anytype) Allocator
     try report.document.addText(" section, plus the fixed runtime set (roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed, roc_crashed), must be defined by the host inputs listed in the platform's ");
     try report.document.addAnnotated("targets", .emphasized);
     try report.document.addText(" section.");
+
+    return report;
+}
+
+fn createUndefinedCompilerSymbolsReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The {s} link needed these symbols, which only the Roc compiler defines, and nothing defined them.", .{info.target_format});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Compiler Bug", headline, .fatal);
+
+    for (info.symbols) |symbol| {
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(symbol, .emphasized);
+    }
+    try report.document.addLineBreaks(2);
+    try report.document.addText("This is a bug in the Roc compiler, not in your program. Please report it at:");
+    try report.document.addLineBreak();
+    try report.document.addText("  ");
+    try report.document.addAnnotated("https://github.com/roc-lang/roc/issues", .emphasized);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Including the linker output above and the command you ran will help.");
 
     return report;
 }
@@ -954,7 +1180,6 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.ChecksumFailure,
         error.CliError,
         error.CompilationFailed,
-        error.ComptimeExhaustiveness,
         error.ConcurrencyUnavailable,
         error.ConnectionResetByPeer,
         error.Crash,
@@ -1077,6 +1302,7 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.Timeout,
         error.TypeCheckingFailed,
         error.UnbundleFailed,
+        error.UndefinedCompilerSymbols,
         error.Unexpected,
         error.UnexpectedEnd,
         error.UnexpectedEndOfStream,

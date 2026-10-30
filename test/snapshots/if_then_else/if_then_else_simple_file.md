@@ -13,7 +13,7 @@ foo = if 1 A
 ~~~
 # EXPECTED
 TYPE MISMATCH - if_then_else_simple_file.md:1:10:1:11
-MISSING METHOD - if_then_else_simple_file.md:4:2:4:9
+TYPE MISMATCH - if_then_else_simple_file.md:4:2:4:9
 # PROBLEMS
 ~~~clojure
 (reports
@@ -35,22 +35,14 @@ MISSING METHOD - if_then_else_simple_file.md:4:2:4:9
 			(annotation-end)))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 4 2) (end 4 9))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
 			(source-region (file "if_then_else_simple_file.md") (start 4 2) (end 4 9) (annotation error) (line-text "\t\"hello\""))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

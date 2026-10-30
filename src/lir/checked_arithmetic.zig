@@ -1,6 +1,7 @@
 //! Shared checked-integer arithmetic metadata for LIR producers and consumers.
 
 const std = @import("std");
+const base = @import("base");
 const layout = @import("layout");
 
 const LIR = @import("LIR.zig");
@@ -75,7 +76,7 @@ pub fn member(operation: Operation, mode: Mode) LIR.LowLevel {
     inline for (family) |entry| {
         if (entry.operation == operation and entry.mode == mode) return entry.op;
     }
-    unreachable;
+    unreachable; // family lists one member for every Operation and Mode pair
 }
 
 /// Returns whether an operation is a pre-LIR source-policy marker.
@@ -114,7 +115,7 @@ pub fn intBits(layout_idx: layout.Idx) u16 {
     if (layout_idx == .u32 or layout_idx == .i32) return 32;
     if (layout_idx == .u64 or layout_idx == .i64) return 64;
     if (layout_idx == .u128 or layout_idx == .i128) return 128;
-    unreachable;
+    base.invariant("checked arithmetic invariant violated: intBits expects a fixed-width integer layout, got layout {d}", .{@backingInt(layout_idx)});
 }
 
 /// Returns the lowest representable value for a signed numeric layout.
@@ -151,18 +152,22 @@ pub fn checkedOp(op: LIR.LowLevel, layout_idx: layout.Idx) ?LIR.LowLevel {
 pub fn lowerOp(op: LIR.LowLevel, layout_idx: layout.Idx) LIR.LowLevel {
     if (op == .num_plus) {
         if (layout_idx == .f32 or layout_idx == .f64) return .num_float_add;
-        return checkedOp(op, layout_idx) orelse unreachable;
+        return checkedOp(op, layout_idx) orelse numericLayoutInvariant(op, layout_idx);
     }
     if (op == .num_minus) {
         if (layout_idx == .f32 or layout_idx == .f64) return .num_float_sub;
-        return checkedOp(op, layout_idx) orelse unreachable;
+        return checkedOp(op, layout_idx) orelse numericLayoutInvariant(op, layout_idx);
     }
     if (op == .num_times) {
         if (layout_idx == .f32 or layout_idx == .f64) return .num_float_mul;
         if (layout_idx == .dec) return .dec_mul;
-        return checkedOp(op, layout_idx) orelse unreachable;
+        return checkedOp(op, layout_idx) orelse numericLayoutInvariant(op, layout_idx);
     }
     return checkedOp(op, layout_idx) orelse op;
+}
+
+fn numericLayoutInvariant(op: LIR.LowLevel, layout_idx: layout.Idx) noreturn {
+    base.invariant("checked arithmetic invariant violated: {s} has non-numeric layout {d}", .{ @tagName(op), @backingInt(layout_idx) });
 }
 
 /// Returns the plain wrapping LIR operation for a checked arithmetic operation.

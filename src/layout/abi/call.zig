@@ -13,6 +13,7 @@
 //! consumer so they agree by construction.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 
 const layout = @import("../layout.zig");
@@ -339,7 +340,7 @@ pub fn markRegisterOverflow(target: Target, lowered: LoweredCall, trailing_point
                 }
             }
         },
-        .wasm32, .wasm32v1, .wasm64 => unreachable,
+        .wasm32, .wasm32v1, .wasm64 => unreachable, // the LLVM backend calls this only when usesTailDrivers is false, which excludes wasm
     }
 }
 
@@ -383,7 +384,7 @@ fn isCAbiAggregate(store: *const Store, start: Idx) bool {
         .scalar => lay.getScalar().tag == .frac and lay.getScalar().getFrac() == .dec,
         // A union with a runtime discriminant is a C struct.
         .tag_union => true,
-        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .zst, .ptr => false,
+        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .zst, .hole, .ptr => false,
     };
 }
 
@@ -394,7 +395,7 @@ fn isCAbiI128Scalar(store: *const Store, start: Idx) bool {
         .scalar => lay.getScalar().tag == .int and store.layoutSize(lay) == 16,
         // A union with a runtime discriminant is a C struct.
         .tag_union => false,
-        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => false,
+        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .ptr => false,
     };
 }
 
@@ -408,7 +409,7 @@ fn cAbiI128VectorKind(store: *const Store, start: Idx) ?layout.Vector {
             null,
         // A union with a runtime discriminant is a C struct.
         .tag_union => null,
-        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => null,
+        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .ptr => null,
     };
 }
 
@@ -439,7 +440,7 @@ pub fn assignPhysicalArgs(
             win_position = 1;
         },
         .aarch64, .aarch64_macho, .aarch64_windows => {}, // AAPCS64 uses the dedicated x8 indirect-result register.
-        .wasm32, .wasm32v1, .wasm64 => unreachable,
+        .wasm32, .wasm32v1, .wasm64 => unreachable, // the entry assertion rejects wasm targets
     };
     if (lowered.leading_ops) switch (target) {
         .x86_64_windows => {
@@ -447,7 +448,7 @@ pub fn assignPhysicalArgs(
             win_position += 1;
         },
         .x86_64_sysv, .aarch64, .aarch64_macho, .aarch64_windows => gp_used += 1,
-        .wasm32, .wasm32v1, .wasm64 => unreachable,
+        .wasm32, .wasm32v1, .wasm64 => unreachable, // the entry assertion rejects wasm targets
     };
 
     for (lowered.args, arg_idxs, args) |placement, arg_idx, *assigned| {
@@ -482,7 +483,7 @@ pub fn assignPhysicalArgs(
                     win_position += 1;
                     gp_used = win_position;
                 },
-                .wasm32, .wasm32v1, .wasm64 => unreachable,
+                .wasm32, .wasm32v1, .wasm64 => unreachable, // the entry assertion rejects wasm targets
             },
             .registers => |registers| switch (target) {
                 .x86_64_windows => {
@@ -558,7 +559,7 @@ pub fn assignPhysicalArgs(
                         }
                     }
                 },
-                .wasm32, .wasm32v1, .wasm64 => unreachable,
+                .wasm32, .wasm32v1, .wasm64 => unreachable, // the entry assertion rejects wasm targets
             },
         }
     }
@@ -640,7 +641,7 @@ fn narrowScalarExtension(store: *const Store, start: Idx) RegExtension {
             }
             break :blk .zero;
         },
-        .struct_, .closure, .erased_callable, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .zst, .ptr => .none,
+        .struct_, .closure, .erased_callable, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .zst, .hole, .ptr => .none,
     };
 }
 
@@ -744,7 +745,7 @@ fn placementAarch64(
                 return integerPieces(arena, size, if (size == 16) .integer else .piecewise, extend);
             },
             .box, .box_of_zst, .erased_box, .ptr => return integerPieces(arena, size, .piecewise, .none),
-            .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .zst => unreachable,
+            .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .zst, .hole => unreachable, // aarch64.classifyType returns byval only for scalar and pointer-like layouts
         },
     }
 }
@@ -779,7 +780,8 @@ fn placementSysV(
                         .class = .vector,
                         .offset = offset,
                         .size = @intCast(@min(@as(u32, 16), size - offset)),
-                        .vector_kind = try findVectorKind(arena, store, idx) orelse unreachable,
+                        .vector_kind = try findVectorKind(arena, store, idx) orelse
+                            base.invariant("layout ABI invariant violated: System V SSE+SSEUP eightbytes have no vector member", .{}),
                     });
                     i += 1;
                 } else {
@@ -822,7 +824,7 @@ fn placementWin64(
                 .class = .vector,
                 .offset = 0,
                 .size = 16,
-                .vector_kind = cAbiI128VectorKind(store, idx) orelse unreachable,
+                .vector_kind = cAbiI128VectorKind(store, idx) orelse unreachable, // win_i128 that is no C aggregate and holds no vector is a 16-byte int scalar
             };
             return .{ .registers = .{ .pieces = pieces } };
         } else return .indirect,
@@ -839,7 +841,10 @@ fn placementWasm(arena: std.mem.Allocator, store: *const Store, idx: Idx, ctx: C
             const is_vector = dlay.tag == .scalar and dlay.getScalar().tag == .vector;
             const class: RegClass = if (is_vector) .vector else if (is_float) .float else .integer;
             if (wasm.lowerAsDoubleI64(store, direct_idx)) {
-                // A value wider than 64 bits is passed as two i64s.
+                // A value wider than 64 bits is passed as two i64s and, since
+                // a wasm C function returns at most one value, returned
+                // through a result pointer.
+                if (ctx == .ret) return .indirect;
                 return integerPieces(arena, size, .piecewise, .none);
             }
             if (is_vector and !simd_enabled) {
@@ -899,7 +904,7 @@ fn findVectorKind(arena: std.mem.Allocator, store: *const Store, idx: Idx) std.m
                     try pending.append(pending_allocator, info.variants.get(0).payload_layout);
                 }
             },
-            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .zst, .ptr => {},
+            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .zst, .hole, .ptr => {},
         }
     }
     return null;
@@ -1112,6 +1117,22 @@ test "lower win64: 16-byte struct is indirect, Plant is one register" {
     const dec = try lower(arena, &store, .x86_64_windows, &.{.dec}, .dec, false);
     try testing.expectEqual(Placement.indirect, dec.args[0]);
     try testing.expectEqual(Placement.indirect, dec.ret);
+}
+
+test "lower wasm32: a value wider than 64 bits is passed as two i64s and returned indirectly" {
+    var store = try Store.init(testing.allocator, .u32);
+    defer store.deinit();
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    for ([_]Target{ .wasm32, .wasm32v1 }) |target| {
+        for ([_]Idx{ .i128, .u128, .dec }) |wide| {
+            const call = try lower(arena, &store, target, &.{wide}, wide, false);
+            try testing.expectEqual(Placement.indirect, call.ret);
+            try expectRegisters(&.{ .{ .class = .integer, .offset = 0, .size = 8 }, .{ .class = .integer, .offset = 8, .size = 8 } }, call.args[0]);
+        }
+    }
 }
 
 test "lower wasm32: single-variant tag union returns payload register" {

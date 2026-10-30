@@ -180,6 +180,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: zig build minici -- --minici-verify-workflows
 
+      - name: Test documentation search
+        if: ${{ !cancelled() }}
+        run: node --test test/docs-search/search.test.cjs
+
       # Not a MiniCI job; covers ci/tidy.zig itself.
       - name: Run tidy unit tests
         if: ${{ !cancelled() }}
@@ -381,10 +385,17 @@ jobs:
       # among them. The cache records those files as link inputs, so a shard
       # needs them in place before it re-stamps the cache; left out, Zig would
       # unpack fresh copies afterwards and relink everything that uses LLVM.
+      #
+      # `minici-build-runner-image` names the hosted runner image this job ran
+      # on. A shard compares it with its own (`--minici-build-runner-image`):
+      # on another image the system headers and libraries differ, so compile
+      # steps that read them miss the restored cache for a reason that is not
+      # build.zig's, and MiniCI's cache-reuse canary says so instead of failing.
       - name: Pack MiniCI build artifact
         shell: bash
         run: |
           set -euo pipefail
+          printf '%s/%s\n' "${ImageOS:?}" "${ImageVersion:?}" > .zig-cache/minici-build-runner-image
           if [ "$RUNNER_OS" = "Windows" ]; then
             tar --dereference -cf - .zig-cache zig-pkg zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
           else
@@ -427,7 +438,9 @@ jobs:
     if: needs.check-changes.outputs.heavy == 'true' && !github.event.pull_request.draft
     name: minici-build (macos-15)
     runs-on: macos-15
-    timeout-minutes: 120
+    # The Zig 0.17 build takes about 110 to 120 minutes here, so 120 leaves no
+    # margin.
+    timeout-minutes: 180
     steps: *minici_build_steps
 
   minici-build-windows:
@@ -539,8 +552,14 @@ jobs:
         with:
           arch: x64
 
+      # The image `build-ci` ran on, recorded by the build job's pack step and
+      # read here in bash so the value reaches the shell-neutral run step below.
+      - name: Read the runner image build-ci ran on
+        shell: bash
+        run: echo "MINICI_BUILD_RUNNER_IMAGE=$(cat .zig-cache/minici-build-runner-image)" >> "$GITHUB_ENV"
+
       - name: Run MiniCI
-        run: zig build minici -- --minici-skip-build --minici-shard ${{ matrix.minici_shard }}
+        run: zig build minici -- --minici-skip-build --minici-build-runner-image ${{ env.MINICI_BUILD_RUNNER_IMAGE }} --minici-shard ${{ matrix.minici_shard }}
 
       # `.zig-cache` doubles as Zig's global cache, its local cache, and the
       # build temp dir. It is restored from the MiniCI build artifact, so the
@@ -695,8 +714,171 @@ jobs:
             valgrind: false
     steps: *minici_shard_steps
 
-  # No arm64 Linux lane: hosted arm64 runners lose network mid-`build-ci` at
-  # full parallelism. arm64 Linux is covered nightly (ci_zig.yml).
+  # aarch64 Linux smoke test of the shipped binary shape. Deliberately a single
+  # release binary plus one host lib: hosted arm64 runners lose network
+  # mid-`build-ci` at full parallelism, so a full MiniCI shard is not viable
+  # on them.
+  arm64-linux-hello-world:
+    needs: check-changes
+    if: needs.check-changes.outputs.heavy == 'true'
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
+        with:
+          version: 0.17.0
+          use-cache: false
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
+        with:
+          # Zig stores fetched packages in the `p/` subdir of the global cache.
+          # Caching just that under a stable build.zig.zon-hash key keeps deps
+          # present across runs: it is read every run, so it stays warm and is
+          # not evicted by the setup action's churnier per-run cache. A cold runner then no
+          # longer re-downloads deps from GitHub and hits HttpConnectionClosing.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
+
+      # temp fix, see https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/CI/near/542085291
+      # `-f` because the LLVM version on the runner image is not this job's to
+      # depend on; there being no llvm-config to remove is fine.
+      - name: delete llvm-config
+        run: sudo rm -f /usr/lib/llvm-18/bin/llvm-config
+
+      # `build-release` rather than a plain `zig build`, so this runs the binary
+      # shape that ships: musl, and pinned to the aarch64 baseline CPU by
+      # getReleaseTargetQuery. That pin is precisely why the compiler cannot
+      # read its own CPU features out of `builtin.cpu` and has to ask the
+      # machine at runtime.
+      - name: build release roc
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build build-release
+          retry_count: 3
+
+      # The fx platform ships `crt1.o` and `libc.a` for each target but builds
+      # `libhost.a`, so the arm64musl inputs dir is incomplete until this runs.
+      - name: build the fx platform host
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build update-test-fixtures -Dplatform=fx
+          retry_count: 3
+
+      - name: Test native instruction-cache publication
+        run: zig test src/machine_code_shim/instruction_cache.zig -O ReleaseSafe
+
+      - name: run hello_world.roc
+        run: |
+          set -euo pipefail
+
+          output="$(./zig-out/bin/roc test/fx/hello_world.roc)"
+          echo "$output"
+
+          if [ "$output" != "Hello, world!" ]; then
+            echo "Expected 'Hello, world!' but got '$output'."
+            exit 1
+          fi
+
+  # roc itself cannot be built on the BSDs (roc-bootstrap ships no LLVM for
+  # them), so the BSD smoke test cross-compiles the builtin platform's hello
+  # world on Linux and runs the executables inside BSD VMs below. OpenBSD is
+  # absent because the builtin platform cannot cross-link it.
+  bsd-build-hello-world:
+    needs: check-changes
+    if: needs.check-changes.outputs.heavy == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
+        with:
+          version: 0.17.0
+          use-cache: false
+
+      - name: Cache Zig dependency packages
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
+        with:
+          # See the same step in `minici-build-linux`.
+          path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
+          key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-deps-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: build release roc
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build build-release
+          retry_count: 3
+
+      - name: cross-compile hello world
+        run: |
+          set -euo pipefail
+
+          mkdir bsd-hello-world
+          for target in x64freebsd x64netbsd; do
+            ./zig-out/bin/roc build --opt=speed --no-cache \
+              --target="$target" --output="bsd-hello-world/hello_$target" \
+              test/echo/hello.roc
+          done
+
+      - name: Upload BSD executables
+        uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
+        with:
+          name: bsd-hello-world
+          path: bsd-hello-world
+          if-no-files-found: error
+          retention-days: 1
+
+  # Runs on a Linux runner, where bsd-action boots the VM under QEMU. The
+  # `cpa.sh` shell runs a step inside the VM.
+  bsd-hello-world:
+    needs: bsd-build-hello-world
+    name: bsd-hello-world (${{ matrix.os }} ${{ matrix.version }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: freebsd
+            version: '15.1'
+            target: x64freebsd
+          - os: netbsd
+            version: '11.0'
+            target: x64netbsd
+    steps:
+      - name: Download BSD executables
+        uses: actions/download-artifact@v8.0.1 # ratchet:actions/download-artifact@v8.0.1
+        with:
+          name: bsd-hello-world
+
+      - name: Start ${{ matrix.os }} VM
+        uses: Anton-4/bsd-action@210435e2d3ab2393c7cad5c69014330efadd8f39 # master
+        with:
+          operating_system: ${{ matrix.os }}
+          version: ${{ matrix.version }}
+
+      - name: run hello world
+        shell: cpa.sh {0}
+        run: |
+          set -eu
+
+          chmod +x ./hello_${{ matrix.target }}
+          output="$(./hello_${{ matrix.target }})"
+          echo "$output"
+
+          if [ "$output" != "Hello, World!" ]; then
+            echo "Expected 'Hello, World!' but got '$output'."
+            exit 1
+          fi
 
   finish:
     needs:
@@ -709,6 +891,9 @@ jobs:
       - minici-macos
       - minici-build-windows
       - minici-windows
+      - arm64-linux-hello-world
+      - bsd-build-hello-world
+      - bsd-hello-world
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     if: always()
@@ -730,6 +915,9 @@ jobs:
           MINICI_MACOS: ${{ needs.minici-macos.result }}
           BUILD_WINDOWS: ${{ needs.minici-build-windows.result }}
           MINICI_WINDOWS: ${{ needs.minici-windows.result }}
+          ARM64_HELLO_WORLD: ${{ needs.arm64-linux-hello-world.result }}
+          BSD_BUILD_HELLO_WORLD: ${{ needs.bsd-build-hello-world.result }}
+          BSD_HELLO_WORLD: ${{ needs.bsd-hello-world.result }}
         run: |
           set -euo pipefail
           failed=0
@@ -750,6 +938,9 @@ jobs:
             expect linux-extra-checks "$LINUX_EXTRA_CHECKS" success
             expect minici-build-linux "$BUILD_LINUX" success
             expect minici-linux "$MINICI_LINUX" success
+            expect arm64-linux-hello-world "$ARM64_HELLO_WORLD" success
+            expect bsd-build-hello-world "$BSD_BUILD_HELLO_WORLD" success
+            expect bsd-hello-world "$BSD_HELLO_WORLD" success
 
             if [ "$DRAFT" = true ]; then
               scarce=skipped

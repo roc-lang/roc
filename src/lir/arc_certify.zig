@@ -263,9 +263,9 @@ fn certifyStoreWithWorkStats(
 
     for (0..store.procSpecCount()) |index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        const proc = store.getProcSpec(proc_id);
-        const body = proc.body orelse continue;
-        try certifier.certifyProc(proc_id, proc, body);
+        const proc = store.getProcSpecImmediate(proc_id);
+        const body = proc.arcBody() orelse continue;
+        try certifier.certifyProc(proc_id, proc.*, body);
     }
 }
 
@@ -477,7 +477,7 @@ fn certifyUniqueArgs(
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         const proc = store.getProcSpec(proc_id);
-        const body = proc.body orelse continue;
+        const body = proc.arcBody() orelse continue;
         const sig = sigs.get(proc_id);
 
         for (dense_locals.items) |local| local_to_dense[@backingInt(local)] = no_dense;
@@ -507,14 +507,14 @@ fn certifyUniqueArgs(
         defer uniqueness.deinit(allocator);
 
         for (proc_stmts.items) |current| {
-            const stmt = store.getCFStmt(current);
-            if (stmt == .assign_literal and store.literalExtra(stmt.assign_literal.value).fresh_alternative != null) {
+            const stmt = store.getCFStmtImmediate(current);
+            if (stmt.* == .assign_literal and store.literalExtra(stmt.assign_literal.value).fresh_alternative != null) {
                 diag.context_proc = proc_id;
                 diag.context_stmt = current;
                 diag.set("stmt={d}: a read still names a fresh form after ARC chose", .{@backingInt(current)});
                 return error.Certification;
             }
-            if (stmt != .assign_low_level) continue;
+            if (stmt.* != .assign_low_level) continue;
             const assign = stmt.assign_low_level;
             const unique_args = store.stmtRowOrDefault(assign.extra).unique_args;
             if (unique_args == 0) continue;
@@ -613,7 +613,7 @@ fn writeFailureContext(
     local: ?LIR.LocalId,
     extra_locals: []const LIR.LocalId,
 ) void {
-    const proc = store.getProcSpec(proc_id);
+    const proc = store.getProcSpecImmediate(proc_id);
     context.append("\nfailure context: proc={d}", .{@backingInt(proc_id)});
     if (store.procDebugName(proc_id)) |name| context.append(" name={s}", .{name});
     if (local) |l| {
@@ -888,7 +888,6 @@ fn writeFailureContext(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .crash,
             => {},
         }
@@ -1095,6 +1094,8 @@ const State = struct {
     /// True until the state first forks. Before that point its tree nodes have
     /// one owner and construction can update them in place.
     unique: bool = true,
+    /// The state arena every snapshot of this state allocates its nodes in.
+    allocator: Allocator,
     /// Dense proc-local position per store local, owned by the certifier and
     /// stable for the lifetime of every state for the current proc.
     local_dense: []const u32,
@@ -1158,19 +1159,20 @@ const State = struct {
 
     fn init(allocator: Allocator, local_dense: []const u32, proc_local_count: usize) Allocator.Error!State {
         return .{
+            .allocator = allocator,
             .local_dense = local_dense,
-            .local_value = ArcSnapshot(ValueId, no_value).init(allocator, proc_local_count),
-            .balance = ArcSnapshot(i32, 0).init(allocator, proc_local_count),
-            .holder = ArcSnapshot(ValueId, no_value).init(allocator, proc_local_count),
-            .conditional = ArcSnapshot(ConditionalEntry, .{}).init(allocator, proc_local_count),
-            .claims = ArcSnapshot(ClaimSet, .{}).init(allocator, proc_local_count),
-            .outcome_discriminants = ArcSnapshot(ValueId, no_value).init(allocator, local_dense.len),
-            .known_variants = ArcSnapshot(u32, no_variant).init(allocator, proc_local_count),
-            .variant_discriminants = ArcSnapshot(ValueId, no_value).init(allocator, local_dense.len),
+            .local_value = ArcSnapshot(ValueId, no_value).init(proc_local_count),
+            .balance = ArcSnapshot(i32, 0).init(proc_local_count),
+            .holder = ArcSnapshot(ValueId, no_value).init(proc_local_count),
+            .conditional = ArcSnapshot(ConditionalEntry, .{}).init(proc_local_count),
+            .claims = ArcSnapshot(ClaimSet, .{}).init(proc_local_count),
+            .outcome_discriminants = ArcSnapshot(ValueId, no_value).init(local_dense.len),
+            .known_variants = ArcSnapshot(u32, no_variant).init(proc_local_count),
+            .variant_discriminants = ArcSnapshot(ValueId, no_value).init(local_dense.len),
             .result_discriminant = no_dense,
-            .maybe_uninitialized_unresolved = ArcSnapshot(bool, false).init(allocator, proc_local_count),
-            .maybe_uninitialized_released = ArcSnapshot(bool, false).init(allocator, proc_local_count),
-            .negative_balance = ArcSnapshot(u64, 0).init(allocator, (proc_local_count + 63) / 64),
+            .maybe_uninitialized_unresolved = ArcSnapshot(bool, false).init(proc_local_count),
+            .maybe_uninitialized_released = ArcSnapshot(bool, false).init(proc_local_count),
+            .negative_balance = ArcSnapshot(u64, 0).init((proc_local_count + 63) / 64),
         };
     }
 
@@ -1185,9 +1187,9 @@ const State = struct {
 
     fn put(self: *State, snapshot: anytype, index: u32, value: anytype) Allocator.Error!void {
         if (self.unique) {
-            try snapshot.putUnique(index, value);
+            try snapshot.putUnique(self.allocator, index, value);
         } else {
-            try snapshot.put(index, value);
+            try snapshot.put(self.allocator, index, value);
         }
     }
 
@@ -1774,7 +1776,8 @@ const WorkQueue = struct {
             .join_body => |walk| {
                 try self.joins.push(allocator, .{
                     .walk = walk,
-                    .component = self.components.get(walk.join) orelse unreachable,
+                    .component = self.components.get(walk.join) orelse
+                        base.invariant("ARC borrow certifier invariant violated: queued join {d} has no liveness component", .{@backingInt(walk.join)}),
                     .sequence = self.sequence,
                 });
                 self.sequence += 1;
@@ -2007,6 +2010,8 @@ const Certifier = struct {
     domain_values_scratch: collections.DenseMap(ValueId, void),
     value_reach_seen: collections.DenseMap(ValueId, void),
     value_reach_stack: std.ArrayList(ValueId) = .empty,
+    /// Values the target of `copyReachedValues` binds to some local.
+    target_carried_scratch: collections.DenseMap(ValueId, void),
     /// Scratch bitset over values, reused by the liveness and borrow-anchor
     /// chain walks. Both walks unset every bit they set on the way out, so
     /// the set is all zero between top-level calls and only ever needs to
@@ -2058,6 +2063,7 @@ const Certifier = struct {
             .region_of_join = collections.DenseMap(LIR.JoinPointId, u32).init(allocator),
             .domain_scratch = collections.DenseMap(u32, void).init(allocator),
             .carrier_scratch = collections.DenseMap(ValueId, u32).init(allocator),
+            .target_carried_scratch = collections.DenseMap(ValueId, void).init(allocator),
             .provenance_carrier_scratch = collections.DenseMap(u32, void).init(allocator),
             .summary_index_scratch = collections.DenseMap(u32, u32).init(allocator),
             .domain_values_scratch = collections.DenseMap(ValueId, void).init(allocator),
@@ -2115,6 +2121,7 @@ const Certifier = struct {
         self.domain_scratch.deinit();
         self.domain_list_scratch.deinit(self.allocator);
         self.carrier_scratch.deinit();
+        self.target_carried_scratch.deinit();
         self.provenance_carrier_scratch.deinit();
         self.summary_index_scratch.deinit();
         self.relevant_bound_scratch.deinit(self.allocator);
@@ -2439,11 +2446,14 @@ const Certifier = struct {
     }
 
     /// A container that must claim its own unit from its parent before the
-    /// field under it is claimed.
+    /// field under it is claimed. When `settles_spent`, the container's one
+    /// explicit unit is already fully spent by its claims: the parent's unit
+    /// replaces it, so those claims settle and the field starts a fresh set.
     const PendingContainerClaim = struct {
         container: ValueId,
         claim: ClaimSet,
         existing: ClaimSet,
+        settles_spent: bool = false,
     };
 
     /// A range of a struct's ownership slots.
@@ -2543,6 +2553,7 @@ const Certifier = struct {
                 .closure,
                 .erased_callable,
                 .zst,
+                .hole,
                 .ptr,
                 => break :walk false,
             };
@@ -2557,9 +2568,27 @@ const Certifier = struct {
             if (claim.isEmpty()) break :walk false;
             const existing = state.claimsOf(container);
             if (existing.intersects(claim)) {
-                // Only a complete projection can spend another whole unit;
-                // repeating a partial field claim would lose its other fields.
-                if (!required.eql(claim)) break :walk false;
+                if (!required.eql(claim)) {
+                    // A partial field claim repeats an earlier one only when
+                    // that earlier claim set spent a whole unit. The field is
+                    // then spent from another unit of the container: an
+                    // intact surplus unit, or its original unit, which a
+                    // retained projection still holds in its parent. The
+                    // spent claims settle against the unit they spent.
+                    // Repeating a field of an incomplete claim set would
+                    // lose its other fields.
+                    if (!existing.eql(required)) break :walk false;
+                    if (state.conditionalConditionOf(container) != null) break :walk false;
+                    if (state.balanceOf(container) >= 2) {
+                        try self.settleSpentClaims(state, container, existing, mutations);
+                        try self.claimContainerField(state, container, claim, .{}, mutations);
+                        break :walk true;
+                    }
+                    if (state.balanceOf(container) != 1) break :walk false;
+                    try pending.append(self.allocator, .{ .container = container, .claim = claim, .existing = .{}, .settles_spent = true });
+                    value = container;
+                    continue :walk;
+                }
                 // A second stamped take of the same projection spends that field
                 // from an intact surplus aggregate unit. The first unit remains
                 // represented by the existing claim set.
@@ -2603,10 +2632,37 @@ const Certifier = struct {
                 .before = before,
                 .after = before + 1,
             } });
+            if (claim.settles_spent) try self.settleSpentClaims(state, claim.container, state.claimsOf(claim.container), mutations);
             try self.claimContainerField(state, claim.container, claim.claim, claim.existing, mutations);
             claimed = true;
         }
         return claimed;
+    }
+
+    /// Settles a claim set that spent one whole unit of `container` while it
+    /// holds another: the spent unit and its claims are both gone.
+    fn settleSpentClaims(
+        self: *Certifier,
+        state: *State,
+        container: ValueId,
+        spent: ClaimSet,
+        mutations: ?*std.ArrayList(OwnershipMutation),
+    ) Allocator.Error!void {
+        const balance = state.balanceOf(container);
+        try state.setClaims(container, .{});
+        try state.addBalance(container, -1);
+        if (mutations) |list| {
+            try list.append(self.allocator, .{ .claims = .{
+                .value = container,
+                .before = spent,
+                .after = .{},
+            } });
+            try list.append(self.allocator, .{ .balance = .{
+                .value = container,
+                .before = balance,
+                .after = balance - 1,
+            } });
+        }
     }
 
     fn claimContainerField(
@@ -2627,20 +2683,7 @@ const Certifier = struct {
         if (balance >= 2) {
             if (try self.requiredClaims(container)) |required| {
                 if (updated.eql(required)) {
-                    try state.setClaims(container, .{});
-                    try state.addBalance(container, -1);
-                    if (mutations) |list| {
-                        try list.append(self.allocator, .{ .claims = .{
-                            .value = container,
-                            .before = existing,
-                            .after = .{},
-                        } });
-                        try list.append(self.allocator, .{ .balance = .{
-                            .value = container,
-                            .before = balance,
-                            .after = balance - 1,
-                        } });
-                    }
+                    try self.settleSpentClaims(state, container, existing, mutations);
                     return;
                 }
             }
@@ -2699,6 +2742,7 @@ const Certifier = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .ptr,
             => return null,
         };
@@ -2942,22 +2986,29 @@ const Certifier = struct {
             if (position >= receipts.len or receipts[position].value == no_value) {
                 return self.fail("outcome refinement lacked argument receipt {d}", .{position});
             }
+            // Each mutation is undone as a change, not a snapshot: a later
+            // argument of the same call can claim a sibling field of the
+            // same container, and those changes commute with this one's.
             const mutations = receipts[position].mutations;
             var mutation_index = mutations.len;
             while (mutation_index > 0) {
                 mutation_index -= 1;
                 switch (mutations[mutation_index]) {
                     .balance => |mutation| {
-                        if (state.balanceOf(mutation.value) != mutation.after) {
+                        if (state.balanceOf(mutation.value) + mutation.before - mutation.after < 0) {
                             return self.fail("outcome restitution argument {d} balance changed before refinement", .{position});
                         }
                         try state.addBalance(mutation.value, mutation.before - mutation.after);
                     },
                     .claims => |mutation| {
-                        if (!state.claimsOf(mutation.value).eql(mutation.after)) {
+                        const arena = self.state_arena.allocator();
+                        const added = try mutation.after.withoutAll(arena, mutation.before);
+                        const removed = try mutation.before.withoutAll(arena, mutation.after);
+                        const current = state.claimsOf(mutation.value);
+                        if (!current.containsAll(added) or current.intersects(removed)) {
                             return self.fail("outcome restitution argument {d} field claims changed before refinement", .{position});
                         }
-                        try state.setClaims(mutation.value, mutation.before);
+                        try state.setClaims(mutation.value, try (try current.withoutAll(arena, added)).withAll(arena, removed));
                     },
                 }
             }
@@ -3406,7 +3457,7 @@ const Certifier = struct {
                     break :blk conditional;
                 },
                 .borrowed, .representation => try self.bindFresh(&state, local, 0, &.{}),
-                .unbound => unreachable,
+                .unbound => unreachable, // the loop skips unbound entries above
             };
             if (entry.abi_live) self.values.items[value].always_live = true;
             if (!entry.claims.isEmpty()) try state.setClaims(value, entry.claims);
@@ -3784,9 +3835,9 @@ const Certifier = struct {
             if (first_visit) try visited.put(current, {});
             self.collect_region = region;
 
-            const current_stmt = self.store.getCFStmt(current);
-            if (first_visit) try self.erased_owners.noteStmt(self.store, self.layouts, current_stmt);
-            switch (current_stmt) {
+            const current_stmt = self.store.getCFStmtImmediate(current);
+            if (first_visit) try self.erased_owners.noteStmt(self.store, self.layouts, current_stmt.*);
+            switch (current_stmt.*) {
                 .assign_ref => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocal(body_clone.refOpSource(assign.op));
@@ -4018,9 +4069,12 @@ const Certifier = struct {
                     try stack.append(self.allocator, .{ .stmt = join_stmt.remainder, .region = region });
                     continue;
                 },
-                .ret => |ret_stmt| try self.noteProcLocal(ret_stmt.value),
+                .ret => |ret_stmt| {
+                    try self.noteProcLocal(ret_stmt.value);
+                    try self.noteRestitutedParams();
+                },
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteProcLocal(message),
-                .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken => {},
+                .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
             }
             // Every other statement's successors stay in its region.
             successors.clearRetainingCapacity();
@@ -4108,7 +4162,6 @@ const Certifier = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -4252,18 +4305,26 @@ const Certifier = struct {
         var successors = std.ArrayList(LIR.CFStmtId).empty;
         defer successors.deinit(self.allocator);
         while (work.pop()) |stmt| {
-            const node_index = graph.indices.get(stmt) orelse unreachable;
+            const node_index = graph.indices.get(stmt) orelse unreachable; // ensureReadBeforeRebindNode indexes every stmt before queueing it
             node_reads.clearRetainingCapacity();
 
             // String-match captures are branch-local definitions. The graph
             // tracks one def per statement, not per edge, so they are not
             // marked as unconditional defs; that would hide reads on the miss
             // path. Over-reporting relevance is safe.
-            const current = self.store.getCFStmt(stmt);
+            const current = self.store.getCFStmtImmediate(stmt);
             var exposed: ExposedReads = .{ .certifier = self, .reads = &node_reads };
-            try body_clone.tryForEachStmtRead(self.store, current, &exposed, ExposedReads.note);
-            if (body_clone.definedTarget(current)) |target| self.setReadBeforeRebindDef(&graph, node_index, target);
-            switch (current) {
+            try body_clone.tryForEachStmtRead(self.store, current.*, &exposed, ExposedReads.note);
+            if (current.* == .ret) {
+                const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(self.current_proc).args);
+                const restituted = self.restitutableParams();
+                for (0..GuardedList.borrowLen(params)) |position| {
+                    const bit = arc_sig.paramBit(position) orelse break;
+                    if ((restituted & bit) != 0) try exposed.note(GuardedList.at(params, position));
+                }
+            }
+            if (body_clone.definedTarget(current.*)) |target| self.setReadBeforeRebindDef(&graph, node_index, target);
+            switch (current.*) {
                 .assign_call_erased => |inline_s| blk_s: {
                     const s = self.store.stmtRow(inline_s.data);
                     break :blk_s if (s.out_desc) |out_desc| self.setReadBeforeRebindDef(&graph, node_index, out_desc);
@@ -4301,7 +4362,6 @@ const Certifier = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -4316,7 +4376,7 @@ const Certifier = struct {
                 .crash,
                 => {},
             }
-            switch (current) {
+            switch (current.*) {
                 .join => |join| {
                     try ensureReadBeforeRebindNode(&graph, &work, join.body);
                     try cache_roots.append(graph_allocator, join.body);
@@ -4358,7 +4418,6 @@ const Certifier = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -4393,7 +4452,8 @@ const Certifier = struct {
         var succ_cursor: u32 = 0;
         for (graph.nodes.items, 0..) |node, node_index| {
             for (graph.successors.items[node.successor_start..][0..node.successor_len]) |successor| {
-                succs[succ_cursor] = @intCast(graph.indices.get(successor) orelse unreachable);
+                const successor_node = graph.indices.get(successor) orelse unreachable; // appendReadBeforeRebindSuccessor indexes every successor it records
+                succs[succ_cursor] = @intCast(successor_node);
                 succ_cursor += 1;
             }
             succ_starts[node_index + 1] = succ_cursor;
@@ -4412,7 +4472,8 @@ const Certifier = struct {
         const components = try collections.scc.compute(graph_allocator, succ_starts, succs, preds.starts, preds.targets);
         var joins = self.join_bodies.iterator();
         while (joins.next()) |join| {
-            const node = graph.indices.get(join.value_ptr.*) orelse unreachable;
+            const node = graph.indices.get(join.value_ptr.*) orelse
+                base.invariant("ARC borrow certifier invariant violated: join {d} body is missing from the read-before-rebind graph", .{@backingInt(join.key_ptr.*)});
             try self.join_components.put(join.key_ptr.*, components.component_of[node]);
         }
 
@@ -4431,7 +4492,7 @@ const Certifier = struct {
 
         for (cache_roots.items) |root| {
             if (self.reads_before_rebind_cache.contains(root)) continue;
-            const node_index = graph.indices.get(root) orelse unreachable;
+            const node_index = graph.indices.get(root) orelse unreachable; // every cache root was indexed by ensureReadBeforeRebindNode before being recorded
             try self.reads_before_rebind_cache.put(root, rows[node_index]);
         }
 
@@ -5003,6 +5064,26 @@ const Certifier = struct {
         return mentions[0] >= self.region_enter.items[slot] and mentions[mentions.len - 1] <= self.region_exit.items[slot];
     }
 
+    /// The parameters some outcome of the current procedure restitutes. A
+    /// return hands each back to the caller, so it reads them: their units
+    /// stay live up to it even when nothing else names them. Every outcome's
+    /// parameters count, since which outcome a return takes is not known
+    /// where reads are collected.
+    fn restitutableParams(self: *const Certifier) arc_sig.ParamMask {
+        var restituted: arc_sig.ParamMask = 0;
+        for (self.sigs.outcomesOf(self.current_sig)) |outcome| restituted |= outcome.restituted_params;
+        return restituted;
+    }
+
+    fn noteRestitutedParams(self: *Certifier) Allocator.Error!void {
+        const params = self.store.getLocalSpan(self.store.getProcSpecImmediate(self.current_proc).args);
+        const restituted = self.restitutableParams();
+        for (0..GuardedList.borrowLen(params)) |position| {
+            const bit = arc_sig.paramBit(position) orelse break;
+            if ((restituted & bit) != 0) try self.noteProcLocal(GuardedList.at(params, position));
+        }
+    }
+
     fn noteProcLocalSpan(self: *Certifier, span: LIR.LocalSpan) Allocator.Error!void {
         const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |index| {
@@ -5035,8 +5116,8 @@ const Certifier = struct {
         try arc_solve.collectProcStatements(self.allocator, self.store, body, &proc_stmts);
         var return_local_mismatch = false;
         for (proc_stmts.items) |stmt_id| {
-            const stmt = self.store.getCFStmt(stmt_id);
-            if (stmt != .ret) continue;
+            const stmt = self.store.getCFStmtImmediate(stmt_id);
+            if (stmt.* != .ret) continue;
             if (self.current_return_local) |expected| {
                 if (expected != stmt.ret.value) {
                     return_local_mismatch = true;
@@ -5238,8 +5319,19 @@ const Certifier = struct {
 
     /// Copies every value reachable from `value_reach_stack` (through
     /// lenders, holders, and payload sources) with its ownership facts from
-    /// `source` into `target`.
+    /// `source` into `target`. The containers through which a reached taken
+    /// projection still owes its claim also retain a carrier binding (see
+    /// `bindTakenProjectionCarriers`).
     fn copyReachedValues(self: *Certifier, source: *const State, target: *State) Allocator.Error!void {
+        self.repr_scratch.clearRetainingCapacity();
+        var bindings = source.local_value.iterator();
+        while (bindings.next()) |binding| {
+            const carrier = try self.repr_scratch.getOrPut(binding.value);
+            if (!carrier.found_existing) carrier.value_ptr.* = binding.index;
+        }
+        self.target_carried_scratch.clearRetainingCapacity();
+        var carried = target.local_value.iterator();
+        while (carried.next()) |binding| try self.target_carried_scratch.put(binding.value, {});
         while (self.value_reach_stack.pop()) |value| {
             if (value == no_value) continue;
             const seen = try self.value_reach_seen.getOrPut(value);
@@ -5255,8 +5347,33 @@ const Certifier = struct {
             if (source.knownVariant(value)) |known| try target.setKnownVariant(value, known);
             const info = self.values.items[value];
             try self.value_reach_stack.appendSlice(self.allocator, info.lenders);
+            if (info.payload_taken and balance <= 0) try self.bindTakenProjectionCarriers(source, target, value);
             try self.value_reach_stack.append(self.allocator, info.payload_source);
             try self.value_reach_stack.append(self.allocator, holder);
+        }
+    }
+
+    /// A taken projection without a unit of its own claims its stored unit
+    /// by walking its container chain (`tryClaimSeen`) through views up to
+    /// the first container that holds a unit or claims; one with a unit
+    /// never walks it. Later summaries encode that path by carrier
+    /// local, so an anonymous container alone cannot preserve it: each
+    /// container on the path that `target` does not already carry keeps its
+    /// lowest carrier from `source`, even a local of an exited region.
+    /// Borrowed projections spend no stored unit; summaries reduce their
+    /// unnamed containers to live anchors instead.
+    fn bindTakenProjectionCarriers(self: *Certifier, source: *const State, target: *State, taken: ValueId) Allocator.Error!void {
+        var container = self.values.items[taken].payload_source;
+        while (container != no_value) : (container = self.values.items[container].payload_source) {
+            if (!self.target_carried_scratch.contains(container)) {
+                if (self.repr_scratch.get(container)) |carrier| {
+                    try target.bindValue(self.proc_locals.items[carrier], container);
+                    try self.target_carried_scratch.put(container, {});
+                }
+            }
+            if (source.balanceOf(container) != 0 or
+                !source.claimsOf(container).isEmpty() or
+                source.conditionalConditionOf(container) != null) break;
         }
     }
 
@@ -5437,19 +5554,19 @@ const Certifier = struct {
                 if (seen.found_existing) return;
             }
 
-            const stmt = self.store.getCFStmt(cursor);
+            const stmt = self.store.getCFStmtImmediate(cursor);
             // Any write to the returned local kills its discriminant witness;
             // `assign_tag` establishes a replacement after this kill.
             if (self.current_return_local) |return_local| {
                 // Emission rebinding of the returned local kills its witness exactly
                 // as it does in the solver's outcome domain; `assign_tag`
                 // establishes a replacement witness after this generic kill.
-                if (body_clone.writtenLocal(stmt)) |target| {
+                if (body_clone.writtenLocal(stmt.*)) |target| {
                     if (target == return_local) state.result_discriminant = no_dense;
                 }
             }
             if (state.outcomeDiscriminantCount() != 0) {
-                const consumes_refinement = stmt == .switch_stmt and
+                const consumes_refinement = stmt.* == .switch_stmt and
                     state.hasOutcomeDiscriminant(stmt.switch_stmt.cond);
                 // ARC may insert explicit RC bookkeeping after the source
                 // discriminant read and before its immediately refining
@@ -5457,7 +5574,7 @@ const Certifier = struct {
                 // result/discriminant relation; any balance mutation that
                 // invalidates restitution is checked independently when the
                 // switch replays its exact call receipt.
-                const stmt_tag = std.meta.activeTag(stmt);
+                const stmt_tag = std.meta.activeTag(stmt.*);
                 const preserves_refinement = stmt_tag == .incref or
                     stmt_tag == .decref or
                     stmt_tag == .decref_if_initialized or
@@ -5466,7 +5583,7 @@ const Certifier = struct {
                     state.clearOutcomeDiscriminants();
                 }
             }
-            switch (stmt) {
+            switch (stmt.*) {
                 .assign_ref => |assign| {
                     try self.validateResidualShellFields(&state, assign);
                     switch (assign.op.kind) {
@@ -5792,9 +5909,6 @@ const Certifier = struct {
                     _ = try self.requireLive(&state, expect_stmt.condition);
                     cursor = expect_stmt.next;
                 },
-                .comptime_branch_taken => |taken| {
-                    cursor = taken.next;
-                },
                 .incref => |rc| {
                     if (!self.isRc(rc.value)) {
                         return self.fail("incref of non-refcounted local {d}", .{@backingInt(rc.value)});
@@ -6015,8 +6129,8 @@ const Certifier = struct {
                         return self.fail("jump to join {d} before its definition", .{@backingInt(jump_stmt.target)});
                     };
                     if (self.current_return_local) |return_local| {
-                        const target_stmt = self.store.getCFStmt(record.body);
-                        if (target_stmt == .ret and target_stmt.ret.value == return_local) {
+                        const target_stmt = self.store.getCFStmtImmediate(record.body);
+                        if (target_stmt.* == .ret and target_stmt.ret.value == return_local) {
                             try self.applyOutcomeRestitution(&state);
                         }
                     }
@@ -6102,6 +6216,23 @@ const Certifier = struct {
             _ = try self.requireAggregateRepresentation(state, source);
             return;
         }
+        // A struct view whose residual shell names every refcounted slot of
+        // its layout holds no unit: it copies only its container's inline
+        // representation, which stays readable after every stored unit has
+        // left (design.md "Residual Shells").
+        if (shell.len != 0 and try self.shellCoversLayout(self.store.getLocal(target).layout_idx, shell)) {
+            std.debug.assert(take_kind == .none);
+            const representation = try self.requireAggregateRepresentation(state, source);
+            const value = if (representation == no_value)
+                try self.bindBorrowedFromImplicitLive(state, target)
+            else
+                try self.bindFresh(state, target, 0, &.{representation});
+            const info = &self.values.items[value];
+            info.payload_source = representation;
+            info.payload_projection = projection;
+            info.payload_taken = false;
+            return;
+        }
         const source_value = try self.requireLive(state, source);
         // Reading a variant's payload proves the container holds that variant
         // on this path; anything else is already undefined.
@@ -6132,6 +6263,17 @@ const Certifier = struct {
         info.payload_source = source_value;
         info.payload_projection = projection;
         info.payload_taken = take_kind == .take;
+    }
+
+    /// Whether `shell`, already validated against `layout_idx` by
+    /// `validateResidualShellFields`, names every refcounted slot of it.
+    fn shellCoversLayout(self: *Certifier, layout_idx: layout_mod.Idx, shell: anytype) Allocator.Error!bool {
+        const required = try self.requiredClaimsForLayout(layout_idx) orelse return false;
+        var listed: ClaimSet = .{};
+        for (0..shell.len) |index| {
+            listed = try listed.withField(self.state_arena.allocator(), @intCast(GuardedList.at(shell, index)));
+        }
+        return listed.eql(required);
     }
 
     /// An RC-bearing projection read observes the stored unit behind the
@@ -6195,6 +6337,7 @@ const Certifier = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .ptr,
             => false,
         };
@@ -7532,6 +7675,7 @@ test "certify accepts a payload borrow used while the owner is live" {
 test "certify accepts a retained Boxy field borrowed from implicit capture storage" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
+    f.store.runtime_contract = .boxy;
 
     const erased_box = try f.layouts.insertLayout(layout_mod.Layout.erasedBox());
     const capture_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
@@ -7542,7 +7686,7 @@ test "certify accepts a retained Boxy field borrowed from implicit capture stora
     const result = try f.local(.i64);
     const desc_local = try f.local(.opaque_ptr);
     const desc = LIR.BoxyDescRef{ .local = desc_local };
-    f.store.setLocalBoxyDesc(field, desc);
+    try f.store.setLocalBoxyDesc(field, desc);
 
     const ret = try f.ret(result);
     const result_assign = try f.assignI64(result, ret);
@@ -9993,6 +10137,55 @@ test "certify flags a nested field a view dismantle leaves unspent" {
     try testing.expect(std.mem.find(u8, f.diag.message(), "unspent") != null);
 }
 
+/// `outer = { 0: { 0: I64, 1: Str }, 1: Str }` as a parameter, both of whose
+/// stored units are taken and released, then field 0 read again as a view
+/// (marked with `view_shell`) and the scalar inside it read through that view.
+fn buildScalarReadThroughSpentView(f: *CertifyTest, view_shell: []const u32) Allocator.Error!void {
+    const inner_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = .i64 },
+        .{ .index = 1, .layout = .str },
+    });
+    const outer_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = inner_layout },
+        .{ .index = 1, .layout = .str },
+    });
+    const outer = try f.local(outer_layout);
+    const inner = try f.local(inner_layout);
+    const other = try f.local(.str);
+    const view = try f.local(inner_layout);
+    const scalar = try f.local(.i64);
+    const ret = try f.ret(scalar);
+    const read_scalar = try fieldReadStmt(f, scalar, view, 0, ret);
+    const read_view = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = view,
+        .op = .field(outer, 0),
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .residual_shell_absent_fields = try f.store.addU32Span(view_shell),
+        }),
+        .next = read_scalar,
+    } }, .test_fixture);
+    const release_other = try f.decrefStmt(other, .str, read_view);
+    const take_other = try takeFieldStmt(f, other, outer, 1, release_other);
+    const release_inner = try f.decrefStmt(inner, inner_layout, take_other);
+    const body = try takeFieldStmt(f, inner, outer, 0, release_inner);
+    _ = try f.addProc(&.{outer}, body, .i64);
+}
+
+test "certify accepts a scalar read through a view of a dismantled record whose shell names every slot" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildScalarReadThroughSpentView(&f, &.{1});
+    try f.certify();
+}
+
+test "certify flags a view of a dismantled record that leaves its taken slot unnamed" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildScalarReadThroughSpentView(&f, &.{});
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "use of dead refcounted local") != null);
+}
+
 test "certify flags a double take of one field" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
@@ -10276,4 +10469,186 @@ test "certify rejects an inner loop returning while an outer value is still owne
     try buildFrameNest(&f, .inner_terminal_leak);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "leaked") != null);
+}
+
+/// One sibling of a nested record is carried while a loop rebuilds the other.
+/// The loop's inner join never names that sibling, so its frame must preserve
+/// the intermediate projection needed to claim the sibling on the next exit.
+fn buildNestedSiblingAcrossInnerJoin(f: *CertifyTest, overconsume: bool) Allocator.Error!void {
+    const chosen_layout = try f.layouts.insertList(.str);
+    const sibling_layout = try f.layouts.insertList(f.pair_str);
+    const pair = try f.layouts.putStructFields(&.{ .{ .index = 0, .layout = chosen_layout }, .{ .index = 1, .layout = sibling_layout } });
+    const root_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = pair },
+        .{ .index = 1, .layout = .str },
+    });
+    const root = try f.local(root_layout);
+    const cond = try f.local(.i64);
+    const inner = try f.local(pair);
+    const inner_again = try f.local(pair);
+    const sibling = try f.local(sibling_layout);
+    const chosen = try f.local(chosen_layout);
+    const outer_piece = try f.local(.str);
+    const loop_param = try f.local(chosen_layout);
+    const result_pair = try f.local(pair);
+    const result_root = try f.local(root_layout);
+    const outer_param = try f.local(pair);
+    const sibling_field = try f.local(sibling_layout);
+    const acc = try f.local(chosen_layout);
+    const next_acc = try f.local(chosen_layout);
+    const outer = f.freshJoinPointId();
+    const loop = f.freshJoinPointId();
+    const done = try f.store.addCFStmt(.{ .assign_struct = .{ .target = result_root, .fields = try f.store.addLocalSpan(&.{ outer_param, outer_piece }), .next = try f.ret(result_root) } }, .test_fixture);
+    var exit = try f.store.addCFStmt(.{ .jump = .{ .target = outer } }, .test_fixture);
+    exit = try f.store.addCFStmt(.{ .set_local = .{ .target = outer_param, .value = result_pair, .mode = .initialize_join_param, .next = exit } }, .test_fixture);
+    exit = try f.store.addCFStmt(.{ .assign_struct = .{ .target = result_pair, .fields = try f.store.addLocalSpan(&.{ acc, sibling }), .next = exit } }, .test_fixture);
+
+    if (overconsume) exit = try f.decrefStmt(sibling, sibling_layout, exit);
+    exit = try f.decrefStmt(loop_param, chosen_layout, exit);
+    var back = try f.store.addCFStmt(.{ .jump = .{ .target = loop } }, .test_fixture);
+    back = try f.store.addCFStmt(.{ .set_local = .{ .target = acc, .value = next_acc, .mode = .initialize_join_param, .next = back } }, .test_fixture);
+    back = try f.store.addCFStmt(.{ .assign_list = .{ .target = next_acc, .elems = .empty(), .next = back } }, .test_fixture);
+    back = try f.decrefStmt(acc, chosen_layout, back);
+    const nested = f.freshJoinPointId();
+    back = try f.store.addCFStmt(.{ .join = .{ .id = nested, .params = .empty(), .body = back, .remainder = try f.store.addCFStmt(.{ .jump = .{ .target = nested } }, .test_fixture) } }, .test_fixture);
+    exit = try f.store.addCFStmt(.{ .switch_stmt = .{ .cond = cond, .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = exit }}), .default_branch = back } }, .test_fixture);
+    var enter = try f.store.addCFStmt(.{ .jump = .{ .target = loop } }, .test_fixture);
+    enter = try f.store.addCFStmt(.{ .assign_list = .{ .target = acc, .elems = .empty(), .next = enter } }, .test_fixture);
+    enter = try f.store.addCFStmt(.{ .set_local = .{ .target = loop_param, .value = chosen, .mode = .initialize_join_param, .next = enter } }, .test_fixture);
+    enter = try f.store.addCFStmt(.{ .assign_ref = .{ .target = chosen, .op = .field(inner_again, 0), .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{ .take_kind = .take }), .next = enter } }, .test_fixture);
+    enter = try f.store.addCFStmt(.{ .assign_ref = .{ .target = inner_again, .op = .field(root, 0), .next = enter } }, .test_fixture);
+    var remainder = try f.store.addCFStmt(.{ .join = .{ .id = loop, .params = try f.store.addLocalSpan(&.{ loop_param, acc }), .body = exit, .remainder = enter } }, .test_fixture);
+    remainder = try f.store.addCFStmt(.{ .assign_ref = .{ .target = sibling, .op = .local(sibling_field), .next = remainder } }, .test_fixture);
+    remainder = try f.store.addCFStmt(.{ .assign_ref = .{ .target = sibling_field, .op = .field(inner, 1), .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{ .take_kind = .take }), .next = remainder } }, .test_fixture);
+    remainder = try f.store.addCFStmt(.{ .assign_ref = .{ .target = inner, .op = .field(root, 0), .next = remainder } }, .test_fixture);
+    var body = try f.store.addCFStmt(.{ .join = .{ .id = outer, .params = try f.store.addLocalSpan(&.{outer_param}), .body = done, .remainder = remainder } }, .test_fixture);
+    body = try takeFieldStmt(f, outer_piece, root, 1, body);
+    _ = try f.addProc(&.{ root, cond }, body, root_layout);
+}
+
+test "issue 12505 taken nested sibling survives inner join" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildNestedSiblingAcrossInnerJoin(&f, false);
+    try f.certify();
+}
+
+test "issue 12505 nested sibling cannot be consumed twice across inner join" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildNestedSiblingAcrossInnerJoin(&f, true);
+    try testing.expectError(error.Certification, f.certify());
+}
+
+test "issue 12505 taken tag record list crosses nested result joins" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const list_layout = try f.layouts.insertList(.str);
+    const payload_layout = try f.layouts.putStructFields(&.{ .{ .index = 0, .layout = .i64 }, .{ .index = 1, .layout = .i64 }, .{ .index = 2, .layout = list_layout } });
+    const tag_layout = try f.layouts.putTagUnion(&.{ payload_layout, try f.layouts.ensureZstLayout() });
+    const tag = try f.local(tag_layout);
+    const payload = try f.local(payload_layout);
+    const selected = try f.local(list_layout);
+    const result = try f.local(.i64);
+    const outer = f.freshJoinPointId();
+    const inner = f.freshJoinPointId();
+    const done = try f.decrefStmt(selected, list_layout, try f.assignI64(result, try f.ret(result)));
+    const jump_outer = try f.store.addCFStmt(.{ .jump = .{ .target = outer } }, .test_fixture);
+    var enter = try f.store.addCFStmt(.{ .jump = .{ .target = inner } }, .test_fixture);
+    enter = try takeFieldStmt(&f, selected, payload, 2, enter);
+    enter = try f.store.addCFStmt(.{ .assign_ref = .{ .target = payload, .op = .tagPayloadStruct(tag, 0, 0), .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{ .take_kind = .take }), .next = enter } }, .test_fixture);
+    const inner_join = try f.store.addCFStmt(.{ .join = .{ .id = inner, .params = try f.store.addLocalSpan(&.{selected}), .body = jump_outer, .remainder = enter } }, .test_fixture);
+    const middle = f.freshJoinPointId();
+    const middle_join = try f.store.addCFStmt(.{ .join = .{ .id = middle, .params = .empty(), .body = inner_join, .remainder = try f.store.addCFStmt(.{ .jump = .{ .target = middle } }, .test_fixture) } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .join = .{ .id = outer, .params = try f.store.addLocalSpan(&.{selected}), .body = done, .remainder = middle_join } }, .test_fixture);
+    _ = try f.addProc(&.{tag}, body, .i64);
+    try f.certify();
+}
+
+/// The selected field escapes a region that owns its intermediate projection,
+/// while the outer record remains live to supply the other fields.
+fn buildEscapingProjectionWithLiveRoot(f: *CertifyTest, overconsume: bool) Allocator.Error!void {
+    const root_layout = try f.layouts.putStructFields(&.{ .{ .index = 0, .layout = f.pair_str }, .{ .index = 1, .layout = .str } });
+    const root = try f.local(root_layout);
+    const inner_view = try f.local(f.pair_str);
+    const selected = try f.local(.str);
+    const remaining_view = try f.local(f.pair_str);
+    const sibling = try f.local(.str);
+    const outer_field = try f.local(.str);
+    const result = try f.local(.i64);
+    const outer = f.freshJoinPointId();
+    const middle = f.freshJoinPointId();
+    const inner = f.freshJoinPointId();
+    var done = try f.assignI64(result, try f.ret(result));
+    done = try f.decrefStmt(outer_field, .str, done);
+    done = try f.decrefStmt(sibling, .str, done);
+    done = try f.decrefStmt(selected, .str, done);
+    if (overconsume) done = try f.decrefStmt(selected, .str, done);
+    done = try takeFieldStmt(f, outer_field, root, 1, done);
+    done = try takeFieldStmt(f, sibling, remaining_view, 1, done);
+    done = try f.store.addCFStmt(.{ .assign_ref = .{ .target = remaining_view, .op = .field(root, 0), .next = done } }, .test_fixture);
+    const jump_outer = try f.store.addCFStmt(.{ .jump = .{ .target = outer } }, .test_fixture);
+    var enter = try f.store.addCFStmt(.{ .jump = .{ .target = inner } }, .test_fixture);
+    enter = try takeFieldStmt(f, selected, inner_view, 0, enter);
+    enter = try f.store.addCFStmt(.{ .assign_ref = .{ .target = inner_view, .op = .field(root, 0), .next = enter } }, .test_fixture);
+    const inner_join = try f.store.addCFStmt(.{ .join = .{ .id = inner, .params = try f.store.addLocalSpan(&.{selected}), .body = jump_outer, .remainder = enter } }, .test_fixture);
+    const middle_join = try f.store.addCFStmt(.{ .join = .{ .id = middle, .params = .empty(), .body = inner_join, .remainder = try f.store.addCFStmt(.{ .jump = .{ .target = middle } }, .test_fixture) } }, .test_fixture);
+    const body = try f.store.addCFStmt(.{ .join = .{ .id = outer, .params = try f.store.addLocalSpan(&.{selected}), .body = done, .remainder = middle_join } }, .test_fixture);
+    _ = try f.addProc(&.{root}, body, .i64);
+}
+
+test "issue 12505 escaping nested projection preserves its independently live root" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildEscapingProjectionWithLiveRoot(&f, false);
+    try f.certify();
+}
+
+test "issue 12505 escaping nested projection cannot spend its field twice" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildEscapingProjectionWithLiveRoot(&f, true);
+    try testing.expectError(error.Certification, f.certify());
+}
+
+/// A record taken from its parent is retained once and dismantled field by
+/// field, then dismantled again starting from a field the first claim set
+/// already spent. With `retain` the second dismantle spends the record's
+/// original unit, still held in the parent; without it that unit is the one
+/// the first dismantle already spent.
+fn buildRetainedRecordDismantledFromParentTwice(f: *CertifyTest, retain: bool) Allocator.Error!void {
+    const parent_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = f.pair_str }});
+    const parent = try f.local(parent_layout);
+    const record = try f.local(f.pair_str);
+    const first_a = try f.local(.str);
+    const first_b = try f.local(.str);
+    const second_a = try f.local(.str);
+    const second_b = try f.local(.str);
+    const result = try f.local(.i64);
+    var body = try f.assignI64(result, try f.ret(result));
+    body = try f.decrefStmt(second_a, .str, body);
+    body = try takeFieldStmt(f, second_a, record, 0, body);
+    body = try f.decrefStmt(second_b, .str, body);
+    body = try takeFieldStmt(f, second_b, record, 1, body);
+    body = try f.decrefStmt(first_b, .str, body);
+    body = try takeFieldStmt(f, first_b, record, 1, body);
+    body = try f.decrefStmt(first_a, .str, body);
+    body = try takeFieldStmt(f, first_a, record, 0, body);
+    if (retain) body = try f.increfStmt(record, f.pair_str, body);
+    body = try takeFieldStmt(f, record, parent, 0, body);
+    _ = try f.addProc(&.{parent}, body, .i64);
+}
+
+test "issue 12505 a retained record's second dismantle spends its unit held in the parent" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildRetainedRecordDismantledFromParentTwice(&f, true);
+    try f.certify();
+}
+
+test "issue 12505 a record taken from its parent cannot be dismantled twice from one unit" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildRetainedRecordDismantledFromParentTwice(&f, false);
+    try testing.expectError(error.Certification, f.certify());
 }

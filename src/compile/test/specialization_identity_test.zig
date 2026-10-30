@@ -61,7 +61,7 @@ fn countU64IdentitySpecs(program: anytype, callable: U64IdentityCallable) usize 
         }
         const fn_type = switch (program.types.get(record.identity.request_fn_ty)) {
             .func => |func| func,
-            .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => continue,
+            .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst, .hole => continue,
         };
         const args = program.types.span(fn_type.args);
         if (args.len != 1) continue;
@@ -75,7 +75,7 @@ fn countU64IdentitySpecs(program: anytype, callable: U64IdentityCallable) usize 
 fn isU64(program: anytype, ty: anytype) bool {
     return switch (program.types.get(ty)) {
         .primitive => |primitive| primitive == .u64,
-        .func, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => false,
+        .func, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst, .hole => false,
     };
 }
 

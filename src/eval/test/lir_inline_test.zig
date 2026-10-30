@@ -157,6 +157,7 @@ const LowerModuleOptions = struct {
     tag_reachability: bool = false,
     promote_loop_appends: bool = true,
     prove_ranges: bool = false,
+    spec_constr_clone_inlining: lir.CheckedPipeline.SpecConstrCloneInlining = .all_calls,
     imports: []const helpers.ModuleSource = &.{},
     /// TEMPORARY SCAFFOLDING: rewrites the root module's checked bodies after
     /// checking and before lowering, for post-check forms no checker site emits
@@ -215,6 +216,7 @@ fn lowerModuleWithOptions(
             .promote_loop_appends = .{ .value = options.promote_loop_appends },
             .prove_ranges = options.prove_ranges,
             .tag_reachability = options.tag_reachability,
+            .spec_constr_clone_inlining = options.spec_constr_clone_inlining,
         },
     );
     errdefer lowered.deinit();
@@ -710,7 +712,6 @@ fn runLoweredWithHostEvents(
             runtime_env.noteCrash(interpreter.getCrashMessage());
             return runtime_env.snapshot(allocator);
         },
-        error.ComptimeExhaustiveness,
         error.DivisionByZero,
         error.ExpectErr,
         error.InvalidHostedFunctionSignature,
@@ -785,7 +786,6 @@ fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) Deb
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -1251,6 +1251,11 @@ fn expectInlinePlanDecision(
     fn_name: []const u8,
     expected: bool,
 ) TestError!void {
+    try std.testing.expectEqual(expected, try inlinePlanDecision(source, fn_name));
+}
+
+/// Whether the inline plan inlines the function named `fn_name`.
+fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     const allocator = std.testing.allocator;
     var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
@@ -1299,18 +1304,19 @@ fn expectInlinePlanDecision(
     defer inline_plan.deinit();
     const plan = inline_plan.view();
 
-    var found = false;
+    var decision: ?bool = null;
     for (solved.lifted.fnsView(), 0..) |fn_, index| {
         const name_id = solved.lifted.procDebugName(fn_.symbol) orelse continue;
         const actual_name = solved.lifted.names.exportNameText(name_id);
         if (!std.mem.eql(u8, actual_name, fn_name)) continue;
 
-        found = true;
         const fn_id: postcheck.MonotypeLifted.Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        try std.testing.expectEqual(expected, plan.bodyForFn(fn_id) != null);
+        const inlined = plan.bodyForFn(fn_id) != null;
+        if (decision) |earlier| try std.testing.expectEqual(earlier, inlined);
+        decision = inlined;
     }
 
-    try std.testing.expect(found);
+    return decision orelse error.TestUnexpectedResult;
 }
 
 fn rootProc(lowered: *const lir.CheckedPipeline.LoweredProgram) TestError!LIR.LirProcSpecId {
@@ -1374,7 +1380,6 @@ fn collectAssignCallProcs(
             .set_local => |stmt| try work.append(allocator, stmt.next),
             .debug => |stmt| try work.append(allocator, stmt.next),
             .expect => |stmt| try work.append(allocator, stmt.next),
-            .comptime_branch_taken => |stmt| try work.append(allocator, stmt.next),
             .incref => |stmt| try work.append(allocator, stmt.next),
             .decref => |stmt| try work.append(allocator, stmt.next),
             .decref_if_initialized => |stmt| try work.append(allocator, stmt.next),
@@ -1613,7 +1618,6 @@ fn markReachableLiftedExpr(
         => |child| markReachableLiftedExpr(program, child, reachable),
         .return_ => |ret| markReachableLiftedExpr(program, ret.value, reachable),
         .expect_err => |expect_err| markReachableLiftedExpr(program, expect_err.msg, reachable),
-        .comptime_branch_taken => |taken| markReachableLiftedExpr(program, taken.body, reachable),
         .if_initialized_payload => |switch_| {
             markReachableLiftedExpr(program, switch_.cond, reachable);
             markReachableLiftedExpr(program, switch_.initialized, reachable);
@@ -1720,11 +1724,22 @@ fn markReachableLiftedStmt(
     }
 }
 
-fn directRecordWorkerIsSpecialized(shape: ProcShape) bool {
-    return shape.arg_count == 2 and
-        shape.self_call_count == 0 and
+/// A specialized loop over `leaves` state leaves: a worker taking the leaves
+/// as its arguments, or that worker localized as a join in a caller that
+/// takes no arguments, which happens when the caller is the worker's only
+/// user.
+fn loopCarriesLeaves(shape: ProcShape, leaves: usize) bool {
+    return shape.self_call_count == 0 and
         shape.jump_count >= 1 and
-        shape.struct_assign_count == 0;
+        (shape.arg_count == leaves or (shape.arg_count == 0 and shape.max_join_param_count >= leaves));
+}
+
+fn loopCarriesTwoLeaves(shape: ProcShape) bool {
+    return loopCarriesLeaves(shape, 2);
+}
+
+fn directRecordWorkerIsSpecialized(shape: ProcShape) bool {
+    return loopCarriesTwoLeaves(shape) and shape.struct_assign_count == 0;
 }
 
 fn directRecordWorkerIsGeneric(shape: ProcShape) bool {
@@ -1749,23 +1764,31 @@ fn whileRecordStateWorkerIsGeneric(shape: ProcShape) bool {
         shape.jump_count >= 2;
 }
 
-/// The shape aggregate loop state takes without call specialization now that
-/// join scalarization sees through lowered aliases: the loop carries the
-/// fields as separate join parameters, while the seeded initializer builds
-/// remain live outside the loop.
+/// The shape aggregate loop state takes without call specialization: join
+/// scalarization carries the fields as separate join parameters. Pruning then
+/// deletes the initializer builds that only fed them, so the loop has the
+/// specialized worker's shape.
 fn whileRecordStateWorkerIsScalarizedUnspecialized(shape: ProcShape) bool {
     return shape.self_call_count == 0 and
         shape.join_count >= 1 and
         shape.max_join_param_count >= 2 and
+        shape.jump_count >= 2;
+}
+
+/// Loop state of a counter and a zero-capture callable without call
+/// specialization: the callable's field is a parameter nothing reads, so
+/// pruning removes it, and the loop carries only the counter and builds no
+/// struct.
+fn whileRecordStateWithUnreadCallableIsScalarized(shape: ProcShape) bool {
+    return shape.self_call_count == 0 and
+        shape.join_count >= 1 and
+        shape.max_join_param_count == 1 and
         shape.jump_count >= 2 and
-        shape.struct_assign_count >= 1;
+        shape.struct_assign_count == 0;
 }
 
 fn directTupleWorkerIsSpecialized(shape: ProcShape) bool {
-    return shape.arg_count == 2 and
-        shape.self_call_count == 0 and
-        shape.jump_count >= 1 and
-        shape.struct_assign_count == 0;
+    return loopCarriesTwoLeaves(shape) and shape.struct_assign_count == 0;
 }
 
 fn directTupleWorkerIsGeneric(shape: ProcShape) bool {
@@ -1802,10 +1825,7 @@ fn unusedStateWorkerIsGeneric(shape: ProcShape) bool {
 }
 
 fn taggedStepWorkerIsSpecialized(shape: ProcShape) bool {
-    return shape.arg_count == 2 and
-        shape.self_call_count == 0 and
-        shape.jump_count >= 1 and
-        shape.tag_assign_count == 0;
+    return loopCarriesTwoLeaves(shape) and shape.tag_assign_count == 0;
 }
 
 fn taggedStepWorkerIsGeneric(shape: ProcShape) bool {
@@ -1816,10 +1836,7 @@ fn taggedStepWorkerIsGeneric(shape: ProcShape) bool {
 }
 
 fn multiTupleWorkerIsFullySpecialized(shape: ProcShape) bool {
-    return shape.arg_count == 5 and
-        shape.self_call_count == 0 and
-        shape.jump_count >= 1 and
-        shape.struct_assign_count == 0;
+    return loopCarriesLeaves(shape, 5) and shape.struct_assign_count == 0;
 }
 
 fn multiTupleWorkerIsGeneric(shape: ProcShape) bool {
@@ -2832,10 +2849,16 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .exact_type_checks = 0,
         // A template's interface relations' summarized expansion
         // instantiates its root once per summary, and summaries are keyed by
-        // template and method scope rather than by each call site's spelling
-        // of the callee's type.
+        // template rather than by each call site's spelling
+        // of the callee's type. The `unwrap(v6)` request is shaped by demand
+        // (design.md "Specialization By Demand"): `unwrap` demands only the
+        // layout of its payload, so the record becomes its tuple
+        // representative, and instantiating the template's root at that
+        // substitution adds one nominal backing instantiation. `const` and
+        // `map2` are not shaped: a scalar is its own representative, and
+        // `map2`'s function argument demands all of every variable.
         .nominal_backing_reuses = 31,
-        .nominal_backing_instantiations = 58,
+        .nominal_backing_instantiations = 59,
     });
 }
 
@@ -3284,7 +3307,7 @@ test "differently ordered source record rows produce normalized monotype rows" {
     for (type_view.types) |content| {
         const span = switch (content) {
             .record => |fields| fields,
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => continue,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => continue,
         };
         const fields = type_view.fieldSpan(span);
         if (fields.len != 2) continue;
@@ -3337,6 +3360,21 @@ test "zero statement block wrapper is inlined" {
         \\main : U64
         \\main = wrapper(41)
     , .wrappers, 0);
+}
+
+test "a wrapper that hands its callee a function it names stays one procedure" {
+    // `sum`'s body is one call, but the function reference it passes inlines
+    // the fold's loop into it, so each copy of `sum` would be a whole loop.
+    try expectRootDirectCallCount(
+        \\add : U64, U64 -> U64
+        \\add = |a, b| a + b
+        \\
+        \\sum : List(U64) -> U64
+        \\sum = |xs| xs.fold(0, add)
+        \\
+        \\main : List(U64) -> U64
+        \\main = |xs| sum(xs) + sum(xs)
+    , .wrappers, 2);
 }
 
 test "low level wrapper is inlined when inline mode is enabled" {
@@ -3423,6 +3461,44 @@ test "single-use block helper nested in a multi-use wrapper is not duplicated" {
         \\    wrapper(a, 2)
         \\}
     , "helper", false);
+}
+
+test "bodies on interlocking call cycles are decided alike in every definition order" {
+    // `a` and `b` call each other, and so do `b` and `c`. Which of them are
+    // inlined depends on the call graph alone, never on the order the
+    // program numbers them in.
+    const forward =
+        \\a : U64 -> U64
+        \\a = |n| if n == 0 { 0 } else { b(n - 1) }
+        \\
+        \\b : U64 -> U64
+        \\b = |n| if n == 0 { 1 } else if n == 1 { a(n - 1) } else { c(n - 1) }
+        \\
+        \\c : U64 -> U64
+        \\c = |n| if n == 0 { 2 } else { b(n - 1) }
+        \\
+        \\main : U64
+        \\main = a(5)
+    ;
+    const backward =
+        \\c : U64 -> U64
+        \\c = |n| if n == 0 { 2 } else { b(n - 1) }
+        \\
+        \\b : U64 -> U64
+        \\b = |n| if n == 0 { 1 } else if n == 1 { a(n - 1) } else { c(n - 1) }
+        \\
+        \\a : U64 -> U64
+        \\a = |n| if n == 0 { 0 } else { b(n - 1) }
+        \\
+        \\main : U64
+        \\main = c(5)
+    ;
+    // Each program is the other with `a` and `c` swapped, so each function
+    // is decided as its counterpart is.
+    const mirrored = [_][2][]const u8{ .{ "a", "c" }, .{ "b", "b" }, .{ "c", "a" } };
+    for (mirrored) |pair| {
+        try std.testing.expectEqual(try inlinePlanDecision(forward, pair[0]), try inlinePlanDecision(backward, pair[1]));
+    }
 }
 
 test "procedure boundary keeps a deeper single-use helper inline" {
@@ -3585,7 +3661,9 @@ test "single-use capturing lambda is inlined with its captures bound" {
 
 test "issue 12029: recursion through an inlined capturing lambda is a loop" {
     // The lambda captures `n` and is called once where it is written, so it
-    // is inlined and `capturing_lambda` calls itself in tail position.
+    // is inlined and `capturing_lambda` calls itself in tail position. The
+    // guard makes `capturing_lambda` a wrapper as well, and the two form a
+    // cycle; rejecting only the wrapper leaves the lambda inlined.
     const allocator = std.testing.allocator;
     for ([_]lir.CheckedPipeline.InlineMode{ .wrappers, .wrappers_and_source_single_use }) |inline_mode| {
         var lowered_source = try lowerModule(allocator,
@@ -3931,6 +4009,257 @@ test "issue 11099 boxy dispatches an imported procedure stored in a record" {
     try std.testing.expectEqualStrings("\"hi!\"", output);
 }
 
+// repro for https://github.com/roc-lang/roc/issues/12609
+// An unannotated inline lambda that dispatches a method on its parameter,
+// stored in a record in another module, must run when read out and called.
+test "issue 12609 boxy dispatches an imported inline lambda stored in a record" {
+    const allocator = std.testing.allocator;
+    const hooks_module =
+        \\Hooks :: [].{
+        \\    hooks = {
+        \\        shout: |s| s.concat("!"),
+        \\    }
+        \\}
+    ;
+    const source =
+        \\import Hooks
+        \\
+        \\main = {
+        \\    shout = Hooks.hooks.shout
+        \\    shout("hi")
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Hooks", .source = hooks_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("\"hi!\"", output);
+}
+
+test "issue 12609 lss dispatches an imported inline lambda stored in a record" {
+    const allocator = std.testing.allocator;
+    const hooks_module =
+        \\Hooks :: [].{
+        \\    hooks = {
+        \\        shout: |s| s.concat("!"),
+        \\    }
+        \\}
+    ;
+    const source =
+        \\import Hooks
+        \\
+        \\main = {
+        \\    shout = Hooks.hooks.shout
+        \\    shout("hi")
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Hooks", .source = hooks_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("\"hi!\"", output);
+}
+
+test "issue 12609 boxy runs imported stored inline lambdas at two types" {
+    const allocator = std.testing.allocator;
+    const hooks_module =
+        \\Hooks :: [].{
+        \\    pair = (|s| s.concat("!"), 1)
+        \\    fns = [|s| s.concat(s)]
+        \\}
+    ;
+    const source =
+        \\import Hooks
+        \\
+        \\main = {
+        \\    (shout, _) = Hooks.pair
+        \\    text = match Hooks.fns {
+        \\        [twice] => twice("ab")
+        \\        _ => ""
+        \\    }
+        \\    bytes = match Hooks.fns {
+        \\        [twice] => twice([1.U8, 2])
+        \\        _ => []
+        \\    }
+        \\    (shout("hi"), text, bytes)
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Hooks", .source = hooks_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("(\"hi!\", \"abab\", [1, 2, 1, 2])", output);
+}
+
+test "issue 12609 lss runs imported stored inline lambdas at two types" {
+    const allocator = std.testing.allocator;
+    const hooks_module =
+        \\Hooks :: [].{
+        \\    pair = (|s| s.concat("!"), 1)
+        \\    fns = [|s| s.concat(s)]
+        \\}
+    ;
+    const source =
+        \\import Hooks
+        \\
+        \\main = {
+        \\    (shout, _) = Hooks.pair
+        \\    text = match Hooks.fns {
+        \\        [twice] => twice("ab")
+        \\        _ => ""
+        \\    }
+        \\    bytes = match Hooks.fns {
+        \\        [twice] => twice([1.U8, 2])
+        \\        _ => []
+        \\    }
+        \\    (shout("hi"), text, bytes)
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Hooks", .source = hooks_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("(\"hi!\", \"abab\", [1, 2, 1, 2])", output);
+}
+
+test "issue 12609 boxy runs imported lambdas a stored conditional, match, or block selects" {
+    const allocator = std.testing.allocator;
+    const hooks_module =
+        \\Hooks :: [].{
+        \\    flag = Bool.True
+        \\    hooks = {
+        \\        dup: if flag |s| s.concat(s) else |s| s,
+        \\        shout: match 1 {
+        \\            1 => |s| s.concat("!")
+        \\            _ => |s| s
+        \\        },
+        \\        suffix: {
+        \\            tail = "?"
+        \\            |s| s.concat(tail)
+        \\        },
+        \\    }
+        \\}
+    ;
+    const source =
+        \\import Hooks
+        \\
+        \\main = ((Hooks.hooks.dup)("ab"), (Hooks.hooks.dup)([1.U8]), (Hooks.hooks.shout)("hi"), (Hooks.hooks.suffix)("ok"))
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Hooks", .source = hooks_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("(\"abab\", [1, 1], \"hi!\", \"ok?\")", output);
+}
+
+test "issue 12609 lss runs imported lambdas a stored conditional, match, or block selects" {
+    const allocator = std.testing.allocator;
+    const hooks_module =
+        \\Hooks :: [].{
+        \\    flag = Bool.True
+        \\    hooks = {
+        \\        dup: if flag |s| s.concat(s) else |s| s,
+        \\        shout: match 1 {
+        \\            1 => |s| s.concat("!")
+        \\            _ => |s| s
+        \\        },
+        \\        suffix: {
+        \\            tail = "?"
+        \\            |s| s.concat(tail)
+        \\        },
+        \\    }
+        \\}
+    ;
+    const source =
+        \\import Hooks
+        \\
+        \\main = ((Hooks.hooks.dup)("ab"), (Hooks.hooks.dup)([1.U8]), (Hooks.hooks.shout)("hi"), (Hooks.hooks.suffix)("ok"))
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{.{ .name = "Hooks", .source = hooks_module }},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("(\"abab\", [1, 1], \"hi!\", \"ok?\")", output);
+}
+
 test "issue 11170 boxy generic inspect preserves SIMD descriptor methods" {
     const allocator = std.testing.allocator;
     const source =
@@ -4226,7 +4555,6 @@ test "spec constr specializes record state carried by while loop" {
     try std.testing.expectEqual(@as(usize, 0), optimized_root_shape.struct_assign_count);
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsGeneric));
 
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
@@ -4382,8 +4710,7 @@ test "LIR statements and procs carry resolved source locations" {
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
-    try std.testing.expectEqual(store.getCFStmts().len, store.cf_stmt_locs.unsafeRawItemsForView().len);
-    try std.testing.expectEqual(store.getCFStmts().len, store.cf_stmt_regions.unsafeRawItemsForView().len);
+    try std.testing.expectEqual(store.getCFStmts().len, store.cf_stmt_sources.unsafeRawItemsForView().len);
     try std.testing.expectEqual(store.getProcSpecs().len, store.proc_locs.unsafeRawItemsForView().len);
     try std.testing.expect(store.proc_debug_names.unsafeRawItemsForView().len > 0);
     for (store.proc_debug_names.unsafeRawItemsForView()) |entry| {
@@ -4392,7 +4719,10 @@ test "LIR statements and procs carry resolved source locations" {
     try std.testing.expect(store.sourceFileCount() >= 1);
 
     var located: usize = 0;
-    for (store.cf_stmt_locs.unsafeRawItemsForView(), store.cf_stmt_regions.unsafeRawItemsForView(), store.getCFStmts()) |loc, region, stmt| {
+    for (store.getCFStmts(), 0..) |stmt, stmt_index| {
+        const stmt_id: lir.LIR.CFStmtId = @fromBackingInt(@intCast(stmt_index));
+        const loc = store.stmtLoc(stmt_id);
+        const region = store.stmtRegion(stmt_id);
         const has_source = switch (stmt) {
             .incref,
             .decref,
@@ -4431,7 +4761,6 @@ test "LIR statements and procs carry resolved source locations" {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
@@ -4485,15 +4814,15 @@ fn countProcsNamed(store: *const lir.LirStore, name: []const u8) usize {
     return count;
 }
 
-test "layout-keyed builtin specializations share one procedure per layout" {
+test "demand-shaped builtin specializations share one procedure per demand shape" {
     const allocator = std.testing.allocator;
 
-    // `List.len` wraps `list_len`, which is on the layout-keyed allow list, so
-    // its specializations at `List({ a : U64 })` and `List({ b : U64 })`,
-    // whose item types differ but commit the same layout, are one
-    // procedure, while `List(Str)` gets its own. `List.is_empty` has a Roc
-    // body and no provided low-level operation, so it keeps one type-keyed
-    // procedure per item type even where the layouts agree.
+    // `List.len` and `List.is_empty` demand nothing of their item type
+    // (design.md "Specialization By Demand"): `list_len` reads the list
+    // header, and `List.is_empty`'s body only passes its list to `List.len`.
+    // Every direct call's request is shaped to `List(hole)`, so the three
+    // item types `{ a : U64 }`, `{ b : U64 }`, and `Str` share one
+    // specialization of each.
     const source =
         \\count_all : List({ a : U64 }), List({ b : U64 }), List(Str) -> U64
         \\count_all = |xs, ys, strs| List.len(xs) + List.len(ys) + List.len(strs)
@@ -4513,8 +4842,8 @@ test "layout-keyed builtin specializations share one procedure per layout" {
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
-    try std.testing.expectEqual(@as(usize, 2), countProcsNamed(store, "Builtin.List.len"));
-    try std.testing.expectEqual(@as(usize, 2), countProcsNamed(store, "Builtin.List.is_empty"));
+    try std.testing.expectEqual(@as(usize, 1), countProcsNamed(store, "Builtin.List.len"));
+    try std.testing.expectEqual(@as(usize, 1), countProcsNamed(store, "Builtin.List.is_empty"));
 }
 
 test "referenced but uncalled function does not materialize a proc" {
@@ -4562,7 +4891,10 @@ test "LIR statements carry source locations under optimizing inline mode" {
 
     const store = &lowered_source.lowered.lir_result.store;
     var located: usize = 0;
-    for (store.cf_stmt_locs.unsafeRawItemsForView(), store.cf_stmt_regions.unsafeRawItemsForView()) |loc, region| {
+    for (0..store.getCFStmts().len) |stmt_index| {
+        const stmt_id: lir.LIR.CFStmtId = @fromBackingInt(@intCast(stmt_index));
+        const loc = store.stmtLoc(stmt_id);
+        const region = store.stmtRegion(stmt_id);
         if (loc.hasLocation()) located += 1;
         if (loc.hasLocation()) try std.testing.expect(!region.isEmpty());
     }
@@ -4835,7 +5167,6 @@ fn collectLirResultProcShape(
             .set_local => |stmt| try work.append(allocator, stmt.next),
             .debug => |stmt| try work.append(allocator, stmt.next),
             .expect => |stmt| try work.append(allocator, stmt.next),
-            .comptime_branch_taken => |stmt| try work.append(allocator, stmt.next),
             .incref => |stmt| {
                 shape.incref_count += 1;
                 try work.append(allocator, stmt.next);
@@ -5216,9 +5547,11 @@ test "ARC keeps a loop-invariant record field out of the loop body keep" {
         \\    if i == 0 acc else count_from(state, i - 1, List.append(acc, List.len(state.a)))
         \\
         \\main : U64
-        \\main = List.len(count_from({ a: [1, 2], b: [3, 4] }, 4, []))
+        \\main = List.len(count_from({ a: [1, 2], b: [3, 4] }, 4, [])) + List.len(List.append([], 5.U64))
     ;
 
+    // The second append keeps `List.append` a procedure the loop calls, as
+    // slack versioning expects, rather than a single-use body inlined there.
     for ([_]bool{ false, true }) |promote_loop_appends| {
         var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
             .promote_loop_appends = promote_loop_appends,
@@ -7890,7 +8223,6 @@ test "spec constr specializes primitive-start record state carried by while loop
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsGeneric));
 
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
@@ -7974,9 +8306,7 @@ test "spec constr splits loop record state with opaque callable field" {
 
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWithZeroCaptureCallableIsSpecialized));
 
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
-    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWithUnreadCallableIsScalarized));
 }
 
 test "spec constr splits loop record state with direct callable captures" {
@@ -8207,7 +8537,6 @@ test "spec constr specializes if-joined record state carried by while loop" {
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
 
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
@@ -8248,7 +8577,6 @@ test "spec constr specializes match-joined record state carried by while loop" {
     try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
 
-    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
     try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
     try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsScalarizedUnspecialized));
 }
@@ -8299,8 +8627,7 @@ fn expectRecordedRunsEqual(
         switch (expected_event) {
             .effect => |expected_effect| switch (actual_event) {
                 .effect => |actual_effect| try std.testing.expectEqualStrings(expected_effect.name, actual_effect.name),
-                // The activeTag equality above already proved both are effects.
-                .dbg, .expect_failed, .crashed => unreachable,
+                .dbg, .expect_failed, .crashed => unreachable, // the activeTag equality above proved both are effects
             },
             .dbg, .expect_failed, .crashed => {},
         }
@@ -9092,7 +9419,8 @@ test "literal conversion ownership includes nested codec evidence" {
         try std.testing.expectEqual(@as(usize, 0), resources.checker.problems.problems.items.len);
         try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
         var dependent_conversions: usize = 0;
-        for (artifact.checked_bodies.stored_exprs.items) |expr| {
+        for (artifact.checked_bodies.stored_exprs.items, 0..) |expr, expr_index| {
+            const expr_id: check.CheckedArtifact.CheckedExprId = @fromBackingInt(@intCast(expr_index));
             const plan_id = switch (expr.data) {
                 .numeral => |numeral| numeral.plan orelse continue,
                 .str_from_quote => |quote| quote.plan orelse continue,
@@ -9145,7 +9473,7 @@ test "literal conversion ownership includes nested codec evidence" {
             };
             const plan = artifact.static_dispatch_plans.plans[@backingInt(plan_id)];
             try std.testing.expect(plan.resolution == .direct_parametric);
-            try std.testing.expect(artifact.checked_bodies.literalConversionRoot(expr.id) == null);
+            try std.testing.expect(artifact.checked_bodies.literalConversionRoot(expr_id) == null);
             dependent_conversions += 1;
         }
         try std.testing.expectEqual(@as(usize, 1), dependent_conversions);
@@ -9253,7 +9581,7 @@ test "custom literal field default gets an ordinary conversion root" {
         .for_,
         .hosted_lambda,
         .run_low_level,
-        => unreachable,
+        => return error.TestUnexpectedResult,
     };
     const plan = &artifact.static_dispatch_plans.plans[@backingInt(plan_id)];
     const saved = plan.resolution;
@@ -9472,10 +9800,10 @@ test "dispatch evidence boundary validator reports a removed dispatch plan by ex
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     var removed: ?check.CheckedArtifact.CheckedExprId = null;
-    for (resources.checked_artifact.checked_bodies.stored_exprs.items) |*expr| {
+    for (resources.checked_artifact.checked_bodies.stored_exprs.items, 0..) |*expr, expr_index| {
         if (std.meta.activeTag(expr.data) == .dispatch_call and expr.data.dispatch_call != null) {
             expr.data = .{ .dispatch_call = null };
-            removed = expr.id;
+            removed = @fromBackingInt(@intCast(expr_index));
             break;
         }
     }
@@ -9854,6 +10182,105 @@ test "issue 11626: a shared callee's closed result row is specialized per caller
         "(Err(NotFound(\"owned error payload longer than an inline string\")), Err(NotFound(7)), Ok(\"text\"), Ok(\"number\"))",
         output,
     );
+}
+
+test "issue 12625: a construction forwarding a parameter crosses its composed result's return boundary" {
+    const allocator = std.testing.allocator;
+    // The body `Err(tag)` builds its own `Try`, but its error row is the
+    // parameter's, which the `?` result widens with `Early`. The parameter
+    // read keeps its own row and the body crosses the return boundary
+    // (design.md "Closed Result Rows At Template Boundaries").
+    const source =
+        \\check = |ok| if ok Ok({}) else Err(Early)
+        \\fail = |ok, tag| {
+        \\    _x = check(ok)?
+        \\    Err(tag)
+        \\}
+        \\
+        \\main = (fail(Bool.True, Missing), fail(Bool.False, Missing), fail(Bool.True, Named("owned payload longer than an inline string")))
+        \\
+    ;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings(
+        "(Err(Missing), Err(Early), Err(Named(\"owned payload longer than an inline string\")))",
+        output,
+    );
+}
+
+test "issue 12625: a construction forwarding a closed parameter widens like its constructing twin" {
+    const allocator = std.testing.allocator;
+    // Each forwarder's payload is its closed parameter's row; its constructing
+    // twin builds the same payload itself. Identical signatures are used
+    // identically (design.md "Row Subsumption"), so both are called at a
+    // wider row.
+    const source =
+        \\fwd_err : [A] -> Try(Str, [A])
+        \\fwd_err = |x| Err(x)
+        \\
+        \\con_err : [A] -> Try(Str, [A])
+        \\con_err = |x| match x {
+        \\    A => Err(A)
+        \\}
+        \\
+        \\fwd_ok : [A] -> Try([A], Str)
+        \\fwd_ok = |x| Ok(x)
+        \\
+        \\fwd_wrap : [A] -> [W([A])]
+        \\fwd_wrap = |x| W(x)
+        \\
+        \\err_name : Try(Str, [A, B]) -> Str
+        \\err_name = |t| match t {
+        \\    Ok(s) => s
+        \\    Err(A) => "err a"
+        \\    Err(B) => "err b"
+        \\}
+        \\
+        \\ok_name : Try([A, B], Str) -> Str
+        \\ok_name = |t| match t {
+        \\    Ok(A) => "ok a"
+        \\    Ok(B) => "ok b"
+        \\    Err(s) => s
+        \\}
+        \\
+        \\wrap_name : [W([A, B])] -> Str
+        \\wrap_name = |w| match w {
+        \\    W(A) => "w a"
+        \\    W(B) => "w b"
+        \\}
+        \\
+        \\main = (err_name(fwd_err(A)), err_name(con_err(A)), ok_name(fwd_ok(A)), wrap_name(fwd_wrap(A)))
+        \\
+    ;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("(\"err a\", \"err a\", \"ok a\", \"w a\")", output);
 }
 
 test "issue 11626: a closed-row callee gets one specialization per widened caller row" {
@@ -10678,7 +11105,7 @@ fn recordFieldReadCounts(
                 seen_call = true;
                 cursor = stmt.next;
             },
-            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 cursor = stmt.next;
             },
             .expect_err,
@@ -10799,7 +11226,7 @@ fn fieldReadRetainCount(
                     }
                     try stack.append(allocator, stmt.next);
                 },
-                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .decref, .decref_if_initialized, .free => |stmt| {
+                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .decref, .decref_if_initialized, .free => |stmt| {
                     try stack.append(allocator, stmt.next);
                 },
                 .switch_stmt => |stmt| {
@@ -10999,6 +11426,24 @@ fn mainFieldReadTakes(allocator: Allocator, lowered: *const lir.CheckedPipeline.
     return counts;
 }
 
+/// The retains of field-read bindings (and their aliases) across every `main`
+/// procedure.
+fn mainFieldReadRetainCount(allocator: Allocator, lowered: *const lir.CheckedPipeline.LoweredProgram) TestError!usize {
+    const store = &lowered.lir_result.store;
+    var retained: usize = 0;
+    var found_main = false;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+        const name = store.procDebugName(proc_id) orelse continue;
+        if (!std.mem.eql(u8, name, "main")) continue;
+        if (store.getProcSpecImmediate(proc_id).body == null) continue;
+        found_main = true;
+        retained += try fieldReadRetainCount(allocator, lowered, proc_id);
+    }
+    if (!found_main) return error.MissingRootProcedure;
+    return retained;
+}
+
 /// A dying record whose `view` field is a record with one refcounted field,
 /// read by functions that take ownership in their mandatory owned variants.
 const dying_view_record_source =
@@ -11072,6 +11517,9 @@ test "field takes: a view taken whole keeps a field it is read again for" {
 
 // With the calls in the other order, `view` is taken whole and lent to
 // `lookup_first`, and then `first` is taken out of the view for `consume`.
+// The read of `first` is solved borrowed, so the take belongs to its last
+// consuming operand, the `consume` call, not to the read: the read is no
+// take, and nothing in `main` retains a field read.
 test "field takes: a view taken whole gives up a field after its last whole use" {
     const allocator = std.testing.allocator;
     const source = dying_view_record_source ++
@@ -11090,7 +11538,8 @@ test "field takes: a view taken whole gives up a field after its last whole use"
     const counts = try mainFieldReadTakes(allocator, &lowered.lowered);
     try std.testing.expectEqual(@as(usize, 1), counts.struct_takes);
     try std.testing.expectEqual(@as(usize, 1), counts.tag_union_reads);
-    try std.testing.expectEqual(@as(usize, 1), counts.tag_union_takes);
+    try std.testing.expectEqual(@as(usize, 0), counts.tag_union_takes);
+    try std.testing.expectEqual(@as(usize, 0), try mainFieldReadRetainCount(allocator, &lowered.lowered));
 }
 
 // A field read twice: the first read's binding reaches `consume` after the
@@ -11252,7 +11701,9 @@ test "a field take assigned into a join result cell keeps a loop list unique" {
 // uniqueness check, so the append grows the list in place. A string-pattern
 // `match` elsewhere in the loop body is unrelated to the record and must not
 // change that choice; the `==` form of the same loops is the control. Two
-// loops give `add` and `at_pos` two call sites, so neither is inlined.
+// loops give `add` and `at_pos` two call sites, so the inline plan keeps both
+// procedures. Release SpecConstr inlines both where the loops take their
+// records apart, so the program is lowered as dev builds lower it.
 test "issue 12420 a string match in a loop keeps dying call arguments on the owned variant" {
     const allocator = std.testing.allocator;
     const cases = [_]struct { name: []const u8, k: []const u8 }{
@@ -11310,7 +11761,10 @@ test "issue 12420 a string match in a loop keeps dying call arguments on the own
         });
         defer allocator.free(source);
 
-        var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .proc_debug_names = true });
+        var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+            .proc_debug_names = true,
+            .spec_constr_clone_inlining = lir.CheckedPipeline.dev_spec_constr_clone_inlining,
+        });
         defer lowered.deinit(allocator);
 
         const store = &lowered.lowered.lir_result.store;
@@ -11570,7 +12024,7 @@ fn listSetCounts(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) ListSet
                     top += 1;
                 }
             },
-            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 if (top < cursor_stack.len) {
                     cursor_stack[top] = stmt.next;
                     top += 1;
@@ -11889,7 +12343,6 @@ test "issue 10354 undefined identifier in expression does not panic monotype low
         error.BuiltinArtifactVersionMismatch,
         error.Canceled,
         error.CompilationFailed,
-        error.ComptimeExhaustiveness,
         error.ConnectionResetByPeer,
         error.CorruptArtifact,
         error.CorruptBuiltinArtifact,
@@ -13589,7 +14042,7 @@ test "provenance: ARC RC statements state their subject, reason, and deciding lo
                     try std.testing.expect(store.stmtLoc(stmt_id).hasLocation());
                     decrefs += 1;
                 },
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => try std.testing.expect(!kind.isArcInserted()),
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => try std.testing.expect(!kind.isArcInserted()),
             }
         }
     }
@@ -13715,4 +14168,42 @@ test "issue 12290: interpreter memory does not grow with the number of loop iter
             try std.testing.expectEqual(few, many);
         }
     }
+}
+
+fn expectIssue12491BlockLocalClosureChain(strategy: base.SpecializationStrategy) TestError!void {
+    const allocator = std.testing.allocator;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .expr,
+        \\{
+        \\    r = (((|n| (|id| (|x| id(x + n))))(1))(|y| y))(41)
+        \\    r
+        \\}
+    ,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        strategy,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("42.0", output);
+}
+
+test "issue 12491 nested closure chain bound to a block local lowers under lss" {
+    // https://github.com/roc-lang/roc/issues/12491: the lambda returned by
+    // `|n|` is that function's result, not a binding, so it takes no scheme
+    // of its own and `id`'s result is the call's `Dec` all the way down.
+    // Binding the chain's result to a block local evaluates to 42.0, the
+    // same as the bare expression.
+    try expectIssue12491BlockLocalClosureChain(.lss);
+}
+
+test "issue 12491 nested closure chain bound to a block local lowers under boxy" {
+    try expectIssue12491BlockLocalClosureChain(.boxy);
 }

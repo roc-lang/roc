@@ -324,6 +324,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "binding handlers resolve plain var reassignment occurrences", .run = bindingHandlersResolvePlainReassignments },
     .{ .name = "binding handlers resolve structural var reassignment occurrences", .run = bindingHandlersResolveStructuralReassignments },
     .{ .name = "rename handler refuses a name already visible in scope", .run = renameHandlerRefusesNameAlreadyInScope },
+    .{ .name = "rename handler distinguishes record labels from bindings (issue 12518)", .run = renameHandlerDistinguishesRecordLabelsFromBindings },
     .{ .name = "rename handler refuses a name that changes what it means", .run = renameHandlerRefusesMeaningChangingName },
     .{ .name = "rename handler refuses a document that does not compile", .run = renameHandlerRefusesUncompilableDocument },
     .{ .name = "prepare rename reports the occurrence under the cursor", .run = prepareRenameReportsOccurrenceUnderCursor },
@@ -1216,6 +1217,80 @@ pub fn renameHandlerRefusesNameAlreadyInScope() integration_spec.SpecError!void 
     const edits = try workspaceEditsFor(try allowed.result(), fixture.uri);
     try std.testing.expect(edits == .array);
     try std.testing.expectEqual(@as(usize, 2), edits.array.items.len);
+}
+
+/// Record labels do not reserve local names; only the patterns they contain do.
+pub fn renameHandlerDistinguishesRecordLabelsFromBindings() integration_spec.SpecError!void {
+    const allocator = test_env.allocator;
+    var tmp = test_env.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(test_env.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const fixture = try renameFixture(allocator, tmp_path, "rename_record.roc");
+    defer allocator.free(fixture.path);
+    defer allocator.free(fixture.uri);
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const cases = [_]struct {
+        pattern: []const u8,
+        argument: []const u8,
+        value: []const u8,
+        free_name: []const u8,
+        bound_name: []const u8,
+    }{
+        .{ .pattern = "{ entry: prevEntry }", .argument = "{ entry: 1 }", .value = "prevEntry + 1", .free_name = "entry", .bound_name = "prevEntry" },
+        .{ .pattern = "{ entry: { value: prevEntry } }", .argument = "{ entry: { value: 1 } }", .value = "prevEntry + 1", .free_name = "entry", .bound_name = "prevEntry" },
+        .{ .pattern = "{ entry: _ }", .argument = "{ entry: 1 }", .value = "1", .free_name = "entry", .bound_name = "next" },
+        .{ .pattern = "{ entry }", .argument = "{ entry: 1 }", .value = "entry + 1", .free_name = "otherEntry", .bound_name = "entry" },
+        .{ .pattern = "{ ..rest }", .argument = "{ entry: 1 }", .value = "rest.entry + 1", .free_name = "entry", .bound_name = "rest" },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("\nrecord rename failed for pattern {s}\n", .{case.pattern});
+        const source = try std.fmt.allocPrint(allocator,
+            \\app [main] {{ pf: platform "{s}" }}
+            \\
+            \\next = |{s}| {{
+            \\    nextEntry = {s}
+            \\    nextEntry
+            \\}}
+            \\
+            \\main = next({s})
+        , .{ platform_path, case.pattern, case.value, case.argument });
+        defer allocator.free(source);
+
+        const free_name = try std.fmt.allocPrint(allocator,
+            \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/rename","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":3,"character":5}},"newName":"{s}"}}}}
+        , .{ fixture.uri, case.free_name });
+        defer allocator.free(free_name);
+        const bound_name = try std.fmt.allocPrint(allocator,
+            \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/rename","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":3,"character":5}},"newName":"{s}"}}}}
+        , .{ fixture.uri, case.bound_name });
+        defer allocator.free(bound_name);
+
+        const responses = try runSessionResponses(allocator, tmp_path, fixture.uri, source, &.{ free_name, bound_name });
+        defer {
+            for (responses) |body| allocator.free(body);
+            allocator.free(responses);
+        }
+
+        var allowed = try responseById(allocator, responses, 2);
+        defer allowed.deinit();
+        const edits = try workspaceEditsFor(try allowed.result(), fixture.uri);
+        try std.testing.expect(edits == .array);
+        try std.testing.expectEqual(@as(usize, 2), edits.array.items.len);
+        try std.testing.expect(try hasEdit(edits, 3, 4, 13, case.free_name));
+        try std.testing.expect(try hasEdit(edits, 4, 4, 13, case.free_name));
+
+        var refused = try responseById(allocator, responses, 3);
+        defer refused.deinit();
+        const rejection = try objectField(refused.parsed.value, "error");
+        try std.testing.expectEqual(@as(i64, -32803), try integerField(rejection, "code"));
+        try std.testing.expectEqualStrings(
+            "that name is already used by another binding that is visible here, so renaming would change what the code means",
+            try stringField(rejection, "message"),
+        );
+    }
 }
 
 /// Verifies a rename that would change a name's meaning is refused.
@@ -3560,6 +3635,16 @@ pub fn completionHandlerReturnsRecordFieldsAfterDot() integration_spec.SpecError
     const change_msg = try frame(allocator, change_body);
     defer allocator.free(change_msg);
 
+    // Editors request semantic tokens for a document they open. That request
+    // runs the open's scheduled check, whose clean build completion answers
+    // from once the edit leaves "rec." unfinished.
+    const tokens_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":4,"method":"textDocument/semanticTokens/full","params":{{"textDocument":{{"uri":"{s}"}}}}}}
+    , .{file_uri});
+    defer allocator.free(tokens_body);
+    const tokens_msg = try frame(allocator, tokens_body);
+    defer allocator.free(tokens_msg);
+
     // Request completion right after "rec." (line 3, character 8).
     const completion_body = try std.fmt.allocPrint(allocator,
         \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":3,"character":8}}}}}}
@@ -3585,6 +3670,7 @@ pub fn completionHandlerReturnsRecordFieldsAfterDot() integration_spec.SpecError
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
     try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, tokens_msg);
     try builder.appendSlice(allocator, change_msg);
     try builder.appendSlice(allocator, completion_msg);
     try builder.appendSlice(allocator, shutdown_msg);
@@ -3781,25 +3867,13 @@ pub fn workspaceDocumentEndingInBuiltinRocBuildsAndProducesDiagnostics() integra
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    const shutdown_body =
-        \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
-    ;
-    const shutdown_msg = try frame(allocator, shutdown_body);
-    defer allocator.free(shutdown_msg);
-
-    const exit_body =
-        \\{"jsonrpc":"2.0","method":"exit"}
-    ;
-    const exit_msg = try frame(allocator, exit_body);
-    defer allocator.free(exit_msg);
-
     var builder: std.ArrayList(u8) = .empty;
     defer builder.deinit(allocator);
     try builder.appendSlice(allocator, init_msg);
     try builder.appendSlice(allocator, initialized_msg);
+    // The input ends after the open, which checks it. Shutting down instead
+    // would drop that scheduled check.
     try builder.appendSlice(allocator, open_msg);
-    try builder.appendSlice(allocator, shutdown_msg);
-    try builder.appendSlice(allocator, exit_msg);
     const combined = try builder.toOwnedSlice(allocator);
     defer allocator.free(combined);
 

@@ -230,6 +230,8 @@ pub const ProgramView = struct {
     types: Type.Store.View,
     fns: []const Fn,
     const_fn_evidence: []const check.ConstStore.ConstFnEvidence,
+    const_fn_evidence_targets: []const check.ConstStore.ConstFnTargetEvidence,
+    const_fn_evidence_structurals: []const check.ConstStore.ConstFnStructuralEvidence,
     const_fn_evidence_frames: []const check.ConstStore.ConstFnEvidenceFrame,
     exprs: []const Expr,
     pats: []const Pat,
@@ -270,7 +272,17 @@ pub const ProgramView = struct {
     inline_scopes: []const InlineScope,
     expr_inline_scopes: []const InlineScopeId,
     stmt_inline_scopes: []const InlineScopeId,
-    local_names: []const []const u8,
+    local_names: []const Mono.LocalNameId,
+    local_name_table: *const Mono.LocalNameTable,
+
+    /// A template's stored evidence vector in this program's evidence columns.
+    pub fn constFnEvidence(self: ProgramView, spans: Mono.ConstEvidenceSpans) check.ConstStore.ConstFnEvidenceVector {
+        return .{
+            .nodes = self.const_fn_evidence[spans.nodes.start..][0..spans.nodes.len],
+            .targets = self.const_fn_evidence_targets[spans.targets.start..][0..spans.targets.len],
+            .structurals = self.const_fn_evidence_structurals[spans.structurals.start..][0..spans.structurals.len],
+        };
+    }
 
     pub fn getComptimeValueRoot(self: ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
         return self.comptime_value_roots[@backingInt(id)];
@@ -301,13 +313,13 @@ pub const ProgramView = struct {
     }
 
     pub fn localName(self: ProgramView, id: LocalId) []const u8 {
-        return self.local_names[@backingInt(id)];
+        return self.local_name_table.text(self.local_names[@backingInt(id)]);
     }
 
     /// The CaptureId of a local. Every local that participates in a capture set
     /// carries one; asserts it is present.
     pub fn captureIdOfLocal(self: ProgramView, id: LocalId) check.CheckedModule.CaptureId {
-        return self.locals[@backingInt(id)].capture_id orelse
+        return self.locals[@backingInt(id)].identity.captureId() orelse
             Common.invariant("lifted capture local had no CaptureId");
     }
 
@@ -423,6 +435,8 @@ pub const Program = struct {
     types: Type.Store,
     fns: ProgramList(Fn, "fns"),
     const_fn_evidence: ProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence"),
+    const_fn_evidence_targets: ProgramList(check.ConstStore.ConstFnTargetEvidence, "const_fn_evidence_targets"),
+    const_fn_evidence_structurals: ProgramList(check.ConstStore.ConstFnStructuralEvidence, "const_fn_evidence_structurals"),
     const_fn_evidence_frames: ProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames"),
     exprs: ProgramList(Expr, "exprs"),
     pats: ProgramList(Pat, "pats"),
@@ -486,9 +500,12 @@ pub const Program = struct {
     expr_inline_scopes: ProgramList(InlineScopeId, "expr_inline_scopes"),
     /// Virtual inline scope per statement, parallel to `stmts`.
     stmt_inline_scopes: ProgramList(InlineScopeId, "stmt_inline_scopes"),
-    /// Source-level name per local, parallel to `locals` (empty for
+    /// Source-level name per local, parallel to `locals` (`none` for
     /// compiler-generated temporaries; moved from Monotype).
-    local_names: ProgramList([]const u8, "local_names"),
+    local_names: ProgramList(Mono.LocalNameId, "local_names"),
+    /// Text of every `LocalNameId`, moved from Monotype. A body shard reads
+    /// its source program's table.
+    local_name_table: Mono.LocalNameTable = .{},
     /// Ambient location recorded by `addExpr`/`addStmt`. Passes that add
     /// nodes set this so synthetic nodes inherit a source location.
     current_loc: base.SourceLoc,
@@ -512,6 +529,7 @@ pub const Program = struct {
         result.shapes = .{};
         result.shapes_owner = null;
         result.proc_debug_names = ProcDebugNameMap.init(allocator);
+        result.local_name_table = .{};
         result.current_loc = self.current_loc;
         result.current_region = self.current_region;
         result.current_inline_scope = self.current_inline_scope;
@@ -563,6 +581,36 @@ pub const Program = struct {
         return @field(self, field).borrowSpan(start, span_.len);
     }
 
+    /// The rows of `span_` when it lies in the frozen source a body shard
+    /// borrows; null for a span the program owns. The frozen source never
+    /// changes while the shard is queried, so these rows stay valid across
+    /// appends to the shard.
+    pub fn frozenSpanRows(self: *const Program, comptime T: type, span_: Span(T)) ?[]const T {
+        const field = comptime spanField(T);
+        if (span_.len == 0) return &.{};
+        if (span_.start >= self.prefixLen(field)) return null;
+        std.debug.assert(span_.len <= self.prefixLen(field) - span_.start);
+        return @field(self.body_prefix.?.source, field).unsafeRawItemsForView()[span_.start..][0..span_.len];
+    }
+
+    /// Borrow the rows of any program span.
+    pub fn spanRows(self: *const Program, comptime T: type, span_: Span(T)) ProgramSpanBorrow(T, spanField(T)) {
+        return self.bodySpan(T, comptime spanField(T), span_);
+    }
+
+    fn spanField(comptime T: type) []const u8 {
+        if (T == ExprId) return "expr_ids";
+        if (T == PatId) return "pat_ids";
+        if (T == StmtId) return "stmt_ids";
+        if (T == TypedLocal) return "typed_locals";
+        if (T == FieldExpr) return "field_exprs";
+        if (T == CaptureOperand) return "capture_operands";
+        if (T == RecordDestruct) return "record_destructs";
+        if (T == Branch) return "branches";
+        if (T == IfBranch) return "if_branches";
+        @compileError("no program span stores " ++ @typeName(T));
+    }
+
     fn appendBodySpan(self: *Program, comptime T: type, comptime field: []const u8, values: []const T) std.mem.Allocator.Error!Span(T) {
         var span_ = try Common.appendSpan(T, &@field(self, field), self.allocator, values);
         span_.start += @intCast(self.prefixLen(field));
@@ -611,6 +659,8 @@ pub const Program = struct {
         name_store: names.NameStore,
         types: Type.Store,
         const_fn_evidence: std.ArrayList(check.ConstStore.ConstFnEvidence),
+        const_fn_evidence_targets: std.ArrayList(check.ConstStore.ConstFnTargetEvidence),
+        const_fn_evidence_structurals: std.ArrayList(check.ConstStore.ConstFnStructuralEvidence),
         const_fn_evidence_frames: std.ArrayList(check.ConstStore.ConstFnEvidenceFrame),
         exprs: std.ArrayList(Expr),
         pats: std.ArrayList(Pat),
@@ -638,7 +688,7 @@ pub const Program = struct {
         inline_scopes: std.ArrayList(InlineScope),
         expr_inline_scopes: std.ArrayList(InlineScopeId),
         stmt_inline_scopes: std.ArrayList(InlineScopeId),
-        local_names: std.ArrayList([]const u8),
+        local_names: std.ArrayList(Mono.LocalNameId),
         static_data_values: std.ArrayList(StaticDataValue),
         comptime_sites: std.ArrayList(ComptimeSite),
         next_symbol: u32,
@@ -651,6 +701,8 @@ pub const Program = struct {
             .types = types,
             .fns = .empty,
             .const_fn_evidence = ProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence").fromArrayList(const_fn_evidence),
+            .const_fn_evidence_targets = ProgramList(check.ConstStore.ConstFnTargetEvidence, "const_fn_evidence_targets").fromArrayList(const_fn_evidence_targets),
+            .const_fn_evidence_structurals = ProgramList(check.ConstStore.ConstFnStructuralEvidence, "const_fn_evidence_structurals").fromArrayList(const_fn_evidence_structurals),
             .const_fn_evidence_frames = ProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames").fromArrayList(const_fn_evidence_frames),
             .exprs = ProgramList(Expr, "exprs").fromArrayList(exprs),
             .pats = ProgramList(Pat, "pats").fromArrayList(pats),
@@ -688,7 +740,7 @@ pub const Program = struct {
             .inline_scopes = ProgramList(InlineScope, "inline_scopes").fromArrayList(inline_scopes),
             .expr_inline_scopes = ProgramList(InlineScopeId, "expr_inline_scopes").fromArrayList(expr_inline_scopes),
             .stmt_inline_scopes = ProgramList(InlineScopeId, "stmt_inline_scopes").fromArrayList(stmt_inline_scopes),
-            .local_names = ProgramList([]const u8, "local_names").fromArrayList(local_names),
+            .local_names = ProgramList(Mono.LocalNameId, "local_names").fromArrayList(local_names),
             .current_loc = base.SourceLoc.none,
             .current_region = base.Region.zero(),
             .current_inline_scope = InlineScopeId.none,
@@ -696,9 +748,7 @@ pub const Program = struct {
     }
 
     pub fn deinit(self: *Program) void {
-        for (self.local_names.unsafeRawItemsForView()) |name| {
-            if (name.len > 0) self.allocator.free(name);
-        }
+        self.local_name_table.deinit(self.allocator);
         self.local_names.deinit(self.allocator);
         self.stmt_inline_scopes.deinit(self.allocator);
         self.expr_inline_scopes.deinit(self.allocator);
@@ -714,9 +764,6 @@ pub const Program = struct {
         self.source_files.deinit(self.allocator);
         self.lowering_modules.deinit(self.allocator);
         if (self.app_dependencies) |*dependencies| dependencies.deinit(self.allocator);
-        for (self.comptime_sites.unsafeRawItemsForView()) |site| {
-            self.allocator.free(site.branch_regions);
-        }
         self.comptime_sites.deinit(self.allocator);
         self.comptime_value_roots.deinit(self.allocator);
         self.static_data_values.deinit(self.allocator);
@@ -746,6 +793,8 @@ pub const Program = struct {
         self.exprs.deinit(self.allocator);
         self.fns.deinit(self.allocator);
         self.const_fn_evidence.deinit(self.allocator);
+        self.const_fn_evidence_targets.deinit(self.allocator);
+        self.const_fn_evidence_structurals.deinit(self.allocator);
         self.const_fn_evidence_frames.deinit(self.allocator);
         self.types.deinit();
         self.names.deinit();
@@ -759,6 +808,8 @@ pub const Program = struct {
             .types = self.types.view(),
             .fns = self.fns.unsafeRawItemsForView(),
             .const_fn_evidence = self.const_fn_evidence.unsafeRawItemsForView(),
+            .const_fn_evidence_targets = self.const_fn_evidence_targets.unsafeRawItemsForView(),
+            .const_fn_evidence_structurals = self.const_fn_evidence_structurals.unsafeRawItemsForView(),
             .const_fn_evidence_frames = self.const_fn_evidence_frames.unsafeRawItemsForView(),
             .exprs = self.exprs.unsafeRawItemsForView(),
             .pats = self.pats.unsafeRawItemsForView(),
@@ -797,6 +848,7 @@ pub const Program = struct {
             .expr_inline_scopes = self.expr_inline_scopes.unsafeRawItemsForView(),
             .stmt_inline_scopes = self.stmt_inline_scopes.unsafeRawItemsForView(),
             .local_names = self.local_names.unsafeRawItemsForView(),
+            .local_name_table = self.localNameTable(),
         };
     }
 
@@ -854,7 +906,6 @@ pub const Program = struct {
     /// a retry or the next analysis walk.
     pub fn rewindSpecConstrAnalysis(self: *Program, virtual_mark: SpecConstrAnalysisMark) void {
         const mark = self.ownedAnalysisMark(virtual_mark);
-        self.freeAnalysisLocalNames(mark.local_names);
         self.freeAnalysisStrings(mark.string_literals);
         self.string_literals.restoreLen(mark.string_literals);
         self.fn_def_captures.restoreLen(mark.fn_def_captures);
@@ -888,7 +939,6 @@ pub const Program = struct {
     /// by its temporary nodes.
     pub fn finishSpecConstrAnalysis(self: *Program, virtual_mark: SpecConstrAnalysisMark) void {
         const mark = self.ownedAnalysisMark(virtual_mark);
-        self.freeAnalysisLocalNames(mark.local_names);
         self.freeAnalysisStrings(mark.string_literals);
         self.string_literals.shrinkAndFree(self.allocator, mark.string_literals);
         self.fn_def_captures.shrinkAndFree(self.allocator, mark.fn_def_captures);
@@ -936,22 +986,24 @@ pub const Program = struct {
         for (self.string_literals.unsafeRawItemsForView()[start..]) |literal| literal.deinit(self.allocator);
     }
 
-    fn freeAnalysisLocalNames(self: *Program, start: usize) void {
-        for (self.local_names.unsafeRawItemsForView()[start..]) |name| {
-            if (name.len > 0) self.allocator.free(name);
-        }
+    /// The id the next function takes. The largest `u32` is never a
+    /// function id, so it can mark an absent one.
+    fn nextFnId(self: *const Program) std.mem.Allocator.Error!FnId {
+        const raw = std.math.cast(u32, self.fns.len()) orelse return error.OutOfMemory;
+        if (raw == std.math.maxInt(u32)) return error.OutOfMemory;
+        return @fromBackingInt(raw);
     }
 
     pub fn addFn(self: *Program, fn_: Fn) std.mem.Allocator.Error!FnId {
         std.debug.assert(self.body_prefix == null);
-        const id: FnId = @fromBackingInt(@intCast(@as(u32, @intCast(self.fns.len()))));
+        const id = try self.nextFnId();
         try self.fns.append(self.allocator, fn_);
         return id;
     }
 
     pub fn reserveFnSlot(self: *Program) std.mem.Allocator.Error!FnId {
         std.debug.assert(self.body_prefix == null);
-        const id: FnId = @fromBackingInt(@intCast(@as(u32, @intCast(self.fns.len()))));
+        const id = try self.nextFnId();
         try self.fns.append(self.allocator, undefined);
         return id;
     }
@@ -1042,7 +1094,7 @@ pub const Program = struct {
                     self.shapes.loop_tuple_result = true;
                 }
             },
-            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .literal_rejected, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
+            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .literal_rejected, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
         }
     }
 
@@ -1140,16 +1192,28 @@ pub const Program = struct {
 
     /// Source-level name of a local; empty for compiler-generated temporaries.
     pub fn localName(self: *const Program, id: LocalId) []const u8 {
+        return self.localNameTable().text(self.localNameId(id));
+    }
+
+    pub fn localNameId(self: *const Program, id: LocalId) Mono.LocalNameId {
         return self.row("local_names", @backingInt(id));
     }
 
-    /// Replace a suffix local's diagnostic name with independently owned bytes.
+    fn localNameTable(self: *const Program) *const Mono.LocalNameTable {
+        if (self.body_prefix) |prefix| return prefix.source.localNameTable();
+        return &self.local_name_table;
+    }
+
+    /// Give a suffix local an already interned diagnostic name.
+    pub fn setLocalNameId(self: *Program, id: LocalId, name: Mono.LocalNameId) void {
+        self.local_names.set(self.ownedIndex("local_names", @backingInt(id)), name);
+    }
+
+    /// Intern and record a local's diagnostic name. A body shard reads its
+    /// source program's table, so only an unsharded program interns.
     pub fn setLocalName(self: *Program, id: LocalId, text: []const u8) std.mem.Allocator.Error!void {
-        const index = self.ownedIndex("local_names", @backingInt(id));
-        const owned = if (text.len == 0) "" else try self.allocator.dupe(u8, text);
-        const old = self.local_names.get(index);
-        if (old.len > 0) self.allocator.free(old);
-        self.local_names.set(index, owned);
+        if (self.body_prefix != null) Common.invariant("a body shard interned a local name");
+        self.setLocalNameId(id, try self.local_name_table.intern(self.allocator, text));
     }
 
     pub fn sourceFiles(self: *const Program) []const base.SourceFileEntry {
@@ -1175,6 +1239,11 @@ pub const Program = struct {
     pub fn literalRootsView(self: *const Program) []const LiteralRoot {
         if (self.body_prefix) |prefix| return prefix.source.literalRootsView();
         return self.literal_roots.unsafeRawItemsForView();
+    }
+
+    pub fn layoutRequestsView(self: *const Program) []const LayoutRequest {
+        if (self.body_prefix) |prefix| return prefix.source.layoutRequestsView();
+        return self.layout_requests.unsafeRawItemsForView();
     }
 
     pub fn fnCount(self: *const Program) usize {
@@ -1609,13 +1678,11 @@ pub const Program = struct {
             .id = id,
             .symbol = symbol,
             .ty = ty,
-            .binder = binder,
             // A binder-backed local carries the exact capture identity of
             // its binding, so any function that captures it joins by CaptureId.
-            .capture_id = checked_capture_id,
-            .checked_capture_id = checked_capture_id,
+            .identity = .init(binder, checked_capture_id, checked_capture_id),
         });
-        try self.local_names.append(self.allocator, "");
+        try self.local_names.append(self.allocator, .none);
         return id;
     }
 
@@ -1652,12 +1719,10 @@ pub const Program = struct {
             .id = id,
             .symbol = symbol,
             .ty = ty,
-            .binder = binder,
-            .capture_id = capture_id,
-            .checked_capture_id = checked_capture_id,
+            .identity = .init(binder, capture_id, checked_capture_id),
             .capture_kind = capture_kind,
         });
-        try self.local_names.append(self.allocator, "");
+        try self.local_names.append(self.allocator, .none);
         return id;
     }
 
@@ -1760,17 +1825,17 @@ pub const Program = struct {
     /// The CaptureId of a local. Every local that participates in a capture set
     /// carries one; asserts it is present.
     pub fn captureIdOfLocal(self: *const Program, id: LocalId) check.CheckedModule.CaptureId {
-        return self.getLocal(id).capture_id orelse
+        return self.getLocal(id).identity.captureId() orelse
             Common.invariant("lifted capture local had no CaptureId");
     }
 
     pub fn ensureLiftCaptureId(self: *Program, id: LocalId) check.CheckedModule.CaptureId {
         if (self.body_prefix != null) return self.captureIdOfLocal(id);
         const local = self.locals.getPtrImmediate(@backingInt(id));
-        if (local.capture_id == null) {
-            local.capture_id = self.nextLiftCaptureId();
+        if (local.identity.captureId() == null) {
+            local.identity.setCaptureId(self.nextLiftCaptureId());
         }
-        return local.capture_id.?;
+        return local.identity.captureId().?;
     }
 
     pub fn stmtSpan(self: *const Program, span_: Span(StmtId)) ProgramSpanBorrow(StmtId, "stmt_ids") {
@@ -2090,7 +2155,7 @@ pub fn appendChildren(allocator: std.mem.Allocator, program: *const Program, exp
             try sink.fields(update.fields);
         },
         .tag => |tag| try sink.span(tag.payloads),
-        .static_data_candidate => |candidate| try sink.one(candidate.runtime_expr),
+        .static_data_candidate => |candidate| if (candidate.value.subexpression()) |sub| try sink.one(sub),
         .comptime_value => |value| try sink.one(value.initializer),
         .typed_boundary => |boundary| try sink.one(boundary.value),
         .row_widen => |widen| try sink.one(widen.value),
@@ -2098,7 +2163,6 @@ pub fn appendChildren(allocator: std.mem.Allocator, program: *const Program, exp
         .return_ => |ret| try sink.one(ret.value),
         .expect_err => |expect_err| try sink.one(expect_err.msg),
         .literal_rejected => |rejected| try sink.one(rejected.msg),
-        .comptime_branch_taken => |taken| try sink.one(taken.body),
         .let_ => |let_| {
             try sink.one(let_.value);
             try sink.one(let_.rest);
@@ -2275,6 +2339,8 @@ fn testLiftedProgram(allocator: std.mem.Allocator) Program {
         names.NameStore.init(allocator),
         Type.Store.init(allocator),
         .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
         .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats

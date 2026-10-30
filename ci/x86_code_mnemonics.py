@@ -15,6 +15,9 @@ This keeps only the instructions that lie inside a sized function symbol,
 which is the part of `.text` that is known to be code. Padding after a
 function and data between functions are left out; an above-baseline
 instruction in a function body is still reported.
+
+An optional second argument restricts the scan to function symbols whose names
+start with it, such as `roc__` for the procedures the Roc compiler emitted.
 """
 
 import bisect
@@ -33,14 +36,17 @@ def run(*command: str) -> str:
     return subprocess.run(command, check=True, capture_output=True, text=True).stdout
 
 
-def function_ranges(binary: str) -> list[tuple[int, int]]:
-    """Return the sorted, merged [start, end) ranges of sized function symbols."""
+def function_ranges(binary: str, name_prefix: str) -> list[tuple[int, int]]:
+    """Return the sorted, merged [start, end) ranges of sized function symbols
+    whose names start with `name_prefix`."""
     ranges = []
     # Columns: Num: Value Size Type Bind Vis Ndx Name. Value is hex and Size is
     # decimal, except that readelf switches Size to hex when it is large.
     for line in run("readelf", "--syms", "--wide", binary).splitlines():
         fields = line.split()
         if len(fields) < 8 or fields[3] not in CODE_SYMBOL_TYPES or fields[6] == "UND":
+            continue
+        if not fields[7].startswith(name_prefix):
             continue
         start = int(fields[1], 16)
         size = int(fields[2], 16) if fields[2].startswith("0x") else int(fields[2])
@@ -59,7 +65,8 @@ def function_ranges(binary: str) -> list[tuple[int, int]]:
 
 def main() -> None:
     binary = sys.argv[1]
-    ranges = function_ranges(binary)
+    name_prefix = sys.argv[2] if len(sys.argv) > 2 else ""
+    ranges = function_ranges(binary, name_prefix)
     if not ranges:
         raise SystemExit(f"{binary} has no sized function symbols; the scan would pass vacuously")
     starts = [start for start, _ in ranges]

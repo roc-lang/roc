@@ -21,11 +21,11 @@ const MethodRegistryTestCheckedTypes = struct {
 
     const Store = struct {
         pub fn payloadCount(_: Store) usize {
-            unreachable;
+            @panic("the method registry test source declares no methods, so the registry never queries checked types");
         }
 
         pub fn payload(_: Store, _: checked_ids.CheckedTypeId) checked_artifact.CheckedTypePayload {
-            unreachable;
+            @panic("the method registry test source declares no methods, so the registry never queries checked types");
         }
     };
 
@@ -36,7 +36,7 @@ const MethodRegistryTestCheckedTypes = struct {
         _: *canonical.CanonicalNameStore,
         _: types.Var,
     ) std.mem.Allocator.Error!checked_ids.CheckedTypeId {
-        unreachable;
+        @panic("the method registry test source declares no methods, so the registry never queries checked types");
     }
 };
 
@@ -45,28 +45,28 @@ const MethodRegistryTestCheckedBodies = struct {
         _: *const @This(),
         _: can.CIR.Pattern.Idx,
     ) ?checked_ids.PatternBinderId {
-        unreachable;
+        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
     }
 
     pub fn exprIdForSource(
         _: *const @This(),
         _: can.CIR.Expr.Idx,
     ) ?checked_ids.CheckedExprId {
-        unreachable;
+        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
     }
 
     pub fn patternIdForSource(
         _: *const @This(),
         _: can.CIR.Pattern.Idx,
     ) ?checked_ids.CheckedPatternId {
-        unreachable;
+        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
     }
 
     pub fn statementIdForSource(
         _: *const @This(),
         _: can.CIR.Statement.Idx,
     ) ?checked_ids.CheckedStatementId {
-        unreachable;
+        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
     }
 };
 
@@ -316,21 +316,21 @@ test "issue 10296: single quote literals do not emit defaulted warning" {
     const source =
         \\x = || 'M' == 'M'
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+    try checkTypesModule(source, .{ .pass = .last_def }, "() -> Bool");
 }
 
 test "issue 10296: single quote literal compared to number literal without warning" {
     const source =
         \\y = || 'M' == 1
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+    try checkTypesModule(source, .{ .pass = .last_def }, "() -> Bool");
 }
 
 test "issue 10296: single quote literal compared to fractional number without warning" {
     const source =
         \\z = || 'M' == 1.5
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+    try checkTypesModule(source, .{ .pass = .last_def }, "() -> Bool");
 }
 
 test "check type - is_eq operands must have same type - I64 eq I32 should fail" {
@@ -3793,7 +3793,6 @@ test "checked artifact method registry skips nominal associated values" {
         module,
         &names,
         &template_lookup,
-        &.{},
         &checked_types,
         &checked_bodies,
     );
@@ -4022,7 +4021,7 @@ test "check type - nominal - local method type - fail" {
         \\```roc
         \\  Str.encode("hi", fmt)
         \\```
-        \\                   ^^^
+        \\  ^^^^^^^^^^^^^^^^^^^^^
         \\
         \\The method `encode_str` has the type:
         \\
@@ -4377,14 +4376,14 @@ test "check type - match - diff cond types 1" {
     try checkTypesModule(
         source,
         .fail_with,
-        \\**Missing Method**
-        \\This `from_quote` method is being called on a value whose type doesn't have that method.
+        \\**Type Mismatch**
+        \\This string literal is being used where a non-string type is needed.
         \\```roc
         \\  match "hello" {
         \\```
         \\        ^^^^^^^
         \\
-        \\The value's type, which does not have a method named `from_quote`, is:
+        \\The type was determined to be:
         \\
         \\    [True]
         \\
@@ -4628,7 +4627,7 @@ test "check type - record - access - not a record" {
         \\
         \\x = r.my_field
     ;
-    try checkTypesModule(source, .fail, "Missing Method");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 // record update
@@ -4948,7 +4947,7 @@ test "check type - patterns - wrong type" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "Missing Method");
+    try checkTypesExpr(source, .fail, "Type Mismatch");
 }
 
 test "check type - patterns tag with payload" {
@@ -4976,7 +4975,7 @@ test "check type - patterns tag with payload mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail_first, "Missing Method");
+    try checkTypesExpr(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - patterns str" {
@@ -5133,7 +5132,7 @@ test "check type - patterns record field mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "Missing Method");
+    try checkTypesExpr(source, .fail, "Type Mismatch");
 }
 
 // vars + reassignment //
@@ -6967,8 +6966,8 @@ test "check type - effectful zero-arg function annotation" {
     // Expected: zero-arg effectful function returning empty record
     // If the parser bug exists, this would fail with TYPE MISMATCH because:
     // - annotation parses as: (()) => {} (one empty-tuple arg)
-    // - lambda infers as: ({}) -> {} (zero args, pure)
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) => {}");
+    // - lambda infers as: () -> {} (zero args, pure)
+    try checkTypesModule(source, .{ .pass = .last_def }, "() => {}");
 }
 
 test "check type - pure zero-arg function annotation" {
@@ -6979,7 +6978,7 @@ test "check type - pure zero-arg function annotation" {
         \\foo = || {}
     ;
     // Expected: zero-arg pure function returning empty record
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> {}");
+    try checkTypesModule(source, .{ .pass = .last_def }, "() -> {}");
 }
 
 test "qualified imports don't produce MODULE NOT FOUND during canonicalization" {
@@ -7812,6 +7811,20 @@ test "nominal value does not inverse-lift through an annotated structural parame
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
+test "structural value lifts through an annotated structural parameter feeding a backing" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\LogEntry := [Entry([Info, Error])]
+        \\
+        \\make : [Info, Error] -> LogEntry
+        \\make = |x| Entry(x)
+        \\
+        \\entry = make(Info)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "LogEntry");
+}
+
 test "nominal value does not inverse-lift into an imported nominal backing" {
     const source_lib =
         \\module [LogEntry]
@@ -8635,10 +8648,10 @@ test "check type - mutually recursive functions - type mismatch error" {
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check can - recursive non-function top-level cycle is rejected before type checking" {
+test "check type - recursive non-function top-level cycle is rejected" {
     const source =
         \\force : ({} -> I64) -> I64
-        \\force = |thunk| thunk(0)
+        \\force = |thunk| thunk({})
         \\
         \\t1 = |_| force(|_| t2)
         \\t2 = t1(0)
@@ -8647,7 +8660,7 @@ test "check can - recursive non-function top-level cycle is rejected before type
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneCanError("Circular Value Definition");
+    try test_env.assertOneTypeError("Circular Value Definition");
 }
 
 test "check type - monomorphic top-level numeric constant cannot be used at multiple types" {
@@ -9070,7 +9083,7 @@ test "check type - polarity - output is inferred as open" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "mk_my_tag", .expected = "({}) -> [MyTag]" },
+            .{ .def = "mk_my_tag", .expected = "() -> [MyTag]" },
         },
     );
 }

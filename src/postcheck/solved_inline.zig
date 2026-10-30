@@ -6,6 +6,7 @@ const collections = @import("collections");
 const Common = @import("common.zig");
 const Lifted = @import("monotype_lifted/ast.zig");
 const SpecConstr = @import("monotype_lifted/spec_constr.zig");
+const WrapperBody = @import("monotype_lifted/wrapper_body.zig");
 const Solved = @import("lambda_solved/ast.zig");
 const SolvedType = @import("lambda_solved/type.zig");
 const GuardedList = collections.GuardedList;
@@ -13,13 +14,17 @@ const GuardedList = collections.GuardedList;
 /// Post-check inline analysis mode.
 pub const Mode = enum {
     none,
+    /// Retain standalone procedures, with iterator fusion in SpecConstr. Only
+    /// wrappers whose bodies the compiler provides (`provides_low_level`) are
+    /// inlined, since substituting them makes no caller's code depend on
+    /// another procedure's source.
+    procedures,
     /// Inline wrappers, and bodies the whole program calls exactly once.
     wrappers,
     /// Inline wrappers, and bodies whose module's source calls them at
     /// exactly one site (`FnTemplate.single_source_call`). Both depend only on
     /// source, never on which other procedures a program contains, so every
-    /// program inlines the same calls. Dev builds use this: the object cache
-    /// links a dev procedure into programs other than the one compiling it.
+    /// program inlines the same calls, including separately compiled callers.
     wrappers_and_source_single_use,
 };
 
@@ -110,6 +115,7 @@ pub fn analyze(
 ) std.mem.Allocator.Error!OwnedPlan {
     return switch (mode) {
         .none => OwnedPlan.empty(allocator),
+        .procedures => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .provided_low_level),
         .wrappers => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .program),
         .wrappers_and_source_single_use => try InlineAnalyzer.run(allocator, procedure_usage, solved, keep_keyed_specializations, .source),
     };
@@ -117,7 +123,6 @@ pub fn analyze(
 
 const Decision = union(enum) {
     unknown,
-    visiting,
     never,
     inline_body: Candidate,
 };
@@ -127,7 +132,10 @@ const Candidate = struct {
     kind: InlineKind,
 };
 
-const SingleUseRule = enum { program, source };
+/// Which bodies are candidates: wrappers and bodies used once by the whole
+/// program's calls or by their module's source, or only wrappers of
+/// compiler-provided low-level templates, which needs no use information.
+const CandidateRule = enum { program, source, provided_low_level };
 
 const MaterializationState = enum {
     unknown,
@@ -142,20 +150,17 @@ const InlineAnalyzer = struct {
     solved: *const Solved.Program,
     solved_types: SolvedType.Store.View,
     decisions: []Decision,
-    stack: std.ArrayList(Lifted.FnId),
     keep_keyed_specializations: bool,
-    /// How a body qualifies as used once: by the whole program's calls, or
-    /// by its module's source.
-    single_use: SingleUseRule,
+    rule: CandidateRule,
 
     fn run(
         allocator: std.mem.Allocator,
         procedure_usage: SpecConstr.ProcedureUsage,
         solved: *const Solved.Program,
         keep_keyed_specializations: bool,
-        single_use: SingleUseRule,
+        rule: CandidateRule,
     ) std.mem.Allocator.Error!OwnedPlan {
-        if (procedure_usage.items.len != solved.lifted.fnCount()) {
+        if (rule != .provided_low_level and procedure_usage.items.len != solved.lifted.fnCount()) {
             Common.invariant("optimized inline analysis requires exact use information for every lifted function");
         }
         const decisions = try allocator.alloc(Decision, solved.lifted.fnCount());
@@ -168,16 +173,10 @@ const InlineAnalyzer = struct {
             .solved = solved,
             .solved_types = solved.types.view(),
             .decisions = decisions,
-            .stack = .empty,
             .keep_keyed_specializations = keep_keyed_specializations,
-            .single_use = single_use,
+            .rule = rule,
         };
-        defer analyzer.stack.deinit(allocator);
-
-        for (0..solved.lifted.fnCount()) |index| {
-            const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-            _ = try analyzer.inlineBody(fn_id);
-        }
+        try analyzer.decideCandidates();
 
         const materialization_states = try allocator.alloc(MaterializationState, decisions.len);
         defer allocator.free(materialization_states);
@@ -195,7 +194,6 @@ const InlineAnalyzer = struct {
             body.* = switch (decision) {
                 .inline_body => |candidate| candidate.body,
                 .unknown,
-                .visiting,
                 .never,
                 => null,
             };
@@ -213,9 +211,13 @@ const InlineAnalyzer = struct {
     }
 
     fn inlineCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Candidate {
+        if (self.rule == .provided_low_level) {
+            if (!(self.solved.lifted.getFn(fn_id).source orelse return null).provides_low_level) return null;
+            return if (try self.wrapperCandidate(fn_id)) |body| .{ .body = body, .kind = .wrapper } else null;
+        }
         // A pack program inlines a wrapper exactly as any program does.
         if (try self.wrapperCandidate(fn_id)) |body| return .{ .body = body, .kind = .wrapper };
-        if (self.single_use == .source) {
+        if (self.rule == .source) {
             if (self.sourceSingleUseCandidate(fn_id)) |body| return .{ .body = body, .kind = .source_single_use };
             return null;
         }
@@ -291,125 +293,97 @@ const InlineAnalyzer = struct {
         return .empty();
     }
 
-    /// One function whose inline eligibility is being decided. Its candidate
-    /// body is walked on its own work list, which suspends at each direct
-    /// call until that callee's decision is made, so neither call chains nor
-    /// expression nesting become native call depth.
-    const Visit = struct {
+    /// A function whose candidate body is closed, and the range of
+    /// `CandidateGraph.callees` its body calls directly.
+    const CandidateNode = struct {
         fn_id: Lifted.FnId,
         candidate: Candidate,
-        walk: std.ArrayList(WalkItem),
+        callees_start: u32,
+        callees_end: u32,
     };
 
-    const WalkItem = struct { child: Lifted.ExprChild, loop_depth: usize };
+    const CandidateGraph = struct {
+        nodes: std.ArrayList(CandidateNode) = .empty,
+        callees: std.ArrayList(Lifted.FnId) = .empty,
+        /// Per lifted function, its index in `nodes`.
+        node_of: []?u32,
 
-    const Entered = union(enum) {
-        /// The function's decision was already made.
-        decided: ?Lifted.ExprId,
-        /// A visit of the function's candidate body began.
-        started,
+        fn deinit(self: *CandidateGraph, allocator: std.mem.Allocator) void {
+            self.nodes.deinit(allocator);
+            self.callees.deinit(allocator);
+            allocator.free(self.node_of);
+        }
+
+        fn calleeNodes(self: *const CandidateGraph, node: u32) []const Lifted.FnId {
+            const n = self.nodes.items[node];
+            return self.callees.items[n.callees_start..n.callees_end];
+        }
     };
 
-    fn inlineBody(self: *InlineAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Lifted.ExprId {
-        var visits: std.ArrayList(Visit) = .empty;
-        defer {
-            for (visits.items) |*visit| visit.walk.deinit(self.allocator);
-            visits.deinit(self.allocator);
+    /// Decide every function. A function is inlined when it has a candidate
+    /// body that is closed and leaving it inlined lets no cycle of direct
+    /// calls among such bodies inline without bound (`rejectCandidateCycles`),
+    /// so inlining always terminates. Cycles are the graph's strongly
+    /// connected components, which depend on the call graph alone: a
+    /// procedure's identity names the same bodies and calls in every program,
+    /// so every program decides it the same way, whatever order its functions
+    /// are numbered in.
+    fn decideCandidates(self: *InlineAnalyzer) std.mem.Allocator.Error!void {
+        const fn_count = self.solved.lifted.fnCount();
+        var graph = CandidateGraph{ .node_of = try self.allocator.alloc(?u32, fn_count) };
+        defer graph.deinit(self.allocator);
+        @memset(graph.node_of, null);
+
+        for (0..fn_count) |index| {
+            const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+            const candidate = try self.inlineCandidate(fn_id) orelse {
+                self.decisions[index] = .never;
+                continue;
+            };
+            const callees_start: u32 = @intCast(graph.callees.items.len);
+            switch (try self.scanCandidateBody(candidate.body, &graph.callees)) {
+                .closed => {},
+                .open => {
+                    graph.callees.shrinkRetainingCapacity(callees_start);
+                    self.decisions[index] = .never;
+                    continue;
+                },
+            }
+            graph.node_of[index] = @intCast(graph.nodes.items.len);
+            try graph.nodes.append(self.allocator, .{
+                .fn_id = fn_id,
+                .candidate = candidate,
+                .callees_start = callees_start,
+                .callees_end = @intCast(graph.callees.items.len),
+            });
         }
-        switch (try self.enterInlineBody(fn_id, &visits)) {
-            .decided => |body| return body,
-            .started => {},
-        }
-        while (true) {
-            const visit = &visits.items[visits.items.len - 1];
-            const outcome = try self.walkVisit(visit, &visits);
-            if (outcome == .suspended) continue;
-            const finished = visits.pop().?;
-            var walk = finished.walk;
-            walk.deinit(self.allocator);
-            const body = self.finishVisit(finished, outcome == .closed);
-            if (visits.items.len == 0) return body;
-        }
+
+        try self.rejectCandidateCycles(&graph, .all);
+        // Rejecting a cycle's wrappers can leave a cycle of single-use
+        // bodies alone, which every member of then leaves.
+        try self.rejectCandidateCycles(&graph, .accepted);
     }
 
-    fn enterInlineBody(self: *InlineAnalyzer, fn_id: Lifted.FnId, visits: *std.ArrayList(Visit)) std.mem.Allocator.Error!Entered {
-        const index = @backingInt(fn_id);
-        switch (self.decisions[index]) {
-            .unknown => {},
-            .visiting => {
-                self.markCycle(fn_id);
-                return .{ .decided = null };
-            },
-            .never => return .{ .decided = null },
-            .inline_body => |candidate| return .{ .decided = candidate.body },
-        }
-
-        self.decisions[index] = .visiting;
-        try self.stack.append(self.allocator, fn_id);
-
-        const candidate = try self.inlineCandidate(fn_id) orelse {
-            self.decisions[index] = .never;
-            self.leaveInlineBody(fn_id);
-            return .{ .decided = null };
-        };
-
-        // Visit every proc called anywhere in the candidate body, including calls
-        // nested inside low-level operands or other call arguments. A self-call
-        // re-enters this function while it is `.visiting`, so `markCycle` marks
-        // the whole cycle `.never` and keeps it out of the inline plan instead
-        // of inlining it without bound.
-        var walk: std.ArrayList(WalkItem) = .empty;
-        errdefer walk.deinit(self.allocator);
-        try walk.append(self.allocator, .{ .child = .{ .expr = candidate.body }, .loop_depth = 0 });
-        try visits.append(self.allocator, .{ .fn_id = fn_id, .candidate = candidate, .walk = walk });
-        return .started;
-    }
-
-    fn leaveInlineBody(self: *InlineAnalyzer, fn_id: Lifted.FnId) void {
-        const popped = self.stack.pop() orelse Common.invariant("inline analysis stack underflow");
-        if (popped != fn_id) Common.invariant("inline analysis stack was corrupted");
-    }
-
-    fn finishVisit(self: *InlineAnalyzer, visit: Visit, closed: bool) ?Lifted.ExprId {
-        const index = @backingInt(visit.fn_id);
-        defer self.leaveInlineBody(visit.fn_id);
-        if (!closed) {
-            self.decisions[index] = .never;
-            return null;
-        }
-        switch (self.decisions[index]) {
-            .never => return null,
-            .visiting => {},
-            .unknown,
-            .inline_body,
-            => Common.invariant("inline analysis decision changed unexpectedly while visiting a candidate"),
-        }
-        self.decisions[index] = .{ .inline_body = visit.candidate };
-        return visit.candidate.body;
-    }
-
-    const WalkOutcome = enum {
-        /// A callee's visit began; this walk resumes after it.
-        suspended,
-        /// The body is closed: no escaping return, break, or continue.
+    const BodyShape = enum {
+        /// No escaping return, break, or continue.
         closed,
         /// The body can transfer control out of itself.
         open,
     };
 
-    /// Walk a candidate body, proving that every break and continue is owned
-    /// by a loop inside the body while visiting every proc it calls, so
-    /// cycles consisting entirely of selected bodies are rejected before
-    /// lowering; combining the checks avoids a second traversal. Positions
-    /// are visited in source order.
-    fn walkVisit(self: *InlineAnalyzer, visit: *Visit, visits: *std.ArrayList(Visit)) std.mem.Allocator.Error!WalkOutcome {
-        const walk = &visit.walk;
+    const WalkItem = struct { child: Lifted.ExprChild, loop_depth: usize };
+
+    /// Prove that every break and continue in `body` is owned by a loop
+    /// inside it, appending each procedure it calls directly to `callees`.
+    fn scanCandidateBody(self: *InlineAnalyzer, body: Lifted.ExprId, callees: *std.ArrayList(Lifted.FnId)) std.mem.Allocator.Error!BodyShape {
+        var walk: std.ArrayList(WalkItem) = .empty;
+        defer walk.deinit(self.allocator);
         var children: std.ArrayList(Lifted.ExprChild) = .empty;
         defer children.deinit(self.allocator);
+        try walk.append(self.allocator, .{ .child = .{ .expr = body }, .loop_depth = 0 });
         while (walk.pop()) |item| {
             const depth = item.loop_depth;
             children.clearRetainingCapacity();
-            var callee: ?Lifted.FnId = null;
             switch (item.child) {
                 .stmt => |stmt_id| switch (self.solved.lifted.getStmt(stmt_id)) {
                     .return_ => return .open,
@@ -432,7 +406,7 @@ const InlineAnalyzer = struct {
                     .comptime_exhaustiveness_failed,
                     => {},
                     .call_proc => |call| {
-                        callee = Lifted.localDirectCallee(call);
+                        if (Lifted.localDirectCallee(call)) |callee| try callees.append(self.allocator, callee);
                         try Lifted.appendChildren(self.allocator, &self.solved.lifted, expr_id, &children);
                     },
                     .@"unreachable",
@@ -460,7 +434,6 @@ const InlineAnalyzer = struct {
                     .expect,
                     .expect_err,
                     .literal_rejected,
-                    .comptime_branch_taken,
                     .let_,
                     .call_value,
                     .low_level,
@@ -479,18 +452,131 @@ const InlineAnalyzer = struct {
                     => try Lifted.appendChildren(self.allocator, &self.solved.lifted, expr_id, &children),
                 },
             }
-            var index = children.items.len;
-            while (index > 0) {
-                index -= 1;
-                try walk.append(self.allocator, .{ .child = children.items[index], .loop_depth = depth });
-            }
-            // The callee is decided before the call's operands are visited.
-            if (callee) |target| switch (try self.enterInlineBody(target, visits)) {
-                .decided => {},
-                .started => return .suspended,
-            };
+            for (children.items) |child| try walk.append(self.allocator, .{ .child = child, .loop_depth = depth });
         }
         return .closed;
+    }
+
+    /// Which nodes of the candidate graph one cycle pass considers.
+    const CyclePass = enum {
+        /// Every node: a node on no cycle takes its candidate, and a cycle
+        /// leaves only its wrappers, or every member when it has none.
+        all,
+        /// The nodes the first pass accepted: a cycle among them, which holds
+        /// no wrapper, leaves every member.
+        accepted,
+    };
+
+    /// Keep every cycle of candidates (a strongly connected component of more
+    /// than one node, or a node that calls itself) from inlining without
+    /// bound. Leaving any one member a procedure breaks a cycle, so a cycle
+    /// first rejects only its wrappers: a wrapper is inlined at every call as
+    /// an optimization, while a single-use body is lowered only at its one
+    /// call, and keeping those inlined keeps a recursion through a lambda a
+    /// self-call. Tarjan's algorithm, run on an explicit stack so call chains
+    /// never become native call depth.
+    fn rejectCandidateCycles(self: *InlineAnalyzer, graph: *const CandidateGraph, pass: CyclePass) std.mem.Allocator.Error!void {
+        const node_count = graph.nodes.items.len;
+        const unvisited = std.math.maxInt(u32);
+        const order = try self.allocator.alloc(u32, node_count);
+        defer self.allocator.free(order);
+        const low = try self.allocator.alloc(u32, node_count);
+        defer self.allocator.free(low);
+        const on_stack = try self.allocator.alloc(bool, node_count);
+        defer self.allocator.free(on_stack);
+        @memset(order, unvisited);
+        @memset(on_stack, false);
+
+        const Frame = struct { node: u32, next_callee: u32 };
+        var frames: std.ArrayList(Frame) = .empty;
+        defer frames.deinit(self.allocator);
+        var component_stack: std.ArrayList(u32) = .empty;
+        defer component_stack.deinit(self.allocator);
+        var next_order: u32 = 0;
+
+        for (0..node_count) |root_index| {
+            const root: u32 = @intCast(root_index);
+            if (order[root] != unvisited) continue;
+            if (pass == .accepted and !self.acceptedNode(graph, root)) continue;
+            order[root] = next_order;
+            low[root] = next_order;
+            next_order += 1;
+            try component_stack.append(self.allocator, root);
+            on_stack[root] = true;
+            try frames.append(self.allocator, .{ .node = root, .next_callee = 0 });
+
+            while (frames.items.len != 0) {
+                const frame = &frames.items[frames.items.len - 1];
+                const node = frame.node;
+                const callees = graph.calleeNodes(node);
+                if (frame.next_callee < callees.len) {
+                    const callee_fn = callees[frame.next_callee];
+                    frame.next_callee += 1;
+                    const callee = graph.node_of[@backingInt(callee_fn)] orelse continue;
+                    if (pass == .accepted and !self.acceptedNode(graph, callee)) continue;
+                    if (order[callee] == unvisited) {
+                        order[callee] = next_order;
+                        low[callee] = next_order;
+                        next_order += 1;
+                        try component_stack.append(self.allocator, callee);
+                        on_stack[callee] = true;
+                        try frames.append(self.allocator, .{ .node = callee, .next_callee = 0 });
+                    } else if (on_stack[callee]) {
+                        low[node] = @min(low[node], order[callee]);
+                    }
+                    continue;
+                }
+
+                _ = frames.pop();
+                if (frames.items.len != 0) {
+                    const parent = frames.items[frames.items.len - 1].node;
+                    low[parent] = @min(low[parent], low[node]);
+                }
+                if (low[node] != order[node]) continue;
+
+                const top = component_stack.items.len;
+                var start = top;
+                while (true) {
+                    start -= 1;
+                    on_stack[component_stack.items[start]] = false;
+                    if (component_stack.items[start] == node) break;
+                }
+                const component = component_stack.items[start..top];
+                const on_cycle = component.len > 1 or callsItself(graph, node);
+                var has_wrapper = false;
+                for (component) |member| {
+                    if (graph.nodes.items[member].candidate.kind == .wrapper) has_wrapper = true;
+                }
+                for (component) |member| {
+                    const member_node = graph.nodes.items[member];
+                    const index = @backingInt(member_node.fn_id);
+                    if (on_cycle) {
+                        if (!has_wrapper or member_node.candidate.kind == .wrapper) self.decisions[index] = .never;
+                    } else if (pass == .all) {
+                        self.decisions[index] = .{ .inline_body = member_node.candidate };
+                    }
+                }
+                // A cycle that kept its single-use bodies is settled by the
+                // second pass.
+                if (on_cycle and has_wrapper and pass == .all) for (component) |member| {
+                    const member_node = graph.nodes.items[member];
+                    if (member_node.candidate.kind != .wrapper) self.decisions[@backingInt(member_node.fn_id)] = .{ .inline_body = member_node.candidate };
+                };
+                component_stack.shrinkRetainingCapacity(start);
+            }
+        }
+    }
+
+    fn acceptedNode(self: *const InlineAnalyzer, graph: *const CandidateGraph, node: u32) bool {
+        return self.decisions[@backingInt(graph.nodes.items[node].fn_id)] != .never;
+    }
+
+    fn callsItself(graph: *const CandidateGraph, node: u32) bool {
+        const fn_id = graph.nodes.items[node].fn_id;
+        for (graph.calleeNodes(node)) |callee| {
+            if (callee == fn_id) return true;
+        }
+        return false;
     }
 
     /// Resolve outer single-use candidates before their descendants. Demoting
@@ -539,9 +625,7 @@ const InlineAnalyzer = struct {
                             result = true;
                             continue;
                         },
-                        .unknown,
-                        .visiting,
-                        => Common.invariant("inline materialization analysis saw an unfinished decision"),
+                        .unknown => Common.invariant("inline materialization analysis saw an unfinished decision"),
                     };
                     if (candidate.kind != .single_use) {
                         _ = frames.pop();
@@ -585,9 +669,7 @@ const InlineAnalyzer = struct {
                             frames.items[frames.items.len - 1] = .{ .resolve = fn_id };
                             continue;
                         },
-                        .unknown,
-                        .visiting,
-                        => Common.invariant("inline materialization analysis saw an unfinished owner decision"),
+                        .unknown => Common.invariant("inline materialization analysis saw an unfinished owner decision"),
                     }
 
                     switch (states[index]) {
@@ -638,278 +720,7 @@ const InlineAnalyzer = struct {
     }
 
     fn wrapperCandidate(self: *const InlineAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Lifted.ExprId {
-        const source_fn = self.solved.lifted.getFn(fn_id);
-        if (self.solved.lifted.typedLocalSpan(source_fn.captures).len != 0) return null;
         if (self.solvedCaptureCount(fn_id) != 0) return null;
-
-        const body = switch (source_fn.body) {
-            .roc => |body_expr| body_expr,
-            .hosted => return null,
-        };
-
-        if (!try self.isInlineableWrapperBody(body)) return null;
-        if (!try self.bodyReadsOnlyArgs(fn_id, body)) return null;
-        return body;
-    }
-
-    fn bodyReadsOnlyArgs(self: *const InlineAnalyzer, fn_id: Lifted.FnId, body: Lifted.ExprId) std.mem.Allocator.Error!bool {
-        const source_fn = self.solved.lifted.getFn(fn_id);
-        return self.exprReadsOnlyArgs(body, self.solved.lifted.typedLocalSpan(source_fn.args));
-    }
-
-    /// Whether `root` reads no local other than `args`. Every subexpression
-    /// must, so they are checked in any order on a work stack.
-    fn exprReadsOnlyArgs(self: *const InlineAnalyzer, root: Lifted.ExprId, args: anytype) std.mem.Allocator.Error!bool {
-        const lifted = &self.solved.lifted;
-        var stack: std.ArrayList(Lifted.ExprChild) = .empty;
-        defer stack.deinit(self.allocator);
-        try stack.append(self.allocator, .{ .expr = root });
-        while (stack.pop()) |child| {
-            const expr_id = child.expr;
-            switch (lifted.getExpr(expr_id).data) {
-                .local => |local| if (!localIsArg(local, args)) return false,
-                .@"unreachable",
-                .unit,
-                .int_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .dec_lit,
-                .str_lit,
-                .crash,
-                .checked_error,
-                .bytes_lit,
-                .def_ref,
-                => {},
-                .fn_ref,
-                .list,
-                .tuple,
-                .record,
-                .record_update,
-                .tag,
-                .static_data_candidate,
-                .comptime_value,
-                .typed_boundary,
-                .row_widen,
-                .nominal,
-                .dbg,
-                .expect,
-                .return_,
-                .expect_err,
-                .literal_rejected,
-                .comptime_branch_taken,
-                .call_value,
-                .low_level,
-                .field_access,
-                .tuple_access,
-                .structural_eq,
-                .structural_hash,
-                => try Lifted.appendChildren(self.allocator, lifted, expr_id, &stack),
-                .call_proc => |call| {
-                    if (call.is_cold) return false;
-                    try Lifted.appendChildren(self.allocator, lifted, expr_id, &stack);
-                },
-                .block => |block| if (!self.isLiteralCrash(expr_id)) {
-                    if (lifted.stmtSpan(block.statements).len != 0) return false;
-                    try stack.append(self.allocator, .{ .expr = block.final_expr });
-                },
-                .if_ => {
-                    // This admits guarded wrappers, not arbitrary conditional
-                    // arguments inside otherwise call-through wrappers.
-                    if (!try self.isInlineableWrapperBody(expr_id)) return false;
-                    try Lifted.appendChildren(self.allocator, lifted, expr_id, &stack);
-                },
-                .lambda,
-                .fn_def,
-                .let_,
-                .match_,
-                .uninitialized,
-                .uninitialized_payload,
-                .if_initialized_payload,
-                .try_sequence,
-                .try_record_sequence,
-                .loop_,
-                .break_,
-                .continue_,
-                .join_point,
-                .jump,
-                .comptime_exhaustiveness_failed,
-                => return false,
-            }
-        }
-        return true;
-    }
-
-    fn localIsArg(local: Lifted.LocalId, args: anytype) bool {
-        for (0..args.len) |index| {
-            const arg = GuardedList.at(args, index);
-            if (arg.local == local) return true;
-        }
-        return false;
-    }
-
-    /// What a wrapper position must be: a whole wrapper body, a guard arm
-    /// (a literal crash or a wrapper body), or an operand a wrapper builds
-    /// its result from (an argument, a literal, or another wrapper body).
-    const WrapperRole = enum { body, arm, operand };
-
-    /// Whether a body is a checked wrapper: one operation, a constant, or a
-    /// single guard whose arms are each of those or a crash. Such a body does
-    /// less work than its call costs, and substituting it at every call site
-    /// exposes its guard and its constant arguments to LIR range analysis
-    /// before backend instruction selection. `List.get` and the byte reads
-    /// have this shape with a `Try` on each arm. Every position must qualify
-    /// in its role, so positions are checked in any order on a work stack.
-    fn isInlineableWrapperBody(self: *const InlineAnalyzer, root: Lifted.ExprId) std.mem.Allocator.Error!bool {
-        const lifted = &self.solved.lifted;
-        const Item = struct { role: WrapperRole, expr: Lifted.ExprId };
-        var stack: std.ArrayList(Item) = .empty;
-        defer stack.deinit(self.allocator);
-        try stack.append(self.allocator, .{ .role = .body, .expr = root });
-        while (stack.pop()) |item| {
-            const expr = lifted.getExpr(item.expr);
-            const role: WrapperRole = switch (item.role) {
-                .arm => if (self.isLiteralCrash(item.expr)) continue else .body,
-                .operand => switch (expr.data) {
-                    .local,
-                    .unit,
-                    .int_lit,
-                    .frac_f32_lit,
-                    .frac_f64_lit,
-                    .dec_lit,
-                    .str_lit,
-                    .bytes_lit,
-                    => continue,
-                    .call_proc,
-                    .low_level,
-                    .tag,
-                    .nominal,
-                    .if_,
-                    .block,
-                    => .body,
-                    .@"unreachable",
-                    .crash,
-                    .checked_error,
-                    .def_ref,
-                    .fn_ref,
-                    .list,
-                    .tuple,
-                    .record,
-                    .record_update,
-                    .static_data_candidate,
-                    .comptime_value,
-                    .typed_boundary,
-                    .row_widen,
-                    .dbg,
-                    .expect,
-                    .return_,
-                    .expect_err,
-                    .literal_rejected,
-                    .comptime_branch_taken,
-                    .call_value,
-                    .field_access,
-                    .tuple_access,
-                    .structural_eq,
-                    .structural_hash,
-                    .lambda,
-                    .fn_def,
-                    .let_,
-                    .match_,
-                    .uninitialized,
-                    .uninitialized_payload,
-                    .if_initialized_payload,
-                    .try_sequence,
-                    .try_record_sequence,
-                    .loop_,
-                    .break_,
-                    .continue_,
-                    .join_point,
-                    .jump,
-                    .comptime_exhaustiveness_failed,
-                    => return false,
-                },
-                .body => .body,
-            };
-            std.debug.assert(role == .body);
-            switch (expr.data) {
-                .call_proc, .low_level => {},
-                .tag => |tag| {
-                    const payloads = lifted.exprSpan(tag.payloads);
-                    for (0..payloads.len) |index| try stack.append(self.allocator, .{ .role = .operand, .expr = GuardedList.at(payloads, index) });
-                },
-                .nominal => |backing| try stack.append(self.allocator, .{ .role = .body, .expr = backing }),
-                .if_ => |if_| {
-                    const branches = lifted.ifBranchSpan(if_.branches);
-                    if (branches.len != 1) return false;
-                    try stack.append(self.allocator, .{ .role = .arm, .expr = GuardedList.at(branches, 0).body });
-                    try stack.append(self.allocator, .{ .role = .arm, .expr = if_.final_else });
-                },
-                .block => |block| {
-                    if (lifted.stmtSpan(block.statements).len != 0) return false;
-                    try stack.append(self.allocator, .{ .role = .body, .expr = block.final_expr });
-                },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
-            }
-        }
-        return true;
-    }
-
-    /// Whether an expression is a crash with a literal message, possibly
-    /// under blocks that hold nothing else.
-    fn isLiteralCrash(self: *const InlineAnalyzer, root: Lifted.ExprId) bool {
-        const lifted = &self.solved.lifted;
-        var expr_id = root;
-        while (true) {
-            switch (lifted.getExpr(expr_id).data) {
-                .crash, .checked_error => return true,
-                .low_level => |call| {
-                    if (call.op != .crash) return false;
-                    const args = lifted.exprSpan(call.args);
-                    return args.len == 1 and
-                        self.isStringLiteral(GuardedList.at(args, 0));
-                },
-                .block => |block| {
-                    const stmts = lifted.stmtSpan(block.statements);
-                    if (stmts.len == 0) {
-                        expr_id = block.final_expr;
-                        continue;
-                    }
-                    // SpecConstr normalizes a terminal crash to a statement
-                    // followed by unreachable. No preceding work is admitted.
-                    if (stmts.len != 1 or lifted.getExpr(block.final_expr).data != .@"unreachable") return false;
-                    switch (lifted.getStmt(GuardedList.at(stmts, 0))) {
-                        .crash, .checked_error => return true,
-                        .expr => |child| expr_id = child,
-                        .uninitialized, .let_, .expect, .dbg, .return_ => return false,
-                    }
-                },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
-            }
-        }
-    }
-
-    fn isStringLiteral(self: *const InlineAnalyzer, root: Lifted.ExprId) bool {
-        var expr_id = root;
-        while (true) {
-            switch (self.solved.lifted.getExpr(expr_id).data) {
-                .str_lit => return true,
-                .nominal => |backing| expr_id = backing,
-                .typed_boundary => |boundary| expr_id = boundary.value,
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .bytes_lit, .static_data_candidate, .comptime_value, .row_widen, .list, .tuple, .record, .record_update, .tag, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
-            }
-        }
-    }
-
-    fn markCycle(self: *InlineAnalyzer, repeated: Lifted.FnId) void {
-        var cycle_start: ?usize = null;
-        for (self.stack.items, 0..) |fn_id, index| {
-            if (fn_id == repeated) {
-                cycle_start = index;
-                break;
-            }
-        }
-        const start = cycle_start orelse Common.invariant("inline cycle did not refer to a visiting function");
-        for (self.stack.items[start..]) |fn_id| {
-            self.decisions[@backingInt(fn_id)] = .never;
-        }
+        return WrapperBody.wrapperBody(self.allocator, &self.solved.lifted, fn_id);
     }
 };

@@ -44,6 +44,7 @@ const Store = problem_mod.Store;
 // Type mismatch types
 const TypePair = problem_mod.TypePair;
 const MethodConflict = problem_mod.MethodConflict;
+const CopiedRequirement = problem_mod.CopiedRequirement;
 
 // Static dispatch errors
 const DispatcherNotNominal = problem_mod.DispatcherNotNominal;
@@ -62,7 +63,6 @@ const RedundantPattern = problem_mod.RedundantPattern;
 const UnmatchablePattern = problem_mod.UnmatchablePattern;
 const MatchAltBinderMissing = problem_mod.MatchAltBinderMissing;
 const DiscardedVarUpdate = problem_mod.DiscardedVarUpdate;
-const ComptimeUnusedBranch = problem_mod.ComptimeUnusedBranch;
 const ComptimeCondition = problem_mod.ComptimeCondition;
 
 // Type declaration errors
@@ -344,7 +344,7 @@ pub const ReportBuilder = struct {
         const inner_region_info = self.module_env.calcRegionInfo(try self.expressionHighlightRegion(inner_region.*));
 
         const display_region = SourceCodeDisplayRegion{
-            .line_text = try self.gpa.dupe(u8, outer_region_info.calculateLineText(self.source, self.module_env.getLineStarts())),
+            .line_text = outer_region_info.calculateLineText(self.source, self.module_env.getLineStarts()),
             .start_line = outer_region_info.start_line_idx + 1,
             .start_column = outer_region_info.start_col_idx + 1,
             .end_line = outer_region_info.end_line_idx + 1,
@@ -1160,7 +1160,6 @@ pub const ReportBuilder = struct {
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
             .match_alt_binder_missing => |data| return self.buildMatchAltBinderMissingReport(data),
             .discarded_var_update => |data| return self.buildDiscardedVarUpdateReport(data),
-            .comptime_unused_branch => |data| return self.buildComptimeUnusedBranchReport(data),
             .comptime_condition => |data| return self.buildComptimeConditionReport(data),
         }
     }
@@ -1266,7 +1265,7 @@ pub const ReportBuilder = struct {
         }
         try report.document.addLineBreaks(2);
         switch (conversion) {
-            .none => unreachable,
+            .none => unreachable, // the switch above returns for .none
             .to_str => if (numeral) try D.renderSlice(&.{
                 D.bytes("Hint:").withAnnotation(.emphasized),
                 D.bytes("Write the number in quotes to make it a"),
@@ -2565,6 +2564,18 @@ pub const ReportBuilder = struct {
         }, self, report, &report.headline);
     }
 
+    fn renderCopiedObligationMissingMethodHeadline(
+        self: *Self,
+        report: *Report,
+        method_name: Ident.Idx,
+    ) Allocator.Error!void {
+        try D.renderSliceInto(&.{
+            D.bytes("This use needs the"),
+            D.ident(method_name).withAnnotation(.inline_code),
+            D.bytes("method, but the type being used doesn't have that method."),
+        }, self, report, &report.headline);
+    }
+
     /// Highlight where a static dispatch constraint failed: at the expression
     /// that owns the failed obligation when there is one, and otherwise at the
     /// constraint's own provenance.
@@ -2586,10 +2597,20 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: DispatcherNotNominal,
     ) Allocator.Error!Report {
+        if (try self.buildLiteralMismatchReport(data.origin, .{
+            .dispatcher_var = data.dispatcher_var,
+            .dispatcher_snapshot = data.dispatcher_snapshot,
+            .num_literal = data.num_literal,
+            .string_literal_region = data.string_literal_region,
+            .copied = data.copied,
+        })) |report| return report;
+
         var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
         errdefer report.deinit();
         if (data.owner_region != null and data.origin == .where_clause) {
             try self.renderOwnedObligationMissingMethodHeadline(&report, data.method_name);
+        } else if (data.copied != null) {
+            try self.renderCopiedObligationMissingMethodHeadline(&report, data.method_name);
         } else {
             try D.renderSliceInto(&.{
                 D.bytes("This"),
@@ -2610,6 +2631,7 @@ pub const ReportBuilder = struct {
         }, self, &report);
         try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
+        if (data.copied) |copied| try self.addCopiedRequirementNotes(&report, copied);
 
         return report;
     }
@@ -2633,23 +2655,69 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: DispatcherDoesNotImplMethod,
     ) Allocator.Error!Report {
-        // Special case: a literal used where a type lacking its `from_*`
-        // conversion method is expected.
-        if (data.origin.literalKind()) |kind| {
-            return switch (kind) {
-                // number literal used where a non-number type is expected
-                .numeral => if (data.num_literal != null and data.num_literal.?.explicit_suffix)
-                    self.buildStaticDispatchMissingMethod(data)
-                else
-                    self.buildNumberUsedAsNonNumber(data),
-                // string/interpolation literal used where a non-string type is expected
-                .quote, .interpolation => self.buildStringUsedAsNonString(data),
-            };
+        if (data.origin.literalKind() != null) {
+            if (try self.buildLiteralMismatchReport(data.origin, .{
+                .dispatcher_var = data.dispatcher_var,
+                .dispatcher_snapshot = data.dispatcher_snapshot,
+                .num_literal = data.num_literal,
+                .string_literal_region = data.string_literal_region,
+                .copied = data.copied,
+            })) |report| return report;
+        } else if (data.row_extension_of) |row_extension| {
+            return self.buildRowExtensionMissingMethod(data, row_extension);
         }
 
-        if (data.row_extension_of) |row_extension| return self.buildRowExtensionMissingMethod(data, row_extension);
+        var report = try self.buildStaticDispatchMissingMethod(data);
+        errdefer report.deinit();
+        if (data.copied) |copied| try self.addCopiedRequirementNotes(&report, copied);
+        return report;
+    }
 
-        return self.buildStaticDispatchMissingMethod(data);
+    /// What a report of a failed requirement that a use copied out of another
+    /// definition's type adds after its own explanation: the code in that
+    /// definition that needs the requirement, and the uses of one method that
+    /// the definition's type made one requirement when they relate its types.
+    fn addCopiedRequirementNotes(self: *Self, report: *Report, copied: CopiedRequirement) Allocator.Error!void {
+        const region = copied.requirement_region orelse return self.addSharedMethodNote(report, copied, .after_text);
+        try report.document.addLineBreaks(2);
+        try D.renderSlice(&.{
+            D.bytes("This use needs that because of this code in the definition it uses:"),
+        }, self, report);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(report, region);
+        try self.addSharedMethodNote(report, copied, .after_source);
+    }
+
+    /// The uses of one method that the definition's type made one
+    /// requirement, when they relate the failed requirement's types. A
+    /// source highlight already ends with a blank line.
+    fn addSharedMethodNote(
+        self: *Self,
+        report: *Report,
+        copied: CopiedRequirement,
+        comptime follows: enum { after_text, after_source },
+    ) Allocator.Error!void {
+        const shared = copied.shared_method orelse return;
+        switch (follows) {
+            .after_text => try report.document.addLineBreaks(2),
+            .after_source => try report.document.addLineBreak(),
+        }
+        try D.renderSlice(&.{
+            D.bytes("These"),
+            D.ident(shared.method_name).withAnnotation(.inline_code),
+            D.bytes("calls share one"),
+            D.ident(shared.method_name).withAnnotation(.inline_code),
+            D.bytes("type, because the type of the value they are called on is not known where they are:"),
+        }, self, report);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(report, shared.first_region);
+        try report.document.addLineBreak();
+        try self.addSourceHighlightRegion(report, shared.second_region);
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("Giving that value a type annotation lets each call have its own type."),
+        }, self, report);
     }
 
     /// A derived `is_eq`/`to_hash` over a record or tag union whose `..`
@@ -2770,6 +2838,8 @@ pub const ReportBuilder = struct {
             }, self, &report, &report.headline);
         } else if (data.owner_region != null and data.origin == .where_clause) {
             try self.renderOwnedObligationMissingMethodHeadline(&report, data.method_name);
+        } else if (data.copied != null) {
+            try self.renderCopiedObligationMissingMethodHeadline(&report, data.method_name);
         } else {
             try D.renderSliceInto(&.{
                 D.bytes("This"),
@@ -3062,37 +3132,109 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// A literal whose `from_*` conversion failed, whatever kind of type the
+    /// literal was used as.
+    const LiteralMismatch = struct {
+        dispatcher_var: Var,
+        dispatcher_snapshot: SnapshotContentIdx,
+        num_literal: ?types_mod.NumeralInfo,
+        string_literal_region: ?Region,
+        copied: ?CopiedRequirement = null,
+    };
+
+    /// Report a literal used where a type lacking its `from_*` conversion
+    /// method is expected, in terms of the literal rather than the conversion
+    /// method it implicitly calls. Null when the failure is not a literal's
+    /// conversion, or is a suffixed number literal's: the suffix names the
+    /// type, so the missing method is reported on that type.
+    fn buildLiteralMismatchReport(
+        self: *Self,
+        origin: types_mod.StaticDispatchConstraint.Origin,
+        data: LiteralMismatch,
+    ) Allocator.Error!?Report {
+        const kind = origin.literalKind() orelse return null;
+        return switch (kind) {
+            // number literal used where a non-number type is expected
+            .numeral => if (data.num_literal != null and data.num_literal.?.explicit_suffix)
+                null
+            else
+                try self.buildNumberUsedAsNonNumber(data),
+            // string/interpolation literal used where a non-string type is expected
+            .quote, .interpolation => try self.buildStringUsedAsNonString(data),
+        };
+    }
+
     /// Build a report for when a string literal is used where a non-string type is expected
     fn buildStringUsedAsNonString(
         self: *Self,
-        data: DispatcherDoesNotImplMethod,
+        data: LiteralMismatch,
     ) Allocator.Error!Report {
+        if (data.copied) |copied| {
+            var report = try Report.init(self.gpa, "Type Mismatch", "This use needs a string literal in the definition it uses to have a non-string type.", .runtime_error);
+            errdefer report.deinit();
+            try self.addCopiedLiteralHighlights(&report, copied, data.string_literal_region, "The string literal is here:");
+            try self.addDeterminedType(&report, data.dispatcher_snapshot);
+            try self.addSharedMethodNote(&report, copied, .after_text);
+            return report;
+        }
+
         var report = try Report.init(self.gpa, "Type Mismatch", "This string literal is being used where a non-string type is needed.", .runtime_error);
         errdefer report.deinit();
 
-        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
-
-        const literal_region = data.quote_region orelse
+        const literal_region = data.string_literal_region orelse
             (if (self.getRegionSafe(@fromBackingInt(@intCast(@backingInt(data.dispatcher_var))))) |r| r.* else Region.zero());
         const region_info = self.module_env.calcRegionInfo(literal_region);
 
         try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
-        try D.renderSlice(&.{
-            D.bytes("The type was determined to be:"),
-        }, self, &report);
-        try report.document.addLineBreaks(2);
-        try report.document.addCodeBlock(snapshot_str);
+        try self.addDeterminedType(&report, data.dispatcher_snapshot);
 
         return report;
+    }
+
+    fn addDeterminedType(self: *Self, report: *Report, determined: SnapshotContentIdx) Allocator.Error!void {
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(determined));
+        try D.renderSlice(&.{
+            D.bytes("The type was determined to be:"),
+        }, self, report);
+        try report.document.addLineBreaks(2);
+        try report.document.addCodeBlock(snapshot_str);
+    }
+
+    /// The use a copied literal conversion fails at, then the literal in the
+    /// definition it uses.
+    fn addCopiedLiteralHighlights(
+        self: *Self,
+        report: *Report,
+        copied: CopiedRequirement,
+        literal_region: ?Region,
+        literal_label: []const u8,
+    ) Allocator.Error!void {
+        try self.addSourceHighlightRegion(report, copied.use_region);
+        try report.document.addLineBreak();
+        if (literal_region) |region| {
+            try D.renderSlice(&.{D.bytes(literal_label)}, self, report);
+            try report.document.addLineBreak();
+            try self.addSourceHighlightRegion(report, region);
+            try report.document.addLineBreak();
+        }
     }
 
     /// Build a report for when a number literal is used where a non-number type is expected
     fn buildNumberUsedAsNonNumber(
         self: *Self,
-        data: DispatcherDoesNotImplMethod,
+        data: LiteralMismatch,
     ) Allocator.Error!Report {
+        if (data.copied) |copied| {
+            var report = try Report.init(self.gpa, "Type Mismatch", "This use needs a number in the definition it uses to have a non-number type.", .runtime_error);
+            errdefer report.deinit();
+            try self.addCopiedLiteralHighlights(&report, copied, data.num_literal.?.region, "The number is here:");
+            try self.addDeterminedType(&report, data.dispatcher_snapshot);
+            try self.addSharedMethodNote(&report, copied, .after_text);
+            return report;
+        }
+
         var report = try Report.init(self.gpa, "Type Mismatch", "This number is being used where a non-number type is needed.", .runtime_error);
         errdefer report.deinit();
 
@@ -3130,7 +3272,107 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
 
+        if (self.lowercaseNumberSuffix(num_region)) |type_name| {
+            const literal_text = self.source[num_region.start.offset..num_region.end.offset];
+            const suggestion = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ literal_text, type_name });
+            defer self.gpa.free(suggestion);
+            try report.document.addLineBreaks(2);
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("Type suffixes on number literals are capitalized and go directly after the number. To give this number the type"),
+                D.bytes(type_name).withAnnotation(.type_variable),
+                D.bytes(", write").withNoPrecedingSpace(),
+                D.bytes(try report.addOwnedString(suggestion)).withAnnotation(.inline_code),
+                D.bytes("instead."),
+            }, self, &report);
+        }
+
         return report;
+    }
+
+    /// When the number literal at `literal_region` is the receiver of a field
+    /// access whose first field is a builtin number type's name in lowercase
+    /// (as in `1.u64`), the builtin number type that access most likely meant
+    /// as a type suffix.
+    fn lowercaseNumberSuffix(self: *Self, literal_region: Region) ?[]const u8 {
+        const builtin_number_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "F32", "F64", "Dec" };
+        // A rejected literal and its access are replaced by runtime errors, so
+        // both are read as written in source.
+        const store = &self.can_ir.store;
+        var raw: u32 = 0;
+        while (raw < store.nodes.len()) : (raw += 1) {
+            const node_idx: CIR.Node.Idx = @fromBackingInt(raw);
+            if (store.sourceNode(node_idx).tag != .expr_field_access) continue;
+            const access = store.getSourceExpr(@fromBackingInt(raw)).e_field_access;
+            switch (store.getSourceExpr(access.receiver)) {
+                .e_num, .e_num_from_numeral, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => {},
+                .e_anno_only,
+                .e_binop,
+                .e_block,
+                .e_break,
+                .e_bytes_literal,
+                .e_call,
+                .e_closure,
+                .e_crash,
+                .e_dbg,
+                .e_deferred_import_ref,
+                .e_derived_method,
+                .e_dispatch_call,
+                .e_ellipsis,
+                .e_empty_list,
+                .e_empty_record,
+                .e_expect,
+                .e_expect_err,
+                .e_field_access,
+                .e_for,
+                .e_hosted_lambda,
+                .e_if,
+                .e_interpolation,
+                .e_lambda,
+                .e_list,
+                .e_lookup_associated,
+                .e_lookup_associated_local,
+                .e_lookup_associated_resolved,
+                .e_lookup_external,
+                .e_lookup_local,
+                .e_lookup_required,
+                .e_match,
+                .e_method_call,
+                .e_method_eq,
+                .e_nominal,
+                .e_nominal_external,
+                .e_record,
+                .e_return,
+                .e_run_low_level,
+                .e_runtime_error,
+                .e_str,
+                .e_str_segment,
+                .e_structural_eq,
+                .e_structural_hash,
+                .e_tag,
+                .e_tuple,
+                .e_tuple_access,
+                .e_typed_frac,
+                .e_typed_int,
+                .e_type_dispatch_call,
+                .e_typed_num_from_numeral,
+                .e_type_method_call,
+                .e_unary_minus,
+                .e_zero_argument_tag,
+                => continue,
+            }
+            const receiver_region = store.getExprRegion(access.receiver);
+            if (receiver_region.start.offset > literal_region.start.offset or
+                receiver_region.end.offset < literal_region.end.offset) continue;
+            std.debug.assert(access.segments.len > 0);
+            const first_segment = store.getFieldAccessSegment(store.fieldAccessSegmentAt(access.segments, 0));
+            const field_name = self.can_ir.getIdentText(first_segment.name);
+            for (builtin_number_types) |type_name| {
+                if (std.ascii.eqlIgnoreCase(field_name, type_name)) return type_name;
+            }
+            return null;
+        }
+        return null;
     }
 
     fn buildInvalidNumericLiteralReport(
@@ -3382,7 +3624,7 @@ pub const ReportBuilder = struct {
             .number_literal => "This number's type never resolved to a concrete type, so it has no",
             .string_literal => "This string's type never resolved to a concrete type, so it has no",
             .value => "A type this needs never resolved to a concrete type, so it has no",
-            .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable,
+            .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable, // the switch at the top returns for shared-literal subjects
         };
         const operator: ?[]const u8 = if (data.is_binop) self.getOperatorForMethod(data.method_name) else null;
         if (operator) |operator_text| {
@@ -3423,7 +3665,7 @@ pub const ReportBuilder = struct {
             const builtin_types: []const u8 = switch (data.subject) {
                 .number_literal => "None of the built-in number types",
                 .string_literal => "None of the built-in string types",
-                .value, .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable,
+                .value, .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable, // the checker sets builtin_candidates_lack_method only with a literal subject; shared subjects returned above
             };
             if (operator) |operator_text| {
                 try D.renderSlice(&.{
@@ -3449,7 +3691,7 @@ pub const ReportBuilder = struct {
             .number_literal => "Giving the number a suffix, using it somewhere that requires a specific type, or annotating it will give it one.",
             .string_literal => "Using the string somewhere that requires a specific type, or annotating it, will give it one.",
             .value => "Using the value somewhere that requires a specific type, or annotating it, will give it one.",
-            .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable,
+            .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable, // the switch at the top returns for shared-literal subjects
         };
         try D.renderSlice(&.{D.bytes(remedy)}, self, &report);
 
@@ -3467,7 +3709,7 @@ pub const ReportBuilder = struct {
         const headline: []const u8 = switch (data.subject) {
             .string_literal_shared_with_number => "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both.",
             .number_literal_shared_with_string => "This number literal must have the same type as a string literal, and nothing in this program determines a type that can be both.",
-            .number_literal, .string_literal, .value => unreachable,
+            .number_literal, .string_literal, .value => unreachable, // buildUndeterminedType delegates only shared-literal subjects here
         };
         try D.renderSliceInto(&.{D.bytes(headline)}, self, &report, &report.headline);
 
@@ -3544,8 +3786,10 @@ pub const ReportBuilder = struct {
     ) Allocator.Error!Report {
         // Note: The unifier's actual/expected are opposite to display order.
         // We want to show "type has X" (from expected_snapshot) then "expected Y" (from actual_snapshot)
-        return try self.makeMismatchReport(
-            if (ctx.source_region) |region|
+        var report = try self.makeMismatchReport(
+            if (ctx.copied) |copied|
+                .{ .direct = copied.use_region }
+            else if (ctx.source_region) |region|
                 .{ .direct = region }
             else
                 .{ .simple = regionIdxFrom(ctx.constraint_var) },
@@ -3568,6 +3812,9 @@ pub const ReportBuilder = struct {
                 // TODO: Once we have nicer type diff hints, use them here
             },
         );
+        errdefer report.deinit();
+        if (ctx.copied) |copied| try self.addCopiedRequirementNotes(&report, copied);
+        return report;
     }
 
     /// Build a typo suggestions report for when a record field is not found.
@@ -3846,14 +4093,13 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Circular Value Definition", "", .runtime_error);
         errdefer report.deinit();
 
-        try D.renderSliceInto(&.{
-            D.bytes("The value"),
-            D.ident(data.ident),
-            D.bytes("is part of a recursive non-function definition cycle."),
-        }, self, &report, &report.headline);
-        try self.addSourceHighlightRegion(&report, data.region);
-        try report.document.addLineBreaks(2);
+        const owned_ident = try report.addOwnedString(self.can_ir.getIdent(data.ident));
+        try report.headline.addReflowingText("The value ");
+        try report.headline.addUnqualifiedSymbol(owned_ident);
+        try report.headline.addReflowingText(" is part of a recursive non-function definition cycle.");
         try report.document.addReflowingText("Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.");
+        try report.document.addLineBreaks(2);
+        try self.addSourceHighlightRegion(&report, data.region);
 
         return report;
     }
@@ -5307,6 +5553,10 @@ pub const ReportBuilder = struct {
         defer patterns.deinit(self.gpa);
         var pattern_ends = std.ArrayList(usize).empty;
         defer pattern_ends.deinit(self.gpa);
+        // A label repeated along the chain is one tag with one arity
+        // (design.md "Row Union Normalization"), so it is written once.
+        var names = std.ArrayList(Ident.Idx).empty;
+        defer names.deinit(self.gpa);
         var cursor = row;
         while (true) {
             const content = snapshots.getContentUnwrapAlias(cursor);
@@ -5316,6 +5566,11 @@ pub const ReportBuilder = struct {
                 .tag_union => |tag_union| {
                     const tags = snapshots.sliceTags(tag_union.tags);
                     for (tags.items(.name), tags.items(.args)) |name, args| {
+                        const repeated = for (names.items) |seen| {
+                            if (seen.eql(name)) break true;
+                        } else false;
+                        if (repeated) continue;
+                        try names.append(self.gpa, name);
                         try patterns.appendSlice(self.gpa, self.can_ir.getIdentText(name));
                         const arity = snapshots.sliceVars(args).len;
                         if (arity == 1) {
@@ -6049,29 +6304,6 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    fn buildComptimeUnusedBranchReport(self: *Self, data: ComptimeUnusedBranch) Allocator.Error!Report {
-        const noun = switch (data.kind) {
-            .match => "match alternative",
-            .if_ => "if branch",
-        };
-        var report = try Report.init(self.gpa, "Unused Branch", "", .warning);
-        errdefer report.deinit();
-        try D.renderSliceInto(&.{
-            D.bytes("This"),
-            D.bytes(noun),
-            D.bytes("was not taken during compile-time evaluation."),
-        }, self, &report, &report.headline);
-
-        try self.addSourceRegionOf(&report.document, data.branch_region, .warning_highlight);
-        try report.document.addLineBreak();
-
-        try D.renderSlice(&.{
-            D.bytes("Note: This warning is empirical; it only describes the compile-time evaluation that ran for this definition."),
-        }, self, &report);
-
-        return report;
-    }
-
     fn buildComptimeConditionReport(self: *Self, data: ComptimeCondition) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Unconditional Condition", "", .warning);
         errdefer report.deinit();
@@ -6106,7 +6338,7 @@ pub const ReportBuilder = struct {
     fn getNumOwned(self: *Self, report: *Report, n: u32) Allocator.Error![]const u8 {
         self.bytes_buf.clearRetainingCapacity();
         var tmp: [20]u8 = undefined;
-        const formatted = std.fmt.bufPrint(&tmp, "{d}", .{n}) catch unreachable;
+        const formatted = std.fmt.bufPrint(&tmp, "{d}", .{n}) catch unreachable; // a u32 has at most 10 decimal digits
         try self.bytes_buf.appendSlice(formatted);
         return try report.addOwnedString(self.bytes_buf.items);
     }
@@ -6123,7 +6355,7 @@ pub const ReportBuilder = struct {
         self.bytes_buf.clearRetainingCapacity();
         const len = std.fmt.count(fmt, args);
         try self.bytes_buf.resize(len);
-        _ = std.fmt.bufPrint(self.bytes_buf.items, fmt, args) catch unreachable;
+        _ = std.fmt.bufPrint(self.bytes_buf.items, fmt, args) catch unreachable; // bytes_buf was resized to std.fmt.count of this format and args
         try report.document.addAnnotated(self.bytes_buf.items, annotation);
     }
 
@@ -6131,7 +6363,7 @@ pub const ReportBuilder = struct {
         self.bytes_buf.clearRetainingCapacity();
         const len = std.fmt.count(fmt, args);
         try self.bytes_buf.resize(len);
-        _ = std.fmt.bufPrint(self.bytes_buf.items, fmt, args) catch unreachable;
+        _ = std.fmt.bufPrint(self.bytes_buf.items, fmt, args) catch unreachable; // bytes_buf was resized to std.fmt.count of this format and args
         try report.document.addReflowingText(self.bytes_buf.items);
     }
 
@@ -6165,7 +6397,7 @@ pub const ReportBuilder = struct {
                     else => &[_]u8{ 't', 'h' },
                 };
                 var tmp: [32]u8 = undefined;
-                const formatted = std.fmt.bufPrint(&tmp, "{d}{s}", .{ n, suffix }) catch unreachable;
+                const formatted = std.fmt.bufPrint(&tmp, "{d}{s}", .{ n, suffix }) catch unreachable; // a u32 has at most 10 decimal digits and the suffix is 2 bytes
                 try buf.appendSlice(formatted);
             },
         }

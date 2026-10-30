@@ -16,8 +16,8 @@ if bool {
 # EXPECTED
 UNCONDITIONAL CONDITION - if_then_else_9.md:3:11:3:13
 TYPE MISMATCH - if_then_else_9.md:3:11:3:13
-MISSING METHOD - if_then_else_9.md:2:2:2:3
-MISSING METHOD - if_then_else_9.md:6:2:6:3
+TYPE MISMATCH - if_then_else_9.md:2:2:2:3
+TYPE MISMATCH - if_then_else_9.md:6:2:6:3
 # PROBLEMS
 ~~~clojure
 (reports
@@ -53,22 +53,18 @@ MISSING METHOD - if_then_else_9.md:6:2:6:3
 			(annotation-end)))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 2 2) (end 2 3))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This number is being used where a non-number type is needed."))
 		(document
 			(source-region (file "if_then_else_9.md") (start 2 2) (end 2 3) (annotation error) (line-text "\t1"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be non-numeric here:")
+			(line-break)
+			(source-region (file "if_then_else_9.md") (start 3 14) (end 5 2) (annotation error) (line-text "} else if 10 { # Comment after else open\n\tA\n} else { # Comment after else open"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -77,22 +73,18 @@ MISSING METHOD - if_then_else_9.md:6:2:6:3
 			(annotation-end)))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 6 2) (end 6 3))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This number is being used where a non-number type is needed."))
 		(document
 			(source-region (file "if_then_else_9.md") (start 6 2) (end 6 3) (annotation error) (line-text "\t3"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be non-numeric here:")
+			(line-break)
+			(source-region (file "if_then_else_9.md") (start 5 8) (end 7 2) (annotation error) (line-text "} else { # Comment after else open\n\t3\n}"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

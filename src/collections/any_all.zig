@@ -31,7 +31,8 @@ pub fn Evaluation(comptime Leaf: type, comptime Context: type) type {
             group: Op,
         };
 
-        const Item = union(enum) {
+        /// One producer-authored leaf or nested Boolean group.
+        pub const Item = union(enum) {
             leaf: Leaf,
             /// A nested group of the `count` leaves after it.
             group: struct { op: Op, count: usize },
@@ -97,7 +98,7 @@ pub fn Evaluation(comptime Leaf: type, comptime Context: type) type {
                 var index = frames.items.len;
                 while (index > frames_base) {
                     index -= 1;
-                    if (frames.items[index].owner) |owner| context.exit(owner, null) catch unreachable;
+                    if (frames.items[index].owner) |owner| context.exit(owner, null) catch unreachable; // Evaluation requires Context.exit not to fail on a null result
                 }
             }
 
@@ -160,7 +161,7 @@ pub fn Evaluation(comptime Leaf: type, comptime Context: type) type {
                     if (frames.items.len == frames.capacity) {
                         frames.ensureUnusedCapacity(allocator, 1) catch |err| {
                             items.shrinkRetainingCapacity(start);
-                            context.exit(leaf, null) catch unreachable;
+                            context.exit(leaf, null) catch unreachable; // Evaluation requires Context.exit not to fail on a null result
                             return err;
                         };
                     }

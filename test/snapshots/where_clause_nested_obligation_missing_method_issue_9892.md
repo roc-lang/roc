@@ -57,7 +57,12 @@ MISSING METHOD - where_clause_nested_obligation_missing_method_issue_9892.md:10:
 			(reflow " ")
 			(annotated code "frobnicate")
 			(reflow " ")
-			(reflow "associated with it in the type's declaration."))))
+			(reflow "associated with it in the type's declaration.")
+			(line-break)
+			(line-break)
+			(reflow "This use needs that because of this code in the definition it uses:")
+			(line-break)
+			(source-region (file "where_clause_nested_obligation_missing_method_issue_9892.md") (start 3 26) (end 3 40) (annotation error) (line-text "    unwrap = |Wrap.W(x)| x.frobnicate()")))))
 ~~~
 # TOKENS
 ~~~zig

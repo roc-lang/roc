@@ -17,6 +17,9 @@ const LirStore = core.LirStore;
 const GuardedList = collections.GuardedList;
 const BodyClone = @import("body_clone.zig");
 
+/// `Pass.old_stmt_to_new` entry of a statement no procedure reaches.
+const pruned_stmt: LIR.CFStmtId = @fromBackingInt(std.math.maxInt(u32));
+
 /// Remove proc specs unreachable from roots, closed static initializers, and
 /// explicit constant callable plans, then rewrite every retained proc reference
 /// to the compact id space.
@@ -88,9 +91,10 @@ const Pass = struct {
     allocator: Allocator,
     reachable: []bool,
     old_to_new: []?LIR.LirProcSpecId,
-    reachable_stmts: []bool,
-    old_stmt_to_new: []?LIR.CFStmtId,
-    visited_stmts: []bool,
+    reachable_stmts: std.bit_set.DynamicBitSetUnmanaged,
+    /// The compact id of each reachable statement; `pruned_stmt` for the rest.
+    old_stmt_to_new: []LIR.CFStmtId,
+    visited_stmts: std.bit_set.DynamicBitSetUnmanaged,
     visited_plans: []bool,
     reachable_static_data: []bool,
     old_static_data_to_new: []?LIR.StaticDataId,
@@ -98,11 +102,38 @@ const Pass = struct {
     export_queue: std.ArrayList(LirProgram.StaticDataSymbolId),
     plan_stack: std.ArrayList(LirProgram.ConstPlanId),
     stmt_stack: std.ArrayList(LIR.CFStmtId),
+    /// The compile-time values this program's own roots produce, which a
+    /// program with completed values evaluates itself; built on first use.
+    own_values: ?std.AutoHashMapUnmanaged(OwnValue, void) = null,
     /// `Result.served_callees` grouped by entry: the callees of `proc` are
     /// `served_callees[served_starts[proc]..served_starts[proc + 1]]`. Both
     /// are empty when the program takes no entry with served callees.
     served_starts: []u32,
     served_callees: []LIR.LirProcSpecId,
+
+    const OwnValue = struct { module: [32]u8, tag: u8, index: u32 };
+
+    fn ownValue(module: @import("check").CheckedModule.ModuleId, producer: LIR.ComptimeProducer) OwnValue {
+        return switch (producer) {
+            .checked => |id| .{ .module = module.bytes, .tag = 0, .index = @backingInt(id) },
+            .literal => |id| .{ .module = module.bytes, .tag = 1, .index = @backingInt(id) },
+        };
+    }
+
+    /// Whether one of this program's own roots produces `root`'s value.
+    fn evaluatesItself(self: *Pass, module: @import("check").CheckedModule.ModuleId, producer: LIR.ComptimeProducer) Allocator.Error!bool {
+        if (self.own_values == null) {
+            var own = std.AutoHashMapUnmanaged(OwnValue, void).empty;
+            errdefer own.deinit(self.allocator);
+            for (self.result.const_roots.items) |root| {
+                const id = root.request.compile_time_root orelse continue;
+                try own.put(self.allocator, ownValue(self.result.lowering_modules.items[@backingInt(root.owner)], .{ .checked = id }), {});
+            }
+            for (self.result.literal_roots.items) |root| try own.put(self.allocator, ownValue(root.module, .{ .literal = root.id }), {});
+            self.own_values = own;
+        }
+        return self.own_values.?.contains(ownValue(module, producer));
+    }
 
     fn init(result: *LirProgram.Result, frozen: ?*LirProgram.FrozenStaticData) Allocator.Error!Pass {
         const allocator = result.store.allocator;
@@ -119,17 +150,15 @@ const Pass = struct {
         errdefer allocator.free(old_to_new);
         @memset(old_to_new, null);
 
-        const visited_stmts = try allocator.alloc(bool, stmt_count);
-        errdefer allocator.free(visited_stmts);
-        @memset(visited_stmts, false);
+        var visited_stmts = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
+        errdefer visited_stmts.deinit(allocator);
 
-        const reachable_stmts = try allocator.alloc(bool, stmt_count);
-        errdefer allocator.free(reachable_stmts);
-        @memset(reachable_stmts, false);
+        var reachable_stmts = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
+        errdefer reachable_stmts.deinit(allocator);
 
-        const old_stmt_to_new = try allocator.alloc(?LIR.CFStmtId, stmt_count);
+        const old_stmt_to_new = try allocator.alloc(LIR.CFStmtId, stmt_count);
         errdefer allocator.free(old_stmt_to_new);
-        @memset(old_stmt_to_new, null);
+        @memset(old_stmt_to_new, pruned_stmt);
 
         const visited_plans = try allocator.alloc(bool, plan_count);
         errdefer allocator.free(visited_plans);
@@ -210,6 +239,7 @@ const Pass = struct {
     }
 
     fn deinit(self: *Pass) void {
+        if (self.own_values) |*own| own.deinit(self.allocator);
         self.allocator.free(self.served_callees);
         self.allocator.free(self.served_starts);
         self.allocator.free(self.static_data_exports);
@@ -222,9 +252,9 @@ const Pass = struct {
         self.allocator.free(self.old_static_data_to_new);
         self.allocator.free(self.reachable_static_data);
         self.allocator.free(self.visited_plans);
-        self.allocator.free(self.visited_stmts);
+        self.visited_stmts.deinit(self.allocator);
         self.allocator.free(self.old_stmt_to_new);
-        self.allocator.free(self.reachable_stmts);
+        self.reachable_stmts.deinit(self.allocator);
         self.allocator.free(self.old_to_new);
         self.allocator.free(self.reachable);
     }
@@ -292,7 +322,7 @@ const Pass = struct {
     }
 
     fn markProcBodyEdges(self: *Pass, proc_id: LIR.LirProcSpecId) Allocator.Error!void {
-        const proc = self.store.getProcSpec(proc_id);
+        const proc = self.store.getProcSpecImmediate(proc_id);
         // A served entry is body-less; its code's calls by identity are
         // edges of their own.
         if (self.served_starts.len != 0) {
@@ -308,10 +338,10 @@ const Pass = struct {
 
         while (self.stmt_stack.pop()) |stmt_id| {
             const stmt_index = @backingInt(stmt_id);
-            if (stmt_index >= self.visited_stmts.len) reachableProcInvariant("stmt reference exceeds cf_stmts len");
-            if (self.visited_stmts[stmt_index]) continue;
-            self.visited_stmts[stmt_index] = true;
-            self.reachable_stmts[stmt_index] = true;
+            if (stmt_index >= self.visited_stmts.bit_length) reachableProcInvariant("stmt reference exceeds cf_stmts len");
+            if (self.visited_stmts.isSet(stmt_index)) continue;
+            self.visited_stmts.set(stmt_index);
+            self.reachable_stmts.set(stmt_index);
 
             // The fresh form of a literal stays available until ARC chooses.
             const refs = stmtRefs(self.store, self.store.getCFStmt(stmt_id));
@@ -396,8 +426,14 @@ const Pass = struct {
             try self.markFrozenExport(export_id);
         } else if (self.result.static_data_values.items[index].initializer) |initializer| {
             try self.markProc(initializer);
+        } else if (self.result.static_data_values.items[index].stored) |stored| {
+            try self.markConstPlan(stored.plan);
         } else if (self.frozen != null) {
-            reachableProcInvariant("completed static data slot has no frozen export");
+            // A program lowered after some compile-time values completed
+            // evaluates the rest itself.
+            const root = self.result.static_data_values.items[index].compile_time_root orelse
+                reachableProcInvariant("completed static data slot has no frozen export");
+            if (!try self.evaluatesItself(root.module, root.root)) reachableProcInvariant("completed static data slot has no frozen export");
         } else if (self.result.static_data_values.items[index].compile_time_root == null) {
             reachableProcInvariant("static data slot has neither an initializer nor explicit compile-time ownership");
         }
@@ -434,8 +470,8 @@ const Pass = struct {
 
     fn assignCompactStmtIds(self: *Pass) void {
         var next: u32 = 0;
-        for (self.reachable_stmts, 0..) |is_reachable, old_index| {
-            if (!is_reachable) continue;
+        var reachable = self.reachable_stmts.iterator(.{});
+        while (reachable.next()) |old_index| {
             self.old_stmt_to_new[old_index] = @fromBackingInt(@intCast(next));
             next += 1;
         }
@@ -451,7 +487,7 @@ const Pass = struct {
     }
 
     fn remapReachableProcBodies(self: *Pass) Allocator.Error!void {
-        @memset(self.visited_stmts, false);
+        self.visited_stmts.unsetAll();
         for (0..self.store.procSpecCount()) |index| {
             if (!self.reachable[index]) continue;
             const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
@@ -468,8 +504,8 @@ const Pass = struct {
         try self.stmt_stack.append(self.allocator, body);
         while (self.stmt_stack.pop()) |stmt_id| {
             const stmt_index = @backingInt(stmt_id);
-            if (self.visited_stmts[stmt_index]) continue;
-            self.visited_stmts[stmt_index] = true;
+            if (self.visited_stmts.isSet(stmt_index)) continue;
+            self.visited_stmts.set(stmt_index);
 
             // The successors are pushed before the edges are remapped, so
             // the walk follows the old ids this table is indexed by.
@@ -534,7 +570,6 @@ const Pass = struct {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -577,9 +612,13 @@ const Pass = struct {
         }
         self.result.served_callees.shrinkRetainingCapacity(kept_served);
         // A specialization whose procedure was unreachable leaves the table.
+        const trace = base.dev_diagnostics.isSet(.pack_trace);
         var kept: usize = 0;
         for (self.result.spec_procs.items) |spec_proc| {
-            const new_proc = self.old_to_new[@backingInt(spec_proc.proc)] orelse continue;
+            const new_proc = self.old_to_new[@backingInt(spec_proc.proc)] orelse {
+                if (trace) std.debug.print("drop-spec key={x} name={s}\n", .{ spec_proc.key[0..8], self.result.store.procDebugName(spec_proc.proc) orelse "" });
+                continue;
+            };
             var remapped = spec_proc;
             remapped.proc = new_proc;
             self.result.spec_procs.items[kept] = remapped;
@@ -606,7 +645,6 @@ const Pass = struct {
         for (self.result.static_data_values.items, 0..) |*value, index| {
             if (!self.reachable_static_data[index]) continue;
             if (value.initializer) |initializer| value.initializer = self.remapProc(initializer);
-            if (value.accessor) |accessor| value.accessor = self.maybeRemapProc(accessor);
             if (value.compile_time_root) |*root| {
                 if (root.role == .value) {
                     root.role.value.failure_slot = self.remapStaticData(root.role.value.failure_slot);
@@ -752,7 +790,7 @@ const Pass = struct {
                 for (old_entries) |entry| {
                     if (entry.captures.len > 0) self.allocator.free(entry.captures);
                     if (entry.template) |template| {
-                        if (template.evidence.len > 0) self.allocator.free(template.evidence);
+                        @import("check").ConstStore.freeVector(self.allocator, template.evidence);
                         if (template.evidence_frames.len > 0) self.allocator.free(template.evidence_frames);
                     }
                     if (entry.boxy) |boxy| self.allocator.free(boxy.captures);
@@ -772,7 +810,7 @@ const Pass = struct {
                 } else {
                     if (entry.captures.len > 0) self.allocator.free(entry.captures);
                     if (entry.template) |template| {
-                        if (template.evidence.len > 0) self.allocator.free(template.evidence);
+                        @import("check").ConstStore.freeVector(self.allocator, template.evidence);
                         if (template.evidence_frames.len > 0) self.allocator.free(template.evidence_frames);
                     }
                     if (entry.boxy) |boxy| self.allocator.free(boxy.captures);
@@ -784,6 +822,11 @@ const Pass = struct {
     }
 
     fn remapBoxyTableProcs(self: *Pass) Allocator.Error!void {
+        if (self.store.runtime_contract == .specialized) {
+            if (self.result.boxy_frozen_method_origins.count() != 0 or self.result.boxy_method_slots.items.len != 0)
+                base.invariant("specialized program carried Boxy method tables", .{});
+            return;
+        }
         var origins: @TypeOf(self.result.boxy_frozen_method_origins) = .empty;
         errdefer origins.deinit(self.allocator);
         var entries = self.result.boxy_frozen_method_origins.iterator();
@@ -818,6 +861,8 @@ const Pass = struct {
     /// method slot. Building this once at the proc-compaction boundary keeps
     /// every backend from rediscovering and deduplicating the same set.
     fn rebuildBoxyWorkerProcs(self: *Pass) Allocator.Error!void {
+        if (self.store.runtime_contract == .specialized) return;
+        @import("base").dev_diagnostics.traceBoxyWork("worker-list");
         self.result.boxy_worker_procs.clearRetainingCapacity();
 
         const proc_count = self.store.procSpecCount();
@@ -844,7 +889,7 @@ const Pass = struct {
     }
 
     fn compactCFStmts(self: *Pass) Allocator.Error!void {
-        try self.store.compactCFStmts(self.reachable_stmts);
+        try self.store.compactCFStmts(&self.reachable_stmts);
     }
 
     fn compactStaticDataValues(self: *Pass) void {
@@ -893,7 +938,7 @@ const Pass = struct {
             if (entry.proc >= proc_count) reachableProcInvariant("proc debug name exceeds compact proc_specs len");
         }
         for (0..self.store.procSpecCount()) |proc_index| {
-            const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+            const proc = self.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             if (proc.body) |body| self.verifyStmtRef(body, stmt_count) else if (proc.hosted == null and !proc.external) {
                 reachableProcInvariant("retained Roc proc has no body");
             }
@@ -927,7 +972,9 @@ const Pass = struct {
     fn remapStmt(self: *Pass, old: LIR.CFStmtId) LIR.CFStmtId {
         const index = @backingInt(old);
         if (index >= self.old_stmt_to_new.len) reachableProcInvariant("stmt reference exceeds old cf_stmts len");
-        return self.old_stmt_to_new[index] orelse reachableProcInvariant("reachable stmt edge pointed at pruned stmt");
+        const new = self.old_stmt_to_new[index];
+        if (new == pruned_stmt) reachableProcInvariant("reachable stmt edge pointed at pruned stmt");
+        return new;
     }
 
     fn verifyProcRef(_: *Pass, proc: LIR.LirProcSpecId, proc_count: usize) void {
@@ -1004,7 +1051,6 @@ fn stmtRefs(store: *const LirStore, stmt: LIR.CFStmt) StmtRefs {
         .expect_err,
         .runtime_error,
         .comptime_exhaustiveness_failed,
-        .comptime_branch_taken,
         .incref,
         .decref,
         .decref_if_initialized,
@@ -1022,10 +1068,7 @@ fn stmtRefs(store: *const LirStore, stmt: LIR.CFStmt) StmtRefs {
 }
 
 fn reachableProcInvariant(msg: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        base.invariant("reachable procs invariant violated: {s}", .{msg});
-    }
-    unreachable;
+    base.invariant("reachable procs invariant violated: {s}", .{msg});
 }
 
 test "reachable proc pass compacts proc specs and remaps root ids" {
@@ -1223,6 +1266,7 @@ test "reachable proc pass follows packed erased callable refs in static initiali
 test "reachable proc pass publishes exact deduplicated boxy worker procs" {
     var result = try LirProgram.Result.init(std.testing.allocator, base.target.TargetUsize.native);
     defer result.deinit();
+    result.store.runtime_contract = .boxy;
 
     const value = try result.store.addLocal(.{ .layout_idx = .zst });
     const ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
@@ -1486,7 +1530,7 @@ test "erased callable pruning frees evidence for fully and partly discarded sets
                     .fn_def = undefined,
                     .source_fn_ty = undefined,
                     .source_fn_key = undefined,
-                    .evidence = try allocator.dupe(@import("check").ConstStore.ConstFnEvidence, &.{.checked_error}),
+                    .evidence = .{ .nodes = try allocator.dupe(@import("check").ConstStore.ConstFnEvidence, &.{.checked_error}) },
                     .evidence_frames = try allocator.dupe(@import("check").ConstStore.ConstFnEvidenceFrame, &.{.{ .scope_id = .root, .parent = null, .roots_start = 0, .roots_len = 1 }}),
                 },
             };
@@ -1496,7 +1540,7 @@ test "erased callable pruning frees evidence for fully and partly discarded sets
     try run(&result);
     try std.testing.expectEqual(@as(usize, 0), result.erased_fns.items[0].entries.len);
     try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries.len);
-    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.?.evidence.len);
+    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.?.evidence.nodes.len);
     try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.?.evidence_frames.len);
 }
 
@@ -1504,6 +1548,7 @@ test "reachable proc pass retains frozen method provenance after implementation 
     const gpa = std.testing.allocator;
     var result = try LirProgram.Result.init(gpa, @import("base").target.TargetUsize.native);
     defer result.deinit();
+    result.store.runtime_contract = .boxy;
     const local = try result.store.addLocal(.{ .layout_idx = .zst });
     const body = try result.store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const implementation_identity = LIR.ProcIdentity.forTest(81);

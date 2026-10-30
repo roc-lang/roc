@@ -151,11 +151,15 @@ pub const StaticDataId = enum(u32) { _ };
 
 /// Optional command-level test-plan metadata for a checked root request.
 pub const RootTestPlanMetadata = struct {
-    /// Exact position in the producer-owned root request sequence.
+    /// Position in the execution subset (offset when CTFE prefixes its roots).
     request_index: u32,
+    /// Original source root order; never renumbered by cache admission.
     root_order: u32,
+    /// Slot in the complete reporting plan, including cached results.
     result_index: u32,
+    /// Original source module index, independent of execution partitions.
     module_index: u32,
+    /// Original root index within its source module.
     root_index: u32,
 };
 
@@ -311,7 +315,7 @@ pub fn invariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .debug) {
         base.invariant("postcheck invariant violated: {s}", .{message});
     }
-    unreachable;
+    unreachable; // callers only report compiler invariants, which design.md makes unreachable outside debug builds
 }
 
 /// `invariant` with runtime context formatted into the panic message.
@@ -319,7 +323,7 @@ pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
     if (@import("builtin").mode == .debug) {
         base.invariant("postcheck invariant violated: " ++ fmt, args);
     }
-    unreachable;
+    unreachable; // callers only report compiler invariants, which design.md makes unreachable outside debug builds
 }
 
 /// Stop the build with a compiler-bug message in every build mode.
@@ -381,12 +385,15 @@ test "test metadata uses explicit union request positions across equal root orde
     var root: checked.RootRequest = undefined;
     root.order = 0;
     const roots: RootRequests = .{ .test_plan_metadata = &.{
-        .{ .request_index = 2, .root_order = 0, .result_index = 0, .module_index = 4, .root_index = 0 },
-        .{ .request_index = 3, .root_order = 0, .result_index = 1, .module_index = 7, .root_index = 0 },
+        .{ .request_index = 2, .root_order = 0, .result_index = 11, .module_index = 4, .root_index = 3 },
+        .{ .request_index = 3, .root_order = 0, .result_index = 29, .module_index = 7, .root_index = 5 },
     } };
     try std.testing.expect(testPlanMetadataForRoot(roots, root, 0) == null);
     try std.testing.expectEqual(@as(u32, 4), testPlanMetadataForRoot(roots, root, 2).?.module_index);
     try std.testing.expectEqual(@as(u32, 7), testPlanMetadataForRoot(roots, root, 3).?.module_index);
+    try std.testing.expectEqual(@as(u32, 11), testPlanMetadataForRoot(roots, root, 2).?.result_index);
+    try std.testing.expectEqual(@as(u32, 29), testPlanMetadataForRoot(roots, root, 3).?.result_index);
+    try std.testing.expectEqual(@as(u32, 5), testPlanMetadataForRoot(roots, root, 3).?.root_index);
 }
 
 /// A checked compile-time root, named by its module's identity bytes.
@@ -395,15 +402,67 @@ pub const ComptimeRootRead = extern struct {
     root: u32,
 };
 
+/// A compile-time root a stored literal value read, named across versions of
+/// the program (design.md "Compile-Time Value Reuse Across Edits"): its module
+/// (a module no other module of the program imports by its value context,
+/// any other by its checked key), its site within that module, and the value
+/// identity it had.
+pub const LiteralValueRead = struct {
+    in_top_module: bool,
+    /// The module's value context when `in_top_module`, else its checked key.
+    module: [32]u8,
+    site: [32]u8,
+    value: [32]u8,
+};
+
+/// A literal value the literal value store holds for a value identity: its
+/// value graph and the roots its evaluation read.
+pub const LiteralValueHit = struct {
+    store: *const check.ConstStore.ConstStore,
+    root: check.ConstStore.ConstNodeId,
+    reads: []const LiteralValueRead,
+};
+
+/// The literal values an earlier compilation of the program stored, by value
+/// identity. The consumer that owns the store supplies the context.
+pub const LiteralValueLookup = struct {
+    context: *const anyopaque,
+    find: *const fn (context: *const anyopaque, identity: [32]u8) ?LiteralValueHit,
+
+    pub fn lookup(self: LiteralValueLookup, identity: [32]u8) ?LiteralValueHit {
+        return self.find(self.context, identity);
+    }
+};
+
+/// How a program evaluates one literal root (design.md "Compile-Time Value
+/// Reuse Across Edits").
+pub const LiteralRootReuse = union(enum) {
+    /// Its definition runs the literal's conversion.
+    converted,
+    /// Its definition restores the value the literal value store holds under
+    /// its value identity.
+    restored,
+    /// Its definition runs the conversion of the restored literal root it
+    /// names, which a compiler with runtime safety evaluates to verify the
+    /// stored value.
+    verifies: LiteralRootId,
+};
+
 /// What the object cache knows about a specialization it can serve: the
 /// content identity of its compiled procedure and the ownership signature
 /// and uniqueness facts ARC solved for it, which the program that links the
 /// entry adopts as fixed.
 pub const SpecCacheHit = struct {
     identity: [32]u8,
+    /// The producer's tail-drive summary for this procedure's native body.
+    may_leave_pending: bool = false,
+    /// Producer-authored iterator normalization scope, part of source identity.
+    iterator_fusion_scope: bool = false,
     /// The entry is a linked object reached through its C-ABI entry rather
     /// than spliced code (`LIR.LirProcSpec.c_abi_entry`).
     c_abi_entry: bool = false,
+    /// Producer proved that the complete closure needs no expect instrumentation.
+    test_compatible: bool = false,
     /// Producer-owned demand summary: the compile-time roots the procedure's
     /// code reads, through every procedure it reaches. A program that takes
     /// the hit demands them as if it had lowered the body (design.md
@@ -430,11 +489,25 @@ pub fn procIdentityCacheKey(identity: [32]u8) [32]u8 {
     return hasher.finalResult();
 }
 
+/// One recorded discovery outcome of a specialization (design.md "Discovery
+/// Summaries"): an earlier compilation lowered the specialization's closure,
+/// whose bodies came from the modules with these checked keys, and evaluated
+/// every literal root it registered without an error or a message.
+pub const DiscoverySettlement = struct {
+    modules: []const [32]u8,
+};
+
 /// Which object-cache entries can serve a consumer, decided by how its code
 /// is emitted.
 pub const SpecCacheTakes = enum {
     /// Dev code only: the consumer splices code and links nothing.
     dev_code,
+    /// Native tests require a closure with no uninstrumented expects.
+    test_dev_code,
+    /// Dev code only, for a producer shared with a consumer whose code is
+    /// linked: no dev entry whose code includes a procedure a linked object
+    /// provides, since that consumer takes the procedure from the object.
+    dev_code_beside_linked_objects,
     /// A linked object's entry (`SpecCacheHit.c_abi_entry`) ahead of the dev
     /// code of the same specialization: the consumer splices code and
     /// its output is linked.
@@ -444,7 +517,21 @@ pub const SpecCacheTakes = enum {
     linked_objects,
 
     pub fn takesLinkedObjects(self: SpecCacheTakes) bool {
-        return self != .dev_code;
+        return switch (self) {
+            .dev_code, .test_dev_code, .dev_code_beside_linked_objects => false,
+            .dev_code_and_linked_objects, .linked_objects => true,
+        };
+    }
+
+    /// Whether a dev entry is refused when its code includes a procedure a
+    /// linked object provides: the program's linked output takes that
+    /// procedure from the object, so dev code for it must not reach the
+    /// program through a splice.
+    pub fn refusesDevCodeOfLinkedProcs(self: SpecCacheTakes) bool {
+        return switch (self) {
+            .dev_code, .test_dev_code, .linked_objects => false,
+            .dev_code_beside_linked_objects, .dev_code_and_linked_objects => true,
+        };
     }
 
     pub fn takesDevCode(self: SpecCacheTakes) bool {
@@ -452,13 +539,69 @@ pub const SpecCacheTakes = enum {
     }
 };
 
+/// The module identity of every checked module a program lowers against, in
+/// byte order: the source files its lines can name. An entry whose splice
+/// would place a line in any other module version does not serve it.
+pub const ProgramModules = []const [32]u8;
+
+/// Whether `modules` holds `identity`.
+pub fn programHasModule(modules: ProgramModules, identity: [32]u8) bool {
+    var low: usize = 0;
+    var high: usize = modules.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        switch (std.mem.order(u8, &modules[mid], &identity)) {
+            .eq => return true,
+            .lt => low = mid + 1,
+            .gt => high = mid,
+        }
+    }
+    return false;
+}
+
+/// The program modules of `identities`, sorted and without duplicates in
+/// place.
+pub fn sortProgramModules(identities: [][32]u8) ProgramModules {
+    std.mem.sort([32]u8, identities, {}, struct {
+        fn lessThan(_: void, lhs: [32]u8, rhs: [32]u8) bool {
+            return std.mem.order(u8, &lhs, &rhs) == .lt;
+        }
+    }.lessThan);
+    var kept: usize = 0;
+    for (identities) |identity| {
+        if (kept != 0 and std.mem.eql(u8, &identities[kept - 1], &identity)) continue;
+        identities[kept] = identity;
+        kept += 1;
+    }
+    return identities[0..kept];
+}
+
+/// Optional immutable interface records. Reads may run on specialization
+/// workers; publication is staged by the coordinator after accepting a result.
+/// Loaded bytes belong to the requesting allocator.
+pub const InterfaceSummaryCache = struct {
+    context: *anyopaque,
+    load: *const fn (*anyopaque, std.mem.Allocator, [32]u8, [32]u8) std.mem.Allocator.Error!?[]u8,
+    record: *const fn (*anyopaque, [32]u8, [32]u8, []const u8) std.mem.Allocator.Error!void,
+};
+
 /// The object cache's answer for a specialization key, asked when Monotype
 /// reserves the specialization and before its body exists. The consumer that
 /// owns the cache supplies the context and the lookup.
+/// Also supplies optional earlier specialization-interface summaries.
 pub const SpecCacheLookup = struct {
+    interfaces: ?InterfaceSummaryCache = null,
     context: *anyopaque,
-    /// `takes`: which entries can serve the asking consumer.
-    find: *const fn (context: *anyopaque, key: [32]u8, takes: SpecCacheTakes) ?SpecCacheHit,
+    /// `takes`: which entries can serve the asking consumer; `modules`: the
+    /// asking program's modules.
+    find: *const fn (context: *anyopaque, key: [32]u8, takes: SpecCacheTakes, modules: ProgramModules) ?SpecCacheHit,
+    /// The discovery outcomes recorded for a specialization key.
+    find_discovery: ?*const fn (context: *anyopaque, key: [32]u8) []const DiscoverySettlement = null,
+
+    pub fn discoverySettlements(self: SpecCacheLookup, key: [32]u8) []const DiscoverySettlement {
+        const find = self.find_discovery orelse return &.{};
+        return find(self.context, key);
+    }
 
     /// Session capability identity, not a persistent cache key. Equal providers
     /// expose the same immutable offer and artifact collection to both readers.
@@ -466,7 +609,7 @@ pub const SpecCacheLookup = struct {
         return self.context == other.context and self.find == other.find;
     }
 
-    pub fn lookup(self: SpecCacheLookup, key: [32]u8, takes: SpecCacheTakes) ?SpecCacheHit {
-        return self.find(self.context, key, takes);
+    pub fn lookup(self: SpecCacheLookup, key: [32]u8, takes: SpecCacheTakes, modules: ProgramModules) ?SpecCacheHit {
+        return self.find(self.context, key, takes, modules);
     }
 };

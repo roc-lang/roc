@@ -266,6 +266,30 @@ const issue11377GenericNominalCollectionSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 12505: record tuple and tag snapshots survive loop updates",
+        .source =
+        \\{
+        \\    make = |n| { a: n, b: n + 1, text: Str.concat("a heap allocated aggregate field: ", n.to_str()), items: [n, n + 2] }
+        \\    var $index = 0.U64
+        \\    var $state = make($index)
+        \\    var $sum = 0.U64
+        \\    while $index < 6 {
+        \\        snapshot = $state
+        \\        pair = (snapshot, $index)
+        \\        wrapped = if $index == 1 Empty else Full(pair)
+        \\        $index = $index + 1
+        \\        $state = make($index)
+        \\        $sum = $sum + match wrapped {
+        \\            Empty => 0
+        \\            Full((old, old_index)) => old.a + old.b + old_index + old.items.len().to_u64() + Str.count_utf8_bytes(old.text).to_u64()
+        \\        }
+        \\    }
+        \\    $sum.to_str()
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"232\"" },
+    },
+    .{
         .name = "issue 11992: local value captures itself through a function field",
         .source_kind = .module,
         .source =
@@ -2297,6 +2321,90 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"hi!\"" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12609
+        // An unannotated inline lambda that dispatches a method on its
+        // parameter is stored in an unannotated record. Nothing in `Hooks`
+        // pins the parameter's type, so the importing module's request must
+        // select `Str.concat`.
+        .name = "issue 12609: inline where-clause lambda read out of a record in an imported module",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Hooks",
+            .source =
+            \\Hooks := [].{
+            \\    hooks = { shout: |s| s.concat("!") }
+            \\}
+            ,
+        }},
+        .source =
+        \\import Hooks
+        \\
+        \\main = {
+        \\    shout = Hooks.hooks.shout
+        \\    shout("hi")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"hi!\"" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12609
+        // The same lambda stored in a tuple and in a list. Each importing use
+        // copies the stored function's type, so two uses can request two
+        // different receiver types.
+        .name = "issue 12609: inline where-clause lambdas in an imported tuple and list run at two types",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Hooks",
+            .source =
+            \\Hooks := [].{
+            \\    pair = (|s| s.concat("!"), 1)
+            \\    fns = [|s| s.concat(s)]
+            \\}
+            ,
+        }},
+        .source =
+        \\import Hooks
+        \\
+        \\main = {
+        \\    (shout, _) = Hooks.pair
+        \\    text = match Hooks.fns {
+        \\        [twice] => twice("ab")
+        \\        _ => ""
+        \\    }
+        \\    bytes = match Hooks.fns {
+        \\        [twice] => twice([1.U8, 2])
+        \\        _ => []
+        \\    }
+        \\    (shout("hi"), text, bytes)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(\"hi!\", \"abab\", [1, 2, 1, 2])" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12609
+        // A lambda that a stored conditional selects has no construction edge
+        // of its own, so it owns a callable-derived evidence scope: its
+        // requirement on the value's unpinned variable resolves from each
+        // importing request.
+        .name = "issue 12609: imported lambda a stored conditional selects runs at two types",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Hooks",
+            .source =
+            \\Hooks := [].{
+            \\    flag = Bool.True
+            \\    hooks = { dup: if flag |s| s.concat(s) else |s| s }
+            \\}
+            ,
+        }},
+        .source =
+        \\import Hooks
+        \\
+        \\main = ((Hooks.hooks.dup)("ab"), (Hooks.hooks.dup)([1.U8]))
+        ,
+        .expected = .{ .inspect_str = "(\"abab\", [1, 1])" },
     },
     .{
         // https://github.com/roc-lang/roc/issues/11170
@@ -4922,5 +5030,66 @@ pub const tests = [_]TestCase{
         \\main = count(["v", "v", "v"])
         ,
         .expected = .{ .inspect_str = "3" },
+    },
+    .{
+        // The loop's iteration method names the element record only through
+        // the iterator type's argument. The record's row is open inside
+        // `sum_x`, so Boxy reads its descriptor from the method's evidence,
+        // which must describe that type-argument position of the signature.
+        .name = "open record named only through an iterator's type argument is read through the method evidence",
+        .source =
+        \\{
+        \\    sum_x = |points| {
+        \\        var $x = 0.I64
+        \\        for point in points {
+        \\            $x = $x + point.x
+        \\        }
+        \\        $x
+        \\    }
+        \\    sum_x([{ x: 1, y: 2 }, { x: 30, y: 40 }])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "31" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12624
+        // `run`'s scheme reads `exec`'s result as an anonymous tag union, and
+        // the callback's `?` lifts it into `Try` at this call. The `Ok`
+        // payload's `trim` dispatch is left to the callable, so its evidence
+        // path's tag step reaches the `Try` and must read its backing.
+        .name = "issue 12624: callable-derived evidence path reads a Try lifted from the scheme's tag union",
+        .source_kind = .module,
+        .source =
+        \\run = |exec| {
+        \\    match exec("a") {
+        \\        Ok(output) => Ok(output.trim())
+        \\        Err(e) => Err("${Str.inspect(e)}")
+        \\    }
+        \\}
+        \\
+        \\main = match run(|_s| {
+        \\    _ = Err(Boom)?
+        \\    crash "unreachable"
+        \\}) {
+        \\    Ok(_) => "ok"
+        \\    Err(msg) => msg
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"Boom\"" },
+    },
+    .{
+        // Checking orders a scheme's evidence by its walk of the scheme's row
+        // chains, so `p.y`, read first, puts `y`'s `is_eq` ahead of `x`'s
+        // `trim`. Boxy pairs each signature dictionary group with its own
+        // checked slot rather than its position in the label-sorted
+        // signature.
+        .name = "dictionary groups read their checked evidence slot when the row reads fields out of label order",
+        .source =
+        \\{
+        \\    run = |p| if p.y == "" p.x.trim() else p.y
+        \\    run({ x: " b ", y: "" })
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"b\"" },
     },
 };

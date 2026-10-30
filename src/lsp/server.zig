@@ -14,6 +14,7 @@ const Contributions = @import("diagnostic_contributions.zig").Contributions;
 const uri_util = @import("uri.zig");
 const compile = @import("compile");
 const watch = @import("watch");
+const inbox_mod = @import("inbox.zig");
 
 /// Optional deterministic observation and failure controls for live-server tests.
 pub const TestHooks = struct {
@@ -61,7 +62,7 @@ const log = std.log.scoped(.roc_lsp_server);
 /// Errors that can occur while opening the optional LSP debug log.
 pub const CreateLogFileError = Allocator.Error || std.Io.File.OpenError || std.Io.Dir.CreateDirPathError || error{NoHomeDirectory};
 /// Errors that can occur while running the LSP server over standard IO.
-pub const RunWithStdIoError = CreateLogFileError || std.Io.File.Reader.Error || error{
+pub const RunWithStdIoError = CreateLogFileError || std.Io.File.Reader.Error || std.Io.ConcurrentError || error{
     EndOfStream,
     HeaderTooLong,
     InvalidHeader,
@@ -85,8 +86,9 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         const NotificationError = Allocator.Error || error{WriteFailed};
         const PayloadError = HandlerError || NotificationError;
         /// Errors that terminate the server because input or output can no longer be processed reliably.
-        pub const RunError = TransportType.ReadMessageError || PayloadError;
-        const RunSyntaxCheckError = SyntaxDriverType.CheckError || std.Io.Dir.RealPathFileAllocError || error{WriteFailed};
+        pub const RunError = TransportType.ReadMessageError || PayloadError || std.Io.ConcurrentError;
+        const InboxType = inbox_mod.Inbox(TransportType.ReadMessageError);
+        const RunSyntaxCheckError = SyntaxDriverType.CheckError || std.Io.Dir.RealPathFileAllocError || Allocator.Error || error{WriteFailed};
         const HandlerFn = fn (*Self, *protocol.JsonId, ?std.json.Value) HandlerError!void;
         const HandlerRegistration = struct {
             call: *const HandlerFn,
@@ -147,18 +149,21 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         diagnostic_contributions: Contributions = .{},
         root_inputs: std.StringHashMapUnmanaged(RootInputs) = .empty,
         watcher: ?*watch.Watcher = null,
-        watch_event: std.Io.Event = .unset,
         watch_failed: bool = false,
         registration_count: usize = 0,
         test_hooks: ?*TestHooks = null,
         diagnostic_uris: std.StringHashMapUnmanaged(void) = .empty,
+        inbox: InboxType,
+        /// Open documents whose text changed since they were last checked, in
+        /// the order they changed. Owns its keys.
+        scheduled_checks: std.StringArrayHashMapUnmanaged(void) = .empty,
         log_file: ?std.Io.File = null,
         debug: DebugFlags,
 
         const RootInputs = struct { path: [:0]const u8, inputs: []const compile.watch_inputs.Input };
 
         pub fn wakeForTesting(self: *Self) void {
-            self.watch_event.set(self.std_io);
+            self.inbox.noteInputsChanged();
         }
 
         fn boundary(self: *Self, point: TestHooks.Boundary) void {
@@ -208,6 +213,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
                 .transport = TransportType.init(allocator, std_io, reader, writer, if (debug_options.transport) log_file else null),
                 .doc_store = DocumentStore.init(allocator),
                 .syntax_checker = syntax_checker,
+                .inbox = InboxType.init(allocator, std_io),
                 .log_file = log_file,
                 .debug = flags,
             };
@@ -229,11 +235,14 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             self.transport.deinit();
             self.doc_store.deinit();
             self.syntax_checker.deinit();
+            self.inbox.deinit();
+            for (self.scheduled_checks.keys()) |uri| self.allocator.free(uri);
+            self.scheduled_checks.deinit(self.allocator);
         }
 
         fn watchCallback(context: ?*anyopaque, _: watch.WatchEvent) void {
             const self: *Self = @ptrCast(@alignCast(context.?));
-            self.watch_event.set(self.std_io);
+            self.inbox.noteInputsChanged();
         }
 
         fn reportWatchFailure(self: *Self) (Allocator.Error || error{WriteFailed})!void {
@@ -261,7 +270,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             while (keys.next()) |key| : (i += 1) list[i] = key.*;
             if (list.len == 0) {
                 self.stopWatching();
-                self.watch_event.set(self.std_io);
+                self.inbox.noteInputsChanged();
                 return;
             }
             self.boundary(.before_registration);
@@ -289,7 +298,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             self.boundary(.after_registration);
             // Compare every consumed state after registration, including repeated
             // observations of the same path. No later native event is required.
-            self.watch_event.set(self.std_io);
+            self.inbox.noteInputsChanged();
         }
 
         fn inputChanged(self: *Self, input: compile.watch_inputs.Input) Allocator.Error!bool {
@@ -356,66 +365,69 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
                 try self.onDocumentChanged(uri);
             }
             if (coverage_changed and changed.items.len == 0) try self.installCoverage();
-            if (changed.items.len == 0 and !coverage_changed and !self.watch_event.isSet()) {
+            if (changed.items.len == 0 and !coverage_changed and self.scheduled_checks.count() == 0 and !self.inbox.inputsChangePending()) {
                 if (self.test_hooks) |hooks| hooks.reconcile_acknowledged.store(reconcile_generation, .seq_cst);
                 self.boundary(.drained);
             }
         }
 
-        const Ready = union(enum) {
-            message: TransportType.ReadMessageError![]u8,
-            watch_ready: std.Io.Cancelable!void,
-        };
-
-        fn waitWatch(self: *Self) std.Io.Cancelable!void {
-            try self.watch_event.wait(self.std_io);
-        }
-
+        /// Serve until the client exits or its input ends. A reader task
+        /// receives messages while this task handles them and checks
+        /// documents, so an edit that arrives during a check cancels that
+        /// check when it makes the check stale.
         pub fn run(self: *Self) RunError!void {
-            var buffer: [2]Ready = undefined;
-            var select = std.Io.Select(Ready).init(self.std_io, &buffer);
+            var reader = try std.Io.concurrent(self.std_io, readMessages, .{self});
             defer {
                 if (comptime @hasDecl(ReaderType, "cancel")) self.transport.reader.cancel();
-                while (select.cancel()) |ready| switch (ready) {
-                    .message => |result| if (result) |payload| self.allocator.free(payload) else |_| {},
-                    .watch_ready => {},
-                };
+                reader.cancel(self.std_io);
                 self.stopWatching();
             }
-            select.concurrent(.message, TransportType.readMessage, .{&self.transport}) catch return error.OutOfMemory;
-            select.concurrent(.watch_ready, waitWatch, .{self}) catch return error.OutOfMemory;
-            while (true) {
-                const ready = select.await() catch return;
-                switch (ready) {
-                    .message => |result| {
-                        const payload = result catch |err| switch (err) {
-                            error.EndOfStream => return,
-                            else => return err,
-                        };
-                        defer self.allocator.free(payload);
-                        try self.handlePayload(payload);
-                        if (self.state == .exit_success or self.state == .exit_failure) return;
+
+            while (self.state != .exit_success and self.state != .exit_failure) {
+                switch (self.inbox.next(self.hasScheduledChecks())) {
+                    .message => |message| {
+                        var owned = message;
+                        defer owned.deinit(self.allocator);
+                        try self.handleMessage(&owned);
                         if (self.state == .shutdown) self.stopWatching();
-                        select.concurrent(.message, TransportType.readMessage, .{&self.transport}) catch return error.OutOfMemory;
                     },
-                    .watch_ready => {
-                        self.watch_event.reset();
-                        try self.refreshInputs();
-                        select.concurrent(.watch_ready, waitWatch, .{self}) catch return error.OutOfMemory;
+                    .inputs_changed => try self.refreshInputs(),
+                    .idle => try self.runScheduledCheck(),
+                    .ended => |maybe_err| {
+                        if (maybe_err) |err| return err;
+                        // No input can make the remaining checks stale.
+                        while (self.hasScheduledChecks()) {
+                            const uri = self.scheduled_checks.keys()[0];
+                            try self.checkScheduledDocument(uri, .uncancelable);
+                        }
+                        return;
                     },
                 }
             }
         }
 
-        fn handlePayload(self: *Self, payload: []u8) PayloadError!void {
-            var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, payload, .{}) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => {
-                    try self.sendError(null, .parse_error, "parse error");
-                    return;
-                },
+        /// The reader task: receive messages until the input ends or the
+        /// server cancels this task.
+        fn readMessages(self: *Self) void {
+            while (true) {
+                if (!self.transport.hasBufferedInput()) self.inbox.noteWaiting();
+                const payload = self.transport.readMessage() catch |err| switch (err) {
+                    error.EndOfStream => return self.inbox.finish(null),
+                    else => return self.inbox.finish(err),
+                };
+                var message = inbox_mod.Message.init(self.allocator, payload) catch |err| return self.inbox.finish(err);
+                self.inbox.push(message) catch |err| {
+                    message.deinit(self.allocator);
+                    return self.inbox.finish(err);
+                };
+            }
+        }
+
+        fn handleMessage(self: *Self, message: *const inbox_mod.Message) PayloadError!void {
+            const parsed = message.parsed orelse {
+                try self.sendError(null, .parse_error, "parse error");
+                return;
             };
-            defer parsed.deinit();
 
             const root = parsed.value;
             if (std.meta.activeTag(root) != .object) {
@@ -495,6 +507,16 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
                     return;
                 }
                 if (handler.requires_trust) try self.refreshInputs();
+                // A semantic request answers from the build of its document's
+                // current text, which a scheduled check of that document
+                // produces, so the check runs first and is not canceled.
+                if (handler.requires_trust) {
+                    if (requestDocumentUri(maybe_params)) |uri| {
+                        if (self.scheduled_checks.getKey(uri)) |scheduled_uri| {
+                            try self.checkScheduledDocument(scheduled_uri, .uncancelable);
+                        }
+                    }
+                }
                 try handler.call(self, id, maybe_params);
                 return;
             }
@@ -572,8 +594,10 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         }
 
         pub fn onDocumentClosed(self: *Self, uri: []const u8) (Allocator.Error || error{WriteFailed})!void {
+            self.unscheduleCheck(uri);
             self.doc_store.remove(uri);
             self.syntax_checker.closeDocument(uri);
+            try self.syntax_checker.forget(uri);
             if (self.root_inputs.fetchRemove(uri)) |entry| {
                 self.allocator.free(entry.key);
                 self.freeRootInputs(entry.value);
@@ -584,18 +608,78 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             try self.publishContributions();
         }
 
-        pub fn onDocumentChanged(self: *Self, uri: []const u8) (Allocator.Error || error{WriteFailed})!void {
-            self.runSyntaxCheck(uri) catch |err| {
-                switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.WriteFailed => return error.WriteFailed,
-                    else => log.err("syntax check failed for {s}: {s}", .{ uri, @errorName(err) }),
-                }
-            };
+        /// The `textDocument.uri` a request names, if any.
+        fn requestDocumentUri(maybe_params: ?std.json.Value) ?[]const u8 {
+            const params = maybe_params orelse return null;
+            if (params != .object) return null;
+            const text_document = params.object.get("textDocument") orelse return null;
+            if (text_document != .object) return null;
+            const uri = text_document.object.get("uri") orelse return null;
+            if (uri != .string) return null;
+            return uri.string;
         }
 
-        fn runSyntaxCheck(self: *Self, uri: []const u8) RunSyntaxCheckError!void {
+        /// Schedule a check of the document, which runs once no message is
+        /// pending, or before a semantic request about it.
+        pub fn onDocumentChanged(self: *Self, uri: []const u8) Allocator.Error!void {
             if (!self.client.trusted_workspace) return;
+            if (self.scheduled_checks.contains(uri)) return;
+            const owned = try self.allocator.dupe(u8, uri);
+            errdefer self.allocator.free(owned);
+            try self.scheduled_checks.put(self.allocator, owned, {});
+        }
+
+        /// Drop the document's scheduled check, if any.
+        pub fn unscheduleCheck(self: *Self, uri: []const u8) void {
+            const removed = self.scheduled_checks.fetchOrderedRemove(uri) orelse return;
+            self.allocator.free(removed.key);
+        }
+
+        fn hasScheduledChecks(self: *const Self) bool {
+            return self.state == .running and self.scheduled_checks.count() != 0;
+        }
+
+        /// Check the earliest scheduled document, canceling the check if a
+        /// message that makes it stale arrives meanwhile.
+        fn runScheduledCheck(self: *Self) (Allocator.Error || error{WriteFailed})!void {
+            const uri = self.scheduled_checks.keys()[0];
+            if (!self.inbox.beginCheck(uri)) return;
+            try self.checkScheduledDocument(uri, .cancelable);
+        }
+
+        /// Check a scheduled document and publish its diagnostics. `uri` is
+        /// the key in `scheduled_checks`, which stays scheduled only when the
+        /// check is canceled: the message that canceled it has yet to be
+        /// handled, and it schedules or drops the document again. A
+        /// cancelable check is one `inbox.beginCheck` started.
+        fn checkScheduledDocument(
+            self: *Self,
+            uri: []const u8,
+            cancelation: enum { cancelable, uncancelable },
+        ) (Allocator.Error || error{WriteFailed})!void {
+            const cancel_request: ?*const std.atomic.Value(bool) = switch (cancelation) {
+                .cancelable => &self.inbox.cancel_request,
+                .uncancelable => null,
+            };
+            const result = self.runSyntaxCheck(uri, cancel_request);
+            // The reader task stops reading `uri` before it is freed below.
+            if (cancelation == .cancelable) self.inbox.endCheck();
+            result catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.WriteFailed => return error.WriteFailed,
+                error.Canceled => switch (cancelation) {
+                    .cancelable => return,
+                    .uncancelable => log.err("syntax check failed for {s}: {s}", .{ uri, @errorName(err) }),
+                },
+                else => log.err("syntax check failed for {s}: {s}", .{ uri, @errorName(err) }),
+            };
+            self.unscheduleCheck(uri);
+            if (self.test_hooks) |hooks| {
+                if (hooks.reconcile_requested.load(.seq_cst) != hooks.reconcile_acknowledged.load(.seq_cst)) self.inbox.noteInputsChanged();
+            }
+        }
+
+        fn runSyntaxCheck(self: *Self, uri: []const u8, cancel_request: ?*const std.atomic.Value(bool)) RunSyntaxCheckError!void {
             const doc = self.doc_store.get(uri);
             const root_path = if (self.client.root_uri) |root_uri|
                 try uri_util.uriToPath(self.allocator, root_uri)
@@ -605,7 +689,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             if (comptime @hasField(SyntaxDriverType, "after_resolution")) {
                 self.syntax_checker.after_resolution = if (self.test_hooks) |hooks| hooks.after_resolution else null;
             }
-            const publish_sets = try self.syntax_checker.check(uri, if (doc) |d| d.text else null, root_path);
+            const publish_sets = try self.syntax_checker.check(uri, if (doc) |d| d.text else null, root_path, cancel_request);
             if (self.test_hooks) |hooks| _ = hooks.checks.fetchAdd(1, .seq_cst);
             self.boundary(.after_check);
             var transferred = false;

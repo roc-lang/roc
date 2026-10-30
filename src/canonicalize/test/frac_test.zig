@@ -18,7 +18,7 @@ test "fractional literal - basic decimal" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     const tag = std.meta.activeTag(expr);
@@ -36,7 +36,7 @@ test "fractional literal - scientific notation small" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     const tag = std.meta.activeTag(expr);
@@ -56,7 +56,7 @@ test "fractional literal - scientific notation large (near f64 max)" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     try testing.expectEqual(.e_num_from_numeral, std.meta.activeTag(expr));
@@ -71,7 +71,7 @@ test "fractional literal - scientific notation at f32 boundary" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     try testing.expectEqual(.e_num_from_numeral, std.meta.activeTag(expr));
@@ -90,7 +90,7 @@ test "fractional literal - very small scientific notation" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     try testing.expectEqual(.e_num_from_numeral, std.meta.activeTag(expr));
@@ -141,7 +141,7 @@ test "fractional literal - scientific notation with capital E" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     try testing.expectEqual(.e_dec, std.meta.activeTag(expr));
@@ -153,7 +153,7 @@ test "fractional literal - negative scientific notation" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     try testing.expectEqual(.e_dec_small, std.meta.activeTag(expr));
@@ -166,7 +166,7 @@ test "negative zero with scientific notation - value is zero, sign recorded on n
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     try testing.expectEqual(.e_dec_small, std.meta.activeTag(expr));
@@ -185,7 +185,7 @@ test "small dec - exceeds i16 range falls back to Dec" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     // Falls back to Dec because 32768 > 32767 (max i16).

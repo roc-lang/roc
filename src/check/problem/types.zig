@@ -19,14 +19,16 @@ const SnapshotContentIdx = snapshot.SnapshotContentIdx;
 
 pub const Context = context_mod.Context;
 pub const Category = context_mod.Category;
+pub const CopiedRequirement = context_mod.CopiedRequirement;
+pub const SharedMethodUses = context_mod.SharedMethodUses;
 
-const ByteListRange = struct { start: usize, count: usize };
+const ByteListRange = struct { start: u64, count: u64 };
 
 /// Alias into the Store.extra_strings_backing array
 pub const ExtraStringIdx = ByteListRange;
 
 /// A range of patterns
-pub const MissingPatternsRange = struct { start: usize, count: usize };
+pub const MissingPatternsRange = struct { start: u64, count: u64 };
 
 /// The checker relation that recorded a problem, or whose unification queued
 /// a dispatch obligation whose problems then belong to it, unless the
@@ -136,7 +138,6 @@ pub const Problem = union(enum) {
     unmatchable_pattern: UnmatchablePattern,
     match_alt_binder_missing: MatchAltBinderMissing,
     discarded_var_update: DiscardedVarUpdate,
-    comptime_unused_branch: ComptimeUnusedBranch,
     comptime_condition: ComptimeCondition,
     derived_parser_error_row: DerivedParserErrorRow,
     derived_codec_open_record: DerivedCodecOpenRecord,
@@ -762,16 +763,6 @@ pub const NonExhaustiveDestructure = struct {
     empirical: bool = false,
 };
 
-/// A compile-time-only branch or match alternative was not taken by compile-time evaluation.
-pub const ComptimeUnusedBranch = struct {
-    kind: enum {
-        match,
-        if_,
-    },
-    site_region: base.Region,
-    branch_region: base.Region,
-};
-
 /// A conditional expression was known while checking, so it will always make the same choice.
 pub const ComptimeCondition = struct {
     kind: enum {
@@ -932,6 +923,14 @@ pub const DispatcherNotNominal = struct {
     /// Region of the expression that owns the failed obligation (see
     /// `DispatcherDoesNotImplMethod.owner_region`).
     owner_region: ?base.Region = null,
+    /// Numeric literal info for `from_literal` constraints of kind `numeral`
+    num_literal: ?types_mod.NumeralInfo = null,
+    /// Source region of the string literal for `from_literal` constraints of
+    /// kind `quote` or `interpolation`
+    string_literal_region: ?base.Region = null,
+    /// Set when the obligation is a copy a use made out of another
+    /// definition's type.
+    copied: ?CopiedRequirement = null,
 };
 
 /// Error when you try to static dispatch but the dispatcher does not have that method
@@ -950,14 +949,18 @@ pub const DispatcherDoesNotImplMethod = struct {
     owner_region: ?base.Region = null,
     /// Optional numeric literal info for `from_literal` constraints of kind `numeral`
     num_literal: ?types_mod.NumeralInfo = null,
-    /// Source region of the string literal for `from_literal` constraints of kind `quote`
-    quote_region: ?base.Region = null,
+    /// Source region of the string literal for `from_literal` constraints of
+    /// kind `quote` or `interpolation`
+    string_literal_region: ?base.Region = null,
     /// Set when the dispatcher is a record's or tag union's `..` extension,
     /// whose obligation came from deriving the method for that whole type.
     row_extension_of: ?RowExtension = null,
     /// How the report suggests turning the literal into the builtin `Str`
     /// when the dispatcher is `Str`.
     str_conversion: StrConversion = .none,
+    /// Set when the obligation is a copy a use made out of another
+    /// definition's type.
+    copied: ?CopiedRequirement = null,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };

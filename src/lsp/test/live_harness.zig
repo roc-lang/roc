@@ -65,6 +65,12 @@ pub const Queue = struct {
         return count;
     }
 
+    pub fn bufferedLen(q: *Queue) usize {
+        q.mutex.lockUncancelable(env.io);
+        defer q.mutex.unlock(env.io);
+        return q.bytes.items.len - q.offset;
+    }
+
     /// Cancellation is deliberately idempotent and wakes an idle transport read.
     pub fn cancel(q: *Queue) void {
         q.close();
@@ -102,6 +108,9 @@ pub const Reader = struct {
     queue: *Queue,
     pub fn read(r: *Reader, bytes: []u8) error{InjectedReadFailure}!usize {
         return r.queue.read(bytes);
+    }
+    pub fn bufferedLen(r: *Reader) usize {
+        return r.queue.bufferedLen();
     }
     pub fn cancel(r: *Reader) void {
         r.queue.close();

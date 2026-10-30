@@ -30,6 +30,10 @@ when a document is opened or changed, and when a saved compiler-recorded input
 changes. Live updates work while the editor is idle and do not require editor
 file-watch notifications.
 
+The check behind them runs once the server has handled every message it has received, so a burst
+of edits is checked once, against its final text, and an edit that arrives while its document is
+being checked cancels that check. A request that needs checked types runs its document's pending
+check first.
 Diagnostics and locations for an open document always use the URI the client opened it under,
 exactly as the client spelled it, since a URI rebuilt from the file's path can name the same file
 differently (percent-encoding, drive-letter case, or a path through a symlink).

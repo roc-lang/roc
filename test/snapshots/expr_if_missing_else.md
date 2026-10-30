@@ -9,7 +9,7 @@ foo = if tru 0
 ~~~
 # EXPECTED
 NAME NOT IN SCOPE - expr_if_missing_else.md:1:10:1:13
-MISSING METHOD - expr_if_missing_else.md:1:14:1:15
+TYPE MISMATCH - expr_if_missing_else.md:1:14:1:15
 # PROBLEMS
 ~~~clojure
 (reports
@@ -28,22 +28,18 @@ MISSING METHOD - expr_if_missing_else.md:1:14:1:15
 			(source-region (file "expr_if_missing_else.md") (start 1 10) (end 1 13) (annotation error) (line-text "foo = if tru 0"))))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 1 14) (end 1 15))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This number is being used where a non-number type is needed."))
 		(document
 			(source-region (file "expr_if_missing_else.md") (start 1 14) (end 1 15) (annotation error) (line-text "foo = if tru 0"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be non-numeric here:")
+			(line-break)
+			(source-region (file "expr_if_missing_else.md") (start 1 7) (end 1 15) (annotation error) (line-text "foo = if tru 0"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

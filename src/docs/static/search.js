@@ -3,200 +3,394 @@ const setupSearch = () => {
   let searchBox = document.getElementById("module-search");
   let searchForm = document.getElementById("module-search-form");
   let topSearchResultListItem = undefined;
-
-  // Hide the results whenever anyone clicks outside the search results,
-  // or on a specific search result.
-  window.addEventListener("click", function (event) {
-    if (!searchForm?.contains(event.target) || event.target.closest("#search-type-ahead a")) {
-      searchTypeAhead.classList.add("hidden");
-    }
+  const mobileSearch = window.matchMedia("(max-width: 768px)");
+  const searchDialog = document.createElement("dialog");
+  searchDialog.className = "mobile-search-dialog";
+  searchDialog.setAttribute("aria-label", "Search documentation");
+  document.body.append(searchDialog);
+  const backButton = document.createElement("button");
+  backButton.type = "button";
+  backButton.className = "search-back";
+  backButton.textContent = "←";
+  backButton.setAttribute("aria-label", "Back to documentation");
+  const placeholder = document.createComment("Search form position");
+  let closingSearch = false;
+  let pageScrollY = 0;
+  function closeMobileSearch() {
+    if (!searchDialog.open) return;
+    closingSearch = true;
+    searchTypeAhead.classList.add("hidden");
+    searchDialog.close();
+    placeholder.replaceWith(searchForm);
+    backButton.remove();
+    searchBox.blur();
+    window.scrollTo(0, pageScrollY);
+    closingSearch = false;
+  }
+  function openMobileSearch() {
+    if (!mobileSearch.matches || searchDialog.open || closingSearch) return;
+    pageScrollY = window.scrollY;
+    searchForm.before(placeholder);
+    searchDialog.append(searchForm);
+    searchForm.prepend(backButton);
+    searchDialog.showModal();
+    searchBox.focus({ preventScroll: true });
+  }
+  backButton.addEventListener("click", closeMobileSearch);
+  searchDialog.addEventListener("cancel", event => {
+    event.preventDefault();
+    closeMobileSearch();
   });
+  mobileSearch.addEventListener("change", () => {
+    if (!mobileSearch.matches) closeMobileSearch();
+  });
+
+  // Keep results and their scroll position when opening a link in another tab.
+  // Ordinary result clicks and clicks outside the search still dismiss them.
+  window.addEventListener("click", function (event) {
+    const result = event.target.closest("#search-type-ahead a");
+    if (result && (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)) return;
+    if (!searchForm?.contains(event.target) || result) {
+      searchTypeAhead.classList.add("hidden");
+      closeMobileSearch();
+    }
+  }, { capture: true });
 
   if (searchBox != null) {
     function searchKeyDown(event) {
-      switch (event.key) {
-        case "ArrowDown": {
-          event.preventDefault();
-
-          const focused = document.querySelector(
-            "#search-type-ahead > li:not([class*='hidden']) > a:focus",
-          );
-
-          // Find the next element to focus.
-          let nextToFocus = focused?.parentElement?.nextElementSibling;
-
-          while (
-            nextToFocus != null &&
-            nextToFocus.classList.contains("hidden")
-          ) {
-            nextToFocus = nextToFocus.nextElementSibling;
-          }
-
-          if (nextToFocus == null) {
-            // If none of the links were focused, focus the first one.
-            // Also if we've reached the last one in the list, wrap around to the first.
-            document
-              .querySelector(
-                "#search-type-ahead > li:not([class*='hidden']) > a",
-              )
-              ?.focus();
-          } else {
-            nextToFocus.querySelector("a").focus();
-          }
-
-          break;
-        }
-        case "ArrowUp": {
-          event.preventDefault();
-
-          const focused = document.querySelector(
-            "#search-type-ahead > li:not([class*='hidden']) > a:focus",
-          );
-
-          // Find the next element to focus.
-          let nextToFocus = focused?.parentElement?.previousElementSibling;
-          while (
-            nextToFocus != null &&
-            nextToFocus.classList.contains("hidden")
-          ) {
-            nextToFocus = nextToFocus.previousElementSibling;
-          }
-
-          if (nextToFocus == null) {
-            // If none of the links were focused, or we're at the first one, focus the search box again.
-            searchBox?.focus();
-          } else {
-            // If one of the links was focused, focus the previous one
-            nextToFocus.querySelector("a").focus();
-          }
-
-          break;
-        }
-        case "Enter": {
-          // In case this is just an anchor link (which will move the scroll bar but not
-          // reload the page), hide the search bar.
-          searchTypeAhead.classList.add("hidden");
-          break;
-        }
-      }
+      if (event.key === "Escape" && searchDialog.open) { event.preventDefault(); closeMobileSearch(); return; }
+      if (event.key === "Escape") { searchBox.focus(); searchTypeAhead.classList.add("hidden"); return; }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      event.preventDefault();
+      const links = Array.from(searchTypeAhead.querySelectorAll("li:not(.hidden) > a.type-ahead-link, .search-suggestion > button"));
+      const current = links.indexOf(document.activeElement);
+      const next = event.key === "ArrowDown" ? (current + 1) % links.length : current - 1;
+      if (next < 0 || !links.length) searchBox.focus();
+      else links[next]?.focus();
     }
 
     searchForm.addEventListener("keydown", searchKeyDown);
 
-    function addLangRefSearchEntries() {
-      if (searchTypeAhead.dataset.langRefReady === "true") return;
-
-      document
-        .querySelectorAll("#sidebar-nav .langref-articles a[href]")
-        .forEach((sidebarLink) => {
-          const name = sidebarLink.textContent.replace(/\s+/g, " ").trim();
-          if (name === "") return;
-
-          const item = document.createElement("li");
-          item.classList.add("hidden");
-
-          const link = document.createElement("a");
-          link.classList.add("type-ahead-link", "type-ahead-langref");
-          link.href = sidebarLink.getAttribute("href");
-
-          const defName = document.createElement("span");
-          defName.classList.add("type-ahead-def-name", "type-ahead-langref-title");
-          defName.textContent = name;
-
-          const context = document.createElement("span");
-          context.classList.add("type-ahead-langref-context");
-          context.textContent = "Language Reference";
-
-          const signature = document.createElement("span");
-          signature.classList.add("type-ahead-signature");
-          signature.textContent = "Language Reference";
-          signature.hidden = true;
-
-          link.append(defName, " in ", context, signature);
-          item.appendChild(link);
-          searchTypeAhead.appendChild(item);
-        });
-
-      searchTypeAhead.dataset.langRefReady = "true";
-    }
-
-    addLangRefSearchEntries();
-
-    // Precompute a lowercase search haystack for every entry once. The old code
-    // re-read the DOM (querySelector + textContent) for all ~1500 entries on
-    // every keystroke, which was needless work per input. The entry <li>s are
-    // static (server-rendered, plus the langref entries appended above) and
-    // persist across soft navigations, so this only has to happen once.
-    const searchEntries = Array.from(
-      searchTypeAhead.querySelectorAll("li"),
-    ).map((li) => {
-      const entryModule =
-        li.querySelector(".type-ahead-module-name")?.textContent?.toLowerCase() ??
-        "";
-      const entryName =
-        li.querySelector(".type-ahead-def-name")?.textContent?.toLowerCase() ?? "";
-      const signature =
-        li
-          .querySelector(".type-ahead-signature")
-          ?.textContent?.toLowerCase()
-          ?.replace(/\s+/g, "") ?? "";
-      const qualifiedName = entryModule ? `${entryModule}.${entryName}` : entryName;
-      return { li, qualifiedName, signature };
-    });
-
-    // Cap how many results we reveal at once. Broad queries (e.g. a single "m")
-    // match well over a thousand entries, and laying out and painting that many
-    // list items is what made the first keystroke freeze. The dropdown scrolls
-    // and typing more characters narrows things down fast, so a modest cap keeps
-    // the type-ahead responsive without meaningfully hurting usability.
+    const engine = window.rocDocsSearch;
+    const indexUrl = new URL(searchForm.dataset.searchIndex, location.href);
+    const docsBase = new URL("./", indexUrl);
+    const categories = new Map([["api", "API"], ["guides", "Guides & examples"]]);
+    let allLabel = "All";
+    let selectedCategory = "";
+    const expandedCategories = new Set();
+    let showSnippets = false;
+    let prose = [];
+    let suggestions = [];
+    const apiDocumentation = new Map();
+    let loaded = false;
+    let loading;
+    let failed = false;
+    let dynamicItems = [];
+    const apiEntries = Array.from(searchTypeAhead.querySelectorAll("li")).map(li => ({
+      li,
+      href: new URL(li.querySelector("a").getAttribute("href"), location.href).href,
+      name: [li.querySelector(".type-ahead-module-name")?.textContent,
+        li.querySelector(".type-ahead-def-name")?.textContent].filter(Boolean).join(".").toLowerCase(),
+      signature: (li.querySelector(".type-ahead-signature")?.textContent || "").toLowerCase().replace(/\s+/g, ""),
+      category: "api",
+      kind: li.dataset.searchKind,
+    }));
+    let shownItems = [];
     const MAX_RESULTS = 50;
 
-    // The entries currently revealed, so each search only re-hides the handful it
-    // previously showed instead of touching every entry in the list.
-    let shownItems = [];
-
-    function search() {
-      topSearchResultListItem = undefined;
-      const text = searchBox.value.toLowerCase(); // Search is case-insensitive.
-
-      // Hide whatever the previous search revealed before revealing new matches.
-      for (const li of shownItems) {
-        li.classList.add("hidden");
+    function addDocument(article) {
+      const category = article.dataset.category;
+      const href = new URL(article.dataset.href, docsBase).href;
+      const title = article.dataset.title;
+      const fullNavigation = article.hasAttribute("data-full-navigation");
+      if (!article.hasAttribute("data-sections")) {
+        prose.push({ category, href, title, fullNavigation, text: article.textContent, terms: [] });
+        return;
       }
-      shownItems = [];
+      let section = { category, href, title, fullNavigation, text: "", terms: [] };
+      for (const node of article.querySelectorAll("h1,h2,h3,h4,h5,h6,p,pre,li,table")) {
+        // Don't count nested list items and paragraphs twice.
+        if (node.parentElement.closest("li,pre,table")) continue;
+        if (/^H[1-6]$/.test(node.tagName) && node.id) {
+          prose.push(section);
+          section = { category, fullNavigation, href: `${href.split("#")[0]}#${encodeURIComponent(node.id)}`,
+            title: `${title} › ${node.textContent}`, text: "", terms: [] };
+        } else section.text += ` ${node.textContent}`;
+      }
+      prose.push(section);
+    }
 
-      if (text === "") {
+    function loadIndex() {
+      if (loading) return loading;
+      loading = fetch(indexUrl, { credentials: "same-origin" }).then(response => {
+        if (!response.ok) throw new Error(`Search index: ${response.status}`);
+        return response.text();
+      }).then(text => {
+        const doc = new DOMParser().parseFromString(text, "text/html");
+        doc.querySelectorAll("[data-search-categories] [data-category]").forEach(node => {
+          categories.delete(node.dataset.category);
+          categories.set(node.dataset.category, node.textContent);
+        });
+        suggestions = Array.from(doc.querySelectorAll("[data-search-suggestion]"), node => ({
+          query: node.dataset.searchSuggestion, description: node.textContent,
+        }));
+        const label = doc.querySelector("[data-search-all-label]");
+        if (label) allLabel = label.textContent;
+        doc.querySelectorAll("article[data-href]").forEach(addDocument);
+        doc.querySelectorAll("[data-search-term]").forEach(node => {
+          const href = new URL(node.dataset.href, docsBase).href;
+          let entry = prose.find(item => item.href === href && item.category === node.dataset.category);
+          if (!entry) {
+            entry = { category: node.dataset.category, href, title: node.textContent, text: "", terms: [] };
+            prose.push(entry);
+          }
+          entry.terms.push(node.dataset.searchTerm);
+        });
+        for (const entry of prose) {
+          if (entry.category === "api" && entry.text.trim() && !apiDocumentation.has(entry.href)) {
+            apiDocumentation.set(entry.href, entry.text);
+          }
+        }
+        loaded = true;
+      }).catch(() => { failed = true; }).then(() => {
+        // Never replace a result while someone is navigating it with the keyboard.
+        if (!searchTypeAhead.contains(document.activeElement) && document.activeElement === searchBox) search();
+      });
+      return loading;
+    }
+    function reopenSearch() {
+      if (closingSearch) return;
+      openMobileSearch();
+      loadIndex();
+      if (searchTypeAhead.classList.contains("hidden")) search();
+    }
+    searchBox.addEventListener("focus", reopenSearch);
+    searchBox.addEventListener("click", reopenSearch);
+
+    function dynamic(tag, className, text) {
+      const node = document.createElement(tag);
+      node.className = className;
+      if (text) node.textContent = text;
+      return node;
+    }
+    function appendItem(node) {
+      searchTypeAhead.appendChild(node);
+      dynamicItems.push(node);
+    }
+    function addHeading(label) {
+      appendItem(dynamic("li", "search-group-label", label));
+    }
+    function addSnippet(link, text, query, fromStart = false) {
+      if (!showSnippets || !text?.trim()) return;
+      const snippet = dynamic("small", "search-snippet");
+      for (const part of engine.highlightParts(engine.snippet(text, fromStart ? "" : query), query)) {
+        snippet.append(part.match ? dynamic("mark", "", part.text) : document.createTextNode(part.text));
+      }
+      link.append(snippet);
+      dynamicItems.push(snippet);
+    }
+    function addApi(entry, query, fromStart = true) {
+      entry.li.classList.remove("hidden");
+      searchTypeAhead.appendChild(entry.li);
+      shownItems.push(entry.li);
+      addSnippet(entry.li.querySelector("a"), apiDocumentation.get(entry.href), query, fromStart);
+    }
+    function addProse(entry, query) {
+      const item = dynamic("li", "search-prose-result");
+      const link = dynamic("a", "type-ahead-link type-ahead-langref");
+      link.href = entry.href;
+      if (entry.fullNavigation) link.setAttribute("data-full-navigation", "");
+      link.append(dynamic("span", "search-result-title", entry.title));
+      if (entry.matchedTerm && engine.normalize(entry.title) !== engine.normalize(entry.matchedTerm)) {
+        link.append(dynamic("small", "search-match-note", ` (search term: ${entry.matchedTerm})`));
+      }
+      addSnippet(link, entry.text, query);
+      item.append(link);
+      appendItem(item);
+      shownItems.push(item);
+    }
+    function capturePosition() {
+      const top = searchTypeAhead.getBoundingClientRect().top +
+        (searchTypeAhead.querySelector(".search-filters")?.offsetHeight || 0);
+      const link = Array.from(searchTypeAhead.querySelectorAll("li:not(.hidden) > a.type-ahead-link"))
+        .find(node => node.getBoundingClientRect().bottom > top);
+      return { scrollTop: searchTypeAhead.scrollTop, href: link?.href,
+        offset: link ? link.getBoundingClientRect().top - top : 0 };
+    }
+    function restorePosition(position) {
+      if (!position) { searchTypeAhead.scrollTop = 0; return; }
+      searchTypeAhead.scrollTop = position.scrollTop;
+      if (!position.href) return;
+      const link = Array.from(searchTypeAhead.querySelectorAll("li:not(.hidden) > a.type-ahead-link"))
+        .find(node => node.href === position.href);
+      if (!link) return;
+      const top = searchTypeAhead.getBoundingClientRect().top +
+        (searchTypeAhead.querySelector(".search-filters")?.offsetHeight || 0);
+      const rect = link.getBoundingClientRect();
+      // If a visible snippet disappears, keep its result from scrolling entirely out of view.
+      const offset = Math.max(position.offset, -rect.height + 1);
+      searchTypeAhead.scrollTop += rect.top - top - offset;
+    }
+    function addExpansion(group, groupLabel, count, expanded) {
+      const row = dynamic("li", "search-more");
+      const button = dynamic("button", "", expanded ? `Less ${groupLabel} matches` : `More ${groupLabel} matches (${count})`);
+      button.type = "button";
+      row.dataset.group = group;
+      button.setAttribute("aria-expanded", String(expanded));
+      button.addEventListener("click", event => {
+        event.stopPropagation();
+        const scrollTop = searchTypeAhead.scrollTop;
+        const offset = row.getBoundingClientRect().top - searchTypeAhead.getBoundingClientRect().top;
+        if (expanded) expandedCategories.delete(group);
+        else expandedCategories.add(group);
+        search({ scrollTop });
+        if (expanded) {
+          const replacement = Array.from(searchTypeAhead.querySelectorAll(".search-more"))
+            .find(node => node.dataset.group === group);
+          searchTypeAhead.scrollTop += replacement.getBoundingClientRect().top -
+            searchTypeAhead.getBoundingClientRect().top - offset;
+          replacement.querySelector("button").focus({ preventScroll: true });
+        } else searchBox.focus({ preventScroll: true });
+      });
+      row.append(button);
+      appendItem(row);
+    }
+    function search(position) {
+      topSearchResultListItem = undefined;
+      for (const item of shownItems) item.classList.add("hidden");
+      for (const item of dynamicItems) item.remove();
+      shownItems = [];
+      dynamicItems = [];
+      const query = searchBox.value.trim();
+      if (!query && document.activeElement !== searchBox && !searchDialog.open) {
         searchTypeAhead.classList.add("hidden");
         return;
       }
+      loadIndex();
+      if (!query) {
+        appendItem(dynamic("li", "search-status", suggestions.length ? "Try searching for…" :
+          loaded ? "Search types, functions, and documentation." :
+          failed ? "Search types and functions." : "Loading search suggestions…"));
+        const groups = new Map();
+        for (const suggestion of suggestions) {
+          let row = groups.get(suggestion.description);
+          if (!row) {
+            row = dynamic("li", "search-suggestion");
+            row.append(dynamic("span", "search-suggestion-label", `${suggestion.description}: `));
+            groups.set(suggestion.description, row);
+            appendItem(row);
+          } else row.append(document.createTextNode(", "));
 
-      const signatureText = text.replace(/\s+/g, "");
-      for (const entry of searchEntries) {
-        if (
-          entry.qualifiedName.includes(text) ||
-          (signatureText !== "" && entry.signature.includes(signatureText))
-        ) {
-          entry.li.classList.remove("hidden");
-          shownItems.push(entry.li);
-          if (topSearchResultListItem === undefined) {
-            topSearchResultListItem = entry.li;
-          }
-          if (shownItems.length >= MAX_RESULTS) {
-            break;
-          }
+          const button = dynamic("button", "");
+          button.type = "button";
+          button.append(dynamic("code", "", suggestion.query));
+          button.addEventListener("click", () => {
+            searchBox.value = suggestion.query;
+            selectedCategory = "";
+            expandedCategories.clear();
+            search();
+            searchBox.focus({ preventScroll: true });
+          });
+          row.append(button);
+        }
+        searchTypeAhead.classList.toggle("hidden", document.activeElement !== searchBox && !searchDialog.open);
+        restorePosition(position);
+        return;
+      }
+      const apiMatches = engine.rankApi(apiEntries, query);
+      const ranked = engine.rank(prose, query, { allowAliasPrefixes: apiMatches.length === 0 });
+      const curatedSymbol = !/[\p{L}\p{N}]/u.test(query) && ranked.some(item => item.exactTerm);
+      const used = new Set([...(apiEntries.length ? ["api"] : []), ...prose.map(item => item.category)]);
+      if (loaded && (used.size > 1 || prose.length)) {
+        const controls = dynamic("li", "search-filters");
+        controls.setAttribute("aria-label", "Search options");
+        for (const [id, label] of (used.size > 1 ? [["", allLabel], ...Array.from(categories).filter(([id]) => used.has(id))] : [])) {
+          const button = dynamic("button", "", label);
+          button.type = "button";
+          button.setAttribute("aria-pressed", String(id === selectedCategory));
+          button.addEventListener("click", event => {
+            event.stopPropagation();
+            if (selectedCategory === id) return;
+            const position = capturePosition();
+            selectedCategory = id;
+            search(position);
+            searchBox.focus({ preventScroll: true });
+          });
+          controls.append(button);
+        }
+        if (prose.length) {
+          const toggle = dynamic("button", "search-snippet-toggle", "");
+          toggle.setAttribute("role", "switch");
+          toggle.setAttribute("aria-label", "Snippets");
+          const track = dynamic("span", "search-snippet-switch");
+          track.setAttribute("aria-hidden", "true");
+          toggle.append(track, document.createTextNode("Snippets"));
+          toggle.type = "button";
+          toggle.setAttribute("aria-checked", String(showSnippets));
+          toggle.addEventListener("click", event => {
+            event.stopPropagation();
+            const position = capturePosition();
+            showSnippets = !showSnippets;
+            search(position);
+            searchTypeAhead.querySelector(".search-snippet-toggle").focus({ preventScroll: true });
+          });
+          controls.append(toggle);
+        }
+        appendItem(controls);
+      }
+      // Explicit symbols/synonyms take precedence; names and signatures otherwise remain first.
+      const curated = ranked.filter(item => item.matchedTerm && (!selectedCategory || item.category === selectedCategory));
+      const seen = new Set();
+      for (const item of curated.slice(0, MAX_RESULTS)) {
+        const api = apiEntries.find(entry => entry.href === item.href);
+        if (api) {
+          addApi(api, query);
+          const note = dynamic("small", "search-match-note", ` (alias: ${item.matchedTerm})`);
+          api.li.querySelector(".type-ahead-def-name").after(note);
+          dynamicItems.push(note);
+        } else addProse(item, query);
+        seen.add(item.href);
+      }
+      if (!curatedSymbol && (!selectedCategory || selectedCategory === "api")) {
+        const nameMatches = apiMatches.filter(item => !seen.has(item.href));
+        const apiMatchHrefs = new Set(apiMatches.map(item => item.href));
+        const documentationMatches = ranked.filter(item => item.category === "api" &&
+          !seen.has(item.href) && !apiMatchHrefs.has(item.href));
+        const matches = [
+          ...nameMatches.map(entry => ({ entry, fromStart: true })),
+          ...documentationMatches.map(documentation => ({
+            entry: apiEntries.find(entry => entry.href === documentation.href),
+            documentation,
+            fromStart: false,
+          })),
+        ];
+        const expanded = expandedCategories.has("api");
+        if (matches.length && loaded && used.size > 1) addHeading(categories.get("api"));
+        for (const match of matches.slice(0, expanded ? matches.length : MAX_RESULTS)) {
+          if (match.entry) addApi(match.entry, query, match.fromStart);
+          else addProse(match.documentation, query);
+        }
+        if (matches.length > MAX_RESULTS) addExpansion("api", "API", matches.length, expanded);
+      }
+      for (const [category, label] of categories) {
+        if (category === "api" || (selectedCategory && category !== selectedCategory)) continue;
+        const matches = ranked.filter(item => item.category === category && !seen.has(item.href));
+        if (!matches.length) continue;
+        addHeading(label);
+        const expanded = expandedCategories.has(category);
+        const limit = expanded ? matches.length : 5;
+        for (const item of matches.slice(0, limit)) { addProse(item, query); seen.add(item.href); }
+        if (matches.length > 5) {
+          addExpansion(category, label, matches.length, expanded);
         }
       }
-
-      if (shownItems.length === 0) {
-        searchTypeAhead.classList.add("hidden");
-      } else {
-        searchTypeAhead.scrollTop = 0;
-        searchTypeAhead.classList.remove("hidden");
-      }
+      if (!loaded) appendItem(dynamic("li", "search-status", failed ? "Additional documentation search is unavailable. API search still works." : "Searching documentation…"));
+      if (!shownItems.length && loaded) appendItem(dynamic("li", "search-status", "No matching documentation."));
+      topSearchResultListItem = shownItems[0];
+      searchTypeAhead.classList.remove("hidden");
+      restorePosition(position);
     }
-
-    searchBox.addEventListener("input", search);
-
+    searchBox.addEventListener("input", () => { expandedCategories.clear(); search(); });
     search();
 
     function searchSubmit(e) {
@@ -212,12 +406,13 @@ const setupSearch = () => {
     }
     searchForm.addEventListener("submit", searchSubmit);
 
-    // Capture '/' keypress for quick search
+    // Capture 's' keypress for quick search
     window.addEventListener("keyup", (e) => {
       if (e.key === "s" && document.activeElement !== searchBox) {
         e.preventDefault();
-        searchBox.focus();
         searchBox.value = "";
+        searchBox.focus();
+        search();
       }
 
       if (e.key === "Escape") {
@@ -422,7 +617,7 @@ const setupDocsSoftNavigation = () => {
   let activeDocumentKey = fragmentKey(new URL(window.location.href));
 
   const eligibleLinkUrl = (link) => {
-    if (!link || link.hasAttribute("download")) return undefined;
+    if (!link || link.hasAttribute("download") || link.hasAttribute("data-full-navigation")) return undefined;
 
     const target = link.getAttribute("target");
     if (target && target !== "_self") return undefined;

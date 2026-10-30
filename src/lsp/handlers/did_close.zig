@@ -3,7 +3,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-/// Handler for `textDocument/didClose` notifications.
+/// Handler for `textDocument/didClose` notifications. A closed document's
+/// truth is the file on disk again, so the server drops its scheduled check,
+/// its stored text, the client URI that named it, and what the syntax driver
+/// kept for it.
 pub fn handler(comptime ServerType: type) type {
     return struct {
         pub fn call(self: *ServerType, params_value: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {

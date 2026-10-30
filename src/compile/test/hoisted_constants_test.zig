@@ -62,7 +62,6 @@ const HoistedConstantsTestError = std.mem.Allocator.Error ||
         PathOutsideWorkspace,
         RootDidNotStoreConstNode,
         StaticDataInitializerCountMismatch,
-        StaticDataInitializerPrecededRootBody,
         StaticDataInitializerRequestOrderMismatch,
         StaticDataLiteralNotFound,
         StaticDataSymbolNotFound,
@@ -535,13 +534,9 @@ test "hoisted list constants lower to internal static data in request order" {
     const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer.?);
     const first_body = first_initializer.body orelse return error.StaticDataLiteralNotFound;
     const second_body = second_initializer.body orelse return error.StaticDataLiteralNotFound;
-    // Reachable roots form a barrier before queued initializers, whose request
-    // order must then determine their body order.
+    // Queued initializers lower in request order. ARC leaves initializers as
+    // lowered, so their bodies' statement ids still show that order.
     if (@backingInt(first_body) >= @backingInt(second_body)) return error.StaticDataInitializerRequestOrderMismatch;
-    for (lowered.lir_result.root_procs.items) |root_proc| {
-        const root_body = lowered.lir_result.store.getProcSpecImmediate(root_proc).body orelse return error.StaticDataLiteralNotFound;
-        if (@backingInt(root_body) >= @backingInt(first_body)) return error.StaticDataInitializerPrecededRootBody;
-    }
     try expectStaticDataLiteralPresent(&lowered.lir_result);
 
     const exports = try static_data_exports.buildStaticData(
@@ -572,6 +567,135 @@ test "hoisted list constants lower to internal static data in request order" {
         }
     }
     return error.StaticDataSymbolNotFound;
+}
+
+test "hoisted Dec and I128 list constants keep their elements 16-aligned in static data" {
+    // Packed scalar lists share the string-literal blobs, so a blob can hold
+    // 16-byte elements; LLVM reads a constant list of them with aligned
+    // vector loads, so an element 8 bytes off a 16-byte boundary faults
+    // wherever the linker happens to place the blob on one.
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\decs : List(Dec)
+        \\decs = [1.5, 2.5, 3.5]
+        \\wides = [11.I128, 22.I128, 33.I128]
+        \\
+        \\main! = |args| {
+        \\    var $d = 0.5
+        \\    for n in decs {
+        \\        $d = $d + n
+        \\    }
+        \\    var $w = 0.I128
+        \\    for n in wides {
+        \\        $w = $w + n
+        \\    }
+        \\    _ = List.len(args)
+        \\    _ = $d
+        \\    _ = $w
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        .x64linux,
+        builtin_modules,
+        build_options.compiler_compatibility_id,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finishCheckedProgram(.executable_artifacts);
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        .{
+            .requests = lir_roots,
+            .include_provided_data_exports = true,
+            .include_internal_static_data = true,
+        },
+        .{ .target_usize = base.target.TargetUsize.u64 },
+    );
+    defer lowered.deinit();
+
+    const exports = try static_data_exports.buildStaticData(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        &lowered,
+        .x64linux,
+        .{ .include_provided_exports = true },
+    );
+    defer static_data_exports.deinitStaticData(gpa, exports);
+
+    // The elements as they are stored: Dec is an i128 scaled by 10^18.
+    var dec_elements: [3 * 16]u8 = undefined;
+    var wide_elements: [3 * 16]u8 = undefined;
+    for ([_]i128{ 1_500_000_000_000_000_000, 2_500_000_000_000_000_000, 3_500_000_000_000_000_000 }, 0..) |value, i| {
+        std.mem.writeInt(i128, dec_elements[i * 16 ..][0..16], value, .little);
+    }
+    for ([_]i128{ 11, 22, 33 }, 0..) |value, i| {
+        std.mem.writeInt(i128, wide_elements[i * 16 ..][0..16], value, .little);
+    }
+    try expectElementsSixteenAligned(exports, &dec_elements);
+    try expectElementsSixteenAligned(exports, &wide_elements);
+}
+
+/// The export holding `elements` places them 16-aligned: the export is
+/// aligned to at least 16, and they start at a multiple of 16 within it.
+fn expectElementsSixteenAligned(exports: []const static_data_exports.StaticDataExport, elements: []const u8) error{ StaticDataElementsMisaligned, StaticDataElementsNotFound }!void {
+    for (exports) |static_export| {
+        const at = std.mem.find(u8, static_export.bytes, elements) orelse continue;
+        if (static_export.alignment < 16 or at % 16 != 0) {
+            std.debug.print("{s}: elements at byte {d} of an export aligned to {d} (symbol_offset {d})\n", .{ static_export.symbol_name, at, static_export.alignment, static_export.symbol_offset });
+            return error.StaticDataElementsMisaligned;
+        }
+        return;
+    }
+    return error.StaticDataElementsNotFound;
 }
 
 test "inline list iter constants lower to internal static data" {
@@ -2072,7 +2196,7 @@ test "issue 10721: runtime-dependent callable use keeps one validating extractio
     try std.testing.expectEqual(@as(usize, 1), validating_extraction_roots);
 }
 
-test "hoisted match guard does not report unused branch warning" {
+test "a match on a constant with a guard selects a hoisted root" {
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -2124,13 +2248,6 @@ test "hoisted match guard does not report unused branch warning" {
     try coord.coordinatorLoop();
     try coord.finishCheckedProgram(.none);
     try std.testing.expect(!coord.hasUserErrors());
-
-    var found_unused_branch = false;
-    var report_iter = coord.iterReports();
-    while (report_iter.next()) |entry| {
-        if (std.mem.eql(u8, entry.report.title, "Unused Branch")) found_unused_branch = true;
-    }
-    try std.testing.expect(!found_unused_branch);
 
     const artifact = coord.appRootCheckedArtifact();
     var found_hoisted_root = false;
@@ -2759,7 +2876,6 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,

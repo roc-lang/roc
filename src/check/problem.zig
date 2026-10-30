@@ -35,6 +35,8 @@ pub const CrossModuleImport = types.CrossModuleImport;
 pub const StaticDispatch = types.StaticDispatch;
 pub const DispatcherNotNominal = types.DispatcherNotNominal;
 pub const DispatcherDoesNotImplMethod = types.DispatcherDoesNotImplMethod;
+pub const CopiedRequirement = types.CopiedRequirement;
+pub const SharedMethodUses = types.SharedMethodUses;
 pub const TypeDoesNotSupportEquality = types.TypeDoesNotSupportEquality;
 pub const TypeDoesNotSupportMap = types.TypeDoesNotSupportMap;
 pub const UndeterminedCodecType = types.UndeterminedCodecType;
@@ -68,7 +70,6 @@ pub const UnmatchablePattern = types.UnmatchablePattern;
 pub const MatchBranchPart = types.MatchBranchPart;
 pub const MatchAltBinderMissing = types.MatchAltBinderMissing;
 pub const DiscardedVarUpdate = types.DiscardedVarUpdate;
-pub const ComptimeUnusedBranch = types.ComptimeUnusedBranch;
 pub const ComptimeCondition = types.ComptimeCondition;
 
 // Type declaration errors

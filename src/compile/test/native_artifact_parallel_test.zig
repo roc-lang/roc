@@ -86,7 +86,7 @@ const ObservedExecutor = struct {
             self.outstanding += 1;
             return;
         }
-        unreachable;
+        @panic("ObservedExecutor.submit: every slot holds an outstanding task");
     }
 
     fn receive(context: *anyopaque) tasks.Completion {
@@ -125,7 +125,7 @@ const ObservedExecutor = struct {
                 }
             }
         }
-        unreachable;
+        @panic("ObservedExecutor.receive: completion matches no submitted task");
     }
 
     fn end(context: *anyopaque) void {
@@ -152,7 +152,7 @@ const ObservedExecutor = struct {
     /// with at least one task per worker. Sessions are waves, whose sizes do
     /// not depend on the worker count, so a probe run's sizes choose a wave a
     /// later run can rendezvous in without waiting for tasks that never come.
-    fn firstFullWave(self: *const ObservedExecutor, from: usize, workers: usize) AssertionError!usize {
+    fn firstFullWave(self: *const ObservedExecutor, from: u64, workers: usize) AssertionError!usize {
         var start: usize = 0;
         for (self.session_sizes[0..self.session_count]) |size| {
             if (start >= from and size >= workers) return start;
@@ -208,6 +208,7 @@ fn emit(
         program.boxy_erased_arg_desc_offsets.items,
         program.boxy_erased_arg_desc_params.items,
         program.boxy_worker_procs.items,
+        program.erased_capture_prefix,
         .default,
     );
     defer cg.deinit();

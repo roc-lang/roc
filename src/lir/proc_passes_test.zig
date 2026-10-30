@@ -330,6 +330,10 @@ const ReverseExecutor = struct {
     // Successful shard allocations survive submit until the phase is drained.
     output_failure: testing.FailingAllocator = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 }),
     scratch_failure: testing.FailingAllocator = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 }),
+    /// The lane the scratch-failing task runs on: passes retain their
+    /// transient storage in lane state, so its allocator fails with the
+    /// task's scratch.
+    failing_lane: ?executor.LaneState = null,
     accepted: usize = 0,
     frozen_source: ?*const core.LirStore = null,
     frozen_prefix: core.LirStore.BodyPrefix = undefined,
@@ -337,6 +341,7 @@ const ReverseExecutor = struct {
 
     fn deinit(self: *ReverseExecutor) void {
         for (&self.lane_states) |*lane| lane.deinit();
+        if (self.failing_lane) |*lane| lane.deinit();
     }
 
     fn begin(context: *anyopaque) void {
@@ -354,11 +359,13 @@ const ReverseExecutor = struct {
         var scratch = collections.SingleThreadArena.init(testing.allocator);
         defer scratch.deinit();
         const worker_id = task.id % self.lanes;
+        const fail_scratch = self.fail_scratch_task == task.id;
+        if (fail_scratch and self.failing_lane == null) self.failing_lane = executor.LaneState.init(self.scratch_failure.allocator());
         const result = task.run(task.context, .{
             .id = worker_id,
             .allocator = if (self.fail_output_task == task.id) self.output_failure.allocator() else testing.allocator,
-            .scratch = if (self.fail_scratch_task == task.id) self.scratch_failure.allocator() else scratch.allocator(),
-            .lane_state = &self.lane_states[worker_id],
+            .scratch = if (fail_scratch) self.scratch_failure.allocator() else scratch.allocator(),
+            .lane_state = if (fail_scratch) &self.failing_lane.? else &self.lane_states[worker_id],
         });
         self.pending[self.pending_len] = .{ .id = task.id, .worker_id = worker_id, .value = result };
         self.pending_len += 1;
@@ -894,6 +901,55 @@ test "LIR proc pass deletes pure definitions that only fed pruned join parameter
     try testing.expectEqual(define_sum, pruned.remainder);
     try testing.expectEqual(define_kept, store.getCFStmtImmediate(define_sum).assign_low_level.next);
     try testing.expectEqual(jump, store.getCFStmtImmediate(define_kept).assign_ref.next);
+}
+
+test "LIR proc pass prunes a join parameter whose only reader is a dead definition" {
+    const LIR = core.LIR;
+    var store = core.LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    var join_ids = body_clone.JoinParamIndex.init(testing.allocator);
+    defer join_ids.deinit();
+    const join_id = join_ids.freshJoinPoint();
+
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const unread = try store.addLocal(.{ .layout_idx = .u64 });
+    const kept = try store.addLocal(.{ .layout_idx = .u64 });
+    const alias = try store.addLocal(.{ .layout_idx = .u64 });
+
+    // The join body binds `unread` to `alias`, which nothing reads, so
+    // `unread` is unread too, and both its write and the alias go.
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const write_kept = try store.addCFStmt(.{ .set_local = .{ .target = kept, .value = value, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+    const write_unread = try store.addCFStmt(.{ .set_local = .{ .target = unread, .value = value, .mode = .initialize_join_param, .next = write_kept } }, .test_fixture);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = kept } }, .test_fixture);
+    const define_alias = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = LIR.RefOp.local(unread), .next = ret } }, .test_fixture);
+    const join = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{ unread, kept }),
+        .body = define_alias,
+        .remainder = write_unread,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(0),
+        .args = try store.addLocalSpan(&.{value}),
+        .frame_locals = try store.addLocalSpan(&.{ value, unread, kept, alias }),
+        .body = join,
+        .ret_layout = .u64,
+    }, .none);
+
+    var metrics: passes.ParallelMetrics = .{};
+    try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
+
+    try testing.expectEqual(join, store.getProcSpecImmediate(proc).body.?);
+    const pruned = store.getCFStmtImmediate(join).join;
+    const params = store.getLocalSpan(pruned.params);
+    try testing.expectEqual(@as(usize, 1), params.len);
+    try testing.expectEqual(kept, core.LirStore.GuardedList.at(params, 0));
+    try testing.expectEqual(write_kept, pruned.remainder);
+    try testing.expectEqual(ret, pruned.body);
 }
 
 test "LIR proc pass keeps join parameters that are read or are procedure arguments" {

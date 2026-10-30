@@ -207,13 +207,14 @@
 //! Store-borrow discipline: this pass clones expressions while walking spans of
 //! the same `Program` store, and cloning appends new nodes to those stores.
 //! Never hold a `Program`-store borrow (any `*Span` result) across a call that
-//! can append to the same store: copy the span first via `GuardedList.dupe`, or
-//! read one element at a time by stable index via the `*At` accessors
-//! (`branchAt`, `captureOperandAt`), which retain no borrow. The GuardedList
-//! generation guard turns a violation into a Debug panic. The generation is
-//! per-list, so a borrow of one store stays valid across an append to a
-//! different store—only same-store appends invalidate it, so copying a span
-//! whose store this walk never grows is unnecessary.
+//! can append to the same store: take the span's rows via `walkRows` (the
+//! frozen source's rows in a body shard, which no append moves, otherwise a
+//! copy), or read one element at a time by stable index via the `*At`
+//! accessors (`branchAt`, `captureOperandAt`), which retain no borrow. The
+//! GuardedList generation guard turns a violation into a Debug panic. The
+//! generation is per-list, so a borrow of one store stays valid across an
+//! append to a different store—only same-store appends invalidate it, so
+//! copying a span whose store this walk never grows is unnecessary.
 
 const std = @import("std");
 const invariant = @import("base").invariant;
@@ -232,11 +233,37 @@ const check = @import("check");
 const names = @import("check").CheckedNames;
 
 const ExitDemand = @import("loop_exit_demand.zig");
+const InlineProductivity = @import("inline_productivity.zig");
 const Allocator = std.mem.Allocator;
 const GuardedList = collections.GuardedList;
 const TaskExecutor = @import("base").post_check_task_executor;
 
 /// Identity exhaustion is a resource failure, checked before committing shard rows.
+/// A span's rows for a walk that appends to `program` while it reads them:
+/// the frozen source's own rows when the span lies there, otherwise a copy in
+/// `allocator`.
+fn walkRows(program: *const Ast.Program, allocator: Allocator, comptime T: type, span: Ast.Span(T)) Allocator.Error![]const T {
+    if (program.frozenSpanRows(T, span)) |rows| return rows;
+    return try GuardedList.dupe(allocator, T, program.spanRows(T, span));
+}
+
+/// `walkRows` for a caller that frees its rows: `deinit` frees only a copy.
+fn OwnedWalkRows(comptime T: type) type {
+    return struct {
+        items: []const T,
+        owned: bool,
+
+        fn deinit(self: @This(), allocator: Allocator) void {
+            if (self.owned) allocator.free(self.items);
+        }
+    };
+}
+
+fn ownedWalkRows(program: *const Ast.Program, allocator: Allocator, comptime T: type, span: Ast.Span(T)) Allocator.Error!OwnedWalkRows(T) {
+    if (program.frozenSpanRows(T, span)) |rows| return .{ .items = rows, .owned = false };
+    return .{ .items = try GuardedList.dupe(allocator, T, program.spanRows(T, span)), .owned = true };
+}
+
 fn checkedIdentityTotal(start: u32, count: u32) Allocator.Error!u32 {
     return std.math.add(u32, start, count) catch error.OutOfMemory;
 }
@@ -262,7 +289,9 @@ fn isForcedDynamicIteratorType(program: *const Ast.Program, ty: Type.TypeId) boo
     return type_ == .named and type_.named.def.iterator_representation == .forced_dynamic;
 }
 
-/// Exact post-SpecConstr use information for one lifted procedure.
+/// Exact post-SpecConstr use information for one lifted procedure. Uses are
+/// counted only in functions the program's roots reach: a function SpecConstr
+/// inlined at every call is left unreferenced, and its body is never lowered.
 pub const ProcedureUse = struct {
     external_calls: usize = 0,
     external_call_expr: ?Ast.ExprId = null,
@@ -322,7 +351,24 @@ pub const OwnedProcedureUsage = struct {
 /// specialization still runs in full; only the value chase narrows. Dev
 /// builds select this so their post-check time and emitted program size stay
 /// proportional to the iterator code the pass improves.
-pub const CloneInlining = enum { all_calls, iterator_fusion };
+pub const CloneInlining = enum {
+    all_calls,
+    iterator_fusion,
+
+    /// Whether SpecConstr clones workers for the call patterns and callables
+    /// the program's calls pass, and rewrites those calls to them. Which
+    /// clones a function gets depends on every call the program makes to it,
+    /// so a body rewritten to call one depends on the rest of the program.
+    /// Dev lowering (`iterator_fusion`) keeps every rewrite a function of the
+    /// function's own source, since the object cache serves one procedure's
+    /// code to every program that names it.
+    pub fn specializesCallPatterns(self: CloneInlining) bool {
+        return switch (self) {
+            .all_calls => true,
+            .iterator_fusion => false,
+        };
+    }
+};
 
 /// Independent work separated by coordinator-owned graph mutation barriers.
 pub const Phase = enum { discovery, unused_loop_results, iterator_fusion };
@@ -506,13 +552,6 @@ const ShapeProof = union(enum) {
     disproven,
     unknown_budget_exhausted,
 };
-
-fn shapeProofIsProven(proof: ShapeProof) bool {
-    return switch (proof) {
-        .proven => true,
-        .disproven, .unknown_budget_exhausted => false,
-    };
-}
 
 /// Maximum number of `runtime_anchor.structure` / `nominal.backing` /
 /// `static_data_candidate.structure` / callable-capture pointer edges any single
@@ -832,7 +871,6 @@ fn exprIsSubstitutable(program: *const Ast.Program, allocator: Allocator, expr_i
         .return_,
         .crash,
         .checked_error,
-        .comptime_branch_taken,
         .comptime_exhaustiveness_failed,
         .dbg,
         .expect_err,
@@ -904,10 +942,13 @@ const BinderIdentity = struct {
     digest: names.TypeDigest,
 };
 
+/// A dense slot for one binder identity, scoped to one `Subst`'s contents.
+const BinderSlot = enum(u32) { _ };
+
 const BindingTarget = union(enum) {
     local: Ast.LocalId,
-    binder: BinderIdentity,
-    alias: BinderIdentity,
+    binder: BinderSlot,
+    alias: BinderSlot,
 };
 
 const BindingChange = struct {
@@ -1154,6 +1195,10 @@ const LoopExitSelection = struct {
 /// step calls no further `next`.
 const InlineFrame = struct {
     fn_id: Ast.FnId,
+    /// What the code around the inlined call consumes of its result, which
+    /// the inlined body's own result reaches. Empty for a frame whose result
+    /// no surrounding code reads, such as a specialization worker's own body.
+    result_demand: []const InlineProductivity.ResolvedRead = &.{},
     /// Null means this acyclic entry had no finite constructor-size proof. A
     /// recursive re-entry may proceed only when both frames have exact sizes
     /// and the new measure is strictly smaller.
@@ -1337,6 +1382,11 @@ const Pass = struct {
     /// Direct callers recorded per function while the first argument-use walk
     /// runs; null outside `collectArgUses`.
     arg_use_callers: ?[]std.ArrayList(Ast.FnId) = null,
+    /// Where each source function consumes its parameters, captures, and
+    /// calls' results, and which result parts it constructs. Present while
+    /// `run` clones, and borrowed by its discovery workers; a clone that admits
+    /// only productive direct inlines reads it.
+    inline_productivity: ?*const InlineProductivity.Analysis = null,
     /// Per source function: whether the whole-body value clone has already
     /// satisfied value-aware call rewriting, shape demand, and known-loop
     /// scalarization. Those analyses can all request the same clone, but the
@@ -1421,6 +1471,7 @@ const Pass = struct {
                 .static_data_structure = .init(scratch),
                 .discovery_admission = self.discovery_admission,
                 .borrowed_worker = true,
+                .inline_productivity = self.source.inline_productivity,
             };
             defer pass.arena.deinit();
             defer pass.static_data_structure.deinit();
@@ -1436,7 +1487,7 @@ const Pass = struct {
                     cloner.rewrite_call_patterns = false;
                     cloner.emit_callable_workers = false;
                     cloner.inline_calls = .iterator_fusion;
-                    cloner.inline_direct_requires_known_arg = true;
+                    cloner.inline_direct_requires_productivity = true;
                     try cloner.collectCallPatternsInExpr(self.fn_id, pass.sourceBody(self.fn_id).roc);
                     pass.rewindAnalysis(mark);
                 },
@@ -1497,6 +1548,10 @@ const Pass = struct {
         if (admission) |snapshot| {
             for (snapshot, 0..) |*entry, raw| entry.* = self.newSpecAdmission(raw);
         }
+        // Task scratch for the inline path, emptied after each task and kept
+        // with its capacity for the next.
+        var serial_scratch = collections.SingleThreadArena.init(self.allocator);
+        defer serial_scratch.deinit();
         var next_fn: usize = 0;
         while (next_fn < fn_count) {
             var work: [wave_capacity]Work = undefined;
@@ -1552,9 +1607,8 @@ const Pass = struct {
                 if (failure) |err| return err;
             } else {
                 for (work[0..count]) |*item| {
-                    var scratch = collections.SingleThreadArena.init(self.allocator);
-                    defer scratch.deinit();
-                    try item.execute(self.allocator, scratch.allocator());
+                    defer _ = serial_scratch.reset(.retain_capacity);
+                    try item.execute(self.allocator, serial_scratch.allocator());
                 }
             }
             if (self.options.metrics_out) |metrics| {
@@ -1742,7 +1796,13 @@ const Pass = struct {
         const expr = self.program.getExpr(expr_id);
         const value: Value = switch (expr.data) {
             .comptime_value => .{ .expr = expr_id },
-            .static_data_candidate, .tag, .tuple, .record, .nominal, .fn_ref => return null,
+            // A stored list has no constructor components, as the list it
+            // stands for has none: the candidate is its own opaque value.
+            .static_data_candidate => |candidate| switch (candidate.value) {
+                .runtime => return null,
+                .stored => .{ .expr = expr_id },
+            },
+            .tag, .tuple, .record, .nominal, .fn_ref => return null,
             // A binding/control expression owns its complete lexical scope.
             // Retaining it as an opaque leaf preserves its exact evaluation
             // without exposing initializer-private locals through the view.
@@ -1786,7 +1846,6 @@ const Pass = struct {
             .return_,
             .crash,
             .checked_error,
-            .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
@@ -1824,13 +1883,16 @@ const Pass = struct {
         var components = std.ArrayList(Ast.ExprId).empty;
         errdefer components.deinit(self.allocator);
         switch (expr.data) {
-            .static_data_candidate => |candidate| try components.append(self.allocator, candidate.runtime_expr),
+            .static_data_candidate => |candidate| switch (candidate.value) {
+                .runtime => |runtime| try components.append(self.allocator, runtime),
+                .stored => unreachable, // staticDataLeaf returns a stored candidate as a leaf, so no frame is built for one
+            },
             .tag => |tag| for (0..tag.payloads.len) |i| try components.append(self.allocator, GuardedList.at(self.program.exprSpan(tag.payloads), i)),
             .tuple => |span| for (0..span.len) |i| try components.append(self.allocator, GuardedList.at(self.program.exprSpan(span), i)),
             .record => |span| for (0..span.len) |i| try components.append(self.allocator, GuardedList.at(self.program.fieldExprSpan(span), i).value),
             .nominal => |backing| try components.append(self.allocator, backing),
             .fn_ref => |ref| for (0..ref.captures.len) |i| try components.append(self.allocator, self.program.captureOperandAt(ref.captures, i).value),
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .comptime_value, .typed_boundary, .row_widen, .list, .record_update, .let_, .lambda, .def_ref, .fn_def, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .comptime_value, .typed_boundary, .row_widen, .list, .record_update, .let_, .lambda, .def_ref, .fn_def, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // staticDataLeaf returns null, and so a frame is built, only for these constructor forms
         }
         const owned = try components.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(owned);
@@ -1879,7 +1941,7 @@ const Pass = struct {
                 }
                 break :blk try callableValue(self.program, self.allocator, expr.ty, ref.fn_id, captures, false);
             },
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .comptime_value, .typed_boundary, .row_widen, .list, .record_update, .let_, .lambda, .def_ref, .fn_def, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .comptime_value, .typed_boundary, .row_widen, .list, .record_update, .let_, .lambda, .def_ref, .fn_def, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // frames are built only for the constructor forms staticDataLeaf returns null for
         };
         return try self.storeStaticDataStructure(expr_id, value);
     }
@@ -1972,8 +2034,14 @@ const Pass = struct {
 
         try self.specializeBranchAppendTails(original_fn_count);
         try self.collectArgUses(original_fn_count);
-        try self.collectCallPatterns(original_fn_count);
-        try self.collectValueAwareCallPatterns(original_fn_count);
+        var productivity = try self.analyzeInlineProductivity();
+        defer productivity.deinit();
+        self.inline_productivity = &productivity;
+        defer self.inline_productivity = null;
+        if (self.clone_inlining.specializesCallPatterns()) {
+            try self.collectCallPatterns(original_fn_count);
+            try self.collectValueAwareCallPatterns(original_fn_count);
+        }
         try self.reserveSpecIds();
         try self.createSpecializations(original_fn_count);
         try self.rewriteExistingCalls();
@@ -1988,6 +2056,17 @@ const Pass = struct {
 
         self.program.next_symbol = self.symbols.next;
         return procedure_usage;
+    }
+
+    /// Summarize the source bodies for the clones' direct-inline admission.
+    fn analyzeInlineProductivity(self: *Pass) Allocator.Error!InlineProductivity.Analysis {
+        const bodies = try self.allocator.alloc(?Ast.ExprId, self.plans.len);
+        defer self.allocator.free(bodies);
+        for (bodies, self.plans) |*body, plan| body.* = switch (plan.source.body) {
+            .roc => |roc_body| roc_body,
+            .hosted => null,
+        };
+        return InlineProductivity.analyze(self.allocator, self.program, bodies);
     }
 
     fn runIteratorFusion(self: *Pass) Common.LowerError!void {
@@ -2077,10 +2156,12 @@ const Pass = struct {
         }
         if (call.is_cold) return;
 
-        const source_args = try GuardedList.dupe(self.allocator, Ast.TypedLocal, self.program.typedLocalSpan(worker.args));
-        defer self.allocator.free(source_args);
-        const source_captures = try GuardedList.dupe(self.allocator, Ast.TypedLocal, self.program.typedLocalSpan(worker.captures));
-        defer self.allocator.free(source_captures);
+        const source_args_rows = try ownedWalkRows(self.program, self.allocator, Ast.TypedLocal, worker.args);
+        defer source_args_rows.deinit(self.allocator);
+        const source_args = source_args_rows.items;
+        const source_captures_rows = try ownedWalkRows(self.program, self.allocator, Ast.TypedLocal, worker.captures);
+        defer source_captures_rows.deinit(self.allocator);
+        const source_captures = source_captures_rows.items;
 
         var params = std.ArrayList(Ast.TypedLocal).empty;
         defer params.deinit(self.allocator);
@@ -2209,7 +2290,6 @@ const Pass = struct {
                     try tails.append(self.allocator, payload_switch.uninitialized);
                 },
                 inline .try_sequence, .try_record_sequence => |sequence| try tails.append(self.allocator, sequence.ok_body),
-                .comptime_branch_taken => |taken| try tails.append(self.allocator, taken.body),
                 .typed_boundary => |boundary| try tails.append(self.allocator, boundary.value),
                 // A self call under a row coercion is not in tail position: the
                 // call's type and the coercion's are distinct Monotype types
@@ -2558,7 +2638,7 @@ const Pass = struct {
                     // selected by operational consumers, but must never cause
                     // argument specialization; the standard child list
                     // excludes them.
-                    .join_point, .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .structural_eq, .structural_hash, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
+                    .join_point, .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .structural_eq, .structural_hash, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
                 }
                 try Ast.appendChildren(self.allocator, self.program, id, &stack);
             },
@@ -2594,11 +2674,16 @@ const Pass = struct {
                     .def_ref,
                     .fn_def,
                     => Common.invariant("pre-lift function expression reached call-pattern specialization"),
-                    .call_proc => |call| if (Ast.localDirectCallee(call)) |callee|
+                    // A demand-shaped call's operands keep the caller's types,
+                    // not the callee's, so its patterns cannot specialize the
+                    // callee.
+                    .call_proc => |call| if (call.demand_shaped)
+                        .descend
+                    else if (Ast.localDirectCallee(call)) |callee|
                         (if (@backingInt(callee) < visitor.pass.plans.len) .descend_then_exit else .descend)
                     else
                         .descend,
-                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
+                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
                 };
             }
 
@@ -2694,8 +2779,9 @@ const Pass = struct {
     fn recordCallPattern(self: *Pass, fn_id: Ast.FnId, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
         const raw = @backingInt(fn_id);
         if (!self.plans[raw].source.size.admits()) return;
-        const args = try GuardedList.dupe(self.allocator, Ast.ExprId, self.program.exprSpan(args_span));
-        defer self.allocator.free(args);
+        const args_rows = try ownedWalkRows(self.program, self.allocator, Ast.ExprId, args_span);
+        defer args_rows.deinit(self.allocator);
+        const args = args_rows.items;
         const fn_args = self.program.typedLocalSpan(self.program.getFnAt(raw).args);
         if (args.len != fn_args.len) Common.invariant("direct call arity differed from lifted function arity");
 
@@ -2986,8 +3072,9 @@ const Pass = struct {
         const body_expr = self.program.getExpr(body);
         if (body_expr.data != .block) return null;
         const block = body_expr.data.block;
-        const stmts = try GuardedList.dupe(self.allocator, Ast.StmtId, self.program.stmtSpan(block.statements));
-        defer self.allocator.free(stmts);
+        const stmts_rows = try ownedWalkRows(self.program, self.allocator, Ast.StmtId, block.statements);
+        defer stmts_rows.deinit(self.allocator);
+        const stmts = stmts_rows.items;
 
         // Locate the driving loop: a statement whose value/expression is a loop.
         // A one-carry loop that binds its result (a fold) rebinds that result
@@ -3305,7 +3392,7 @@ const Pass = struct {
             switch (expr.data) {
                 .continue_ => |continue_| return self.program.exprSpan(continue_.values),
                 .block => |block| current = block.final_expr,
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return null,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return null,
             }
         }
     }
@@ -3455,7 +3542,11 @@ const Pass = struct {
                 .nominal => |backing| try stack.append(self.allocator, backing),
                 .field_access => |field| try stack.append(self.allocator, field.receiver),
                 .tuple_access => |access| try stack.append(self.allocator, access.tuple),
-                .static_data_candidate => |candidate| try stack.append(self.allocator, candidate.runtime_expr),
+                .static_data_candidate => |candidate| switch (candidate.value) {
+                    .runtime => |runtime| try stack.append(self.allocator, runtime),
+                    // As the list literal it stands for.
+                    .stored => return .disproven,
+                },
                 .typed_boundary => |boundary| try stack.append(self.allocator, boundary.value),
                 // A row coercion emits a discriminant switch and, for a boxed
                 // destination, an allocation.
@@ -3464,7 +3555,6 @@ const Pass = struct {
                     if (self.program.stmtSpan(block.statements).len != 0) return .disproven;
                     try stack.append(self.allocator, block.final_expr);
                 },
-                .comptime_branch_taken => |taken| try stack.append(self.allocator, taken.body),
                 .@"unreachable",
                 .list,
                 .record_update,
@@ -3597,12 +3687,9 @@ const Pass = struct {
         const loop_expr = self.program.getExpr(loop_expr_id);
         const loop = loop_expr.data.loop_;
         const source_params = self.program.typedLocalSpan(loop.params);
-        const source_initials = try GuardedList.dupe(
-            self.allocator,
-            Ast.ExprId,
-            self.program.exprSpan(loop.initial_values),
-        );
-        defer self.allocator.free(source_initials);
+        const source_initials_rows = try ownedWalkRows(self.program, self.allocator, Ast.ExprId, loop.initial_values);
+        defer source_initials_rows.deinit(self.allocator);
+        const source_initials = source_initials_rows.items;
         if (source_params.len == 0 or source_params.len != source_initials.len) return null;
 
         const base_ty = self.program.getLocal(base_local).ty;
@@ -3794,8 +3881,9 @@ const Pass = struct {
         const expr = self.program.getExpr(branch_expr_id);
         if (expr.data == .if_) {
             const if_ = expr.data.if_;
-            const branches = try GuardedList.dupe(self.allocator, Ast.IfBranch, self.program.ifBranchSpan(if_.branches));
-            defer self.allocator.free(branches);
+            const branches_rows = try ownedWalkRows(self.program, self.allocator, Ast.IfBranch, if_.branches);
+            defer branches_rows.deinit(self.allocator);
+            const branches = branches_rows.items;
             var rewritten = try self.allocator.alloc(Ast.IfBranch, branches.len);
             defer self.allocator.free(rewritten);
             for (branches, 0..) |br, index| {
@@ -3809,8 +3897,9 @@ const Pass = struct {
             } } });
         } else if (expr.data == .match_) {
             const match = expr.data.match_;
-            const branches = try GuardedList.dupe(self.allocator, Ast.Branch, self.program.branchSpan(match.branches));
-            defer self.allocator.free(branches);
+            const branches_rows = try ownedWalkRows(self.program, self.allocator, Ast.Branch, match.branches);
+            defer branches_rows.deinit(self.allocator);
+            const branches = branches_rows.items;
             var rewritten = try self.allocator.alloc(Ast.Branch, branches.len);
             defer self.allocator.free(rewritten);
             for (branches, 0..) |br, index| {
@@ -3871,7 +3960,7 @@ const Pass = struct {
                 try stmts.append(self.allocator, try self.program.addStmt(.{ .expr = step }));
             }
         }
-        unreachable;
+        unreachable; // chain.items is nonempty here, so the final iteration returns
     }
 
     /// One application of the loop body: bind the item pattern to an appended
@@ -4196,7 +4285,6 @@ const Pass = struct {
                 .break_,
                 .join_point,
                 .jump,
-                .comptime_branch_taken,
                 .comptime_exhaustiveness_failed,
                 .dbg,
                 .expect_err,
@@ -4248,6 +4336,7 @@ const Pass = struct {
                     .iterator_procedure = call.iterator_procedure,
                     .captures = try clone.captureOperandSpan(call.captures, children[call.args.len..]),
                     .is_cold = call.is_cold,
+                    .demand_shaped = call.demand_shaped,
                 } },
                 .call_value => .{ .call_value = .{
                     .callee = @fromBackingInt(@intCast(children[0])),
@@ -4290,7 +4379,6 @@ const Pass = struct {
                 .break_,
                 .join_point,
                 .jump,
-                .comptime_branch_taken,
                 .comptime_exhaustiveness_failed,
                 .dbg,
                 .expect_err,
@@ -4368,7 +4456,6 @@ const Pass = struct {
                 .return_,
                 .crash,
                 .checked_error,
-                .comptime_branch_taken,
                 .comptime_exhaustiveness_failed,
                 .dbg,
                 .expect_err,
@@ -4388,7 +4475,7 @@ const Pass = struct {
                 .block => .{ .block = try clone.blockData(children) },
                 .if_ => .{ .if_ = try clone.ifData(children) },
                 .match_ => |match| .{ .match_ = try clone.matchData(match, children) },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => Common.invariant("new-carry clone finished an expression it does not rebuild"),
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => Common.invariant("new-carry clone finished an expression it does not rebuild"),
             };
             try clone.replaceResults(base, @backingInt(try program.addExpr(.{ .ty = loop_parts.value_ty, .data = data })));
         }
@@ -4587,11 +4674,15 @@ const Pass = struct {
                     .all_calls => .all,
                     .iterator_fusion => .iterator_fusion,
                 };
-                cloner.inline_direct_requires_known_arg = true;
+                cloner.inline_direct_requires_productivity = true;
+                if (!self.clone_inlining.specializesCallPatterns()) {
+                    cloner.rewrite_call_patterns = false;
+                    cloner.emit_callable_workers = false;
+                }
             },
             .iterator_fusion => {
                 cloner.inline_calls = .iterator_fusion;
-                cloner.inline_direct_requires_known_arg = false;
+                cloner.inline_direct_requires_productivity = false;
                 cloner.rewrite_call_patterns = false;
                 cloner.emit_callable_workers = false;
             },
@@ -4638,7 +4729,9 @@ const Pass = struct {
     }
 
     /// Once the specialization graph is complete, clone only functions whose
-    /// loop result ABI contains fields their exact continuation cannot observe.
+    /// loop result tuple their exact continuation never observes whole: the
+    /// exit then transfers the components the continuation reads, dropping
+    /// any it cannot observe.
     /// Calls and loop-carried state stay unchanged in this final pass; its sole
     /// authority is the producer-visible result binding and continuation.
     fn projectUnusedLoopResults(self: *Pass) Common.LowerError!void {
@@ -4702,7 +4795,7 @@ const Pass = struct {
                     .fn_def,
                     => Common.invariant("pre-lift function expression reached call-pattern specialization"),
                     .call_proc => .descend_then_exit,
-                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
+                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
                 };
             }
 
@@ -4714,13 +4807,15 @@ const Pass = struct {
     }
 
     fn rewriteCallProc(self: *Pass, expr_id: Ast.ExprId, call: @import("../monotype/ast.zig").CallProc) Allocator.Error!void {
+        if (call.demand_shaped) return;
         const callee = Ast.localDirectCallee(call) orelse return;
         const raw = @backingInt(callee);
         if (raw >= self.plans.len) return;
         if (self.plans[raw].specs.items.len == 0) return;
 
-        const args = try GuardedList.dupe(self.allocator, Ast.ExprId, self.program.exprSpan(call.args));
-        defer self.allocator.free(args);
+        const args_rows = try ownedWalkRows(self.program, self.allocator, Ast.ExprId, call.args);
+        defer args_rows.deinit(self.allocator);
+        const args = args_rows.items;
         var order_buffer: [spec_constr_specialization_count]u8 = undefined;
         for (try self.specSelectionOrder(raw, &order_buffer)) |spec_index| {
             const spec = self.plans[raw].specs.items[spec_index];
@@ -4940,7 +5035,6 @@ const Pass = struct {
             .return_,
             .crash,
             .checked_error,
-            .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
@@ -5039,7 +5133,7 @@ const Pass = struct {
                     .captures = capture_shapes,
                 } };
             },
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .let_, .lambda, .def_ref, .fn_def, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .let_, .lambda, .def_ref, .fn_def, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // enterConstructorShape returns components only for the constructor forms above
         };
     }
 
@@ -5134,7 +5228,7 @@ const Pass = struct {
             .tuple => |tuple| try components.appendSlice(self.allocator, tuple.items),
             .nominal => |nominal| try components.append(self.allocator, nominal.backing.*),
             .callable => |callable| for (callable.captures) |capture| try components.append(self.allocator, capture.value),
-            .expr, .runtime_anchor, .static_data_candidate => unreachable,
+            .expr, .runtime_anchor, .static_data_candidate => unreachable, // the wrapper loop above breaks only on composite values
         }
         const owned = try components.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(owned);
@@ -5201,7 +5295,7 @@ const Pass = struct {
                     .captures = captures,
                 } } };
             },
-            .expr, .runtime_anchor, .static_data_candidate => unreachable,
+            .expr, .runtime_anchor, .static_data_candidate => unreachable, // frames hold only the composite values enterShapeFromValue decomposed
         }
     }
 };
@@ -5211,9 +5305,9 @@ const Pass = struct {
 /// scope's writes can be unwound at its boundary.
 ///
 /// The exact-local map is keyed by `LocalId`. The other two maps are keyed by
-/// `BinderIdentity`—the checked pattern binder together with the digest of the
-/// local's monomorphic type, so two locals that share a binder but were
-/// monomorphized at different types stay distinct bindings. `binder_aliases`
+/// the dense slot of a `BinderIdentity`—the checked pattern binder together
+/// with the digest of the local's monomorphic type, so two locals that share a
+/// binder but were monomorphized at different types stay distinct bindings. `binder_aliases`
 /// resolves every binder-equivalent local while cloning, for opaque and
 /// structural values alike. `binder_subst` exposes only known structure and
 /// loop-carried values to specialization decisions. Keeping those indexes
@@ -5221,8 +5315,8 @@ const Pass = struct {
 /// an opaque binding into constructor evidence.
 const Subst = struct {
     exact: collections.DenseMap(Ast.LocalId, Value),
-    binder_subst: std.AutoHashMap(BinderIdentity, Value),
-    binder_aliases: std.AutoHashMap(BinderIdentity, Value),
+    binder_subst: collections.DenseMap(BinderSlot, Value),
+    binder_aliases: collections.DenseMap(BinderSlot, Value),
     /// Binder identities carried by an enclosing loop being cloned, with a
     /// nesting refcount. A carried variable's value must survive every `let`
     /// scope inside the loop body: the state-merge lowering binds a merged
@@ -5231,16 +5325,25 @@ const Subst = struct {
     /// binder. Cloning a `let` value floats any update to a carried binder past its
     /// own restore so a later reference resolves to the merged value rather
     /// than the loop-entry value pinned at loop setup.
-    loop_carried_binders: std.AutoHashMap(BinderIdentity, u32),
+    loop_carried_binders: collections.DenseMap(BinderSlot, u32),
+    /// The slot of each binder identity met so far: each binder heads a chain
+    /// of the slots for the types it was met at, almost always one.
+    binder_heads: collections.DenseMap(check.CheckedModule.PatternBinderId, u32),
+    binder_slots: std.ArrayList(SlotNode),
     changes: std.ArrayList(BindingChange),
     allocator: Allocator,
+
+    const no_slot: u32 = std.math.maxInt(u32);
+    const SlotNode = struct { identity: BinderIdentity, next: u32 };
 
     fn init(allocator: Allocator) Subst {
         return .{
             .exact = collections.DenseMap(Ast.LocalId, Value).init(allocator),
-            .binder_subst = std.AutoHashMap(BinderIdentity, Value).init(allocator),
-            .binder_aliases = std.AutoHashMap(BinderIdentity, Value).init(allocator),
-            .loop_carried_binders = std.AutoHashMap(BinderIdentity, u32).init(allocator),
+            .binder_subst = collections.DenseMap(BinderSlot, Value).init(allocator),
+            .binder_aliases = collections.DenseMap(BinderSlot, Value).init(allocator),
+            .loop_carried_binders = collections.DenseMap(BinderSlot, u32).init(allocator),
+            .binder_heads = collections.DenseMap(check.CheckedModule.PatternBinderId, u32).init(allocator),
+            .binder_slots = .empty,
             .changes = .empty,
             .allocator = allocator,
         };
@@ -5248,6 +5351,8 @@ const Subst = struct {
 
     fn deinit(self: *Subst) void {
         self.changes.deinit(self.allocator);
+        self.binder_slots.deinit(self.allocator);
+        self.binder_heads.deinit();
         self.loop_carried_binders.deinit();
         self.binder_aliases.deinit();
         self.binder_subst.deinit();
@@ -5257,6 +5362,8 @@ const Subst = struct {
     /// Forget every substitution while keeping the tables' capacity.
     fn clearRetainingCapacity(self: *Subst) void {
         self.changes.clearRetainingCapacity();
+        self.binder_slots.clearRetainingCapacity();
+        self.binder_heads.clearRetainingCapacity();
         self.loop_carried_binders.clearRetainingCapacity();
         self.binder_aliases.clearRetainingCapacity();
         self.binder_subst.clearRetainingCapacity();
@@ -5272,11 +5379,35 @@ const Subst = struct {
     /// program mutable.
     fn binderIdentityOf(program: *Ast.Program, local: Ast.LocalId) ?BinderIdentity {
         const local_data = program.getLocal(local);
-        const binder = local_data.binder orelse return null;
+        const binder = local_data.identity.binder() orelse return null;
         return .{
             .binder = binder,
             .digest = program.types.equalityDigest(&program.names, local_data.ty),
         };
+    }
+
+    /// The slot of `identity`, or null when this substitution has never
+    /// written under it.
+    fn slotOf(self: *const Subst, identity: BinderIdentity) ?BinderSlot {
+        var cursor = self.binder_heads.get(identity.binder) orelse return null;
+        while (cursor != no_slot) {
+            const node = self.binder_slots.items[cursor];
+            if (std.mem.eql(u8, &node.identity.digest.bytes, &identity.digest.bytes)) return @fromBackingInt(cursor);
+            cursor = node.next;
+        }
+        return null;
+    }
+
+    fn internSlot(self: *Subst, identity: BinderIdentity) Allocator.Error!BinderSlot {
+        if (self.slotOf(identity)) |slot| return slot;
+        const index = std.math.cast(u32, self.binder_slots.items.len) orelse return error.OutOfMemory;
+        if (index == no_slot) return error.OutOfMemory;
+        try self.binder_slots.ensureUnusedCapacity(self.allocator, 1);
+        const head = try self.binder_heads.getOrPut(identity.binder);
+        const next = if (head.found_existing) head.value_ptr.* else no_slot;
+        head.value_ptr.* = index;
+        self.binder_slots.appendAssumeCapacity(.{ .identity = identity, .next = next });
+        return @fromBackingInt(index);
     }
 
     /// Resolve a local to its known value through the exact-local map, then the
@@ -5284,7 +5415,9 @@ const Subst = struct {
     fn get(self: *const Subst, program: *Ast.Program, local: Ast.LocalId) ?Value {
         if (self.exact.get(local)) |value| return value;
         if (binderIdentityOf(program, local)) |identity| {
-            if (self.binder_subst.get(identity)) |value| return value;
+            if (self.slotOf(identity)) |slot| {
+                if (self.binder_subst.get(slot)) |value| return value;
+            }
         }
         return null;
     }
@@ -5294,7 +5427,9 @@ const Subst = struct {
     fn getForClone(self: *const Subst, program: *Ast.Program, local: Ast.LocalId) ?Value {
         if (self.exact.get(local)) |value| return value;
         if (binderIdentityOf(program, local)) |identity| {
-            if (self.binder_aliases.get(identity)) |value| return value;
+            if (self.slotOf(identity)) |slot| {
+                if (self.binder_aliases.get(slot)) |value| return value;
+            }
         }
         return null;
     }
@@ -5316,8 +5451,9 @@ const Subst = struct {
         try self.putExact(local, value);
 
         const identity = binderIdentityOf(program, local) orelse return;
-        try self.putAlias(identity, value);
-        const subst_binder = self.isLoopCarried(identity) or switch (value) {
+        const slot = try self.internSlot(identity);
+        try self.putAliasSlot(slot, value);
+        const subst_binder = self.loop_carried_binders.contains(slot) or switch (value) {
             .tag,
             .record,
             .tuple,
@@ -5330,12 +5466,7 @@ const Subst = struct {
             => false,
         };
         if (!subst_binder) return;
-        const previous_binder = self.binder_subst.get(identity);
-        try self.changes.append(self.allocator, .{
-            .key = .{ .binder = identity },
-            .previous = previous_binder,
-        });
-        try self.binder_subst.put(identity, value);
+        try self.putBinderSlot(slot, value);
     }
 
     /// Install a substitution for one exact local id without touching its
@@ -5354,18 +5485,27 @@ const Subst = struct {
         try self.exact.put(local, value);
     }
 
-    fn putAlias(self: *Subst, identity: BinderIdentity, value: Value) Allocator.Error!void {
-        const previous = self.binder_aliases.get(identity);
+    fn putAliasSlot(self: *Subst, slot: BinderSlot, value: Value) Allocator.Error!void {
+        const previous = self.binder_aliases.get(slot);
         try self.changes.append(self.allocator, .{
-            .key = .{ .alias = identity },
+            .key = .{ .alias = slot },
             .previous = previous,
         });
-        try self.binder_aliases.put(identity, value);
+        try self.binder_aliases.put(slot, value);
+    }
+
+    fn putBinderSlot(self: *Subst, slot: BinderSlot, value: Value) Allocator.Error!void {
+        const previous = self.binder_subst.get(slot);
+        try self.changes.append(self.allocator, .{
+            .key = .{ .binder = slot },
+            .previous = previous,
+        });
+        try self.binder_subst.put(slot, value);
     }
 
     fn putLocalAlias(self: *Subst, program: *Ast.Program, local: Ast.LocalId, value: Value) Allocator.Error!void {
         const identity = binderIdentityOf(program, local) orelse return;
-        try self.putAlias(identity, value);
+        try self.putAliasSlot(try self.internSlot(identity), value);
     }
 
     /// Install a binder-wide substitution for a loop-carried slot. Reassigned
@@ -5376,13 +5516,9 @@ const Subst = struct {
     /// pre-loop local and capture recomputation turns the vanished binding into
     /// a phantom root argument.
     fn putLoopCarried(self: *Subst, identity: BinderIdentity, value: Value) Allocator.Error!void {
-        try self.putAlias(identity, value);
-        const previous = self.binder_subst.get(identity);
-        try self.changes.append(self.allocator, .{
-            .key = .{ .binder = identity },
-            .previous = previous,
-        });
-        try self.binder_subst.put(identity, value);
+        const slot = try self.internSlot(identity);
+        try self.putAliasSlot(slot, value);
+        try self.putBinderSlot(slot, value);
     }
 
     /// Remove the pre-loop `binder_subst` value for the variable carried by a
@@ -5396,33 +5532,29 @@ const Subst = struct {
     fn dropCarriedBinder(self: *Subst, program: *Ast.Program, initial: Ast.ExprId) Allocator.Error!?BinderIdentity {
         const local = localExpr(program, initial) orelse return null;
         const identity = binderIdentityOf(program, local) orelse return null;
-        if (self.binder_subst.get(identity)) |previous| {
+        const slot = self.slotOf(identity) orelse return identity;
+        if (self.binder_subst.get(slot)) |previous| {
             try self.changes.append(self.allocator, .{
-                .key = .{ .binder = identity },
+                .key = .{ .binder = slot },
                 .previous = previous,
             });
-            _ = self.binder_subst.remove(identity);
+            _ = self.binder_subst.remove(slot);
         }
-        if (self.binder_aliases.get(identity)) |previous| {
+        if (self.binder_aliases.get(slot)) |previous| {
             try self.changes.append(self.allocator, .{
-                .key = .{ .alias = identity },
+                .key = .{ .alias = slot },
                 .previous = previous,
             });
-            _ = self.binder_aliases.remove(identity);
+            _ = self.binder_aliases.remove(slot);
         }
         return identity;
-    }
-
-    /// Whether an enclosing loop currently carries this binder.
-    fn isLoopCarried(self: *const Subst, identity: BinderIdentity) bool {
-        return self.loop_carried_binders.contains(identity);
     }
 
     /// Register a binder as carried by a loop being cloned. Nested loops that
     /// carry the same binder are counted so the marker survives until the
     /// outermost such loop finishes.
     fn markLoopCarried(self: *Subst, identity: BinderIdentity) Allocator.Error!void {
-        const entry = try self.loop_carried_binders.getOrPut(identity);
+        const entry = try self.loop_carried_binders.getOrPut(try self.internSlot(identity));
         if (entry.found_existing) {
             entry.value_ptr.* += 1;
         } else {
@@ -5432,9 +5564,10 @@ const Subst = struct {
 
     /// Drop one registration of a carried binder, removing it at zero.
     fn unmarkLoopCarried(self: *Subst, identity: BinderIdentity) void {
-        const entry = self.loop_carried_binders.getPtr(identity) orelse return;
+        const slot = self.slotOf(identity) orelse return;
+        const entry = self.loop_carried_binders.getPtr(slot) orelse return;
         if (entry.* <= 1) {
-            _ = self.loop_carried_binders.remove(identity);
+            _ = self.loop_carried_binders.remove(slot);
         } else {
             entry.* -= 1;
         }
@@ -5448,26 +5581,29 @@ const Subst = struct {
     /// (an arm boundary or the loop clone itself) still unwinds it.
     fn restoreFloatingLoopCarries(self: *Subst, start: usize) Allocator.Error!void {
         if (self.loop_carried_binders.count() == 0) return self.restore(start);
-        var floated = std.ArrayList(struct { identity: BinderIdentity, value: Value }).empty;
+        var floated = std.ArrayList(struct { slot: BinderSlot, value: Value }).empty;
         defer floated.deinit(self.allocator);
         for (self.changes.items[start..]) |change| {
-            const identity = switch (change.key) {
-                .binder => |identity| identity,
+            const slot = switch (change.key) {
+                .binder => |slot| slot,
                 .local, .alias => continue,
             };
-            if (!self.isLoopCarried(identity)) continue;
-            const value = self.binder_subst.get(identity) orelse continue;
+            if (!self.loop_carried_binders.contains(slot)) continue;
+            const value = self.binder_subst.get(slot) orelse continue;
             var seen = false;
             for (floated.items) |entry| {
-                if (std.meta.eql(entry.identity, identity)) {
+                if (entry.slot == slot) {
                     seen = true;
                     break;
                 }
             }
-            if (!seen) try floated.append(self.allocator, .{ .identity = identity, .value = value });
+            if (!seen) try floated.append(self.allocator, .{ .slot = slot, .value = value });
         }
         self.restore(start);
-        for (floated.items) |entry| try self.putLoopCarried(entry.identity, entry.value);
+        for (floated.items) |entry| {
+            try self.putAliasSlot(entry.slot, entry.value);
+            try self.putBinderSlot(entry.slot, entry.value);
+        }
     }
 
     fn restore(self: *Subst, start: usize) void {
@@ -5483,23 +5619,69 @@ const Subst = struct {
                         _ = self.exact.remove(local);
                     }
                 },
-                .binder => |identity| {
+                .binder => |slot| {
                     if (change.previous) |previous| {
-                        self.binder_subst.putAssumeCapacity(identity, previous);
+                        self.binder_subst.putAssumeCapacity(slot, previous);
                     } else {
-                        _ = self.binder_subst.remove(identity);
+                        _ = self.binder_subst.remove(slot);
                     }
                 },
-                .alias => |identity| {
+                .alias => |slot| {
                     if (change.previous) |previous| {
-                        self.binder_aliases.putAssumeCapacity(identity, previous);
+                        self.binder_aliases.putAssumeCapacity(slot, previous);
                     } else {
-                        _ = self.binder_aliases.remove(identity);
+                        _ = self.binder_aliases.remove(slot);
                     }
                 },
             }
         }
         self.changes.shrinkRetainingCapacity(start);
+    }
+};
+
+/// Emptied lists kept with their capacity for the clone tasks that build
+/// spans while their children append to them. A fixed number are kept so
+/// returning one never allocates; beyond that a returned list is freed.
+fn SpareLists(comptime T: type) type {
+    return struct {
+        const Self = @This();
+        const max_lists = 8;
+
+        lists: [max_lists]std.ArrayList(T) = undefined,
+        len: usize = 0,
+
+        fn take(self: *Self) std.ArrayList(T) {
+            if (self.len == 0) return .empty;
+            self.len -= 1;
+            return self.lists[self.len];
+        }
+
+        /// Keep `list` empty for the next task, leaving `list` itself empty.
+        fn give(self: *Self, allocator: Allocator, list: *std.ArrayList(T)) void {
+            defer list.* = .empty;
+            if (list.capacity == 0) return;
+            if (self.len == max_lists) return list.deinit(allocator);
+            list.clearRetainingCapacity();
+            self.lists[self.len] = list.*;
+            self.len += 1;
+        }
+
+        fn deinit(self: *Self, allocator: Allocator) void {
+            for (self.lists[0..self.len]) |*list| list.deinit(allocator);
+            self.len = 0;
+        }
+    };
+}
+
+const ClonerSpareLists = struct {
+    stmts: SpareLists(Ast.StmtId) = .{},
+    exprs: SpareLists(Ast.ExprId) = .{},
+    typed_locals: SpareLists(Ast.TypedLocal) = .{},
+
+    fn deinit(self: *ClonerSpareLists, allocator: Allocator) void {
+        self.stmts.deinit(allocator);
+        self.exprs.deinit(allocator);
+        self.typed_locals.deinit(allocator);
     }
 };
 
@@ -5557,6 +5739,7 @@ const ClonerScratch = struct {
     /// capacity for the next run. A fixed number are kept so returning one
     /// never allocates.
     spare_clone_frames: CloneFramePool,
+    spare_lists: ClonerSpareLists,
 
     fn fresh(allocator: Allocator) ClonerScratch {
         return .{
@@ -5577,6 +5760,7 @@ const ClonerScratch = struct {
             .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(allocator),
             .rebased_inline_scope_changes = .empty,
             .spare_clone_frames = .{},
+            .spare_lists = .{},
         };
     }
 
@@ -5618,6 +5802,7 @@ const ClonerScratch = struct {
         self.inline_scope_origins.deinit();
         self.rebased_inline_scope_changes.deinit(allocator);
         self.spare_clone_frames.deinit(allocator);
+        self.spare_lists.deinit(allocator);
         self.subst.deinit();
         self.arena.deinit();
     }
@@ -5695,6 +5880,8 @@ const Cloner = struct {
     /// attempt rollback. Accepted entries remain useful for the rest of the clone.
     rebased_inline_scope_changes: std.ArrayList(InlineScopeRebasePair),
     spare_clone_frames: CloneFramePool,
+    /// Span-building lists for clone tasks (`ClonerSpareLists`).
+    spare_lists: ClonerSpareLists,
     /// Depth of the wrapper-strip recursion in the static value matchers
     /// (`bindPatToValue`/`bindPatToMatchValue`/`bindPatToFlowValue`), counting
     /// each `runtime_anchor.structure`/`nominal.backing`/
@@ -5712,7 +5899,11 @@ const Cloner = struct {
     materialize_strip_depth: usize,
     inline_calls: InlineCallMode,
     iterator_inline_depth: usize,
-    inline_direct_requires_known_arg: bool,
+    /// Inline a direct call only when inlining lets a known value meet a
+    /// consumer that gains from it (`InlineProductivity`). Calls to the
+    /// checker-stamped iterator protocol or to a wrapper, and calls whose
+    /// captures this context substituted, inline regardless.
+    inline_direct_requires_productivity: bool,
     rewrite_call_patterns: bool,
     /// Pattern discovery and detect-only walks do not own output functions.
     /// Production clones reserve callable workers through the pass-wide table.
@@ -5780,11 +5971,12 @@ const Cloner = struct {
             .inline_scope_origins = scratch.inline_scope_origins,
             .rebased_inline_scope_changes = scratch.rebased_inline_scope_changes,
             .spare_clone_frames = scratch.spare_clone_frames,
+            .spare_lists = scratch.spare_lists,
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
             .inline_calls = .all,
             .iterator_inline_depth = 0,
-            .inline_direct_requires_known_arg = true,
+            .inline_direct_requires_productivity = true,
             .rewrite_call_patterns = true,
             .emit_callable_workers = true,
             .case_of_case_growth = .init(case_of_case_work_budget),
@@ -5799,7 +5991,7 @@ const Cloner = struct {
         // A rewrite never calls buildArgs, the only reader of `source_fn`.
         var cloner = init(pass, undefined, .{ .args = &.{} });
         cloner.purpose = .rewrite;
-        cloner.inline_direct_requires_known_arg = false;
+        cloner.inline_direct_requires_productivity = false;
         return cloner;
     }
 
@@ -5837,6 +6029,7 @@ const Cloner = struct {
             .inline_scope_origins = self.inline_scope_origins,
             .rebased_inline_scope_changes = self.rebased_inline_scope_changes,
             .spare_clone_frames = self.spare_clone_frames,
+            .spare_lists = self.spare_lists,
         };
         self.pass.returnClonerScratch(&scratch);
     }
@@ -5989,11 +6182,11 @@ const Cloner = struct {
         const allocator = self.pass.allocator;
         switch (frame.task) {
             .block_value => |*task| if (task.statements_owned) {
-                task.statements.deinit(allocator);
+                self.spare_lists.stmts.give(allocator, task.statements);
                 task.statements_owned = false;
             },
             .exit_block_value => |*task| if (task.statements_owned) {
-                task.statements.deinit(allocator);
+                self.spare_lists.stmts.give(allocator, task.statements);
                 task.statements_owned = false;
             },
             .let_case_arm_body => |*task| {
@@ -6001,20 +6194,20 @@ const Cloner = struct {
                 task.emitted_statements = .empty;
             },
             .distribute_arm => |*task| if (task.statements_owned) {
-                task.statements.deinit(allocator);
+                self.spare_lists.stmts.give(allocator, task.statements);
                 task.statements_owned = false;
             },
             .continue_ => |*task| if (task.new_values_owned) {
-                task.new_values.deinit(allocator);
+                self.spare_lists.exprs.give(allocator, task.new_values);
                 task.new_values_owned = false;
             },
             .loop_value => |task| if (task.attempt_lists_owned) {
-                task.new_params.deinit(allocator);
-                task.new_initials.deinit(allocator);
+                self.spare_lists.typed_locals.give(allocator, task.new_params);
+                self.spare_lists.exprs.give(allocator, task.new_initials);
                 task.attempt_lists_owned = false;
             },
             .call_proc => |*task| if (task.out_owned) {
-                task.out.deinit(allocator);
+                self.spare_lists.exprs.give(allocator, task.out);
                 task.out_owned = false;
             },
             .stmt_span => |*task| {
@@ -6369,7 +6562,9 @@ const Cloner = struct {
         source_fields: []const Ast.FieldExpr = &.{},
         values: []Value = &.{},
         fields: []FieldValue = &.{},
-        result_type_fields: []const Type.Field = &.{},
+        /// The result record's type fields, read one at a time since cloning
+        /// can grow the type store.
+        result_type_fields: Type.Span = Type.Span.empty(),
         value: Value = undefined,
         other: Value = undefined,
         expr_out: Ast.ExprId = undefined,
@@ -6449,7 +6644,7 @@ const Cloner = struct {
             .tag => |tag| {
                 if (frame.cursor == 0) {
                     assertStructuralConstructionType(self.pass.program, expr.ty);
-                    task.sources = try GuardedList.dupe(self.arena.allocator(), Ast.ExprId, self.pass.program.exprSpan(tag.payloads));
+                    task.sources = try walkRows(self.pass.program, self.arena.allocator(), Ast.ExprId, tag.payloads);
                     task.values = try self.arena.allocator().alloc(Value, task.sources.len);
                     frame.cursor = 1;
                 } else {
@@ -6464,7 +6659,7 @@ const Cloner = struct {
             .record => |fields_span| {
                 if (frame.cursor == 0) {
                     assertStructuralConstructionType(self.pass.program, expr.ty);
-                    task.source_fields = try GuardedList.dupe(self.arena.allocator(), Ast.FieldExpr, self.pass.program.fieldExprSpan(fields_span));
+                    task.source_fields = try walkRows(self.pass.program, self.arena.allocator(), Ast.FieldExpr, fields_span);
                     task.fields = try self.arena.allocator().alloc(FieldValue, task.source_fields.len);
                     frame.cursor = 1;
                 } else {
@@ -6483,7 +6678,7 @@ const Cloner = struct {
             .tuple => |items_span| {
                 if (frame.cursor == 0) {
                     assertStructuralConstructionType(self.pass.program, expr.ty);
-                    task.sources = try GuardedList.dupe(self.arena.allocator(), Ast.ExprId, self.pass.program.exprSpan(items_span));
+                    task.sources = try walkRows(self.pass.program, self.arena.allocator(), Ast.ExprId, items_span);
                     task.values = try self.arena.allocator().alloc(Value, task.sources.len);
                     frame.cursor = 1;
                 } else {
@@ -6644,19 +6839,7 @@ const Cloner = struct {
                     return .{ .call = .{ .plain = .{ .expr = expr_id } } };
                 }
                 const callee = Ast.localDirectCallee(call) orelse return .{ .call = .{ .plain = .{ .expr = expr_id } } };
-                const has_known_shape_arg = try self.directCallHasKnownShapeArg(call.args);
-                // A direct call carries its callee's captures by the callee's
-                // own capture locals: the residual call imports those locals
-                // into the enclosing function. In a context where a capture
-                // operand has been substituted away from the callee's local,
-                // that import would name a local the context does not have,
-                // so the call cannot stay residual and must inline.
-                const captures_foreign = self.callCapturesAreForeign(call.captures);
-                if (self.inline_direct_requires_known_arg and
-                    !has_known_shape_arg and
-                    !isIteratorProducer(call.iterator_procedure) and
-                    !captures_foreign)
-                {
+                if (!try self.admitsDirectInline(expr_id, callee, call)) {
                     return .{ .call = .{ .plain = .{ .expr = expr_id } } };
                 }
                 task.enters_iterator = self.iterator_inline_depth != 0 or isIteratorProducer(call.iterator_procedure);
@@ -6699,7 +6882,6 @@ const Cloner = struct {
             .return_,
             .crash,
             .checked_error,
-            .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
@@ -6724,28 +6906,15 @@ const Cloner = struct {
         const bindings = task.bindings;
         switch (frame.cursor) {
             0 => {
-                task.source_fields = try GuardedList.dupe(
-                    self.arena.allocator(),
-                    Ast.FieldExpr,
-                    self.pass.program.fieldExprSpan(update.fields),
-                );
-                task.result_type_fields = try GuardedList.dupe(
-                    self.arena.allocator(),
-                    Type.Field,
-                    self.pass.program.types.fieldSpan(recordUpdateFieldSpan(self.pass.program, expr.ty)),
-                );
+                task.source_fields = try walkRows(self.pass.program, self.arena.allocator(), Ast.FieldExpr, update.fields);
+                task.result_type_fields = recordUpdateFieldSpan(self.pass.program, expr.ty);
                 frame.cursor = 1;
                 return .{ .call = .{ .expr = update.base } };
             },
             1 => {
                 const base = input.?.get(.expr);
                 const base_ty = self.pass.program.getExpr(base).ty;
-                const base_type_fields = try GuardedList.dupe(
-                    self.pass.allocator,
-                    Type.Field,
-                    self.pass.program.types.fieldSpan(recordUpdateFieldSpan(self.pass.program, base_ty)),
-                );
-                defer self.pass.allocator.free(base_type_fields);
+                const base_type_fields = recordUpdateFieldSpan(self.pass.program, base_ty);
                 if (base_type_fields.len != task.result_type_fields.len) {
                     Common.invariant("record update base and result had different field counts in SpecConstr");
                 }
@@ -6760,13 +6929,14 @@ const Cloner = struct {
                 task.fields = try self.arena.allocator().alloc(FieldValue, task.result_type_fields.len);
                 var snapshot_fields = std.ArrayList(Ast.RecordDestruct).empty;
                 defer snapshot_fields.deinit(self.pass.allocator);
-                for (task.result_type_fields, 0..) |result_type_field, index| {
+                for (0..task.result_type_fields.len) |index| {
+                    const result_type_field = GuardedList.at(self.pass.program.types.fieldSpan(task.result_type_fields), index);
                     const updated = for (task.source_fields) |field| {
                         if (self.pass.program.names.recordFieldLabelTextEql(result_type_field.name, field.name)) break field.value;
                     } else null;
                     if (updated != null) continue;
 
-                    const base_type_field = base_type_fields[index];
+                    const base_type_field = GuardedList.at(self.pass.program.types.fieldSpan(base_type_fields), index);
                     if (!self.pass.program.names.recordFieldLabelTextEql(result_type_field.name, base_type_field.name)) {
                         Common.invariant("record update base and result had different ordered fields in SpecConstr");
                     }
@@ -6801,14 +6971,14 @@ const Cloner = struct {
             },
             else => {
                 task.fields[frame.index] = .{
-                    .name = task.result_type_fields[frame.index].name,
+                    .name = GuardedList.at(self.pass.program.types.fieldSpan(task.result_type_fields), frame.index).name,
                     .value = input.?.get(.value),
                 };
                 frame.index += 1;
             },
         }
         while (frame.index < task.result_type_fields.len) {
-            const type_field = task.result_type_fields[frame.index];
+            const type_field = GuardedList.at(self.pass.program.types.fieldSpan(task.result_type_fields), frame.index);
             const updated = for (task.source_fields) |field| {
                 if (self.pass.program.names.recordFieldLabelTextEql(type_field.name, field.name)) break field.value;
             } else {
@@ -6870,6 +7040,7 @@ const Cloner = struct {
                     return .{ .tail = value_task };
                 }
                 const callee = Ast.localDirectCallee(call) orelse return .{ .tail = value_task };
+                if (!try self.admitsDirectInline(expr_id, callee, call)) return .{ .tail = value_task };
                 task.enters_iterator = self.iterator_inline_depth != 0 or isIteratorProducer(call.iterator_procedure);
                 if (task.enters_iterator) self.iterator_inline_depth += 1;
                 frame.cursor = 1;
@@ -6924,7 +7095,6 @@ const Cloner = struct {
                 .{ .demanding = .{ .expr = block.final_expr, .bindings = bindings } }
             else
                 value_task },
-            .comptime_branch_taken => |taken| return .{ .tail = .{ .demanding = .{ .expr = taken.body, .bindings = bindings } } },
             .typed_boundary, .row_widen => return .{ .tail = value_task },
             .local,
             .unit,
@@ -7147,7 +7317,6 @@ const Cloner = struct {
                     .try_sequence,
                     .try_record_sequence,
                     .return_,
-                    .comptime_branch_taken,
                     .dbg,
                     .expect_err,
                     .literal_rejected,
@@ -7453,14 +7622,6 @@ const Cloner = struct {
             },
             .crash => |msg| return self.finishPlainData(task, expr, .{ .crash = msg }),
             .checked_error => |msg| return self.finishPlainData(task, expr, .{ .checked_error = msg }),
-            .comptime_branch_taken => |taken| {
-                if (cursor == 0) return .{ .call = .{ .expr = taken.body } };
-                return self.finishPlainData(task, expr, .{ .comptime_branch_taken = .{
-                    .site = taken.site,
-                    .branch_index = taken.branch_index,
-                    .body = input.?.get(.expr),
-                } });
-            },
             .comptime_exhaustiveness_failed => |site| return self.finishPlainData(task, expr, .{ .comptime_exhaustiveness_failed = site }),
             .dbg => |child| {
                 if (cursor == 0) return .{ .call = .{ .expr = child } };
@@ -7515,8 +7676,9 @@ const Cloner = struct {
         switch (frame.cursor) {
             0 => {
                 task.retained = try self.cloneRetainedLocals(join_point.retained);
-                const source_params = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(join_point.params));
-                defer self.pass.allocator.free(source_params);
+                const source_params_rows = try ownedWalkRows(self.pass.program, self.pass.allocator, Ast.TypedLocal, join_point.params);
+                defer source_params_rows.deinit(self.pass.allocator);
+                const source_params = source_params_rows.items;
                 task.params = try self.arena.allocator().alloc(Ast.TypedLocal, source_params.len);
                 for (source_params, 0..) |source_param, index| {
                     const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), source_param.ty);
@@ -8008,7 +8170,7 @@ const Cloner = struct {
                     .tag, .tuple, .nominal => task.values[frame.index] = child,
                     .record => |record| task.fields[frame.index] = .{ .name = record.fields[frame.index].name, .value = child },
                     .callable => |callable| task.captures[frame.index] = .{ .id = callable.captures[frame.index].id, .value = child },
-                    .expr, .runtime_anchor, .static_data_candidate => unreachable,
+                    .expr, .runtime_anchor, .static_data_candidate => unreachable, // cursor 0 returns for leaf and wrapper values, so only composites reach cursor 2
                 }
                 frame.index += 1;
             },
@@ -8019,7 +8181,7 @@ const Cloner = struct {
             .tuple => |tuple| if (frame.index < tuple.items.len) tuple.items[frame.index] else null,
             .nominal => |nominal| if (frame.index < 1) nominal.backing.* else null,
             .callable => |callable| if (frame.index < callable.captures.len) callable.captures[frame.index].value else null,
-            .expr, .runtime_anchor, .static_data_candidate => unreachable,
+            .expr, .runtime_anchor, .static_data_candidate => unreachable, // cursor 0 returns for leaf and wrapper values, so only composites reach here
         };
         if (next_child) |child| {
             return .{ .call = .{ .make_reusable = .{ .value = child, .budget = task.budget, .bindings = bindings } } };
@@ -8034,7 +8196,7 @@ const Cloner = struct {
                 break :blk try nominalValue(self.pass.program, self.pass.allocator, nominal.ty, backing);
             },
             .callable => |callable| try callableValue(self.pass.program, self.pass.allocator, callable.ty, callable.fn_id, task.captures, callable.iterator_step),
-            .expr, .runtime_anchor, .static_data_candidate => unreachable,
+            .expr, .runtime_anchor, .static_data_candidate => unreachable, // cursor 0 returns for leaf and wrapper values, so only composites reach here
         });
     }
 
@@ -8121,14 +8283,14 @@ const Cloner = struct {
 
                 switch (value_data) {
                     .match_ => |match| {
-                        task.match_branches = try GuardedList.dupe(arena, Ast.Branch, self.pass.program.branchSpan(match.branches));
+                        task.match_branches = try walkRows(self.pass.program, arena, Ast.Branch, match.branches);
                         task.match_rewritten = try arena.alloc(Ast.Branch, task.match_branches.len);
                     },
                     .if_ => |if_| {
-                        task.if_branches = try GuardedList.dupe(arena, Ast.IfBranch, self.pass.program.ifBranchSpan(if_.branches));
+                        task.if_branches = try walkRows(self.pass.program, arena, Ast.IfBranch, if_.branches);
                         task.if_rewritten = try arena.alloc(Ast.IfBranch, task.if_branches.len);
                     },
-                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // cursor 0 returned unless the value is a match or if
                 }
                 frame.cursor = 1;
             },
@@ -8163,7 +8325,7 @@ const Cloner = struct {
                             } };
                         }
                     },
-                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // cursor 0 returned unless the value is a match or if
                 }
                 frame.index += 1;
             },
@@ -8218,7 +8380,7 @@ const Cloner = struct {
                     } } };
                 }
             },
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // cursor 0 returned unless the value is a match or if
         }
 
         // Different outer constructors cannot expose shared leaves to one continuation.
@@ -8307,8 +8469,9 @@ const Cloner = struct {
         const join_id = self.pass.freshJoinPoint();
         const remainder = switch (value_data) {
             .match_ => |match| blk: {
-                const branches = try GuardedList.dupe(self.pass.allocator, Ast.Branch, self.pass.program.branchSpan(match.branches));
-                defer self.pass.allocator.free(branches);
+                const branches_rows = try ownedWalkRows(self.pass.program, self.pass.allocator, Ast.Branch, match.branches);
+                defer branches_rows.deinit(self.pass.allocator);
+                const branches = branches_rows.items;
                 const rewritten = try self.pass.allocator.alloc(Ast.Branch, branches.len);
                 defer self.pass.allocator.free(rewritten);
                 for (branches, 0..) |branch, index| {
@@ -8330,8 +8493,9 @@ const Cloner = struct {
                 } } });
             },
             .if_ => |if_| blk: {
-                const branches = try GuardedList.dupe(self.pass.allocator, Ast.IfBranch, self.pass.program.ifBranchSpan(if_.branches));
-                defer self.pass.allocator.free(branches);
+                const branches_rows = try ownedWalkRows(self.pass.program, self.pass.allocator, Ast.IfBranch, if_.branches);
+                defer branches_rows.deinit(self.pass.allocator);
+                const branches = branches_rows.items;
                 const rewritten = try self.pass.allocator.alloc(Ast.IfBranch, branches.len);
                 defer self.pass.allocator.free(rewritten);
                 for (branches, 0..) |branch, index| {
@@ -8354,7 +8518,7 @@ const Cloner = struct {
                     .final_else = final_else,
                 } } });
             },
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // let_of_case_shared is entered only from stepLetOfCase after its match/if check
         };
 
         return .{ .join_point = .{
@@ -8427,7 +8591,7 @@ const Cloner = struct {
                     // thrown away.
                     switch (self.pass.program.getExpr(block.final_expr).data) {
                         .match_, .if_, .loop_ => return .{ .ret = .{ .maybe_expr = null } },
-                        .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
+                        .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
                     }
 
                     task.change_start = self.subst.watermark();
@@ -8475,7 +8639,7 @@ const Cloner = struct {
                 },
             },
             .match_, .if_, .loop_ => return .{ .ret = .{ .maybe_expr = null } },
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => switch (frame.cursor) {
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => switch (frame.cursor) {
                 0 => {
                     frame.cursor = 1;
                     return .{ .call = .{ .expr_value_owned = .{ .expr = task.branch_body, .demand_shape = false } } };
@@ -8534,7 +8698,7 @@ const Cloner = struct {
                     .target = ret.target,
                 } } });
             },
-            .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .comptime_branch_taken, .dbg, .expect_err, .expect, .literal_rejected => null,
+            .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .dbg, .expect_err, .expect, .literal_rejected => null,
         } } };
     }
 
@@ -8553,7 +8717,7 @@ const Cloner = struct {
     fn stepCaptureLetCaseJump(self: *Cloner, frame: *CloneFrame, task: *CaptureLetCaseJumpTask, input: ?CloneResult) Common.LowerError!CloneStep {
         const arena = self.arena.allocator();
         if (frame.cursor == 0) {
-            task.args = try GuardedList.dupe(arena, Ast.ExprId, self.pass.program.exprSpan(task.jump.args));
+            task.args = try walkRows(self.pass.program, arena, Ast.ExprId, task.jump.args);
             task.values = try arena.alloc(Value, task.args.len);
             task.chain = try self.newChain();
             frame.cursor = 1;
@@ -8902,7 +9066,7 @@ const Cloner = struct {
                     .tuple => |first| task.children = try arena.alloc(Value, first.items.len),
                     .nominal => task.children = try arena.alloc(Value, 1),
                     .callable => |first| task.captures = try arena.alloc(CaptureValue, first.captures.len),
-                    .expr, .runtime_anchor, .static_data_candidate => unreachable,
+                    .expr, .runtime_anchor, .static_data_candidate => unreachable, // the structured path requires valuesShareOuterSkeleton, which accepts only composites
                 }
                 frame.cursor = 1;
             },
@@ -8913,7 +9077,7 @@ const Cloner = struct {
                     .tag, .tuple, .nominal => task.children[frame.index] = child,
                     .record => |first| task.fields[frame.index] = .{ .name = first.fields[frame.index].name, .value = child },
                     .callable => |first| task.captures[frame.index] = .{ .id = first.captures[frame.index].id, .value = child },
-                    .expr, .runtime_anchor, .static_data_candidate => unreachable,
+                    .expr, .runtime_anchor, .static_data_candidate => unreachable, // cursor 1 follows only the structured path, whose values[0] is a composite
                 }
                 frame.index += 1;
             },
@@ -8934,7 +9098,7 @@ const Cloner = struct {
             .tuple => |first| first.items.len,
             .nominal => 1,
             .callable => |first| first.captures.len,
-            .expr, .runtime_anchor, .static_data_candidate => unreachable,
+            .expr, .runtime_anchor, .static_data_candidate => unreachable, // the structured path requires valuesShareOuterSkeleton, which accepts only composites
         };
         if (frame.index < child_count) {
             const children = try arena.alloc(Value, values.len);
@@ -8944,7 +9108,7 @@ const Cloner = struct {
                 .tuple => |tuple| tuple.items[frame.index],
                 .nominal => |nominal| nominal.backing.*,
                 .callable => |callable| callable.captures[frame.index].value,
-                .expr, .runtime_anchor, .static_data_candidate => unreachable,
+                .expr, .runtime_anchor, .static_data_candidate => unreachable, // valuesShareOuterSkeleton gave every value the composite tag of values[0]
             };
             return .{ .call = .{ .rebuild_let_case_join_value = .{
                 .values = children,
@@ -8963,7 +9127,7 @@ const Cloner = struct {
                 break :blk try nominalValue(self.pass.program, self.pass.allocator, first.ty, backing);
             },
             .callable => |first| try callableValue(self.pass.program, self.pass.allocator, first.ty, first.fn_id, task.captures, task.iterator_step),
-            .expr, .runtime_anchor, .static_data_candidate => unreachable,
+            .expr, .runtime_anchor, .static_data_candidate => unreachable, // the structured path requires valuesShareOuterSkeleton, which accepts only composites
         });
     }
 
@@ -9013,8 +9177,8 @@ const Cloner = struct {
         const arena = self.arena.allocator();
         switch (frame.cursor) {
             LoopValueCursor.start => {
-                task.params = try GuardedList.dupe(arena, Ast.TypedLocal, self.pass.program.typedLocalSpan(task.loop.params));
-                task.initial_values = try GuardedList.dupe(arena, Ast.ExprId, self.pass.program.exprSpan(task.loop.initial_values));
+                task.params = try walkRows(self.pass.program, arena, Ast.TypedLocal, task.loop.params);
+                task.initial_values = try walkRows(self.pass.program, arena, Ast.ExprId, task.loop.initial_values);
                 if (task.params.len != task.initial_values.len) Common.invariant("loop parameter count differed from initial value count");
 
                 task.values = try arena.alloc(Value, task.initial_values.len);
@@ -9068,14 +9232,14 @@ const Cloner = struct {
                         .initial_values = try self.pass.program.addExprSpan(task.new_initials.items),
                         .body = body,
                     } } });
-                    task.new_params.deinit(self.pass.allocator);
-                    task.new_initials.deinit(self.pass.allocator);
+                    self.spare_lists.typed_locals.give(self.pass.allocator, task.new_params);
+                    self.spare_lists.exprs.give(self.pass.allocator, task.new_initials);
                     task.attempt_lists_owned = false;
                     return self.finishLoopValue(task, .{ .expr = loop });
                 }
 
-                task.new_params.deinit(self.pass.allocator);
-                task.new_initials.deinit(self.pass.allocator);
+                self.spare_lists.typed_locals.give(self.pass.allocator, task.new_params);
+                self.spare_lists.exprs.give(self.pass.allocator, task.new_initials);
                 task.attempt_lists_owned = false;
                 self.subst.restore(task.split_start);
                 self.rewindLoopAttempt(task.attempt_mark);
@@ -9101,7 +9265,7 @@ const Cloner = struct {
                     .body = body,
                 } } }) });
             },
-            LoopValueCursor.whole_body + 1...std.math.maxInt(u8) => unreachable,
+            LoopValueCursor.whole_body + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a LoopValueCursor constant
         }
         if (frame.index < task.initial_values.len) {
             return .{ .call = .{ .demanding = .{ .expr = task.initial_values[frame.index], .bindings = task.bindings } } };
@@ -9173,9 +9337,9 @@ const Cloner = struct {
         if (task.has_constructor) {
             task.attempt_mark = self.markLoopAttempt();
             task.new_params = try arena.create(std.ArrayList(Ast.TypedLocal));
-            task.new_params.* = .empty;
+            task.new_params.* = self.spare_lists.typed_locals.take();
             task.new_initials = try arena.create(std.ArrayList(Ast.ExprId));
-            task.new_initials.* = .empty;
+            task.new_initials.* = self.spare_lists.exprs.take();
             task.attempt_lists_owned = true;
             task.split_start = self.subst.watermark();
             task.forward_sources = .empty;
@@ -9292,7 +9456,7 @@ const Cloner = struct {
     };
 
     fn finishBlockValueTask(self: *Cloner, task: *BlockValueTask, value: Value) CloneStep {
-        task.statements.deinit(self.pass.allocator);
+        self.spare_lists.stmts.give(self.pass.allocator, task.statements);
         task.statements_owned = false;
         self.subst.restore(task.change_start);
         return retValue(value);
@@ -9316,7 +9480,7 @@ const Cloner = struct {
                 task.change_start = self.subst.watermark();
                 task.block_bindings = try self.newChain();
                 task.statements = try self.arena.allocator().create(std.ArrayList(Ast.StmtId));
-                task.statements.* = .empty;
+                task.statements.* = self.spare_lists.stmts.take();
                 task.statements_owned = true;
                 task.terminated = self.pass.program.getExpr(block.final_expr).data == .@"unreachable";
             },
@@ -9417,7 +9581,7 @@ const Cloner = struct {
                 task.stmt_context = null;
                 return self.finishBlockValueTask(task, .{ .expr = input.?.get(.expr) });
             },
-            BlockValueCursor.finish + 1...std.math.maxInt(u8) => unreachable,
+            BlockValueCursor.finish + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a BlockValueCursor constant
         }
         return try self.nextBlockStatementStep(frame, task);
     }
@@ -9530,7 +9694,7 @@ const Cloner = struct {
                 task.change_start = self.subst.watermark();
                 task.block_bindings = try self.newChain();
                 task.statements = try self.arena.allocator().create(std.ArrayList(Ast.StmtId));
-                task.statements.* = .empty;
+                task.statements.* = self.spare_lists.stmts.take();
                 task.statements_owned = true;
                 frame.cursor = 1;
             },
@@ -9567,7 +9731,7 @@ const Cloner = struct {
                     } } })
                 else
                     try self.wrapBindings(task.block_bindings.*, materialized);
-                task.statements.deinit(self.pass.allocator);
+                self.spare_lists.stmts.give(self.pass.allocator, task.statements);
                 task.statements_owned = false;
                 self.subst.restore(task.change_start);
                 return retValue(.{ .expr = result });
@@ -9626,7 +9790,7 @@ const Cloner = struct {
             return .{ .call = .{ .materialize = .{ .value = value } } };
         }
         task.bindings.appendChain(task.block_bindings.*);
-        task.statements.deinit(self.pass.allocator);
+        self.spare_lists.stmts.give(self.pass.allocator, task.statements);
         task.statements_owned = false;
         self.subst.restore(task.change_start);
         return retValue(value);
@@ -9676,12 +9840,12 @@ const Cloner = struct {
                     return .{ .call = .{ .expr_span = .{ .span = task.values } } };
                 }
                 const loop = self.loop_stack.items[task.frame_count - 1];
-                task.source_values = try GuardedList.dupe(arena, Ast.ExprId, self.pass.program.exprSpan(task.values));
+                task.source_values = try walkRows(self.pass.program, arena, Ast.ExprId, task.values);
                 if (task.source_values.len != loop.values.len) {
                     Common.invariantFmt("continue value count differed from specialized loop pattern: continue has {d} values, {d} frames with innermost expecting {d}", .{ task.source_values.len, task.frame_count, loop.values.len });
                 }
                 task.new_values = try arena.create(std.ArrayList(Ast.ExprId));
-                task.new_values.* = .empty;
+                task.new_values.* = self.spare_lists.exprs.take();
                 task.new_values_owned = true;
                 task.chain = try self.newChain();
                 frame.cursor = 1;
@@ -9717,7 +9881,7 @@ const Cloner = struct {
         const continued = try self.addExpr(.{ .ty = task.ty, .data = .{ .continue_ = .{
             .values = try self.pass.program.addExprSpan(task.new_values.items),
         } } });
-        task.new_values.deinit(self.pass.allocator);
+        self.spare_lists.exprs.give(self.pass.allocator, task.new_values);
         task.new_values_owned = false;
         return retExpr(try self.wrapBindings(task.chain.*, continued));
     }
@@ -9754,14 +9918,14 @@ const Cloner = struct {
         switch (frame.cursor) {
             CallProcCursor.start => {
                 const rewrites = if (Ast.localDirectCallee(call)) |callee|
-                    !call.is_cold and self.rewrite_call_patterns and @backingInt(callee) < self.pass.plans.len
+                    !call.is_cold and !call.demand_shaped and self.rewrite_call_patterns and @backingInt(callee) < self.pass.plans.len
                 else
                     false;
                 if (!rewrites) {
                     frame.cursor = CallProcCursor.plain_args;
                     return .{ .call = .{ .expr_span = .{ .span = call.args } } };
                 }
-                task.args = try GuardedList.dupe(arena, Ast.ExprId, self.pass.program.exprSpan(call.args));
+                task.args = try walkRows(self.pass.program, arena, Ast.ExprId, call.args);
                 task.values = try arena.alloc(Value, task.args.len);
                 task.analyzed = try arena.alloc(ClonedValue, task.args.len);
                 frame.cursor = CallProcCursor.analyzed_arg;
@@ -9777,6 +9941,7 @@ const Cloner = struct {
                 .iterator_procedure = call.iterator_procedure,
                 .captures = input.?.get(.capture_span),
                 .is_cold = call.is_cold,
+                .demand_shaped = call.demand_shaped,
             } } })),
             CallProcCursor.analyzed_arg => {
                 task.analyzed[frame.index] = input.?.get(.cloned);
@@ -9809,10 +9974,11 @@ const Cloner = struct {
                     .iterator_procedure = call.iterator_procedure,
                     .captures = input.?.get(.capture_span),
                     .is_cold = call.is_cold,
+                    .demand_shaped = call.demand_shaped,
                 } } });
                 return retExpr(try self.wrapBindings(task.chain.*, residual));
             },
-            CallProcCursor.residual_captures + 1...std.math.maxInt(u8) => unreachable,
+            CallProcCursor.residual_captures + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a CallProcCursor constant
         }
         const raw = @backingInt(Ast.localDirectCallee(call).?);
         if (frame.index < task.args.len) {
@@ -9830,7 +9996,7 @@ const Cloner = struct {
         // chains: those chains must be placed exactly once before the call.
         task.chain = try self.newChain();
         task.out = try arena.create(std.ArrayList(Ast.ExprId));
-        task.out.* = .empty;
+        task.out.* = self.spare_lists.exprs.take();
         task.out_owned = true;
         var order_buffer: [spec_constr_specialization_count]u8 = undefined;
         for (try self.pass.specSelectionOrder(raw, &order_buffer)) |spec_index| {
@@ -9856,7 +10022,7 @@ const Cloner = struct {
             return .{ .call = .{ .append_exprs_from_value = .{ .shape = pattern.args[frame.index], .value = task.values[frame.index], .out = task.out } } };
         }
         task.expr_span = try self.pass.program.addExprSpan(task.out.items);
-        task.out.deinit(self.pass.allocator);
+        self.spare_lists.exprs.give(self.pass.allocator, task.out);
         task.out_owned = false;
         frame.cursor = CallProcCursor.specialized_captures;
         return .{ .call = .{ .capture_span = .{ .span = task.call.captures } } };
@@ -9869,7 +10035,7 @@ const Cloner = struct {
             return .{ .call = .{ .materialize = .{ .value = task.values[frame.index] } } };
         }
         task.expr_span = try self.pass.program.addExprSpan(task.out.items);
-        task.out.deinit(self.pass.allocator);
+        self.spare_lists.exprs.give(self.pass.allocator, task.out);
         task.out_owned = false;
         frame.cursor = CallProcCursor.residual_captures;
         return .{ .call = .{ .capture_span = .{ .span = task.call.captures } } };
@@ -9907,7 +10073,7 @@ const Cloner = struct {
         }
         const index = frame.index;
         const child: ?AppendExprsTask = switch (task.shape) {
-            .any => unreachable,
+            .any => unreachable, // both cursor branches above return for an .any shape
             .tag => |tag| if (index < tag.payloads.len) .{ .shape = tag.payloads[index], .value = structural_value.tag.payloads[index], .out = task.out } else null,
             .record => |record| if (index < record.fields.len) .{ .shape = record.fields[index].shape, .value = structural_value.record.fields[index].value, .out = task.out } else null,
             .tuple => |tuple| if (index < tuple.items.len) .{ .shape = tuple.items[index], .value = structural_value.tuple.items[index], .out = task.out } else null,
@@ -10032,7 +10198,7 @@ const Cloner = struct {
                 switch (shape) {
                     .record => |record| task.fields[frame.index] = .{ .name = record.fields[frame.index].name, .shape = supplied.shape },
                     .tag, .tuple, .nominal, .callable => task.shapes[frame.index] = supplied.shape,
-                    .any => unreachable,
+                    .any => unreachable, // an .any shape takes the materialize_any mode, never structural
                 }
                 task.demoted = task.demoted or supplied.demoted;
                 frame.index += 1;
@@ -10040,7 +10206,7 @@ const Cloner = struct {
         }
         const index = frame.index;
         switch (shape) {
-            .any => unreachable,
+            .any => unreachable, // an .any shape returns from both cursor branches above
             .tag => |tag| if (index < tag.payloads.len) {
                 return .{ .call = .{ .supply_loop_slot = .{ .shape = tag.payloads[index], .value = value.tag.payloads[index], .out = task.out } } };
             } else return .{ .ret = .{ .supplied = .{ .shape = .{ .tag = .{ .ty = tag.ty, .name = tag.name, .payloads = task.shapes } }, .demoted = task.demoted } } },
@@ -10418,7 +10584,7 @@ const Cloner = struct {
                             task.fields[index] = .{ .name = record.fields[index].name, .value = prepared };
                         },
                         .tuple, .tag => task.values[index] = child.get(.maybe_value) orelse return .{ .ret = .{ .maybe_value = null } },
-                        .bind, .wildcard, .as, .list, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable,
+                        .bind, .wildcard, .as, .list, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable, // the children mode is set only for record, tuple, and tag patterns
                     }
                     frame.index += 1;
                 },
@@ -10598,7 +10764,7 @@ const Cloner = struct {
                 }
                 return .{ .call = .{ .bind_pat_to_match_value = .{ .pat = GuardedList.at(pats, index), .value = tag.payloads[index], .body = task.body, .bindings = bindings } } };
             },
-            .bind, .wildcard, .as, .list, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable,
+            .bind, .wildcard, .as, .list, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable, // the children modes are set only for record, tuple, and tag patterns
         }
     }
 
@@ -10721,7 +10887,7 @@ const Cloner = struct {
             const branch_work = switch (scrutinee_data) {
                 .match_ => |inner_match| self.pass.program.branchSpan(inner_match.branches).len,
                 .if_ => |inner_if| self.pass.program.ifBranchSpan(inner_if.branches).len + 1,
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return .{ .ret = .{ .maybe_value = null } },
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return .{ .ret = .{ .maybe_value = null } },
             };
             task.recorded = self.arm_values.get(task.scrutinee_expr);
             if (task.recorded == null and @backingInt(task.scrutinee_expr) >= self.output_start) return .{ .ret = .{ .maybe_value = null } };
@@ -10729,16 +10895,16 @@ const Cloner = struct {
 
             switch (scrutinee_data) {
                 .match_ => |inner_match| {
-                    task.match_branches = try GuardedList.dupe(arena, Ast.Branch, self.pass.program.branchSpan(inner_match.branches));
+                    task.match_branches = try walkRows(self.pass.program, arena, Ast.Branch, inner_match.branches);
                     task.match_rewritten = try arena.alloc(Ast.Branch, task.match_branches.len);
                     task.values = try arena.alloc(Value, task.match_branches.len);
                 },
                 .if_ => |inner_if| {
-                    task.if_branches = try GuardedList.dupe(arena, Ast.IfBranch, self.pass.program.ifBranchSpan(inner_if.branches));
+                    task.if_branches = try walkRows(self.pass.program, arena, Ast.IfBranch, inner_if.branches);
                     task.if_rewritten = try arena.alloc(Ast.IfBranch, task.if_branches.len);
                     task.values = try arena.alloc(Value, task.if_branches.len + 1);
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // the branch_work switch returned for every non-case scrutinee
             }
             frame.cursor = 1;
         } else {
@@ -10768,7 +10934,7 @@ const Cloner = struct {
                     try self.recordArmValues(distributed, task.values);
                     return .{ .ret = .{ .maybe_value = .{ .expr = distributed } } };
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // the branch_work switch returned for every non-case scrutinee
             }
             task.values[index] = arm.value;
             frame.index += 1;
@@ -10804,7 +10970,7 @@ const Cloner = struct {
                 .outer_branches = task.outer_branches,
                 .widen_to = task.widen_to,
             } } },
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // the branch_work switch returned for every non-case scrutinee
         }
     }
 
@@ -10874,7 +11040,7 @@ const Cloner = struct {
                     const arm_data = self.pass.program.getExpr(task.arm_body).data;
                     if (arm_data == .block) {
                         task.statements = try self.arena.allocator().create(std.ArrayList(Ast.StmtId));
-                        task.statements.* = .empty;
+                        task.statements.* = self.spare_lists.stmts.take();
                         task.statements_owned = true;
                         const existing = self.pass.program.stmtSpan(arm_data.block.statements);
                         for (0..existing.len) |index| {
@@ -10896,7 +11062,7 @@ const Cloner = struct {
             },
             3 => {
                 const body = input.?.get(.expr);
-                task.statements.deinit(self.pass.allocator);
+                self.spare_lists.stmts.give(self.pass.allocator, task.statements);
                 task.statements_owned = false;
                 self.subst.restore(task.change_start);
                 return .{ .ret = .{ .maybe_arm = .{ .body = body, .value = task.outer_value } } };
@@ -11017,11 +11183,11 @@ const Cloner = struct {
                 if (!self.admitInlineBodyGrowth(source.size)) return residualCallableCall(frame, task);
 
                 task.source_expr = source.expr;
-                task.source_args = try GuardedList.dupe(arena, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
-                task.args = try GuardedList.dupe(arena, Ast.ExprId, self.pass.program.exprSpan(task.args_span));
+                task.source_args = try walkRows(self.pass.program, arena, Ast.TypedLocal, source_fn.args);
+                task.args = try walkRows(self.pass.program, arena, Ast.ExprId, task.args_span);
                 if (task.source_args.len != task.args.len) Common.invariant("callable call arity differed from lifted function arity");
 
-                task.source_captures = try GuardedList.dupe(arena, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.captures));
+                task.source_captures = try walkRows(self.pass.program, arena, Ast.TypedLocal, source_fn.captures);
                 if (task.source_captures.len != callable.captures.len) {
                     Common.invariant("callable value capture count differed from lifted function capture count");
                 }
@@ -11062,7 +11228,7 @@ const Cloner = struct {
                 return self.finishInlinedCall(task, inlined, callable.fn_id);
             },
             InlineCallableCursor.boundary => return self.finishInlinedCall(task, input.?.get(.value), callable.fn_id),
-            InlineCallableCursor.boundary + 1...std.math.maxInt(u8) => unreachable,
+            InlineCallableCursor.boundary + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to an InlineCallableCursor constant
         }
         if (frame.cursor == InlineCallableCursor.capture) {
             if (frame.index < task.source_captures.len) {
@@ -11089,7 +11255,11 @@ const Cloner = struct {
             return .{ .call = .{ .local_value = .{ .value = task.arg_values[frame.index], .bindings = task.bindings } } };
         }
 
-        try self.inline_stack.append(self.pass.allocator, .{ .fn_id = callable.fn_id, .known_size = task.exact_call_size });
+        try self.inline_stack.append(self.pass.allocator, .{
+            .fn_id = callable.fn_id,
+            .known_size = task.exact_call_size,
+            .result_demand = try self.inlineResultDemand(task.original_expr),
+        });
         for (task.source_args, task.prepared_args) |source_arg, arg_value| {
             try self.subst.put(self.pass.program, source_arg.local, arg_value);
         }
@@ -11145,7 +11315,12 @@ const Cloner = struct {
         switch (frame.cursor) {
             InlineDirectCursor.start => {
                 const source_fn = self.pass.program.getFn(callee);
-                task.result_ty = self.pass.program.getExpr(task.original_expr).ty;
+                const original = self.pass.program.getExpr(task.original_expr);
+                // A demand-shaped callee's body is typed at its holes and layout
+                // representatives, not at this call's types, so it stays a
+                // call (design.md "Specialization By Demand").
+                if (original.data == .call_proc and original.data.call_proc.demand_shaped) return plainDirectCall(frame, task);
+                task.result_ty = original.ty;
                 const source = try self.pass.inlineSourceBody(callee) orelse return plainDirectCall(frame, task);
                 if (!source.size.admits()) return plainDirectCall(frame, task);
                 if (try exprContainsReturn(self.pass.allocator, self.pass.program, source.expr) or
@@ -11168,17 +11343,17 @@ const Cloner = struct {
                 }
                 if (!self.admitInlineBodyGrowth(source.size)) return plainDirectCall(frame, task);
                 task.source_expr = source.expr;
-                task.source_args = try GuardedList.dupe(arena, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
-                task.args = try GuardedList.dupe(arena, Ast.ExprId, self.pass.program.exprSpan(task.args_span));
+                task.source_args = try walkRows(self.pass.program, arena, Ast.TypedLocal, source_fn.args);
+                task.args = try walkRows(self.pass.program, arena, Ast.ExprId, task.args_span);
                 if (task.source_args.len != task.args.len) Common.invariant("direct call arity differed from lifted function arity");
 
                 task.change_start = self.subst.watermark();
 
-                task.captures = try GuardedList.dupe(arena, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.captures));
+                task.captures = try walkRows(self.pass.program, arena, Ast.TypedLocal, source_fn.captures);
                 // The call's capture operands are keyed by CaptureId, not positional
                 // with the callee's capture slots. Clone each operand's value keyed by
                 // id, then resolve each slot's value by its own CaptureId below.
-                task.operands = try GuardedList.dupe(arena, Ast.CaptureOperand, self.pass.program.captureOperandSpan(task.captures_span));
+                task.operands = try walkRows(self.pass.program, arena, Ast.CaptureOperand, task.captures_span);
                 if (task.captures.len != task.operands.len) {
                     Common.invariant("direct call capture count differed from lifted function capture count");
                 }
@@ -11214,7 +11389,7 @@ const Cloner = struct {
                 return self.finishInlinedCall(task, inlined, callee);
             },
             InlineDirectCursor.boundary => return self.finishInlinedCall(task, input.?.get(.value), callee),
-            InlineDirectCursor.boundary + 1...std.math.maxInt(u8) => unreachable,
+            InlineDirectCursor.boundary + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to an InlineDirectCursor constant
         }
         if (frame.cursor == InlineDirectCursor.capture_value) {
             if (frame.index < task.operands.len) {
@@ -11247,7 +11422,11 @@ const Cloner = struct {
             return .{ .call = .{ .local_value = .{ .value = task.arg_values[frame.index], .bindings = task.bindings } } };
         }
 
-        try self.inline_stack.append(self.pass.allocator, .{ .fn_id = callee, .known_size = task.exact_call_size });
+        try self.inline_stack.append(self.pass.allocator, .{
+            .fn_id = callee,
+            .known_size = task.exact_call_size,
+            .result_demand = try self.inlineResultDemand(task.original_expr),
+        });
         for (task.captures, task.prepared_captures) |capture, capture_value| {
             try self.subst.put(self.pass.program, capture.local, capture_value);
         }
@@ -11509,7 +11688,7 @@ const Cloner = struct {
 
     fn stepStmtSpan(self: *Cloner, frame: *CloneFrame, task: *StmtSpanTask, input: ?CloneResult) Common.LowerError!CloneStep {
         if (frame.cursor == 0) {
-            task.source = try GuardedList.dupe(self.arena.allocator(), Ast.StmtId, self.pass.program.stmtSpan(task.span));
+            task.source = try walkRows(self.pass.program, self.arena.allocator(), Ast.StmtId, task.span);
             frame.cursor = 1;
         } else {
             const cloned = input.?.get(.stmt);
@@ -11535,7 +11714,7 @@ const Cloner = struct {
         const arena = self.arena.allocator();
         switch (frame.cursor) {
             0 => {
-                task.source = try GuardedList.dupe(arena, Ast.Branch, self.pass.program.branchSpan(task.span));
+                task.source = try walkRows(self.pass.program, arena, Ast.Branch, task.span);
                 task.branches = try arena.alloc(Ast.Branch, task.source.len);
                 task.values = try arena.alloc(Value, task.source.len);
             },
@@ -11591,7 +11770,7 @@ const Cloner = struct {
         const arena = self.arena.allocator();
         switch (frame.cursor) {
             0 => {
-                task.source = try GuardedList.dupe(arena, Ast.IfBranch, self.pass.program.ifBranchSpan(task.span));
+                task.source = try walkRows(self.pass.program, arena, Ast.IfBranch, task.span);
                 task.branches = try arena.alloc(Ast.IfBranch, task.source.len);
                 task.values = try arena.alloc(Value, task.source.len);
                 task.unchanged = self.source_reuse == .original_body;
@@ -11657,7 +11836,7 @@ const Cloner = struct {
                 .record => |record| record.fields[frame.index].value,
                 .tuple => |tuple| tuple.items[frame.index],
                 .nominal => |nominal| nominal.backing.*,
-                .expr, .runtime_anchor, .static_data_candidate, .callable => unreachable,
+                .expr, .runtime_anchor, .static_data_candidate, .callable => unreachable, // cursor 0 returned for leaf, wrapper, and callable values
             };
             return .{ .call = .{ .materialize = .{ .value = child } } };
         }
@@ -11684,7 +11863,7 @@ const Cloner = struct {
                 self.materialize_strip_depth -= 1;
                 return retExpr(materialized);
             },
-            .expr, .runtime_anchor, .static_data_candidate, .callable => unreachable,
+            .expr, .runtime_anchor, .static_data_candidate, .callable => unreachable, // cursor 0 returned for leaf, wrapper, and callable values
         }
     }
 
@@ -11747,7 +11926,7 @@ const Cloner = struct {
             current = switch (data) {
                 .field_access => |field| field.receiver,
                 .tuple_access => |access| access.tuple,
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => Common.invariant("recursive field/tuple read replacement reached a non-access expression before its root"),
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => Common.invariant("recursive field/tuple read replacement reached a non-access expression before its root"),
             };
         }
         var rebuilt = replacement;
@@ -11771,7 +11950,7 @@ const Cloner = struct {
                     .tuple = rebuilt,
                     .elem_index = access.elem_index,
                 } } }),
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // the chain collected above holds only field and tuple accesses
             };
         }
         return rebuilt;
@@ -11826,7 +12005,7 @@ const Cloner = struct {
         const source_fn_id = self.pass.callable_sources.get(callable.fn_id) orelse callable.fn_id;
         const source_fn = self.pass.program.getFn(source_fn_id);
         task.source_fn = source_fn;
-        const source_captures = try GuardedList.dupe(arena, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.captures));
+        const source_captures = try walkRows(self.pass.program, arena, Ast.TypedLocal, source_fn.captures);
         if (source_captures.len != callable.captures.len) {
             Common.invariant("callable value capture count differed from lifted function capture count");
         }
@@ -11873,9 +12052,9 @@ const Cloner = struct {
             const local = try self.pass.program.addLocalWithCaptureIdentity(
                 self.pass.symbols.fresh(),
                 capture_ty,
-                source_local.binder,
+                source_local.identity.binder(),
                 id,
-                source_local.checked_capture_id,
+                source_local.identity.checkedCaptureId(),
                 source_local.capture_kind,
             );
             worker_captures[index] = .{ .local = local, .ty = capture_ty };
@@ -11898,7 +12077,7 @@ const Cloner = struct {
         }
         task.captures_span = try self.pass.program.addTypedLocalSpan(worker_captures);
 
-        const source_args = try GuardedList.dupe(arena, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
+        const source_args = try walkRows(self.pass.program, arena, Ast.TypedLocal, source_fn.args);
         const args = try arena.alloc(Ast.TypedLocal, source_args.len);
         for (source_args, 0..) |source_arg, index| {
             const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), source_arg.ty);
@@ -11964,7 +12143,7 @@ const Cloner = struct {
 
     fn stepMaterializeWithCaptures(self: *Cloner, frame: *CloneFrame, task: *MaterializeWithCapturesTask, input: ?CloneResult) Common.LowerError!CloneStep {
         if (frame.cursor == 0) {
-            task.captures = try GuardedList.dupe(self.arena.allocator(), Ast.TypedLocal, self.pass.program.typedLocalSpan(task.captures_span));
+            task.captures = try walkRows(self.pass.program, self.arena.allocator(), Ast.TypedLocal, task.captures_span);
             if (task.captures.len != task.values.len) {
                 Common.invariant("callable value capture count differed from specialized function capture count");
             }
@@ -12128,7 +12307,7 @@ const Cloner = struct {
                     if (callee_raw >= self.pass.plans.len) continue;
                     if (self.pass.newSpecAdmission(callee_raw) != .admitted) continue;
 
-                    const args = try GuardedList.dupe(self.arena.allocator(), Ast.ExprId, self.pass.program.exprSpan(call.args));
+                    const args = try walkRows(self.pass.program, self.arena.allocator(), Ast.ExprId, call.args);
                     const values = try self.arena.allocator().alloc(Value, args.len);
                     if (args.len == 0) {
                         try self.pass.recordCallPatternForValues(callee, values);
@@ -12219,7 +12398,7 @@ const Cloner = struct {
                 try self.collectFieldExprs(task, update.fields);
             },
             .tag => |tag| try self.collectExprSpan(task, tag.payloads),
-            .static_data_candidate => |candidate| try items.append(allocator, .{ .expr = candidate.runtime_expr }),
+            .static_data_candidate => |candidate| if (candidate.value.subexpression()) |sub| try items.append(allocator, .{ .expr = sub }),
             .typed_boundary => |boundary| try items.append(allocator, .{ .expr = boundary.value }),
             .row_widen => |widen| try items.append(allocator, .{ .expr = widen.value }),
             .nominal,
@@ -12229,7 +12408,6 @@ const Cloner = struct {
             .return_ => |ret| try items.append(allocator, .{ .expr = ret.value }),
             .expect_err => |expect_err| try items.append(allocator, .{ .expr = expect_err.msg }),
             .literal_rejected => |rejected| try items.append(allocator, .{ .expr = rejected.msg }),
-            .comptime_branch_taken => |taken| try items.append(allocator, .{ .expr = taken.body }),
             .let_ => |let_| {
                 try items.append(allocator, .{ .expr = let_.value });
                 try items.append(allocator, .open_scope);
@@ -12248,7 +12426,10 @@ const Cloner = struct {
             .call_proc => |call| {
                 try self.collectExprSpan(task, call.args);
                 try self.collectCaptureOperands(task, call.captures);
-                try items.append(allocator, .{ .call_pattern = expr_id });
+                // A demand-shaped call's operands keep the caller's types,
+                // not the callee's, so its values cannot specialize the
+                // callee.
+                if (!call.demand_shaped) try items.append(allocator, .{ .call_pattern = expr_id });
             },
             .low_level => |call| try self.collectExprSpan(task, call.args),
             .field_access => |field| try items.append(allocator, .{ .expr = field.receiver }),
@@ -12337,8 +12518,9 @@ const Cloner = struct {
     fn buildArgs(self: *Cloner) Allocator.Error!Ast.Span(Ast.TypedLocal) {
         const source_fn = self.pass.program.getFn(self.source_fn);
         const source_body = self.pass.sourceBody(self.source_fn);
-        const source_args = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
-        defer self.pass.allocator.free(source_args);
+        const source_args_rows = try ownedWalkRows(self.pass.program, self.pass.allocator, Ast.TypedLocal, source_fn.args);
+        defer source_args_rows.deinit(self.pass.allocator);
+        const source_args = source_args_rows.items;
         if (source_args.len != self.pattern.args.len) Common.invariant("call-pattern argument count differed from source function arity");
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
@@ -12475,12 +12657,304 @@ const Cloner = struct {
         return result;
     }
 
-    fn directCallHasKnownShapeArg(self: *Cloner, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!bool {
-        const args = self.pass.program.exprSpan(args_span);
-        for (0..args.len) |index| {
-            const arg = GuardedList.at(args, index);
-            if (try self.exprHasKnownShape(arg)) return true;
+    /// Whether this clone may inline the direct call `expr_id` to `callee`.
+    /// The checker-stamped iterator protocol always inlines: a producer
+    /// exposes its construction to fusion, and `next` exposes the step call it
+    /// forwards to the code that matches its result. A wrapper always inlines,
+    /// since its body costs less than the call. A call whose captures this
+    /// context substituted also always inlines; any other call inlines only
+    /// when inlining is productive.
+    fn admitsDirectInline(self: *Cloner, expr_id: Ast.ExprId, callee: Ast.FnId, call: Mono.CallProc) Allocator.Error!bool {
+        if (!self.inline_direct_requires_productivity) return true;
+        if (call.iterator_procedure != null) return true;
+        if (self.productivity().summary(callee).wrapper) return true;
+        // A direct call carries its callee's captures by the callee's own
+        // capture locals: the residual call imports those locals into the
+        // enclosing function. In a context where a capture operand has been
+        // substituted away from the callee's local, that import would name a
+        // local the context does not have, so the call cannot stay residual
+        // and must inline.
+        if (self.callCapturesAreForeign(call.captures)) return true;
+        return self.directInlineIsProductive(expr_id, callee, call);
+    }
+
+    fn productivity(self: *const Cloner) *const InlineProductivity.Analysis {
+        return self.pass.inline_productivity orelse
+            Common.invariant("a clone that admits only productive inlines ran without inline productivity");
+    }
+
+    /// What the code around the source call `call_expr` consumes of its
+    /// result in this clone's context. Where the call's result reaches the
+    /// enclosing function's result, it is read by whatever reads that result
+    /// around the innermost inlined call.
+    fn callResultDemand(self: *Cloner, call_expr: Ast.ExprId) Allocator.Error![]const InlineProductivity.ResolvedRead {
+        const analysis = self.productivity();
+        const enclosing: []const InlineProductivity.ResolvedRead = if (self.inline_stack.items.len == 0)
+            &.{}
+        else
+            self.inline_stack.items[self.inline_stack.items.len - 1].result_demand;
+        return analysis.resolve(self.arena.allocator(), analysis.callDemand(call_expr), enclosing);
+    }
+
+    /// The result demand of the frame that inlines `call_expr`.
+    fn inlineResultDemand(self: *Cloner, call_expr: Ast.ExprId) Allocator.Error![]const InlineProductivity.ResolvedRead {
+        if (!self.inline_direct_requires_productivity) return &.{};
+        return self.callResultDemand(call_expr);
+    }
+
+    /// Whether inlining lets a known value meet a consumer that simplifies on
+    /// it: the caller consumes a result part the callee constructs on every
+    /// path that returns, or a known part of an argument or capture reaches a
+    /// consumer in the callee.
+    fn directInlineIsProductive(self: *Cloner, expr_id: Ast.ExprId, callee: Ast.FnId, call: Mono.CallProc) Allocator.Error!bool {
+        const analysis = self.productivity();
+        const result_demand = try self.callResultDemand(expr_id);
+        for (result_demand) |read| {
+            if (analysis.constructs(callee, read.steps, read.consumers)) return true;
         }
+        const summary = analysis.summary(callee);
+        const args = self.pass.program.exprSpan(call.args);
+        for (0..args.len) |index| {
+            if (try self.demandedPartKnown(GuardedList.at(args, index), summary.params[index].view(), result_demand)) return true;
+        }
+        const operands = self.pass.program.captureOperandSpan(call.captures);
+        for (0..operands.len) |index| {
+            const operand = GuardedList.at(operands, index);
+            const slot = analysis.captureSlot(callee, operand.id);
+            if (try self.demandedPartKnown(operand.value, summary.captures[slot].view(), result_demand)) return true;
+        }
+        return false;
+    }
+
+    /// Whether this clone knows a part of `source_expr` that `demand` reads,
+    /// where `result_demand` reads the result `demand`'s placements reach.
+    fn demandedPartKnown(
+        self: *Cloner,
+        source_expr: Ast.ExprId,
+        demand: InlineProductivity.Demand,
+        result_demand: []const InlineProductivity.ResolvedRead,
+    ) Allocator.Error!bool {
+        const reads = try self.productivity().resolve(self.arena.allocator(), demand, result_demand);
+        for (reads) |read| {
+            const consumers = read.consumers.intersectWith(InlineProductivity.argument_consumers);
+            if (consumers.count() == 0) continue;
+            if (try self.exprKnownAt(source_expr, read.steps, consumers)) return true;
+        }
+        return false;
+    }
+
+    /// Whether this clone knows the part of `source_expr` at `source_steps`
+    /// well enough for one of `consumers` to simplify on it: a tag for a
+    /// `match`, a callable for a call, or a constructor for a loop entry. A
+    /// direct call is known at a part its callee constructs on every path
+    /// that returns, and at a part it always passes through from a known
+    /// argument or capture.
+    fn exprKnownAt(
+        self: *Cloner,
+        source_expr: Ast.ExprId,
+        source_steps: []const InlineProductivity.Step,
+        consumers: InlineProductivity.Consumers,
+    ) Allocator.Error!bool {
+        const Step = InlineProductivity.Step;
+        const Item = union(enum) {
+            expr: struct { id: Ast.ExprId, steps: []const Step },
+            value: struct { value: Value, steps: []const Step },
+        };
+        const program = self.pass.program;
+        const analysis = self.productivity();
+        const arena = self.arena.allocator();
+        const known_constructor = consumers.contains(.loop);
+        const known_tag = consumers.contains(.match) or known_constructor;
+        const known_callable = consumers.contains(.call);
+        var work: std.ArrayList(Item) = .empty;
+        defer work.deinit(self.pass.allocator);
+        try work.append(self.pass.allocator, .{ .expr = .{ .id = source_expr, .steps = source_steps } });
+        while (work.pop()) |item| switch (item) {
+            .value => |known| {
+                const steps = known.steps;
+                switch (structuralValue(known.value)) {
+                    .nominal => |nominal| try work.append(self.pass.allocator, .{ .value = .{ .value = nominal.backing.*, .steps = steps } }),
+                    .tag => |tag| {
+                        if (steps.len == 0) {
+                            if (known_tag) return true;
+                            continue;
+                        }
+                        for (tag.payloads, 0..) |payload, index| {
+                            if (!steps[0].eql(Step.payload(tag.name, @intCast(index)))) continue;
+                            try work.append(self.pass.allocator, .{ .value = .{ .value = payload, .steps = steps[1..] } });
+                        }
+                    },
+                    .record => |record| {
+                        if (steps.len == 0) {
+                            if (known_constructor) return true;
+                            continue;
+                        }
+                        for (record.fields) |field| {
+                            if (!steps[0].eql(Step.field(field.name))) continue;
+                            try work.append(self.pass.allocator, .{ .value = .{ .value = field.value, .steps = steps[1..] } });
+                        }
+                    },
+                    .tuple => |tuple| {
+                        if (steps.len == 0) {
+                            if (known_constructor) return true;
+                            continue;
+                        }
+                        for (tuple.items, 0..) |tuple_item, index| {
+                            if (!steps[0].eql(Step.item(@intCast(index)))) continue;
+                            try work.append(self.pass.allocator, .{ .value = .{ .value = tuple_item, .steps = steps[1..] } });
+                        }
+                    },
+                    .callable => if (steps.len == 0 and known_callable) return true,
+                    .expr => {},
+                    .runtime_anchor, .static_data_candidate => Common.invariant("structuralValue returned a value wrapper"),
+                }
+            },
+            .expr => |known| {
+                const steps = known.steps;
+                switch (program.getExpr(known.id).data) {
+                    .typed_boundary => |boundary| try work.append(self.pass.allocator, .{ .expr = .{ .id = boundary.value, .steps = steps } }),
+                    .row_widen => |widen| try work.append(self.pass.allocator, .{ .expr = .{ .id = widen.value, .steps = steps } }),
+                    .nominal => |backing| try work.append(self.pass.allocator, .{ .expr = .{ .id = backing, .steps = steps } }),
+                    .static_data_candidate => |candidate| switch (candidate.value) {
+                        .runtime => |runtime| try work.append(self.pass.allocator, .{ .expr = .{ .id = runtime, .steps = steps } }),
+                        // As the list it stands for.
+                        .stored => {},
+                    },
+                    // These probes read the exact-local map only, not the
+                    // binder-wide map: they ask whether this specific local
+                    // was directly substituted with a known value here, so a
+                    // binder-wide entry installed for a sibling of the same
+                    // binder must not answer for it.
+                    .local => |local| if (self.subst.getExact(local)) |value| {
+                        try work.append(self.pass.allocator, .{ .value = .{ .value = value, .steps = steps } });
+                    },
+                    .field_access => |field| {
+                        const receiver_local = localExpr(program, field.receiver) orelse continue;
+                        const receiver = self.subst.getExact(receiver_local) orelse continue;
+                        const value = fieldPathFromValue(program, receiver, program.fieldAccessSegmentSpan(field.segments)) orelse continue;
+                        try work.append(self.pass.allocator, .{ .value = .{ .value = value, .steps = steps } });
+                    },
+                    .tuple_access => |access| {
+                        const tuple_local = localExpr(program, access.tuple) orelse continue;
+                        const tuple = self.subst.getExact(tuple_local) orelse continue;
+                        const value = itemFromValue(tuple, access.elem_index) orelse continue;
+                        try work.append(self.pass.allocator, .{ .value = .{ .value = value, .steps = steps } });
+                    },
+                    .fn_ref => if (steps.len == 0 and known_callable) return true,
+                    .tag => |tag| {
+                        if (steps.len == 0) {
+                            if (known_tag) return true;
+                            continue;
+                        }
+                        const payloads = program.exprSpan(tag.payloads);
+                        for (0..payloads.len) |index| {
+                            if (!steps[0].eql(Step.payload(tag.name, @intCast(index)))) continue;
+                            try work.append(self.pass.allocator, .{ .expr = .{ .id = GuardedList.at(payloads, index), .steps = steps[1..] } });
+                        }
+                    },
+                    .record => |span| {
+                        if (steps.len == 0) {
+                            if (known_constructor) return true;
+                            continue;
+                        }
+                        const fields = program.fieldExprSpan(span);
+                        for (0..fields.len) |index| {
+                            const field = GuardedList.at(fields, index);
+                            if (!steps[0].eql(Step.field(field.name))) continue;
+                            try work.append(self.pass.allocator, .{ .expr = .{ .id = field.value, .steps = steps[1..] } });
+                        }
+                    },
+                    .record_update => |update| {
+                        if (steps.len == 0) {
+                            if (known_constructor) return true;
+                            continue;
+                        }
+                        const fields = program.fieldExprSpan(update.fields);
+                        const updated = for (0..fields.len) |index| {
+                            const field = GuardedList.at(fields, index);
+                            if (steps[0].eql(Step.field(field.name))) break field.value;
+                        } else null;
+                        if (updated) |value| {
+                            try work.append(self.pass.allocator, .{ .expr = .{ .id = value, .steps = steps[1..] } });
+                        } else {
+                            try work.append(self.pass.allocator, .{ .expr = .{ .id = update.base, .steps = steps } });
+                        }
+                    },
+                    .tuple => |span| {
+                        if (steps.len == 0) {
+                            if (known_constructor) return true;
+                            continue;
+                        }
+                        const items = program.exprSpan(span);
+                        for (0..items.len) |index| {
+                            if (!steps[0].eql(Step.item(@intCast(index)))) continue;
+                            try work.append(self.pass.allocator, .{ .expr = .{ .id = GuardedList.at(items, index), .steps = steps[1..] } });
+                        }
+                    },
+                    .call_proc => |call| {
+                        const callee = Ast.localDirectCallee(call) orelse continue;
+                        if (analysis.constructs(callee, steps, consumers)) return true;
+                        const args = program.exprSpan(call.args);
+                        const operands = program.captureOperandSpan(call.captures);
+                        for (analysis.summary(callee).passes) |pass| {
+                            const placed = try analysis.stepsOf(arena, pass.result);
+                            if (!InlineProductivity.startsWith(steps, placed)) continue;
+                            var through: std.ArrayList(Step) = .empty;
+                            try through.appendSlice(arena, try analysis.stepsOf(arena, pass.value));
+                            for (steps[placed.len..]) |step| try InlineProductivity.appendStep(arena, &through, step);
+                            const source = switch (pass.slot.kind) {
+                                .arg => GuardedList.at(args, pass.slot.index),
+                                .capture => for (0..operands.len) |index| {
+                                    const operand = GuardedList.at(operands, index);
+                                    if (analysis.captureSlot(callee, operand.id) == pass.slot.index) break operand.value;
+                                } else Common.invariant("direct call supplied no operand for a capture its callee passes through"),
+                            };
+                            try work.append(self.pass.allocator, .{ .expr = .{ .id = source, .steps = through.items } });
+                        }
+                    },
+                    .comptime_value,
+                    .unit,
+                    .@"unreachable",
+                    .int_lit,
+                    .frac_f32_lit,
+                    .frac_f64_lit,
+                    .dec_lit,
+                    .str_lit,
+                    .bytes_lit,
+                    .list,
+                    .let_,
+                    .lambda,
+                    .def_ref,
+                    .fn_def,
+                    .call_value,
+                    .low_level,
+                    .structural_eq,
+                    .structural_hash,
+                    .match_,
+                    .if_,
+                    .uninitialized,
+                    .uninitialized_payload,
+                    .if_initialized_payload,
+                    .try_sequence,
+                    .try_record_sequence,
+                    .block,
+                    .loop_,
+                    .break_,
+                    .continue_,
+                    .join_point,
+                    .jump,
+                    .return_,
+                    .crash,
+                    .checked_error,
+                    .comptime_exhaustiveness_failed,
+                    .dbg,
+                    .expect_err,
+                    .literal_rejected,
+                    .expect,
+                    => {},
+                }
+            },
+        };
         return false;
     }
 
@@ -12498,99 +12972,6 @@ const Cloner = struct {
             if (localExpr(self.pass.program, substituted_expr) != local) return true;
         }
         return false;
-    }
-
-    fn exprHasKnownShape(self: *Cloner, source_expr_id: Ast.ExprId) Allocator.Error!bool {
-        var expr_id = source_expr_id;
-        // Transparent wrappers are unwrapped iteratively.
-        while (true) {
-            switch (self.pass.program.getExpr(expr_id).data) {
-                .static_data_candidate => |candidate| expr_id = candidate.runtime_expr,
-                .typed_boundary => |boundary| expr_id = boundary.value,
-                // A row coercion is opaque to static matching: the child's
-                // known tag structure indexes the child's own row.
-                .row_widen => return false,
-                .comptime_branch_taken => |taken| expr_id = taken.body,
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .comptime_value, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => break,
-            }
-        }
-        const expr = self.pass.program.getExpr(expr_id);
-        // These probes read the exact-local map only, not the binder-wide map:
-        // they ask whether this specific local was directly substituted with a
-        // known-shaped value here, so a binder-wide entry installed for a
-        // sibling of the same binder must not answer for it.
-        return switch (expr.data) {
-            .local => |local| if (self.subst.getExact(local)) |value|
-                shapeProofIsProven(try self.pass.shapeFromValue(value))
-            else
-                false,
-            .tag,
-            .record,
-            .record_update,
-            .tuple,
-            .nominal,
-            .fn_ref,
-            => (try self.pass.constructorShape(expr_id)) != null,
-            .list, .str_lit, .bytes_lit => false,
-            .field_access => |field| blk: {
-                const receiver_local = localExpr(self.pass.program, field.receiver) orelse break :blk false;
-                const receiver = self.subst.getExact(receiver_local) orelse break :blk false;
-                const value = fieldPathFromValue(
-                    self.pass.program,
-                    receiver,
-                    self.pass.program.fieldAccessSegmentSpan(field.segments),
-                ) orelse break :blk false;
-                break :blk shapeProofIsProven(try self.pass.shapeFromValue(value));
-            },
-            .tuple_access => |access| blk: {
-                const tuple_local = localExpr(self.pass.program, access.tuple) orelse break :blk false;
-                const tuple = self.subst.getExact(tuple_local) orelse break :blk false;
-                const value = itemFromValue(tuple, access.elem_index) orelse break :blk false;
-                break :blk shapeProofIsProven(try self.pass.shapeFromValue(value));
-            },
-            .static_data_candidate,
-            .typed_boundary,
-            .row_widen,
-            .comptime_branch_taken,
-            => Common.invariant("known-shape probe did not unwrap a transparent wrapper"),
-            .comptime_value, .comptime_exhaustiveness_failed => false,
-            .unit,
-            .@"unreachable",
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .let_,
-            .lambda,
-            .def_ref,
-            .fn_def,
-            .call_value,
-            .call_proc,
-            .low_level,
-            .structural_eq,
-            .structural_hash,
-            .match_,
-            .if_,
-            .uninitialized,
-            .uninitialized_payload,
-            .if_initialized_payload,
-            .try_sequence,
-            .try_record_sequence,
-            .block,
-            .loop_,
-            .break_,
-            .continue_,
-            .join_point,
-            .jump,
-            .return_,
-            .crash,
-            .checked_error,
-            .dbg,
-            .expect_err,
-            .literal_rejected,
-            .expect,
-            => false,
-        };
     }
 
     /// Explicit code-growth limit on substitution. A substitutable value never
@@ -12700,7 +13081,7 @@ const Cloner = struct {
                     if (expr.data != .nominal or nominal.ty != expr.ty) return false;
                     try pending.append(self.pass.allocator, .{ .value = nominal.backing.*, .expr_id = expr.data.nominal, .depth = depth + 1 });
                 },
-                .expr => unreachable,
+                .expr => unreachable, // .expr values are compared and skipped before this switch
             }
         }
         return true;
@@ -12715,7 +13096,6 @@ const Cloner = struct {
             .structural_hash,
             .if_,
             .return_,
-            .comptime_branch_taken,
             .dbg,
             .expect_err,
             .literal_rejected,
@@ -12927,8 +13307,9 @@ const Cloner = struct {
             } } });
         }
         const rest_match = self.pass.program.getExpr(let_.rest).data.match_;
-        const branches = try GuardedList.dupe(self.pass.allocator, Ast.Branch, self.pass.program.branchSpan(rest_match.branches));
-        defer self.pass.allocator.free(branches);
+        const branches_rows = try ownedWalkRows(self.pass.program, self.pass.allocator, Ast.Branch, rest_match.branches);
+        defer branches_rows.deinit(self.pass.allocator);
+        const branches = branches_rows.items;
         const rewritten = try self.pass.allocator.alloc(Ast.Branch, branches.len);
         defer self.pass.allocator.free(rewritten);
         for (branches, joins, 0..) |branch, join, index| {
@@ -13192,7 +13573,11 @@ const Cloner = struct {
                     try accessors.append(self.pass.allocator, expr_id);
                     expr_id = access.tuple;
                 },
-                .static_data_candidate => |candidate| expr_id = candidate.runtime_expr,
+                .static_data_candidate => |candidate| switch (candidate.value) {
+                    .runtime => |runtime| expr_id = runtime,
+                    // As the list it stands for.
+                    .stored => return null,
+                },
                 .comptime_value => return null,
                 .typed_boundary => |boundary| expr_id = boundary.value,
                 // A row coercion is opaque to static matching: the child's
@@ -13238,7 +13623,6 @@ const Cloner = struct {
                 .return_,
                 .crash,
                 .checked_error,
-                .comptime_branch_taken,
                 .comptime_exhaustiveness_failed,
                 .dbg,
                 .expect_err,
@@ -13255,7 +13639,7 @@ const Cloner = struct {
                     self.pass.program.fieldAccessSegmentSpan(field.segments),
                 ),
                 .tuple_access => |access| itemFromValue(value, access.elem_index),
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // accessors collects only field and tuple accesses
             } orelse return null;
         }
         return value;
@@ -13418,7 +13802,7 @@ const Cloner = struct {
         const pat = self.pass.program.getPat(frame.pat_id);
         const value = frame.value;
         if (input) |answer| switch (frame.stage) {
-            .start => unreachable,
+            .start => unreachable, // an answer arrives only after a .child return, and every .child return moves the stage past .start
             .as_binding => {
                 if (answer != matched) return .{ .done = answer };
                 try self.subst.put(self.pass.program, pat.data.as.local, value);
@@ -13596,7 +13980,7 @@ const Cloner = struct {
                 // An anchor's structure is matched in its place.
                 while (frame.value == .runtime_anchor) frame.value = frame.value.runtime_anchor.structure.*;
                 switch (frame.value) {
-                    .runtime_anchor => unreachable,
+                    .runtime_anchor => unreachable, // the loop above strips every runtime_anchor
                     .expr => |receiver| {
                         if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .unknown;
                         frame.stage = .from_receiver;
@@ -14103,7 +14487,7 @@ const Cloner = struct {
                         .runtime = try self.addExpr(.{ .ty = step.dest, .data = .{ .row_widen = .{ .value = candidate.expr } } }),
                         .structure = try self.copyValue(children[0]),
                     } },
-                    .expr, .record, .tuple, .callable => unreachable,
+                    .expr, .record, .tuple, .callable => unreachable, // only tag, nominal and anchored steps are expanded with children below
                 };
                 results.shrinkRetainingCapacity(step.results_start);
                 try results.append(gpa, built);
@@ -14232,7 +14616,7 @@ const Cloner = struct {
                             .record => |record| frame.fields = try arena.alloc(FieldValue, record.fields.len),
                             .tuple => |tuple| frame.values = try arena.alloc(Value, tuple.items.len),
                             .nominal => {},
-                            .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable,
+                            .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable, // enterReanchor returns .structure only for records, tuples, and nominals
                         }
                         try frames.append(self.pass.allocator, frame);
                     },
@@ -14250,7 +14634,7 @@ const Cloner = struct {
                     .tuple => frame.values[index] = delivered orelse
                         Common.invariant("tuple item with a runtime position could not be recursively anchored"),
                     .nominal => {},
-                    .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable,
+                    .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable, // frames hold only the records, tuples, and nominals enterReanchor returned
                 }
             }
             switch (frame.structure) {
@@ -14281,7 +14665,7 @@ const Cloner = struct {
                     request = .{ .value = nominal.backing.*, .runtime = frame.runtime, .has_value_type = false };
                     continue;
                 },
-                .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable,
+                .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable, // frames hold only the records, tuples, and nominals enterReanchor returned
             }
             const finished = frames.pop().?;
             const structure: Value = switch (finished.structure) {
@@ -14296,7 +14680,7 @@ const Cloner = struct {
                     backing.* = inner;
                     break :blk try nominalValue(self.pass.program, self.pass.allocator, nominal.ty, backing);
                 },
-                .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable,
+                .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable, // frames hold only the records, tuples, and nominals enterReanchor returned
             };
             delivered = if (finished.runtime_has_value_type) try self.runtimeAnchoredValue(structure, finished.runtime) else structure;
         }
@@ -14334,7 +14718,7 @@ const Cloner = struct {
                     !try initializer_bindings.referencedByExpr(self.pass.allocator, self.pass.program, expr)) return .{ .done = value };
                 return .{ .done = if (runtime_has_value_type) Value{ .expr = runtime } else null };
             },
-            .runtime_anchor => unreachable,
+            .runtime_anchor => unreachable, // the loop above strips every runtime_anchor
             .record, .tuple, .nominal => return .{ .structure = value },
             .static_data_candidate, .tag, .callable => {
                 if (try self.valueContainsNonReusableOrInitializerLocalExpr(initializer_bindings, value, budget)) {
@@ -14763,7 +15147,7 @@ const BodyLocalScope = struct {
                     try walk.pushFieldExprs(update.fields);
                 },
                 .tag => |tag| try walk.pushExprSpan(tag.payloads),
-                .static_data_candidate => |candidate| try walk.push(.{ .expr = candidate.runtime_expr }),
+                .static_data_candidate => |candidate| if (candidate.value.subexpression()) |sub| try walk.push(.{ .expr = sub }),
                 .comptime_value => |candidate| try walk.push(.{ .expr = candidate.initializer }),
                 .typed_boundary => |boundary| try walk.push(.{ .expr = boundary.value }),
                 .row_widen => |widen| try walk.push(.{ .expr = widen.value }),
@@ -14774,7 +15158,6 @@ const BodyLocalScope = struct {
                 .return_ => |ret| try walk.push(.{ .expr = ret.value }),
                 .expect_err => |expect_err| try walk.push(.{ .expr = expect_err.msg }),
                 .literal_rejected => |rejected| try walk.push(.{ .expr = rejected.msg }),
-                .comptime_branch_taken => |taken| try walk.push(.{ .expr = taken.body }),
                 .let_ => |let_| {
                     try walk.push(.{ .expr = let_.value });
                     try walk.push(.open_scope);
@@ -14925,9 +15308,9 @@ fn fnBodySizeWithin(allocator: Allocator, program: *const Ast.Program, body: Ast
     };
 }
 
-/// Count the expressions in `expr_id`, stopping once more than `limit` have
-/// been seen. The count is order-independent, so the walk keeps its own
-/// work stack.
+/// Measure clone work in `expr_id`, including implicit record-update fields,
+/// stopping once it exceeds `limit`. The count is order-independent, so the
+/// walk keeps its own work stack.
 ///
 /// A constant read counts as one expression whichever form it has: a
 /// compile-time root read whose proof call is never executed, or a static
@@ -14951,7 +15334,17 @@ fn exprBodySizeWithin(allocator: Allocator, program: *const Ast.Program, expr_id
                 .fn_def,
                 => Common.invariant("pre-lift function expression reached SpecConstr body-size counting"),
                 .static_data_candidate, .comptime_value => {},
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => try Ast.appendChildren(allocator, program, id, &stack),
+                .record_update => {
+                    // The value-aware clone snapshots unchanged fields and
+                    // reconstructs the result. That work is implicit in the
+                    // source update, but explicit in the emitted constructor.
+                    // Charge its complete row before admitting the inline.
+                    const fields = recordUpdateFieldSpan(program, program.getExpr(id).ty);
+                    if (fields.len > remaining) return .over_limit;
+                    remaining -= fields.len;
+                    try Ast.appendChildren(allocator, program, id, &stack);
+                },
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .list, .tuple, .record, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => try Ast.appendChildren(allocator, program, id, &stack),
             }
         },
     };
@@ -14997,7 +15390,25 @@ const ProgramProcedureUsage = struct {
             }
             fn_uses[owner_index].contains_return = shapes.contains_return;
             tail_self_calls[owner_index] = if (shapes.self_call) try tailSelfCallSummary(allocator, program, body, owner) else .{};
-            try collectAllFnUsesInExpr(allocator, program, body, owner, fn_uses);
+        }
+
+        // Count uses in the functions the roots reach, following each direct
+        // call and function reference as lowering does.
+        var reached = try std.DynamicBitSetUnmanaged.initEmpty(allocator, fn_count);
+        defer reached.deinit(allocator);
+        var pending: std.ArrayList(Ast.FnId) = .empty;
+        defer pending.deinit(allocator);
+        for (program.rootsView()) |root| try reachFn(allocator, root.fn_id, &reached, &pending);
+        for (program.literalRootsView()) |root| try reachFn(allocator, root.fn_id, &reached, &pending);
+        for (program.layoutRequestsView()) |request| {
+            if (request.fn_id) |fn_id| try reachFn(allocator, fn_id, &reached, &pending);
+        }
+        while (pending.pop()) |owner| {
+            const body = switch (program.getFn(owner).body) {
+                .roc => |body| body,
+                .hosted => continue,
+            };
+            try collectAllFnUsesInExpr(allocator, program, body, owner, fn_uses, &reached, &pending);
         }
         for (program.rootsView()) |root| {
             fn_uses[@backingInt(root.fn_id)].value_refs += 1;
@@ -15021,15 +15432,25 @@ const ProgramProcedureUsage = struct {
     }
 };
 
-/// Count every procedure use in `expr_id` into `uses`. Only a procedure's
-/// counts and its single external call site are recorded, so visiting order
-/// does not matter and the walk runs on its own work stack.
+fn reachFn(allocator: Allocator, fn_id: Ast.FnId, reached: *std.DynamicBitSetUnmanaged, pending: *std.ArrayList(Ast.FnId)) Allocator.Error!void {
+    const index = @backingInt(fn_id);
+    if (reached.isSet(index)) return;
+    reached.set(index);
+    try pending.append(allocator, fn_id);
+}
+
+/// Count every procedure use in `expr_id` into `uses`, and queue each
+/// function it uses on `pending` the first time any body reaches it. Only a
+/// procedure's counts and its single external call site are recorded, so
+/// visiting order does not matter and the walk runs on its own work stack.
 fn collectAllFnUsesInExpr(
     allocator: Allocator,
     program: *const Ast.Program,
     expr_id: Ast.ExprId,
     owner: Ast.FnId,
     uses: []ProcedureUse,
+    reached: *std.DynamicBitSetUnmanaged,
+    pending: *std.ArrayList(Ast.FnId),
 ) Allocator.Error!void {
     var stack: std.ArrayList(Ast.ExprChild) = .empty;
     defer stack.deinit(allocator);
@@ -15042,8 +15463,12 @@ fn collectAllFnUsesInExpr(
                 .def_ref,
                 .fn_def,
                 => Common.invariant("pre-lift function expression reached specialized-worker use analysis"),
-                .fn_ref => |fn_ref| uses[@backingInt(fn_ref.fn_id)].value_refs += 1,
+                .fn_ref => |fn_ref| {
+                    uses[@backingInt(fn_ref.fn_id)].value_refs += 1;
+                    try reachFn(allocator, fn_ref.fn_id, reached, pending);
+                },
                 .call_proc => |call| if (Ast.localDirectCallee(call)) |callee| {
+                    try reachFn(allocator, callee, reached, pending);
                     if (callee != owner) {
                         const summary = &uses[@backingInt(callee)];
                         summary.external_calls += 1;
@@ -15051,7 +15476,7 @@ fn collectAllFnUsesInExpr(
                         summary.external_call_owner = owner;
                     }
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
             }
             try Ast.appendChildren(allocator, program, id, &stack);
         },
@@ -15135,7 +15560,6 @@ fn tailSelfCallSummary(allocator: Allocator, program: *const Ast.Program, root: 
             if (try exprCallsFn(allocator, program, sequence.try_expr, target)) return invalid;
             try tails.append(allocator, sequence.ok_body);
         },
-        .comptime_branch_taken => |taken| try tails.append(allocator, taken.body),
         .typed_boundary => |boundary| try tails.append(allocator, boundary.value),
         // A self call under a row coercion is not in tail position: the
         // call's type and the coercion's are distinct Monotype types until
@@ -15218,7 +15642,7 @@ fn exprContainsIteratorProducer(allocator: Allocator, program: *const Ast.Progra
                     try pushExprSpanSearch(search.allocator, search.program, jump.args, stack);
                     break :blk .children;
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
             };
         }
 
@@ -15239,7 +15663,7 @@ fn exprCallsFn(allocator: Allocator, program: *const Ast.Program, expr_id: Ast.E
                 .comptime_value => .skip,
                 .lambda, .def_ref, .fn_def => Common.invariant("pre-lift function expression reached recursive-call scan"),
                 .call_proc => |call| if (Ast.localDirectCallee(call) == search.fn_id) .found else .descend,
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
             };
         }
 
@@ -15283,7 +15707,7 @@ fn exprContainsReturn(allocator: Allocator, program: *const Ast.Program, expr_id
             return switch (search.program.getExpr(id).data) {
                 .return_ => .found,
                 .lambda, .def_ref, .fn_def, .comptime_value => .skip,
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
             };
         }
 
@@ -15312,7 +15736,7 @@ fn exprReferencesLocal(allocator: Allocator, program: *const Ast.Program, expr_i
                 .uninitialized_payload => |payload| if (payload.condition == search.local) .found else .skip,
                 .join_point => |join_point| if (typedLocalSpanContains(search.program, join_point.retained, search.local)) .found else .descend,
                 .lambda, .def_ref, .fn_def, .comptime_value => .skip,
-                .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
+                .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
             };
         }
 
@@ -15452,7 +15876,7 @@ fn walkLoopBodyContents(pass: *Pass, root_body: Ast.ExprId, root_uses: []Initial
                             try children.append(allocator, .{ .expr = GuardedList.at(initial_values, index) });
                         }
                     },
-                    .unit, .@"unreachable", .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .jump, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => try Ast.appendChildren(allocator, program, expr_id, &children),
+                    .unit, .@"unreachable", .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .jump, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => try Ast.appendChildren(allocator, program, expr_id, &children),
                 },
             },
         }
@@ -15519,7 +15943,7 @@ fn exprContainsFreeLoopControl(allocator: Allocator, program: *const Ast.Program
                     if (item.loop_depth == 0) return true;
                     try Ast.appendChildren(allocator, program, id, &children);
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => try Ast.appendChildren(allocator, program, id, &children),
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => try Ast.appendChildren(allocator, program, id, &children),
             },
         }
         for (children.items) |child| try stack.append(allocator, .{ .child = child, .loop_depth = item.loop_depth });
@@ -15586,7 +16010,7 @@ fn collectTupleLocalDemand(
                     try stack.append(search.allocator, .{ .expr = sequence.try_expr });
                     break :blk .children;
                 },
-                .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .block, .loop_, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
+                .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .block, .loop_, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
             };
         }
 
@@ -15648,7 +16072,7 @@ fn localUseCount(allocator: Allocator, program: *const Ast.Program, local: Ast.L
                     try stack.append(counter.allocator, .{ .expr = sequence.try_expr });
                     break :blk .children;
                 },
-                .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .block, .loop_, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
+                .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .block, .loop_, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => .descend,
             };
         }
 
@@ -15739,7 +16163,7 @@ fn recordUpdateBackingType(program: *const Ast.Program, ty: Type.TypeId) Type.Ty
 
 fn recordUpdateFieldSpan(program: *const Ast.Program, ty: Type.TypeId) Type.Span {
     const content = program.types.get(recordUpdateBackingType(program, ty));
-    if (content != .record) unreachable;
+    if (content != .record) unreachable; // recordUpdateBackingType returns only a record type
     return content.record;
 }
 
@@ -16292,6 +16716,8 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Ast.Program {
         names.NameStore.init(allocator),
         Type.Store.init(allocator),
         .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
         .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
@@ -16372,6 +16798,9 @@ test "compile-time root reads remain opaque through specialization and cloning" 
     } } });
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
+    var productivity = try InlineProductivity.analyze(allocator, &program, &.{});
+    defer productivity.deinit();
+    pass.inline_productivity = &productivity;
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
     const value = try cloner.cloneExprValueDemandingShape(read);
@@ -16379,7 +16808,7 @@ test "compile-time root reads remain opaque through specialization and cloning" 
     try std.testing.expect(value.value == .expr);
     try std.testing.expectEqual(read, value.value.expr);
     try std.testing.expectEqual(read, try cloner.cloneExprPlain(read));
-    try std.testing.expect(!try cloner.exprHasKnownShape(read));
+    try std.testing.expect(!try cloner.exprKnownAt(read, &.{}, .full));
     try std.testing.expect((try cloner.peekKnownValue(read)) == null);
     try std.testing.expect((try pass.staticDataStructure(read)).* == .expr);
     var renames = collections.DenseMap(Ast.LocalId, Ast.LocalId).init(allocator);
@@ -16416,7 +16845,7 @@ test "a constant read counts as one expression in either form" {
     const candidate = try program.addExpr(.{ .ty = list_ty, .data = .{ .static_data_candidate = .{
         .storage = .aggregate,
         .static_data = try addStaticDataIdentityForTest(&program),
-        .runtime_expr = list,
+        .value = .{ .runtime = list },
     } } });
     try std.testing.expectEqual(BodySize{ .exact = 4 }, try exprBodySizeWithin(allocator, &program, list, spec_constr_body_expr_threshold));
     try std.testing.expectEqual(BodySize{ .exact = 1 }, try exprBodySizeWithin(allocator, &program, read, spec_constr_body_expr_threshold));
@@ -16434,7 +16863,7 @@ test "static candidate clones share closed initializers without emitting caller 
     const candidate = try program.addExpr(.{ .ty = list_ty, .data = .{ .static_data_candidate = .{
         .storage = .aggregate,
         .static_data = try addStaticDataIdentityForTest(&program),
-        .runtime_expr = list,
+        .value = .{ .runtime = list },
     } } });
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
@@ -16472,7 +16901,7 @@ test "static candidate constructor views are linear in shared source graph size"
     const candidate = try program.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
         .storage = .aggregate,
         .static_data = try addStaticDataIdentityForTest(&program),
-        .runtime_expr = expr,
+        .value = .{ .runtime = expr },
     } } });
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
@@ -16505,7 +16934,7 @@ test "static candidate match rebinding preserves the initializer and its private
     const candidate = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .static_data_candidate = .{
         .storage = .aggregate,
         .static_data = try addStaticDataIdentityForTest(&program),
-        .runtime_expr = tuple,
+        .value = .{ .runtime = tuple },
     } } });
     const field_local = try program.addLocal(@fromBackingInt(@intCast(2)), ty);
     const field_pat = try program.addPat(.{ .ty = ty, .data = .{ .bind = field_local } });
@@ -16524,7 +16953,7 @@ test "static candidate match rebinding preserves the initializer and its private
     try std.testing.expectEqual(private, itemFromValue(cloned.value, 0).?.expr);
     const selected = try cloner.materialize(itemFromValue(prepared, 0).?);
     try std.testing.expect(program.getExpr(selected).data.local != local);
-    try std.testing.expectEqual(tuple, program.getExpr(candidate).data.static_data_candidate.runtime_expr);
+    try std.testing.expectEqual(tuple, program.getExpr(candidate).data.static_data_candidate.value.runtime);
 }
 
 test "loop exit selection clone is isolated from ordinary rewrites" {
@@ -17034,7 +17463,7 @@ test "SpecConstr accepts a transparent alias record update base" {
     const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try program.names.internTypeName("RecordAlias");
     const alias_ty = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Type.Span.empty(),
@@ -17070,7 +17499,7 @@ test "SpecConstr compares representations, not checked provenance" {
     const Nominal = struct {
         fn add(p: *Ast.Program, module: names.ModuleIdentityId, name: names.TypeNameId, checked_ty: u32, backing: Type.TypeId) Allocator.Error!Type.TypeId {
             return p.types.add(.{ .named = .{
-                .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(checked_ty)) },
+                .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(checked_ty)), .ty_module = .{} },
                 .def = .{ .module = module, .type_name = name, .source_decl = 7 },
                 .kind = .nominal,
                 .args = Type.Span.empty(),
@@ -17342,6 +17771,9 @@ test "staged SpecConstr phase entry capacity fixes discovery budgets across wave
         }
         var pass = try Pass.init(allocator, &program);
         defer pass.deinit();
+        var productivity = try pass.analyzeInlineProductivity();
+        defer productivity.deinit();
+        pass.inline_productivity = &productivity;
         pass.plans[0].used_args[0] = true;
         pass.plans[1].used_args[0] = true;
         var executor: ReverseSpecConstrExecutor = .{ .worker_count = worker_count };
@@ -17586,7 +18018,10 @@ fn checkSpecConstrRequestAllocationFailure(allocator: Allocator) (Allocator.Erro
 }
 
 test "staged SpecConstr request copying and admission allocation failures release owners" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, checkSpecConstrRequestAllocationFailure, .{});
+    // In-place growth under the testing allocator depends on the heap's
+    // layout, so the failure check runs over an allocator that refuses it.
+    var deterministic = @import("base").DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), checkSpecConstrRequestAllocationFailure, .{});
 }
 
 test "issue 10313 value-aware call-pattern collection does not append lifted IR" {
@@ -17690,6 +18125,58 @@ test "a specialization call redirected to its own body records the self call in 
     const tail = usage.tail_self_calls[@backingInt(spec_fn_id)];
     try std.testing.expect(tail.valid);
     try std.testing.expectEqual(@as(usize, 1), tail.count);
+}
+
+test "procedure uses count only calls in functions the roots reach" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const callee = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(1),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = try program.addExpr(.{ .ty = unit_ty, .data = .unit }) },
+        .ret = unit_ty,
+    });
+    var callers: [2]Ast.FnId = undefined;
+    for (&callers, 0..) |*caller, index| {
+        const call = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+            .callee = .{ .lifted = callee },
+            .args = Ast.Span(Ast.ExprId).empty(),
+        } } });
+        caller.* = try program.addFn(.{
+            .shapes = program.finishFnShapes(.{}),
+            .symbol = @fromBackingInt(@intCast(2 + index)),
+            .args = Ast.Span(Ast.TypedLocal).empty(),
+            .captures = Ast.Span(Ast.TypedLocal).empty(),
+            .body = .{ .roc = call },
+            .ret = unit_ty,
+        });
+    }
+    // Only the first caller is a root; nothing references the second, as
+    // when SpecConstr has inlined a function at every call it had.
+    try program.addRoot(.{
+        .fn_id = callers[0],
+        .request = .{
+            .order = 0,
+            .module_idx = 0,
+            .kind = .dev_expr,
+            .source = undefined, // Use counting never reads a root's checked source.
+            .checked_type = undefined, // Use counting never reads a root's checked type.
+            .abi = .roc,
+            .exposure = .private,
+        },
+        .owner = .first,
+    });
+
+    var usage = try ProgramProcedureUsage.collect(allocator, &program);
+    defer usage.deinit(allocator);
+    const use = usage.fn_uses[@backingInt(callee)];
+    try std.testing.expectEqual(@as(usize, 1), use.external_calls);
+    try std.testing.expectEqual(@as(?Ast.FnId, callers[0]), use.external_call_owner);
 }
 
 test "SpecConstr admission uses body size and worker count before cloning" {
@@ -17997,12 +18484,25 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
     defer program.deinit();
 
     const unit_ty = try program.types.add(.zst);
-    const pair_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ unit_ty, unit_ty }) });
+    const pair_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const pair_name = try program.names.internTagLabel("Pair");
     const unit_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
     const pair_expr = try program.addExpr(.{
         .ty = pair_ty,
-        .data = .{ .tuple = try program.addExprSpan(&.{ unit_expr, unit_expr }) },
+        .data = .{ .tag = .{ .name = pair_name, .payloads = Ast.Span(Ast.ExprId).empty() } },
     });
+
+    // Every level matches its argument, so a call passing the known `Pair`
+    // is a productive inline at every depth.
+    const Matching = struct {
+        fn body(p: *Ast.Program, arg: Ast.LocalId, arg_ty: Type.TypeId, name: names.TagNameId, ty: Type.TypeId, arm: Ast.ExprId) Allocator.Error!Ast.ExprId {
+            const pattern = try p.addPat(.{ .ty = arg_ty, .data = .{ .tag = .{ .name = name, .payloads = Ast.Span(Ast.PatId).empty() } } });
+            return p.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
+                .scrutinee = try p.addExpr(.{ .ty = arg_ty, .data = .{ .local = arg } }),
+                .branches = try p.addBranchSpan(&.{.{ .pat = pattern, .body = arm }}),
+            } } });
+        }
+    };
 
     const leaf_arg = try program.addLocal(@fromBackingInt(@intCast(1)), pair_ty);
     var result_ty = unit_ty;
@@ -18011,7 +18511,7 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
         .symbol = @fromBackingInt(@intCast(2)),
         .args = try program.addTypedLocalSpan(&.{.{ .local = leaf_arg, .ty = pair_ty }}),
         .captures = Ast.Span(Ast.TypedLocal).empty(),
-        .body = .{ .roc = unit_expr },
+        .body = .{ .roc = try Matching.body(&program, leaf_arg, pair_ty, pair_name, unit_ty, unit_expr) },
         .ret = unit_ty,
     });
     // Each source wrapper is tiny. Before source and output bodies were kept
@@ -18031,7 +18531,7 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
             .captures = Ast.Span(Ast.CaptureOperand).empty(),
         } } });
         const wrapper_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ result_ty, result_ty }) });
-        const body = try program.addExpr(.{
+        const pair = try program.addExpr(.{
             .ty = wrapper_ty,
             .data = .{ .tuple = try program.addExprSpan(&.{ first, second }) },
         });
@@ -18044,7 +18544,7 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
             .symbol = @fromBackingInt(@intCast(@as(u32, @intCast(depth + 12)))),
             .args = try program.addTypedLocalSpan(&.{.{ .local = arg, .ty = pair_ty }}),
             .captures = Ast.Span(Ast.TypedLocal).empty(),
-            .body = .{ .roc = body },
+            .body = .{ .roc = try Matching.body(&program, arg, pair_ty, pair_name, wrapper_ty, pair) },
             .ret = wrapper_ty,
         });
         result_ty = wrapper_ty;
@@ -18052,6 +18552,9 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
 
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
+    var productivity = try pass.analyzeInlineProductivity();
+    defer productivity.deinit();
+    pass.inline_productivity = &productivity;
 
     for (0..pass.plans.len) |index| {
         try pass.cloneFnBody(.normalize, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
@@ -18082,7 +18585,7 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
 
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
-    cloner.inline_direct_requires_known_arg = true;
+    cloner.inline_direct_requires_productivity = true;
     const before_exprs = program.exprCount();
     const before_work = cloner.inline_body_growth.remaining;
     _ = try cloner.cloneExpr(root_call);
@@ -18091,6 +18594,65 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
 
     // An admitted inline must charge enough source-body work to bound what it
     // emits. Declining the inline may emit only the original residual call.
+    const growth_limit = charged_work + root_source_size;
+    try std.testing.expectEqual(growth_limit, @max(growth_limit, growth));
+}
+
+test "issue 12505 SpecConstr charges wide record update expansion to inline growth" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const u64_ty = try program.types.add(.{ .primitive = .u64 });
+    var fields: [64]Type.Field = undefined;
+    for (&fields, 0..) |*field, index| {
+        var buffer: [32]u8 = undefined;
+        const name = try std.fmt.bufPrint(&buffer, "field{d:0>3}", .{index});
+        field.* = .{
+            .name = try program.names.internRecordFieldLabel(name),
+            .ty = u64_ty,
+            .default = null,
+        };
+    }
+    const record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &fields) });
+    const arg = try program.addLocal(@fromBackingInt(@intCast(1)), record_ty);
+    const base = try program.addExpr(.{ .ty = record_ty, .data = .{ .local = arg } });
+    const replacement = try program.addExpr(.{ .ty = u64_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 1)), .kind = .u128 } } });
+    const update = try program.addExpr(.{ .ty = record_ty, .data = .{ .record_update = .{
+        .base = base,
+        .fields = try program.addFieldExprSpan(&.{.{ .name = fields[0].name, .value = replacement }}),
+    } } });
+    const callee = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(@intCast(2)),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = arg, .ty = record_ty }}),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = update },
+        .ret = record_ty,
+    });
+    const input = try program.addLocal(@fromBackingInt(@intCast(3)), record_ty);
+    const input_ref = try program.addExpr(.{ .ty = record_ty, .data = .{ .local = input } });
+    const call = try program.addExpr(.{ .ty = record_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = callee },
+        .args = try program.addExprSpan(&.{input_ref}),
+        .captures = Ast.Span(Ast.CaptureOperand).empty(),
+    } } });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    const root_source_size = (try exprBodySizeWithin(allocator, &program, call, spec_constr_body_expr_threshold)).exactValue() orelse return error.TestUnexpectedResult;
+    const before_exprs = program.exprCount();
+    const before_work = cloner.inline_body_growth.remaining;
+    _ = try cloner.cloneExpr(call);
+    const growth = program.exprCount() - before_exprs;
+    const charged_work = before_work - cloner.inline_body_growth.remaining;
+
+    // https://github.com/roc-lang/roc/issues/12505
+    // As in the issue 10760 regression above, admitted expansion must be
+    // covered by its charge. Updating one field can expand every other field;
+    // those generated expressions must not bypass the growth budget.
     const growth_limit = charged_work + root_source_size;
     try std.testing.expectEqual(growth_limit, @max(growth_limit, growth));
 }
@@ -18176,12 +18738,13 @@ test "value-aware call-pattern collection keeps generic producer calls opaque" {
     try std.testing.expectEqual(@as(usize, 1), pass.plans[@backingInt(consumer)].specs.items.len);
 }
 
-test "generic value cloning preserves a call until its result shape is demanded" {
+test "a direct call inlines only where its surroundings consume the result it constructs" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
     defer program.deinit();
 
     const union_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const unit_ty = try program.types.add(.zst);
     const tag_name = try program.names.internTagLabel("Result");
     const tag = try program.addExpr(.{
         .ty = union_ty,
@@ -18190,35 +18753,79 @@ test "generic value cloning preserves a call until its result shape is demanded"
             .payloads = Ast.Span(Ast.ExprId).empty(),
         } },
     });
+    // A statement before the tag keeps the callee from being a wrapper,
+    // which would inline wherever it is called.
+    const callee_body = try program.addExpr(.{ .ty = union_ty, .data = .{ .block = .{
+        .statements = try program.addStmtSpan(&.{try program.addStmt(.{ .expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit }) })}),
+        .final_expr = tag,
+    } } });
     const callee = try program.addFn(.{
         .shapes = program.finishFnShapes(.{}),
         .symbol = @fromBackingInt(@intCast(1)),
         .args = Ast.Span(Ast.TypedLocal).empty(),
         .captures = Ast.Span(Ast.TypedLocal).empty(),
-        .body = .{ .roc = tag },
+        .body = .{ .roc = callee_body },
         .ret = union_ty,
     });
-    const call = try program.addExpr(.{
+    const unconsumed_call = try program.addExpr(.{
         .ty = union_ty,
         .data = .{ .call_proc = .{
             .callee = .{ .lifted = callee },
             .args = Ast.Span(Ast.ExprId).empty(),
         } },
     });
+    _ = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(@intCast(2)),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = try program.addExpr(.{ .ty = unit_ty, .data = .{ .block = .{
+            .statements = try program.addStmtSpan(&.{try program.addStmt(.{ .expr = unconsumed_call })}),
+            .final_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit }),
+        } } }) },
+        .ret = unit_ty,
+    });
+    const matched_call = try program.addExpr(.{
+        .ty = union_ty,
+        .data = .{ .call_proc = .{
+            .callee = .{ .lifted = callee },
+            .args = Ast.Span(Ast.ExprId).empty(),
+        } },
+    });
+    const pattern = try program.addPat(.{ .ty = union_ty, .data = .{ .tag = .{
+        .name = tag_name,
+        .payloads = Ast.Span(Ast.PatId).empty(),
+    } } });
+    const arm = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    _ = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(@intCast(3)),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = try program.addExpr(.{ .ty = unit_ty, .data = .{ .match_ = .{
+            .scrutinee = matched_call,
+            .branches = try program.addBranchSpan(&.{.{ .pat = pattern, .body = arm }}),
+        } } }) },
+        .ret = unit_ty,
+    });
 
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
+    var productivity = try pass.analyzeInlineProductivity();
+    defer productivity.deinit();
+    pass.inline_productivity = &productivity;
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
-    cloner.inline_direct_requires_known_arg = true;
+    cloner.inline_direct_requires_productivity = true;
 
-    const generic = try cloner.cloneExprValue(call);
-    if (generic.value != .expr) return error.TestUnexpectedResult;
-    const residual = generic.value.expr;
-    try std.testing.expect(program.getExpr(residual).data == .call_proc);
+    // A result the caller discards gains nothing from the constructed tag.
+    const unconsumed = try cloner.cloneExprValueDemandingShape(unconsumed_call);
+    if (unconsumed.value != .expr) return error.TestUnexpectedResult;
+    try std.testing.expect(program.getExpr(unconsumed.value.expr).data == .call_proc);
 
-    const demanded = try cloner.cloneExprValueDemandingShape(call);
-    try std.testing.expect(demanded.value == .tag);
+    // A match selects its arm from the constructed tag, so either clone inlines.
+    try std.testing.expect((try cloner.cloneExprValueDemandingShape(matched_call)).value == .tag);
+    try std.testing.expect((try cloner.cloneExprValue(matched_call)).value == .tag);
 }
 
 test "issue 10168 SpecConstr clones every capture when nested cloning grows the capture store" {
@@ -18795,14 +19402,14 @@ fn substituteNamedForTest(
     const type_name = try program.names.internTypeName("Nominal");
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const first_ty = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(first_checked_ty)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(first_checked_ty)), .ty_module = .{} },
         .def = def,
         .kind = .nominal,
         .args = Type.Span.empty(),
         .backing = .{ .ty = first_backing, .use = .inspectable },
     } });
     const second_ty = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(second_checked_ty)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(second_checked_ty)), .ty_module = .{} },
         .def = def,
         .kind = .nominal,
         .args = Type.Span.empty(),
@@ -19080,6 +19687,108 @@ test "loop exit demand is linear in tuple width and rejects whole tuple uses" {
         try whole.collect(whole_use);
         try std.testing.expect(!whole.hasSelection());
     }
+}
+
+test "loop exit demand selects a fully read tuple exactly when a component may be refcounted" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const ty = try program.types.add(.{ .list = try program.types.add(.zst) });
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ ty, ty }) });
+    const input = try program.addLocal(@fromBackingInt(@intCast(1)), tuple_ty);
+    const ref = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .local = input } });
+    const exit = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .break_ = ref } });
+    const loop = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .loop_ = .{
+        .params = .empty(),
+        .initial_values = .empty(),
+        .body = exit,
+    } } });
+
+    // Both components bound by the pattern and both read.
+    const first = try program.addLocal(@fromBackingInt(@intCast(2)), ty);
+    const second = try program.addLocal(@fromBackingInt(@intCast(3)), ty);
+    const pats = [_]Ast.PatId{
+        try program.addPat(.{ .ty = ty, .data = .{ .bind = first } }),
+        try program.addPat(.{ .ty = ty, .data = .{ .bind = second } }),
+    };
+    const pat = try program.addPat(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addPatSpan(&pats) } });
+    const reads = [_]Ast.ExprId{
+        try program.addExpr(.{ .ty = ty, .data = .{ .local = first } }),
+        try program.addExpr(.{ .ty = ty, .data = .{ .local = second } }),
+    };
+    const rest = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&reads) } });
+    const body = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .let_ = .{ .bind = pat, .value = loop, .rest = rest } } });
+    var demand = ExitDemand.Inventory.init(allocator, &program);
+    defer demand.deinit();
+    try demand.collect(body);
+    const plan = demand.get(pat) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), plan.used_count);
+
+    // Both components projected from a bound aggregate.
+    const aggregate = try program.addLocal(@fromBackingInt(@intCast(4)), tuple_ty);
+    const aggregate_pat = try program.addPat(.{ .ty = tuple_ty, .data = .{ .bind = aggregate } });
+    const aggregate_ref = [_]Ast.ExprId{
+        try program.addExpr(.{ .ty = tuple_ty, .data = .{ .local = aggregate } }),
+        try program.addExpr(.{ .ty = tuple_ty, .data = .{ .local = aggregate } }),
+    };
+    const projections = [_]Ast.ExprId{
+        try program.addExpr(.{ .ty = ty, .data = .{ .tuple_access = .{ .tuple = aggregate_ref[0], .elem_index = 0 } } }),
+        try program.addExpr(.{ .ty = ty, .data = .{ .tuple_access = .{ .tuple = aggregate_ref[1], .elem_index = 1 } } }),
+    };
+    const projected = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&projections) } });
+    const projected_body = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .let_ = .{
+        .bind = aggregate_pat,
+        .value = loop,
+        .rest = projected,
+    } } });
+    var projected_demand = ExitDemand.Inventory.init(allocator, &program);
+    defer projected_demand.deinit();
+    try projected_demand.collect(projected_body);
+    try std.testing.expect(projected_demand.get(aggregate_pat) != null);
+
+    // The same projections followed by a read of the whole tuple.
+    const whole_ref = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .local = aggregate } });
+    const both = [_]Ast.ExprId{ projected, whole_ref };
+    const both_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ tuple_ty, tuple_ty }) });
+    const whole_rest = try program.addExpr(.{ .ty = both_ty, .data = .{ .tuple = try program.addExprSpan(&both) } });
+    const whole_body = try program.addExpr(.{ .ty = both_ty, .data = .{ .let_ = .{
+        .bind = aggregate_pat,
+        .value = loop,
+        .rest = whole_rest,
+    } } });
+    var whole = ExitDemand.Inventory.init(allocator, &program);
+    defer whole.deinit();
+    try whole.collect(whole_body);
+    try std.testing.expect(!whole.hasSelection());
+
+    // Scalar components, both read, keep the tuple.
+    const scalar_ty = try program.types.add(.{ .primitive = .u64 });
+    const scalar_tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ scalar_ty, scalar_ty }) });
+    const scalar_input = try program.addLocal(@fromBackingInt(@intCast(5)), scalar_tuple_ty);
+    const scalar_ref = try program.addExpr(.{ .ty = scalar_tuple_ty, .data = .{ .local = scalar_input } });
+    const scalar_exit = try program.addExpr(.{ .ty = scalar_tuple_ty, .data = .{ .break_ = scalar_ref } });
+    const scalar_loop = try program.addExpr(.{ .ty = scalar_tuple_ty, .data = .{ .loop_ = .{
+        .params = .empty(),
+        .initial_values = .empty(),
+        .body = scalar_exit,
+    } } });
+    const scalar_first = try program.addLocal(@fromBackingInt(@intCast(6)), scalar_ty);
+    const scalar_second = try program.addLocal(@fromBackingInt(@intCast(7)), scalar_ty);
+    const scalar_pats = [_]Ast.PatId{
+        try program.addPat(.{ .ty = scalar_ty, .data = .{ .bind = scalar_first } }),
+        try program.addPat(.{ .ty = scalar_ty, .data = .{ .bind = scalar_second } }),
+    };
+    const scalar_pat = try program.addPat(.{ .ty = scalar_tuple_ty, .data = .{ .tuple = try program.addPatSpan(&scalar_pats) } });
+    const scalar_reads = [_]Ast.ExprId{
+        try program.addExpr(.{ .ty = scalar_ty, .data = .{ .local = scalar_first } }),
+        try program.addExpr(.{ .ty = scalar_ty, .data = .{ .local = scalar_second } }),
+    };
+    const scalar_rest = try program.addExpr(.{ .ty = scalar_tuple_ty, .data = .{ .tuple = try program.addExprSpan(&scalar_reads) } });
+    const scalar_body = try program.addExpr(.{ .ty = scalar_tuple_ty, .data = .{ .let_ = .{ .bind = scalar_pat, .value = scalar_loop, .rest = scalar_rest } } });
+    var scalars = ExitDemand.Inventory.init(allocator, &program);
+    defer scalars.deinit();
+    try scalars.collect(scalar_body);
+    try std.testing.expect(scalars.get(scalar_pat) == null);
 }
 
 test "loop exit projection retains typed boundaries around known tuples" {

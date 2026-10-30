@@ -239,7 +239,7 @@ fn tokenizeReport(
     const body = switch (diagnostic.tag) {
         .BidiControlInSource => blk: {
             const control = base.bidi.at(source_env.source[region.start.offset..]).?;
-            break :blk std.fmt.bufPrint(&bidi_body, "Literal U+{X:0>4} ({s}) can make source appear different from what Roc executes. Use \\u({X:0>4}) in a literal, or remove the control from source text.", .{ control.codepoint, control.name, control.codepoint }) catch unreachable;
+            break :blk std.fmt.bufPrint(&bidi_body, "Literal U+{X:0>4} ({s}) can make source appear different from what Roc executes. Use \\u({X:0>4}) in a literal, or remove the control from source text.", .{ control.codepoint, control.name, control.codepoint }) catch unreachable; // bidi_body fits the fixed text plus the longest bidi control name (under 30 bytes)
         },
         .TooManyTokenizationErrors => "Additional tokenization errors were omitted because the diagnostic limit was reached.",
         .MisplacedCarriageReturn => "Carriage return characters (\\r) are not allowed in Roc source code.",
@@ -620,6 +620,7 @@ fn parseReport(ctx: ParseReportContext) Allocator.Error!reporting.Report {
         .expected_expr_comma => reportParseProblem(ctx, "Expected Comma", "I was parsing a record update, and I expected `,` before the fields.", "A record update writes the base record after `..`, then a comma, then the updated fields.", .{ .example = "{ ..person, name: \"Ada\" }" }),
         .expected_expr_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing a block expression, and I expected `}` before the file ended.", "Close the block after its final statement or expression.", .{ .example = "{\n    answer = 42\n    answer\n}" }),
         .expr_dot_suffix_not_allowed => reportParseProblem(ctx, "Expected Record Accessor", "I was parsing access after `.`, and I expected a field name or tuple index.", "Required record access uses `.name`, optional record access uses `.?name`, and tuple access uses `.0`. Accessor names must be lowercase and adjacent to their punctuation.", .{ .example = "person.name\nmaybe_person.?name\npair.0" }),
+        .expr_type_suffix_on_parenthesized_literal => reportParseProblem(ctx, "Parenthesized Type Suffix", "I was parsing access after `.`, and I found a type suffix after parentheses.", "A type suffix like `.U64` is part of the literal it gives a type to, so it goes directly after the number or string, inside any parentheses around it.", .{ .example = "1.U64\n-12.34.Dec\n(1.U64)", .show_found = false }),
         .incomplete_import => reportParseProblem(ctx, "Incomplete Import", "I was parsing an import, and the module path is incomplete.", "Imports must name a module, optionally with a qualifier and exposing list.", .{ .example = "import Json/Decode exposing [decode]" }),
         .file_import_expected_as => reportParseProblem(ctx, "Expected File Import Name", "I was parsing a file import, and I expected `as` after the path.", "File imports give the file contents a local name using `as`.", .{ .example = "import \"data.txt\" as data : Str" }),
         .file_import_expected_name => reportParseProblem(ctx, "Expected File Import Binding", "I was parsing a file import, and I expected a lowercase binding name.", "The name after `as` is the local value that will contain the imported file contents.", .{ .example = "import \"data.txt\" as data : Str" }),
@@ -763,6 +764,7 @@ pub const Diagnostic = struct {
         expected_expr_comma,
         expected_expr_close_curly,
         expr_dot_suffix_not_allowed,
+        expr_type_suffix_on_parenthesized_literal,
         incomplete_import,
         file_import_expected_as,
         file_import_expected_name,
@@ -899,11 +901,13 @@ fn pushQualifiedName(
     final_token: Token.Idx,
 ) std.mem.Allocator.Error!void {
     const qualifier_tokens = self.store.tokenSlice(qualifiers);
-    const final_ident = self.tokens.resolveIdentifier(final_token) orelse unreachable;
+    const final_ident = self.tokens.resolveIdentifier(final_token) orelse
+        base.invariant("AST invariant violated: qualified name token {d} is not an identifier", .{final_token});
 
     var byte_count = env.getIdent(final_ident).len;
     for (qualifier_tokens) |raw_token| {
-        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse unreachable;
+        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse
+            base.invariant("AST invariant violated: qualifier token {d} is not an identifier", .{raw_token});
         byte_count += env.getIdent(segment).len + 1;
     }
 
@@ -911,7 +915,8 @@ fn pushQualifiedName(
     const buffer = tree.reservedStringBuffer(begin);
     var offset: usize = 0;
     for (qualifier_tokens) |raw_token| {
-        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse unreachable;
+        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse
+            base.invariant("AST invariant violated: qualifier token {d} is not an identifier", .{raw_token});
         const text = env.getIdent(segment);
         std.mem.copyForwards(u8, buffer[offset..][0..text.len], text);
         offset += text.len;
@@ -3164,7 +3169,8 @@ pub const Expr = union(enum) {
                 for (ast.store.fieldAccessSegmentSlice(a.segments)) |segment| {
                     const segment_node = try tree.beginNamedNode("segment");
                     try tree.pushStringPair("mode", @tagName(segment.mode));
-                    const field_ident = ast.tokens.resolveIdentifier(segment.field_token) orelse unreachable;
+                    const field_ident = ast.tokens.resolveIdentifier(segment.field_token) orelse
+                        base.invariant("AST invariant violated: field access token {d} is not an identifier", .{segment.field_token});
                     try tree.pushStringPair("field", env.getIdent(field_ident));
                     try tree.endNodeWithoutChildren(segment_node);
                 }

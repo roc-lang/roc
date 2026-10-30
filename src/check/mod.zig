@@ -31,10 +31,16 @@ pub const HoistRoots = @import("hoist_roots.zig");
 pub const RequirementSolution = @import("requirement_solution.zig");
 pub const ConstStore = @import("const_store.zig");
 pub const CheckedArtifact = @import("checked_artifact.zig");
+/// Import-facing checking identities and explicit binding to current owners.
+pub const CheckingDependencies = @import("checking_dependencies.zig");
+pub const CheckingInterface = @import("checking_interface.zig");
+pub const InferenceOutput = @import("inference_output.zig");
 /// Comptime layout fingerprint for a registered serialization root (recurses into
 /// nested aggregates and `SerializedElement`s), so every admitted blob invalidates on
 /// any layout change, not just a top-level one.
 pub const rootLayoutVersionHash = @import("artifact_serialize.zig").rootLayoutVersionHash;
+/// Bounds-check every relocatable marker of a serialized store.
+pub const validateSerialized = @import("artifact_serialize.zig").validateSerialized;
 /// Checked module data exported under the post-check-facing name.
 pub const CheckedModule = CheckedArtifact;
 
@@ -44,6 +50,10 @@ pub const TestEnv = @import("test/TestEnv.zig");
 pub const ReportBuilder = report.ReportBuilder;
 
 test "check tests" {
+    std.testing.refAllDecls(@import("callable_checking.zig"));
+    std.testing.refAllDecls(@import("checking_dependencies.zig"));
+    std.testing.refAllDecls(@import("checking_interface.zig"));
+    std.testing.refAllDecls(@import("inference_output.zig"));
     std.testing.refAllDecls(@import("Check.zig"));
     std.testing.refAllDecls(@import("exhaustive.zig"));
     std.testing.refAllDecls(@import("exhaustiveness_context.zig"));
@@ -79,6 +89,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/custom_num_type_test.zig"));
     std.testing.refAllDecls(@import("test/builtin_low_level_types_test.zig"));
     std.testing.refAllDecls(@import("test/builtin_scope_test.zig"));
+    std.testing.refAllDecls(@import("test/builtin_opacity_test.zig"));
     std.testing.refAllDecls(@import("test/num_type_inference_test.zig"));
     std.testing.refAllDecls(@import("test/unify_test.zig"));
     std.testing.refAllDecls(@import("test/instantiate_tag_union_test.zig"));
@@ -93,6 +104,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/exhaustiveness_test.zig"));
     std.testing.refAllDecls(@import("test/type_view_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9705_test.zig"));
+    std.testing.refAllDecls(@import("test/builtin_type_shadowing_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9709_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9710_test.zig"));
     std.testing.refAllDecls(@import("test/issue_9711_test.zig"));
@@ -163,6 +175,11 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_11886_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12318_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12309_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12489_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12553_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12586_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12587_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12677_test.zig"));
     std.testing.refAllDecls(@import("test/nominal_decl_growth_test.zig"));
     std.testing.refAllDecls(@import("test/frame_owned_judgment_test.zig"));
 

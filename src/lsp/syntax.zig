@@ -246,6 +246,7 @@ pub const SyntaxChecker = struct {
         checker: *SyntaxChecker,
         identity: ?DocumentIdentity,
         session: ?BuildSession,
+        handle: *BuildEnvHandle,
         env: *BuildEnv,
         absolute_path: []const u8,
         build_succeeded: bool,
@@ -521,6 +522,7 @@ pub const SyntaxChecker = struct {
                     .checker = self,
                     .identity = identity,
                     .session = null,
+                    .handle = handle,
                     .env = env,
                     .absolute_path = abs_path,
                     .build_succeeded = documentParsedCleanly(env, document.absolute_path),
@@ -541,6 +543,7 @@ pub const SyntaxChecker = struct {
                 .checker = self,
                 .identity = identity,
                 .session = null,
+                .handle = env_handle,
                 .env = env,
                 .absolute_path = abs_path,
                 .build_succeeded = false,
@@ -568,6 +571,7 @@ pub const SyntaxChecker = struct {
             .checker = self,
             .identity = identity,
             .session = session,
+            .handle = env_handle,
             .env = env,
             .absolute_path = abs_path,
             .build_succeeded = session.build_succeeded and documentParsedCleanly(env, session.absolute_path),
@@ -577,7 +581,71 @@ pub const SyntaxChecker = struct {
     }
 
     /// Check the file referenced by the URI and return diagnostics grouped by URI.
-    pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) CheckError![]Diagnostics.PublishDiagnostics {
+    /// The absolute path of an existing file, or null when it cannot be
+    /// resolved.
+    fn realAbsolutePath(self: *SyntaxChecker, path: []const u8) std.mem.Allocator.Error!?[:0]u8 {
+        return std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.Canceled,
+            error.DeviceBusy,
+            error.FileBusy,
+            error.FileNotFound,
+            error.FileSystem,
+            error.FileTooBig,
+            error.InputOutput,
+            error.IsDir,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.OperationUnsupported,
+            error.PathAlreadyExists,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.Unexpected,
+            error.UnrecognizedVolume,
+            => null,
+        };
+    }
+
+    /// Drop what was kept for a document the client closed: its last-built
+    /// content hash and its completion snapshot, which holds a whole build.
+    pub fn forget(self: *SyntaxChecker, uri: []const u8) std.mem.Allocator.Error!void {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+
+        const path = try uri_util.uriToPath(self.allocator, uri);
+        defer self.allocator.free(path);
+        const abs_path = try self.realAbsolutePath(path);
+        defer if (abs_path) |a| self.allocator.free(a);
+        const key: []const u8 = abs_path orelse path;
+
+        if (self.content_hashes.fetchRemove(key)) |removed| self.allocator.free(removed.key);
+        if (self.snapshot_envs.fetchRemove(key)) |removed| {
+            removed.value.release(owner_snapshot);
+            self.allocator.free(removed.key);
+        }
+    }
+
+    /// Check the document and return the diagnostics to publish, grouped by
+    /// URI. Once `cancel_request` is set the build is abandoned and this
+    /// returns `error.Canceled`, leaving every retained build, content hash,
+    /// and published-URI record as it was before the call.
+    pub fn check(
+        self: *SyntaxChecker,
+        uri: []const u8,
+        override_text: ?[]const u8,
+        workspace_root: ?[]const u8,
+        cancel_request: ?*const std.atomic.Value(bool),
+    ) CheckError![]Diagnostics.PublishDiagnostics {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
 
@@ -591,44 +659,18 @@ pub const SyntaxChecker = struct {
         }
 
         // Check if content has changed using hash comparison BEFORE building.
-        // This avoids unnecessary rebuilds on focus/blur events.
+        // This avoids unnecessary rebuilds on focus/blur events. The new hash
+        // is recorded only once the build completes, so a canceled build
+        // never makes the next check of the same text skip.
+        var hashed_path: ?[:0]u8 = null;
+        defer if (hashed_path) |a| self.allocator.free(a);
         if (override_text) |text| {
             const path = try uri_util.uriToPath(self.allocator, uri);
             defer self.allocator.free(path);
 
-            const abs_path: ?[:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.AccessDenied,
-                error.AntivirusInterference,
-                error.BadPathName,
-                error.Canceled,
-                error.DeviceBusy,
-                error.FileBusy,
-                error.FileNotFound,
-                error.FileSystem,
-                error.FileTooBig,
-                error.InputOutput,
-                error.IsDir,
-                error.NameTooLong,
-                error.NetworkNotFound,
-                error.NoDevice,
-                error.NoSpaceLeft,
-                error.NotDir,
-                error.OperationUnsupported,
-                error.PathAlreadyExists,
-                error.PermissionDenied,
-                error.PipeBusy,
-                error.ProcessFdQuotaExceeded,
-                error.SymLinkLoop,
-                error.SystemFdQuotaExceeded,
-                error.SystemResources,
-                error.Unexpected,
-                error.UnrecognizedVolume,
-                => null,
-            };
-            defer if (abs_path) |a| self.allocator.free(a);
+            hashed_path = try self.realAbsolutePath(path);
 
-            if (abs_path) |ap| {
+            if (hashed_path) |ap| {
                 const new_hash = contentHash(text);
                 const old_hash = self.content_hashes.get(ap);
 
@@ -653,23 +695,33 @@ pub const SyntaxChecker = struct {
                         new_hash[0..4].*,
                     });
                 }
-
-                const entry = try self.content_hashes.getOrPut(self.allocator, ap);
-                if (!entry.found_existing) {
-                    entry.key_ptr.* = self.allocator.dupe(u8, ap) catch |err| {
-                        self.content_hashes.removeByPtr(entry.key_ptr);
-                        return err;
-                    };
-                }
-                entry.value_ptr.* = new_hash;
             }
         }
 
-        const env_handle = try self.createFreshBuildEnv();
+        const env_handle = try self.createBuildEnv();
+        var env_handle_installed = false;
+        errdefer if (!env_handle_installed) env_handle.release(owner_build);
         const env = env_handle.envPtr();
+        env.setCancelRequest(cancel_request);
 
         var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text, self.workspace_root);
         defer session.deinit();
+        // The flag is reused for later checks, which this build, once
+        // retained for queries, must not observe.
+        env.setCancelRequest(null);
+
+        self.installBuildEnv(env_handle);
+        env_handle_installed = true;
+        if (hashed_path) |ap| {
+            const entry = try self.content_hashes.getOrPut(self.allocator, ap);
+            if (!entry.found_existing) {
+                entry.key_ptr.* = self.allocator.dupe(u8, ap) catch |err| {
+                    self.content_hashes.removeByPtr(entry.key_ptr);
+                    return err;
+                };
+            }
+            entry.value_ptr.* = contentHash(override_text.?);
+        }
 
         if (self.watch_inputs.len != 0) compile.watch_inputs.deinit(self.allocator, self.watch_inputs);
         self.watch_inputs = &.{};
@@ -757,6 +809,13 @@ pub const SyntaxChecker = struct {
         return false;
     }
 
+    fn publishListHasDiagnostics(publish_list: *const std.ArrayList(Diagnostics.PublishDiagnostics), uri: []const u8) bool {
+        for (publish_list.items) |set| {
+            if (set.diagnostics.len > 0 and std.mem.eql(u8, set.uri, uri)) return true;
+        }
+        return false;
+    }
+
     /// Ensure the checked URI is published, clear stale URIs from prior publishes,
     /// and refresh the set of URIs that currently have non-empty diagnostics.
     fn finishDiagnosticPublishes(
@@ -771,23 +830,40 @@ pub const SyntaxChecker = struct {
             });
         }
 
+        // Every URI that had diagnostics last time and is not published now
+        // gets an empty set, which clears it in the editor. In server sessions,
+        // root ownership and stale clearing are external.
         if (!self.root_owned_publication) {
-            var previous = self.published_diagnostic_uris.keyIterator();
-            while (previous.next()) |old_uri| {
-                if (!publishListContainsUri(publish_list, old_uri.*)) {
-                    const uri = try self.allocator.dupe(u8, old_uri.*);
-                    errdefer self.allocator.free(uri);
-                    try publish_list.append(self.allocator, .{ .uri = uri, .diagnostics = &.{} });
+            var it = self.published_diagnostic_uris.keyIterator();
+            while (it.next()) |prev| {
+                if (!publishListContainsUri(publish_list, prev.*)) {
+                    const stale_uri = try self.allocator.dupe(u8, prev.*);
+                    errdefer self.allocator.free(stale_uri);
+                    try publish_list.append(self.allocator, .{
+                        .uri = stale_uri,
+                        .diagnostics = &.{},
+                    });
                 }
             }
         }
-        // In server sessions, root ownership and stale clearing are external.
-        self.clearPublishedDiagnosticUris();
+
+        // Keep the URIs that still have diagnostics, so a document whose
+        // errors persist across edits keeps its owned key.
+        var keys = self.published_diagnostic_uris.keyIterator();
+        while (keys.next()) |key| {
+            if (publishListHasDiagnostics(publish_list, key.*)) continue;
+            const owned = key.*;
+            self.published_diagnostic_uris.removeByPtr(key);
+            self.allocator.free(owned);
+        }
         for (publish_list.items) |set| {
             if (set.diagnostics.len == 0) continue;
-            const owned = try self.allocator.dupe(u8, set.uri);
-            const gop = try self.published_diagnostic_uris.getOrPut(self.allocator, owned);
-            if (gop.found_existing) self.allocator.free(owned);
+            const gop = try self.published_diagnostic_uris.getOrPut(self.allocator, set.uri);
+            if (gop.found_existing) continue;
+            gop.key_ptr.* = self.allocator.dupe(u8, set.uri) catch |err| {
+                self.published_diagnostic_uris.removeByPtr(gop.key_ptr);
+                return err;
+            };
         }
     }
 
@@ -813,9 +889,14 @@ pub const SyntaxChecker = struct {
     /// Creates a fresh BuildEnv for a new build.
     /// The previous build_env is moved to previous_build_env for module lookups.
     fn createFreshBuildEnv(self: *SyntaxChecker) SyntaxBuildEnvError!*BuildEnvHandle {
-        self.logDebug(.build, "createFreshBuildEnv: prev_build_env={any} build_env={any}", .{ self.previous_build_env != null, self.build_env != null });
+        const handle = try self.createBuildEnv();
+        self.installBuildEnv(handle);
+        return handle;
+    }
 
-        // Release the previous_build_env owner first.
+    /// Make `handle`, created by `createBuildEnv`, the current build_env.
+    /// The current one becomes previous_build_env for module lookups.
+    fn installBuildEnv(self: *SyntaxChecker, handle: *BuildEnvHandle) void {
         if (self.previous_build_env) |old_prev| {
             old_prev.release(owner_previous);
             self.previous_build_env = null;
@@ -826,7 +907,20 @@ pub const SyntaxChecker = struct {
             current.retain(owner_previous);
             current.release(owner_build);
             self.previous_build_env = current;
-            self.build_env = null;
+        }
+        self.build_env = handle;
+    }
+
+    /// Create a fresh BuildEnv owned under `owner_build` but not yet
+    /// installed. previous_build_env is released first, since installing
+    /// the new one replaces it, so at most two builds are retained while
+    /// this one runs.
+    fn createBuildEnv(self: *SyntaxChecker) SyntaxBuildEnvError!*BuildEnvHandle {
+        self.logDebug(.build, "createBuildEnv: prev_build_env={any} build_env={any}", .{ self.previous_build_env != null, self.build_env != null });
+
+        if (self.previous_build_env) |old_prev| {
+            old_prev.release(owner_previous);
+            self.previous_build_env = null;
         }
 
         // Create a fresh BuildEnv. The LSP reuses one pre-published Builtin
@@ -856,9 +950,7 @@ pub const SyntaxChecker = struct {
         }
 
         const debug_handles = self.debug.build or self.debug.syntax or self.debug.server;
-        const handle = try BuildEnvHandle.create(self.allocator, env, cwd, owner_build, debug_handles);
-        self.build_env = handle;
-        return handle;
+        return BuildEnvHandle.create(self.allocator, env, cwd, owner_build, debug_handles);
     }
 
     fn sharedBuiltinModules(self: *SyntaxChecker) (Allocator.Error || eval.BuiltinModules.InitError)!*eval.BuiltinModules {
@@ -960,16 +1052,20 @@ pub const SyntaxChecker = struct {
     /// Get the BuildEnv that should be used for module lookups (semantic tokens, etc.).
     /// Prefers the current build_env if it has modules, otherwise falls back to previous_build_env.
     pub fn getModuleLookupEnv(self: *SyntaxChecker) ?*BuildEnv {
+        const handle = self.getModuleLookupHandle() orelse return null;
+        return handle.envPtr();
+    }
+
+    /// The handle owning `getModuleLookupEnv`'s env.
+    fn getModuleLookupHandle(self: *SyntaxChecker) ?*BuildEnvHandle {
         // Prefer current build_env if it exists and has modules
         if (self.build_env) |handle| {
-            const env = handle.envPtr();
-            if (env.hasCompiledModules()) {
-                return env;
+            if (handle.envPtr().hasCompiledModules()) {
+                return handle;
             }
         }
         // Fall back to previous_build_env
-        if (self.previous_build_env) |handle| return handle.envPtr();
-        return null;
+        return self.previous_build_env;
     }
 
     /// Get the cached snapshot BuildEnv for completions.
@@ -1275,9 +1371,9 @@ pub const SyntaxChecker = struct {
         // When we already have a lookup expression, resolve directly to avoid
         // region/offset ambiguity around delimiters.
         const documentation = if (lookup_result_opt) |lookup_result|
-            try self.resolveDocForLookup(env, module_env, build.absolute_path, lookup_result)
+            try self.resolveDocForLookup(env, build.handle, module_env, build.absolute_path, lookup_result, hover_type_var)
         else
-            try self.findDocumentationForDeclarationName(module_env, target_offset);
+            try self.findDocumentationForDeclarationName(env, build.handle, module_env, target_offset, hover_type_var);
 
         defer if (documentation) |doc| self.allocator.free(doc);
 
@@ -1296,28 +1392,33 @@ pub const SyntaxChecker = struct {
         };
     }
 
-    /// Documentation of the declaration whose name is at `offset`: a def's
-    /// pattern, a declaration statement's pattern, or a type declaration's
-    /// header.
-    fn findDocumentationForDeclarationName(self: *SyntaxChecker, module_env: *ModuleEnv, offset: u32) Allocator.Error!?[]const u8 {
+    /// Documentation of the declaration whose name is at `offset`: a binding
+    /// (see `bindingDoc`) or a type declaration's header.
+    fn findDocumentationForDeclarationName(
+        self: *SyntaxChecker,
+        env: *BuildEnv,
+        handle: *BuildEnvHandle,
+        module_env: *ModuleEnv,
+        offset: u32,
+        type_var: types.Var,
+    ) Allocator.Error!?[]const u8 {
         const source = module_env.common.source;
         const store = &module_env.store;
 
-        for (store.sliceDefs(module_env.all_defs)) |def_idx| {
-            const def = store.getDef(def_idx);
-            if (cir_queries.regionContainsOffset(store.getPatternRegion(def.pattern), offset)) {
-                return try doc_comments.extractDocForDef(self.allocator, source, store, def);
+        for (try handle.scopeBindings(module_env)) |binding| {
+            if (cir_queries.regionContainsOffset(store.getPatternRegion(binding.pattern_idx), offset)) {
+                return try self.bindingDoc(env, module_env, binding.owner, type_var);
             }
         }
 
         for (store.sliceStatements(module_env.all_statements)) |stmt_idx| {
             const stmt = store.getSourceStatement(stmt_idx);
-            const name_region = switch (stmt) {
-                .s_decl => |decl| store.getPatternRegion(decl.pattern),
-                .s_var => |var_stmt| store.getPatternRegion(var_stmt.pattern_idx),
-                .s_var_uninitialized => |var_stmt| store.getPatternRegion(var_stmt.pattern_idx),
-                .s_alias_decl => |alias| store.getRegionAt(@fromBackingInt(@backingInt(alias.header))),
-                .s_nominal_decl => |nominal| store.getRegionAt(@fromBackingInt(@backingInt(nominal.header))),
+            const header = switch (stmt) {
+                .s_alias_decl => |alias| alias.header,
+                .s_nominal_decl => |nominal| nominal.header,
+                .s_decl,
+                .s_var,
+                .s_var_uninitialized,
                 .s_reassign,
                 .s_crash,
                 .s_dbg,
@@ -1336,7 +1437,7 @@ pub const SyntaxChecker = struct {
                 .s_runtime_error,
                 => continue,
             };
-            if (cir_queries.regionContainsOffset(name_region, offset)) {
+            if (cir_queries.regionContainsOffset(store.getRegionAt(@fromBackingInt(@backingInt(header))), offset)) {
                 return try doc_comments.extractDocForStatement(self.allocator, source, store, stmt, stmt_idx);
             }
         }
@@ -1344,51 +1445,74 @@ pub const SyntaxChecker = struct {
         return null;
     }
 
-    /// Resolve documentation for a local lookup, external lookup, or attached method dispatch.
-    fn resolveDocForLookup(
+    /// Documentation of a binding of type `type_var`: the doc comment of the
+    /// declaration that owns it, or, when it has none, the doc comment of the
+    /// declaration of its checked type.
+    fn bindingDoc(
         self: *SyntaxChecker,
         env: *BuildEnv,
         module_env: *ModuleEnv,
+        owner: scope_map.Binding.Owner,
+        type_var: types.Var,
+    ) Allocator.Error!?[]const u8 {
+        if (try doc_comments.extractDocForBinding(self.allocator, module_env.common.source, &module_env.store, owner)) |doc| return doc;
+        return try self.findTypeDeclarationDoc(env, module_env, type_var);
+    }
+
+    /// Documentation of the alias or nominal type declaration that `type_var`
+    /// resolves to, read from the module that declares it.
+    fn findTypeDeclarationDoc(self: *SyntaxChecker, env: *BuildEnv, module_env: *ModuleEnv, type_var: types.Var) Allocator.Error!?[]const u8 {
+        const type_owner = resolveMethodOwnerForLookup(module_env, type_var) orelse return null;
+        const owner_env = methodOwnerModuleEnv(env, module_env, type_owner) orelse return null;
+        const owner_store = &owner_env.store;
+        return try doc_comments.extractDocForStatement(
+            self.allocator,
+            owner_env.common.source,
+            owner_store,
+            owner_store.getSourceStatement(type_owner.owner),
+            type_owner.owner,
+        );
+    }
+
+    /// Resolve documentation for a local lookup, external lookup, or attached
+    /// method dispatch. A looked-up value whose declaration has no doc comment
+    /// shows the doc comment of its type's declaration.
+    fn resolveDocForLookup(
+        self: *SyntaxChecker,
+        env: *BuildEnv,
+        handle: *BuildEnvHandle,
+        module_env: *ModuleEnv,
         doc_path: []const u8,
         lookup_result: cir_queries.LookupResult,
+        type_var: types.Var,
     ) Allocator.Error!?[]const u8 {
-        const source = module_env.common.source;
-        const store = &module_env.store;
         const expr_idx = switch (lookup_result) {
             .expr => |idx| idx,
             .field_access => return null,
         };
-        const expr = store.getSourceExpr(expr_idx);
+        const expr = module_env.store.getSourceExpr(expr_idx);
 
         const expr_tag = std.meta.activeTag(expr);
         if (expr_tag == .e_lookup_local) {
             const lookup = expr.e_lookup_local;
-            // Local lookup - resolve to the owning def or statement
-            if (module_lookup.findDefOwningPattern(module_env, lookup.pattern_idx)) |def| {
-                return try doc_comments.extractDocForDef(self.allocator, source, store, def);
+            for (try handle.scopeBindings(module_env)) |binding| {
+                if (binding.pattern_idx == lookup.pattern_idx) {
+                    return try self.bindingDoc(env, module_env, binding.owner, type_var);
+                }
             }
-            if (module_lookup.findStatementOwningPattern(module_env, lookup.pattern_idx)) |result| {
-                return try doc_comments.extractDocForStatement(self.allocator, source, store, result.stmt, result.idx);
-            }
-
-            // Some local bindings are nested inside expressions (e.g. block
-            // locals) and are not owned by top-level defs/statements. Fall
-            // back to doc extraction directly from the bound pattern region.
-            return try doc_comments.extractDocCommentBefore(
-                self.allocator,
-                source,
-                store.getPatternRegion(lookup.pattern_idx).start.offset,
-            );
+            return null;
         }
         if (expr_tag == .e_lookup_external) {
             const lookup = expr.e_lookup_external;
             const target_env = importedEnvForImport(env, module_env, doc_path, lookup.module_idx) orelse return null;
-            return try findDocForValueNode(self.allocator, target_env, lookup.target_node_idx);
+            return try findDocForValueNode(self.allocator, target_env, lookup.target_node_idx) orelse
+                try self.findTypeDeclarationDoc(env, module_env, type_var);
         }
         if (expr_tag == .e_lookup_associated_resolved) {
             const resolved = expr.e_lookup_associated_resolved;
             const target_env = moduleEnvForIdentity(env, module_env, resolved.module_identity) orelse return null;
-            return try doc_comments.extractDocForDef(self.allocator, target_env.common.source, &target_env.store, target_env.store.getDef(resolved.target_def_idx));
+            return try doc_comments.extractDocForDef(self.allocator, target_env.common.source, &target_env.store, target_env.store.getDef(resolved.target_def_idx)) orelse
+                try self.findTypeDeclarationDoc(env, module_env, type_var);
         }
         if (expr_tag == .e_dispatch_call) {
             const method_call = expr.e_dispatch_call;
@@ -1881,7 +2005,7 @@ pub const SyntaxChecker = struct {
         const def = store.getDef(@fromBackingInt(value_node));
         const ident = module_lookup.extractIdentFromPattern(store, def.pattern) orelse return null;
         for (module_env.method_idents.entries.items) |entry| {
-            if (entry.key.owner_module == ModuleEnv.MethodOwner.self_module and entry.value.eql(ident)) return entry.key.owner;
+            if (entry.value.eql(ident)) return entry.key.owner;
         }
         return null;
     }
@@ -3000,17 +3124,15 @@ pub const SyntaxChecker = struct {
     /// `new_name`, so an overlap is refused. Bindings in unrelated scopes do
     /// not overlap and stay renameable.
     fn checkNewNameAgainstScope(
-        self: *SyntaxChecker,
+        handle: *BuildEnvHandle,
         module_env: *ModuleEnv,
         target_pattern: CIR.Pattern.Idx,
         new_name: []const u8,
     ) Allocator.Error!ScopeCheck {
-        var scopes = scope_map.ScopeMap.init(self.allocator);
-        defer scopes.deinit();
-        try scopes.build(module_env);
+        const bindings = try handle.scopeBindings(module_env);
 
         var target_binding: ?scope_map.Binding = null;
-        for (scopes.bindings.items) |binding| {
+        for (bindings) |binding| {
             if (@backingInt(binding.pattern_idx) == @backingInt(target_pattern)) {
                 target_binding = binding;
                 break;
@@ -3018,14 +3140,12 @@ pub const SyntaxChecker = struct {
         }
 
         // Without the renamed binding's own extent there is nothing to compare
-        // against. `ScopeMap` records a destructured field under the extent of
-        // the pattern that destructures it, for one, so not every binding is
-        // found by its own index. Refuse, but say which of the two happened:
+        // against. Refuse, but say which of the two happened:
         // "the name is taken" would be a claim about the code that has not
         // been established.
         const target = target_binding orelse return .scope_unavailable;
 
-        for (scopes.bindings.items) |binding| {
+        for (bindings) |binding| {
             if (@backingInt(binding.pattern_idx) == @backingInt(target_pattern)) continue;
             if (!std.mem.eql(u8, module_env.common.idents.getText(binding.ident), new_name)) continue;
             if (binding.visible_from <= target.visible_to and target.visible_from <= binding.visible_to) {
@@ -3173,7 +3293,7 @@ pub const SyntaxChecker = struct {
             return RenameOutcome{ .rejected = .{ .bad_new_name = rejection } };
         }
 
-        switch (try self.checkNewNameAgainstScope(module_env, target.pattern, new_name)) {
+        switch (try checkNewNameAgainstScope(build.handle, module_env, target.pattern, new_name)) {
             .clear => {},
             .taken => return RenameOutcome{ .rejected = .name_already_in_scope },
             .scope_unavailable => return RenameOutcome{ .rejected = .scope_unavailable },
@@ -3312,12 +3432,10 @@ pub const SyntaxChecker = struct {
     }
 
     /// Resolve a local binding's type var for chained access completion.
-    fn resolveLocalBindingTypeVar(self: *SyntaxChecker, module_env: *ModuleEnv, name: []const u8, name_start: u32, oom: *?Allocator.Error) ?types.Var {
-        var scope = scope_map.ScopeMap.init(self.allocator);
-        defer scope.deinit();
-        noteOom(oom, scope.build(module_env)) orelse return null;
+    fn resolveLocalBindingTypeVar(builder: *completion_builder.CompletionBuilder, module_env: *ModuleEnv, name: []const u8, name_start: u32, oom: *?Allocator.Error) ?types.Var {
+        const bindings = noteOom(oom, builder.scopeBindings(module_env)) orelse return null;
 
-        for (scope.bindings.items) |binding| {
+        for (bindings) |binding| {
             const binding_name = module_env.getIdentText(binding.ident);
             if (!scope_map.ScopeMap.isVisibleAt(binding, name_start)) continue;
             if (std.mem.eql(u8, binding_name, name)) {
@@ -3408,7 +3526,7 @@ pub const SyntaxChecker = struct {
             return .{ .module_env = resolved_env, .type_var = type_var };
         }
 
-        var type_var = self.resolveLocalBindingTypeVar(module_env, first.segment, chain_start, oom) orelse return null;
+        var type_var = resolveLocalBindingTypeVar(builder, module_env, first.segment, chain_start, oom) orelse return null;
         while (nextChainSegment(access_chain, idx)) |segment| {
             idx = segment.next;
             const next_var = builder.getFieldTypeVarFromTypeVar(module_env, type_var, segment.segment) orelse return null;
@@ -3522,18 +3640,11 @@ pub const SyntaxChecker = struct {
         // Compute cursor offset for scope-based completions
         const cursor_offset = completion_context.computeOffset(source, line, character);
 
-        // Collect completions based on context
+        // Collect completions based on context. The items and their strings
+        // live in one arena that the result owns.
+        var arena = base.SingleThreadArena.init(self.allocator);
+        errdefer arena.deinit();
         var items: std.ArrayList(completion_handler.CompletionItem) = .empty;
-        errdefer {
-            for (items.items) |item| {
-                self.allocator.free(item.label);
-                if (item.detail) |d| self.allocator.free(d);
-                if (item.documentation) |doc| self.allocator.free(doc);
-                if (item.sortText) |sort_text| self.allocator.free(sort_text);
-                if (item.insertText) |insert_text| self.allocator.free(insert_text);
-            }
-            items.deinit(self.allocator);
-        }
 
         // Try to get the module environment for richer completions
         // ALWAYS try snapshot first for completion - typing usually produces incomplete code
@@ -3541,6 +3652,8 @@ pub const SyntaxChecker = struct {
         // Track which BuildEnv backs the chosen module_env_opt so module member
         // lookups stay consistent with snapshot/previous envs.
         var module_lookup_env: *BuildEnv = env;
+        // The handle owning `module_env_opt`, which holds its scope map.
+        var module_handle: *BuildEnvHandle = build.handle;
         const module_env_opt: ?*ModuleEnv = blk: {
             if (!build_has_reports) {
                 if (build.getModuleEnv()) |module_env| {
@@ -3553,6 +3666,7 @@ pub const SyntaxChecker = struct {
                 if (snapshot_module_env) |module_env| {
                     used_snapshot = true;
                     module_lookup_env = snapshot_handle.envPtr();
+                    module_handle = snapshot_handle;
                     break :blk module_env;
                 }
             }
@@ -3563,15 +3677,19 @@ pub const SyntaxChecker = struct {
                 if (prev_module_env) |module_env| {
                     used_snapshot = true;
                     module_lookup_env = previous_handle.envPtr();
+                    module_handle = previous_handle;
                     break :blk module_env;
                 }
             }
 
             // Fall back to current build only if no snapshot available and build succeeded
             if (build.build_succeeded and !build_has_reports) {
-                if (self.getModuleEnvByPath(build.absolute_path)) |module_env| {
-                    module_lookup_env = env;
-                    break :blk module_env;
+                if (self.getModuleLookupHandle()) |lookup_handle| {
+                    if (self.getModuleEnvByPathInEnv(lookup_handle.envPtr(), build.absolute_path)) |module_env| {
+                        module_lookup_env = env;
+                        module_handle = lookup_handle;
+                        break :blk module_env;
+                    }
                 }
 
                 module_lookup_env = env;
@@ -3585,7 +3703,7 @@ pub const SyntaxChecker = struct {
 
         // Initialize CompletionBuilder for deduplication and organized completion item building
         // Provide the builtin module env so completion can resolve builtin method data.
-        var builder = completion_builder.CompletionBuilder.initWithDebug(self.allocator, self.std_io, &items, env.builtin_modules.builtin_module.env, self.debug, self.log_file);
+        var builder = completion_builder.CompletionBuilder.initWithDebug(self.allocator, arena.allocator(), self.std_io, &items, env.builtin_modules.builtin_module.env, module_handle, self.debug, self.log_file);
         defer builder.deinit();
 
         switch (context) {
@@ -3734,20 +3852,13 @@ pub const SyntaxChecker = struct {
         // remains robust even when environments expose very large symbol sets.
         const max_completion_items: usize = 512;
         if (items.items.len > max_completion_items) {
-            // Free the allocated strings in items being dropped
-            for (items.items[max_completion_items..]) |item| {
-                self.allocator.free(item.label);
-                if (item.detail) |d| self.allocator.free(d);
-                if (item.documentation) |doc| self.allocator.free(doc);
-                if (item.sortText) |sort_text| self.allocator.free(sort_text);
-                if (item.insertText) |insert_text| self.allocator.free(insert_text);
-            }
             items.items.len = max_completion_items;
         }
 
         return .{
-            .items = try items.toOwnedSlice(self.allocator),
+            .items = items.items,
             .is_incomplete = false,
+            .arena = arena,
         };
     }
 };

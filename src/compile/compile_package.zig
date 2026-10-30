@@ -174,6 +174,10 @@ pub const TypeCheckOutput = struct {
     checker: Check,
     publication: CheckedArtifact.CheckedModuleArtifact,
     publication_owned: bool = true,
+    inference_reused: bool = false,
+    owner_bindings: u32 = 0,
+    reference_bindings: u32 = 0,
+    diagnostics_replayed: u32 = 0,
 
     pub fn deinit(self: *TypeCheckOutput) void {
         if (self.publication_owned) self.publication.deinit(self.publication.canonical_names.allocator);
@@ -253,7 +257,7 @@ pub fn buildCheckOwnerEnvs(
         }
     }
 
-    var seen_public_dependencies = std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator);
+    var seen_public_dependencies = std.AutoHashMap(CheckedArtifact.CheckedModuleDigest, void).init(allocator);
     defer seen_public_dependencies.deinit();
 
     for (imported_artifacts) |imported_artifact| {
@@ -273,7 +277,7 @@ fn appendCheckOwnerEnvPublicDependencies(
     allocator: Allocator,
     owner_envs: *std.ArrayList(*const ModuleEnv),
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
-    seen_public_dependencies: *std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void),
+    seen_public_dependencies: *std.AutoHashMap(CheckedArtifact.CheckedModuleDigest, void),
     view: CheckedArtifact.ImportedModuleView,
 ) Allocator.Error!void {
     for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
@@ -318,7 +322,7 @@ fn moduleEnvIdentitiesMatch(a: *const ModuleEnv, b: *const ModuleEnv) bool {
 
 fn availableArtifactByKey(
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
-    key: CheckedArtifact.CheckedModuleArtifactKey,
+    key: CheckedArtifact.ModuleId,
 ) ?CheckedArtifact.ImportedModuleView {
     for (available_artifacts) |artifact| {
         if (std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) return artifact;
@@ -495,9 +499,11 @@ pub fn typeCheckModule(
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey,
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
     validation: Can.Validation,
+    source_pin_validation: [32]u8,
     ctfe_options: eval.CompileTimeFinalization.Options,
     deferred_imports: can.ImportResolution.Imports,
     missing_public_types: []const []const u8,
+    inference_cache: ?@import("inference_cache.zig").Cache,
 ) TypeCheckModuleError!TypeCheckOutput {
     const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
 
@@ -531,6 +537,19 @@ pub fn typeCheckModule(
         .missing_public_types = missing_public_types,
     });
 
+    var checking_scope = try check.CheckingInterface.makeScope(check_alloc, env, builtin_module_env, imported_envs, owner_envs);
+    defer checking_scope.deinit();
+    // The platform's complete checking surface already belongs to the scope.
+    // Select its owner parameter here; full platform implementation identity
+    // remains an input to publication below, never inference admission.
+    const requirement_owner = if (platform_requirements) |requirements|
+        checking_scope.ordinal(requirements.env.contentIdentityHash().?.*)
+    else
+        null;
+    const inference_key = CheckedArtifact.inferenceKeyFromModuleEnv(env, checking_scope.digest(), requirement_owner, explicit_roots, validation, source_pin_validation, missing_public_types);
+    const loaded = if (inference_cache) |cache| try cache.load(inference_key, env, &checking_scope) else null;
+    defer if (loaded) |capsule| capsule.deinit();
+
     var checker = try Check.initWithOwnerModules(
         check_alloc,
         &env.types,
@@ -550,7 +569,12 @@ pub fn typeCheckModule(
     // until after platform requirements are checked, so numeric literals can be
     // constrained by platform types (e.g., I64) before defaulting to Dec.
     // TODO: re-enable defer_numeric_defaults once ModuleEnv has the field
-    try checker.checkFile();
+    if (loaded) |capsule| {
+        try capsule.metadata.install(&checker, &checking_scope);
+    } else {
+        try checker.checkFile();
+        if (inference_cache) |cache| cache.store(inference_key, env, &checker, &checking_scope);
+    }
 
     module_envs_map.deinit();
 
@@ -582,6 +606,10 @@ pub fn typeCheckModule(
     return .{
         .checker = checker,
         .publication = checked_artifact,
+        .inference_reused = loaded != null,
+        .owner_bindings = if (loaded != null) @intCast(env.module_identities.count()) else 0,
+        .reference_bindings = if (loaded) |capsule| std.math.cast(u32, capsule.metadata.foreign_references.len) orelse return error.OutOfMemory else 0,
+        .diagnostics_replayed = if (loaded) |capsule| std.math.cast(u32, capsule.metadata.outcome.problems.len + env.diagnosticCount()) orelse return error.OutOfMemory else 0,
     };
 }
 

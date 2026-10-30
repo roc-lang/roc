@@ -24,6 +24,8 @@
 
 const std = @import("std");
 const invariant = @import("base").invariant;
+const SingleThreadArena = @import("base").SingleThreadArena;
+const collections = @import("collections");
 const builtin = @import("builtin");
 const backend = @import("backend");
 const layout_mod = @import("layout");
@@ -56,6 +58,7 @@ pub const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
 /// output used by test roots; non-test entrypoints initialize them to zero.
 /// Build the explicit function table consumed by in-process machine code.
 pub fn nativeFnTable() BoxyNativeFnTable {
+    @import("base").dev_diagnostics.traceBoxyWork("native-functions");
     var table: BoxyNativeFnTable = undefined;
     inline for (@typeInfo(BoxyBuiltinFn).@"enum".field_values) |field_value| {
         const boxy_fn: BoxyBuiltinFn = @fromBackingInt(@intCast(field_value));
@@ -92,7 +95,6 @@ const RegisteredProc = struct {
 };
 
 const RegisteredErasedProc = struct {
-    proc_id: u32,
     ret_layout: layout_mod.Idx,
     metadata_offset: u32,
     arg_layouts: LIR.BoxySpan,
@@ -116,12 +118,13 @@ pub const GlobalBoxyRuntime = struct {
     runtime_boxy_tag_payload_descs: std.ArrayList(LirProgram.BoxyTagPayloadDesc) = .empty,
     runtime_boxy_dicts: boxy_runtime.RuntimeBoxyDicts = .{},
     /// Backs runtime-materialized descriptors; they live until deinit.
-    desc_arena: std.heap.ArenaAllocator,
+    desc_arena: SingleThreadArena,
     /// Backs value temporaries; reset when the outermost wrapper call
     /// returns.
-    value_scratch: std.heap.ArenaAllocator,
+    value_scratch: SingleThreadArena,
     call_depth: usize = 0,
-    procs: std.AutoHashMapUnmanaged(u32, RegisteredProc) = .empty,
+    /// Registered dictionary workers, by LIR proc id.
+    procs: collections.DenseMapUnmanaged(u32, RegisteredProc) = .empty,
     /// Return layout of each Roc-created erased-callable proc, keyed by the
     /// worker's runtime code address. An erased call reads the actual return
     /// layout here to materialize the worker's result into the caller's
@@ -498,6 +501,9 @@ pub fn swapActiveRuntime(runtime: ?*GlobalBoxyRuntime) ?*GlobalBoxyRuntime {
     return ActiveRuntimeSelection.swap(runtime);
 }
 
+/// Runtime archives linked into user programs reach this through a sidecar
+/// view, so it reads none of the compiler's developer diagnostics; the
+/// compiler-side entry points trace Boxy runtime creation themselves.
 fn createRuntime(
     gpa: Allocator,
     store: *const LirStore,
@@ -510,8 +516,8 @@ fn createRuntime(
     g.* = .{
         .gpa = gpa,
         .store_shell = LirStore.init(gpa),
-        .desc_arena = std.heap.ArenaAllocator.init(gpa),
-        .value_scratch = std.heap.ArenaAllocator.init(gpa),
+        .desc_arena = SingleThreadArena.init(gpa),
+        .value_scratch = SingleThreadArena.init(gpa),
         .runtime = .{
             .store = store,
             .layout_store = layout_store,
@@ -553,6 +559,8 @@ pub fn createRuntimeFromStores(
     tables: BoxyTables,
     roc_ops: *RocOps,
 ) error{OutOfMemory}!*GlobalBoxyRuntime {
+    store.requireBoxy();
+    @import("base").dev_diagnostics.traceBoxyWork("runtime");
     return createRuntime(gpa, store, layout_store, tables, roc_ops);
 }
 
@@ -566,6 +574,7 @@ pub fn initGlobal(
     roc_ops: *RocOps,
 ) error{ OutOfMemory, AlreadyInitialized }!void {
     if (global != null) return error.AlreadyInitialized;
+    @import("base").dev_diagnostics.traceBoxyWork("runtime");
     global = try createRuntime(gpa, store, layout_store, tables, roc_ops);
 }
 
@@ -615,6 +624,7 @@ pub fn createRuntimeFromSidecarView(
         .erased_arg_desc_params = view.tables.erased_arg_desc_params,
     };
     const g = try createRuntime(gpa, undefined, &view.layouts, tables, roc_ops);
+    g.store_shell.runtime_contract = .boxy;
     g.store_shell.boxy_names = view.names;
     g.runtime.store = &g.store_shell;
     return g;
@@ -708,7 +718,7 @@ const AbiHooks = struct {
     /// Crash at code checking rejected and already reported.
     pub fn crashCheckedError(_: AbiHooks, message: []const u8) Error {
         builtins.dev_wrappers.roc_builtins_checked_error_crashed(message.ptr, message.len);
-        unreachable;
+        unreachable; // roc_builtins_checked_error_crashed ends in the noreturn RocOps.crash
     }
 
     /// Call the `kind` method slot the first argument's descriptor carries
@@ -784,7 +794,7 @@ const AbiHooks = struct {
             .@"4" => scratch.alignedAlloc(u8, .@"4", sa.size),
             .@"8" => scratch.alignedAlloc(u8, .@"8", sa.size),
             .@"16" => scratch.alignedAlloc(u8, .@"16", sa.size),
-            _ => unreachable,
+            _ => invariant("boxy ABI layout alignment {d} exceeds 16 bytes", .{sa.alignment.toByteUnits()}),
         } catch return error.OutOfMemory;
         return Value.fromSlice(slice);
     }
@@ -912,13 +922,10 @@ fn abiCrashMissingDescriptorCapture(
 
 fn abiCrashNullErasedArgDescriptor(
     g: *GlobalBoxyRuntime,
-    proc_id: u32,
     key: LIR.ErasedArgDescKey,
 ) noreturn {
     var message: CrashMessage = .{};
-    message.str("boxy runtime erased call supplied a null descriptor to proc ");
-    message.uint(proc_id);
-    message.str(" for key (");
+    message.str("boxy runtime erased call supplied a null descriptor for key (");
     message.uint(key.arg_index);
     message.str(", ");
     message.uint(key.descriptor_index);
@@ -928,14 +935,11 @@ fn abiCrashNullErasedArgDescriptor(
 
 fn abiCrashMissingErasedArgDescriptor(
     g: *GlobalBoxyRuntime,
-    proc_id: u32,
     key: LIR.ErasedArgDescKey,
     supplied_keys: []const LIR.ErasedArgDescKey,
 ) noreturn {
     var message: CrashMessage = .{};
-    message.str("boxy runtime erased proc ");
-    message.uint(proc_id);
-    message.str(" required descriptor key (");
+    message.str("boxy runtime erased proc required descriptor key (");
     message.uint(key.arg_index);
     message.str(", ");
     message.uint(key.descriptor_index);
@@ -946,13 +950,10 @@ fn abiCrashMissingErasedArgDescriptor(
 
 fn abiCrashDuplicateErasedArgDescriptor(
     g: *GlobalBoxyRuntime,
-    proc_id: u32,
     key: LIR.ErasedArgDescKey,
 ) noreturn {
     var message: CrashMessage = .{};
-    message.str("boxy runtime erased call supplied duplicate descriptors to proc ");
-    message.uint(proc_id);
-    message.str(" for key (");
+    message.str("boxy runtime erased call supplied duplicate descriptors for key (");
     message.uint(key.arg_index);
     message.str(", ");
     message.uint(key.descriptor_index);
@@ -1067,7 +1068,6 @@ pub fn roc_boxy_register_proc(
 /// address is the relocated runtime address.
 pub fn roc_boxy_register_erased_proc(
     fn_ptr: ?*const anyopaque,
-    proc_id: u32,
     ret_layout: u32,
     metadata_offset: u32,
     arg_layouts_start: u32,
@@ -1087,7 +1087,6 @@ pub fn roc_boxy_register_erased_proc(
         abiCrash(g, "erased proc argument-layout registration");
     }
     g.erased_procs.put(g.gpa, @intFromPtr(ptr), .{
-        .proc_id = proc_id,
         .ret_layout = layoutIdx(ret_layout),
         .metadata_offset = metadata_offset,
         .arg_layouts = .{
@@ -1147,18 +1146,18 @@ fn erasedInvocationCaptureWithKeys(
         for (keys, 0..) |key, desc_index| {
             if (!std.meta.eql(key, offset.key)) continue;
             if (matching_desc_index != null) {
-                abiCrashDuplicateErasedArgDescriptor(g, registered.proc_id, offset.key);
+                abiCrashDuplicateErasedArgDescriptor(g, offset.key);
             }
             matching_desc_index = desc_index;
         }
         const desc_index = matching_desc_index orelse
-            abiCrashMissingErasedArgDescriptor(g, registered.proc_id, offset.key, keys);
+            abiCrashMissingErasedArgDescriptor(g, offset.key, keys);
         const destination = @as(usize, registered.capture_offset_base) + offset.offset;
         if (destination + @sizeOf(?*const BoxyTypeDesc) > invocation.len) {
             abiCrash(g, "erased invocation descriptor destination");
         }
         const desc = descs[desc_index] orelse
-            abiCrashNullErasedArgDescriptor(g, registered.proc_id, offset.key);
+            abiCrashNullErasedArgDescriptor(g, offset.key);
         const payload_index = @backingInt(desc.payload_layout);
         if (payload_index >= g.runtime.layout_store.layoutCount()) {
             abiCrash(g, "erased invocation descriptor payload layout");
@@ -2465,10 +2464,9 @@ pub fn roc_boxy_call_dict(
     }
     const raw_hidden: []const usize = if (hidden_args) |h| h[0..hidden_len] else &.{};
     const hidden_values = scratch.alloc(Value, raw_hidden.len) catch abiCrash(g, "dictionary call hidden argument collection");
-    for (raw_hidden, 0..) |raw, i| {
-        const slot = scratch.alloc(usize, 1) catch abiCrash(g, "dictionary call hidden argument collection");
-        slot[0] = raw;
-        hidden_values[i] = .{ .ptr = @ptrCast(slot.ptr) };
+    const hidden_slots = scratch.dupe(usize, raw_hidden) catch abiCrash(g, "dictionary call hidden argument collection");
+    for (hidden_slots, 0..) |*slot, i| {
+        hidden_values[i] = .{ .ptr = @ptrCast(slot) };
     }
 
     const call = g.runtime.prepareDictCall(

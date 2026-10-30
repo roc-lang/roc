@@ -90,7 +90,6 @@ pub const Owners = struct {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -140,7 +139,7 @@ pub fn resolveProcReuseSources(
     layouts: *const layout_mod.Store,
     proc_id: LIR.LirProcSpecId,
 ) Allocator.Error!void {
-    const proc = store.getProcSpec(proc_id);
+    const proc = store.getProcSpecImmediate(proc_id);
     const body = proc.body orelse return;
 
     var owners = Owners.init(allocator);
@@ -155,9 +154,9 @@ pub fn resolveProcReuseSources(
     var stmts = try BodyClone.ReachableStmts.initWithAllocator(store, body, allocator);
     defer stmts.deinit();
     while (try stmts.next()) |current| {
-        const stmt = store.getCFStmt(current);
-        try owners.noteStmt(store, layouts, stmt);
-        if (stmt == .assign_call_erased and store.stmtRow(stmt.assign_call_erased.data).reuse_source != null) {
+        const stmt = store.getCFStmtImmediate(current);
+        try owners.noteStmt(store, layouts, stmt.*);
+        if (stmt.* == .assign_call_erased and store.stmtRow(stmt.assign_call_erased.data).reuse_source != null) {
             try calls.append(allocator, current);
         }
     }

@@ -18,6 +18,11 @@ const hosted = @import("hosted.zig");
 const StringLiteral = base.StringLiteral;
 const names = check.CheckedNames;
 
+/// Capability established by lowering, preserved by artifacts, and consumed
+/// mechanically by execution backends. Only explicit Boxy lowering enables
+/// descriptor operations; specialized indirect calls have an exact native ABI.
+pub const RuntimeContract = enum(u8) { specialized, boxy };
+
 /// Global identifier (opaque 64-bit id).
 pub const Symbol = packed struct(u64) {
     id: u64,
@@ -106,13 +111,32 @@ pub const ProcIdentity = extern struct {
     /// Identity of a procedure a pass derives from this one: the same role
     /// and key from the same origin yields the same identity.
     pub fn derived(self: ProcIdentity, role: []const u8, key: []const u8) ProcIdentity {
+        var builder = self.deriving(role);
+        builder.update(key);
+        return builder.finish();
+    }
+
+    /// Streams the key of a derived identity: `finish` returns `derived(role,
+    /// key)` for `key` the concatenation of every `update`.
+    pub fn deriving(self: ProcIdentity, role: []const u8) DerivedBuilder {
         var hasher = base.TypeDigestHasher.init();
         hasher.update("roc.proc.derived.v1");
         hasher.update(&self.bytes);
         hasher.update(role);
-        hasher.update(key);
-        return .{ .bytes = hasher.finalResult() };
+        return .{ .hasher = hasher };
     }
+
+    pub const DerivedBuilder = struct {
+        hasher: base.TypeDigestHasher,
+
+        pub fn update(self: *DerivedBuilder, key_part: []const u8) void {
+            self.hasher.update(key_part);
+        }
+
+        pub fn finish(self: *DerivedBuilder) ProcIdentity {
+            return .{ .bytes = self.hasher.finalResult() };
+        }
+    };
 
     /// Identity of a procedure that exists only within one program and is
     /// never an object-cache entry: Boxy lowering output, whose programs do
@@ -331,6 +355,36 @@ pub const OriginKind = union(enum(u8)) {
     pub const ArcLocal = struct {
         subject_local: LocalId,
     };
+
+    /// This kind in its eight-byte stored form.
+    pub fn pack(self: OriginKind) StoredOriginKind {
+        return switch (self) {
+            .arc_incref, .arc_decref => |rc| .{ .tag = std.meta.activeTag(self), .reason = @backingInt(rc.reason), .subject_local = @backingInt(rc.subject_local) },
+            .arc_dismantle => |glue| .{ .tag = .arc_dismantle, .subject_local = @backingInt(glue.subject_local) },
+            .source, .lowering_glue, .derived, .scaffold, .join_scalarize, .box_reuse, .return_slot, .str_append_fuse, .loop_append_promote, .tag_case_fusion, .forwarding_join_inline, .comptime_value_guard, .trmc, .range_prove => .{ .tag = std.meta.activeTag(self) },
+        };
+    }
+};
+
+/// A statement's `OriginKind` as its provenance column stores it: the tag,
+/// the RC reason and the subject local in eight bytes. Kinds without a
+/// reason or subject store zero for them, so every byte is defined.
+pub const StoredOriginKind = extern struct {
+    tag: std.meta.Tag(OriginKind),
+    /// An `RcReason` for `arc_incref` and `arc_decref`.
+    reason: u8 = 0,
+    padding: [2]u8 = .{ 0, 0 },
+    /// A `LocalId` for the ARC kinds.
+    subject_local: u32 = 0,
+
+    pub fn unpack(self: StoredOriginKind) OriginKind {
+        return switch (self.tag) {
+            .arc_incref => .{ .arc_incref = .{ .subject_local = @fromBackingInt(self.subject_local), .reason = @fromBackingInt(self.reason) } },
+            .arc_decref => .{ .arc_decref = .{ .subject_local = @fromBackingInt(self.subject_local), .reason = @fromBackingInt(self.reason) } },
+            .arc_dismantle => .{ .arc_dismantle = .{ .subject_local = @fromBackingInt(self.subject_local) } },
+            inline .source, .lowering_glue, .derived, .scaffold, .join_scalarize, .box_reuse, .return_slot, .str_append_fuse, .loop_append_promote, .tag_case_fusion, .forwarding_join_inline, .comptime_value_guard, .trmc, .range_prove => |tag| tag,
+        };
+    }
 };
 
 /// Solver decision that produced an ARC RC statement. Every value names the
@@ -418,6 +472,7 @@ pub const RcReason = enum(u8) {
 comptime {
     std.debug.assert(@sizeOf(RcReason) == 1);
     std.debug.assert(@sizeOf(OriginKind) == 12);
+    std.debug.assert(@sizeOf(StoredOriginKind) == 8);
 }
 
 /// Identifier of a compile-time-observed control-flow site.
@@ -517,7 +572,6 @@ pub const ComptimeProducer = union(enum) {
 pub const ComptimeSiteKind = enum {
     match,
     destructure,
-    if_,
 };
 
 /// Metadata for one compile-time-observed control-flow site.
@@ -531,7 +585,6 @@ pub const ComptimeSite = struct {
     region: base.Region,
     checked_site: ?CheckedExhaustivenessSiteId = null,
     proc: LirProcSpecId,
-    branch_regions: []const base.Region = &.{},
 };
 
 /// Identifier of a join point targeted by `jump`.
@@ -1175,6 +1228,18 @@ pub const CallExtra = struct {
     returns_pending: ?PendingReturn = null,
 };
 
+/// The fields of `CFStmt.crash` that most crashes leave unset, stored out of
+/// line.
+pub const CrashExtra = struct {
+    /// Set when this crash is a literal conversion rejecting its literal:
+    /// compile-time evaluation reports the literal's own diagnostic with
+    /// `msg`, the conversion's error message.
+    literal_rejection: ?LiteralRejectionSite = null,
+    /// Set when this crash is the failure path of a read of a compile-time
+    /// value whose producer failed.
+    failed_value: ?ComptimeValueRef = null,
+};
+
 /// The ownership facts ARC stamps on a `CFStmt.assign_ref`, stored out of
 /// line.
 pub const RefExtra = struct {
@@ -1348,8 +1413,8 @@ pub const BoxyDynamicFracLiteral = struct {
 pub const ErasedCallData = struct {
     closure: LocalId,
     args: LocalSpan,
-    /// Ordered runtime layouts of the explicit arguments packed into the
-    /// erased-call argument buffer.
+    /// Boxy-only layouts for runtime argument adaptation. Specialized calls
+    /// use their locals and `arg_plan` and leave this span empty.
     arg_layouts: BoxySpan = BoxySpan.empty(),
     /// Exact descriptors for descriptor-bearing explicit arguments, in
     /// the callee function representation's traversal order.
@@ -1737,15 +1802,11 @@ pub const CFStmt = union(enum) {
     /// Compiler-generated impossible execution path. This is terminal.
     runtime_error: void,
     /// Pattern coverage failed during compile-time evaluation. This is
-    /// terminal and becomes a checking diagnostic while finalizing.
+    /// terminal: it crashes, and compile-time finalization reports the crash
+    /// as the empirical failure of `checked_site` in module `owner`.
     comptime_exhaustiveness_failed: struct {
-        site: ComptimeSiteId,
-    },
-    /// One compile-time-observed branch or match alternative was taken.
-    comptime_branch_taken: struct {
-        site: ComptimeSiteId,
-        branch_index: u32,
-        next: CFStmtId,
+        owner: LoweringModuleId,
+        checked_site: ?CheckedExhaustivenessSiteId,
     },
     incref: struct {
         value: LocalId,
@@ -1841,14 +1902,49 @@ pub const CFStmt = union(enum) {
     },
     crash: struct {
         msg: CrashMessage,
-        /// Set when this crash is a literal conversion rejecting its literal:
-        /// compile-time evaluation reports the literal's own diagnostic with
-        /// `msg`, the conversion's error message.
-        literal_rejection: ?LiteralRejectionSite = null,
         /// Set when this crash is code checking rejected and already
         /// reported: compile-time evaluation that reaches it discards the
         /// result instead of reporting the problem a second time.
         checked_error: bool = false,
+        /// What the crash reports beyond `msg`; `none` when it reports
+        /// nothing more.
+        extra: StmtRowId(CrashExtra) = .none,
+    },
+};
+
+/// The crash message of a `comptime_exhaustiveness_failed` statement. Every
+/// backend and the interpreter crash with it, so a compile-time evaluation
+/// and a build of the same code fail identically; compile-time finalization
+/// reports the failure by its checked site instead.
+pub const comptime_exhaustiveness_failure_message = "non-exhaustive pattern match";
+
+/// One compile-time value: its producer and the module owning it.
+pub const ComptimeValueRef = struct {
+    owner: LoweringModuleId,
+    producer: ComptimeProducer,
+};
+
+/// What it means for generated code to fail at one statement, beyond
+/// crashing there. Every identity but a literal producer's stays meaningful in
+/// every compilation of the program (`LirStore.failureMeaning`).
+pub const FailureMeaning = union(enum) {
+    /// Code checking rejected and already reported.
+    checked_error,
+    /// A literal conversion rejecting the literal at `checked_expr`.
+    literal_rejection: struct {
+        module: [32]u8,
+        checked_expr: u32,
+        kind: LiteralRejectionKind,
+    },
+    /// An exhaustiveness failure at a checked site.
+    exhaustiveness: struct {
+        module: [32]u8,
+        checked_site: ?CheckedExhaustivenessSiteId,
+    },
+    /// A read of a compile-time value whose producer failed.
+    failed_value: struct {
+        module: [32]u8,
+        producer: ComptimeProducer,
     },
 };
 
@@ -1902,7 +1998,10 @@ pub const ProcShapes = packed struct(u16) {
     unsigned_compare: bool = false,
     /// A SIMD byte concat-shift, whose count a value-range proof can fix.
     simd_concat_shift: bool = false,
-    _padding: u2 = 0,
+    /// A checked integer division or remainder, whose divisor a value-range
+    /// proof can show nonzero.
+    checked_division: bool = false,
+    _padding: u1 = 0,
 
     pub fn merged(self: ProcShapes, other: ProcShapes) ProcShapes {
         return @bitCast(@as(u16, @bitCast(self)) | @as(u16, @bitCast(other)));
@@ -1948,12 +2047,13 @@ pub const LirProcSpec = struct {
     /// intentionally separate from externally resolvable `ret_desc`.
     runtime_ret_desc: ?LocalId = null,
     /// Keyed byte offsets of hidden descriptor fields in this erased worker's
-    /// capture value.
+    /// capture value, in increasing (argument, descriptor) key order.
     erased_arg_desc_offsets: BoxySpan = .{},
-    /// Ordered runtime layouts expected in this erased worker's explicit
-    /// argument buffer.
+    /// Boxy-only layouts for runtime argument adaptation. Specialized workers
+    /// carry their exact ABI in argument locals and `erased_call_args`.
     erased_arg_layouts: BoxySpan = .{},
-    /// Hidden descriptor parameters supplied for this erased invocation.
+    /// Hidden descriptor parameters supplied for this erased invocation, in
+    /// increasing (argument, descriptor) key order.
     erased_arg_desc_params: BoxySpan = .{},
     /// Hidden capture-pointer parameter for an erased callable procedure.
     erased_capture_arg: ?LocalId = null,
@@ -1986,16 +2086,25 @@ pub const LirProcSpec = struct {
     /// content (`Mono.FnTemplate.site_identity`): its identity together with
     /// its module's content key, which names its code. Cached code of the
     /// procedure is taken and placed only under an equal code key; a null key
-    /// means the identity names the code. Code compiled against an earlier
-    /// body of the procedure calls it by identity, so ARC pins its signature
-    /// to the one its types determine. Set only in a program using the
-    /// object cache.
+    /// means the identity names the code. Set in every program whose code a
+    /// pack can hold (`CheckedPipeline.TargetConfig.site_code_keys`), whether
+    /// or not it uses the object cache.
     code_key: ?[32]u8 = null,
+    /// A procedure with a code key that code without one can call: a member
+    /// of a lambda set in such a procedure's signature, or an app function
+    /// such a procedure's code reaches. That code keeps its identity across
+    /// an edit of this procedure's body, so cached copies of it call this
+    /// procedure's current body; ARC pins its base signature to the one its
+    /// types determine (`Lowerer.markStableSignatures`).
+    stable_signature: bool = false,
     /// The Monotype function this procedure lowers, which keys the producer's
     /// summary of the compile-time roots its code reads
     /// (`SpecComptimeReads.fnReads`); null for a procedure no Monotype
     /// function names.
     source_monotype_fn: ?u32 = null,
+    /// Checked defining module for an app-independent direct template offer.
+    /// Null keeps generated, nested, and app-dependent code program-scoped.
+    cache_provider_module: ?[32]u8 = null,
     /// Set on an `external` proc whose cache entry is a linked object rather
     /// than spliced code: callers reach it through its C-ABI entry
     /// (`ProcIdentity.writeCAbiEntryName`), classified from its argument and
@@ -2007,6 +2116,9 @@ pub const LirProcSpec = struct {
     /// `unless_caller_drives` statement: its entry records whether the
     /// erased-call runtime made the call.
     reads_caller_drives: bool = false,
+    /// Producer-owned tail-drive summary. Cached bodies retain this fact so
+    /// callers make a pending erased call before reading its result.
+    may_leave_pending: bool = false,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.
     tail_transform: TailTransform = .none,
     /// Set by ARC on every procedure that makes or receives a same-SCC tail
@@ -2050,6 +2162,14 @@ pub const LirProcSpec = struct {
     /// only the base signature and no body, so a proc with this bit set is
     /// never offered as one.
     rc_variant_demandable: bool = false,
+
+    /// The body ARC analyzes and places reference counts in. A static
+    /// initializer is construction-only LIR that the static data
+    /// materializer evaluates and no backend emits, so nothing calls it and a
+    /// reference count in it would never run: ARC sees it as having none.
+    pub fn arcBody(self: *const LirProcSpec) ?CFStmtId {
+        return if (self.is_static_initializer) null else self.body;
+    }
 };
 
 test "a statement occupies one 32-byte slot" {

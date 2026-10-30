@@ -39,22 +39,21 @@ pub const Set = struct {
         } else {
             const word = field / 64;
             var high: High = if (self.high) |previous| previous.* else .{
-                .words = Words.init(allocator, @as(usize, word) + 1),
+                .words = Words.init(@as(usize, word) + 1),
                 .last_word = 0,
                 .count = 0,
             };
-            high.words.allocator = allocator;
             // A snapshot's depth covers its highest word, so a set sized for
             // its narrower fields is rebuilt deep enough for this one. Equal
             // sets share their highest word and so their depth.
-            const needed = Words.init(allocator, @as(usize, word) + 1);
+            const needed = Words.init(@as(usize, word) + 1);
             if (needed.depth > high.words.depth) {
                 var grown = needed;
                 var entries = high.words.iterator();
-                while (entries.next()) |entry| try grown.put(entry.index, entry.value);
+                while (entries.next()) |entry| try grown.put(allocator, entry.index, entry.value);
                 high.words = grown;
             }
-            try high.words.put(word, high.words.get(word) | bit);
+            try high.words.put(allocator, word, high.words.get(word) | bit);
             high.last_word = @max(high.last_word, word);
             high.count += 1;
             const stored = try allocator.create(High);
@@ -91,6 +90,35 @@ pub const Set = struct {
             }
         }
         return result;
+    }
+
+    /// The fields of `self` that `other` lacks. Use an arena that outlives
+    /// every snapshot sharing the result.
+    pub fn withoutAll(self: Set, allocator: std.mem.Allocator, other: Set) std.mem.Allocator.Error!Set {
+        var result: Set = .{ .low = self.low & ~other.low };
+        if (self.high) |high| {
+            var entries = high.words.iterator();
+            while (entries.next()) |entry| {
+                const removed = if (other.high) |other_high| other_high.words.get(entry.index) else 0;
+                var bits = entry.value & ~removed;
+                while (bits != 0) : (bits &= bits - 1) {
+                    result = try result.withField(allocator, @intCast(@as(u64, entry.index) * 64 + @ctz(bits)));
+                }
+            }
+        }
+        return result;
+    }
+
+    /// Whether every field of `other` is in `self`.
+    pub fn containsAll(self: Set, other: Set) bool {
+        if (other.low & ~self.low != 0) return false;
+        const high = other.high orelse return true;
+        var entries = high.words.iterator();
+        while (entries.next()) |entry| {
+            const present = if (self.high) |self_high| self_high.words.get(entry.index) else 0;
+            if (entry.value & ~present != 0) return false;
+        }
+        return true;
     }
 
     pub fn isSingleton(self: Set, field: u32) bool {

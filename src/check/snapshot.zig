@@ -114,6 +114,22 @@ pub const SnapshotTagUnion = struct {
     ext: SnapshotContentIdx,
 };
 
+/// Append one row part's entry to the labels gathered into `list` from
+/// `base_idx`, where `outer_end` ends the outer parts' labels. A label an outer
+/// part already holds names the same field or tag (design.md "Row Union
+/// Normalization"), and the row means what it would mean with only the
+/// innermost occurrence, so that occurrence replaces the outer one.
+pub fn appendRowLabel(comptime T: type, list: *collections.SafeMultiList(T), gpa: std.mem.Allocator, base_idx: u32, outer_end: u32, entry: T) std.mem.Allocator.Error!void {
+    const names = list.field(.name);
+    for (names[base_idx..outer_end], base_idx..) |name, index| {
+        if (name.eql(entry.name)) {
+            list.set(@fromBackingInt(@intCast(index)), entry);
+            return;
+        }
+    }
+    _ = try list.append(gpa, entry);
+}
+
 /// A single tag in a snapshotted tag union with its name and argument types.
 pub const SnapshotTag = struct {
     name: Ident.Idx,
@@ -496,8 +512,7 @@ pub const Store = struct {
                     // These don't have a direct name, so contextual naming names them.
                     .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => null,
                 },
-                // Error types shouldn't create cycles
-                .err => unreachable,
+                .err => unreachable, // .err content is recorded and leaves seen_vars at once, so it is never on the path
             };
             const idx = try self.contents.append(self.gpa, .{ .recursive = recursive_name });
             try self.pending_values.append(idx);
@@ -957,7 +972,7 @@ pub const Store = struct {
                 },
                 .tag_args => {
                     // Indexing through the run's start only happens when the
-                    // tag union has tags; start may be undefined when count is 0.
+                    // tag union has tags; an empty run's start addresses no row.
                     const tag = store.tags.get(@fromBackingInt(@intCast(@backingInt(frame.source_tags.start) + frame.tag_idx)));
                     const tag_args_slice = store.sliceVars(tag.args);
                     if (frame.arg_idx < tag_args_slice.len) {
@@ -1102,6 +1117,7 @@ pub const Store = struct {
         defer trace.end();
 
         // Add immediate fields
+        const base_idx = fields_out.len();
         const record_fields = self.sliceRecordFields(record.fields);
         for (record_fields.items(.name), record_fields.items(.content), record_fields.items(.presence)) |name, content, presence| {
             _ = try fields_out.append(gpa, .{ .name = name, .content = content, .presence = presence });
@@ -1115,8 +1131,9 @@ pub const Store = struct {
                 .structure => |flat| switch (flat) {
                     .record => |rec| {
                         const ext_fields = self.sliceRecordFields(rec.fields);
+                        const outer_end = fields_out.len();
                         for (ext_fields.items(.name), ext_fields.items(.content), ext_fields.items(.presence)) |name, field_content, presence| {
-                            _ = try fields_out.append(gpa, .{ .name = name, .content = field_content, .presence = presence });
+                            try appendRowLabel(SnapshotRecordField, fields_out, gpa, base_idx, outer_end, .{ .name = name, .content = field_content, .presence = presence });
                         }
                         ext_idx = rec.ext;
                     },
@@ -1194,7 +1211,7 @@ test "snapshot record field presence survives deep copy and gather" {
 
     const top_snapshot_idx = try snapshots.snapshotVarForError(&type_store, &type_writer, top_var);
     const top_content = snapshots.getContent(top_snapshot_idx);
-    if (top_content != .structure or top_content.structure != .record) unreachable;
+    if (top_content != .structure or top_content.structure != .record) return error.TestUnexpectedResult;
     const top_snapshot = top_content.structure.record;
     try std.testing.expectEqual(
         SnapshotFieldPresence.required,
@@ -1202,7 +1219,7 @@ test "snapshot record field presence survives deep copy and gather" {
     );
 
     const middle_content = snapshots.getContent(top_snapshot.ext);
-    if (middle_content != .structure or middle_content.structure != .record) unreachable;
+    if (middle_content != .structure or middle_content.structure != .record) return error.TestUnexpectedResult;
     const middle_snapshot = middle_content.structure.record;
     try std.testing.expectEqual(
         SnapshotFieldPresence.unknown,
@@ -1210,7 +1227,7 @@ test "snapshot record field presence survives deep copy and gather" {
     );
 
     const tail_content = snapshots.getContent(middle_snapshot.ext);
-    if (tail_content != .structure or tail_content.structure != .record) unreachable;
+    if (tail_content != .structure or tail_content.structure != .record) return error.TestUnexpectedResult;
     const tail_snapshot_fields = tail_content.structure.record.fields;
     try std.testing.expectEqual(
         SnapshotFieldPresence.unknown,
@@ -1220,7 +1237,7 @@ test "snapshot record field presence survives deep copy and gather" {
     var gathered_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, 4);
     defer gathered_fields.deinit(gpa);
     const gathered = try snapshots.gatherRecordFields(top_snapshot_idx, gpa, &gathered_fields);
-    if (gathered != .record) unreachable;
+    if (gathered != .record) return error.TestUnexpectedResult;
     try std.testing.expectEqualSlices(
         SnapshotFieldPresence,
         &.{ .required, .unknown, .unknown },
