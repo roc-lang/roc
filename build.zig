@@ -2147,7 +2147,7 @@ pub fn build(b: *std.Build) void {
 
     // The native Boxy runtime object (`roc_desc_*`) for the host target.
     const build_boxy_runtime_step = b.step("build-boxy-runtime", "Build the native Boxy runtime object");
-    const boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, "roc_boxy_runtime", "src/boxy_runtime/static_lib.zig", target, optimize);
+    const boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, "roc_boxy_runtime", "src/boxy_runtime/static_lib.zig", target);
     build_boxy_runtime_step.dependOn(&b.addInstallArtifact(boxy_runtime_obj, .{ .dest_dir = .{ .override = .{ .custom = "boxy_runtime" } } }).step);
 
     // Build-time compiler for builtin .roc modules
@@ -5299,7 +5299,7 @@ fn addEvalWasmRuntimeModules(
 
     // The Boxy runtime a `.boxy` program's module merges next to the
     // builtins, whose compiler-rt it shares.
-    const boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_{s}_eval", .{name}), "src/boxy_runtime/static_lib.zig", target, optimize);
+    const boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_{s}_eval", .{name}), "src/boxy_runtime/static_lib.zig", target);
 
     const builtins_files = b.addWriteFiles();
     _ = builtins_files.addCopyFile(merged_builtins, "roc_builtins.o");
@@ -5557,6 +5557,9 @@ fn addBuiltinsObject(
             .optimize = optimize,
             .strip = program_object_strip,
             .omit_frame_pointer = program_object_omit_frame_pointer,
+            // Linked into programs, which define no stack probe for a Debug
+            // build's large frames to call.
+            .stack_check = false,
             .pic = true,
         }),
     });
@@ -5577,7 +5580,6 @@ fn addBoxyRuntimeObject(
     name: []const u8,
     root_source_file: []const u8,
     target: ResolvedTarget,
-    optimize: OptimizeMode,
 ) *Step.Compile {
     const builtins_module = b.createModule(.{ .root_source_file = b.path("src/builtins/mod.zig") });
     addBuiltinsImports(b, roc_modules, builtins_module);
@@ -5589,12 +5591,13 @@ fn addBoxyRuntimeObject(
     runtime_module.addImport("layout_shape", shape_module);
     value_rules_module.addImport("builtins", builtins_module);
     runtime_module.addImport("value_rules", value_rules_module);
+    runtime_module.addImport("raw_pages", roc_modules.raw_pages);
     const obj = b.addObject(.{
         .name = name,
         .root_module = b.createModule(.{
             .root_source_file = b.path(root_source_file),
             .target = target,
-            .optimize = optimize,
+            .optimize = .ReleaseFast,
             .strip = program_object_strip,
             .omit_frame_pointer = program_object_omit_frame_pointer,
             // Native runtime objects can participate in shared-library links.
@@ -6030,7 +6033,7 @@ fn addMainExe(
 
     // The Boxy runtime object a `--specialize=no` program compiled by the
     // dev backend links next to the builtins.
-    const boxy_runtime_native_obj = addBoxyRuntimeObject(b, roc_modules, "roc_boxy_runtime_native", "src/boxy_runtime/static_lib.zig", builtins_target, optimize);
+    const boxy_runtime_native_obj = addBoxyRuntimeObject(b, roc_modules, "roc_boxy_runtime_native", "src/boxy_runtime/static_lib.zig", builtins_target);
     const host_boxy_runtime_filename = if (target.result.os.tag == .windows) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
     _ = embedded_assets.addCopyFile(boxy_runtime_native_obj.getEmittedBin(), b.pathJoin(&.{ "", host_boxy_runtime_filename }));
     embedded_digests.addArg("boxy_runtime_native");
@@ -6139,7 +6142,7 @@ fn addMainExe(
 
         const builtins_extern_ext = if (cross_target.query.os_tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
         {
-            const cross_boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}), "src/boxy_runtime/static_lib.zig", cross_resolved_target, optimize);
+            const cross_boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}), "src/boxy_runtime/static_lib.zig", cross_resolved_target);
             const boxy_runtime_ext = if (cross_target.query.os_tag == .windows) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
             embedded_digests.addArg(b.fmt("boxy_runtime_{s}", .{cross_target.name}));
             embedded_digests.addFileArg(cross_boxy_runtime_obj.getEmittedBin());
@@ -6168,7 +6171,7 @@ fn addMainExe(
                 b.pathJoin(&.{ "targets", cross_target.name, "roc_builtins_extern_stack_checked.o" }),
             );
 
-            const checked_boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_stack_checked_{s}", .{cross_target.name}), "src/boxy_runtime/static_lib_stack_checked.zig", cross_resolved_target, optimize);
+            const checked_boxy_runtime_obj = addBoxyRuntimeObject(b, roc_modules, b.fmt("roc_boxy_runtime_stack_checked_{s}", .{cross_target.name}), "src/boxy_runtime/static_lib_stack_checked.zig", cross_resolved_target);
             embedded_digests.addArg(b.fmt("boxy_runtime_stack_checked_{s}", .{cross_target.name}));
             embedded_digests.addFileArg(checked_boxy_runtime_obj.getEmittedBin());
             _ = embedded_assets.addCopyFile(

@@ -295,7 +295,7 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
         }
         if (f.kind != t.kind) invariant(ops, "adapted descriptors describe different kinds of value");
         switch (t.kind) {
-            .zst, .scalar, .str, .bool, .erased_callable, .opaque_unknown => {
+            .zst, .scalar, .str, .bool, .erased_callable => {
                 @memcpy(work.dst[0..t.size], work.src[0..t.size]);
                 walk.incref(t, work.dst, 1, ops);
             },
@@ -672,8 +672,9 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
                 return;
             }
             // The displaced element is released here: `set` does not return it.
-            const old: [*]u8 = @ptrCast(ops.allocRaw(e.width, e.alignment));
-            defer ops.dealloc(@ptrCast(old), e.alignment);
+            var old_buffer: walk.ArgsBuffer = .{};
+            defer old_buffer.deinit(ops);
+            const old = old_buffer.get(e.width, ops);
             const result = if (req.op == .set_in_place_unsafe or m0 == .InPlace)
                 list.listReplaceInPlace(a, req.n[0], req.element, e.width, old, &list.copy_fallback)
             else

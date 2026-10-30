@@ -31,4 +31,13 @@ Lib := [].{
 		expect n == 0
 		n
 	}
+
+	pick : U64 -> U64
+	pick = |n| {
+		x = n + 1
+		match x {
+			1 => 2
+			_ => crash "no such pick"
+		}
+	}
 }

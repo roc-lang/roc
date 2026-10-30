@@ -11048,6 +11048,19 @@ fn writeCombinedLlvmWasmObject(
     defer app_module.deinit();
     var app_merge = try wasm_module.mergeModuleForObject(&app_module);
     app_merge.deinit();
+    // A program with the `.boxy` runtime contract calls the Boxy runtime's
+    // `roc_desc_*` entry points, which this object then defines.
+    if (lir_result.store.runtime_contract == .boxy) {
+        const target_objects = EmbeddedTargetObjects.forTarget(target);
+        const runtime_bytes = (if (stack_checks) target_objects.boxy_runtime_stack_checked else target_objects.boxy_runtime) orelse return error.UnsupportedTarget;
+        var runtime_module = backend.wasm.WasmModule.preload(ctx.gpa, runtime_bytes, .relocatable_for_merge) catch |err| {
+            std.log.err("Failed to preload the wasm Boxy runtime: {}", .{err});
+            return err;
+        };
+        defer runtime_module.deinit();
+        var runtime_merge = try wasm_module.mergeModuleForObject(&runtime_module);
+        runtime_merge.deinit();
+    }
 
     try mergeStaticDataWasmModule(ctx, &wasm_module, static_data_exports, .relocatable_object);
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_wasm32_{s}.o", .{@tagName(opt)});

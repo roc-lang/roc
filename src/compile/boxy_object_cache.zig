@@ -151,6 +151,10 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
     return try bytes.toOwnedSlice(allocator);
 }
 
+/// The bytes of an export record with no return conditions: its identity,
+/// four 64-bit masks, three flags, and its condition count.
+const min_export_record_size = 32 + 4 * @sizeOf(u64) + 3 + @sizeOf(u32);
+
 /// Why cached bytes are not an entry: a file this compiler did not write
 /// (another entry format, or a truncated or altered file). The cache
 /// treats it as a miss.
@@ -164,6 +168,7 @@ pub fn decode(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     if (!std.mem.eql(u8, found_magic, magic)) return error.InvalidEntry;
     if (try reader.word32() != format_version) return error.InvalidEntry;
     const export_count = try reader.word32();
+    if (export_count > (bytes.len - reader.at) / min_export_record_size) return error.InvalidEntry;
     const exports = try allocator.alloc(ExportRecord, export_count);
     errdefer allocator.free(exports);
     var decoded_exports: usize = 0;
@@ -182,6 +187,7 @@ pub fn decode(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
             .rc_ret_conditions = &.{},
         };
         const condition_count = try reader.word32();
+        if (condition_count > (bytes.len - reader.at) / @sizeOf(u32)) return error.InvalidEntry;
         const conditions = try allocator.alloc(u32, condition_count);
         errdefer allocator.free(conditions);
         for (conditions) |*word| word.* = try reader.word32();
@@ -217,6 +223,7 @@ pub fn decode(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
 
 fn decodeSymbols(allocator: Allocator, reader: *Reader) DecodeError![]const []const u8 {
     const count = try reader.word32();
+    if (count > (reader.bytes.len - reader.at) / @sizeOf(u32)) return error.InvalidEntry;
     const symbols = try allocator.alloc([]const u8, count);
     errdefer allocator.free(symbols);
     var decoded: usize = 0;
@@ -383,4 +390,17 @@ test "a hosted bindings digest is a function of the bindings in order" {
     renamed[0].symbol = "roc_fx_line2";
     try std.testing.expect(!std.mem.eql(u8, &baseline, &hostedBindingsDigest(&renamed)));
     try std.testing.expect(!std.mem.eql(u8, &baseline, &hostedBindingsDigest(bindings[0..1])));
+}
+
+test "a count larger than the bytes behind it is a miss, not an allocation" {
+    const gpa = std.testing.allocator;
+    const encoded = try encode(gpa, .{ .exports = &.{}, .hosted_symbols = &.{}, .object = "object" });
+    defer gpa.free(encoded);
+    const count_offset = magic.len + @sizeOf(u32);
+    for ([_]usize{ count_offset, count_offset + @sizeOf(u32) }) |offset| {
+        const damaged = try gpa.dupe(u8, encoded);
+        defer gpa.free(damaged);
+        std.mem.writeInt(u32, damaged[offset..][0..4], std.math.maxInt(u32), .little);
+        try std.testing.expectError(error.InvalidEntry, decode(gpa, damaged));
+    }
 }

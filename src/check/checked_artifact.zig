@@ -20002,7 +20002,6 @@ const EvidencePass = struct {
                 .callable_ty = self.checked_types.rootForSourceVar(self.module, param.constraint.fn_var) orelse
                     checkedArtifactInvariant("checked evidence parameter callable type was not published", .{}),
                 .slot = if (source == .scheme_requirement) null else self.schemeVarSlot(param.dispatcher_var),
-                .runtime_dictionary = true,
                 .structural = self.structuralKindForMethodIdent(param.constraint.fn_name),
                 .source = source,
                 .path = published_path,
@@ -20570,7 +20569,7 @@ const EvidencePass = struct {
             const schema = self.templates.evidence_params_pool[owner];
             return .{ .resolved = .{ .evidence_dependent = .{
                 .scheme_param = if (match.callable_contract != null or
-                    (schema.runtime_dictionary and schema.source != .scheme_callable)) owner else null,
+                    schema.source != .scheme_callable) owner else null,
                 .index = match.index,
                 .independent_callable = independent_callable,
                 .reuse_slot_nested_evidence = match.callable_relation == .independent_reuse_slot_nested,
@@ -21451,7 +21450,6 @@ const EvidencePass = struct {
         const dispatcher_ty = context.dispatcher_ty;
         return .{
             .dispatcher_ty = dispatcher_ty,
-            .runtime_dictionary = true,
             .resolution = switch (resolution) {
                 .direct_pending => |node| .{ .direct = node },
                 .direct_closed, .direct_parametric => checkedArtifactInvariant("call resolution was finalized before evidence publication completed", .{}),
@@ -21628,7 +21626,6 @@ const EvidencePass = struct {
             checkedArtifactInvariant("checked stored-function dispatcher type was not published", .{});
         return .{
             .dispatcher_ty = dispatcher_ty,
-            .runtime_dictionary = true,
             .resolution = .from_callable,
         };
     }
@@ -21763,7 +21760,6 @@ const EvidencePass = struct {
                     checkedArtifactInvariant("checked nested-procedure evidence dispatcher type was not published", .{});
                 entries.appendAssumeCapacity(.{
                     .dispatcher_ty = dispatcher_ty,
-                    .runtime_dictionary = true,
                     .resolution = if (param.source == .scheme_requirement) .from_scheme else .from_callable,
                 });
                 continue;
@@ -21806,8 +21802,8 @@ const EvidencePass = struct {
 
 test "procedure evidence schema positively classifies callable paths and pathless requirements" {
     var params = [_]static_dispatch.EvidenceParamRecord{
-        .{ .method = @fromBackingInt(@intCast(1)), .dispatcher_ty = @fromBackingInt(@intCast(1)), .callable_ty = @fromBackingInt(@intCast(3)), .slot = 0, .runtime_dictionary = true, .structural = .encoder, .path = .{ .last = 0, .len = 1 } },
-        .{ .method = @fromBackingInt(@intCast(2)), .dispatcher_ty = @fromBackingInt(@intCast(2)), .callable_ty = @fromBackingInt(@intCast(4)), .slot = 1, .runtime_dictionary = true, .path = .{ .last = 1, .len = 1 } },
+        .{ .method = @fromBackingInt(@intCast(1)), .dispatcher_ty = @fromBackingInt(@intCast(1)), .callable_ty = @fromBackingInt(@intCast(3)), .slot = 0, .structural = .encoder, .path = .{ .last = 0, .len = 1 } },
+        .{ .method = @fromBackingInt(@intCast(2)), .dispatcher_ty = @fromBackingInt(@intCast(2)), .callable_ty = @fromBackingInt(@intCast(4)), .slot = 1, .path = .{ .last = 1, .len = 1 } },
     };
     const table = CheckedProcedureTemplateTable{
         .evidence_params_pool = params[0..],
@@ -36156,7 +36152,7 @@ pub const CheckedModuleArtifact = struct {
                     if (dependent.scheme_param) |param_index| {
                         const pool = self.checked_procedure_templates.evidence_params_pool;
                         if (param_index >= pool.len or pool[param_index].method != plan.method or
-                            (if (dependent.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else (!pool[param_index].runtime_dictionary or pool[param_index].source == .scheme_callable)))
+                            (if (dependent.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else pool[param_index].source == .scheme_callable))
                             return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
                     }
                 },
@@ -36387,7 +36383,7 @@ pub const CheckedModuleArtifact = struct {
                     if (constraint.scheme_param) |param_index| {
                         const pool = self.checked_procedure_templates.evidence_params_pool;
                         if (param_index >= pool.len or
-                            (if (constraint.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else (!pool[param_index].runtime_dictionary or pool[param_index].source == .scheme_callable)))
+                            (if (constraint.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else pool[param_index].source == .scheme_callable))
                             return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
                     }
                 },
@@ -41779,8 +41775,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x70, 0x9A, 0xB3, 0xFB, 0x6A, 0xAF, 0x01, 0xAB, 0x63, 0x3A, 0x8E, 0xCD, 0xC4, 0x22, 0xB0, 0x67,
-        0x21, 0xD0, 0x11, 0x9B, 0x14, 0x43, 0x7F, 0x6A, 0x91, 0xDE, 0xF5, 0x0C, 0x82, 0x12, 0x8B, 0x78,
+        0xA7, 0x9A, 0x77, 0x17, 0x9B, 0x0C, 0x10, 0x39, 0xED, 0xCA, 0xF3, 0x50, 0x64, 0xB3, 0x81, 0xD8,
+        0x80, 0x97, 0x6B, 0x07, 0xF7, 0x69, 0x63, 0xF9, 0x5C, 0xD5, 0x50, 0xDC, 0xBD, 0x6D, 0x4F, 0xF1,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -41800,9 +41796,9 @@ test "closed direct evidence excludes specialization-dependent nested recipes" {
     const context_anchor = testIndexId(CheckedStatementId, 0);
 
     var refs = [_]static_dispatch.CheckedEvidence{
-        .{ .dispatcher_ty = callable_ty, .runtime_dictionary = true, .resolution = .{ .constraint = .{ .index = .{ .depth = 0, .index = 0 } } } },
-        .{ .dispatcher_ty = callable_ty, .runtime_dictionary = true, .resolution = .{ .direct = evidence_0 } },
-        .{ .dispatcher_ty = callable_ty, .runtime_dictionary = true, .resolution = .{ .direct = evidence_1 } },
+        .{ .dispatcher_ty = callable_ty, .resolution = .{ .constraint = .{ .index = .{ .depth = 0, .index = 0 } } } },
+        .{ .dispatcher_ty = callable_ty, .resolution = .{ .direct = evidence_0 } },
+        .{ .dispatcher_ty = callable_ty, .resolution = .{ .direct = evidence_1 } },
     };
     const procedure_target = static_dispatch.MethodTarget{
         .module_idx = 0,
@@ -42500,7 +42496,6 @@ test "issue 11737: identical callable contract vectors share their checked stora
     defer pass.callable_contracts.deinit(allocator);
     const contract = [_]static_dispatch.CheckedEvidence{.{
         .dispatcher_ty = @fromBackingInt(@intCast(1)),
-        .runtime_dictionary = false,
         .resolution = .unreachable_value,
     }};
     const first = try pass.internCallableContracts(&contract);

@@ -448,9 +448,11 @@ pub const StaticDescs = struct {
                 };
                 try pointers.append(self.allocator, .{ .offset = desc_layout.of(.child), .target = try self.componentNode(elem, elem_layout) });
             },
-            // `Box(function)` is the function's erased callable.
+            // `Box(function)` is the function's erased callable, with the
+            // function as its child so the value still inspects as a box.
             .box => |payload| if (self.store.get(payload) == .function) {
                 kind = .erased_callable;
+                try pointers.append(self.allocator, .{ .offset = desc_layout.of(.child), .target = (try self.reserveDescriptor(.{ .ty = payload, .recursive_box = false })).node });
             } else {
                 kind = .box;
                 const payload_layout = switch (committed_layout.tag) {

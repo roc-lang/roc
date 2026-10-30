@@ -15,7 +15,9 @@
 //! (`compiled.InProcessState`).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const builtins = @import("builtins");
+const raw_pages = @import("raw_pages");
 const shape = @import("layout_shape");
 const desc_mod = @import("desc.zig");
 
@@ -58,7 +60,6 @@ fn leaf(kind: Kind, scalar: Scalar, size: u32, alignment: u32, sort_key: SortKey
 const zst_leaf: TypeDesc = leaf(.zst, .u8, 0, 1, .align_1, false);
 const str_leaf: TypeDesc = leaf(.str, .u8, RocStr.word_count * pointer_size, pointer_size, .pointer, true);
 const erased_callable_leaf: TypeDesc = leaf(.erased_callable, .u8, pointer_size, pointer_size, .pointer, true);
-const opaque_unknown_leaf: TypeDesc = leaf(.opaque_unknown, .u8, pointer_size, pointer_size, .pointer, true);
 const bool_leaf: TypeDesc = blk: {
     var bool_desc = leaf(.bool, .u8, 1, 1, .align_1, false);
     bool_desc.count = 2;
@@ -109,11 +110,6 @@ pub fn boolDesc() *const TypeDesc {
 /// The descriptor every function value shares.
 pub fn erasedCallableDesc() *const TypeDesc {
     return &erased_callable_leaf;
-}
-
-/// The descriptor of a value whose type the runtime never learns.
-pub fn opaqueUnknownDesc() *const TypeDesc {
-    return &opaque_unknown_leaf;
 }
 
 /// A scalar's descriptor. A SIMD vector's carries no `to_inspect`; the
@@ -280,6 +276,13 @@ const PlatformImmortals = struct {
 
     const min_chunk_bytes = 64 * 1024;
 
+    /// Fresh pages. A program's object has no standard library to reach
+    /// the kernel through, except on wasm, where memory only grows.
+    fn mapChunk(len: usize) ?[*]u8 {
+        if (comptime builtin.cpu.arch.isWasm()) return std.heap.page_allocator.rawAlloc(len, .fromByteUnits(std.heap.pageSize()), @returnAddress());
+        return raw_pages.map(len);
+    }
+
     fn alloc(ops: *RocOps, size: usize, alignment: usize) [*]u8 {
         while (!lock.tryLock()) std.atomic.spinLoopHint();
         defer lock.unlock();
@@ -287,8 +290,7 @@ const PlatformImmortals = struct {
         if (next == 0 or size > end - @min(start, end)) {
             const page = std.heap.pageSize();
             const chunk_len = std.mem.alignForward(usize, @max(size + alignment, min_chunk_bytes), page);
-            const chunk = std.heap.page_allocator.rawAlloc(chunk_len, .fromByteUnits(page), @returnAddress()) orelse
-                ops.crash("out of memory composing a Boxy descriptor");
+            const chunk = mapChunk(chunk_len) orelse ops.crash("out of memory composing a Boxy descriptor");
             next = @intFromPtr(chunk);
             end = next + chunk_len;
             start = std.mem.alignForward(usize, next, alignment);
@@ -368,9 +370,17 @@ pub fn list(cache: *Cache, ops: *RocOps, elem: *const TypeDesc) *const TypeDesc 
 
 /// `Box(payload)`. A box of a zero-sized payload is one word and holds no
 /// allocation. A box of a function is the function's erased callable, which
-/// is an allocation of its own.
+/// is an allocation of its own, with the function as its `child` so the value
+/// still inspects as a box.
 pub fn box(cache: *Cache, ops: *RocOps, payload: *const TypeDesc) *const TypeDesc {
-    if (payload.kind == .erased_callable) return payload;
+    if (payload.kind == .erased_callable and payload.child == null) {
+        const key = [_]u64{ @backingInt(KeyTag.box), ptrWord(payload) };
+        if (cache.lookup(&key)) |existing| return existing;
+        const built = immortal(TypeDesc, 1, ops);
+        built[0] = payload.*;
+        built[0].child = payload;
+        return cache.intern(&key, &built[0], ops);
+    }
     return container(cache, ops, .box, payload, payload.size != 0);
 }
 
@@ -424,7 +434,7 @@ fn container(cache: *Cache, ops: *RocOps, comptime kind: Kind, child: *const Typ
         .list => .list,
         .box => .box,
         .recursive_box => .recursive_box,
-        .zst, .scalar, .str, .bool, .record, .tuple, .tag_union, .erased_callable, .nominal, .opaque_unknown => @compileError("not a container kind"),
+        .zst, .scalar, .str, .bool, .record, .tuple, .tag_union, .erased_callable, .nominal => @compileError("not a container kind"),
     };
     const key = [_]u64{ @backingInt(tag), ptrWord(child) };
     if (cache.lookup(&key)) |existing| return existing;
@@ -473,7 +483,7 @@ pub fn recordExtended(cache: *Cache, ops: *RocOps, fields: []const FieldInput, e
     const ext_fields: []const desc_mod.Field = switch (ext.kind) {
         .record => ext.fields(),
         .zst => &.{},
-        .scalar, .str, .bool, .list, .box, .tuple, .tag_union, .erased_callable, .nominal, .opaque_unknown, .recursive_box => invariant(ops, "a record row's remainder descriptor is not a record"),
+        .scalar, .str, .bool, .list, .box, .tuple, .tag_union, .erased_callable, .nominal, .recursive_box => invariant(ops, "a record row's remainder descriptor is not a record"),
     };
     var scratch: Scratch(FieldInput, 32) = .{};
     defer scratch.deinit(ops);
@@ -494,7 +504,7 @@ pub fn tagUnionExtended(cache: *Cache, ops: *RocOps, variants: []const VariantIn
     const ext_variants: []const desc_mod.Variant = switch (ext.kind) {
         .tag_union => ext.variants(),
         .zst => &.{},
-        .scalar, .str, .bool, .list, .box, .record, .tuple, .erased_callable, .nominal, .opaque_unknown, .recursive_box => invariant(ops, "a tag row's remainder descriptor is not a tag union"),
+        .scalar, .str, .bool, .list, .box, .record, .tuple, .erased_callable, .nominal, .recursive_box => invariant(ops, "a tag row's remainder descriptor is not a tag union"),
     };
     var scratch: Scratch(VariantInput, 32) = .{};
     defer scratch.deinit(ops);

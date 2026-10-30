@@ -34363,6 +34363,7 @@ const BodyContext = struct {
     const DivergentTask = struct {
         expr: checked.CheckedExprId,
         form: DivergentForm,
+        saved: ?SavedSourceLocation = null,
         finish: union(enum) {
             passthrough,
             /// Wrap the child's data as an expression of this type.
@@ -34391,7 +34392,16 @@ const BodyContext = struct {
         return requestLowerTask(ctx, .{ .divergent = .{ .expr = expr, .form = form } });
     }
 
+    /// Lower a divergent expression at its own source location, so a failure
+    /// in it is reported there and not at the construct around it.
     fn stepDivergent(self: *BodyContext, frame: *LowerFrame, task: *DivergentTask, input: ?LowerResult) Allocator.Error!LowerStep {
+        if (frame.cursor == 0) task.saved = try self.saveSourceLocation(self.view.bodies.expr(task.expr));
+        const step = try self.stepDivergentExpr(frame, task, input);
+        if (step == .ret) self.restoreSourceLocation(&task.saved);
+        return step;
+    }
+
+    fn stepDivergentExpr(self: *BodyContext, frame: *LowerFrame, task: *DivergentTask, input: ?LowerResult) Allocator.Error!LowerStep {
         if (frame.cursor != 0) {
             const child = input.?;
             return switch (task.finish) {
@@ -69371,9 +69381,9 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
     frame_view.names = &frame_names;
     frame_view.types = checked_types.view();
     const params = [_]static_dispatch.EvidenceParamRecord{
-        .{ .method = frame_encode, .dispatcher_ty = receiver_ty, .callable_ty = encode_ty, .slot = 0, .runtime_dictionary = true },
-        .{ .method = frame_decode, .dispatcher_ty = other_receiver_ty, .callable_ty = other_decode_ty, .slot = 1, .runtime_dictionary = true },
-        .{ .method = frame_decode, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0, .runtime_dictionary = true },
+        .{ .method = frame_encode, .dispatcher_ty = receiver_ty, .callable_ty = encode_ty, .slot = 0 },
+        .{ .method = frame_decode, .dispatcher_ty = other_receiver_ty, .callable_ty = other_decode_ty, .slot = 1 },
+        .{ .method = frame_decode, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0 },
     };
     const frame: EvidenceChain = .{
         .scope = undefined,
@@ -69415,7 +69425,7 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
             .view = inner_view,
             .root = null,
             .scheme_vars = &.{receiver_ty},
-            .params = &.{.{ .method = inner_method, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0, .runtime_dictionary = true }},
+            .params = &.{.{ .method = inner_method, .dispatcher_ty = receiver_ty, .callable_ty = decode_ty, .slot = 0 }},
             .params_start = 0,
         },
         .subst = &.{.{ .node = receiver }},

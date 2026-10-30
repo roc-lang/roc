@@ -80,49 +80,6 @@ pub fn zeroSizedPtr() [*]u8 {
     return @ptrCast(&zero_sized_storage);
 }
 
-/// A last-in, first-out work stack, inline while small and grown through
-/// `RocOps` after.
-/// Whether two descriptors describe values of one shape: the same kinds,
-/// scalars, sizes, and field and tag names all the way down. A recursion box
-/// is compared by its payload's own kind and name, so the walk is finite.
-pub fn sameShape(a: *const TypeDesc, b: *const TypeDesc, ops: *RocOps) bool {
-    const Pair = struct { a: *const TypeDesc, b: *const TypeDesc };
-    var stack: Stack(Pair, 16) = .{};
-    defer stack.deinit(ops);
-    stack.push(.{ .a = a, .b = b }, ops);
-    while (stack.pop()) |pair| {
-        const x = pair.a;
-        const y = pair.b;
-        if (x == y) continue;
-        if (x.kind != y.kind or x.size != y.size or x.count != y.count) return false;
-        switch (x.kind) {
-            .scalar => if (x.scalar != y.scalar) return false,
-            .zst, .str, .bool, .erased_callable, .opaque_unknown => {},
-            .list, .box => stack.push(.{ .a = x.child.?, .b = y.child.? }, ops),
-            .recursive_box => {
-                const px = x.child.?;
-                const py = y.child.?;
-                if (px.kind != py.kind) return false;
-                if (px.kind == .nominal and !px.name.?.eql(py.name.?)) return false;
-            },
-            .nominal => {
-                if (!x.name.?.eql(y.name.?)) return false;
-                stack.push(.{ .a = x.child.?, .b = y.child.? }, ops);
-            },
-            .record, .tuple => for (x.fields(), y.fields()) |*fx, *fy| {
-                if ((fx.name == null) != (fy.name == null)) return false;
-                if (fx.name != null and !fx.name.?.eql(fy.name.?)) return false;
-                stack.push(.{ .a = fx.desc, .b = fy.desc }, ops);
-            },
-            .tag_union => for (x.variants(), y.variants()) |*vx, *vy| {
-                if (!vx.name.eql(vy.name) or vx.payload_count != vy.payload_count) return false;
-                if (vx.payload_count != 0) stack.push(.{ .a = vx.payload, .b = vy.payload }, ops);
-            },
-        }
-    }
-    return true;
-}
-
 /// An explicit work stack that keeps `inline_count` items inline and grows
 /// through `ops` past that, so walks never recurse.
 pub fn Stack(comptime T: type, comptime inline_count: usize) type {
@@ -202,7 +159,7 @@ pub fn incref(desc: *const TypeDesc, ptr: [*]u8, count: isize, ops: *RocOps) voi
             .str => value.rocStr().incref(@intCast(count), ops),
             .list => value.rocList().incref(count, d.child.?.flags.contains_refcounted, ops),
             .box, .recursive_box => if (d.child.?.size != 0) utils.increfDataPtr(value.word(), count, .atomic, ops),
-            .erased_callable, .opaque_unknown => utils.increfDataPtr(value.word(), count, .atomic, ops),
+            .erased_callable => utils.increfDataPtr(value.word(), count, .atomic, ops),
             .record, .tuple => for (d.fields()) |*f| {
                 if (f.is_padding == 0 and f.desc.flags.contains_refcounted) stack.push(value.field(f), ops);
             },
@@ -280,7 +237,6 @@ pub fn decref(desc: *const TypeDesc, ptr: [*]u8, ops: *RocOps) void {
                     }
                 },
                 .erased_callable => erased_callable.decref(value.word(), ops),
-                .opaque_unknown => ops.crash("boxy runtime: a RocBox(RocUnknown) cannot be released through its descriptor, which does not know its payload's alignment"),
                 .record, .tuple => {
                     const fields = d.fields();
                     var index = fields.len;
@@ -327,20 +283,20 @@ pub fn elemDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
 
 // Method overrides.
 
-/// The packed argument record of a method call, built in a buffer that is
-/// inline when small.
-const ArgsBuffer = struct {
+/// Bytes for a method call's packed argument record or an element held for a
+/// moment, aligned for any Roc value and inline when small.
+pub const ArgsBuffer = struct {
     inline_bytes: [256]u8 align(16) = undefined,
     heap: ?[*]u8 = null,
 
-    fn get(self: *ArgsBuffer, size: usize, ops: *RocOps) [*]u8 {
+    pub fn get(self: *ArgsBuffer, size: usize, ops: *RocOps) [*]u8 {
         if (size <= self.inline_bytes.len) return &self.inline_bytes;
         const bytes: [*]u8 = @ptrCast(ops.allocRaw(size, 16));
         self.heap = bytes;
         return bytes;
     }
 
-    fn deinit(self: *ArgsBuffer, ops: *RocOps) void {
+    pub fn deinit(self: *ArgsBuffer, ops: *RocOps) void {
         if (self.heap) |bytes| ops.dealloc(@ptrCast(bytes), 16);
     }
 };
@@ -437,7 +393,6 @@ const EqCtx = struct {
             .record, .tuple => .{ .components = .{ .lhs = lhs, .rhs = rhs } },
             .tag_union => .{ .tag_union = .{ .lhs = lhs, .rhs = rhs } },
             .erased_callable => invariant(self.ops, "a function value reached descriptor-guided equality"),
-            .opaque_unknown => self.ops.crash("boxy runtime: a RocBox(RocUnknown) has no equality"),
             .nominal => if (override(d, .is_eq)) |is_eq|
                 .{ .done = callIsEq(is_eq, lhs, rhs, self.ops) }
             else
@@ -541,7 +496,6 @@ const HashCtx = struct {
             .record, .tuple => .{ .components = value },
             .tag_union => .{ .tag_union = value },
             .erased_callable => invariant(self.ops, "a function value reached descriptor-guided hashing"),
-            .opaque_unknown => self.ops.crash("boxy runtime: a RocBox(RocUnknown) has no hash"),
             .nominal => if (override(d, .to_hash)) |to_hash|
                 .{ .done = callToHash(to_hash, value, hasher, self.ops) }
             else
@@ -661,12 +615,12 @@ const InspectCtx = struct {
             .record => .{ .record = value },
             .tuple => .{ .tuple = value },
             .tag_union => if (d.flags.presence_slot) .{ .presence_slot = value } else .{ .tag_union = value },
-            .erased_callable => .function,
+            // A box of a function is the callable itself (`compose.box`).
+            .erased_callable => if (d.child) |function| .{ .box = .at(function, value.ptr) } else .function,
             .nominal => .{ .nominal = .{
                 .override = if (override(d, .to_inspect) != null) value else null,
                 .backing = if (d.flags.inspect_opaque) null else .at(d.child.?, value.ptr),
             } },
-            .opaque_unknown => self.ops.crash("boxy runtime: a RocBox(RocUnknown) has no inspection"),
             .recursive_box => .{ .transparent = value.boxPayload() },
         };
     }

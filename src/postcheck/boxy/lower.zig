@@ -727,7 +727,6 @@ pub const Program = struct {
         const literal_requirements = view.view.checked_procedure_templates.templateLiteralRequirements(&template);
         var dictionary_params: std.ArrayList(u32) = .empty;
         for (evidence_params, 0..) |param, index| {
-            if (!param.runtime_dictionary) continue;
             const sealed_dispatcher = if (param.slot) |slot| std.mem.findScalar(u32, sealed_slots.items, slot) != null else false;
             if (sealed_dispatcher) continue;
             try dictionary_params.append(self.arena.allocator(), @intCast(index));

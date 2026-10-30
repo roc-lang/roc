@@ -386,7 +386,6 @@ const ContentDigester = struct {
         const refs = self.table.evidence_refs[span.start..][0..span.len];
         self.writeU32(@intCast(refs.len));
         for (refs) |ref| {
-            self.writeU8(@intFromBool(ref.runtime_dictionary));
             try self.writeType(ref.dispatcher_ty);
             self.writeU8(@backingInt(std.meta.activeTag(ref.resolution)));
             switch (ref.resolution) {
@@ -566,7 +565,7 @@ const Comparer = struct {
         const right_refs = self.table.evidence_refs[right.start..][0..right.len];
         for (left_refs, right_refs) |a, b| {
             try pending.append(self.allocator, .{ a.callable_contracts, b.callable_contracts });
-            if (a.runtime_dictionary != b.runtime_dictionary or std.meta.activeTag(a.resolution) != std.meta.activeTag(b.resolution)) return false;
+            if (std.meta.activeTag(a.resolution) != std.meta.activeTag(b.resolution)) return false;
             try self.typesPair(a.dispatcher_ty, b.dispatcher_ty);
             switch (a.resolution) {
                 .direct => |id| try self.work.append(self.allocator, .{ .kind = .evidence, .left = @backingInt(id), .right = @backingInt(b.resolution.direct) }),
