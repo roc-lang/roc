@@ -122,14 +122,46 @@ fn copyMingwRuntimeToTestPlatform(
 /// `src/default_platform/msvc_runtime/`.
 const msvc_runtime = @import("src/echo_platform/msvc_runtime.zig");
 
+var archive_member_names_tool: ?*Step.Compile = null;
+
+/// Zig names archive members after the paths of the objects it packed, which
+/// puts a `.zig-cache` key and the build machine's home directory into the
+/// archive. Every archive `roc` embeds goes through this tool first, which
+/// strips the names to bare file names (see src/build/archive_member_names.zig).
+///
+/// Debug, like the archive checker: each run takes about 20 ms in either mode,
+/// so a ReleaseSafe build only added its LLVM compile time to every cold cache.
+fn archiveMemberNamesTool(b: *std.Build) *Step.Compile {
+    if (archive_member_names_tool) |tool| return tool;
+    const tool = b.addExecutable(.{
+        .name = "archive_member_names",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/archive_member_names.zig"),
+            .target = hostToolTarget(b, .debug),
+            .optimize = .debug,
+        }),
+    });
+    configureBackend(tool, b.graph.host);
+    archive_member_names_tool = tool;
+    return tool;
+}
+
+/// `archive` with its member names stripped to bare file names.
+fn bareArchiveMemberNames(b: *std.Build, os: std.Target.Os.Tag, archive: std.Build.LazyPath, basename: []const u8) std.Build.LazyPath {
+    const run = b.addRunArtifact(archiveMemberNamesTool(b));
+    run.addArg(@tagName(os));
+    run.addFileArg(archive);
+    return run.addOutputFileArg(basename);
+}
+
 /// One startup archive per architecture, shared by every platform it is copied to.
-var msvc_runtime_libs: [2]?*Step.Compile = .{ null, null };
+var msvc_runtime_libs: [2]?std.Build.LazyPath = .{ null, null };
 
 /// The MSVC-ABI startup archive for `target_name` (`x64win` or `arm64win`):
 /// process and DLL entry points, the TLS directory, the routines vcruntime
 /// supplies, and compiler-rt, each in its own archive member so a link pulls
 /// only what it references.
-fn msvcRuntimeLib(b: *std.Build, target_name: []const u8) *Step.Compile {
+fn msvcRuntimeLib(b: *std.Build, target_name: []const u8) std.Build.LazyPath {
     const is_arm64 = std.mem.startsWith(u8, target_name, "arm64");
     const slot = &msvc_runtime_libs[@intFromBool(is_arm64)];
     if (slot.*) |lib| return lib;
@@ -178,8 +210,9 @@ fn msvcRuntimeLib(b: *std.Build, target_name: []const u8) *Step.Compile {
     // Without libc, compiler-rt also defines `__chkstk`.
     lib.bundle_compiler_rt = true;
 
-    slot.* = lib;
-    return lib;
+    const bare = bareArchiveMemberNames(b, .windows, lib.getEmittedBin(), msvc_runtime.runtime_archive);
+    slot.* = bare;
+    return bare;
 }
 
 /// Adds every MSVC runtime file for `target_name` to `copy`, landing in
@@ -192,7 +225,7 @@ fn addMsvcRuntimeCopies(
 ) void {
     test_fixtures.copy(
         copy,
-        msvcRuntimeLib(b, target_name).getEmittedBin(),
+        msvcRuntimeLib(b, target_name),
         b.pathJoin(&.{ dest_dir, msvc_runtime.runtime_archive }),
     );
     const import_source = msvc_runtime.importLibrarySourceTarget(target_name);
@@ -2115,12 +2148,6 @@ pub fn build(b: *std.Build) void {
         @tagName(builtin.target.abi),
     })) catch @panic("OOM");
 
-    // Path to bundled Darwin sysroot with libSystem.tbd stub
-    // This must be absolute: `roc` resolves it at run time from whatever
-    // directory it was started in, and `addOptionPathDirectory` bakes in the
-    // checkout-relative path, which only resolves from the repository root.
-    build_options.addOption([]const u8, "darwin_sysroot", b.root.joinString(b.allocator, "src/cli/darwin") catch @panic("OOM"));
-
     // We use zstd for `roc bundle` and `roc unbundle` and downloading .tar.zst bundles.
     const zstd = b.dependency("zstd", .{
         .target = target,
@@ -2764,6 +2791,7 @@ pub fn build(b: *std.Build) void {
             exe.step.dependOn(&write_compiled_builtins.step);
             release_exe_for_llvm_embedded = exe;
             build_release_step.dependOn(addInstallMaybeStrippedExe(b, exe, strip_macho_exports_tool));
+            build_release_step.dependOn(addBuildPathCheck(b, exe.getEmittedBin()));
         }
     }
 
@@ -5794,23 +5822,6 @@ fn addMainExe(
     // Include the pre-built builtins object
     interpreter_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
     interpreter_shim_lib.bundle_compiler_rt = true;
-    // Zig names archive members after the paths of the objects it packed,
-    // which puts a `.zig-cache` key and the build machine's home directory
-    // into the archive; `roc` embeds the archive, so strip the names to bare
-    // file names first (see src/build/archive_member_names.zig).
-    //
-    // Debug, like the archive checker below: each run takes about 20 ms in
-    // either mode, so a ReleaseSafe build only added its LLVM compile time to
-    // every cold cache.
-    const archive_member_names_tool = b.addExecutable(.{
-        .name = "archive_member_names",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/build/archive_member_names.zig"),
-            .target = hostToolTarget(b, .debug),
-            .optimize = .debug,
-        }),
-    });
-    configureBackend(archive_member_names_tool, b.graph.host);
     // The link inputs `roc` embeds are digested once here (see
     // src/build/embedded_digests.zig), so `roc run` never rehashes them.
     //
@@ -5829,10 +5840,8 @@ fn addMainExe(
     const embedded_digests = b.addRunArtifact(embedded_digests_tool);
     const embedded_digests_source = embedded_digests.addOutputFileArg("embedded_digests.zig");
     const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
-    const strip_interpreter_shim_names = b.addRunArtifact(archive_member_names_tool);
-    strip_interpreter_shim_names.addArg(@tagName(target.result.os.tag));
-    strip_interpreter_shim_names.addFileArg(interpreter_shim_lib.getEmittedBin());
-    const bare_interpreter_shim = strip_interpreter_shim_names.addOutputFileArg(interpreter_shim_filename);
+    // `roc` embeds the archive, so strip its member names first.
+    const bare_interpreter_shim = bareArchiveMemberNames(b, target.result.os.tag, interpreter_shim_lib.getEmittedBin(), interpreter_shim_filename);
     embedded_digests.addArg("interpreter_shim");
     embedded_digests.addFileArg(bare_interpreter_shim);
     // Install shim library to the output directory
@@ -5941,10 +5950,7 @@ fn addMainExe(
             selected_check.dependOn(&link_check.step);
         }
     }
-    const strip_machine_code_shim_names = b.addRunArtifact(archive_member_names_tool);
-    strip_machine_code_shim_names.addArg(@tagName(target.result.os.tag));
-    strip_machine_code_shim_names.addFileArg(checked_machine_code_shim);
-    const bare_machine_code_shim = strip_machine_code_shim_names.addOutputFileArg(machine_code_shim_filename);
+    const bare_machine_code_shim = bareArchiveMemberNames(b, target.result.os.tag, checked_machine_code_shim, machine_code_shim_filename);
     embedded_digests.addArg("machine_code_shim");
     embedded_digests.addFileArg(bare_machine_code_shim);
 
@@ -6343,6 +6349,14 @@ fn addMainExe(
         }
     }
 
+    // The libSystem stub every Mach-O link without a platform sysroot links
+    // against. Embedded rather than found on disk, so `roc` carries no path
+    // from the machine that built it and cross-links macOS from any host.
+    const libsystem_tbd = b.path("src/cli/darwin/usr/lib/libSystem.tbd");
+    _ = embedded_assets.addCopyFile(libsystem_tbd, "darwin/libSystem.tbd");
+    embedded_digests.addArg("darwin_libsystem_tbd");
+    embedded_digests.addFileArg(libsystem_tbd);
+
     const copy_default_mingw_runtime = embedded_assets;
     for ([_][]const u8{ "x64mingw", "arm64mingw" }) |target_name| {
         for (mingw_runtime_files) |filename| {
@@ -6355,7 +6369,7 @@ fn addMainExe(
 
     for ([_][]const u8{ "x64win", "arm64win" }) |target_name| {
         _ = embedded_assets.addCopyFile(
-            msvcRuntimeLib(b, target_name).getEmittedBin(),
+            msvcRuntimeLib(b, target_name),
             b.pathJoin(&.{ "targets", target_name, msvc_runtime.runtime_archive }),
         );
         const import_source = msvc_runtime.importLibrarySourceTarget(target_name);
@@ -6426,6 +6440,29 @@ fn addInstallMaybeStrippedExe(b: *std.Build, exe: *Step.Compile, macho_strip_too
         return &b.addInstallBinFile(executableRuntimePath(b, exe, macho_strip_tool), exe.out_filename).step;
     }
     return &b.addInstallArtifact(exe, .{}).step;
+}
+
+/// Fails the build when `binary` contains the checkout or a Zig cache
+/// directory, which would make it differ from the same commit built anywhere
+/// else (see src/build/build_path_check.zig).
+fn addBuildPathCheck(b: *std.Build, binary: std.Build.LazyPath) *Step {
+    const tool = b.addExecutable(.{
+        .name = "build_path_check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/build_path_check.zig"),
+            .target = hostToolTarget(b, .debug),
+            .optimize = .debug,
+        }),
+    });
+    configureBackend(tool, b.graph.host);
+    const run = b.addRunArtifact(tool);
+    // An output makes the result cacheable, so an unchanged binary is not
+    // rescanned on every build.
+    _ = run.addOutputFileArg("build_path_check.stamp");
+    run.addFileArg(binary);
+    run.addDirectoryArg(b.path("."));
+    run.addArg(b.graph.zig_exe);
+    return &run.step;
 }
 
 fn install_and_run(
