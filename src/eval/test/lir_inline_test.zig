@@ -209,6 +209,9 @@ fn lowerModuleWithOptions(
             .target_usize = base.target.TargetUsize.native,
             .consume_dead_boxes = false,
             .specialization_strategy = options.specialization_strategy,
+            // The harness evaluates the root it lowers, so a `.boxy`
+            // lowering of a compile-time root is the evaluator's.
+            .boxy_compile_time = options.specialization_strategy == .boxy and main_request.abi == .compile_time,
             .checked_module_state = options.checked_module_state,
             .inline_mode = inline_mode,
             .inline_expects = options.inline_expects,

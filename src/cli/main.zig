@@ -11752,6 +11752,7 @@ const BoxyUnitTask = struct {
 
         var object_compiler = backend.ObjectFileCompiler.init(gpa);
         object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
+        object_compiler.link_unit = true;
         var written = object_compiler.compileToObjectFile(
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,

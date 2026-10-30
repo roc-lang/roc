@@ -92,6 +92,10 @@ pub const ObjectFileCompiler = struct {
     /// Emit every procedure as a global symbol and emit the object even
     /// without host entrypoints: the object is a module pack, not an app.
     pack_mode: bool = false,
+    /// The object is one unit of a multi-object link: it binds what its
+    /// module exports, which may be nothing at all, and is emitted either
+    /// way.
+    link_unit: bool = false,
     /// Where the excerpts of external (object-cache) procedures come from.
     splice_source: ?SpliceSource = null,
     /// Lift the compiled program into excerpts and keep them in
@@ -185,7 +189,7 @@ pub const ObjectFileCompiler = struct {
         proc_specs: []const LirProcSpec,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target, self.enable_default_platform_runtime, self.erased_capture_prefix, self.timing, self.pack_mode, self.splice_source, self.capture_excerpts, self.emit_object, self.post_check_executor, self.reuse_same_program);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target, self.enable_default_platform_runtime, self.erased_capture_prefix, self.timing, self.pack_mode, self.link_unit, self.splice_source, self.capture_excerpts, self.emit_object, self.post_check_executor, self.reuse_same_program);
     }
 
     /// Compile to an object file and write it to a path.
@@ -291,6 +295,7 @@ fn compileWithCodeGen(
     erased_capture_prefix: u32,
     timing: ?*ObjectFileCompiler.Timing,
     pack_mode: bool,
+    link_unit: bool,
     splice_source: ?SpliceSource,
     capture_excerpts: bool,
     emit_object: bool,
@@ -300,7 +305,7 @@ fn compileWithCodeGen(
     const exports_procs = for (proc_specs) |proc| {
         if (proc.exported) break true;
     } else false;
-    if (!pack_mode and entrypoints.len == 0 and static_data_exports.len == 0 and !exports_procs) {
+    if (!pack_mode and !link_unit and entrypoints.len == 0 and static_data_exports.len == 0 and !exports_procs) {
         return CompilationError.NoEntrypoints;
     }
 
@@ -388,11 +393,19 @@ fn compileWithCodeGen(
     defer staged.deinit();
     var host_visible = std.ArrayList(CodeExcerpt.DataItem).empty;
     defer host_visible.deinit(allocator);
+    // The constants the host names. Only these bind globally: the rest of
+    // the host-visible data is reached from them by relocation within this
+    // object, and a content-named datum another object of the link also
+    // carries must not clash with it.
+    var exported_roots = std.StringHashMap(void).init(allocator);
+    defer exported_roots.deinit();
     {
         var roots = std.ArrayList([]const u8).empty;
         defer roots.deinit(allocator);
         for (static_data_exports) |data_export| {
-            if (data_export.is_exported) roots.append(allocator, data_export.symbol_name) catch return CompilationError.OutOfMemory;
+            if (!data_export.is_exported) continue;
+            roots.append(allocator, data_export.symbol_name) catch return CompilationError.OutOfMemory;
+            exported_roots.put(data_export.symbol_name, {}) catch return CompilationError.OutOfMemory;
         }
         CodeExcerpt.dataClosure(allocator, &catalog, roots.items, &host_visible) catch |err| switch (err) {
             error.OutOfMemory => return CompilationError.OutOfMemory,
@@ -542,13 +555,14 @@ fn compileWithCodeGen(
                 .addend = relocation.addend,
                 .kind = if (relocation.function) .function_pointer else .address,
             };
+            const exported = datum.host_visible and exported_roots.contains(item.name);
             out.* = .{
                 .symbol_name = item.name,
                 .bytes = item.bytes,
                 .symbol_offset = item.symbol_offset,
                 .alignment = item.alignment,
-                .is_global = datum.host_visible,
-                .is_exported = datum.host_visible,
+                .is_global = exported,
+                .is_exported = exported,
                 .relocations = relocations,
             };
         }
@@ -1106,6 +1120,7 @@ fn crossCompileDispatch(
     erased_capture_prefix: u32,
     timing: ?*ObjectFileCompiler.Timing,
     pack_mode: bool,
+    link_unit: bool,
     splice_source: ?SpliceSource,
     capture_excerpts: bool,
     emit_object: bool,
@@ -1133,6 +1148,7 @@ fn crossCompileDispatch(
                     erased_capture_prefix,
                     timing,
                     pack_mode,
+                    link_unit,
                     splice_source,
                     capture_excerpts,
                     emit_object,
@@ -1155,6 +1171,22 @@ test "ObjectFileCompiler initialization" {
     try std.testing.expectEqual(allocator, compiler.allocator);
     try std.testing.expect(compiler.post_check_executor == null);
     try std.testing.expect(compiler.reuse_same_program == null);
+}
+
+test "ObjectFileCompiler emits a link unit that defines nothing and refuses an empty program" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+
+    var compiler = ObjectFileCompiler.init(allocator);
+    try std.testing.expectError(CompilationError.NoEntrypoints, compiler.compileToObjectFile(&store, &layouts, &.{}, &.{}, &.{}, .arm64linux));
+
+    compiler.link_unit = true;
+    var result = try compiler.compileToObjectFile(&store, &layouts, &.{}, &.{}, &.{}, .arm64linux);
+    defer result.deinit();
+    try std.testing.expect(std.mem.startsWith(u8, result.object_bytes, "\x7fELF"));
 }
 
 test "ObjectFileCompiler native emission skips static initializers and captures packs" {

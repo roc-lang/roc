@@ -202,6 +202,8 @@ pub fn constTypeOf(program: *Program, ty: TypeId) Allocator.Error!const_store.Co
             defer allocator.free(ids);
             for (all_args[0..formal_count], ids) |arg, *slot| slot.* = try constTypeOf(program, arg);
             const backing = try constTypeOf(program, try program.layouts.converter.backing(ty));
+            // An opaque declaration's backing is a layout later stages never
+            // look into, as Monotype types it.
             break :blk .{ .named = .{
                 .named_type = namedType(program, nominal),
                 .def = .{
@@ -212,7 +214,7 @@ pub fn constTypeOf(program: *Program, ty: TypeId) Allocator.Error!const_store.Co
                 .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
                 .builtin_owner = builtinOwner(nominal.builtin),
                 .args = try const_types.appendTypeSpan(ids),
-                .backing = .{ .ty = backing, .use = .inspectable, .authority = .checked_public },
+                .backing = .{ .ty = backing, .use = if (nominal.is_opaque) .runtime_layout_only else .inspectable, .authority = .checked_public },
             } };
         },
         .function => invariant("a function value reached a stored type; roots holding function values are evaluated specialized"),

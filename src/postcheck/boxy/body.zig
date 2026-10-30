@@ -1147,7 +1147,23 @@ pub const Builder = struct {
                 if (params.len != 0) invariant("an entry wrapper has parameters");
                 self.own_root = wrapper.root;
                 try self.tasks.append(self.allocator, .ret);
-                try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr });
+                // A root whose value evaluation stored is read from the
+                // store wherever it occurs (design.md "Literal Tables"), in
+                // its own wrapper too: a module unit emits the wrapper for
+                // the objects that name it, with none of its body's
+                // literals, which belong to compile-time evaluation alone.
+                const stored = if (self.program.input.compile_time) false else switch (root.payload) {
+                    .const_node => |node| blk: {
+                        try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = worker.ret } });
+                        break :blk true;
+                    },
+                    .fn_value => |fn_id| blk: {
+                        try self.restoreFn(.{ .module = self.module }, fn_id, worker.ret);
+                        break :blk true;
+                    },
+                    .pending, .unevaluated, .discarded, .expect, .runtime => false,
+                };
+                if (!stored) try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr });
             },
         }
         try self.run();
@@ -3040,7 +3056,19 @@ pub const Builder = struct {
     /// instance's dictionary where the literal is (`lowerLiteralConversion`).
     pub fn lowerInstanceLiteral(self: *Builder, expr_id: CheckedExprId, kind: LIR.LiteralRejectionKind, plan_id: static_dispatch.StaticDispatchPlanId, lit_ty: TypeId) Allocator.Error!void {
         if (self.program.input.compile_time) return try self.lowerLiteralConversion(expr_id, kind, plan_id, lit_ty);
+        // A module unit emits every template (design.md "Per-Module
+        // Output"), so a body the program's discovery never reached has no
+        // converted instance: an interpolation there, at a type closed in
+        // its body, calls its conversion where it is, and nothing runs it.
+        if (kind == .interpolation and !self.hasLiteralEntries(expr_id) and try self.closed(lit_ty)) return try self.lowerLiteralConversion(expr_id, kind, plan_id, lit_ty);
         try self.lowerLiteralTableAt(expr_id, kind, lit_ty);
+    }
+
+    /// Whether compile-time evaluation converted any instance of the literal
+    /// `expr_id`.
+    fn hasLiteralEntries(self: *const Builder, expr_id: CheckedExprId) bool {
+        const list = self.program.literal_entries.get(.{ .module = self.module, .expr = expr_id }) orelse return false;
+        return list.items.len != 0;
     }
 
     /// Call a literal's conversion (`from_numeral`, `from_quote`,

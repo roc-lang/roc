@@ -14940,7 +14940,11 @@ called with the interpolated values. There is no builtin rule for an
 interpolation: some candidate always describes its type, so with one
 candidate it is that candidate and otherwise the last candidate is the one no
 earlier candidate is. `from_interpolation` never runs in a `.boxy` runtime
-program.
+program. A module unit emits every template (Per-Module Output), among them
+bodies the program's discovery never reached, whose interpolations have no
+candidate: an interpolation there at a type closed in its body calls its
+conversion where it is, as the evaluator's own programs convert, and the
+program runs none of it.
 
 An expression compile-time evaluation hoisted and stored is read from its
 stored value wherever it occurs, as `.lss` reads it, except in the entry
