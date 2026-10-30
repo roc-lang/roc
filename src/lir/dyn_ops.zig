@@ -47,7 +47,6 @@ pub fn ownership(op: DynOp) Ownership {
         .desc_recursive_open,
         .desc_recursive_close,
         .tag_discriminant_of,
-        .desc_index,
         => .none,
         // A dictionary is an immortal erased callable built from its
         // captures, which it holds as an aggregate holds its fields.
@@ -64,7 +63,7 @@ pub fn ownership(op: DynOp) Ownership {
         .box_payload_addr => |payload| .{ .borrow_component = payload.box },
         .tag_payload_addr => |payload| .{ .borrow_component = payload.base },
         .view => |view| .{ .borrow_component = view.address },
-        .tag_discriminant, .eq, .hash, .inspect, .numeral, .adapt => .borrow_operands,
+        .tag_discriminant, .eq, .hash, .inspect, .adapt => .borrow_operands,
         .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .closure => .construct,
         .call_erased => .call_erased,
     };
@@ -161,10 +160,6 @@ pub const Operands = struct {
                 result.single(tag.desc);
                 result.single(tag.name);
             },
-            .desc_index => |index| {
-                result.single(index.desc);
-                result.single(index.candidates);
-            },
             .tag_payload_addr => |payload| {
                 result.single(payload.base);
                 result.single(payload.desc);
@@ -220,10 +215,6 @@ pub const Operands = struct {
             },
             .closure => |closure| result.single(closure.capture),
             .view => |view| result.single(view.address),
-            .numeral => |numeral| {
-                result.single(numeral.desc);
-                result.single(numeral.table);
-            },
             .adapt => |adapt| {
                 result.single(adapt.src);
                 result.single(adapt.from);
@@ -267,7 +258,7 @@ pub fn constructedValues(store: *const LirStore, allocator: std.mem.Allocator, o
         .slot_store => |slot| try out.appendSlice(allocator, &.{ slot.slot, slot.value }),
         .dict_compose => |dict| try appendSpan(store, allocator, dict.captures, out),
         .closure => |closure| try out.append(allocator, closure.capture),
-        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .desc_index, .tag_payload_addr, .eq, .hash, .inspect, .call_erased, .view, .numeral, .adapt => unreachable, // only construct operations consume value operands
+        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .eq, .hash, .inspect, .call_erased, .view, .adapt => unreachable, // only construct operations consume value operands
     }
 }
 
@@ -278,10 +269,9 @@ pub fn borrowedValues(store: *const LirStore, allocator: std.mem.Allocator, op: 
         .eq => |eq| try out.appendSlice(allocator, &.{ eq.lhs, eq.rhs }),
         .hash => |hash| try out.appendSlice(allocator, &.{ hash.hasher, hash.value }),
         .inspect => |inspect| try out.append(allocator, inspect.value),
-        .numeral => {},
         .adapt => |adapt| try out.append(allocator, adapt.src),
         .dict_record => |dict| try appendSpan(store, allocator, dict.methods, out),
-        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_compose, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant_of, .desc_index, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .call_erased, .closure, .view => unreachable, // only borrow_operands operations borrow value operands
+        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_compose, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .call_erased, .closure, .view => unreachable, // only borrow_operands operations borrow value operands
     }
 }
 
@@ -365,7 +355,6 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
         .box_payload_addr => |payload| .{ .box_payload_addr = .{ .box = try Remap.one(context, payload.box), .desc = try Remap.one(context, payload.desc) } },
         .tag_discriminant => |tag| .{ .tag_discriminant = .{ .base = try Remap.one(context, tag.base), .desc = try Remap.one(context, tag.desc) } },
         .tag_discriminant_of => |tag| .{ .tag_discriminant_of = .{ .desc = try Remap.one(context, tag.desc), .name = try Remap.one(context, tag.name) } },
-        .desc_index => |index| .{ .desc_index = .{ .desc = try Remap.one(context, index.desc), .candidates = try Remap.one(context, index.candidates) } },
         .tag_payload_addr => |payload| .{ .tag_payload_addr = .{
             .base = try Remap.one(context, payload.base),
             .desc = try Remap.one(context, payload.desc),
@@ -396,7 +385,6 @@ pub fn remapOperands(store: *LirStore, op: DynOp, context: anytype, comptime map
         } },
         .closure => |closure| .{ .closure = .{ .proc = closure.proc, .capture = try Remap.one(context, closure.capture) } },
         .view => |view| .{ .view = .{ .address = try Remap.one(context, view.address) } },
-        .numeral => |numeral| .{ .numeral = .{ .desc = try Remap.one(context, numeral.desc), .table = try Remap.one(context, numeral.table) } },
         .adapt => |adapt| .{ .adapt = .{ .src = try Remap.one(context, adapt.src), .from = try Remap.one(context, adapt.from), .to = try Remap.one(context, adapt.to) } },
     };
 }

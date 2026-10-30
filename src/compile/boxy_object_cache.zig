@@ -5,17 +5,18 @@
 //! compiled in, and the compiler's compatibility identity. An entry holds
 //! everything a build needs of the module's object: the export interface
 //! each importing module compiles its calls against, the hosted symbols the
-//! object references, and the object code itself. Nothing in it refers to
-//! another cache.
+//! object references, the object code itself, and where that code came from.
+//! Nothing in it refers to another cache.
 
 const std = @import("std");
 const base = @import("base");
 const build_options = @import("build_options");
+const CodeLocations = @import("backend").dev.CodeLocations;
 
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 1;
+pub const format_version: u32 = 2;
 
 const magic = "RBXO";
 
@@ -43,12 +44,6 @@ pub const KeyInput = struct {
     opt: []const u8,
     /// Whether inline expects are compiled in (`roc test`) or dropped.
     inline_expects: bool,
-    /// For a module whose code embeds a literal table (an instance-dependent
-    /// literal's values, which the program's discovery converts): the key
-    /// of the program the table was converted for, which covers every
-    /// instance the program reaches the literal at. Null for a module whose
-    /// object is the same in every program.
-    literal_program: ?[32]u8 = null,
 };
 
 /// The key of a module's object for `input` under this compiler.
@@ -67,12 +62,6 @@ pub fn key(input: KeyInput) Key {
     hashLengthPrefixed(&hasher, input.target);
     hashLengthPrefixed(&hasher, input.opt);
     hasher.update(&[_]u8{@intFromBool(input.inline_expects)});
-    if (input.literal_program) |program| {
-        hasher.update(&[_]u8{1});
-        hasher.update(&program);
-    } else {
-        hasher.update(&[_]u8{0});
-    }
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -123,6 +112,9 @@ pub const Entry = struct {
     /// keeps, and the symbols a shared library exports.
     link_root_symbols: []const []const u8 = &.{},
     app_export_symbols: []const []const u8 = &.{},
+    /// Where the object's code came from (`CodeLocations`): what a
+    /// compile-time program running the object reports its failures from.
+    code_locations: []const u8 = &.{},
     object: []const u8,
 };
 
@@ -152,6 +144,8 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
             try bytes.appendSlice(allocator, symbol);
         }
     }
+    try appendU64(&bytes, allocator, entry.code_locations.len);
+    try bytes.appendSlice(allocator, entry.code_locations);
     try appendU64(&bytes, allocator, entry.object.len);
     try bytes.appendSlice(allocator, entry.object);
     return try bytes.toOwnedSlice(allocator);
@@ -200,6 +194,12 @@ pub fn decode(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     errdefer freeSymbols(allocator, link_root_symbols);
     const app_export_symbols = try decodeSymbols(allocator, &reader);
     errdefer freeSymbols(allocator, app_export_symbols);
+    const locations_len = try reader.word64();
+    if (locations_len > std.math.maxInt(usize)) return error.InvalidEntry;
+    const encoded_locations = try reader.take(@intCast(locations_len));
+    if (encoded_locations.len != 0 and !CodeLocations.validate(encoded_locations)) return error.InvalidEntry;
+    const code_locations = try allocator.dupe(u8, encoded_locations);
+    errdefer allocator.free(code_locations);
     const object_len = try reader.word64();
     if (object_len > std.math.maxInt(usize)) return error.InvalidEntry;
     const object = try allocator.dupe(u8, try reader.take(@intCast(object_len)));
@@ -210,6 +210,7 @@ pub fn decode(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         .hosted_symbols = hosted_symbols,
         .link_root_symbols = link_root_symbols,
         .app_export_symbols = app_export_symbols,
+        .code_locations = code_locations,
         .object = object,
     };
 }
@@ -239,6 +240,7 @@ pub fn deinitEntry(allocator: Allocator, entry: Entry) void {
     allocator.free(entry.exports);
     freeSymbols(allocator, entry.hosted_symbols);
     freeSymbols(allocator, entry.link_root_symbols);
+    allocator.free(entry.code_locations);
     freeSymbols(allocator, entry.app_export_symbols);
     allocator.free(entry.object);
 }
@@ -328,13 +330,6 @@ test "a Boxy object key is a function of exactly its declared inputs" {
     var changed_expects = testInput();
     changed_expects.inline_expects = true;
     try std.testing.expect(!std.mem.eql(u8, &baseline.bytes, &key(changed_expects).bytes));
-
-    var with_literal_program = testInput();
-    with_literal_program.literal_program = @splat(11);
-    try std.testing.expect(!std.mem.eql(u8, &baseline.bytes, &key(with_literal_program).bytes));
-    var other_literal_program = testInput();
-    other_literal_program.literal_program = @splat(12);
-    try std.testing.expect(!std.mem.eql(u8, &key(with_literal_program).bytes, &key(other_literal_program).bytes));
 
     // A length prefix keeps one field's tail from reading as the next's head.
     var moved_boundary = testInput();

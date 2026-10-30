@@ -709,7 +709,7 @@ pub const Converter = struct {
         return identities.get(.{ .module = module, .ty = ty });
     }
 
-    fn rootHasIdentityVariables(view: *const ModuleView, ty: checked.CheckedTypeId) bool {
+    pub fn rootHasIdentityVariables(view: *const ModuleView, ty: checked.CheckedTypeId) bool {
         const roots = view.types().rootRows();
         const index: usize = @backingInt(ty);
         if (index >= roots.len) return true;

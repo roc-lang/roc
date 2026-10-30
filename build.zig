@@ -1056,6 +1056,7 @@ fn createAndRunBuiltinCompiler(
             .{ .name = "sljmp", .module = roc_modules.sljmp },
             .{ .name = "value_rules", .module = roc_modules.value_rules },
             .{ .name = "boxy_runtime", .module = roc_modules.boxy_runtime },
+            .{ .name = "vendor_relocatable_loader", .module = roc_modules.vendor_relocatable_loader },
         },
     });
     // The interpreter's hosted-call trampoline is hand-written assembly; attach

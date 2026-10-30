@@ -55,6 +55,7 @@ const compile_package = @import("compile_package.zig");
 const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
+const boxy_unit = @import("boxy_unit.zig");
 const cache_versioning = @import("cache_versioning.zig");
 const discovery_roots = @import("discovery_roots.zig");
 const cache_key_mod = @import("cache_key.zig");
@@ -1448,6 +1449,152 @@ test "dependency post-order of a deep dependency chain runs on a small stack" {
     for (order, 0..) |node, position| try std.testing.expectEqual(depth - 1 - position, node);
 }
 
+/// The lowering of the module objects compile-time evaluation links against.
+pub const BoxyObjectLowering = struct {
+    target: roc_target.RocTarget,
+    config: lir.CheckedPipeline.TargetConfig,
+    opt: []const u8,
+    inline_expects: bool,
+};
+
+/// The module objects of one `.boxy` evaluation: restored from the
+/// per-module cache, or compiled whole and filed there the first time a
+/// module's importer needs it (design.md "Caching Under `.boxy`").
+const BoxyObjects = struct {
+    coordinator: *Coordinator,
+    lowering: BoxyObjectLowering,
+    manager: *CacheManager,
+    interfaces: eval.CompileTimeFinalization.ExportInterfaces,
+    arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator),
+    /// Each module's object, once it has been asked for; null for a module
+    /// with none of its own.
+    objects: std.AutoHashMapUnmanaged([32]u8, ?eval.CompileTimeFinalization.BoxyObject) = .empty,
+
+    const Object = eval.CompileTimeFinalization.BoxyObject;
+    const Artifact = CheckedArtifact.CheckedModuleArtifact;
+    const Error = eval.CompileTimeFinalization.FinalizeError;
+
+    fn deinit(self: *BoxyObjects) void {
+        self.objects.deinit(self.coordinator.gpa);
+        self.interfaces.deinit();
+        self.arena.deinit();
+    }
+
+    fn source(self: *BoxyObjects) eval.CompileTimeFinalization.BoxyObjectSource {
+        return .{ .context = self, .objects = objectSet, .interfaces = &self.interfaces, .target = self.lowering.config };
+    }
+
+    fn objectSet(context: *anyopaque, module: *const Artifact) Error!?eval.CompileTimeFinalization.BoxyObjectSet {
+        const self: *BoxyObjects = @ptrCast(@alignCast(context));
+        const arena = self.arena.allocator();
+        var ordered = std.ArrayList(Object).empty;
+        var visited = std.AutoHashMapUnmanaged([32]u8, *const Artifact).empty;
+        defer visited.deinit(self.coordinator.gpa);
+        const builtin_artifact = &self.coordinator.builtin_modules.checked_artifact;
+        if (!try self.visit(builtin_artifact, &visited, &ordered)) return null;
+        for (module.direct_import_module_keys) |key| {
+            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse return null;
+            if (!try self.visit(imported, &visited, &ordered)) return null;
+        }
+        return .{
+            .objects = try arena.dupe(Object, ordered.items),
+            .views = try self.withEveryObjectsModule(try self.viewsOf(module), visited),
+        };
+    }
+
+    fn viewsOf(self: *BoxyObjects, module: *const Artifact) Allocator.Error![]const CheckedArtifact.ImportedModuleView {
+        const views = try self.coordinator.collectImportedArtifactViews(self.coordinator.gpa, module);
+        defer self.coordinator.gpa.free(views);
+        return try self.arena.allocator().dupe(CheckedArtifact.ImportedModuleView, views);
+    }
+
+    /// `views`, and a view of every module whose object runs: a failure in
+    /// that object's code is reported against its module, which a private
+    /// import of an import leaves out of `views`.
+    fn withEveryObjectsModule(self: *BoxyObjects, views: []const CheckedArtifact.ImportedModuleView, visited: std.AutoHashMapUnmanaged([32]u8, *const Artifact)) Error![]const CheckedArtifact.ImportedModuleView {
+        const arena = self.arena.allocator();
+        var all = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
+        try all.appendSlice(arena, views);
+        var artifacts = visited.valueIterator();
+        while (artifacts.next()) |artifact| {
+            const present = for (views) |view| {
+                if (std.meta.eql(view.key, artifact.*.key)) break true;
+            } else false;
+            if (!present) try all.append(arena, CheckedArtifact.importedView(artifact.*));
+        }
+        return all.items;
+    }
+
+    /// Append the objects of `artifact` and its imports to `ordered`, imports
+    /// first. False when one has no object of its own.
+    fn visit(self: *BoxyObjects, artifact: *const Artifact, visited: *std.AutoHashMapUnmanaged([32]u8, *const Artifact), ordered: *std.ArrayList(Object)) Error!bool {
+        const gpa = self.coordinator.gpa;
+        const entry = try visited.getOrPut(gpa, artifact.key.bytes);
+        if (entry.found_existing) return true;
+        entry.value_ptr.* = artifact;
+        for (artifact.direct_import_module_keys) |key| {
+            const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse return false;
+            if (!try self.visit(imported, visited, ordered)) return false;
+        }
+        const object = (try self.objectOf(artifact)) orelse return false;
+        try ordered.append(self.arena.allocator(), object);
+        return true;
+    }
+
+    fn objectOf(self: *BoxyObjects, artifact: *const Artifact) Error!?Object {
+        const gpa = self.coordinator.gpa;
+        if (self.objects.get(artifact.key.bytes)) |known| return known;
+        const object = try self.buildObject(artifact);
+        try self.objects.put(gpa, artifact.key.bytes, object);
+        return object;
+    }
+
+    /// The module whose hosted section binds `artifact`'s hosted functions.
+    fn platformOf(self: *BoxyObjects, artifact: *const Artifact) ?CheckedArtifact.ImportedModuleView {
+        if (artifact.hosted_procs.procs.len == 0) return null;
+        var packages = self.coordinator.packages.iterator();
+        while (packages.next()) |package| {
+            for (package.value_ptr.*.modules.items) |*mod| {
+                const candidate = mod.checkedArtifact() orelse continue;
+                if (candidate.module_identity.kind == .platform) return CheckedArtifact.importedView(candidate);
+            }
+        }
+        return null;
+    }
+
+    fn buildObject(self: *BoxyObjects, artifact: *const Artifact) Error!?Object {
+        const gpa = self.coordinator.gpa;
+        // A platform module with requirements is lowered at its app's types,
+        // and a module with roots left to evaluate has no final object.
+        if (artifact.platform_type_inputs.requirements.len != 0 or artifact.hasUnevaluatedRequests(.boxy)) return null;
+        const platform = self.platformOf(artifact);
+        if (artifact.hosted_procs.procs.len != 0 and platform == null) return null;
+        const arena = self.arena.allocator();
+        const views = try self.viewsOf(artifact);
+        var config = self.lowering.config;
+        config.boxy_unit = .{ .imports = &self.interfaces, .root = false };
+        config.checked_module_state = if (artifact.evaluation_state == .finalized) .complete else .checking_finalization;
+        const built = boxy_unit.restoreOrBuild(.{
+            .gpa = gpa,
+            .artifact = artifact,
+            .platform = platform,
+            .views = views,
+            .target = self.lowering.target,
+            .config = config,
+            .interfaces = &self.interfaces,
+            .cache_manager = self.manager,
+            .key = try boxy_unit.objectKey(gpa, artifact, platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, false),
+        }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => Coordinator.coordinatorInvariant("a module's object failed to compile for compile-time evaluation: {s}", .{@errorName(err)}),
+        };
+        defer built.deinit(gpa);
+        const symbols = try arena.alloc([]const u8, built.hosted_symbols.len);
+        for (built.hosted_symbols, symbols) |symbol, *copy| copy.* = try arena.dupe(u8, symbol);
+        return .{ .module = artifact.key.bytes, .object = try arena.dupe(u8, built.object), .code_locations = try arena.dupe(u8, built.code_locations), .hosted_symbols = symbols };
+    }
+};
+
 /// Coordinator manages all compilation state and coordinates workers
 pub const Coordinator = struct {
     gpa: Allocator,
@@ -1507,6 +1654,9 @@ pub const Coordinator = struct {
     /// otherwise (design.md "Caching Under `.boxy`"). It is part of each
     /// checked module's cache identity.
     specialization_strategy: base.SpecializationStrategy = .lss,
+    /// The lowering of the module objects a `.boxy` compile-time evaluation
+    /// links against, and the host target they are compiled for.
+    boxy_object_lowering: ?BoxyObjectLowering = null,
     /// A completed result owns the semantic outcome independently of checked
     /// modules, which can remain prepared when no live finalization is needed.
     compilation_result: union(enum) { live, recorded: *const completed.Outcome } = .live,
@@ -3211,7 +3361,7 @@ pub const Coordinator = struct {
             for (package.value_ptr.*.modules.items) |*mod| {
                 if (mod.pending_evaluation != null) continue;
                 const artifact = mod.checkedArtifact() orelse continue;
-                if (artifact.evaluation_state != .finalized or !artifact.hasUnevaluatedRequests()) continue;
+                if (artifact.evaluation_state != .finalized or !artifact.hasUnevaluatedRequests(self.specialization_strategy)) continue;
                 if (dependency_root != null and !dependencies.contains(artifact.key.bytes)) continue;
                 // A platform awaiting its app relation finalizes in the pass
                 // that evaluates the platform alone, which demands every root.
@@ -3220,7 +3370,7 @@ pub const Coordinator = struct {
                 errdefer state.deinit();
                 try artifact.reopenForEvaluation(self.gpa);
                 mod.pending_evaluation = state;
-                mod.reopened_unevaluated = unevaluatedRequestCount(artifact);
+                mod.reopened_unevaluated = unevaluatedRequestCount(artifact, self.specialization_strategy);
             }
         }
         var entries = std.ArrayList(Entry).empty;
@@ -3365,6 +3515,12 @@ pub const Coordinator = struct {
         var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing);
         options.strategy = self.specialization_strategy;
         options.post_check_executor = self.postCheckExecutor();
+        var boxy_objects: ?BoxyObjects = null;
+        defer if (boxy_objects) |*objects| objects.deinit();
+        if (self.specialization_strategy == .boxy) if (self.boxy_object_lowering) |lowering| if (self.cache_manager) |manager| if (manager.config.enabled) {
+            boxy_objects = .{ .coordinator = self, .lowering = lowering, .manager = manager, .interfaces = .init(self.gpa, self.roc_ctx.std_io) };
+        };
+        if (boxy_objects) |*objects| options.boxy_objects = objects.source();
         options.cancel_request = self.cancel_request;
         options.object_cache = self.compile_time_object_cache;
         options.keep_artifacts = self.compile_time_object_cache != null or self.keep_compile_time_artifacts;
@@ -3522,9 +3678,6 @@ pub const Coordinator = struct {
         const serialized: *const CheckedArtifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(buffer.ptr));
         serialized.validate(buffer.len) catch return;
         if (!std.mem.eql(u8, &serialized.key.bytes, &previous_key)) return;
-        // A value another strategy's evaluator stored is restored by that
-        // strategy's programs alone.
-        if (serialized.checking_context_identity.evaluation_strategy.value != artifact.checking_context_identity.evaluation_strategy) return;
         var previous = eval.CompileTimeReuse.Previous.fromSerialized(serialized, self.gpa);
         var previous_owned = true;
         defer if (previous_owned) previous.deinit();
@@ -3697,10 +3850,13 @@ pub const Coordinator = struct {
         self.roc_ctx.writeStderr(out.written()) catch {};
     }
 
-    fn unevaluatedRequestCount(artifact: *const CheckedArtifact.CheckedModuleArtifact) usize {
+    /// The roots a compilation under `strategy` has yet to evaluate; a
+    /// `.lss` compilation never evaluates a literal argument root.
+    fn unevaluatedRequestCount(artifact: *const CheckedArtifact.CheckedModuleArtifact, strategy: base.SpecializationStrategy) usize {
         var count: usize = 0;
         for (artifact.root_requests.compile_time_requests) |request| {
             const root = request.compile_time_root orelse continue;
+            if (strategy == .lss and artifact.compile_time_roots.root(root).kind == .literal_argument) continue;
             if (artifact.compile_time_roots.root(root).payload == .unevaluated or
                 artifact.compile_time_roots.root(root).payload == .pending) count += 1;
         }
@@ -3842,7 +3998,7 @@ pub const Coordinator = struct {
         }
         // A reopened cache entry is published again only when this
         // compilation evaluated roots it lacked.
-        const evaluated_more = if (mod.reopened_unevaluated) |before| unevaluatedRequestCount(artifact) < before else true;
+        const evaluated_more = if (mod.reopened_unevaluated) |before| unevaluatedRequestCount(artifact, self.specialization_strategy) < before else true;
         mod.reopened_unevaluated = null;
         if (mod.hasOnlyPreCheckReports() and evaluated_more) {
             if (artifact.pairing_arena == null) {
@@ -4304,7 +4460,6 @@ pub const Coordinator = struct {
             self.gpa,
             env,
             .{
-                .evaluation_strategy = self.specialization_strategy,
                 .imports = imported_artifacts,
                 .platform_requirement_context = platform_requirement_context,
                 .explicit_roots = explicit_roots,
@@ -7040,7 +7195,6 @@ pub const Coordinator = struct {
             task.validation,
             task.source_pin_validation,
             ctfe_options,
-            self.specialization_strategy,
             .{ .explicit = task.deferred_imports },
             task.missing_public_types,
             if (self.cache_entry_dirs.inference) |directory| .{ .manager = self.cache_manager.?, .directory = directory } else null,
@@ -10047,6 +10201,7 @@ fn hashPatternExtractionRegionsForView(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .literal_argument,
             .repl_expr,
             => false,
         };
@@ -10106,6 +10261,7 @@ fn hashPatternExtractionRegionsForView(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .literal_argument,
             .repl_expr,
             => unreachable, // is_selected_root skipped every root of these kinds
         }

@@ -678,9 +678,11 @@ pub const Ctx = struct {
                     const expected = try self.b.builtinNumeral(numeral.literal, structural);
                     try self.b.emitLowLevel(matches, .num_is_eq, &.{ source, expected });
                 } else {
-                    // The literal at the number type the descriptor names.
-                    const expected = try self.b.descriptorNumeral(numeral.literal, ty);
-                    try self.b.emitDyn(matches, .{ .eq = .{ .lhs = source, .rhs = expected, .desc = try self.b.descOf(ty) } });
+                    // A numeral matched at a type the body knows only by its
+                    // descriptor is converted through the pattern's checked
+                    // guard, which the tree tests instead (design.md
+                    // "Literal Arguments").
+                    invariant("a numeral pattern at a type known by descriptor has no conversion guard");
                 }
             },
             .str_literal => |literal| {

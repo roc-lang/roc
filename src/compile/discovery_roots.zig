@@ -21,8 +21,6 @@ pub fn rootKey(artifact: *const checked.CheckedModuleArtifact, request: checked.
     hash.update(@tagName(roc_target.RocTarget.detectNative()));
     hash.update(&artifact.compile_time_root_identities.test_rows[@backingInt(root)].value);
     if (artifact.checking_context_identity.platform_app_relation) |relation| hash.update(&relation.bytes);
-    // Each strategy's evaluator settles a root on its own.
-    hash.update(@tagName(artifact.checking_context_identity.evaluation_strategy));
     return hash.finalResult();
 }
 

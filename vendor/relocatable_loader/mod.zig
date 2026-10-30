@@ -163,6 +163,8 @@ pub const Image = struct {
     symbols: std.StringHashMapUnmanaged(usize),
     arena: std.heap.ArenaAllocator,
     unwind: coff.UnwindRegistration = .{},
+    /// The object's first code section, where it was loaded.
+    code: []const u8 = &.{},
 
     /// Load `object_bytes` and bind its undefined symbols through `resolver`.
     /// The bytes are only read during the call.
@@ -311,6 +313,11 @@ pub const Loader = struct {
         };
         errdefer image.arena.deinit();
         errdefer image.symbols.deinit(self.gpa);
+        for (self.parsed.sections) |section| {
+            if (section.kind != .code) continue;
+            image.code = @as([*]const u8, @ptrFromInt(section.address))[0..@intCast(section.size)];
+            break;
+        }
         const names = image.arena.allocator();
         for (self.parsed.symbols) |symbol| {
             if (symbol.kind != .defined or symbol.name.len == 0) continue;

@@ -31,16 +31,6 @@ const CheckedStringLiteralId = checked_ids.CheckedStringLiteralId;
 const PatternBinderId = checked_ids.PatternBinderId;
 const DispatchScopeId = checked_ids.DispatchScopeId;
 
-/// Shared policy for checked evidence publication and runtime dictionary
-/// requirements. Quote and interpolation conversion evidence carries its method
-/// implementation even when the constraint originated at a literal.
-pub fn requiresRuntimeDictionary(origin: types.StaticDispatchConstraint.Origin) bool {
-    return if (origin.literalKind()) |kind| switch (kind) {
-        .numeral => false,
-        .quote, .interpolation => true,
-    } else true;
-}
-
 const DispatchExprTag = enum {
     e_dispatch_call,
     e_interpolation,
@@ -1734,9 +1724,10 @@ pub const EvidenceParamRecord = struct {
     /// obligation's receiver is read from. Composite scheme requirements are
     /// supplied by checked evidence and have no quantified-variable slot.
     slot: ?u32,
-    /// Whether this parameter becomes a runtime method dictionary. Numeral
-    /// defaulting evidence remains an ABI input for descriptor selection; quote
-    /// evidence also carries the conversion implementation.
+    /// Whether this parameter becomes a runtime method dictionary. Every
+    /// requirement does, a literal's included: a literal in the scheme's
+    /// body converts through it where its converted value is not passed as
+    /// a literal argument (design.md "Literal Arguments").
     runtime_dictionary: bool,
     /// Checker-recorded derived implementation permitted when the concrete
     /// dispatcher has no registered method target.
@@ -1744,15 +1735,6 @@ pub const EvidenceParamRecord = struct {
     source: EvidenceParamSource = .scheme_callable,
     path: EvidencePath = .{},
 };
-
-/// Whether a forwarded obligation resolving to evidence parameter `record`
-/// names it as its scheme parameter: a constraint-callable source always,
-/// since Monotype replays it symbolically at specialization time whether or
-/// not it is a runtime dictionary, and otherwise any runtime dictionary the
-/// scheme callable itself does not reach.
-pub fn namedAsSchemeParam(record: EvidenceParamRecord) bool {
-    return record.source == .constraint_callable or (record.runtime_dictionary and record.source != .scheme_callable);
-}
 
 /// Exact producer-authored source of an evidence parameter's dispatcher.
 /// `path` is relative to the selected callable source and is never used for an

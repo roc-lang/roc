@@ -277,6 +277,13 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     build_env.release_checked_solver_types = opts.release_checked_solver_types;
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
     build_env.setSpecializationStrategy(opts.specialization_strategy);
+    const object_target = roc_target.host_cpu.nativeTarget();
+    build_env.boxy_object_lowering = .{
+        .target = object_target,
+        .config = checkedRuntimeLoweringConfig(.linked_output, .dev, .boxy, object_target, false).target,
+        .opt = @tagName(cli_args.OptLevel.dev),
+        .inline_expects = inlineExpectModeForOpt(.dev) == .run,
+    };
     if (opts.runtime_lowering) |config| build_env.setRuntimeLowering(config);
     if (opts.source_dir_override) |source_dir| {
         build_env.setRootSourceDirOverride(source_dir);
@@ -11415,8 +11422,6 @@ fn buildBoxyLibraryObjects(
         }
     }
 
-    const session = build_env.runtimeProgramSession() orelse
-        base.invariant("roc build invariant violated: a .boxy build has no program session", .{});
     const tasks = try ctx.gpa.alloc(BoxyUnitTask, units.items.len);
     defer {
         for (tasks) |*task| task.deinit(ctx.gpa);
@@ -11432,8 +11437,6 @@ fn buildBoxyLibraryObjects(
             .views = try build_env.collectImportedArtifactViews(ctx.gpa, artifact),
             .target = target,
             .interfaces = interfaces,
-            .literal_values = session.boxyLiteralValues(),
-            .root_key = root_artifact.codeGenerationKey().bytes,
             .cache_manager = if (args.no_cache) null else build_env.cache_manager,
         };
     }
@@ -11528,44 +11531,8 @@ fn boxyPlatformView(
 }
 
 /// The key of `artifact`'s object under this build's target and policy.
-/// A module declaring hosted functions is lowered against the platform
-/// header's hosted section, which binds them to their host symbols, so its
-/// key covers a digest of that section too.
-/// `root` selects the root program's key, which covers its platform
-/// pairing: the root unit lowers the platform modules at the app's types.
-/// A library module's object is a function of the module and its imports
-/// alone, so its key is its checked key whatever program pairs it.
-/// The program key a module's object is keyed by when its code embeds a
-/// literal table: the root program's, since the table holds the values of
-/// every instance that program reaches the module's literals at. Null for a
-/// module whose literals the program converted none of.
-fn boxyLiteralProgram(literal_values: ?*const lir.CheckedPipeline.BoxyLiteralValues, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, root_key: [32]u8) ?[32]u8 {
-    const values = literal_values orelse return null;
-    for (values.entries.items) |entry| {
-        if (std.mem.eql(u8, &entry.module.bytes, &artifact.key.bytes)) return root_key;
-    }
-    return null;
-}
-
-fn boxyObjectKey(gpa: Allocator, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView, args: cli_args.BuildArgs, target: RocTarget, root: bool, literal_program: ?[32]u8) Allocator.Error!compile.boxy_object_cache.Key {
-    const hosted_bindings: ?[32]u8 = if (platform) |platform_view| blk: {
-        const inputs = try gpa.alloc(compile.boxy_object_cache.HostedBindingInput, platform_view.hosted_bindings.bindings.len);
-        defer gpa.free(inputs);
-        for (platform_view.hosted_bindings.bindings, inputs) |binding, *input| input.* = .{
-            .target_module = binding.target_checked_module.bytes,
-            .target_def = @backingInt(binding.target_def),
-            .symbol = platform_view.canonical_names.externalSymbolNameText(binding.external_symbol_name),
-        };
-        break :blk compile.boxy_object_cache.hostedBindingsDigest(inputs);
-    } else null;
-    return compile.boxy_object_cache.key(.{
-        .checked_key = if (root) artifact.codeGenerationKey().bytes else artifact.key.bytes,
-        .hosted_bindings = hosted_bindings,
-        .target = @tagName(target),
-        .opt = @tagName(args.opt),
-        .inline_expects = inlineExpectModeForOpt(args.opt) == .run,
-        .literal_program = literal_program,
-    });
+fn boxyObjectKey(gpa: Allocator, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView, args: cli_args.BuildArgs, target: RocTarget, root: bool) Allocator.Error!compile.boxy_object_cache.Key {
+    return compile.boxy_unit.objectKey(gpa, artifact, platform, @tagName(args.opt), inlineExpectModeForOpt(args.opt) == .run, target, root);
 }
 
 /// The platform module a unit of `artifact` needs in view: the one whose
@@ -11574,82 +11541,6 @@ fn boxyObjectKey(gpa: Allocator, artifact: *const check.CheckedArtifact.CheckedM
 fn boxyUnitPlatform(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView) ?check.CheckedArtifact.ImportedModuleView {
     if (artifact.hosted_procs.procs.len == 0) return null;
     return platform;
-}
-
-/// Restore `key`'s entry from the per-module Boxy object cache, recording
-/// its exports in `interfaces`. Null for a miss, or for bytes this compiler
-/// did not write.
-fn restoreBoxyObject(
-    gpa: Allocator,
-    cache_manager: ?*CacheManager,
-    key: compile.boxy_object_cache.Key,
-    interfaces: *postcheck.Boxy.Lower.ExportInterfaces,
-) Allocator.Error!?compile.boxy_object_cache.Entry {
-    const cache = compile.boxy_object_cache;
-    const manager = cache_manager orelse {
-        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no cache manager to restore key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
-        return null;
-    };
-    const bytes = manager.loadFamilyBytes(.boxy_object, key.bytes, cache.scope) orelse {
-        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no object cache entry for key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
-        return null;
-    };
-    defer gpa.free(bytes);
-    const entry = cache.decode(gpa, bytes) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.InvalidEntry => {
-            if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache entry for key {s} is not an entry ({d} bytes)\n", .{ &std.fmt.bytesToHex(key.bytes[0..8], .lower), bytes.len });
-            return null;
-        },
-    };
-    errdefer cache.deinitEntry(gpa, entry);
-    for (entry.exports) |record| try interfaces.put(.{ .bytes = record.identity }, .{
-        .rc_borrowed_params = record.rc_borrowed_params,
-        .rc_ret_borrowed = record.rc_ret_borrowed,
-        .rc_ret_lenders = record.rc_ret_lenders,
-        .rc_read_only_params = record.rc_read_only_params,
-        .rc_ret_unique = record.rc_ret_unique,
-        .rc_ret_unique_fields = record.rc_ret_unique_fields,
-        .rc_ret_conditions = record.rc_ret_conditions,
-        .may_leave_pending = record.may_leave_pending,
-    });
-    return entry;
-}
-
-/// The export records of `lowered`'s exported procedures, recorded in
-/// `interfaces`. The caller owns the result.
-fn boxyExportRecords(gpa: Allocator, lowered: *const lir.CheckedPipeline.LoweredProgram, interfaces: *postcheck.Boxy.Lower.ExportInterfaces) Allocator.Error![]compile.boxy_object_cache.ExportRecord {
-    const store = &lowered.lir_result.store;
-    const records = try gpa.alloc(compile.boxy_object_cache.ExportRecord, lowered.lir_result.exported_procs.items.len);
-    errdefer gpa.free(records);
-    for (lowered.lir_result.exported_procs.items, records) |proc, *record| {
-        const interface = try interfaces.putProc(store, proc);
-        record.* = .{
-            .identity = store.getProcSpec(proc).identity.bytes,
-            .rc_borrowed_params = interface.rc_borrowed_params,
-            .rc_ret_lenders = interface.rc_ret_lenders,
-            .rc_read_only_params = interface.rc_read_only_params,
-            .rc_ret_unique_fields = interface.rc_ret_unique_fields,
-            .rc_ret_borrowed = interface.rc_ret_borrowed,
-            .rc_ret_unique = interface.rc_ret_unique,
-            .may_leave_pending = interface.may_leave_pending,
-            .rc_ret_conditions = interface.rc_ret_conditions,
-        };
-    }
-    return records;
-}
-
-/// File `entry` in the per-module Boxy object cache under `key`.
-fn storeBoxyObject(gpa: Allocator, cache_manager: ?*CacheManager, key: compile.boxy_object_cache.Key, entry: compile.boxy_object_cache.Entry) Allocator.Error!void {
-    const cache = compile.boxy_object_cache;
-    const manager = cache_manager orelse {
-        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: no cache manager to store key {s}\n", .{&std.fmt.bytesToHex(key.bytes[0..8], .lower)});
-        return;
-    };
-    const bytes = try cache.encode(gpa, entry);
-    defer gpa.free(bytes);
-    manager.storeFamilyBytes(.boxy_object, key.bytes, bytes, cache.scope, "boxy object");
-    if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: stored object cache entry for key {s} ({d} bytes)\n", .{ &std.fmt.bytesToHex(key.bytes[0..8], .lower), bytes.len });
 }
 
 /// One library module's unit, run as a post-check task: its object restored
@@ -11664,28 +11555,14 @@ const BoxyUnitTask = struct {
     views: []check.CheckedArtifact.ImportedModuleView,
     target: RocTarget,
     interfaces: *postcheck.Boxy.Lower.ExportInterfaces,
-    literal_values: ?*const lir.CheckedPipeline.BoxyLiteralValues,
-    /// The root program's key (`boxyLiteralProgram`).
-    root_key: [32]u8,
     cache_manager: ?*CacheManager,
-    outcome: union(enum) { pending, failed: CliMainError, done: Result } = .pending,
-
-    const Result = struct {
-        restored: bool,
-        /// Owned by the task's `gpa`.
-        object: []const u8,
-        hosted_symbols: []const []const u8,
-    };
+    outcome: union(enum) { pending, failed: CliMainError, done: compile.boxy_unit.Built } = .pending,
 
     fn deinit(self: *BoxyUnitTask, gpa: Allocator) void {
         gpa.free(self.views);
         switch (self.outcome) {
             .pending, .failed => {},
-            .done => |result| {
-                gpa.free(result.object);
-                for (result.hosted_symbols) |symbol| gpa.free(symbol);
-                gpa.free(result.hosted_symbols);
-            },
+            .done => |result| result.deinit(gpa),
         }
     }
 
@@ -11695,93 +11572,22 @@ const BoxyUnitTask = struct {
         return context;
     }
 
-    fn build(self: *BoxyUnitTask) CliMainError!Result {
-        const gpa = self.gpa;
-        const object_key = try boxyObjectKey(gpa, self.artifact, self.platform, self.args, self.target, false, boxyLiteralProgram(self.literal_values, self.artifact, self.root_key));
-        const module_name = self.artifact.canonical_names.moduleNameText(self.artifact.module_identity.module_name);
-        if (try restoreBoxyObject(gpa, self.cache_manager, object_key, self.interfaces)) |entry| {
-            defer compile.boxy_object_cache.deinitEntry(gpa, entry);
-            if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache hit for {s} key {s} checked {s}\n", .{ module_name, &std.fmt.bytesToHex(object_key.bytes[0..8], .lower), &std.fmt.bytesToHex(self.artifact.key.bytes[0..8], .lower) });
-            return .{
-                .restored = true,
-                .object = try gpa.dupe(u8, entry.object),
-                .hosted_symbols = try dupeSymbols(gpa, entry.hosted_symbols),
-            };
-        }
-        if (dev_diagnostics.isSet(.trace_boxy_work)) {
-            std.debug.print("boxy-work: object cache miss for {s} key {s} checked {s}\n", .{ module_name, &std.fmt.bytesToHex(object_key.bytes[0..8], .lower), &std.fmt.bytesToHex(self.artifact.key.bytes[0..8], .lower) });
-            for (self.views) |view| std.debug.print("boxy-work:   in view: {s} ({s})\n", .{ view.module_env.module_name, &std.fmt.bytesToHex(view.key.bytes[0..8], .lower) });
-            if (self.platform) |view| std.debug.print("boxy-work:   platform in view: {s} ({s}), {d} hosted procs declared\n", .{ view.module_env.module_name, &std.fmt.bytesToHex(view.key.bytes[0..8], .lower), self.artifact.hosted_procs.procs.len });
-        }
-
-        // The platform module whose hosted section binds the hosted
-        // functions the module declares, when it declares any.
-        var views: std.ArrayList(check.CheckedArtifact.ImportedModuleView) = .empty;
-        defer views.deinit(gpa);
-        try views.appendSlice(gpa, self.views);
-        if (self.platform) |platform_view| {
-            const present = for (self.views) |view| {
-                if (std.meta.eql(view.key, platform_view.key)) break true;
-            } else false;
-            if (!present) try views.append(gpa, platform_view);
-        }
-        const modules: lir.CheckedPipeline.CheckedModuleSet = .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(self.artifact, &.{}),
-            .imports = views.items,
-        };
+    fn build(self: *BoxyUnitTask) CliMainError!compile.boxy_unit.Built {
         var config = checkedRuntimeLoweringConfig(.linked_output, self.args.opt, .boxy, self.target, self.args.synthetic_default_platform);
         config.target.boxy_unit = .{ .imports = self.interfaces, .root = false };
-        var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(gpa, modules, .{}, config.target, self.literal_values);
-        defer lowered.deinit();
-        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: lowered {s} ({d} procs)\n", .{ module_name, lowered.lir_result.store.procSpecCount() });
-
-        const static_data_exports = try compile.static_data_exports.buildStaticData(gpa, .{ .root = modules.root, .imports = views.items }, &lowered, self.target, .{});
-        defer compile.static_data_exports.deinitStaticData(gpa, static_data_exports);
-        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: static data of {s} ({d} exports)\n", .{ module_name, static_data_exports.len });
-
-        var object_compiler = backend.ObjectFileCompiler.init(gpa);
-        object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
-        object_compiler.link_unit = true;
-        var written = object_compiler.compileToObjectFile(
-            &lowered.lir_result.store,
-            &lowered.lir_result.layouts,
-            &.{},
-            static_data_exports,
-            lowered.lir_result.store.getProcSpecs(),
-            self.target,
-        ) catch |err| {
-            std.log.err("Native compilation of module {s} failed: {}", .{ self.artifact.canonical_names.moduleNameText(self.artifact.module_identity.module_name), err });
-            return error.NativeCompilationFailed;
-        };
-        defer written.deinit();
-
-        if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: compiled object for {s} ({d} bytes, {d} exports)\n", .{ module_name, written.object_bytes.len, lowered.lir_result.exported_procs.items.len });
-        const records = try boxyExportRecords(gpa, &lowered, self.interfaces);
-        defer gpa.free(records);
-        var hosted_arena = std.heap.ArenaAllocator.init(gpa);
-        defer hosted_arena.deinit();
-        const hosted = try hostedSymbolsFromLir(hosted_arena.allocator(), &lowered.lir_result.store);
-        try storeBoxyObject(gpa, self.cache_manager, object_key, .{ .exports = records, .hosted_symbols = hosted, .object = written.object_bytes });
-        return .{
-            .restored = false,
-            .object = try gpa.dupe(u8, written.object_bytes),
-            .hosted_symbols = try dupeSymbols(gpa, hosted),
-        };
+        return try compile.boxy_unit.restoreOrBuild(.{
+            .gpa = self.gpa,
+            .artifact = self.artifact,
+            .platform = self.platform,
+            .views = self.views,
+            .target = self.target,
+            .config = config.target,
+            .interfaces = self.interfaces,
+            .cache_manager = self.cache_manager,
+            .key = try boxyObjectKey(self.gpa, self.artifact, self.platform, self.args, self.target, false),
+        });
     }
 };
-
-/// Copies of `symbols`, each and the slice allocated from `gpa`.
-fn dupeSymbols(gpa: Allocator, symbols: []const []const u8) Allocator.Error![]const []const u8 {
-    const copies = try gpa.alloc([]const u8, symbols.len);
-    errdefer gpa.free(copies);
-    var duped: usize = 0;
-    errdefer for (copies[0..duped]) |copy| gpa.free(copy);
-    for (symbols, copies) |symbol, *copy| {
-        copy.* = try gpa.dupe(u8, symbol);
-        duped += 1;
-    }
-    return copies;
-}
 
 /// `first` followed by every symbol of `second` it lacks.
 fn unionSymbols(arena: Allocator, first: []const []const u8, second: []const []const u8) Allocator.Error![]const []const u8 {
@@ -12348,11 +12154,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     else
         null;
     const boxy_cache_manager: ?*CacheManager = if (args.no_cache) null else build_env.cache_manager;
-    const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| try boxyObjectKey(ctx.gpa, root_artifact, boxyUnitPlatform(root_artifact, library.platform), args, target, true, null) else null;
+    const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| try boxyObjectKey(ctx.gpa, root_artifact, boxyUnitPlatform(root_artifact, library.platform), args, target, true) else null;
     if (dev_diagnostics.isSet(.trace_boxy_work)) if (boxy_library) |library| std.debug.print("boxy-work: library objects {d}, root key {s}\n", .{ library.objects.len, &std.fmt.bytesToHex(boxy_root_key.?.bytes[0..8], .lower) });
     // The root program's object is cached under its own key too: a build
     // whose every module is cached lowers nothing.
-    if (boxy_library) |library| if (try restoreBoxyObject(ctx.gpa, boxy_cache_manager, boxy_root_key.?, &boxy_interfaces.?)) |entry| {
+    if (boxy_library) |library| if (try compile.boxy_unit.restore(ctx.gpa, boxy_cache_manager, boxy_root_key.?, &boxy_interfaces.?)) |entry| {
         defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
         build_env.recordBoxyObjects(1, 0);
         reporter.begin("Preparing Link Inputs");
@@ -12466,9 +12272,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         .boxy_runtime = lowered.lir_result.store.runtime_contract == .boxy,
     };
     if (boxy_root_key) |root_key| {
-        const records = try boxyExportRecords(ctx.gpa, &lowered, &boxy_interfaces.?);
+        const records = try compile.boxy_unit.exportRecords(ctx.gpa, &lowered, &boxy_interfaces.?);
         defer ctx.gpa.free(records);
-        try storeBoxyObject(ctx.gpa, boxy_cache_manager, root_key, .{
+        try compile.boxy_unit.store(ctx.gpa, boxy_cache_manager, root_key, .{
             .exports = records,
             .hosted_symbols = root_hosted_symbols,
             .link_root_symbols = link_facts.link_root_symbols,
@@ -21922,29 +21728,12 @@ test "renderDependencyTree shows declared sources, provenance, and shared subtre
     try std.testing.expect(std.mem.find(u8, out.items, "characters") == null);
 }
 
-/// Apply optional search metadata after all documentation destinations exist.
-fn configureDocsSearch(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
-    if (args.search_config) |path| {
-        var diagnostic: docs.search_config.Diagnostic = .{};
-        docs.search_config.apply(ctx.gpa, ctx.io.std_io, args.output, path, &diagnostic) catch |err| {
-            const stderr = ctx.io.stderr();
-            if (diagnostic.line > 0) {
-                stderr.print("{s}:{d}: could not configure documentation search: {}\n", .{ path, diagnostic.line, err }) catch {};
-            } else {
-                stderr.print("{s}: could not configure documentation search: {}\n", .{ path, err }) catch {};
-            }
-            return error.DocsFailed;
-        };
-    }
-}
-
 fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     if (args_in.builtins) {
         try generateBuiltinDocs(ctx, args_in.output, args_in.with_lang_ref);
-        try configureDocsSearch(ctx, args_in);
         ctx.io.stdout().print("\nGenerated docs for the builtins\n", .{}) catch {};
         if (args_in.serve) {
             try serveDocumentation(ctx, args_in.output);
@@ -22026,7 +21815,6 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
 
     // Generate documentation for all packages and modules
     try generateDocs(ctx, &result_with_env.build_env, args.path, args.output, args.with_lang_ref);
-    try configureDocsSearch(ctx, args);
 
     stdout.print("\nGenerated docs for {s}\n", .{try ctx.displayPath(args.path)}) catch {};
 

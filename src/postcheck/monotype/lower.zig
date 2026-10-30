@@ -7670,10 +7670,34 @@ const Builder = struct {
 
     /// Procedure-use runs are the only isolated roots without an ordered
     /// coordinator dependency; every other root kind remains a serial barrier.
-    fn lowerIsolatedRoots(self: *Builder, all_requests: []const checked.RootRequest, all_source_modules: []const checked.ModuleId, discovery_start: ?usize) Allocator.Error!void {
-        if (all_source_modules.len != 0 and all_source_modules.len != all_requests.len) {
+    fn lowerIsolatedRoots(self: *Builder, unfiltered_requests: []const checked.RootRequest, unfiltered_source_modules: []const checked.ModuleId, unfiltered_discovery_start: ?usize) Allocator.Error!void {
+        if (unfiltered_source_modules.len != 0 and unfiltered_source_modules.len != unfiltered_requests.len) {
             Common.invariant("root source module count differs from explicit request count");
         }
+        // A literal argument root is the `.boxy` evaluator's: a Solved
+        // program neither declares nor lowers it (design.md "Literal
+        // Arguments").
+        var solved_requests = std.ArrayList(checked.RootRequest).empty;
+        defer solved_requests.deinit(self.allocator);
+        var solved_source_modules = std.ArrayList(checked.ModuleId).empty;
+        defer solved_source_modules.deinit(self.allocator);
+        var discovery_start = unfiltered_discovery_start;
+        for (unfiltered_requests, 0..) |request, i| {
+            const literal_argument = if (request.compile_time_root) |root_id|
+                self.moduleForId(self.rootSourceModule(unfiltered_source_modules, i)).compile_time_roots.root(root_id).kind == .literal_argument
+            else
+                false;
+            if (literal_argument) {
+                if (unfiltered_discovery_start) |start| if (i < start) {
+                    discovery_start.? -= 1;
+                };
+                continue;
+            }
+            try solved_requests.append(self.allocator, request);
+            if (unfiltered_source_modules.len != 0) try solved_source_modules.append(self.allocator, unfiltered_source_modules[i]);
+        }
+        const all_requests: []const checked.RootRequest = solved_requests.items;
+        const all_source_modules: []const checked.ModuleId = solved_source_modules.items;
         var demanded_later_requests = std.ArrayList(checked.RootRequest).empty;
         defer demanded_later_requests.deinit(self.allocator);
         var demanded_later_sources = std.ArrayList(checked.ModuleId).empty;
@@ -29537,11 +29561,16 @@ const BodyContext = struct {
             .numeral_conversion,
             .quote_conversion,
             .repl_expr,
+            .literal_argument,
             => saved_source_region_override,
         };
         const body = if (root.literalConversionKind() != null)
             try self.lowerLiteralConversionRootBody(wrapper.body_expr, ret_cell)
         else switch (root.kind) {
+            // A literal argument root is the `.boxy` evaluator's: its value
+            // is passed at runtime by address, so it is never a Solved
+            // program's root (design.md "Literal Arguments").
+            .literal_argument => Common.invariant("a literal argument root reached Monotype"),
             .constant,
             .hoisted_constant,
             .hoisted_validation,

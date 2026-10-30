@@ -1649,10 +1649,11 @@ pub const Store = struct {
                 finalize: GraphNodeId,
             };
 
-            /// A nominal wrapper's layout is its child's in either mode, so
-            /// a read looks through it: a parent on a cycle through the
-            /// wrapper then reads the child's slot, and the wrapper never
-            /// fills a slot of its own with a copy of the child's layout.
+            /// A nominal wrapper's layout is its child's whether the parent
+            /// stores the child or points at it, so a read looks through it:
+            /// a parent on a cycle through the wrapper then reads the
+            /// child's slot, and the wrapper never fills a slot of its own
+            /// with a copy of the child's layout.
             fn childLayout(self_finalizer: *@This(), ref: GraphRef) ChildLayout {
                 var current = ref;
                 while (true) {
@@ -1770,8 +1771,7 @@ pub const Store = struct {
                     // The next child to read.
                     const next: ?GraphRef = switch (node) {
                         .pending, .committed => unreachable, // commitGraph builds this working graph with committed leaves as canonical refs and every reserved node filled
-                        .nominal => |child| if (frame.children.items.len == 0) child else null,
-                        .box, .list, .closure => |child| if (frame.children.items.len == 0) child else null,
+                        .nominal, .box, .list, .closure => |child| if (frame.children.items.len == 0) child else null,
                         .erased_callable => null,
                         .struct_ => |span| blk: {
                             const graph_fields = self_finalizer.graph.getFields(span);

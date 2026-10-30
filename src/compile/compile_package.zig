@@ -216,9 +216,6 @@ pub const ArtifactPublicationInputs = struct {
     /// How this module's compile-time roots were established. Part of the
     /// checked-artifact cache identity. See `Can.Validation`.
     validation: Can.Validation = .checking,
-    /// The strategy whose compile-time evaluator completes the module's
-    /// roots. Part of the checked-artifact cache identity.
-    evaluation_strategy: base.SpecializationStrategy = .lss,
 };
 
 fn importedArtifactsCoverImportedEnvs(
@@ -504,7 +501,6 @@ pub fn typeCheckModule(
     validation: Can.Validation,
     source_pin_validation: [32]u8,
     ctfe_options: eval.CompileTimeFinalization.Options,
-    evaluation_strategy: base.SpecializationStrategy,
     deferred_imports: can.ImportResolution.Imports,
     missing_public_types: []const []const u8,
     inference_cache: ?@import("inference_cache.zig").Cache,
@@ -603,7 +599,6 @@ pub fn typeCheckModule(
             .ctfe_options = ctfe_options,
             .evaluation_phase = .post_frontend,
             .validation = validation,
-            .evaluation_strategy = evaluation_strategy,
         },
     );
     errdefer checked_artifact.deinit(artifact_alloc);
@@ -682,7 +677,6 @@ pub fn publishFromPrebuiltModules(
             .evaluation_phase = publication.evaluation_phase,
             .problem_store = publication.problem_store,
             .validation = publication.validation,
-            .evaluation_strategy = publication.evaluation_strategy,
         },
     );
 }

@@ -474,7 +474,7 @@ const Printer = struct {
             .field_addr => |field| try writer.print(" #{d}", .{field.field_index}),
             .tag_payload_addr => |payload| try writer.print(" #{d}", .{payload.payload_index}),
             .desc_nominal => |nominal| if (nominal.inspect_opaque) try writer.writeAll(" opaque"),
-            .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_args, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_record, .copy, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .desc_index, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .view, .numeral, .adapt => {},
+            .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_args, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_record, .copy, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .view, .adapt => {},
         }
         const operands = DynOps.Operands.of(op);
         for (operands.singles[0..operands.single_count]) |local| try writer.print(" l{d}", .{@backingInt(local)});

@@ -118,17 +118,6 @@ pub fn tagDiscriminantOf(desc: *const TypeDesc, name: *const Name, ops: *RocOps)
     return variantNamed(desc, name, ops).variant.discriminant;
 }
 
-/// The position of the first of the descriptors `candidates` lists (an
-/// argument record's descriptor, whose fields are of those types) that
-/// describes the type `desc` describes, or their count when none does.
-pub fn descIndex(desc: *const TypeDesc, candidates: *const TypeDesc, ops: *RocOps) u32 {
-    var index: u32 = 0;
-    while (index < candidates.count) : (index += 1) {
-        if (walk.sameShape(desc, candidates.fieldBySemanticIndex(index).desc, ops)) return index;
-    }
-    return candidates.count;
-}
-
 /// The address of payload `payload_index` of the variant named `name` of
 /// the tag union value at `base`.
 pub fn tagPayloadAddr(desc: *const TypeDesc, base: [*]u8, name: *const Name, payload_index: u32, ops: *RocOps) [*]u8 {

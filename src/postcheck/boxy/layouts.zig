@@ -34,13 +34,12 @@ pub const Layouts = struct {
     /// The recursive component of each open type `recursiveComponent` has
     /// placed, or `no_component` for one in no cycle.
     components: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
-    /// The members of each recursive component that a boxed slot of the
+    /// The recursive component of each open type over size edges alone
+    /// (`sizeComponent`), or `no_component` for one in no such cycle.
+    size_components: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
+    /// The members of each recursive component that a pointer slot of the
     /// component points at, by component.
     component_targets: std.ArrayList([]const TypeId) = .empty,
-    /// The recursive component of each open type over size edges alone
-    /// (`sizeComponent`), or `no_component` for one in no size cycle.
-    size_components: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
-    size_component_count: u32 = 0,
     /// The type variables of each recursive member asked about.
     member_vars: collections.DenseMapUnmanaged(TypeId, []const TypeId) = .empty,
 
@@ -51,7 +50,23 @@ pub const Layouts = struct {
     /// A component a type's descriptor composes from: one stored inline, in
     /// a struct slot (a record field or tuple element), as a tag's payload,
     /// or as a nominal's backing, or one a list or box points at.
-    pub const InlineEdge = struct { child: TypeId, slot: enum { field, payload, backing, list_elem, box_payload } };
+    pub const InlineEdge = struct {
+        child: TypeId,
+        slot: enum { field, payload, backing, list_elem, box_payload },
+
+        /// Whether the edge places its child inside its parent: the shared
+        /// layout store's size edges, whose cycles are the components it
+        /// boxes slots of. A list or box points at its child.
+        pub fn placesInline(self: InlineEdge) bool {
+            return switch (self.slot) {
+                .field, .payload, .backing => true,
+                .list_elem, .box_payload => false,
+            };
+        }
+    };
+
+    /// Which edges a component placement follows.
+    const Edges = enum { all, size };
 
     pub fn deinit(self: *Layouts) void {
         self.memo.deinit(self.allocator);
@@ -106,16 +121,16 @@ pub const Layouts = struct {
     pub fn recursiveComponent(self: *Layouts, ty: TypeId) Allocator.Error!?u32 {
         if (self.components.get(ty)) |component| return if (component == no_component) null else component;
         if (try self.converter.representationClosed(ty)) return null;
-        try self.placeComponents(ty, .composition);
+        try self.placeComponents(ty, .all);
         const component = self.components.get(ty).?;
         return if (component == no_component) null else component;
     }
 
-    /// The recursive component of the open type `ty` over size edges alone,
-    /// those that store a child inline in its parent (a struct slot, a tag
-    /// payload, a nominal's backing), or null when `ty` is on no such
-    /// cycle. These are the cycles the shared layout store boxes a slot of;
-    /// a list element or box payload is a pointer already and joins none.
+    /// The recursive component of the open type `ty` in the graph of the
+    /// components it stores inline (`InlineEdge.placesInline`), or null when
+    /// no such cycle holds it: the shared layout store boxes a slot only for
+    /// a cycle that would otherwise place a type inside itself, so a type
+    /// recursive only through a list or box has no boxed slot.
     fn sizeComponent(self: *Layouts, ty: TypeId) Allocator.Error!?u32 {
         if (self.size_components.get(ty)) |component| return if (component == no_component) null else component;
         if (try self.converter.representationClosed(ty)) return null;
@@ -124,49 +139,45 @@ pub const Layouts = struct {
         return if (component == no_component) null else component;
     }
 
-    /// Whether the edge from `parent` to `edge.child` leads back into
-    /// `parent`'s recursive component through a pointer: a list element or
-    /// box payload, which is a pointer already, or a struct slot or a
-    /// non-struct tag payload the shared layout store boxes, which it does
-    /// only on a cycle of size edges (`sizeComponent`).
+    /// Whether `parent` stores `edge.child` in a recursion box: a struct
+    /// slot or a non-struct tag payload leading back into `parent`'s size
+    /// component, which the shared layout store boxes.
     pub fn boxedEdge(self: *Layouts, parent: TypeId, edge: InlineEdge) Allocator.Error!bool {
-        const component = try self.recursiveComponent(parent) orelse return false;
-        if (self.components.get(edge.child) != component) return false;
+        const component = try self.sizeComponent(parent) orelse return false;
+        if (self.size_components.get(edge.child) != component) return false;
         return switch (edge.slot) {
-            .list_elem, .box_payload => true,
-            .backing => false,
-            .field, .payload => |slot| blk: {
-                const size_component = try self.sizeComponent(parent) orelse break :blk false;
-                if (self.size_components.get(edge.child) != size_component) break :blk false;
-                break :blk slot == .field or switch (self.store.get(edge.child)) {
-                    .record, .tuple => false,
-                    .primitive, .empty_record, .tag_union, .list, .box, .nominal, .function, .variable => true,
-                };
+            .field => true,
+            .payload => switch (self.store.get(edge.child)) {
+                .record, .tuple => false,
+                .primitive, .empty_record, .tag_union, .list, .box, .nominal, .function, .variable => true,
             },
+            .backing, .list_elem, .box_payload => false,
         };
     }
 
-    /// The members of recursive component `component` that a boxed slot
+    /// Whether the edge from `parent` to `edge.child` leads back into
+    /// `parent`'s recursive component through a pointer: a recursion box
+    /// (`boxedEdge`), or a list element or box payload, which is a pointer
+    /// already.
+    pub fn pointerEdge(self: *Layouts, parent: TypeId, edge: InlineEdge) Allocator.Error!bool {
+        if (edge.placesInline()) return try self.boxedEdge(parent, edge);
+        const component = try self.recursiveComponent(parent) orelse return false;
+        return self.components.get(edge.child) == component;
+    }
+
+    /// The members of recursive component `component` that a pointer slot
     /// points at.
     pub fn componentTargets(self: *const Layouts, component: u32) []const TypeId {
         return self.component_targets.items[component];
     }
 
-    /// Which inline edges a component walk follows: every one, for the
-    /// components a descriptor composes (`recursiveComponent`), or the size
-    /// edges alone (`sizeComponent`).
-    const EdgeSet = enum { composition, size };
-
-    fn componentMap(self: *Layouts, comptime edge_set: EdgeSet) *collections.DenseMapUnmanaged(TypeId, u32) {
-        return switch (edge_set) {
-            .composition => &self.components,
+    /// Tarjan's strongly connected components over the open types reachable
+    /// from `root` through inline edges (`edges`), with an explicit stack.
+    fn placeComponents(self: *Layouts, root: TypeId, comptime edges_followed: Edges) Allocator.Error!void {
+        const placed = switch (edges_followed) {
+            .all => &self.components,
             .size => &self.size_components,
         };
-    }
-
-    /// Tarjan's strongly connected components over the open types reachable
-    /// from `root` through `edge_set`'s edges, with an explicit stack.
-    fn placeComponents(self: *Layouts, root: TypeId, comptime edge_set: EdgeSet) Allocator.Error!void {
         const Frame = struct { ty: TypeId, edges: []InlineEdge, next: usize };
         var frames: std.ArrayList(Frame) = .empty;
         defer {
@@ -196,15 +207,13 @@ pub const Layouts = struct {
                 try on_stack.put(self.allocator, ty, {});
                 edges.clearRetainingCapacity();
                 try self.inlineEdges(ty, &edges);
-                if (edge_set == .size) {
+                if (edges_followed == .size) {
                     var kept: usize = 0;
-                    for (edges.items) |edge| switch (edge.slot) {
-                        .field, .payload, .backing => {
-                            edges.items[kept] = edge;
-                            kept += 1;
-                        },
-                        .list_elem, .box_payload => {},
-                    };
+                    for (edges.items) |edge| {
+                        if (!edge.placesInline()) continue;
+                        edges.items[kept] = edge;
+                        kept += 1;
+                    }
                     edges.shrinkRetainingCapacity(kept);
                 }
                 const owned = try self.allocator.dupe(InlineEdge, edges.items);
@@ -216,7 +225,7 @@ pub const Layouts = struct {
             if (top.next < top.edges.len) {
                 const child = top.edges[top.next].child;
                 top.next += 1;
-                if (self.componentMap(edge_set).contains(child)) continue;
+                if (placed.contains(child)) continue;
                 if (index_of.get(child)) |child_index| {
                     if (on_stack.contains(child)) {
                         const entry = low.getPtr(top.ty).?;
@@ -246,24 +255,20 @@ pub const Layouts = struct {
             if (!cyclic) for (frame.edges) |edge| {
                 if (edge.child == frame.ty) cyclic = true;
             };
-            const component: u32 = if (!cyclic) no_component else switch (edge_set) {
-                .composition => @intCast(self.component_targets.items.len),
-                .size => blk: {
-                    const id = self.size_component_count;
-                    self.size_component_count += 1;
-                    break :blk id;
-                },
+            const component: u32 = switch (edges_followed) {
+                .all => if (cyclic) @intCast(self.component_targets.items.len) else no_component,
+                .size => if (cyclic) counter else no_component,
             };
             for (members) |member| {
                 _ = on_stack.remove(member);
-                try self.componentMap(edge_set).put(self.allocator, member, component);
+                try placed.put(self.allocator, member, component);
             }
-            if (cyclic and edge_set == .composition) try self.component_targets.append(self.allocator, try self.boxedTargets(members));
+            if (edges_followed == .all and cyclic) try self.component_targets.append(self.allocator, try self.pointerTargets(members));
             stack.shrinkRetainingCapacity(start);
         }
     }
 
-    fn boxedTargets(self: *Layouts, members: []const TypeId) Allocator.Error![]const TypeId {
+    fn pointerTargets(self: *Layouts, members: []const TypeId) Allocator.Error![]const TypeId {
         var targets: std.ArrayList(TypeId) = .empty;
         errdefer targets.deinit(self.allocator);
         var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
@@ -274,7 +279,7 @@ pub const Layouts = struct {
             edges.clearRetainingCapacity();
             try self.inlineEdges(member, &edges);
             for (edges.items) |edge| {
-                if (!try self.boxedEdge(member, edge)) continue;
+                if (!try self.pointerEdge(member, edge)) continue;
                 if ((try seen.getOrPut(self.allocator, edge.child)).found_existing) continue;
                 try targets.append(self.allocator, edge.child);
             }
