@@ -20569,7 +20569,8 @@ const EvidencePass = struct {
                 checkedArtifactInvariant("forwarded evidence owner was not published", .{});
             const schema = self.templates.evidence_params_pool[owner];
             return .{ .resolved = .{ .evidence_dependent = .{
-                .scheme_param = if (match.callable_contract != null or static_dispatch.namedAsSchemeParam(schema)) owner else null,
+                .scheme_param = if (match.callable_contract != null or
+                    (schema.runtime_dictionary and schema.source != .scheme_callable)) owner else null,
                 .index = match.index,
                 .independent_callable = independent_callable,
                 .reuse_slot_nested_evidence = match.callable_relation == .independent_reuse_slot_nested,
@@ -36155,7 +36156,7 @@ pub const CheckedModuleArtifact = struct {
                     if (dependent.scheme_param) |param_index| {
                         const pool = self.checked_procedure_templates.evidence_params_pool;
                         if (param_index >= pool.len or pool[param_index].method != plan.method or
-                            (if (dependent.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else !static_dispatch.namedAsSchemeParam(pool[param_index])))
+                            (if (dependent.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else (!pool[param_index].runtime_dictionary or pool[param_index].source == .scheme_callable)))
                             return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
                     }
                 },
@@ -36386,7 +36387,7 @@ pub const CheckedModuleArtifact = struct {
                     if (constraint.scheme_param) |param_index| {
                         const pool = self.checked_procedure_templates.evidence_params_pool;
                         if (param_index >= pool.len or
-                            (if (constraint.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else !static_dispatch.namedAsSchemeParam(pool[param_index])))
+                            (if (constraint.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else (!pool[param_index].runtime_dictionary or pool[param_index].source == .scheme_callable)))
                             return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
                     }
                 },

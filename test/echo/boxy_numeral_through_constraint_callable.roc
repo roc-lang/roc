@@ -1,8 +1,7 @@
 # Unannotated helpers whose numerals sit at generic types. The `0` in
 # `contains_private` reaches `remove` only through the call's constraint
-# callable, and under `--specialize=no` a numeral requirement is never a
-# runtime dictionary at either end: the call passes descriptors, and each
-# numeral converts through the descriptor of its type.
+# callable, so `remove` holds the requirement as evidence of its own and
+# every call between the two passes exactly what the callee declares.
 remove = |set, private_id| {
 	bit = 1.U64.shl_wrap(private_id % 64)
 	mask = bit.bitwise_not()
