@@ -1413,11 +1413,6 @@ pub const DynOp = union(enum) {
     tag_discriminant: struct { base: LocalId, desc: LocalId },
     /// The discriminant (target: `u32`) tag `name` has under `desc`.
     tag_discriminant_of: struct { desc: LocalId, name: LocalId },
-    /// The position (target: `u32`) of the first of the descriptors
-    /// `candidates` lists (a `desc_args` descriptor, whose fields are of
-    /// those types) that describes the type `desc` describes, or the count
-    /// of candidates when none does.
-    desc_index: struct { desc: LocalId, candidates: LocalId },
     /// Payload `payload_index` of tag `name` in the tag union `base`, which
     /// holds that tag.
     tag_payload_addr: struct { base: LocalId, desc: LocalId, name: LocalId, payload_index: u32 },
@@ -1475,10 +1470,6 @@ pub const DynOp = union(enum) {
     /// local), which the target's descriptor describes; it borrows from
     /// whatever owns those bytes.
     view: struct { address: LocalId },
-    /// The numeric literal `table` (an `opaque_ptr` to a static
-    /// `NumeralTable` of the Boxy runtime) holds, at the number type `desc`
-    /// describes; the program crashes when the literal does not fit it.
-    numeral: struct { desc: LocalId, table: LocalId },
     /// The value `src` (borrowed), which `from` describes, rebuilt as the
     /// owned value `to` describes. The descriptors describe one type whose
     /// record fields may differ in storage (design.md "Field Kinds"): a

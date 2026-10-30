@@ -26,6 +26,7 @@ const LirProgram = lir_core.Program;
 const desc_format = boxy_runtime.desc;
 const TypeId = types.TypeId;
 const NameId = types.NameId;
+const WorkerId = lower.WorkerId;
 
 const StaticDataExport = LirProgram.StaticDataExport;
 const StaticDataRelocation = LirProgram.StaticDataRelocation;
@@ -48,7 +49,6 @@ pub const StaticDescs = struct {
     /// How many dictionary callables static callables have captured, which
     /// names each one's node.
     extra_nodes: u32 = 0,
-    numeral_tables: std.StringHashMapUnmanaged(LIR.StaticDataId) = .empty,
     /// The key word of each recursive member type composed at runtime.
     recursion_keys: collections.DenseMapUnmanaged(TypeId, LIR.StaticDataId) = .empty,
 
@@ -82,9 +82,6 @@ pub const StaticDescs = struct {
         self.exports.deinit(self.allocator);
         self.desc_slots.deinit(self.allocator);
         self.name_slots.deinit(self.allocator);
-        var tables = self.numeral_tables.keyIterator();
-        while (tables.next()) |key| self.allocator.free(key.*);
-        self.numeral_tables.deinit(self.allocator);
         self.recursion_keys.deinit(self.allocator);
         self.pending.deinit(self.allocator);
     }
@@ -141,16 +138,6 @@ pub const StaticDescs = struct {
         _ = try self.addExport(try LirProgram.staticDataSymbolName(self.allocator, slot), self.ptrSize(), self.ptrSize(), slot);
         self.null_word = slot;
         return slot;
-    }
-
-    /// The static-data slot pointing at a numeric literal's
-    /// `NumeralTable` with contents `table`.
-    pub fn numeralTableSlot(self: *StaticDescs, table: []const u8) Allocator.Error!LIR.StaticDataId {
-        if (self.numeral_tables.get(table)) |slot| return slot;
-        const reserved = try self.addSlotWithNode(@intCast(table.len), desc_format.NumeralTable.alignment);
-        @memcpy(@constCast(self.exports.items[reserved.node].bytes), table);
-        try self.numeral_tables.put(self.allocator, try self.allocator.dupe(u8, table), reserved.slot);
-        return reserved.slot;
     }
 
     /// The static-data slot holding the `Name` of `name`.
@@ -262,6 +249,10 @@ pub const StaticDescs = struct {
         const Frame = struct {
             proc: LIR.LirProcSpecId,
             module: types.ModuleIndex,
+            /// The worker the entry wraps and the types its scheme takes:
+            /// its literal arguments are derived from them.
+            target: WorkerId,
+            bound: []const TypeId,
             requirements: []const lower.DictRequirement,
             words: std.ArrayList(CaptureWord),
             next: usize,
@@ -273,13 +264,23 @@ pub const StaticDescs = struct {
         }
         const program_ = self.program();
         const root_entry = program_.worker(override.entry).*;
-        try frames.append(self.allocator, .{ .proc = root_entry.proc, .module = root_entry.module, .requirements = override.dicts, .words = .empty, .next = 0 });
+        try frames.append(self.allocator, .{ .proc = root_entry.proc, .module = root_entry.module, .target = override.target, .bound = override.bound, .requirements = override.dicts, .words = .empty, .next = 0 });
         for (override.bound) |ty| try frames.items[0].words.append(self.allocator, .{ .desc = ty });
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
             if (frame.next == frame.requirements.len) {
                 var done = frames.pop().?;
                 defer done.words.deinit(self.allocator);
+                // After its dictionaries, the entry's literal arguments: a
+                // static callable per literal thunk, capturing nothing
+                // (design.md "Literal Arguments").
+                const thunks = try program_.literalThunks(self.allocator, done.target, done.bound);
+                defer self.allocator.free(thunks);
+                for (thunks) |thunk| {
+                    self.extra_nodes += 1;
+                    const callable = try self.staticCallableOf(owner, 16 + self.extra_nodes, program_.worker(thunk).proc, &.{});
+                    try done.words.append(self.allocator, .{ .callable = callable });
+                }
                 // Each node index past the slot's own names one callable.
                 const node_index: u32 = if (frames.items.len == 0) index else blk: {
                     self.extra_nodes += 1;
@@ -313,7 +314,7 @@ pub const StaticDescs = struct {
                     const entry = program_.worker(try program_.methodEntryWorker(target)).*;
                     var words: std.ArrayList(CaptureWord) = .empty;
                     for (instance.bound) |ty| try words.append(self.allocator, .{ .desc = ty });
-                    try frames.append(self.allocator, .{ .proc = entry.proc, .module = entry.module, .requirements = instance.requirements, .words = words, .next = 0 });
+                    try frames.append(self.allocator, .{ .proc = entry.proc, .module = entry.module, .target = target, .bound = instance.bound, .requirements = instance.requirements, .words = words, .next = 0 });
                 },
             }
         }

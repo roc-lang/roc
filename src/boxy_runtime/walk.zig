@@ -178,19 +178,6 @@ pub fn Stack(comptime T: type, comptime inline_count: usize) type {
 // Copy.
 
 /// Copy a value's `desc.size` bytes. Reference counts are untouched.
-/// Write the numeric literal `table` holds at the number type `desc`
-/// describes (`desc_mod.NumeralTable`), or crash when it does not fit.
-pub fn numeral(desc: *const TypeDesc, table: [*]const u8, dst: [*]u8, ops: *RocOps) void {
-    const Table = desc_mod.NumeralTable;
-    if (desc.kind != .scalar or @backingInt(desc.scalar) >= Table.number_count) {
-        ops.crash("a numeric literal in a generic body reached a type that converts literals with its own from_numeral");
-    }
-    const mask = std.mem.readInt(u32, table[0..4], .little);
-    if (mask & (@as(u32, 1) << @intCast(@backingInt(desc.scalar))) == 0) ops.crash("invalid numeric literal");
-    const offset = Table.slotOffset(desc.scalar);
-    @memcpy(dst[0..desc.size], table[offset..][0..desc.size]);
-}
-
 /// Copy the bytes of a value described by `desc` from `src` to `dst`.
 pub fn copy(desc: *const TypeDesc, dst: [*]u8, src: [*]const u8) void {
     @memmove(dst[0..desc.size], src[0..desc.size]);

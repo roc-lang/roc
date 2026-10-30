@@ -52,9 +52,6 @@ pub const Input = struct {
     list_in_place_map: bool = false,
     /// Record each platform entrypoint's host boundary digest.
     host_boundary_digests: bool = false,
-    /// The values compile-time evaluation converted the program's
-    /// instance-dependent literals to, when the program was evaluated.
-    literal_values: ?*const @import("literal_values.zig").LiteralValues = null,
     /// The lowering is a compile-time evaluator's: its roots are
     /// compile-time roots, each lowered with the plan and stored type the
     /// store writer keeps its value by (`LirProgram.ConstRootPlan`), and a
@@ -202,6 +199,12 @@ pub const WorkerKey = union(enum) {
     /// target's hidden descriptors and dictionaries as its captures, and
     /// calls the target.
     method_entry: WorkerId,
+    /// The thunk of literal requirement `literal requirement` of the own scope of worker
+    /// `target` instantiated at the types `bound` (a tuple type of them):
+    /// an erased worker with no arguments producing the literal's converted
+    /// value (design.md "Literal Arguments"), for an instantiation checking
+    /// recorded no edge for.
+    literal_thunk: struct { target: WorkerId, bound: TypeId, literal_requirement: u32 },
     /// A compiler-derived structural method over the descriptor its
     /// dictionary captures.
     structural: StructuralMethod,
@@ -233,9 +236,8 @@ pub const WorkerKey = union(enum) {
 /// Why a dictionary slot's method crashes.
 pub const CrashDictionary = enum { checked_error, unreachable_value };
 
-/// Where a stored constant lives: a checked module's constant store, or the
-/// program's converted literal values (`Input.literal_values`).
-pub const ConstSource = union(enum) { module: ModuleIndex, literals };
+/// Where a stored constant lives: a checked module's constant store.
+pub const ConstSource = union(enum) { module: ModuleIndex };
 
 /// Whether `primitive` is a 128-bit SIMD vector.
 fn descFormatIsVector(primitive: types.Primitive) bool {
@@ -311,6 +313,16 @@ pub const Worker = struct {
     /// by position) rather than a checked scheme variable.
     structural_descs: u32 = 0,
     own_dicts: u32 = 0,
+    /// The literal arguments the worker takes after its dictionaries, one
+    /// per literal requirement of its own scheme (design.md "Literal Arguments"):
+    /// an immortal callable producing the literal's converted value.
+    literal_params: u32 = 0,
+    /// The literal requirements in scope, by generalized scope, innermost
+    /// first, parallel to `dict_scopes`.
+    literal_scopes: []const []const checked.LiteralRequirement = &.{},
+    /// For a generalized local procedure: how many literal arguments of its
+    /// own scope its argument record carries after its own dictionaries.
+    own_literals: u32 = 0,
 
     /// The bytes of the worker's procedure identity.
     pub fn identityBytes(self: Worker, program: *const Program) [32]u8 {
@@ -323,6 +335,14 @@ pub const Worker = struct {
         for (self.dict_scopes) |scope| count += @intCast(scope.len);
         return count - self.own_dicts;
     }
+
+    /// The literal arguments a lambda worker captures: every scope's but
+    /// its own.
+    pub fn capturedLiteralCount(self: Worker) u32 {
+        var count: u32 = 0;
+        for (self.literal_scopes) |scope| count += @intCast(scope.len);
+        return count - self.own_literals;
+    }
 };
 
 /// A generalized local procedure's own scheme: its quantified variables and
@@ -332,6 +352,8 @@ pub const LocalScheme = struct {
     dictionaries: []const u32,
     /// The scope's evidence-parameter records, by parameter index.
     params: []const static_dispatch.EvidenceParamRecord = &.{},
+    /// The scope's literal requirements (design.md "Literal Arguments").
+    literal_requirements: []const checked.LiteralRequirement = &.{},
     /// Whether each call passes the scheme's descriptors and dictionaries (a
     /// local procedure's), or the function value captures them at its
     /// construction (any other generalized lambda's).
@@ -344,8 +366,9 @@ pub const LocalScheme = struct {
 /// it.
 pub const NominalOverride = union(enum) {
     /// A procedure's dictionary entry, its scheme taking `bound` and its
-    /// requirements `dicts`.
-    procedure: struct { entry: WorkerId, bound: []const TypeId, dicts: []const DictRequirement },
+    /// requirements `dicts`; `target` is the procedure's own worker, whose
+    /// literal requirements the entry's literal arguments are derived for.
+    procedure: struct { entry: WorkerId, target: WorkerId, bound: []const TypeId, dicts: []const DictRequirement },
     /// A method declared in a function body that checking left a local
     /// procedure of the body (it names the body's type variables): its
     /// function value, at the method's interface `interface`, which only a
@@ -421,9 +444,6 @@ pub const Program = struct {
     lowering_module_ids: []LIR.LoweringModuleId = &.{},
     /// Modules by the checker's `module_idx`.
     by_module_idx: std.AutoHashMapUnmanaged(u32, ModuleIndex) = .empty,
-    /// The converted values of each instance-dependent literal, by the
-    /// literal: indices into `Input.literal_values.entries`.
-    literal_entries: std.AutoHashMapUnmanaged(ExprKey, std.ArrayList(u32)) = .empty,
     /// The constant store plans and stored types of the compile-time roots
     /// this lowering evaluates (`ConstSchema`).
     const_schema: ConstSchema = .{},
@@ -472,15 +492,6 @@ pub const Program = struct {
     /// for the root unit, each module with platform requirements, whose
     /// workers are lowered at the app's types (design.md "Per-Module
     /// Output").
-    /// Whether a worker receives `param` as a dictionary. A runtime
-    /// program's numeral evidence selects descriptors and is no dictionary:
-    /// its literals come converted from the literal tables. The compile-time
-    /// evaluator's program converts its literals where they are, through
-    /// every evidence parameter, so there each one is a dictionary.
-    pub fn runtimeDictionary(self: *const Program, param: static_dispatch.EvidenceParamRecord) bool {
-        return param.runtime_dictionary or self.input.compile_time;
-    }
-
     pub fn ownsModule(self: *const Program, index: ModuleIndex) bool {
         const unit = switch (self.input.unit) {
             .program => return true,
@@ -519,7 +530,7 @@ pub const Program = struct {
                 hasher.update(&self.module(default.module).view.module_identity.stable_hash);
                 hasher.update(std.mem.asBytes(&@as(u32, @backingInt(default.expr))));
             },
-            .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert => invariant("a worker no module's object exports has no content identity"),
+            .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk => invariant("a worker no module's object exports has no content identity"),
         }
         return .{ .bytes = hasher.finalResult() };
     }
@@ -529,12 +540,12 @@ pub const Program = struct {
     pub fn exportableKind(key: WorkerKey) bool {
         return switch (key) {
             .template, .lambda, .method_entry, .default => true,
-            .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert => false,
+            .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk => false,
         };
     }
 
     /// The module unit this lowering emits, or null for a program.
-    fn moduleUnit(self: *const Program) ?ModuleUnit {
+    pub fn moduleUnit(self: *const Program) ?ModuleUnit {
         return switch (self.input.unit) {
             .program => null,
             .module => |unit| unit,
@@ -600,6 +611,7 @@ pub const Program = struct {
         for (imported.scheme_vars) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = .opaque_ptr }));
         const erased = try self.result.layouts.insertErasedCallable();
         for (imported.dictionary_params) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = erased }));
+        for (0..imported.literal_params) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = erased }));
         const proc = store.getProcSpecPtr(imported.proc);
         proc.args = try store.addLocalSpan(args.items);
         if (try self.converter().representationClosed(imported.ret)) {
@@ -619,7 +631,6 @@ pub const Program = struct {
     pub fn constStore(self: *const Program, source: ConstSource) *const check.ConstStore.ConstStore {
         return switch (source) {
             .module => |index| self.module(index).view.const_store,
-            .literals => &(self.input.literal_values orelse invariant("a literal table names values no evaluation converted")).store,
         };
     }
 
@@ -627,7 +638,6 @@ pub const Program = struct {
     pub fn constNames(self: *const Program, source: ConstSource) *const checked_names.CanonicalNameStore {
         return switch (source) {
             .module => |index| self.module(index).nameStore(),
-            .literals => &(self.input.literal_values orelse invariant("a literal table names values no evaluation converted")).names,
         };
     }
 
@@ -691,6 +701,11 @@ pub const Program = struct {
         defer sealed_slots.deinit(self.allocator);
         const evidence_params = poolSlice(static_dispatch.EvidenceParamRecord, view.view.checked_procedure_templates.evidence_params_pool, template.evidence_params);
         for (checked_scheme_vars, 0..) |variable, slot| {
+            // A platform requirement's identity variable is the app type
+            // this program lowers the platform at (`solvePlatformIdentities`):
+            // every mention converts to that type, so it is no hidden
+            // parameter either.
+            if (self.platform_identities.contains(.{ .module = module_index, .ty = variable })) continue;
             if (try self.converter().sealedSchemeVar(module_index, variable, template.checked_fn_root, evidence_params)) {
                 try sealed_slots.append(self.allocator, @intCast(slot));
                 continue;
@@ -698,9 +713,10 @@ pub const Program = struct {
             try scheme_vars.append(self.arena.allocator(), variable);
             try checked_slots.append(self.arena.allocator(), @intCast(slot));
         }
+        const literal_requirements = view.view.checked_procedure_templates.templateLiteralRequirements(&template);
         var dictionary_params: std.ArrayList(u32) = .empty;
         for (evidence_params, 0..) |param, index| {
-            if (!self.runtimeDictionary(param)) continue;
+            if (!param.runtime_dictionary) continue;
             const sealed_dispatcher = if (param.slot) |slot| std.mem.findScalar(u32, sealed_slots.items, slot) != null else false;
             if (sealed_dispatcher) continue;
             try dictionary_params.append(self.arena.allocator(), @intCast(index));
@@ -737,6 +753,8 @@ pub const Program = struct {
             .ret = signature.ret,
             .dict_scopes = try self.arena.allocator().dupe([]const u32, &.{dictionary_params.items}),
             .dict_scope_params = try self.arena.allocator().dupe([]const static_dispatch.EvidenceParamRecord, &.{evidence_params}),
+            .literal_params = @intCast(literal_requirements.len),
+            .literal_scopes = try self.arena.allocator().dupe([]const checked.LiteralRequirement, &.{literal_requirements}),
             .imported = imported,
             .lowered = imported,
         });
@@ -809,6 +827,8 @@ pub const Program = struct {
             .dict_scope_params = if (own) |scheme| try std.mem.concat(self.arena.allocator(), []const static_dispatch.EvidenceParamRecord, &.{ &.{scheme.params}, outer_worker.dict_scope_params }) else outer_worker.dict_scope_params,
             .own_descs = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.scheme_vars.len) else 0) else 0,
             .own_dicts = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.dictionaries.len) else 0) else 0,
+            .literal_scopes = if (own) |scheme| try std.mem.concat(self.arena.allocator(), []const checked.LiteralRequirement, &.{ &.{scheme.literal_requirements}, outer_worker.literal_scopes }) else outer_worker.literal_scopes,
+            .own_literals = if (own) |scheme| (if (scheme.per_call) @intCast(scheme.literal_requirements.len) else 0) else 0,
             .imported = imported,
             .lowered = imported,
             .queued = imported,
@@ -1115,7 +1135,7 @@ pub const Program = struct {
                     const target_worker = self.worker(worker_id).*;
                     const formal = try self.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
                     const instance = try self.instantiateTarget(worker_id, formal, try self.overrideInterface(2, nominal_ty));
-                    result[2] = .{ .procedure = .{ .entry = try self.methodEntryWorker(worker_id), .bound = instance.bound, .dicts = instance.requirements } };
+                    result[2] = .{ .procedure = .{ .entry = try self.methodEntryWorker(worker_id), .target = worker_id, .bound = instance.bound, .dicts = instance.requirements } };
                 }
                 try self.nominal_overrides.put(self.allocator, nominal_ty, result);
                 return result;
@@ -1143,7 +1163,8 @@ pub const Program = struct {
                     // A type whose method checking rejected compares and
                     // hashes as checked-error code.
                     .rejected => {
-                        slot.* = .{ .procedure = .{ .entry = try self.crashDictionaryWorker(nominal.decl.module, .checked_error), .bound = &.{}, .dicts = &.{} } };
+                        const crash = try self.crashDictionaryWorker(nominal.decl.module, .checked_error);
+                        slot.* = .{ .procedure = .{ .entry = crash, .target = crash, .bound = &.{}, .dicts = &.{} } };
                         continue;
                     },
                     .target => |found| found,
@@ -1164,7 +1185,7 @@ pub const Program = struct {
                 const target_worker = self.worker(worker_id).*;
                 const formal = try self.store.intern(.{ .function = .{ .args = target_worker.params, .ret = target_worker.ret, .effectful = false } });
                 const instance = try self.instantiateTarget(worker_id, formal, try self.overrideInterface(method_index, nominal_ty));
-                slot.* = .{ .procedure = .{ .entry = try self.methodEntryWorker(worker_id), .bound = instance.bound, .dicts = instance.requirements } };
+                slot.* = .{ .procedure = .{ .entry = try self.methodEntryWorker(worker_id), .target = worker_id, .bound = instance.bound, .dicts = instance.requirements } };
             }
         }
         try self.nominal_overrides.put(self.allocator, nominal_ty, result);
@@ -1266,7 +1287,7 @@ pub const Program = struct {
         if (requirements.len == 0) return .{ .bound = bound, .requirements = requirements };
         const key = switch (target_worker.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
         const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
@@ -1313,7 +1334,7 @@ pub const Program = struct {
         if (target_worker.dictionary_params.len != 0) {
             const key = switch (target_worker.key) {
                 .template => |key| key,
-                .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert => invariant("a worker with dictionary parameters is not a template's"),
+                .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk => invariant("a worker with dictionary parameters is not a template's"),
             };
             const templates = self.module(key.module).view.checked_procedure_templates;
             const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
@@ -1663,6 +1684,47 @@ pub const Program = struct {
         return id;
     }
 
+    /// The workers whose scopes `worker_id` runs in and that own literal
+    /// literal requirements, innermost first (the order the worker's literal
+    /// arguments take): the worker itself where its own scope has
+    /// literal requirements, then each enclosing lambda scope that does.
+    pub fn scopeOwners(self: *Program, allocator: Allocator, worker_id: WorkerId) Allocator.Error![]WorkerId {
+        var owners = std.ArrayList(WorkerId).empty;
+        errdefer owners.deinit(allocator);
+        var current = worker_id;
+        while (true) {
+            const scoped = self.worker(current).*;
+            const outer: ?WorkerId = switch (scoped.key) {
+                .lambda => |lambda| lambda.outer,
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk => null,
+            };
+            const own = if (outer) |o| scoped.literal_scopes.len != self.worker(o).literal_scopes.len else scoped.literal_scopes.len != 0;
+            if (own) try owners.append(allocator, current);
+            current = outer orelse break;
+        }
+        return try owners.toOwnedSlice(allocator);
+    }
+
+    /// The literal thunks of `worker_id` whose scheme takes `bound`, each
+    /// an erased worker taking no arguments, one per literal requirement of its
+    /// scopes in literal argument order: what an instantiation checking
+    /// recorded no edge for passes as the worker's literal arguments
+    /// (design.md "Literal Arguments").
+    pub fn literalThunks(self: *Program, allocator: Allocator, worker_id: WorkerId, bound: []const TypeId) Allocator.Error![]WorkerId {
+        const owners = try self.scopeOwners(allocator, worker_id);
+        defer allocator.free(owners);
+        var thunks = std.ArrayList(WorkerId).empty;
+        errdefer thunks.deinit(allocator);
+        for (owners) |owner| {
+            const owner_worker = self.worker(owner).*;
+            const owner_bound = bound[0..owner_worker.scheme_vars.len];
+            for (0..owner_worker.literal_scopes[0].len) |literal_requirement| {
+                try thunks.append(allocator, try self.literalThunkWorker(owner, owner_bound, @intCast(literal_requirement)));
+            }
+        }
+        return try thunks.toOwnedSlice(allocator);
+    }
+
     /// The row conversion worker of `module_index` from `from` to `to` (see
     /// `WorkerKey.convert`).
     pub fn convertWorker(self: *Program, module_index: ModuleIndex, from: TypeId, to: TypeId) Allocator.Error!WorkerId {
@@ -1716,6 +1778,20 @@ pub const Program = struct {
             return id;
         }
         return try self.addErasedWorkerWithIdentity(key, target_worker.module, target_worker.scheme_vars, target_worker.params, target_worker.ret, identity);
+    }
+
+    /// The thunk of literal requirement `literal requirement` of the own scope of `target`
+    /// instantiated at `bound` (`WorkerKey.literal_thunk`).
+    pub fn literalThunkWorker(self: *Program, target: WorkerId, bound: []const TypeId, literal_requirement: u32) Allocator.Error!WorkerId {
+        const bound_ty = try self.store.intern(.{ .tuple = bound });
+        const key: WorkerKey = .{ .literal_thunk = .{ .target = target, .bound = bound_ty, .literal_requirement = literal_requirement } };
+        if (self.worker_ids.get(key)) |existing| return existing;
+        const target_worker = self.worker(target).*;
+        if (bound.len != target_worker.scheme_vars.len) invariant("a literal thunk's types differ from its target's scheme");
+        if (target_worker.literal_scopes.len == 0 or literal_requirement >= target_worker.literal_scopes[0].len) invariant("a literal thunk names an literal_requirement its target's scope does not have");
+        const ty = target_worker.literal_scopes[0][literal_requirement].ty;
+        const ret = try self.converter().convert(target_worker.module, ty, .{ .module = target_worker.module, .vars = target_worker.scheme_vars, .bound = bound });
+        return try self.addErasedWorker(key, target_worker.module, &.{}, &.{}, ret, "boxy.literal_thunk");
     }
 
     /// The structural method worker of `method`, generic over one type `a`
@@ -1874,11 +1950,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         program.exported_bindings.deinit(allocator);
         program.callable_eval_by_pattern.deinit(allocator);
         program.platform_identities.deinit(allocator);
-        {
-            var entries = program.literal_entries.valueIterator();
-            while (entries.next()) |list| list.deinit(allocator);
-            program.literal_entries.deinit(allocator);
-        }
         program.const_schema.deinit(allocator);
         program.wrapper_by_root.deinit(allocator);
         program.hosted.deinit(allocator);
@@ -1916,16 +1987,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
         for (view.view.entry_wrappers.wrappers.items) |wrapper| {
             try program.wrapper_by_root.put(allocator, .{ .module = view.index, .root = wrapper.root }, wrapper.template);
-        }
-    }
-    if (input.literal_values) |values| {
-        for (values.entries.items, 0..) |entry, index| {
-            // The values are the program's; a module unit lowers the
-            // literals of its own modules.
-            const module = program.modules.find(entry.module) orelse continue;
-            const slot = try program.literal_entries.getOrPut(allocator, .{ .module = module.index, .expr = entry.expr });
-            if (!slot.found_existing) slot.value_ptr.* = .empty;
-            try slot.value_ptr.append(allocator, @intCast(index));
         }
     }
     try solvePlatformIdentities(&program);
@@ -1994,18 +2055,27 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         const proc = program.worker(worker_id).proc;
         try program.result.root_procs.append(allocator, proc);
         // A compile-time evaluator stores each root's value by the plan
-        // and stored type of the root's own result type.
-        if (request.abi == .compile_time) {
-            if (!input.compile_time) invariant("a compile-time root reached a lowering that evaluates none");
+        // and stored type of the root's own result type. A lowering that
+        // evaluates none (a test lowering one constant's root) runs the
+        // root as a procedure producing the value.
+        if (request.abi == .compile_time and input.compile_time) {
             const ret = program.worker(worker_id).ret;
+            // A literal argument root whose value holds a function is
+            // validated and discarded: nothing stores its value (design.md
+            // "Literal Arguments").
+            const validate_only = if (request.compile_time_root) |root_id| blk: {
+                const root = program.module(source_module).view.compile_time_roots.root(root_id);
+                break :blk if (root.literal_argument) |argument| argument.validate_only else false;
+            } else false;
+            const stored_ty = if (validate_only) try program.store.emptyRecord() else ret;
             try program.result.const_roots.append(allocator, .{
                 .root_order = @intCast(index),
                 .owner = program.lowering_module_ids[@backingInt(source_module)],
                 .request = request,
                 .proc = proc,
                 .ret_layout = try program.layouts.layoutOf(ret),
-                .ret_type = try const_schema.constTypeOf(&program, ret),
-                .plan = try const_schema.constPlanOf(&program, ret),
+                .ret_type = try const_schema.constTypeOf(&program, stored_ty),
+                .plan = try const_schema.constPlanOf(&program, stored_ty),
             });
         }
         var metadata = RootMetadata.fromCheckedRoot(request);
@@ -2068,7 +2138,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                     const export_name = names.procBase(template.proc_base).export_name orelse break :blk "boxy.template";
                     break :blk names.exportNameText(export_name);
                 },
-                inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert => |_, kind| "boxy." ++ @tagName(kind),
+                inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert, .literal_thunk => |_, kind| "boxy." ++ @tagName(kind),
             };
             try program.result.store.setProcDebugName(worker.proc, name);
         }
@@ -2223,8 +2293,8 @@ fn lowerRoot(program: *Program, request: checked.RootRequest, index: u32, source
         template
     else if (request.procedure_binding) |binding| switch (program.module(source_module).view.top_level_procedure_bindings.bindings.items[@backingInt(binding)].body) {
         .direct_template => |direct| Program.directTemplate(direct.template),
-        .callable_eval_template => null,
-        .checked_error => invariant("a root names a rejected procedure binding"),
+        // A rejected binding's root is a wrapper that crashes.
+        .callable_eval_template, .checked_error => null,
     } else null;
     if (direct) |template| {
         const id = try program.templateRefWorker(template);

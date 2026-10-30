@@ -8260,12 +8260,11 @@ alias's backing as their subject, so lowering descends an alias
 subject to its backing together with the shape.
 
 An interpolation in a generic body converts to a type known only by its
-descriptor, so its `from_interpolation` evidence carries a runtime dictionary
-like a quote conversion's does (`requiresRuntimeDictionary`), and a numeral
-conversion's does not. The checked item type is the parts' type, so the
-caller's descriptor for the parts is the item descriptor that dictionary
-receives, and the iterator is constructed at `Iter`'s backing instantiated at
-that item type.
+descriptor, so its `from_interpolation` evidence carries a runtime dictionary,
+as every conversion requirement's does ("Literal Arguments"). The checked
+item type is the parts' type, so the caller's descriptor for the parts is
+the item descriptor that dictionary receives, and the iterator is
+constructed at `Iter`'s backing instantiated at that item type.
 
 ### Structural Serialization Methods
 
@@ -14601,7 +14600,9 @@ parameters:
 - one descriptor parameter per quantified variable of its scheme, in the
   scheme's checked `scheme_vars` order;
 - one dictionary parameter per evidence parameter of its scheme, in the
-  checked `evidence_params` order the checker records.
+  checked `evidence_params` order the checker records;
+- one literal argument per literal requirement of its scheme, in the checked
+  `literal_requirements` order ("Literal Arguments").
 
 A generalized local function (a dispatch scope with its own `scheme_vars`
 and `evidence_params`) is a worker with its own hidden parameters in the same
@@ -14630,7 +14631,7 @@ open (Polarity): `parse : Str -> Try(U8, [InvalidU8])` quantifies a row
 variable on its error row, instantiated fresh at every call, so a caller may
 use the result at a wider union. The checker bounds that variable
 (`DescriptorFlags.bounded_row_ext`): the body can never add a tag to the row,
-only an instantiation can. The checked artifact publishes the bound on the
+only an instantiation can. The checked module records the bound on the
 variable (`CheckedTypeVariable.bounded_row_ext`), and Boxy reads it as the
 one condition under which a scheme variable is SEALED: a flex tag-row tail
 that is bounded, whose row default is the empty row, and whose constraints
@@ -14640,6 +14641,12 @@ bound to the empty row when its worker is lowered and takes no hidden
 descriptor parameter, so `parse` is a static worker returning
 `Try(U8, [InvalidU8])`. An evidence parameter whose dispatcher is a sealed
 variable is no dictionary parameter either.
+
+A platform requirement's identity variable (`[State : state] for main`) is a
+scheme variable of every platform template whose type mentions it, and the
+root program lowers the platform at the app type that variable solved to
+(`solvePlatformIdentities`): every mention converts to that type, so the
+variable is no hidden descriptor parameter of the template's worker either.
 
 Sealing is sound only where every value typed with the variable crosses the
 worker's boundary at a place that knows both rows, which is its result. So a
@@ -14785,12 +14792,17 @@ Descriptors come from two sources and nowhere else:
 
 A recursive type composes through placeholders. The lowerer finds the
 type's recursive component in the graph of descriptor components (record
-fields, tuple items, tag payloads, nominal backings, list elements, box
+fields, tuple items, tag payloads, nominal backings, list items, box
 payloads) and breaks the cycle at exactly its pointer slots: the slots the
-shared layout store boxes for that component, a struct slot leading back into
-it and a non-struct tag payload leading back into it, and the list elements
-and box payloads leading back into it, which are pointers already. Each member
-a pointer slot points at is opened first (`desc_recursive_open`, keyed by a
+shared layout store boxes, and the list items and box payloads leading back
+into the component, which are pointers already. The store boxes a slot only
+for a cycle of its size edges, the components a type stores inside itself
+(record fields, tuple items, tag payloads, nominal backings): a struct slot
+or a non-struct tag payload leading back into such a cycle is boxed, while a
+type recursive only through a list or box has no boxed slot, since the list
+or box already points at it. The lowerer places those size-edge components
+separately (`Layouts.sizeComponent`) and boxes exactly the same slots. Each
+member a pointer slot points at is opened first (`desc_recursive_open`, keyed by a
 static word naming the member and the descriptors of its variables), which
 yields the finished descriptor when an earlier composition interned it and a
 placeholder otherwise. The boxed slots compose as `desc_recursive_box` over
@@ -14877,39 +14889,10 @@ descriptor explicitly as an operand:
 - `dyn_slot_alloc(dst, desc)` allocates a recursive value's slot, a zeroed
   `Box` whose payload `desc` describes, and `dyn_slot_store(dst, slot, value,
   desc)` moves the built value into it ("Recursive values" above).
-- `dyn_numeral(dst, desc, table)` is a numeric literal at the builtin number
-  type `desc` describes: `table` is a static `NumeralTable` holding the
-  literal's value under every builtin number type that can hold it, and the
-  program crashes when the described type cannot.
-- `dyn_desc_index(dst, desc, candidates)` is the position of the first
-  descriptor among `candidates` (a `desc_args` descriptor, whose fields are of
-  the candidate types) that describes the type `desc` describes, compared
-  structurally, or the candidate count when none does.
 
-A literal whose conversion depends on its instance never converts at
-runtime. Compile-time evaluation converts it at every instance the program's
-compile-time specialization reaches it at, as literal roots ("Per-program
-literal roots"), and records each root's value, or its failure, together with
-the concrete type it converted the literal at, for a `.boxy` runtime program.
-The literal lowers to a *literal table*: each recorded type is a candidate,
-`dyn_desc_index` selects the candidate the literal's descriptor describes, and
-the selected branch restores that candidate's stored value at its type and
-re-tags it to the literal's own type, or crashes with its failure. A literal of
-a builtin type, which no literal root converts, takes the builtin rule where no
-candidate matches: a numeral through `dyn_numeral`, a quote as the `Str` it
-spells. A literal whose type is closed in its body selects its candidate
-statically. Nominal descriptors carry a name of their own declaration, so the
-structural comparison never takes one nominal for another.
-
-An interpolation converts the same way. Its conversion produces the assembler
-its values are passed to, and compile-time evaluation converts it at every
-type the program reaches it at, so its table's candidates are assembler
-values: the selected candidate's stored function value is restored and
-called with the interpolated values. There is no builtin rule for an
-interpolation: some candidate always describes its type, so with one
-candidate it is that candidate and otherwise the last candidate is the one no
-earlier candidate is. `from_interpolation` never runs in a `.boxy` runtime
-program.
+A literal whose conversion depends on its instance never converts at a type
+the body does not know: its converted value is a literal argument of the
+body ("Literal Arguments"), or the body converts it through its dictionary.
 
 An expression compile-time evaluation hoisted and stored is read from its
 stored value wherever it occurs, as `.lss` reads it, except in the entry
@@ -14981,6 +14964,108 @@ callable. A nominal override is instantiated at its method's interface:
 `is_eq` at `T, T -> Bool`, `to_hash` at `T, Hasher -> Hasher` with the
 Builtin hasher every runtime hash threads, and `to_inspect` at `T -> Str`. A
 SIMD vector's descriptor carries its builtin `to_inspect`.
+
+#### Literal Arguments
+
+A literal in a generic body whose type mentions a variable of the enclosing
+scheme (`0` in `|xs| xs.fold(0, Num.plus)`, where `0 : item` and `item` is
+quantified) cannot be converted where it is written: its `from_numeral`,
+`from_quote`, or `from_interpolation` conversion exists only once the
+variable is fixed. The rule is the same under both strategies: **a literal is
+converted where its type first becomes concrete, at compile time.** Under
+`.lss` that place is the specialization that fixes the variable, which hoists
+the conversion as a literal root ("Demand-Driven Compile-Time
+Specialization"). Under `.boxy` a body is lowered once, so the conversion
+belongs to the caller that fixes the variable, and the body receives the
+converted value as a hidden argument: a *literal argument*. No type is
+special-cased: a literal at a builtin number type takes the same path as one
+at a user type, through the builtin type's own `from_numeral`.
+
+The checker records the data in every checked module, whatever strategy
+the compilation runs under: the data describes the program, and a checked
+module serves both strategies' programs (its cache identity names no
+strategy).
+
+- A scheme's *literal requirements* (`CheckedProcedureTemplate.literal_requirements`,
+  and the dispatch scope's `literal_requirements`): one per literal of its own body
+  whose conversion plan is open (`.evidence_dependent` or
+  `.direct_parametric`), recording the literal (`LiteralSite`: module,
+  expression, kind) and its type over the scheme's variables; and one per
+  literal requirement of every scheme the body instantiates at an open type (an
+  *edge*: a dispatch edge's evidence node, a procedure use, a generalized
+  local function's use or construction), recording the type after the edge's
+  substitution, the edge, and the callee's literal requirement index. Literal requirements are
+  computed to a fixpoint over the module's schemes and deduplicated by
+  literal and type, so a self-recursive call at the same types adds nothing.
+- Each edge's *literal arguments* (`literalEdgeArgs`): for every literal requirement
+  of the instantiated scheme, where the body gets the value from. An
+  instantiation at a closed type is a `literal_argument` compile-time root
+  of this module (`.root`), one per literal and closed type, whose wrapper
+  body is the conversion at that edge. An instantiation at an open type is
+  forwarded: the value is one of the enclosing scheme's own literal
+  arguments (`.forwarded`). A template's `literal_argument_demand` lists the
+  roots its edges read, so compile-time evaluation orders them before any
+  evaluation of the template.
+- The root's value type is the conversion's `Ok` payload type at the closed
+  type: the literal's type for a numeral or a quote, the assembler's function
+  type for an interpolation. A root whose value holds a function
+  (`validate_only`, every interpolation among them) is evaluated and its
+  value discarded: compile-time evaluation reports its failure like any
+  other root's, and a runtime program converts the literal where the value
+  is needed. This keeps a `.boxy` program's literal rejections identical to
+  a specialized program's: every conversion a program reaches is run at
+  compile time, at the type it is reached at.
+- A literal argument root is the `.boxy` evaluator's. A `.boxy` compilation
+  evaluates it like any pending root of its modules, in dependency order:
+  the request scheduler (`CompileTimeRequestScheduler`) and the finalizer's
+  completion state walk the scheme a root's edge instantiates and treat a
+  template's `literal_argument_demand` as reads, so each root completes
+  before any root whose evaluation calls through it. A `.lss` compilation
+  converts each literal in the specialization that fixes its type and never
+  reads these roots, so it leaves them `unevaluated`, exactly as it leaves a
+  root it does not demand: a later `.boxy` compilation reopens the checked
+  module and evaluates them (`hasUnevaluatedRequests` takes the strategy).
+  The one checked module no compilation reopens, the baked Builtin, is
+  completed at its bake (`Options.complete_baked_module`), whose `.lss` finalization hands
+  these roots to the `.boxy` evaluator.
+
+Lowering gives every worker one hidden parameter per literal requirement of its own
+scheme, after its dictionaries (`Worker.literal_params`, in literal requirement
+order): an immortal erased callable taking no arguments and producing the
+converted value. The callable is the root's entry wrapper composed as a
+dictionary entry (`Body.rootThunk`): its body restores the stored value
+(`CompileTimeRootPayload.const_node`), or, where none is stored (the root is
+being evaluated, or holds a function), converts the literal in the frames of
+the schemes its edge instantiates (`Body.lowerLiteralArgumentRoot`,
+`lowerLiteralChain`): the wrapper enters the callee's scheme at the edge's
+instantiation (`enterEdge`: its module, its variables bound to the edge's
+types, its dictionaries from the edge's evidence, its literal arguments from
+the edge's literal arguments), follows a forwarded literal requirement into the next
+scheme the same way, and lowers the literal's own conversion plan where it
+ends, unwrapping its `Try` as an in-place conversion does. A body reads a
+literal of its own scheme by calling the argument (`lowerInstanceLiteral`); a
+call passes the callee's literal arguments from the edge's
+(`fillLiteralArgs`): a root's thunk or one of the caller's own arguments. A
+generalized local function's own literal requirements travel with its dictionaries:
+per call for a local procedure, in its captures for any other generalized
+lambda; a nested lambda captures the enclosing scopes' literal arguments as
+it captures their dictionaries, after them.
+
+An instantiation checking recorded no edge for (a platform's call of the
+app's binding, a stored closure restored from a constant store, a target
+derived from its callable type) derives its literal arguments from its
+types as it derives its dictionaries: a *literal thunk* worker per
+literal requirement (`WorkerKey.literal_thunk`, keyed by the worker, the types its
+scheme takes, and the literal requirement), whose body enters the worker's scopes at
+those types with dictionaries resolved from types
+(`Program.resolveRequirement`) and converts the literal there.
+
+Every evidence parameter is a runtime dictionary, a numeral requirement's
+included: a body converts a literal through its dictionary wherever no
+literal argument carries the value, and the dictionary is what a derived
+instantiation resolves. The runtime has no numeral table and no descriptor
+selection among candidate types: `dyn_numeral` and `dyn_desc_index` do not
+exist.
 
 #### Function Values
 
@@ -15085,7 +15170,7 @@ the program and never shared between programs.
 #### Per-Module Output
 
 Everything Boxy emits for a module is a function of that module's checked
-artifact and its imports' checked artifacts, and of the target (pointer
+checked module and its imports' checked modules, and of the target (pointer
 width, operating system, and CPU), the opt level, and the compiler version.
 Nothing a module emits depends on a module that imports it:
 
@@ -15123,9 +15208,12 @@ its module objects (`compile.boxy_object_cache`, the `boxy_object` family).
 (`Validation.explicit_roots`), which is its own check under either strategy,
 and with `--specialize=no` it leaves exactly what that check leaves. `roc
 check` accepts `--opt` and ignores it; it honors `--specialize`, because the
-strategy selects the compile-time evaluator and so is part of every checked
-module's cache identity (`CheckingContextIdentity.evaluation_strategy`): a
-module checked under one strategy is never served to the other.
+strategy selects the compile-time evaluator that completes the module's
+roots. The checked module itself names no strategy: both evaluators store
+the same values, and the one kind of root only the `.boxy` evaluator reads
+(a literal argument root, "Literal Arguments") a `.lss` check leaves
+unevaluated for a `.boxy` compilation to complete, so a module checked under
+one strategy is served to the other.
 
 The per-module Boxy cache is exactly as simple as the checked-module cache,
 and Per-Module Output is the invariant that makes it possible:
@@ -15138,7 +15226,7 @@ and Per-Module Output is the invariant that makes it possible:
   a warm build, and two machines, write the same bytes. It holds everything
   lowered for the module, through the object's machine code, and the few
   words of ARC interface a downstream module compiles against (each exported
-  procedure's solved ownership signature and uniqueness facts, which
+  procedure's solved ownership signature and uniqueness data, which
   Per-Module Output makes a function of the module and its imports). There
   is no index, no manifest, no second cache the file refers to, and nothing
   in it comes from any other cache.
@@ -15151,7 +15239,7 @@ and Per-Module Output is the invariant that makes it possible:
 - A hit replaces lowering the module: `roc build`, `roc run`, and `roc test`
   with `--specialize=no` re-lower only modules whose key changed, and modules
   whose keys are known can be lowered independently and in parallel, since
-  the inputs of each are its own and its imports' checked artifacts and
+  the inputs of each are its own and its imports' checked modules and
   nothing else.
 
 Compile-time evaluation results, checked modules, and the canonicalized cache
@@ -15191,40 +15279,20 @@ for every closure it creates; a `.boxy` function value carries runtime
 descriptors and dictionaries instead, which name neither the checked
 evidence nor a nominal's phantom arguments, so a `.boxy` evaluation has
 nothing to store such a value by. The `.boxy` evaluator specializes exactly
-those roots: one that a `.boxy`-evaluated root reads, directly or through
-other roots, in one Solved program per level (`RootFilter`), with the group
-it belongs to; every other one in the discovery pass that follows the
-levels, together with the runtime bodies, so a stored function value
-restores within the program that stored it and no program is specialized
-for it alone.
+those roots, in one Solved program per level (`RootFilter`), with the group
+each belongs to. A literal argument root ("Literal Arguments") is the
+`.boxy` evaluator's whatever its value: one whose value holds a function is
+evaluated for its outcome and discarded.
 
-An instance-dependent literal (one in a generic body, converted at each
-instance the program reaches it at) is converted for the runtime program by
-the Solved evaluator's discovery under either strategy: once every root is
-complete, the `.boxy` evaluator runs the same demand-driven discovery the
-Solved evaluator runs (`specializeAndEvaluate` with the program roots as
-discovery roots), which specializes a runtime body only where it can
-register a literal root, evaluates each literal root, and records the values
-a `.boxy` runtime program reads as its literal tables. A numeral requirement
-is no runtime dictionary (descriptor selection converts a numeral at a
-builtin instance), so a custom instance's conversion exists at runtime only
-through its table; the tables are what keep a `.boxy` program's literal
-rejections, conversion effects, and dormant-code diagnostics identical to a
-specialized program's. A module whose object embeds a literal table is keyed
-by the program the table was converted for
-(`boxy_object_cache.KeyInput.literal_program`).
-
-The `.boxy` evaluator's own programs run before any table exists, so they
-convert each instance-dependent literal where it is: the literal's checked
-conversion plan (`from_numeral`, `from_quote`, `from_interpolation`) is
-called at the instance the body has there and its `Try` result unwrapped,
-an `Err` crashing as the literal's rejection with the conversion's message
-(`Body.lowerLiteralConversion`). So that the call has its instance, every
-evidence parameter of a compile-time program's worker is a dictionary
-(`Program.runtimeDictionary`), numeral requirements included; the program
-is lowered and run whole, so its parameter lists are its own. A literal with
-a conversion root of its own converts the same way until the root is
-evaluated, which the discovery after the roots does.
+A literal in a generic body converts at the first instantiation that fixes
+its type, under either strategy: as a literal root of the specialization
+under `.lss`, as a literal argument root of the instantiating module under
+`.boxy`. A `.boxy` compile-time program converts its literals exactly as a
+runtime program does, through its literal arguments and dictionaries, so the
+evaluator runs no discovery pass and no literal table exists: a literal
+rejection, a conversion's effects, and a dormant-code diagnostic are the
+same under both strategies because the same conversions run at the same
+types.
 
 ### Strategy Equivalence Tests
 
@@ -17831,7 +17899,6 @@ whose substitution the use instantiates under.
 
 Checking instantiates nothing for these targets, so their nodes derive the
 substitution from the callable:
-- the numeric default owner checking selects for a dispatcher no edge pins;
 - the target checking resolves for a literal conversion that it left
   to each specialization;
 - a literal conversion on a builtin number or `Str`, which checking discharges
@@ -18082,6 +18149,13 @@ defaultable arithmetic operators default to `Dec`, quote and interpolation
 literals default to `Str`, and every requirement on such a var resolves against
 the default owner during checking. Structural-capable requirements on other
 unpinnable vars resolve structurally; the rest are statically unreachable.
+The checked module data selects no default owner of its own: a dispatcher
+still flex when a module's checked data is written is one checking did not
+default, so no value reaches its dispatch (the parameter of a function value
+nothing calls, say), and the unpinned-dispatch rule classifies it. Resolving
+it against a default owner's method instead would record a call whose callable nothing validated against
+the method's signature, and a body lowered with such a call (Boxy lowers every
+lambda) would pass the method operands it does not take.
 
 The checker pinning-frontier judgment appends each selected receiver and
 `DefaultTarget` to `default_materializations`. Its compatibility fixpoint
@@ -21012,7 +21086,7 @@ field default, a dictionary entry, a root wrapper, a static data
 initializer, a crash dictionary, a codec derivation) the `isolated` unit,
 which shares with nothing, not even itself. A module's object therefore
 carries only the variants its own calls demanded, and a procedure's solved
-base signature and uniqueness facts—functions of its body and its
+base signature and uniqueness data—functions of its body and its
 callees—are the whole of what another module compiles against (Per-Module
 Output). Imports are acyclic, so no same-SCC tail call crosses a unit.
 Variants inherit their source's unit.

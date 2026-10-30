@@ -8801,10 +8801,6 @@ pub const Interpreter = struct {
                 const found = try self.variantNamed(try self.descAt(frame, t.desc), try self.nameAt(frame, t.name));
                 try self.setScalarTarget(frame, stmt_id, target, u32, found.variant.discriminant);
             },
-            .desc_index => |d| {
-                const index = boxy.compiled.descIndex(try self.descAt(frame, d.desc), try self.descAt(frame, d.candidates), &self.roc_ops);
-                try self.setScalarTarget(frame, stmt_id, target, u32, index);
-            },
             .tag_payload_addr => |t| {
                 const found = try self.variantNamed(try self.descAt(frame, t.desc), try self.nameAt(frame, t.name));
                 const offset = try self.variantPayloadOffset(found.variant, t.payload_index);
@@ -8950,17 +8946,6 @@ pub const Interpreter = struct {
                 if (crash_boundary.set() != 0) return self.crashError();
                 boxy.compiled.adapt(from, to, dst, src, &self.roc_ops);
                 try self.finishResultStorage(frame, stmt_id, target, dst);
-            },
-            .numeral => |n| {
-                const desc = try self.descAt(frame, n.desc);
-                const table: [*]const u8 = @ptrFromInt(try self.localWord(frame, n.table));
-                if (self.store.getLocal(target).dyn != null) {
-                    boxy.walk.numeral(desc, table, try self.dynAddress(frame, target), &self.roc_ops);
-                } else {
-                    const value = try self.alloc(self.store.getLocal(target).layout_idx);
-                    boxy.walk.numeral(desc, table, value.ptr, &self.roc_ops);
-                    try self.setLocalChecked(frame, stmt_id, target, value, false);
-                }
             },
             .closure => |c| {
                 const record = try self.localBytes(frame, c.capture);

@@ -3947,7 +3947,7 @@ pub const MonoLlvmCodeGen = struct {
                     // its composition takes.
                     .dyn => |dyn_stmt| switch (self.store.stmtRow(dyn_stmt.data)) {
                         .dict_compose => |compose| needs[@backingInt(compose.worker)] = true,
-                        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .desc_index, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .numeral, .adapt => {},
+                        .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => {},
                     },
                     .init_uninitialized, .assign_ref, .assign_call_erased, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
                 }
@@ -11872,11 +11872,6 @@ pub const MonoLlvmCodeGen = struct {
                 try self.prepareLocalWrite(target);
                 try self.storeLocalInt(target, discriminant, self.localLayout(target));
             },
-            .desc_index => |d| {
-                const index = try self.callBoxyRuntime("roc_desc_index", .i32, &.{ ptr_ty, ptr_ty }, &.{ try self.wordValue(d.desc), try self.wordValue(d.candidates) });
-                try self.prepareLocalWrite(target);
-                try self.storeLocalInt(target, index, self.localLayout(target));
-            },
             .tag_payload_addr => |t| try self.bindComponentAddress(target, try self.callBoxyRuntime("roc_desc_tag_payload_addr", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, .i32 }, &.{
                 try self.wordValue(t.desc),
                 try self.bytesAddress(t.base),
@@ -12006,11 +12001,6 @@ pub const MonoLlvmCodeGen = struct {
                 try self.wordValue(a.to),
                 try self.targetAddress(target),
                 try self.bytesAddress(a.src),
-            }),
-            .numeral => |n| _ = try self.callBoxyRuntime("roc_desc_numeral", .void, &.{ ptr_ty, ptr_ty, ptr_ty }, &.{
-                try self.wordValue(n.desc),
-                try self.wordValue(n.table),
-                try self.targetAddress(target),
             }),
         }
     }

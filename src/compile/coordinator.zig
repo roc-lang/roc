@@ -3211,7 +3211,7 @@ pub const Coordinator = struct {
             for (package.value_ptr.*.modules.items) |*mod| {
                 if (mod.pending_evaluation != null) continue;
                 const artifact = mod.checkedArtifact() orelse continue;
-                if (artifact.evaluation_state != .finalized or !artifact.hasUnevaluatedRequests()) continue;
+                if (artifact.evaluation_state != .finalized or !artifact.hasUnevaluatedRequests(self.specialization_strategy)) continue;
                 if (dependency_root != null and !dependencies.contains(artifact.key.bytes)) continue;
                 // A platform awaiting its app relation finalizes in the pass
                 // that evaluates the platform alone, which demands every root.
@@ -3220,7 +3220,7 @@ pub const Coordinator = struct {
                 errdefer state.deinit();
                 try artifact.reopenForEvaluation(self.gpa);
                 mod.pending_evaluation = state;
-                mod.reopened_unevaluated = unevaluatedRequestCount(artifact);
+                mod.reopened_unevaluated = unevaluatedRequestCount(artifact, self.specialization_strategy);
             }
         }
         var entries = std.ArrayList(Entry).empty;
@@ -3522,9 +3522,6 @@ pub const Coordinator = struct {
         const serialized: *const CheckedArtifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(buffer.ptr));
         serialized.validate(buffer.len) catch return;
         if (!std.mem.eql(u8, &serialized.key.bytes, &previous_key)) return;
-        // A value another strategy's evaluator stored is restored by that
-        // strategy's programs alone.
-        if (serialized.checking_context_identity.evaluation_strategy.value != artifact.checking_context_identity.evaluation_strategy) return;
         var previous = eval.CompileTimeReuse.Previous.fromSerialized(serialized, self.gpa);
         var previous_owned = true;
         defer if (previous_owned) previous.deinit();
@@ -3697,10 +3694,13 @@ pub const Coordinator = struct {
         self.roc_ctx.writeStderr(out.written()) catch {};
     }
 
-    fn unevaluatedRequestCount(artifact: *const CheckedArtifact.CheckedModuleArtifact) usize {
+    /// The roots a compilation under `strategy` has yet to evaluate; a
+    /// `.lss` compilation never evaluates a literal argument root.
+    fn unevaluatedRequestCount(artifact: *const CheckedArtifact.CheckedModuleArtifact, strategy: base.SpecializationStrategy) usize {
         var count: usize = 0;
         for (artifact.root_requests.compile_time_requests) |request| {
             const root = request.compile_time_root orelse continue;
+            if (strategy == .lss and artifact.compile_time_roots.root(root).kind == .literal_argument) continue;
             if (artifact.compile_time_roots.root(root).payload == .unevaluated or
                 artifact.compile_time_roots.root(root).payload == .pending) count += 1;
         }
@@ -3842,7 +3842,7 @@ pub const Coordinator = struct {
         }
         // A reopened cache entry is published again only when this
         // compilation evaluated roots it lacked.
-        const evaluated_more = if (mod.reopened_unevaluated) |before| unevaluatedRequestCount(artifact) < before else true;
+        const evaluated_more = if (mod.reopened_unevaluated) |before| unevaluatedRequestCount(artifact, self.specialization_strategy) < before else true;
         mod.reopened_unevaluated = null;
         if (mod.hasOnlyPreCheckReports() and evaluated_more) {
             if (artifact.pairing_arena == null) {
@@ -4304,7 +4304,6 @@ pub const Coordinator = struct {
             self.gpa,
             env,
             .{
-                .evaluation_strategy = self.specialization_strategy,
                 .imports = imported_artifacts,
                 .platform_requirement_context = platform_requirement_context,
                 .explicit_roots = explicit_roots,
@@ -7040,7 +7039,6 @@ pub const Coordinator = struct {
             task.validation,
             task.source_pin_validation,
             ctfe_options,
-            self.specialization_strategy,
             .{ .explicit = task.deferred_imports },
             task.missing_public_types,
             if (self.cache_entry_dirs.inference) |directory| .{ .manager = self.cache_manager.?, .directory = directory } else null,
@@ -10037,6 +10035,7 @@ fn hashPatternExtractionRegionsForView(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .literal_argument,
             .repl_expr,
             => false,
         };
@@ -10096,6 +10095,7 @@ fn hashPatternExtractionRegionsForView(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .literal_argument,
             .repl_expr,
             => unreachable, // is_selected_root skipped every root of these kinds
         }

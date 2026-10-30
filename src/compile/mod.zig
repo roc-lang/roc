@@ -69,6 +69,7 @@ test "compile tests" {
     }
     std.testing.refAllDecls(@import("cache_config.zig"));
     std.testing.refAllDecls(@import("cache_key.zig"));
+    std.testing.refAllDecls(boxy_object_cache);
     std.testing.refAllDecls(@import("cache_manager.zig"));
     std.testing.refAllDecls(@import("cache_module.zig"));
     std.testing.refAllDecls(@import("cache_versioning.zig"));

@@ -17390,12 +17390,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBoxyRuntime(&builder, "roc_desc_tag_discriminant_of");
                     try self.bindReturnedScalar(dst_local, 4);
                 },
-                .desc_index => |d| {
-                    try self.addWordArg(&builder, d.desc);
-                    try self.addWordArg(&builder, d.candidates);
-                    try self.callBoxyRuntime(&builder, "roc_desc_index");
-                    try self.bindReturnedScalar(dst_local, 4);
-                },
                 .tag_payload_addr => |t| {
                     try self.addWordArg(&builder, t.desc);
                     try self.addBytesArg(&builder, t.base);
@@ -17508,14 +17502,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try addTargetArg(&builder, dst);
                     try self.addBytesArg(&builder, a.src);
                     try self.callBoxyRuntime(&builder, "roc_desc_adapt");
-                    try self.finishTarget(dst_local, dst);
-                },
-                .numeral => |n| {
-                    const dst = try self.dynTarget(dst_local);
-                    try self.addWordArg(&builder, n.desc);
-                    try self.addWordArg(&builder, n.table);
-                    try addTargetArg(&builder, dst);
-                    try self.callBoxyRuntime(&builder, "roc_desc_numeral");
                     try self.finishTarget(dst_local, dst);
                 },
                 .view => |v| {

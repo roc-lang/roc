@@ -1487,7 +1487,7 @@ pub fn lowerCheckedModulesToLir(
         return lowerPreparedMonotypeToLir(try prepareCheckedModulesMonotype(allocator, modules, roots, target));
     }
     // Lowered outside a program session, nothing evaluated its literals.
-    var prepared = try prepareBoxyCheckedModules(allocator, modules, roots, target, null);
+    var prepared = try prepareBoxyCheckedModules(allocator, modules, roots, target);
     defer prepared.deinit();
     return prepared.lower(target);
 }
@@ -2152,15 +2152,12 @@ fn finishLoweredOutput(
 
 /// The values compile-time evaluation converted a `.boxy` program's
 /// instance-dependent literals to (design.md "Literal Tables").
-pub const BoxyLiteralValues = postcheck.Boxy.LiteralValues;
-
 /// The checked inputs of one `.boxy` lowering, validated once before any
 /// lowering begins (design.md "`.boxy` Runtime Lowering").
 pub const PreparedBoxy = struct {
     allocator: Allocator,
     modules: CheckedModuleSet,
     roots: RootRequestSet,
-    literal_values: ?*const BoxyLiteralValues,
     layout_requests: []const checked.CheckedTypeId,
     static_data_requests: []const postcheck.Common.StaticDataRequest,
 
@@ -2185,7 +2182,6 @@ pub const PreparedBoxy = struct {
             .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
             .list_in_place_map = target.list_in_place_map,
             .host_boundary_digests = target.host_boundary_digests,
-            .literal_values = self.literal_values,
             .compile_time = target.boxy_compile_time,
             .unit = if (target.boxy_unit) |unit| .{ .module = unit } else .program,
         });
@@ -2212,7 +2208,6 @@ pub fn prepareBoxyCheckedModules(
     modules: CheckedModuleSet,
     roots: RootRequestSet,
     target: TargetConfig,
-    literal_values: ?*const BoxyLiteralValues,
 ) LowerResourceError!PreparedBoxy {
     std.debug.assert(target.specialization_strategy == .boxy);
     try verifyCheckedBoundary(modules, target);
@@ -2225,7 +2220,6 @@ pub fn prepareBoxyCheckedModules(
         .allocator = allocator,
         .modules = modules,
         .roots = roots,
-        .literal_values = literal_values,
         .layout_requests = layout_requests,
         .static_data_requests = static_data_requests,
     };

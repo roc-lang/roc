@@ -1642,10 +1642,6 @@ pub const Store = struct {
             recursive_nodes: []bool,
             component_ids: []u32,
 
-            /// How a parent reads a child: as its final value, or as a
-            /// pointer target.
-            const ChildMode = enum { value, pointer };
-
             /// The layout of child `ref`, or the node that must be finalized
             /// first to produce it.
             const ChildLayout = union(enum) {
@@ -1653,12 +1649,12 @@ pub const Store = struct {
                 finalize: GraphNodeId,
             };
 
-            /// A nominal wrapper's layout is its child's in either mode, so
-            /// a read looks through it: a parent on a cycle through the
-            /// wrapper then reads the child's slot, and the wrapper never
-            /// fills a slot of its own with a copy of the child's layout.
-            fn childLayout(self_finalizer: *@This(), ref: GraphRef, mode: ChildMode) ChildLayout {
-                _ = mode;
+            /// A nominal wrapper's layout is its child's whether the parent
+            /// stores the child or points at it, so a read looks through it:
+            /// a parent on a cycle through the wrapper then reads the
+            /// child's slot, and the wrapper never fills a slot of its own
+            /// with a copy of the child's layout.
+            fn childLayout(self_finalizer: *@This(), ref: GraphRef) ChildLayout {
                 var current = ref;
                 while (true) {
                     const node_id = switch (current) {
@@ -1772,17 +1768,16 @@ pub const Store = struct {
                     input = null;
                     const node_id = frame.node_id;
                     const node = self_finalizer.graph.getNode(node_id);
-                    // The next child to read, with how it is read.
-                    const next: ?struct { ref: GraphRef, mode: ChildMode } = switch (node) {
+                    // The next child to read.
+                    const next: ?GraphRef = switch (node) {
                         .pending, .committed => unreachable, // commitGraph builds this working graph with committed leaves as canonical refs and every reserved node filled
-                        .nominal => |child| if (frame.children.items.len == 0) .{ .ref = child, .mode = .value } else null,
-                        .box, .list, .closure => |child| if (frame.children.items.len == 0) .{ .ref = child, .mode = .pointer } else null,
+                        .nominal, .box, .list, .closure => |child| if (frame.children.items.len == 0) child else null,
                         .erased_callable => null,
                         .struct_ => |span| blk: {
                             const graph_fields = self_finalizer.graph.getFields(span);
                             while (frame.children.items.len < graph_fields.len) {
                                 const field = graph_fields[frame.children.items.len];
-                                if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, field.child)) break :blk .{ .ref = field.child, .mode = .value };
+                                if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, field.child)) break :blk field.child;
                                 try frame.children.append(allocator, try self_finalizer.recursiveSlotLayout(field.child));
                             }
                             break :blk null;
@@ -1791,14 +1786,14 @@ pub const Store = struct {
                             const graph_refs = self_finalizer.graph.getRefs(span);
                             while (frame.children.items.len < graph_refs.len) {
                                 const variant_ref = graph_refs[frame.children.items.len];
-                                if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, variant_ref)) break :blk .{ .ref = variant_ref, .mode = .value };
+                                if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, variant_ref)) break :blk variant_ref;
                                 try frame.children.append(allocator, try self_finalizer.recursiveSlotLayout(variant_ref));
                             }
                             break :blk null;
                         },
                     };
                     if (next) |child| {
-                        switch (self_finalizer.childLayout(child.ref, child.mode)) {
+                        switch (self_finalizer.childLayout(child)) {
                             .layout => |layout_idx| input = layout_idx,
                             .finalize => |child_id| {
                                 self_finalizer.finalize_state[@backingInt(child_id)] = .active;

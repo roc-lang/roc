@@ -121,6 +121,7 @@ const Walker = struct {
         const wrapper = root.request.procedure_template orelse
             base.invariant("compile-time finalization invariant violated: a compile-time root has no checked wrapper template", .{});
         try self.pushTemplate(wrapper);
+        if (self.modules[root.module].compile_time_roots.root(root.root).literal_argument) |argument| try self.walkLiteralEdge(root.module, argument.edge);
         while (self.pending.pop()) |next| try self.walkTemplate(next);
         std.sort.pdq(u32, self.reads.items, {}, std.sort.asc(u32));
         var out = std.ArrayList(u32).empty;
@@ -158,6 +159,28 @@ const Walker = struct {
             const raw = @backingInt(ref_id);
             if (raw >= module.resolved_value_refs.records.len) base.invariant("compile-time finalization invariant violated: a value reference id is outside its checked table", .{});
             try self.walkRef(module.resolved_value_refs.records[raw].ref);
+        }
+        // The literal argument roots the template's edges read (design.md
+        // "Literal Arguments").
+        for (module.checked_procedure_templates.templateLiteralArgumentDemand(&template)) |root| try self.readRoot(key.module, root);
+    }
+
+    /// Walk the scheme a literal argument root's edge instantiates: the
+    /// root's body converts the literal in that scheme's frames.
+    fn walkLiteralEdge(self: *Walker, module: u32, edge: checked.LiteralEdge) Allocator.Error!void {
+        const artifact = self.modules[module];
+        switch (edge) {
+            .literal => {},
+            .node => |id| switch (artifact.static_dispatch_plans.evidenceNode(id).target.kind) {
+                .procedure => |procedure| try self.pushTemplate(procedure.template),
+                .local_proc, .structural => {},
+            },
+            .use => |expr| {
+                const raw = @backingInt(expr);
+                if (raw >= artifact.resolved_value_refs.by_checked_expr.len) return;
+                const ref_id = artifact.resolved_value_refs.by_checked_expr[raw].get() orelse return;
+                try self.walkRef(artifact.resolved_value_refs.records[@backingInt(ref_id)].ref);
+            },
         }
     }
 
@@ -308,8 +331,21 @@ pub fn rootHoldsFunction(
                             base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
                         try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaring.nominalDeclarationById(imported.declaration).backing });
                     },
-                    // A box payload capability's value is a function value.
-                    .local_box_payload_capability, .imported_box_payload_capability => return true,
+                    // A nominal published as a box payload capability is
+                    // declared in its module like any other: its value is
+                    // its backing's.
+                    .local_box_payload_capability => {
+                        const declaration = item.types.nominalDeclarationForPayload(nominal) orelse
+                            base.invariant("compile-time finalization invariant violated: a box payload capability names a nominal its module does not declare", .{});
+                        try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = declaration.backing });
+                    },
+                    .imported_box_payload_capability => |imported| {
+                        const declaring = typesOf(modules, imports, imported.artifact) orelse
+                            base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
+                        const declaration = declaring.nominalDeclarationForPayload(nominal) orelse
+                            base.invariant("compile-time finalization invariant violated: a box payload capability names a nominal its module does not declare", .{});
+                        try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaration.backing });
+                    },
                     .opaque_without_backing => {},
                 }
             },
@@ -320,10 +356,10 @@ pub fn rootHoldsFunction(
 
 fn typesOf(modules: []const *checked.CheckedModuleArtifact, imports: []const checked.ImportedModuleView, key: canonical.CheckedModuleDigest) ?checked.CheckedTypeStoreView {
     for (modules) |module| {
-        if (std.mem.eql(u8, &module.key.digest().bytes, &key.bytes)) return module.checked_types.view();
+        if (module.key.digest().eql(key)) return module.checked_types.view();
     }
     for (imports) |import| {
-        if (std.mem.eql(u8, &import.key.digest().bytes, &key.bytes)) return import.checked_types;
+        if (import.key.digest().eql(key)) return import.checked_types;
     }
     return null;
 }

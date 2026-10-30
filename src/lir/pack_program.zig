@@ -415,7 +415,7 @@ pub fn erasedCallingProcs(allocator: Allocator, store: *const LirStore) Allocato
                 => true,
                 .dyn => |dyn| switch (store.stmtRow(dyn.data)) {
                     .dict_compose, .call_erased, .closure => true,
-                    .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .desc_index, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .view, .numeral, .adapt => false,
+                    .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .view, .adapt => false,
                 },
                 .init_uninitialized,
                 .assign_ref,
@@ -606,7 +606,7 @@ fn stmtDirectCallee(store: *const LirStore, stmt_id: LIR.CFStmtId) ?LIR.LirProcS
         .dyn => |dyn| switch (store.stmtRow(dyn.data)) {
             .dict_compose => |dict| dict.worker,
             .closure => |closure| closure.proc,
-            .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .desc_index, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .view, .numeral, .adapt => null,
+            .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .view, .adapt => null,
         },
         .init_uninitialized,
         .assign_ref,

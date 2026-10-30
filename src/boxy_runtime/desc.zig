@@ -44,22 +44,6 @@ pub const Kind = enum(u8) {
     recursive_box,
 };
 
-/// A numeric literal's value under every builtin number type, for a literal
-/// whose type a generic body knows only by its descriptor: a `u32` mask (bit
-/// `s` set when the literal fits `Scalar` `s`) padded to 16 bytes, then one
-/// 16-byte little-endian slot per number `Scalar` (`u8` through `dec`).
-pub const NumeralTable = struct {
-    pub const number_count = 13;
-    pub const header_size = 16;
-    pub const slot_size = 16;
-    pub const size = header_size + number_count * slot_size;
-    pub const alignment = 16;
-
-    pub fn slotOffset(scalar: Scalar) u32 {
-        return header_size + @as(u32, @backingInt(scalar)) * slot_size;
-    }
-};
-
 /// Which scalar a `.scalar` descriptor is.
 pub const Scalar = enum(u8) {
     u8,
@@ -388,7 +372,7 @@ fn fieldSize(comptime F: type, width: PointerWidth) u32 {
 fn fieldAlignment(comptime F: type, width: PointerWidth) u32 {
     return switch (@typeInfo(F)) {
         .array => |array| fieldAlignment(array.child, width),
-        else => fieldSize(F, width),
+        .type, .void, .bool, .noreturn, .int, .float, .pointer, .@"struct", .comptime_float, .comptime_int, .undefined, .null, .optional, .error_union, .error_set, .@"enum", .@"union", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal, .spirv => fieldSize(F, width),
     };
 }
 

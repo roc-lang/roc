@@ -117,11 +117,6 @@ pub fn roc_desc_nominal(backing: *const TypeDesc, name: ?*const Name, methods: ?
     return compose.nominal(cache(), composeOps(), backing, name, methods, inspect_opaque);
 }
 
-/// The C-ABI form of `walk.numeral`.
-pub fn roc_desc_numeral(desc: *const TypeDesc, table: [*]const u8, dst: ?[*]u8) callconv(.c) void {
-    walk.numeral(desc, table, valuePtr(dst), ops());
-}
-
 /// The C-ABI form of `compiled.adapt`.
 pub fn roc_desc_adapt(from: *const TypeDesc, to: *const TypeDesc, dst: ?[*]u8, src: ?[*]u8) callconv(.c) void {
     compiled.adapt(from, to, valuePtr(dst), valuePtr(src), ops());
@@ -201,11 +196,6 @@ pub fn roc_desc_tag_discriminant(desc: *const TypeDesc, base: ?[*]u8) callconv(.
 /// The C-ABI form of `compiled.tagDiscriminantOf`.
 pub fn roc_desc_tag_discriminant_of(desc: *const TypeDesc, name: *const Name) callconv(.c) u32 {
     return compiled.tagDiscriminantOf(desc, name, ops());
-}
-
-/// The C-ABI form of `compiled.descIndex`.
-pub fn roc_desc_index(desc: *const TypeDesc, candidates: *const TypeDesc) callconv(.c) u32 {
-    return compiled.descIndex(desc, candidates, ops());
 }
 
 /// The C-ABI form of `compiled.tagPayloadAddr`.
