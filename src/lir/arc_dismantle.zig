@@ -3015,11 +3015,22 @@ pub fn compute(
     while (proc_cursor > 0) {
         proc_cursor -= 1;
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_cursor))));
+        const proc_params = store.getLocalSpan(store.getProcSpecImmediate(proc_id).args);
         for (solution.procStatements(store, proc_id)) |current| {
             const stmt_index = @backingInt(current);
             if (visited.isSet(stmt_index)) continue;
             visited.set(stmt_index);
             try classifyStatement(&analysis, store, operand_read_counts, direct_call_stmt_by_arg, direct_call_position_by_arg, current);
+            // A restitution boundary hands each restituted parameter's exact
+            // entry unit back to the caller, so it is a whole use of that
+            // parameter: no field take may run before it on any path.
+            const restituted = solution.restitutionParamsAt(current);
+            if (restituted == 0) continue;
+            for (0..GuardedList.borrowLen(proc_params)) |position| {
+                const bit = arc_sig.paramBit(position) orelse break;
+                if ((restituted & bit) == 0) continue;
+                try analysis.useWholeAt(GuardedList.at(proc_params, position), current);
+            }
         }
     }
 
