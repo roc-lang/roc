@@ -3517,14 +3517,17 @@ pub const Coordinator = struct {
         options.post_check_executor = self.postCheckExecutor();
         var boxy_objects: ?BoxyObjects = null;
         defer if (boxy_objects) |*objects| objects.deinit();
-        if (self.specialization_strategy == .boxy) if (self.boxy_object_lowering) |lowering| if (self.cache_manager) |manager| if (manager.config.enabled) {
-            // The module objects are built within this evaluation, so their
-            // lowering, code generation, and cache writes count toward it.
-            var unit_lowering = lowering;
-            unit_lowering.config.timing = &self.ctfe_timing.lowering;
-            boxy_objects = .{ .coordinator = self, .lowering = unit_lowering, .manager = manager, .interfaces = .init(self.gpa, self.roc_ctx.std_io) };
-        };
-        if (boxy_objects) |*objects| options.boxy_objects = objects.source();
+        // A host that interprets its compile-time programs links no objects.
+        if (comptime !eval.CompileTimeFinalization.compilerHostMustUseInterpreterForCtfe()) {
+            if (self.specialization_strategy == .boxy) if (self.boxy_object_lowering) |lowering| if (self.cache_manager) |manager| if (manager.config.enabled) {
+                // The module objects are built within this evaluation, so their
+                // lowering, code generation, and cache writes count toward it.
+                var unit_lowering = lowering;
+                unit_lowering.config.timing = &self.ctfe_timing.lowering;
+                boxy_objects = .{ .coordinator = self, .lowering = unit_lowering, .manager = manager, .interfaces = .init(self.gpa, self.roc_ctx.std_io) };
+            };
+            if (boxy_objects) |*objects| options.boxy_objects = objects.source();
+        }
         options.cancel_request = self.cancel_request;
         options.object_cache = self.compile_time_object_cache;
         options.keep_artifacts = self.compile_time_object_cache != null or self.keep_compile_time_artifacts;
