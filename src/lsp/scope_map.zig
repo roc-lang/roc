@@ -28,8 +28,21 @@ pub const Binding = struct {
     visible_from: u32,
     /// The region where this binding's scope ends
     visible_to: u32,
-    /// Whether this is a function parameter
-    is_parameter: bool,
+    /// What introduced this binding
+    owner: Owner,
+
+    /// The construct that introduced a binding. Only declarations carry doc
+    /// comments; parameters and pattern binders never do.
+    pub const Owner = union(enum) {
+        /// A top-level definition, possibly destructuring
+        def: CIR.Def.Idx,
+        /// A declaration statement, top-level or in a block, possibly destructuring
+        statement: CIR.Statement.Idx,
+        /// A lambda parameter
+        parameter,
+        /// A `match` branch or `for` loop pattern
+        binder,
+    };
 };
 
 /// Reconstructed scope information from CIR.
@@ -62,7 +75,7 @@ pub const ScopeMap = struct {
         // Top-level defs are visible from their definition to the end of the module
         for (store.sliceDefs(module_env.all_defs)) |def_idx| {
             const def = store.getDef(def_idx);
-            try self.extractBindingsFromPattern(module_env, def.pattern, 0, std.math.maxInt(u32), false);
+            try self.extractBindingsFromPattern(module_env, def.pattern, 0, std.math.maxInt(u32), .{ .def = def_idx });
             visitor.walkExpr(store, def.expr);
             if (walk.oom) |err| return err;
         }
@@ -103,7 +116,7 @@ pub const ScopeMap = struct {
 
         fn visitStmt(walk: *ScopeWalk, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
             switch (stmt) {
-                .s_for => |for_stmt| walk.bindInBody(for_stmt.patt, for_stmt.body, false) catch |err| {
+                .s_for => |for_stmt| walk.bindInBody(for_stmt.patt, for_stmt.body, .binder) catch |err| {
                     walk.oom = err;
                     return .stop;
                 },
@@ -133,9 +146,9 @@ pub const ScopeMap = struct {
         }
 
         /// Records `pattern`'s bindings as visible throughout `body`.
-        fn bindInBody(walk: *ScopeWalk, pattern: CIR.Pattern.Idx, body: CIR.Expr.Idx, is_parameter: bool) Allocator.Error!void {
+        fn bindInBody(walk: *ScopeWalk, pattern: CIR.Pattern.Idx, body: CIR.Expr.Idx, owner: Binding.Owner) Allocator.Error!void {
             const body_region = walk.module_env.store.getExprRegion(body);
-            try walk.scope_map.extractBindingsFromPattern(walk.module_env, pattern, body_region.start.offset, body_region.end.offset, is_parameter);
+            try walk.scope_map.extractBindingsFromPattern(walk.module_env, pattern, body_region.start.offset, body_region.end.offset, owner);
         }
 
         fn recordExprBindings(walk: *ScopeWalk, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) Allocator.Error!void {
@@ -150,7 +163,7 @@ pub const ScopeMap = struct {
                 },
                 .e_lambda => |lambda| {
                     for (store.slicePatterns(lambda.args)) |arg_pattern| {
-                        try walk.bindInBody(arg_pattern, lambda.body, true);
+                        try walk.bindInBody(arg_pattern, lambda.body, .parameter);
                     }
                 },
                 .e_match => |match| {
@@ -158,11 +171,11 @@ pub const ScopeMap = struct {
                     for (store.sliceMatchBranches(match.branches)) |branch_idx| {
                         const branch = store.getMatchBranch(branch_idx);
                         for (store.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
-                            try walk.bindInBody(store.getMatchBranchPattern(branch_pattern_idx).pattern, branch.value, false);
+                            try walk.bindInBody(store.getMatchBranchPattern(branch_pattern_idx).pattern, branch.value, .binder);
                         }
                     }
                 },
-                .e_for => |for_expr| try walk.bindInBody(for_expr.patt, for_expr.body, false),
+                .e_for => |for_expr| try walk.bindInBody(for_expr.patt, for_expr.body, .binder),
                 .e_closure,
                 .e_if,
                 .e_call,
@@ -250,7 +263,7 @@ pub const ScopeMap = struct {
             => return,
         };
         const visible_from = module_env.store.getStatementRegion(stmt_idx).start.offset;
-        try self.extractBindingsFromPattern(module_env, pattern, visible_from, scope_end, false);
+        try self.extractBindingsFromPattern(module_env, pattern, visible_from, scope_end, .{ .statement = stmt_idx });
     }
 
     /// Extract bindings from a pattern (handles destructuring, as-patterns, etc.)
@@ -260,7 +273,7 @@ pub const ScopeMap = struct {
         pattern_idx: CIR.Pattern.Idx,
         visible_from: u32,
         visible_to: u32,
-        is_parameter: bool,
+        owner: Binding.Owner,
     ) Allocator.Error!void {
         const pattern = module_env.store.getSourcePattern(pattern_idx);
 
@@ -271,7 +284,7 @@ pub const ScopeMap = struct {
                     .pattern_idx = pattern_idx,
                     .visible_from = visible_from,
                     .visible_to = visible_to,
-                    .is_parameter = is_parameter,
+                    .owner = owner,
                 });
             },
             .as => |p| {
@@ -281,24 +294,24 @@ pub const ScopeMap = struct {
                     .pattern_idx = pattern_idx,
                     .visible_from = visible_from,
                     .visible_to = visible_to,
-                    .is_parameter = is_parameter,
+                    .owner = owner,
                 });
                 // Also extract from the nested pattern
-                try self.extractBindingsFromPattern(module_env, p.pattern, visible_from, visible_to, is_parameter);
+                try self.extractBindingsFromPattern(module_env, p.pattern, visible_from, visible_to, owner);
             },
             .applied_tag => |p| {
                 // Extract bindings from tag arguments
                 const args = module_env.store.slicePatterns(p.args);
                 for (args) |arg_pattern| {
-                    try self.extractBindingsFromPattern(module_env, arg_pattern, visible_from, visible_to, is_parameter);
+                    try self.extractBindingsFromPattern(module_env, arg_pattern, visible_from, visible_to, owner);
                 }
             },
             .nominal => |p| {
                 // Extract bindings from the backing pattern
-                try self.extractBindingsFromPattern(module_env, p.backing_pattern, visible_from, visible_to, is_parameter);
+                try self.extractBindingsFromPattern(module_env, p.backing_pattern, visible_from, visible_to, owner);
             },
             .nominal_external => |p| {
-                try self.extractBindingsFromPattern(module_env, p.backing_pattern, visible_from, visible_to, is_parameter);
+                try self.extractBindingsFromPattern(module_env, p.backing_pattern, visible_from, visible_to, owner);
             },
             .record_destructure => |p| {
                 const destructs = module_env.store.sliceRecordDestructs(p.destructs);
@@ -306,25 +319,25 @@ pub const ScopeMap = struct {
                     const destruct = module_env.store.getRecordDestruct(destruct_idx);
                     // Field labels are not bindings. Required fields, sub-patterns,
                     // and rests all carry the pattern that introduces their bindings.
-                    try self.extractBindingsFromPattern(module_env, destruct.kind.toPatternIdx(), visible_from, visible_to, is_parameter);
+                    try self.extractBindingsFromPattern(module_env, destruct.kind.toPatternIdx(), visible_from, visible_to, owner);
                 }
             },
             .list => |p| {
                 const patterns = module_env.store.slicePatterns(p.patterns);
                 for (patterns) |elem_pattern| {
-                    try self.extractBindingsFromPattern(module_env, elem_pattern, visible_from, visible_to, is_parameter);
+                    try self.extractBindingsFromPattern(module_env, elem_pattern, visible_from, visible_to, owner);
                 }
                 // Handle rest pattern if present (e.g., [first, .. as rest])
                 if (p.rest_info) |rest_info| {
                     if (rest_info.pattern) |rest_pattern| {
-                        try self.extractBindingsFromPattern(module_env, rest_pattern, visible_from, visible_to, is_parameter);
+                        try self.extractBindingsFromPattern(module_env, rest_pattern, visible_from, visible_to, owner);
                     }
                 }
             },
             .tuple => |p| {
                 const patterns = module_env.store.slicePatterns(p.patterns);
                 for (patterns) |elem_pattern| {
-                    try self.extractBindingsFromPattern(module_env, elem_pattern, visible_from, visible_to, is_parameter);
+                    try self.extractBindingsFromPattern(module_env, elem_pattern, visible_from, visible_to, owner);
                 }
             },
             .str_interpolation => |p| {
@@ -332,7 +345,7 @@ pub const ScopeMap = struct {
                 while (i < p.steps.span.len) : (i += 1) {
                     const step = module_env.store.getStrPatternStep(p.steps, i);
                     if (step.capture) |capture| {
-                        try self.extractBindingsFromPattern(module_env, capture, visible_from, visible_to, is_parameter);
+                        try self.extractBindingsFromPattern(module_env, capture, visible_from, visible_to, owner);
                     }
                 }
             },
@@ -392,5 +405,5 @@ test "ScopeMap traverses a flattened field access receiver" {
     try std.testing.expectEqual(parameter, binding.pattern_idx);
     try std.testing.expectEqual(@as(u32, 20), binding.visible_from);
     try std.testing.expectEqual(@as(u32, 30), binding.visible_to);
-    try std.testing.expect(binding.is_parameter);
+    try std.testing.expect(binding.owner == .parameter);
 }

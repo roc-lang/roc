@@ -722,6 +722,24 @@ Same-program retained fragments remain exact-target for now. Their separate
 `rejected_target` metric exposes this limitation; revision, transferred LIR and
 layout ownership, CPU, static-data and runtime-context checks are unchanged.
 
+### Closed Named Occurrences
+
+A closed checked occurrence (a root without identity variables) has no
+instantiation identity, so lowering gives every closed named type one
+representative occurrence per program (`Builder.canonicalNamedOccurrence`):
+the declaring module's own occurrence when that module holds one, so the
+choice does not move with other modules' keys as they are edited, and
+otherwise the occurrence in the lowest-keyed module that holds one. Freshly
+lowered, replayed and restored named types of one closed type are then one
+Monotype, with one full and one specialization digest. The coordinator builds
+the index from checked type key to representative (`ClosedOccurrenceIndex`) once,
+from every module view's named root rows, before any body is lowered; workers
+borrow it, and a persistent summary's closed occurrence resolves through it on
+decode. Open occurrences keep their exact lowering-view witness. The
+representative is a property of one program and is never persisted in a
+module's own checked module cache entry ("Compile-Time Value Reuse Across
+Edits").
+
 ### Persistent Specialization Interface Summaries
 
 The earliest reusable result of an open specialization request is its settled
@@ -3619,19 +3637,32 @@ type contain no function value, no function, erased or generated named type,
 no named type or field default declared in the module itself, and nothing
 else carrying a module-version id. A `runtime` payload (a guarded root whose
 evaluation failed) and an `expect` root are never reused. A named type
-carries the checked occurrence it was lowered from: `named_type.ty`, an id
-in the type store of `named_type.ty_module`, the module whose checked types
-the occurrence came from. That module is the declaring module when the type
-was lowered inside it and the module that used the type otherwise, so
-`ty_module` is explicit and need not be `named_type.module`. Static data
-planning re-enters `ty_module`'s store at `ty`, and the occurrence takes part
-in a Monotype type's full and specialization digests. An occurrence in the
-module's own store names a type of the version that stored it: after an edit
-the same id names another type of the new version, or none. A root holding
-one is therefore not portable. An occurrence in another module's store stays
-valid, because the value identity covers that module's key. Compilers with
-runtime safety check, for every transplanted root, that each named type's
-occurrence re-enters another module's store at the nominal type it names.
+carries a checked occurrence: `named_type.ty`, an id in the type store of
+`named_type.ty_module`, the module whose checked types the occurrence is in,
+which is explicit and need not be `named_type.module`. Static data planning
+re-enters `ty_module`'s store at `ty`, and the occurrence takes part in a
+Monotype type's full and specialization digests. In a stored value and its
+stored type, every closed named type's occurrence is one the storing module's
+identity covers (`ConstStoreWriter.rebindNamedOccurrence`): the storing
+module's own, which holds every closed named type of the stored root's
+checked type under the same checked type key, or, for a stored closure's
+captures, which are lowered in the callee's module, the occurrence in the
+lowest-keyed module of the storing module's transitive imports that holds
+one. The module's cache entry then names only modules its own identity
+covers. Monotype's in-memory occurrence of a closed
+type is instead one representative per program ("Closed Named Occurrences"
+above), which may belong to any module of the program the value was lowered
+in, so a module's entry must not retain it: a later program reusing the entry
+need not contain that module. An open occurrence is exact, lowered from a
+view the storing module's value identity covers, and is stored as it is.
+Restoring a stored type resolves each occurrence back to the current
+program's representative, so a restored type and a freshly lowered one are
+one Monotype. An occurrence in the module's own store names a type of the
+version that stored it: after an edit the same id names another type of the
+new version, or none. A root holding one is therefore not portable without
+the key relocation above. Compilers with runtime safety check, for every
+transplanted root, that each named type's occurrence re-enters a store of the
+compilation at the nominal type it names.
 A literal conversion stores no type, so its value is portable when its checked
 type mentions one of the module's own types only where the value holds nothing
 of it (a phantom parameter of an imported nominal); its value identity still
