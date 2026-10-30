@@ -1488,7 +1488,7 @@ const BoxyObjects = struct {
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         const arena = self.arena.allocator();
         var ordered = std.ArrayList(Object).empty;
-        var visited = std.AutoHashMapUnmanaged([32]u8, void).empty;
+        var visited = std.AutoHashMapUnmanaged([32]u8, *const Artifact).empty;
         defer visited.deinit(self.coordinator.gpa);
         const builtin_artifact = &self.coordinator.builtin_modules.checked_artifact;
         if (!try self.visit(builtin_artifact, &visited, &ordered)) return null;
@@ -1498,7 +1498,7 @@ const BoxyObjects = struct {
         }
         return .{
             .objects = try arena.dupe(Object, ordered.items),
-            .views = try self.viewsOf(module),
+            .views = try self.withEveryObjectsModule(try self.viewsOf(module), visited),
         };
     }
 
@@ -1508,11 +1508,30 @@ const BoxyObjects = struct {
         return try self.arena.allocator().dupe(CheckedArtifact.ImportedModuleView, views);
     }
 
+    /// `views`, and a view of every module whose object runs: a failure in
+    /// that object's code is reported against its module, which a private
+    /// import of an import leaves out of `views`.
+    fn withEveryObjectsModule(self: *BoxyObjects, views: []const CheckedArtifact.ImportedModuleView, visited: std.AutoHashMapUnmanaged([32]u8, *const Artifact)) Error![]const CheckedArtifact.ImportedModuleView {
+        const arena = self.arena.allocator();
+        var all = std.ArrayList(CheckedArtifact.ImportedModuleView).empty;
+        try all.appendSlice(arena, views);
+        var artifacts = visited.valueIterator();
+        while (artifacts.next()) |artifact| {
+            const present = for (views) |view| {
+                if (std.meta.eql(view.key, artifact.*.key)) break true;
+            } else false;
+            if (!present) try all.append(arena, CheckedArtifact.importedView(artifact.*));
+        }
+        return all.items;
+    }
+
     /// Append the objects of `artifact` and its imports to `ordered`, imports
     /// first. False when one has no object of its own.
-    fn visit(self: *BoxyObjects, artifact: *const Artifact, visited: *std.AutoHashMapUnmanaged([32]u8, void), ordered: *std.ArrayList(Object)) Error!bool {
+    fn visit(self: *BoxyObjects, artifact: *const Artifact, visited: *std.AutoHashMapUnmanaged([32]u8, *const Artifact), ordered: *std.ArrayList(Object)) Error!bool {
         const gpa = self.coordinator.gpa;
-        if ((try visited.getOrPut(gpa, artifact.key.bytes)).found_existing) return true;
+        const entry = try visited.getOrPut(gpa, artifact.key.bytes);
+        if (entry.found_existing) return true;
+        entry.value_ptr.* = artifact;
         for (artifact.direct_import_module_keys) |key| {
             const imported = self.coordinator.checkedArtifactByKey(key.digest()) orelse return false;
             if (!try self.visit(imported, visited, ordered)) return false;
@@ -1572,7 +1591,7 @@ const BoxyObjects = struct {
         defer built.deinit(gpa);
         const symbols = try arena.alloc([]const u8, built.hosted_symbols.len);
         for (built.hosted_symbols, symbols) |symbol, *copy| copy.* = try arena.dupe(u8, symbol);
-        return .{ .module = artifact.key.bytes, .object = try arena.dupe(u8, built.object), .hosted_symbols = symbols };
+        return .{ .module = artifact.key.bytes, .object = try arena.dupe(u8, built.object), .code_locations = try arena.dupe(u8, built.code_locations), .hosted_symbols = symbols };
     }
 };
 

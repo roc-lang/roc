@@ -42,6 +42,8 @@ pub const host_lir_codegen_available = LirCodeGenMod.host_lir_codegen_available;
 /// Supports cross-compilation to any RocTarget.
 /// Only available on non-freestanding targets (uses std.fs)
 pub const ObjectFileCompiler = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").ObjectFileCompiler;
+/// The source locations and failure meanings of an object's code.
+pub const CodeLocations = @import("CodeLocations.zig");
 /// Per-region machine-code excerpts and their reassembly.
 pub const CodeExcerpt = @import("CodeExcerpt.zig");
 /// Declared compatibility of relocatable native dev procedures.

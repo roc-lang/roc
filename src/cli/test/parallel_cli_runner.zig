@@ -11627,9 +11627,8 @@ fn customBoxyCompileTimeObjects(
     for (after_run) |entry| {
         if (entry.family == .boxy_object) objects_after += 1;
     }
-    // A run reuses the objects of Builtin and Lib. Echo's declares hosted
-    // functions, whose object the running platform's bindings key.
-    if (objects_after > objects + 1) return customFailure(allocator, timer, "`roc run` rebuilt module objects: {d} became {d}", .{ objects, objects_after });
+    // A run reuses every object the check filed.
+    if (objects_after != objects) return customFailure(allocator, timer, "`roc run` rebuilt module objects: {d} became {d}", .{ objects, objects_after });
 
     var reports: [2][]const u8 = undefined;
     for ([_]bool{ false, true }, &reports) |no_cache, *report| {
@@ -11638,13 +11637,33 @@ fn customBoxyCompileTimeObjects(
         const crashed = runRocInEnv(io, allocator, &isolated, args, crashes, .relative, &.{}, null, crash_timeout) catch |err|
             return customInfraFailure(allocator, timer, "command spawn error: {}", .{err});
         if (processSucceeded(crashed.term)) return customFailure(allocator, timer, "`roc check` accepted a constant that crashes", .{});
-        if (std.mem.find(u8, crashed.stderr, "too big") == null or std.mem.find(u8, crashed.stderr, "Lib (line 12, column 4)") == null) return failureFromRun(allocator, timer, crashed, "the report does not name the crash's location");
+        if (std.mem.find(u8, crashed.stderr, "too big") == null or std.mem.find(u8, crashed.stderr, "Lib (line 14, column 4)") == null) return failureFromRun(allocator, timer, crashed, "the report does not name the crash's location");
         const first = std.mem.find(u8, crashed.stderr, "[dbg] 3") orelse return failureFromRun(allocator, timer, crashed, "the crash's `dbg` did not print");
         if (std.mem.findPos(u8, crashed.stderr, first + 1, "[dbg] 3") != null) return failureFromRun(allocator, timer, crashed, "the crash's `dbg` printed twice");
         const summary = std.mem.findLast(u8, crashed.stderr, "── ") orelse crashed.stderr.len;
         report.* = crashed.stderr[0..summary];
     }
     if (!std.mem.eql(u8, reports[0], reports[1])) return customFailure(allocator, timer, "the crash reports differently with a cache:\n{s}\nthan without one:\n{s}", .{ reports[0], reports[1] });
+
+    // Every other way a constant fails inside another module's code.
+    const failures = [_]struct { roc_file: []const u8, text: []const u8 }{
+        .{ .roc_file = "test/cli/boxy_compile_time_objects/PrivateImportCrash.roc", .text = "Util (line 3, column 14)" },
+        .{ .roc_file = "test/cli/boxy_compile_time_objects/ArithmeticCrash.roc", .text = "Lib (line" },
+        .{ .roc_file = "test/cli/boxy_compile_time_objects/StackOverflow.roc", .text = "Lib (line" },
+        .{ .roc_file = "test/cli/boxy_compile_time_objects/ExpectFails.roc", .text = "Lib" },
+    };
+    for (failures) |failure| {
+        for ([_]bool{ false, true }, &reports) |no_cache, *report| {
+            const args: []const []const u8 = if (no_cache) &.{ "check", "--specialize=no", "--no-cache" } else &.{ "check", "--specialize=no" };
+            const failure_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a failure");
+            const failed = runRocInEnv(io, allocator, &isolated, args, failure.roc_file, .relative, &.{}, null, failure_timeout) catch |err|
+                return customInfraFailure(allocator, timer, "command spawn error: {}", .{err});
+            if (std.mem.find(u8, failed.stderr, failure.text) == null) return failureFromRun(allocator, timer, failed, "the failure did not report its location");
+            const summary = std.mem.findLast(u8, failed.stderr, "── ") orelse failed.stderr.len;
+            report.* = failed.stderr[0..summary];
+        }
+        if (!std.mem.eql(u8, reports[0], reports[1])) return customFailure(allocator, timer, "{s} reports differently with a cache:\n{s}\nthan without one:\n{s}", .{ failure.roc_file, reports[1], reports[0] });
+    }
     return null;
 }
 

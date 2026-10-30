@@ -15205,9 +15205,8 @@ command. `roc check` also files the host-target, dev-opt object of every
 module a module with roots left to evaluate imports, which compile-time
 evaluation runs against (Compile-Time Evaluation Strategy). `roc check` and
 `roc run` with `--specialize=no` therefore leave identical cache contents for
-the same sources, except that a module declaring hosted functions has one
-object per platform binding of them, and `roc build` adds exactly the module
-objects still missing (`compile.boxy_object_cache`, the `boxy_object` family).
+the same sources, and `roc build` adds exactly the module objects still
+missing (`compile.boxy_object_cache`, the `boxy_object` family).
 `roc test` checks its root for explicit test roots
 (`Validation.explicit_roots`), which is its own check under either strategy,
 and with `--specialize=no` it leaves exactly what that check leaves. `roc
@@ -15295,13 +15294,13 @@ evaluation (`BoxyLinkedImages`), by symbol. A module with no object yet is
 compiled whole and filed the first time an importer needs it, whichever
 command that is; the root module's own constant code is compiled for the
 evaluation and discarded. A platform module with requirements has no object of
-its own, so a module importing one skips this step. An object carries machine
-code and no source locations, so this program reports nothing: a root that
-crashes or emits an event stays pending (`Options.defer_failures`), and every
-such root then runs in the whole program described above, which has the
-locations of every module it reaches. Compile-time code is pure, so running a
-root twice observes nothing, and a compilation with no cache runs only the
-whole program, so the cache never changes what a compilation reports.
+its own, so a module importing one runs as the whole program. Each object is
+filed with its `CodeLocations`: its line table, failure sites and source files
+(Compile-Time Failure Sites). A failure in an object's code is therefore found
+and reported exactly as one in a whole program's own code, and the two forms
+report identically. The table is read only when something fails, so the code
+that succeeds carries nothing extra. A compilation with no cache has no objects, and
+runs as the whole program.
 
 A root whose value holds a function value (anywhere in its type, or a
 callable binding) is evaluated by the Solved evaluator under either strategy.
@@ -23292,7 +23291,8 @@ replay.
 Code generated for compile-time evaluation calls nothing in the compiler to
 say where it is: a failure is located from where the machine left it. Every
 procedure's code carries two tables, kept with the code wherever it goes (into
-an object-cache pack and back into another program's image):
+an object-cache pack and back into another program's image, or into a `.boxy`
+module object's `CodeLocations`):
 
 - Its line table. Each entry is the offset where a statement's code begins,
   with the statement's source location and checked region, so any code offset

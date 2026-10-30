@@ -149,10 +149,6 @@ pub const Options = struct {
     /// compile-time program against (`BoxyObjectSource`), when this
     /// compilation has a cache to keep them in.
     boxy_objects: ?BoxyObjectSource = null,
-    /// A root of this evaluation that crashes or emits an event stays
-    /// pending, without a report: a whole program evaluates it next, with
-    /// the source locations of every module it reaches (`BoxyLinkedImages`).
-    defer_failures: bool = false,
     /// The loaded objects a native program links against.
     boxy_linked_images: ?*BoxyLinkedImages = null,
     /// Where a compile-time failure is reported when the source it names
@@ -1704,6 +1700,8 @@ pub const BoxyObject = struct {
     /// The module's checked key.
     module: [32]u8,
     object: []const u8,
+    /// Where the object's code came from (`CodeLocations`).
+    code_locations: []const u8,
     hosted_symbols: []const []const u8,
 };
 
@@ -1728,20 +1726,24 @@ pub const BoxyObjectSource = struct {
 };
 
 /// The imported objects a `.boxy` evaluation has loaded into this process,
-/// each once, which a module's compile-time program calls by symbol. An
-/// object carries machine code and no source locations, so a program linked
-/// against these reports nothing itself: a root that crashes or emits an
-/// event stays pending (`Options.defer_failures`) for the whole program that
-/// follows it, and evaluation is pure, so running it twice observes nothing.
+/// each once, which a module's compile-time program calls by symbol. Each
+/// object's `CodeLocations` say where a failure in its code happened, exactly
+/// as a whole program's own line table does.
 const BoxyLinkedImages = struct {
     allocator: Allocator,
     images: std.ArrayList(object_image.Image) = .empty,
+    /// Each image's code, in `images` order.
+    code: std.ArrayList([]const u8) = .empty,
+    /// Each image's locations, in `images` order. Borrowed from its object.
+    locations: std.ArrayList(backend.dev.CodeLocations) = .empty,
     loaded: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
     hosted: std.StringHashMapUnmanaged(void) = .empty,
 
     fn deinit(self: *BoxyLinkedImages) void {
         for (self.images.items) |*image| image.deinit();
         self.images.deinit(self.allocator);
+        self.code.deinit(self.allocator);
+        self.locations.deinit(self.allocator);
         self.loaded.deinit(self.allocator);
         var names = self.hosted.keyIterator();
         while (names.next()) |name| self.allocator.free(name.*);
@@ -1760,7 +1762,19 @@ const BoxyLinkedImages = struct {
                 else => finalizationInvariantFmt("a cached Boxy module object would not load: {s}", .{@errorName(err)}),
             };
             try self.images.append(self.allocator, image);
+            try self.code.append(self.allocator, image.code);
+            try self.locations.append(self.allocator, .{ .bytes = object.code_locations });
         }
+    }
+
+    /// The offset of `address` in a loaded image's code, and that image's
+    /// locations.
+    fn codeAt(self: *const BoxyLinkedImages, address: usize) ?struct { locations: backend.dev.CodeLocations, offset: u32 } {
+        for (self.code.items, self.locations.items) |code, locations| {
+            const start = @intFromPtr(code.ptr);
+            if (address >= start and address < start + code.len) return .{ .locations = locations, .offset = @intCast(address - start) };
+        }
+        return null;
     }
 
     /// The address an object's or a program's reference to `name` binds to.
@@ -2072,28 +2086,18 @@ fn evaluateModuleRootsBoxy(
     }
     if (pending.items.len == 0) return;
     // A module's program runs against its imports' objects where the host
-    // runs native code and it can have them. What that leaves pending runs
-    // as a whole program, the only form with every module's source locations.
+    // runs native code and it can have them.
     if (options.boxy_objects) |source| if (comptime !compilerHostMustUseInterpreterForCtfe()) {
         if (artifact.platform_type_inputs.requirements.len == 0) if (try source.objects(source.context, artifact)) |set| {
             try images.load(set.objects);
             var linked_options = options;
-            linked_options.defer_failures = true;
             linked_options.boxy_linked_images = images;
             const modules_of_unit: lir.CheckedPipeline.CheckedModuleSet = .{
                 .root = checked.loweringViewWithRelations(artifact, &.{}),
                 .imports = set.views,
             };
             try runBoxyProgram(allocator, modules, modules_of_unit, states, roots, graph, pending.items, boxyLinkedCompileTimeTarget(source, options), linked_options);
-            var kept: usize = 0;
-            for (pending.items) |member| {
-                const root = roots[member];
-                if (states[root.module].isDone(root.root)) continue;
-                pending.items[kept] = member;
-                kept += 1;
-            }
-            pending.shrinkRetainingCapacity(kept);
-            if (pending.items.len == 0) return;
+            return;
         };
     };
     try runBoxyProgram(allocator, modules, lowering_modules, states, roots, graph, pending.items, boxyCompileTimeTarget(options), options);
@@ -2189,7 +2193,6 @@ fn runBoxyProgram(
     // read a value not yet complete (a member of a group that reads itself,
     // or a method a dictionary selects at runtime, which no checked
     // reference names) stayed pending, and runs again now.
-    if (options.defer_failures) return;
     batch.clearRetainingCapacity();
     for (pending.items, 0..) |member, local| {
         const root = roots[member];
@@ -4559,7 +4562,7 @@ fn evalDevLiteralRoot(
     @memset(ret_buf, 0);
     var host = CompileTimeHost.init(host_allocator);
     defer host.deinit();
-    host.setGeneratedCode(native.executable.generatedCode());
+    host.setGeneratedCode(native.executable.generatedCode(), native.linkedCode());
     host.timing_io = if (options.timing) |timing| timing.std_io else null;
 
     host.resetForRun();
@@ -5642,6 +5645,10 @@ const DevProgram = struct {
     /// What a `.boxy` program's code composes while it runs, current on
     /// each thread that runs it.
     composition: ?*BoxyInProcessState,
+    /// The objects a linked program's code calls into.
+    linked_images: ?*BoxyLinkedImages,
+    /// The program's LIR, whose source file table locations index.
+    lir_store: *const lir.LirStore,
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!DevProgram {
         const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
@@ -5781,6 +5788,8 @@ const DevProgram = struct {
             .excerpts = artifacts,
             .capture_prefix = lowered.lir_result.erased_capture_prefix,
             .composition = if (lowered.lir_result.store.runtime_contract == .boxy) try BoxyInProcessState.create(allocator) else null,
+            .linked_images = options.boxy_linked_images,
+            .lir_store = &lowered.lir_result.store,
         };
     }
 
@@ -5838,21 +5847,27 @@ const DevProgram = struct {
     fn publishFailure(self: *DevProgram, lowered: *const lir.CheckedPipeline.LoweredProgram, module: lir.LIR.LoweringModuleId, producer: lir.LIR.ComptimeProducer, failure: ?SlotFailure) FinalizeError!void {
         try self.slots.publishFailure(lowered, module, producer, failure, .{ .context = self, .resolve = resolveFrozenFunction });
     }
+    /// The loaded objects this program's code calls into.
+    fn linkedCode(self: *const DevProgram) []const []const u8 {
+        const images = self.linked_images orelse return &.{};
+        return images.code.items;
+    }
+
     /// Where a failure the host located in this program's generated code
-    /// happened. It is reported at the innermost statement with a source
-    /// region among the faulting instruction's and those of the generated
-    /// calls enclosing it, with the meaning of the call it came out of.
+    /// or a loaded object's happened. It is reported at the innermost
+    /// statement with a source region among the faulting instruction's and
+    /// those of the generated calls enclosing it, with the meaning of the
+    /// call it came out of.
     fn failedAt(self: *const DevProgram, point: ?CompileTimeHost.FailurePoint) FailedAt {
         const known = point orelse return .{};
-        const code_base = @intFromPtr(self.executable.codePtr());
         var failed_at = FailedAt{};
         if (known.fault == null and known.calls.len != 0) {
-            failed_at.meaning = self.codegen.failureMeaningAt(known.calls[0] - code_base);
+            failed_at.meaning = self.failureMeaningAt(known.calls[0]);
         }
-        const located = if (known.fault) |pc| self.statementAt(pc - code_base) else null;
+        const located = if (known.fault) |pc| self.statementAt(pc) else null;
         const statement = located orelse for (known.calls) |address| {
             // A return address follows its call instruction.
-            if (self.statementAt(address - code_base - 1)) |line| break line;
+            if (self.statementAt(address - 1)) |line| break line;
         } else null;
         if (statement) |line| {
             failed_at.region = line.region;
@@ -5861,10 +5876,34 @@ const DevProgram = struct {
         return self.slots.withProducerOrigin(failed_at);
     }
 
-    fn statementAt(self: *const DevProgram, offset: usize) ?backend.dev.LirCodeGenMod.LineEntry {
-        const line = self.codegen.lineEntryAt(offset) orelse return null;
+    fn failureMeaningAt(self: *const DevProgram, return_address: usize) ?lir.LIR.FailureMeaning {
+        if (self.linked_images) |images| if (images.codeAt(return_address)) |at| return at.locations.failureMeaningAt(at.offset);
+        return self.codegen.failureMeaningAt(return_address - @intFromPtr(self.executable.codePtr()));
+    }
+
+    /// The statement whose code holds `address`, its location in terms of
+    /// this program's source file table.
+    fn statementAt(self: *const DevProgram, address: usize) ?backend.dev.LirCodeGenMod.LineEntry {
+        if (self.linked_images) |images| if (images.codeAt(address)) |at| {
+            const line = at.locations.lineEntryAt(at.offset) orelse return null;
+            if (line.region.isEmpty() or !line.loc.hasLocation()) return null;
+            const identity = at.locations.sourceFile(line.loc.file).module_identity;
+            var loc = line.loc;
+            loc.file = self.sourceFileOf(identity);
+            return .{ .offset = line.offset, .loc = loc, .region = line.region };
+        };
+        const line = self.codegen.lineEntryAt(address - @intFromPtr(self.executable.codePtr())) orelse return null;
         if (line.region.isEmpty() or !line.loc.hasLocation()) return null;
         return line;
+    }
+
+    /// This program's source file table entry of a module that has an object
+    /// it runs: such a program has a view of every one.
+    fn sourceFileOf(self: *const DevProgram, identity: [32]u8) u32 {
+        for (0..self.lir_store.sourceFileCount()) |file| {
+            if (@as(u256, @bitCast(self.lir_store.sourceFileModuleIdentity(@intCast(file)))) == @as(u256, @bitCast(identity))) return @intCast(file);
+        }
+        finalizationInvariant("a loaded object's module is not in its program's source file table");
     }
 
     fn freezeCompleted(self: *DevProgram) Allocator.Error!LirProgram.FrozenStaticData {
@@ -5977,7 +6016,7 @@ fn evalDevProgramRoots(
                 .host = CompileTimeHost.init(host_allocator),
                 .label = label,
             };
-            jobs[i].host.setGeneratedCode(native.executable.generatedCode());
+            jobs[i].host.setGeneratedCode(native.executable.generatedCode(), native.linkedCode());
             jobs[i].host.timing_io = if (options.timing) |timing| timing.std_io else null;
             jobs_len += 1;
         }
@@ -6093,10 +6132,6 @@ fn evalDevProgramRoots(
     for (jobs[0..jobs_len]) |*job| {
         if (options.retry) |retry| {
             if (job.result == .crashed and retry.holds(native.failedAt(job.host.failure).meaning)) continue;
-        }
-        if (options.defer_failures and (job.result == .crashed or job.host.events.items.len != 0)) {
-            if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: deferred root #{d} ({s}, {d} events): {s}\n", .{ @backingInt(job.root_id), @tagName(job.result), job.host.events.items.len, if (job.result == .crashed) job.host.crashMessage() orelse "" else "" });
-            continue;
         }
         const payload: checked.CompileTimeRootPayload = switch (job.result) {
             .pending => finalizationInvariant("dev backend compile-time root was not evaluated"),

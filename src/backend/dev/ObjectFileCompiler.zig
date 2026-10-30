@@ -28,6 +28,7 @@ const Dwarf = @import("Dwarf.zig");
 const ObjectWriter = @import("ObjectWriter.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
 const CodeExcerpt = @import("CodeExcerpt.zig");
+const CodeLocations = @import("CodeLocations.zig");
 const NativeProcCompiler = @import("NativeProcCompiler.zig");
 const Executor = @import("base").post_check_task_executor.Executor;
 const static_data_export = @import("StaticDataExport.zig");
@@ -60,9 +61,12 @@ pub const CompilationResult = struct {
     /// The compiled program lifted into excerpts, when the compile ran in
     /// pack mode on a target whose excerpts can be extracted.
     excerpts: ?CodeExcerpt.Set = null,
+    /// The object's encoded `CodeLocations`, when the compile captured them.
+    code_locations: []const u8 = &.{},
 
     pub fn deinit(self: *CompilationResult) void {
         self.allocator.free(self.object_bytes);
+        self.allocator.free(self.code_locations);
         if (self.excerpts) |*set| set.deinit();
     }
 };
@@ -99,6 +103,9 @@ pub const ObjectFileCompiler = struct {
     /// program's own pack can be written from the build that produced it.
     capture_excerpts: bool = false,
     captured_excerpts: ?CodeExcerpt.Set = null,
+    /// Keep the object's `CodeLocations` in the result, for an object a
+    /// compile-time program may run.
+    capture_code_locations: bool = false,
     /// Encode the object file and its debug sections. A pack written only
     /// as excerpts leaves this off, and its result's `object_bytes` is
     /// empty.
@@ -185,7 +192,7 @@ pub const ObjectFileCompiler = struct {
         proc_specs: []const LirProcSpec,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target, self.enable_default_platform_runtime, self.erased_capture_prefix, self.timing, self.pack_mode, self.splice_source, self.capture_excerpts, self.emit_object, self.post_check_executor, self.reuse_same_program);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target, self.enable_default_platform_runtime, self.erased_capture_prefix, self.timing, self.pack_mode, self.splice_source, self.capture_excerpts, self.capture_code_locations, self.emit_object, self.post_check_executor, self.reuse_same_program);
     }
 
     /// Compile to an object file and write it to a path.
@@ -293,6 +300,7 @@ fn compileWithCodeGen(
     pack_mode: bool,
     splice_source: ?SpliceSource,
     capture_excerpts: bool,
+    capture_code_locations: bool,
     emit_object: bool,
     executor: ?Executor,
     reuse_same_program: ?*const NativeProcCompiler.Retained,
@@ -722,11 +730,37 @@ fn compileWithCodeGen(
         };
     }
 
+    errdefer if (excerpts) |*set| set.deinit();
     return CompilationResult{
         .object_bytes = object_bytes,
         .allocator = allocator,
         .excerpts = excerpts,
+        .code_locations = if (capture_code_locations) try encodeCodeLocations(allocator, lir_store, &final) else &.{},
     };
+}
+
+/// The `CodeLocations` of a finished code generator's code.
+fn encodeCodeLocations(allocator: Allocator, lir_store: *const LirStore, codegen: anytype) Allocator.Error![]const u8 {
+    const code_regions = codegen.codeRegions();
+    const regions = try allocator.alloc(CodeLocations.CodeRange, code_regions.len);
+    defer allocator.free(regions);
+    for (code_regions, regions) |source, *region| region.* = .{ .start = @intCast(source.start), .end = @intCast(source.end) };
+    const line_entries = codegen.getLineEntries();
+    const lines = try allocator.alloc(CodeLocations.Line, line_entries.len);
+    defer allocator.free(lines);
+    for (line_entries, lines) |source, *line| line.* = .{ .offset = source.offset, .loc = source.loc, .region = source.region };
+    const failure_sites = codegen.getFailureSites();
+    const sites = try allocator.alloc(CodeLocations.Site, failure_sites.len);
+    defer allocator.free(sites);
+    for (failure_sites, sites) |source, *site| site.* = .{ .offset = source.offset, .meaning = source.meaning };
+    const files = try allocator.alloc(@import("base").SourceFileEntry, lir_store.sourceFileCount());
+    defer allocator.free(files);
+    for (files, 0..) |*file, index| file.* = .{
+        .name = lir_store.sourceFileName(@intCast(index)),
+        .qualified_name = lir_store.sourceFileQualifiedName(@intCast(index)),
+        .module_identity = lir_store.sourceFileModuleIdentity(@intCast(index)),
+    };
+    return try CodeLocations.encode(allocator, .{ .regions = regions, .lines = lines, .sites = sites, .files = files });
 }
 
 /// Encode the compiled program as an object file with DWARF line tables
@@ -1108,6 +1142,7 @@ fn crossCompileDispatch(
     pack_mode: bool,
     splice_source: ?SpliceSource,
     capture_excerpts: bool,
+    capture_code_locations: bool,
     emit_object: bool,
     executor: ?Executor,
     reuse_same_program: ?*const NativeProcCompiler.Retained,
@@ -1135,6 +1170,7 @@ fn crossCompileDispatch(
                     pack_mode,
                     splice_source,
                     capture_excerpts,
+                    capture_code_locations,
                     emit_object,
                     executor,
                     reuse_same_program,

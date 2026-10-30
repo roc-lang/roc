@@ -43,10 +43,13 @@ pub const Built = struct {
     restored: bool,
     /// Owned by the unit's `gpa`.
     object: []const u8,
+    /// The object's encoded `CodeLocations`. Owned by the unit's `gpa`.
+    code_locations: []const u8,
     hosted_symbols: []const []const u8,
 
     pub fn deinit(self: Built, gpa: Allocator) void {
         gpa.free(self.object);
+        gpa.free(self.code_locations);
         for (self.hosted_symbols) |symbol| gpa.free(symbol);
         gpa.free(self.hosted_symbols);
     }
@@ -188,6 +191,7 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
         return .{
             .restored = true,
             .object = try gpa.dupe(u8, entry.object),
+            .code_locations = try gpa.dupe(u8, entry.code_locations),
             .hosted_symbols = try dupeSymbols(gpa, entry.hosted_symbols),
         };
     }
@@ -215,6 +219,7 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
 
     var object_compiler = backend.ObjectFileCompiler.init(gpa);
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
+    object_compiler.capture_code_locations = true;
     var written = object_compiler.compileToObjectFile(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -233,10 +238,11 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     var hosted_arena = std.heap.ArenaAllocator.init(gpa);
     defer hosted_arena.deinit();
     const hosted = try hostedSymbols(hosted_arena.allocator(), &lowered.lir_result.store);
-    try store(gpa, unit.cache_manager, unit.key, .{ .exports = records, .hosted_symbols = hosted, .object = written.object_bytes });
+    try store(gpa, unit.cache_manager, unit.key, .{ .exports = records, .hosted_symbols = hosted, .code_locations = written.code_locations, .object = written.object_bytes });
     return .{
         .restored = false,
         .object = try gpa.dupe(u8, written.object_bytes),
+        .code_locations = try gpa.dupe(u8, written.code_locations),
         .hosted_symbols = try dupeSymbols(gpa, hosted),
     };
 }
