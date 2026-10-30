@@ -161,7 +161,7 @@ fn rootWithOrder(requests: []const CheckedArtifact.RootRequest, order: u32) erro
     return error.TestUnexpectedResult;
 }
 
-test "a build evaluates and materializes only the compile-time values its program reads" {
+test "a build evaluates every compile-time value and materializes the ones its program reads" {
     if (is_freestanding) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -238,27 +238,24 @@ test "a build evaluates and materializes only the compile-time values its progra
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
 
-    // A build evaluates only the roots its program demands (design.md
-    // "Demand-Driven Compile-Time Evaluation"), so the unread value never
-    // runs and reports no `dbg`.
+    // A build evaluates every root (design.md "Demand-Driven Compile-Time
+    // Evaluation"), so the unread value runs and reports its `dbg` too.
     const observed = capture.bytes[0..capture.len];
     try std.testing.expect(std.mem.find(u8, observed, "evaluated used table") != null);
-    try std.testing.expect(std.mem.find(u8, observed, "evaluated unused table") == null);
+    try std.testing.expect(std.mem.find(u8, observed, "evaluated unused table") != null);
 
     const host = &session.completed.?;
     const helper = moduleArtifactNamed(&coord, "Helper") orelse return error.TestUnexpectedResult;
     const helper_roots = helper.root_requests.compile_time_requests;
     try std.testing.expectEqual(@as(usize, 2), helper_roots.len);
     // The value the program reads is materialized and frozen; the other root
-    // stays explicitly unevaluated. Transcoding rejects a read whose value
-    // the host did not materialize, so the runtime continuation below also
-    // fails if the wrong root were the evaluated one.
+    // is complete but stays in its module's store. Transcoding rejects a read
+    // whose value the host did not materialize, so the runtime continuation
+    // below also fails if the wrong root were the materialized one.
     try std.testing.expectEqual(@as(usize, 1), try materializedAmong(host, helper.key.digest(), helper_roots));
-    var unevaluated: usize = 0;
     for (helper_roots) |request| {
-        if (helper.compile_time_roots.root(request.compile_time_root.?).payload == .unevaluated) unevaluated += 1;
+        try std.testing.expect(helper.compile_time_roots.root(request.compile_time_root.?).payload != .unevaluated);
     }
-    try std.testing.expectEqual(@as(usize, 1), unevaluated);
 
     // The runtime program restores the completed table from Helper's store
     // (design.md "Runtime Programs Read Stored Values"), so it reads nothing

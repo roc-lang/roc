@@ -742,6 +742,12 @@ types. Compiler placeholders, redirects and lazy solver leaves are not committab
 The capture producer supplies all open-node witnesses, related groups, generated
 iterator provenance, and field-presence evidence explicitly.
 
+Which summaries a compilation writes depends on scheduling: a worker that finds
+a relation another worker already finished replays it and writes nothing. A
+summary is a hint that saves work and never changes a result, so packs of code
+and stored values are identical across worker counts while the summaries beside
+them need not be.
+
 Build and test runtime lowering share the checked session's interface provider
 with compile-time evaluation. Test roots retain source-body code provision;
 interface replay does not grant machine-code splice capability. Successful
@@ -825,7 +831,7 @@ existing validated normalized machine-code offers, but never reuse the first
 pass's slot-read bodies. Interface relations do not carry compile-time values:
 constant-function evidence and the current request still identify the selected
 relation. Thus a fresh value and a restored value enter the same normalization
-path, and unused failing roots remain undemanded.
+path.
 
 Persistent records are batched by checked module and context in
 interface records in the indexed entry catalog under the object store's procedure domain.
@@ -2432,9 +2438,8 @@ validation checks the recorded root ids and message ranges before replay.
 Checking must evaluate every checked top-level expression and every selected
 compile-time root that can be evaluated without effectful calls or runtime
 data. It must run `crash`, `dbg`, and `expect` during that evaluation and
-output their diagnostics during `roc check`. A build evaluates the subset of
-those roots its program demands (see "Demand-Driven Compile-Time
-Evaluation").
+output their diagnostics during `roc check`, and every other command does the
+same (see "Demand-Driven Compile-Time Evaluation").
 
 A function-typed top-level binding whose entire checked right-hand side is one
 resolved procedure lookup already has its complete checked callable identity.
@@ -2536,10 +2541,8 @@ Unrequested callable bindings retain their ordinary checked body computation.
 Completed-value materialization requests are the intersection of that manifest
 and the shared program's explicit value reads, matched by module and root
 identity. Collection preserves manifest order without repeated scans of the
-read set. Demand, not materialization, decides whether a root evaluates:
-checking evaluates an unread root for its diagnostics, and a demand-driven
-build does not evaluate it at all. Absence of a materialization request never
-suppresses an evaluation that demand requires.
+read set. Materialization does not decide whether a root evaluates: absence of
+a materialization request never suppresses an evaluation.
 
 A shared compile-time value slot has its root type's own layout. A read whose
 target stores that type boxed, such as a recursive payload field, reads the
@@ -2689,11 +2692,8 @@ program's root module, taken from its checked `runtime_requests`, and the
 `test_expect` requests of every module `roc test` would run (the root
 package and the packages it reaches through filesystem paths), with every
 literal conversion those roots reach hoisted, at the host's width, with
-expects run (`compileTimeTarget`). Checking, testing, and every compilation
-without an LSS runtime program evaluate every requested root; a build with an
-LSS runtime program evaluates the requested roots its program demands, a set
-that is itself a function of the checked program and the build's roots
-("Demand-Driven Compile-Time Evaluation"). Its Solved policy is that of the program
+expects run (`compileTimeTarget`). Every compilation evaluates every requested
+root ("Demand-Driven Compile-Time Evaluation"). Its Solved policy is that of the program
 being built, so evaluation runs inside that program's one specialization;
 with no runtime program, as in `roc check`, it is a dev build's
 (`CheckedPipeline.dev_inline_mode`). Inlining and SpecConstr preserve meaning,
@@ -2714,9 +2714,9 @@ key names, and carries the failure sites that classify its crashes
 ("Compile-Time Failure Sites"), so the cache too changes only what
 evaluation compiles. `roc check` and `roc build` therefore
 compute the same value for every root both evaluate: a build cannot report an
-error in the program that checking did not, checking reports the errors of
-roots no build demands, and `--opt` never moves a computation between compile
-time and runtime. A
+error in the program that checking did not, a build reports every error
+checking does, and `--opt` never moves a computation between compile time and
+runtime. A
 dev build for the host reads the same packs for its runtime program and
 shares them with evaluation.
 
@@ -3310,8 +3310,7 @@ hosted symbols, link roots and app exports. It also retains the complete ordered
 frontend and finalization diagnostic documents. An early hit replays these with
 current presentation options and rebound source paths. A later hit, after ordinary
 frontend work, replays only finalization diagnostics; the frontend still owns its
-reports on that path. An unused root evaluated by another command never joins the
-recorded demand. Completed results remain usable after checked-IR cache eviction.
+reports on that path. Completed results remain usable after checked-IR cache eviction.
 
 An early hit creates no coordinator or program session and marks no checked
 module finalized. It performs no shared demand specialization, CTFE, post-CTFE
@@ -3389,39 +3388,56 @@ builds produce no new diagnostic output.
 
 ### Demand-Driven Compile-Time Evaluation
 
-A build evaluates only the compile-time roots its program demands. A root is
-demanded when code that runs regardless of compile-time demand reads it, or
-when the body of a demanded root reads it. The code that runs regardless is
-the program's runtime roots, its static-data requests (provided data exports),
-and every literal root the specialization registers. A validation root (a
-pattern's validation, or a binding whose right-hand side always crashes) is
-demanded outright: it produces no value for any read to reach, and it exists
-to run its `crash` and `dbg` behavior once in every lowering mode. A read is a slot read of
-a root this compilation evaluates, the restore of a value an earlier
-compilation stored, or one of the reads an object-cache entry records for the
-body it stands in for; each demands the root. The set is computed over the
-specialized program itself, so it is a function of the checked program and
-the build's roots, never of what any cache holds.
+Every compilation evaluates every compile-time root it requests, whatever the
+command and whatever its strategy, and reports every failure. `roc build` is
+`roc check` plus an executable, so `roc check`, `roc run`, `roc build` and
+`roc test` report the same failures for the same sources, including failures in
+roots nothing reads and in the modules of dependencies. A failure is an error
+in every command.
 
-A completed-compilation hit reuses these checked decisions and replays their
-observations without recomputing demand. This is equivalent to the live path,
-not check-style evaluation of every root.
+This policy is chosen for these reasons:
 
-Demand-driven evaluation applies to a compilation whose LSS runtime consumer
-continues the evaluation's specialization, that runs no tests, and whose
-checking left no static exhaustiveness diagnostic for compile-time evaluation
-to resolve. Every other compilation evaluates every root it requests:
-`roc check` and `roc test` for their diagnostics, a Boxy runtime program
-because it reads compile-time values from the constant stores without a
-shared specialization to discover demand, a test program because test roots
-are addressed by their position in the request list, and a program with such
-an exhaustiveness diagnostic because only evaluating every root decides
-whether that diagnostic is reported. Each exclusion is decided from the
-checked program and the command, never from cache state. Discovery roots
-("Demand-Driven Compile-Time Specialization") may accompany an LSS runtime
-consumer: tests of an application build discover literals without becoming
-runtime entrypoints. Filtering parked compile-time roots translates the
-discovery boundary into the retained request list explicitly.
+- `roc build` is meant to be `roc check` plus an executable. If evaluation
+  followed demand, `roc check` would report errors a build of the same sources
+  does not, which contradicts that meaning. Evaluating every root makes the
+  commands agree without any rule about which command saw which root.
+- `roc check` cannot follow demand. A library has no entry point, so demand
+  would be empty and its constants would never be validated, and working out
+  demand for an application means specializing its whole runtime program, which
+  checking otherwise does not need.
+- The strategies must agree, and demand cannot give them the same answer. LSS
+  computes demand over its specialized program, which reveals every read. Boxy
+  shares no specialization: a method a dictionary selects at runtime reaches no
+  checked reference, so the reads the checked data names are only a lower bound,
+  and an upper bound would report failures LSS does not. Evaluating every root
+  needs no agreement about reads, so it holds under both.
+- A failure stays an error rather than becoming a warning for unread roots.
+  Telling read roots from unread ones needs the same demand answer, and a
+  warning for every failed root would let a program carry on without a constant
+  it reads.
+
+The costs are accepted. A cold LSS build evaluates constants its program never
+reads, including those of dependencies, though per-module caching means this
+is mostly paid once. A failure in an unused constant now stops a build, even in
+a dependency, which can be annoying. That case is rare, and it is a real defect
+in the code it points at, while consistency between commands and strategies
+matters to every build of every program, so the policy favors consistency.
+
+The one exception is a test program with validation certificates ("Successful
+Initializer Validation Without Value Rebinding"), which needs not evaluate a
+root an earlier compilation certified. There, a root is demanded when code that
+runs regardless of compile-time demand reads it, or when the body of a demanded
+root reads it. The code that runs regardless is the program's runtime roots,
+its static-data requests (provided data exports), and every literal root the
+specialization registers. A validation root (a pattern's validation, or a
+binding whose right-hand side always crashes) is demanded outright: it produces
+no value for any read to reach, and it exists to run its `crash` and `dbg`
+behavior once in every lowering mode. A read is a slot read of a root this
+compilation evaluates, the restore of a value an earlier compilation stored, or
+one of the reads an object-cache entry records for the body it stands in for;
+each demands the root. The set is computed over the specialized program itself,
+so it is a function of the checked program and the build's roots, never of what
+any cache holds.
 
 Monotype declares every requested compile-time root up front: it reserves the
 root's entry template, so a read anywhere, including in a parallel worker's
@@ -3466,8 +3482,7 @@ directly or through the code it reaches, in the module's
 stored it (`StoredConstTemplate.root`). A compilation that restores a stored
 value therefore demands everything the value's own evaluation demanded,
 exactly as if it had lowered the root's body. `dbg` observations replay for
-the demanded roots only, whether this compilation evaluated them or restored
-their values, so a build reports the same observations with or without a
+every root, whether this compilation evaluated it or restored its value, so a build reports the same observations with or without a
 cache and whatever an earlier command evaluated.
 
 The object cache composes with demand by having an entry carry what its
@@ -3503,9 +3518,8 @@ so they do not prevent reuse and are not emitted again by the checked module dat
 An entry therefore never holds a new checking or evaluation diagnostic that a
 later compilation's evaluation could contradict.
 
-A build reports the compile-time failures of the roots it evaluates. A
-failure in a root no build demands is reported by `roc check`, which
-evaluates every root, including those a cache entry left unevaluated.
+Every command reports the compile-time failures of every root, including
+those a cache entry left unevaluated.
 
 ### Compile-Time Value Reuse Across Edits
 

@@ -8342,7 +8342,6 @@ const Builder = struct {
                     EdgeEvidence{ .subst = &.{}, .vector = &.{} };
                 const selected = try ctx.draftFnSlotForProcedureUseAtNode(
                     procedure,
-                    request.checked_type,
                     procedure.source_fn_ty_template,
                     root_node,
                     edge,
@@ -8717,7 +8716,6 @@ const Builder = struct {
         } else &.{};
         return try self.lowerTemplateWithMono(
             template_ref,
-            source_fn_ty,
             source_ty_view.types.rootKey(source_fn_ty),
             fn_ty,
             evidence,
@@ -9001,7 +8999,6 @@ const Builder = struct {
     fn lowerTemplateWithMono(
         self: *Builder,
         template_ref: names.ProcTemplate,
-        source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         fn_ty: Type.TypeId,
         evidence: []const SpecEvidence,
@@ -9025,6 +9022,9 @@ const Builder = struct {
         const lower_fn_ty = fn_ty;
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
+        // The template's own type, whichever module requests it first: a
+        // request names the type through its own module's checked types.
+        const source_fn_ty = template.checked_fn_root;
         if (evidence.len > template.evidence_params.len) {
             Common.invariant("procedure specialization received more evidence than its checked requirements");
         }
@@ -11238,7 +11238,6 @@ const Builder = struct {
         self: *Builder,
         source_ctx: *BodyContext,
         template_ref: names.ProcTemplate,
-        source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         raw_request_fn_node: NodeId,
         partial_edge: EdgeEvidence,
@@ -11255,6 +11254,9 @@ const Builder = struct {
         };
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
+        // The template's own type, whichever module requests it first: a
+        // request names the type through its own module's checked types.
+        const source_fn_ty = template.checked_fn_root;
         if (partial_edge.vector.len > template.evidence_params.len) {
             Common.invariant("draft procedure specialization received more evidence than its checked requirements");
         }
@@ -13821,7 +13823,6 @@ const Builder = struct {
         // not even match). Neither states the claim this checks.
         const def = try self.lowerTemplateWithMono(
             template_ref,
-            fn_template.source_fn_ty,
             fn_template.source_fn_key,
             fn_template.mono_fn_ty,
             evidence,
@@ -13919,7 +13920,6 @@ const Builder = struct {
                 // call-target site above.
                 const def = try self.lowerTemplateWithMono(
                     template_ref,
-                    fn_template.source_fn_ty,
                     fn_template.source_fn_key,
                     fn_template.mono_fn_ty,
                     retained.vector,
@@ -15494,7 +15494,6 @@ const Builder = struct {
         const resolved_slot: Ast.FnSlot = blk: {
             const def = try self.lowerTemplateWithMono(
                 spec.template_ref,
-                spec.source_fn_ty,
                 spec.source_fn_key,
                 request_fn_ty,
                 evidence,
@@ -37017,7 +37016,6 @@ const BodyContext = struct {
             const created = try self.builder.lowerDraftTemplateFromContext(
                 self,
                 procedure.template,
-                source_fn_ty,
                 lookup.view.types.rootKey(source_fn_ty),
                 callable_node,
                 edge,
@@ -45930,7 +45928,6 @@ const BodyContext = struct {
             else
                 try self.draftFnSlotForProcedureUseAtNode(
                     proc,
-                    source_fn_ty,
                     source_fn_key,
                     request_fn_node,
                     try self.evidenceForProcedureUseAtNode(proc, record.expr, null, request_fn_node, .body_lowering),
@@ -45941,7 +45938,6 @@ const BodyContext = struct {
             else
                 try self.draftFnSlotForProcedureUseAtNode(
                     proc.procedure,
-                    source_fn_ty,
                     source_fn_key,
                     request_fn_node,
                     try self.evidenceForProcedureUseAtNode(proc.procedure, record.expr, proc.root_evidence, request_fn_node, .body_lowering),
@@ -46102,7 +46098,6 @@ const BodyContext = struct {
     fn draftFnSlotForProcedureUseAtNode(
         self: *BodyContext,
         proc: checked.ProcedureUseTemplate,
-        source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         request_fn_node: NodeId,
         edge: EdgeEvidence,
@@ -46112,7 +46107,6 @@ const BodyContext = struct {
         return try self.builder.lowerDraftTemplateFromContext(
             self,
             template_ref,
-            source_fn_ty,
             source_fn_key,
             request_fn_node,
             edge,
@@ -47205,11 +47199,10 @@ const BodyContext = struct {
             );
         }
         const edge = try self.evidenceForProcedureUseAtNode(proc, site_expr, root_evidence, request_fn_node, .body_lowering);
-        const source_fn_ty = proc.source_fn_ty_payload orelse
+        _ = proc.source_fn_ty_payload orelse
             Common.invariant("checked procedure value reached Monotype without a requested function type");
         const slot = try self.draftFnSlotForProcedureUseAtNode(
             proc,
-            source_fn_ty,
             proc.source_fn_ty_template,
             request_fn_node,
             edge,
@@ -48809,7 +48802,6 @@ const BodyContext = struct {
                 break :blk try self.requireLocalDraftSlot(try self.builder.lowerDraftTemplateFromContext(
                     self,
                     template_ref,
-                    source_fn_ty,
                     source_fn_key,
                     request_fn_node,
                     .{ .subst = subst, .vector = retained_evidence.vector },
@@ -55709,7 +55701,6 @@ const BodyContext = struct {
                 break :blk try self.builder.lowerDraftTemplateFromContext(
                     self,
                     procedure.template,
-                    source_fn_ty,
                     source_fn_key,
                     request_fn_node,
                     edge,
@@ -55880,7 +55871,6 @@ const BodyContext = struct {
                 break :blk try self.builder.lowerDraftTemplateFromContext(
                     self,
                     procedure.template,
-                    source_fn_ty,
                     source_fn_key,
                     request_fn_node,
                     edge,
