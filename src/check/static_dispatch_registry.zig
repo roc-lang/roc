@@ -1559,10 +1559,6 @@ pub const CheckedEvidence = struct {
     /// runtime representation still needs an explicit descriptor).
     dispatcher_ty: CheckedTypeId,
     resolution: Resolution,
-    /// Whether this obligation is represented by a runtime dictionary slot.
-    /// Literal-defaulting constraints remain in canonical evidence vectors for
-    /// specialization, but do not become runtime dictionary requirements.
-    runtime_dictionary: bool,
     /// Independent callable contracts in `evidence_refs`, sharing one target slot.
     callable_contracts: artifact_serialize.Span = .{},
 
@@ -1724,11 +1720,6 @@ pub const EvidenceParamRecord = struct {
     /// obligation's receiver is read from. Composite scheme requirements are
     /// supplied by checked evidence and have no quantified-variable slot.
     slot: ?u32,
-    /// Whether this parameter becomes a runtime method dictionary. Every
-    /// requirement does, a literal's included: a literal in the scheme's
-    /// body converts through it where its converted value is not passed as
-    /// a literal argument (design.md "Literal Arguments").
-    runtime_dictionary: bool,
     /// Checker-recorded derived implementation permitted when the concrete
     /// dispatcher has no registered method target.
     structural: ?StructuralKind = null,
@@ -3340,12 +3331,12 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
             .nested = .{ .resolved = .{ .start = 0, .len = 1 } },
         }};
         var evidence_refs = [_]CheckedEvidence{
-            .{ .dispatcher_ty = @fromBackingInt(@intCast(14)), .runtime_dictionary = true, .resolution = .{ .structural = .{
+            .{ .dispatcher_ty = @fromBackingInt(@intCast(14)), .resolution = .{ .structural = .{
                 .derivation = .encoder,
                 .dispatcher_ty = @fromBackingInt(@intCast(14)),
                 .callable_ty = @fromBackingInt(@intCast(15)),
             } } },
-            .{ .dispatcher_ty = @fromBackingInt(@intCast(12)), .runtime_dictionary = false, .resolution = .{ .direct = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
+            .{ .dispatcher_ty = @fromBackingInt(@intCast(12)), .resolution = .{ .direct = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
         };
         var site_evidence = [_]SiteEvidenceEntry{.{
             .key = 16,
@@ -3400,13 +3391,11 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
         try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(@intCast(13))), node.instantiation.callable);
         const nested = loaded.nestedEvidence(node);
         try std.testing.expectEqual(@as(usize, 1), nested.len);
-        try std.testing.expect(nested[0].runtime_dictionary);
         try std.testing.expectEqual(StructuralKind.encoder, nested[0].resolution.structural.derivation.kind());
         try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(@intCast(14))), nested[0].resolution.structural.dispatcher_ty);
         try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(@intCast(15))), nested[0].resolution.structural.callable_ty);
         const site = loaded.siteEvidence(@fromBackingInt(@intCast(16))) orelse return error.TestExpectedEqual;
         try std.testing.expectEqual(@as(usize, 1), site.len);
-        try std.testing.expect(!site[0].runtime_dictionary);
         try std.testing.expectEqual(@as(EvidenceNodeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))), site[0].resolution.direct);
     }
 }

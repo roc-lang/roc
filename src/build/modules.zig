@@ -689,6 +689,7 @@ pub const RocModules = struct {
         // `build_options` for the Darwin sysroot path baked in at build time.
         self.embedded_lld.addImport("collections", self.collections);
         self.embedded_lld.addImport("build_options", self.build_options);
+        self.boxy_runtime.addImport("raw_pages", self.raw_pages);
 
         // The vendored Mach-O code-signing helpers use the build-time `tracy`
         // tracing shim.

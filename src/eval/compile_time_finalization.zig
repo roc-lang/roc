@@ -1730,7 +1730,7 @@ const BoxyLinkedImages = struct {
     hosted: std.StringHashMapUnmanaged(void) = .empty,
 
     fn deinit(self: *BoxyLinkedImages) void {
-        for (self.images.items) |*image| image.deinit();
+        if (comptime !compilerHostMustUseInterpreterForCtfe()) for (self.images.items) |*image| image.deinit();
         self.images.deinit(self.allocator);
         self.code.deinit(self.allocator);
         self.locations.deinit(self.allocator);
@@ -4635,7 +4635,7 @@ fn reportLiteralRootExpectFailure(
 /// any other host (freestanding, wasm32, 32-bit ARM or x86) the interpreter
 /// evaluates at the host's width, and a target of another width receives the
 /// completed values re-encoded at its own layouts.
-fn compilerHostMustUseInterpreterForCtfe() bool {
+pub fn compilerHostMustUseInterpreterForCtfe() bool {
     return builtin.target.os.tag == .freestanding or !backend.host_lir_codegen_available;
 }
 

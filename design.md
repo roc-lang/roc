@@ -15037,8 +15037,8 @@ their own, lowered once per checked derivation with hidden parameters for the
 derivation's type variables, and reached through dictionaries like any other
 target.
 
-A dispatch the checker resolved to a concrete target with no dictionary
-(`runtime_dictionary == false`) is a direct call; it consumes no dictionary.
+A dispatch the checker resolved to a concrete target is a direct call; it
+consumes no dictionary.
 
 A dispatch through a scope's dictionary calls the method at the callable type
 its scope's requirement names, and reads the result at the dispatch's own

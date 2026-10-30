@@ -37,8 +37,6 @@ pub const Kind = enum(u8) {
     /// `child` is the backing descriptor, whose layout this one shares;
     /// `methods` holds the type's overrides and `name` its name.
     nominal,
-    /// `RocBox(RocUnknown)`: only retained, moved, or shallow-dropped.
-    opaque_unknown,
     /// The box a layout inserts to break a recursive type. `child` is the
     /// payload; inspection, equality, and hashing see through it.
     recursive_box,

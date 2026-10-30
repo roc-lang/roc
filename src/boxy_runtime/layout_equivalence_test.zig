@@ -223,7 +223,7 @@ const Builder = struct {
                 try testing.expectEqual(@as(u32, 0), d.child.?.size);
             },
             .bool => try testing.expectEqual(Idx.bool, idx),
-            .zst, .scalar, .str, .erased_callable, .nominal, .opaque_unknown, .recursive_box => {},
+            .zst, .scalar, .str, .erased_callable, .nominal, .recursive_box => {},
         }
     }
 };

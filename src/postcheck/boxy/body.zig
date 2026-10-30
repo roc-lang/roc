@@ -4295,8 +4295,8 @@ pub const Builder = struct {
         const scope = templates.dispatch_scopes[@backingInt(scope_id)];
         const evidence_params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, scope.evidence_params);
         var dictionaries: std.ArrayList(u32) = .empty;
-        for (evidence_params, 0..) |param, index| {
-            if (param.runtime_dictionary) try dictionaries.append(self.program.arena.allocator(), @intCast(index));
+        for (evidence_params, 0..) |_, index| {
+            try dictionaries.append(self.program.arena.allocator(), @intCast(index));
         }
         return .{
             .scheme_vars = lower.poolSlice(checked.CheckedTypeId, templates.scheme_vars_pool, scope.scheme_vars),
@@ -5744,16 +5744,16 @@ pub const Builder = struct {
     fn scopeDictionaries(self: *Builder, params: []const static_dispatch.EvidenceParamRecord, evidence: []const static_dispatch.CheckedEvidence) Allocator.Error![]const LocalId {
         if (evidence.len != params.len) invariant("an alias scope's evidence differs from its requirements");
         var dicts: std.ArrayList(LocalId) = .empty;
-        for (params, evidence) |param, entry| {
-            if (param.runtime_dictionary) try dicts.append(self.program.arena.allocator(), try self.dictionaryOf(entry));
+        for (params, evidence) |_, entry| {
+            try dicts.append(self.program.arena.allocator(), try self.dictionaryOf(entry));
         }
         return dicts.items;
     }
 
     fn runtimeParams(self: *const Builder, params: []const static_dispatch.EvidenceParamRecord) Allocator.Error![]const u32 {
         var indices: std.ArrayList(u32) = .empty;
-        for (params, 0..) |param, index| {
-            if (param.runtime_dictionary) try indices.append(self.program.arena.allocator(), @intCast(index));
+        for (params, 0..) |_, index| {
+            try indices.append(self.program.arena.allocator(), @intCast(index));
         }
         return indices.items;
     }
@@ -6085,7 +6085,7 @@ pub const Builder = struct {
         var listing: [2048]u8 = undefined;
         var written: usize = 0;
         for (evidence_params, 0..) |param, position| {
-            const text = std.fmt.bufPrint(listing[written..], " [{d}] {s} runtime_dictionary={}", .{ position, self.view.nameStore().methodNameText(param.method), param.runtime_dictionary }) catch break;
+            const text = std.fmt.bufPrint(listing[written..], " [{d}] {s}", .{ position, self.view.nameStore().methodNameText(param.method) }) catch break;
             written += text.len;
         }
         invariantFmt("evidence named dictionary parameter {d} at depth {d}, which worker {s} (scope depth {d} of {d}, {d} dictionaries, {d} sealed; evidence params:{s}) does not have", .{
