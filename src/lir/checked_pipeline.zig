@@ -694,6 +694,7 @@ pub const TimingSnapshot = struct {
     demand: DemandMetrics = .{},
 };
 
+/// A post-check stage `--timings` itemizes on its own line.
 pub const TimingPhase = enum {
     monotype,
     lift,
