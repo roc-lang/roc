@@ -175,8 +175,11 @@ fn dupeSymbols(gpa: Allocator, symbols: []const []const u8) Allocator.Error![]co
     return copies;
 }
 
+/// Why a unit's object could not be built.
+pub const BuildError = eval.CompileTimeFinalization.RuntimeMaterializationError || static_data_exports.MaterializationError || error{NativeCompilationFailed};
+
 /// `unit`'s object, from the cache or built and filed there.
-pub fn restoreOrBuild(unit: Unit) !Built {
+pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     const gpa = unit.gpa;
     const module_name = unit.artifact.canonical_names.moduleNameText(unit.artifact.module_identity.module_name);
     if (try restore(gpa, unit.cache_manager, unit.key, unit.interfaces)) |entry| {

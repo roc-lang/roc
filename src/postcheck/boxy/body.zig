@@ -86,7 +86,7 @@ pub const Task = union(enum) {
     /// in presence slots: the types its scheme takes and the arguments'.
     finish_call: struct { callee: WorkerId, hidden: []LocalId, arg_count: u32, ret: TypeId, result: TypeId, adapt: ?Builder.CallAdapt = null },
     finish_erased_call: struct { fn_ty: TypeId, arg_count: u32, result: TypeId },
-    finish_low_level: struct { op: LIR.LowLevel, arg_count: u32, result: TypeId, arg_types: []const TypeId = &.{} },
+    finish_low_level: struct { op: LIR.LowLevel, arg_count: u32, result: TypeId, arg_types: []const TypeId = &.{}, region: ?base.Region = null },
     finish_record: CheckedExprId,
     finish_tuple: CheckedExprId,
     finish_tag: CheckedExprId,
@@ -2503,7 +2503,12 @@ pub const Builder = struct {
                 if (call.adapt) |adapt| return try self.finishAdaptedCall(call.callee, call.hidden, adapt, call.ret, call.result);
                 try self.finishCall(call.callee, call.hidden, call.arg_count, call.ret, call.result);
             },
-            .finish_low_level => |ll| try self.finishLowLevel(ll.op, ll.arg_count, ll.result, ll.arg_types),
+            .finish_low_level => |ll| {
+                // The arguments moved the current region; a failure of the
+                // operation itself is the call's.
+                if (ll.region) |region| self.region = region;
+                try self.finishLowLevel(ll.op, ll.arg_count, ll.result, ll.arg_types);
+            },
             .finish_record => |expr| try self.finishRecord(expr),
             .restore => |restore| try self.restoreStep(restore.source, restore.node, restore.ty, restore.root),
             .restore_callable_eval => |eval| {
@@ -2797,7 +2802,7 @@ pub const Builder = struct {
             .run_low_level => |run_ll| {
                 const arg_types = try self.program.arena.allocator().alloc(TypeId, run_ll.args.len);
                 for (run_ll.args, arg_types) |arg, *arg_ty| arg_ty.* = try self.exprType(arg);
-                try self.push(.{ .finish_low_level = .{ .op = run_ll.op, .arg_count = @intCast(run_ll.args.len), .result = try self.exprType(expr_id), .arg_types = arg_types } });
+                try self.push(.{ .finish_low_level = .{ .op = run_ll.op, .arg_count = @intCast(run_ll.args.len), .result = try self.exprType(expr_id), .arg_types = arg_types, .region = expr.source_region } });
                 try self.pushExprsReversed(run_ll.args);
             },
             // An empty literal at a record type of optional fields builds

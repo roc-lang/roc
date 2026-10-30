@@ -86,7 +86,8 @@ pub const ModuleViews = struct {
     imports: []const Checked.ImportedModuleView = &.{},
 };
 
-const MaterializationError = Allocator.Error || error{
+/// Why static data could not be materialized.
+pub const MaterializationError = Allocator.Error || error{
     UnsupportedTarget,
 };
 

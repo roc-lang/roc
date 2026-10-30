@@ -11638,7 +11638,7 @@ fn customBoxyCompileTimeObjects(
         const crashed = runRocInEnv(io, allocator, &isolated, args, crashes, .relative, &.{}, null, crash_timeout) catch |err|
             return customInfraFailure(allocator, timer, "command spawn error: {}", .{err});
         if (processSucceeded(crashed.term)) return customFailure(allocator, timer, "`roc check` accepted a constant that crashes", .{});
-        if (std.mem.find(u8, crashed.stderr, "too big") == null or std.mem.find(u8, crashed.stderr, "Lib (line 12") == null) return failureFromRun(allocator, timer, crashed, "the report does not name the crash's location");
+        if (std.mem.find(u8, crashed.stderr, "too big") == null or std.mem.find(u8, crashed.stderr, "Lib (line 12, column 4)") == null) return failureFromRun(allocator, timer, crashed, "the report does not name the crash's location");
         const first = std.mem.find(u8, crashed.stderr, "[dbg] 3") orelse return failureFromRun(allocator, timer, crashed, "the crash's `dbg` did not print");
         if (std.mem.findPos(u8, crashed.stderr, first + 1, "[dbg] 3") != null) return failureFromRun(allocator, timer, crashed, "the crash's `dbg` printed twice");
         const summary = std.mem.findLast(u8, crashed.stderr, "── ") orelse crashed.stderr.len;
