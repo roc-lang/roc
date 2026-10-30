@@ -64,11 +64,11 @@ These security guarantees can be relied on because platforms have _exclusive_ co
 
 ### Performance benefits
 
-Many I/O operations can benefit from being run concurrently. Since platforms are in charge of how those I/O operations are implemented, they can also determine how they are scheduled. This means that both applications and packages can describe which operations they want to run concurrently, and then the platform can optimize the scheduling of these operations using its domain-specific knowledge.
+> ⚠️ Note that although platform-implemented scheduling of concurrent operations is possible in principle, some pieces needed to make it practical for platform authors to implement haven't been built yet.
+
+Many I/O operations can benefit from being run concurrently. Since platforms are in charge of how those I/O operations are implemented, they can also determine how they are scheduled. In principle, both applications and packages could describe which operations they want to run concurrently, and the platform could optimize their scheduling using its domain-specific knowledge.
 
 For example, a command-line platform might schedule concurrent operations across all available cores (or some lower number specified by a command-line argument). In contrast, a web server platform might try to balance available cores across multiple request handlers, to prevent undesirable scenarios like one handler getting all the cores (meaning none of the others can progress).
-
-> Note that although platform-implemented scheduling of concurrent operations is possible in principle, some pieces needed to make it practical for platform authors to implement haven't been built yet.
 
 ## How platforms are implemented
 
@@ -117,7 +117,7 @@ This I/O design has [security benefits](#security-benefits), [ecosystem benefits
 
 Applications interact only with the _Roc API_ portion of a platform, but there is also a _[host](#host)_ portion (written in a different language) that works behind the scenes. The host determines how the program starts, how memory is allocated and deallocated, and how I/O primitives are implemented.
 
-Anyone can implement their own platform. There is not yet an official guide about how to do this, but there are some useful examples:
+Anyone can implement their own platform. [Platform module headers](modules#platform-modules) and [hosted type modules](modules#hosted-type-modules) are described in the Modules chapter. There is not yet an official guide about how to create a platform, but there are some useful examples:
 
 - [basic-cli](https://github.com/roc-lang/basic-cli)
 - [basic-webserver](https://github.com/roc-lang/basic-webserver)

@@ -1,4 +1,4 @@
-**NOTE:** This is heavily WIP! This line will be removed when the langref is considered complete, and at that point, missing sections and outdated information will be considered bugs. If you'd like to contribute to this (other than minor corrections of obvious mistakes), **definitely** mention it in the [langref Zulip channel](https://roc.zulipchat.com/#narrow/channel/316715-contributing/topic/language.20reference/with/564909757) before getting started on anything!
+⚠️ **NOTE:** This reference describes Roc's current development version. Features and behavior may change before 0.1.0. Known limitations are noted in the relevant sections. If you'd like to contribute to this (other than minor corrections of obvious mistakes), **definitely** mention it in the [langref Zulip channel](https://roc.zulipchat.com/#narrow/channel/316715-contributing/topic/language.20reference/with/564909757) before getting started on anything!
 
 # Language Reference
 
@@ -17,11 +17,14 @@ If you're looking for a beginner tutorial, check out [roc-lang.org/tutorial](htt
 - [Statements](statements)
   - [`=` (assignment)](statements#assignment)
     - [Type Annotations](statements#type-annotations)
+    - [Reassignment with `var`](statements#reassignment)
   - [`import`](statements#import)
+  - [`dbg`](statements#dbg)
   - [`expect`](statements#expect)
   - [`return`](statements#return)
   - [`break`](statements#break)
   - [`continue`](statements#continue)
+  - [`crash`](statements#crash)
   - [Block Statements](statements#block-statements)
 - [Error Handling](errors)
   - [`Try`](errors#try)
@@ -91,12 +94,16 @@ If you're looking for a beginner tutorial, check out [roc-lang.org/tutorial](htt
     - [Memory management](platforms#memory-management)
     - [Program start](platforms#program-start)
 - [Types](types)
+  - [Roc's Type System](types#rocs-type-system)
+    - [Generalization](types#generalization)
   - [Type Annotations](types#type-annotations)
     - [Where Clauses](types#where-clauses)
   - [Nominal Types](types#nominal-types)
     - [Opaque Nominal Types](types#opaque-nominal-types)
   - [Structural Types](types#structural-types)
   - [Type Aliases](types#type-aliases)
+  - [Recursive Types](types#recursive)
+  - [Mutually Recursive Types](types#mutually-recursive)
   - [Performance](types#performance)
 - [Static Dispatch](static-dispatch)
   - [Methods](static-dispatch#methods)
@@ -160,6 +167,8 @@ If you're looking for a beginner tutorial, check out [roc-lang.org/tutorial](htt
   - [Transforming Iterators](iterators#transforming-iterators)
   - [Laziness](iterators#laziness)
   - [Custom Iterators](iterators#custom-iterators)
+  - [How Iteration Works](iterators#how-iteration-works)
+  - [Effectful Iteration](iterators#effectful-iteration)
   - [Performance](iterators#performance)
 - [Numbers](numbers)
   - [Number Literals](numbers#number-literals)
@@ -194,3 +203,5 @@ If you're looking for a beginner tutorial, check out [roc-lang.org/tutorial](htt
 - [Packages](packages)
   - [Depending on Packages](packages#depending-on-packages)
   - [Shorthands](packages#shorthands)
+  - [Inspecting Dependencies with `roc deps`](packages#inspecting-dependencies-with-roc-deps)
+  - [Replacing Dependencies with `--replace-dep`](packages#replacing-dependencies-with-replace-dep)
