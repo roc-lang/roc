@@ -8361,6 +8361,9 @@ const ReuseRun = struct {
     /// The checked occurrence of every named type in each root's stored
     /// value and type, by name, in walk order.
     occurrences: [][]NamedOccurrence,
+    /// The app module's checked key, whose version-specific checked types
+    /// no stored closed occurrence of an imported type names.
+    module_key: [32]u8,
     hoisted: []HoistedIdentity,
 
     const HoistedIdentity = struct { text: []u8, value: [32]u8 };
@@ -8540,6 +8543,7 @@ fn compileForReuseWith(allocator: Allocator, cache_dir: []const u8, app_path: []
         .values = try values.toOwnedSlice(allocator),
         .literals = try literals.toOwnedSlice(allocator),
         .occurrences = try occurrences.toOwnedSlice(allocator),
+        .module_key = app.key.bytes,
         .hoisted = try hoisted.toOwnedSlice(allocator),
     };
 }
@@ -8777,8 +8781,10 @@ test "a transplanted value carries no checked type occurrence of the version tha
         \\}
         \\
     ;
-    // `built`'s type is lowered from the app's own checked types, `made`'s
-    // from `Counter`'s.
+    // `built`'s type is the app's own annotation and `made`'s is inferred
+    // from `Counter.make`'s return type: both stored constants carry
+    // `Counter`'s own occurrence, which its declaring module holds inside the
+    // app's import closure, never the app's version-specific one.
     const occurrence_app =
         \\app [answer] { pf: platform "./platform.roc" }
         \\
@@ -8799,8 +8805,12 @@ test "a transplanted value carries no checked type occurrence of the version tha
 
     var first = try compileForReuse(allocator, cache, app);
     defer first.deinit(allocator);
-    // All values are unchanged, including the nominal whose checked type
-    // occurrence belongs to the app rather than the imported declaration.
+    for ([_][]const u8{ "built", "made" }) |name| {
+        const stored = first.namedOccurrences(name);
+        try std.testing.expect(stored.len != 0);
+        for (stored) |occurrence| try std.testing.expect(!std.mem.eql(u8, &first.module_key, &occurrence.ty_module));
+    }
+    // All values are unchanged, including the nominals the app annotates.
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = occurrence_app ++ "# unchanged values\n" });
     var unchanged = try compileForReuseVerifying(allocator, cache, app, true);
     defer unchanged.deinit(allocator);

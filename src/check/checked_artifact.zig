@@ -3303,6 +3303,19 @@ pub const CheckedTypeStoreView = struct {
         return reconstructTypeData(CheckedTypePayload, self, &self.stored_payloads[index]);
     }
 
+    /// Whether `id` is a nominal or alias type, read from its stored payload
+    /// tag without materializing the payload.
+    pub fn isNamed(self: CheckedTypeStoreView, id: CheckedTypeId) bool {
+        const index: usize = @backingInt(id);
+        if (index >= self.stored_payloads.len) {
+            checkedArtifactInvariant("checked type payload id is out of range", .{});
+        }
+        return switch (self.stored_payloads[index]) {
+            .alias, .nominal => true,
+            .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => false,
+        };
+    }
+
     /// Looks up a published checked type root by canonical source type key.
     pub fn rootForKey(self: CheckedTypeStoreView, key: canonical.CanonicalTypeKey) ?CheckedTypeId {
         const index = CheckedRootIndex.fromCells(self.root_index, self.root_index_count);
@@ -20556,8 +20569,7 @@ const EvidencePass = struct {
                 checkedArtifactInvariant("forwarded evidence owner was not published", .{});
             const schema = self.templates.evidence_params_pool[owner];
             return .{ .resolved = .{ .evidence_dependent = .{
-                .scheme_param = if (match.callable_contract != null or
-                    (schema.runtime_dictionary and schema.source != .scheme_callable)) owner else null,
+                .scheme_param = if (match.callable_contract != null or static_dispatch.namedAsSchemeParam(schema)) owner else null,
                 .index = match.index,
                 .independent_callable = independent_callable,
                 .reuse_slot_nested_evidence = match.callable_relation == .independent_reuse_slot_nested,
@@ -36143,7 +36155,7 @@ pub const CheckedModuleArtifact = struct {
                     if (dependent.scheme_param) |param_index| {
                         const pool = self.checked_procedure_templates.evidence_params_pool;
                         if (param_index >= pool.len or pool[param_index].method != plan.method or
-                            (if (dependent.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else (!pool[param_index].runtime_dictionary or pool[param_index].source == .scheme_callable)))
+                            (if (dependent.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else !static_dispatch.namedAsSchemeParam(pool[param_index])))
                             return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
                     }
                 },
@@ -36374,7 +36386,7 @@ pub const CheckedModuleArtifact = struct {
                     if (constraint.scheme_param) |param_index| {
                         const pool = self.checked_procedure_templates.evidence_params_pool;
                         if (param_index >= pool.len or
-                            (if (constraint.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else (!pool[param_index].runtime_dictionary or pool[param_index].source == .scheme_callable)))
+                            (if (constraint.callable_contract) |contract| contract >= pool[param_index].callable_contracts.len else !static_dispatch.namedAsSchemeParam(pool[param_index])))
                             return .{ .kind = .evidence_scheme_param_invalid, .index = @intCast(i) };
                     }
                 },
@@ -41766,8 +41778,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x3F, 0xFB, 0x32, 0x64, 0x71, 0x00, 0xE4, 0xE1, 0xB0, 0x34, 0x92, 0x33, 0xEA, 0xEC, 0x71, 0x03,
-        0x52, 0xA2, 0xC1, 0xE0, 0xE1, 0xC3, 0xF4, 0xFB, 0x20, 0xB5, 0x79, 0x1C, 0x65, 0x73, 0xB1, 0xFB,
+        0x70, 0x9A, 0xB3, 0xFB, 0x6A, 0xAF, 0x01, 0xAB, 0x63, 0x3A, 0x8E, 0xCD, 0xC4, 0x22, 0xB0, 0x67,
+        0x21, 0xD0, 0x11, 0x9B, 0x14, 0x43, 0x7F, 0x6A, 0x91, 0xDE, 0xF5, 0x0C, 0x82, 0x12, 0x8B, 0x78,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

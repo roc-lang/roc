@@ -2159,7 +2159,7 @@ pub const Store = struct {
     }
 
     /// Append every type `ty`'s content refers to.
-    fn appendChildTypes(self: *const Store, ty: TypeId, out: *std.ArrayList(TypeId)) std.mem.Allocator.Error!void {
+    pub fn appendChildTypes(self: *const Store, ty: TypeId, out: *std.ArrayList(TypeId)) std.mem.Allocator.Error!void {
         switch (self.get(ty)) {
             .primitive, .erased, .zst, .hole => {},
             .list, .box => |child| try out.append(self.allocator, child),

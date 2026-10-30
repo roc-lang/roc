@@ -716,7 +716,7 @@ pub const Program = struct {
             // this program lowers the platform at (`solvePlatformIdentities`):
             // every mention converts to that type, so it is no hidden
             // parameter either.
-            if (self.platform_identities.contains(.{ .module = module_index, .ty = variable })) continue;
+            if (self.converter().platformIdentity(module_index, variable) != null) continue;
             if (try self.converter().sealedSchemeVar(module_index, variable, template.checked_fn_root, evidence_params)) {
                 try sealed_slots.append(self.allocator, @intCast(slot));
                 continue;
@@ -2259,7 +2259,8 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
 fn seedUnitWorkers(program: *Program) Allocator.Error!void {
     for (program.modules.views.items) |*view| {
         if (!program.ownsModule(view.index)) continue;
-        for (0..view.view.checked_procedure_templates.templates.items.len) |index| {
+        for (view.view.checked_procedure_templates.templates.items, 0..) |template, index| {
+            if (!unitEmitsTemplate(view, template)) continue;
             const worker = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
             _ = try program.methodEntryWorker(worker);
         }
@@ -2278,6 +2279,20 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         }
     }
     try program.drain();
+}
+
+/// Whether a module unit emits `template` (design.md "Per-Module Output"):
+/// every template another object may call or compose, which leaves out the
+/// wrappers of `expect` and REPL roots. Nothing reaches those but a test
+/// plan's or a REPL's own roots, and each of those lowers as one program.
+fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedProcedureTemplate) bool {
+    return switch (template.body) {
+        .checked_body, .intrinsic_wrapper, .unimplemented => true,
+        .entry_wrapper => |wrapper_id| switch (view.view.compile_time_roots.root(view.view.entry_wrappers.get(wrapper_id).root).kind) {
+            .expect, .repl_expr => false,
+            .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => true,
+        },
+    };
 }
 
 fn seedSourceFiles(program: *Program) Allocator.Error!void {

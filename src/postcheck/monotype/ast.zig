@@ -728,15 +728,15 @@ fn writeFnEvidence(
                 writeStructuralDerivation(hasher, structural.derivation);
                 if (structural.checked) |checked_structural| {
                     writeU8(hasher, 1);
-                    if (checked_structural.generated_codec_content) |content| {
+                    if (checked_structural.codecContent()) |content| {
                         writeU8(hasher, 1);
                         writeBytes(hasher, &content.bytes);
                     } else {
                         writeU8(hasher, 0);
-                        writeEvidenceModule(hasher, &checked_structural.view.bytes, site_names);
+                        writeEvidenceModule(hasher, &checked_structural.recorded.view.bytes, site_names);
                     }
-                    writeBytes(hasher, &checked_structural.dispatcher_key.bytes);
-                    writeBytes(hasher, &checked_structural.callable_key.bytes);
+                    writeBytes(hasher, &checked_structural.dispatcherKey().bytes);
+                    writeBytes(hasher, &checked_structural.callableKey().bytes);
                 } else writeU8(hasher, 0);
             },
             .from_callable => |use| {
@@ -3306,7 +3306,7 @@ test "codec function evidence identity excludes per-use replay addresses" {
     const nodes = [_]Evidence{.{ .structural = 0 }};
     const left_structurals = [_]check.ConstStore.ConstFnStructuralEvidence{.{
         .derivation = .encoder,
-        .checked = .{
+        .checked = .{ .recorded = .{
             .view = .{ .bytes = @as([32]u8, @splat(1)) },
             .dispatcher_key = types.view().rootKey(replay_types[0]),
             .dispatcher_ty = replay_types[0],
@@ -3314,22 +3314,29 @@ test "codec function evidence identity excludes per-use replay addresses" {
             .callable_ty = replay_types[1],
             .generated_codec_derivation = derivation_ids[0],
             .generated_codec_content = .{ .bytes = @as([32]u8, @splat(4)) },
-        },
+        } },
     }};
     var right_structurals = left_structurals;
     const left: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &nodes, .structurals = &left_structurals };
     const right: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &nodes, .structurals = &right_structurals };
-    right_structurals[0].checked.?.dispatcher_ty = replay_types[2];
-    right_structurals[0].checked.?.callable_ty = replay_types[3];
-    right_structurals[0].checked.?.generated_codec_derivation = derivation_ids[1];
+    right_structurals[0].checked.?.recorded.dispatcher_ty = replay_types[2];
+    right_structurals[0].checked.?.recorded.callable_ty = replay_types[3];
+    right_structurals[0].checked.?.recorded.generated_codec_derivation = derivation_ids[1];
     try std.testing.expect(fnEvidenceEql(left, &frames, 0, right, &frames, 0));
     try std.testing.expectEqual(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0));
     // Equal contracts recorded by different modules are one identity.
-    right_structurals[0].checked.?.view = .{ .bytes = @as([32]u8, @splat(5)) };
+    right_structurals[0].checked.?.recorded.view = .{ .bytes = @as([32]u8, @splat(5)) };
     try std.testing.expect(fnEvidenceEql(left, &frames, 0, right, &frames, 0));
     try std.testing.expectEqual(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0));
-    right_structurals[0].checked.?.generated_codec_derivation = derivation_ids[2];
-    right_structurals[0].checked.?.generated_codec_content = .{ .bytes = @as([32]u8, @splat(6)) };
+    // A ConstStore's form names the contract without its recording module
+    // and keeps the identity.
+    const stored_structurals = [_]check.ConstStore.ConstFnStructuralEvidence{right_structurals[0].storedForm()};
+    try std.testing.expect(stored_structurals[0].checked.? == .codec);
+    const stored: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &nodes, .structurals = &stored_structurals };
+    try std.testing.expect(fnEvidenceEql(left, &frames, 0, stored, &frames, 0));
+    try std.testing.expectEqual(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(stored, &frames, 0));
+    right_structurals[0].checked.?.recorded.generated_codec_derivation = derivation_ids[2];
+    right_structurals[0].checked.?.recorded.generated_codec_content = .{ .bytes = @as([32]u8, @splat(6)) };
     try std.testing.expect(!fnEvidenceEql(left, &frames, 0, right, &frames, 0));
     try std.testing.expect(!std.meta.eql(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0)));
 }

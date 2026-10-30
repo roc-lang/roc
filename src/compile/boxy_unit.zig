@@ -219,6 +219,7 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
 
     var object_compiler = backend.ObjectFileCompiler.init(gpa);
     object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
+    object_compiler.link_unit = true;
     object_compiler.capture_code_locations = true;
     var written = object_compiler.compileToObjectFile(
         &lowered.lir_result.store,

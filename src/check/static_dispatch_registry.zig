@@ -1736,6 +1736,15 @@ pub const EvidenceParamRecord = struct {
     path: EvidencePath = .{},
 };
 
+/// Whether a forwarded obligation resolving to evidence parameter `record`
+/// names it as its scheme parameter: a constraint-callable source always,
+/// since Monotype replays it symbolically at specialization time whether or
+/// not it is a runtime dictionary, and otherwise any runtime dictionary the
+/// scheme callable itself does not reach.
+pub fn namedAsSchemeParam(record: EvidenceParamRecord) bool {
+    return record.source == .constraint_callable or (record.runtime_dictionary and record.source != .scheme_callable);
+}
+
 /// Exact producer-authored source of an evidence parameter's dispatcher.
 /// `path` is relative to the selected callable source and is never used for an
 /// erased row remainder or an explicit default.

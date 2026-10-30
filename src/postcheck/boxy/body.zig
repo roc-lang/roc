@@ -622,8 +622,13 @@ pub const Builder = struct {
         return id;
     }
 
+    /// How a merge ends: at a join whose parameters carry the binders' values
+    /// out, or in tail position, where every branch returns and the merge
+    /// only restores the binders' starting values for each branch.
+    pub const MergeEnd = enum { joined, tail };
+
     /// Start a merge of `binders`, recording their current values.
-    pub fn beginMerge(self: *Builder, plan_binders: []const checked.PatternBinderId) Allocator.Error!?MergeId {
+    pub fn beginMerge(self: *Builder, plan_binders: []const checked.PatternBinderId, end: MergeEnd) Allocator.Error!?MergeId {
         // A binder the construct reassigns but that is not bound before it
         // is declared inside it, and goes out of scope with it.
         const arena = self.program.arena.allocator();
@@ -634,16 +639,22 @@ pub const Builder = struct {
         const binders = in_scope.items;
         if (binders.len == 0) return null;
         const pre = try arena.alloc(LocalId, binders.len);
-        const params = try arena.alloc(LocalId, binders.len);
-        for (binders, pre, params) |binder, *before, *param| {
-            before.* = self.binders.get(binder).?;
-            var local = self.store.getLocal(before.*);
-            if (local.dyn) |*dyn| {
-                dyn.storage = .frame;
-                self.has_dynamic_frame = true;
-            }
-            param.* = try self.addLocal(local);
-        }
+        for (binders, pre) |binder, *before| before.* = self.binders.get(binder).?;
+        const params: []LocalId = switch (end) {
+            .tail => &.{},
+            .joined => blk: {
+                const params = try arena.alloc(LocalId, binders.len);
+                for (pre, params) |before, *param| {
+                    var local = self.store.getLocal(before);
+                    if (local.dyn) |*dyn| {
+                        dyn.storage = .frame;
+                        self.has_dynamic_frame = true;
+                    }
+                    param.* = try self.addLocal(local);
+                }
+                break :blk params;
+            },
+        };
         const id: MergeId = @intCast(self.merges.items.len);
         try self.merges.append(self.allocator, .{ .binders = binders, .pre = pre, .params = params });
         return id;
@@ -669,6 +680,7 @@ pub const Builder = struct {
 
     pub fn enterMerge(self: *Builder, merge: MergeId) Allocator.Error!void {
         const m = self.merges.items[merge];
+        if (m.params.len != m.binders.len) invariant("a merge in tail position carries no binder out");
         for (m.binders, m.params) |binder, value| try self.binders.put(self.allocator, binder, value);
     }
 
@@ -1203,7 +1215,11 @@ pub const Builder = struct {
                             try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = self.currentWorker().ret, .root = wrapper.root } })
                         else
                             try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
-                        .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
+                        .fn_value => |fn_id| if (self.program.moduleUnit() != null)
+                            try self.restoreFn(.{ .module = self.module }, fn_id, self.currentWorker().ret)
+                        else
+                            try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
+                        .pending, .unevaluated, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .expr = wrapper.body_expr }),
                     },
                     // A literal argument's body is the conversion its root
                     // names, called on another module's literal.
@@ -2894,16 +2910,18 @@ pub const Builder = struct {
                     for (if_.branches) |branch| try self.tail_exprs.put(self.allocator, branch.body, {});
                     try self.tail_exprs.put(self.allocator, if_.final_else, {});
                     // Each branch returns; nothing reads the construct's
-                    // own value.
+                    // own value, and each branch starts from the binder
+                    // values the construct started with.
+                    const merge = try self.beginMerge(if (if_.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{}, .tail);
                     try self.push(.unreachable_or_unit);
-                    try self.push(.{ .if_test = .{ .expr = expr_id, .index = 0, .join = null, .merge = null } });
+                    try self.push(.{ .if_test = .{ .expr = expr_id, .index = 0, .join = null, .merge = merge } });
                     try self.push(.{ .expr = if_.branches[0].cond });
                     return;
                 }
                 const result_ty = try self.exprType(expr_id);
                 const result = try self.localOf(result_ty, .frame);
                 const join = self.freshJoin();
-                const merge = try self.beginMerge(if (if_.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{});
+                const merge = try self.beginMerge(if (if_.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{}, .joined);
                 const after = try self.declareMergeJoin(join, result, merge);
                 try self.push(.{ .push_value = result });
                 if (merge) |m| try self.push(.{ .enter_merge = m });
@@ -4606,7 +4624,7 @@ pub const Builder = struct {
                 // A scheme variable only the target's requirements mention is
                 // fixed by relating those requirements' methods.
                 const bound = (try self.program.instantiateTarget(target, formal, fn_ty)).bound;
-                const dicts = try self.storedDictionaries(stored, target, bound);
+                const dicts = try self.storedDictionaries(source, stored, target, bound);
                 defer self.allocator.free(dicts);
                 const hidden = try self.allocator.alloc(LocalId, bound.len + dicts.len);
                 defer self.allocator.free(hidden);
@@ -4713,12 +4731,12 @@ pub const Builder = struct {
                         const head = stored.evidence_frame_head orelse invariant("a stored generalized lambda with dictionaries has no evidence");
                         const templates = owner_view.view.checked_procedure_templates;
                         const scope_params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.dispatch_scopes[@backingInt(own_scope.?)].evidence_params);
-                        try self.recordedDerivedCallables(stored, head, scope_params, owner.module, generic, &recorded);
+                        try self.recordedDerivedCallables(source, stored, head, scope_params, owner.module, generic, &recorded);
                     };
                     if (owner.dictionary_params.len != 0) {
                         var frame_index = stored.evidence_frame_head orelse invariant("a stored function value with dictionaries has no evidence");
                         while (stored.evidence_frames[frame_index].parent) |parent| frame_index = parent;
-                        try self.recordedDerivedCallables(stored, frame_index, self.templateEvidenceParams(owner_worker), owner.module, generic, &recorded);
+                        try self.recordedDerivedCallables(source, stored, frame_index, self.templateEvidenceParams(owner_worker), owner.module, generic, &recorded);
                     }
                     const from_edges = try self.relateVariablesPartial(recorded.items, scope_vars.len);
                     defer self.allocator.free(from_edges);
@@ -4739,7 +4757,7 @@ pub const Builder = struct {
                 const worker = try self.program.lambdaWorker(owner_worker, lambda_expr, captures, capture_types, generic_fn, own);
                 const descs = try self.program.arena.allocator().alloc(LocalId, bound.len);
                 for (bound, descs) |ty, *desc| desc.* = try self.descOf(ty);
-                const owner_dicts = if (nested.default_root != null) try self.allocator.alloc(LocalId, 0) else try self.storedDictionaries(stored, owner_worker, bound[0..owner.scheme_vars.len]);
+                const owner_dicts = if (nested.default_root != null) try self.allocator.alloc(LocalId, 0) else try self.storedDictionaries(source, stored, owner_worker, bound[0..owner.scheme_vars.len]);
                 defer self.allocator.free(owner_dicts);
                 // A generalized lambda's own dictionaries are the stored
                 // evidence's innermost frame, its own scope's, ahead of its
@@ -4751,7 +4769,7 @@ pub const Builder = struct {
                     if (frame.scope() == .root) invariant("a stored generalized lambda's innermost evidence frame is its procedure's");
                     const templates = owner_view.view.checked_procedure_templates;
                     const params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.dispatch_scopes[@backingInt(own_scope.?)].evidence_params);
-                    const roots = try self.storedEvidenceTrees(stored.evidence, frame.roots_start, frame.roots_len, params, concrete);
+                    const roots = try self.storedEvidenceTrees(source, stored.evidence, frame.roots_start, frame.roots_len, params, concrete);
                     defer self.allocator.free(roots);
                     const out = try self.allocator.alloc(LocalId, scheme.dictionaries.len);
                     for (scheme.dictionaries, out) |param_index, *dict| dict.* = roots[param_index] orelse invariant("a stored dictionary's evidence denotes no dictionary");
@@ -4789,7 +4807,7 @@ pub const Builder = struct {
     /// instantiated with: for each of the worker `owner`'s dictionary
     /// parameters, the dictionary its stored evidence denotes, with the
     /// owner's scheme variables bound to `bound`.
-    pub fn storedDictionaries(self: *Builder, stored: check.ConstStore.ConstFn, owner: WorkerId, bound: []const TypeId) Allocator.Error![]LocalId {
+    pub fn storedDictionaries(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFn, owner: WorkerId, bound: []const TypeId) Allocator.Error![]LocalId {
         const owner_worker = self.program.worker(owner).*;
         const dicts = try self.allocator.alloc(LocalId, owner_worker.dictionary_params.len);
         errdefer self.allocator.free(dicts);
@@ -4800,7 +4818,7 @@ pub const Builder = struct {
         const frame = stored.evidence_frames[frame_index];
         if (frame.scope() != .root) invariant("a stored function value's outermost evidence frame is not its procedure's");
         const owner_record = self.program.worker(owner).*;
-        const roots = try self.storedEvidenceTrees(stored.evidence, frame.roots_start, frame.roots_len, self.templateEvidenceParams(owner), .{ .module = owner_record.module, .vars = owner_record.scheme_vars, .bound = bound });
+        const roots = try self.storedEvidenceTrees(source, stored.evidence, frame.roots_start, frame.roots_len, self.templateEvidenceParams(owner), .{ .module = owner_record.module, .vars = owner_record.scheme_vars, .bound = bound });
         defer self.allocator.free(roots);
         for (owner_worker.dictionary_params, dicts) |param_index, *dict| {
             dict.* = roots[param_index] orelse invariant("a stored dictionary's evidence denotes no dictionary");
@@ -4812,15 +4830,15 @@ pub const Builder = struct {
     /// `frame_index` (whose roots are `params`, over `env`), the parameter's
     /// callable type paired with the instantiated callable its stored edge
     /// recorded.
-    fn recordedDerivedCallables(self: *Builder, stored: check.ConstStore.ConstFn, frame_index: u32, params: []const static_dispatch.EvidenceParamRecord, module_index: types.ModuleIndex, env: types.Env, out: *std.ArrayList([2]TypeId)) Allocator.Error!void {
+    fn recordedDerivedCallables(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFn, frame_index: u32, params: []const static_dispatch.EvidenceParamRecord, module_index: types.ModuleIndex, env: types.Env, out: *std.ArrayList([2]TypeId)) Allocator.Error!void {
         const frame = stored.evidence_frames[frame_index];
         const roots = try self.storedEvidenceRoots(stored.evidence, frame.roots_start, frame.roots_len);
         defer self.allocator.free(roots);
         for (roots, 0..) |node_index, position| switch (stored.evidence.nodes[node_index]) {
-            .structural => |index| if (stored.evidence.structural(index).checked) |edge| {
+            .structural => |index| if (stored.evidence.structural(index).checked) |checked_edge| {
                 if (position >= params.len) invariant("stored evidence has more entries than its scope has evidence parameters");
-                const edge_view = self.program.moduleByKey(.{ .bytes = edge.view.bytes });
-                const edge_callable = try self.program.converter().convert(edge_view.index, edge.callable_ty, .{ .module = edge_view.index, .vars = &.{}, .bound = &.{} });
+                const edge = try Codec.storedEdge(self, source, checked_edge);
+                const edge_callable = try self.program.converter().convert(edge.module, edge.callable_ty, .{ .module = edge.module, .vars = &.{}, .bound = &.{} });
                 try out.append(self.allocator, .{ try self.program.converter().convert(module_index, params[position].callable_ty, env), edge_callable });
             },
             .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
@@ -4884,7 +4902,7 @@ pub const Builder = struct {
     /// each entry's callable contracts, which no dictionary reads, follow
     /// it. A target takes the instantiation its parameter's callable type,
     /// bound by its owner's instantiation, relates it to.
-    pub fn storedEvidenceTrees(self: *Builder, evidence: check.ConstStore.ConstFnEvidenceVector, start: u32, count: u32, root_params: []const static_dispatch.EvidenceParamRecord, root_env: types.Env) Allocator.Error![]?LocalId {
+    pub fn storedEvidenceTrees(self: *Builder, source: lower.ConstSource, evidence: check.ConstStore.ConstFnEvidenceVector, start: u32, count: u32, root_params: []const static_dispatch.EvidenceParamRecord, root_env: types.Env) Allocator.Error![]?LocalId {
         const Parsed = struct {
             node: u32,
             /// The parsed target whose nested vector holds this entry and
@@ -5005,7 +5023,7 @@ pub const Builder = struct {
                     }
                     break :blk try self.composeDictionary(try self.program.methodEntryWorker(entry.target.?), hidden);
                 },
-                .structural => |structural_index| try self.storedStructuralDictionary(evidence.structural(structural_index).*, dispatchers[index].?, callables[index].?),
+                .structural => |structural_index| try self.storedStructuralDictionary(source, evidence.structural(structural_index).*, dispatchers[index].?, callables[index].?),
                 // Evidence no dictionary reads restores to none.
                 .from_callable, .from_scheme, .unreachable_value, .checked_error => null,
             };
@@ -5015,15 +5033,13 @@ pub const Builder = struct {
         return result;
     }
 
-    pub fn storedStructuralDictionary(self: *Builder, stored: check.ConstStore.ConstFnStructuralEvidence, dispatcher: TypeId, callable: TypeId) Allocator.Error!?LocalId {
+    pub fn storedStructuralDictionary(self: *Builder, source: lower.ConstSource, stored: check.ConstStore.ConstFnStructuralEvidence, dispatcher: TypeId, callable: TypeId) Allocator.Error!?LocalId {
         const method: lower.StructuralMethod = switch (stored.derivation) {
             .equality => .is_eq,
             .hash => .to_hash,
             .parser, .encoder => {
-                const recorded = stored.checked orelse invariant("stored structural codec evidence records no checked edge");
-                const view = self.program.moduleByKey(.{ .bytes = recorded.view.bytes });
-                const id = recorded.generated_codec_derivation orelse invariant("stored structural codec evidence names no generated derivation");
-                return try Codec.dictionaryAt(self, view.index, id, callable);
+                const edge = try Codec.storedEdge(self, source, stored.checked orelse invariant("stored structural codec evidence records no checked edge"));
+                return try Codec.dictionaryAt(self, edge.module, edge.id orelse invariant("stored structural codec evidence names no generated derivation"), callable);
             },
             .map, .map_effectful => |plan| return try self.structuralMapDictionary(plan, stored.derivation == .map_effectful, callable),
         };
@@ -6038,7 +6054,33 @@ pub const Builder = struct {
         for (scopes[depth], 0..) |param_index, position| {
             if (param_index == index.index) return self.dict_locals[offset + position];
         }
-        invariant("evidence named a dictionary parameter its scope does not have");
+        const worker = self.currentWorker().*;
+        const named: []const u8 = switch (worker.key) {
+            .template => |key| blk: {
+                const view = self.program.module(key.module);
+                const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+                const export_name = view.nameStore().procBase(template.proc_base).export_name orelse break :blk "a template";
+                break :blk view.nameStore().exportNameText(export_name);
+            },
+            inline .literal_thunk, .root_slot, .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert => |_, kind| @tagName(kind),
+        };
+        const evidence_params = if (worker.key == .template) self.templateEvidenceParams(self.worker_id) else &.{};
+        var listing: [2048]u8 = undefined;
+        var written: usize = 0;
+        for (evidence_params, 0..) |param, position| {
+            const text = std.fmt.bufPrint(listing[written..], " [{d}] {s} runtime_dictionary={}", .{ position, self.view.nameStore().methodNameText(param.method), param.runtime_dictionary }) catch break;
+            written += text.len;
+        }
+        invariantFmt("evidence named dictionary parameter {d} at depth {d}, which worker {s} (scope depth {d} of {d}, {d} dictionaries, {d} sealed; evidence params:{s}) does not have", .{
+            index.index,
+            index.depth,
+            named,
+            depth,
+            scopes.len,
+            scopes[depth].len,
+            worker.checked_scheme_count - worker.checked_slots.len,
+            listing[0..written],
+        });
     }
 
     pub fn siteSubstitution(self: *Builder, site: CheckedExprId) []const checked.CheckedTypeId {
@@ -7050,13 +7092,17 @@ pub const Builder = struct {
             .merge = null,
             .remainder = undefined,
         };
+        const merge_binders: []const checked.PatternBinderId = if (match.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{};
         if (tail) {
-            // Each branch returns; nothing reads the construct's own value.
+            // Each branch returns; nothing reads the construct's own value,
+            // and each branch starts from the binder values the construct
+            // started with.
             for (match.branches) |branch| try self.tail_exprs.put(self.allocator, branch.value, {});
+            state.merge = try self.beginMerge(merge_binders, .tail);
             try self.push(.unreachable_or_unit);
         } else {
             const result = try self.localOf(try self.exprType(expr_id), .frame);
-            state.merge = try self.beginMerge(if (match.state_merge) |plan| self.bodies().stateMergeBinders(plan) else &.{});
+            state.merge = try self.beginMerge(merge_binders, .joined);
             const after = try self.declareMergeJoin(state.done, result, state.merge);
             try self.push(.{ .push_value = result });
             if (state.merge) |m| try self.push(.{ .enter_merge = m });
@@ -7811,8 +7857,8 @@ pub const Builder = struct {
             const range = self.bodies().loopMutations(plan).binders;
             break :blk self.bodies().patternBinderIdPool()[range.start..][0..range.len];
         } else &.{};
-        const exit_merge = try self.beginMerge(binders);
-        const head_merge = try self.beginMerge(binders);
+        const exit_merge = try self.beginMerge(binders, .joined);
+        const head_merge = try self.beginMerge(binders, .joined);
         const exit = self.freshJoin();
         const head = self.freshJoin();
         const after = try self.declareMergeJoin(exit, null, exit_merge);
@@ -7866,8 +7912,8 @@ pub const Builder = struct {
             const range = self.bodies().loopMutations(id).binders;
             break :blk self.bodies().patternBinderIdPool()[range.start..][0..range.len];
         } else &.{};
-        const exit_merge = try self.beginMerge(binders);
-        const head_merge = try self.beginMerge(binders);
+        const exit_merge = try self.beginMerge(binders, .joined);
+        const head_merge = try self.beginMerge(binders, .joined);
         const exit = self.freshJoin();
         const head = self.freshJoin();
         const state = try self.localOf(iterator_ty, .frame);

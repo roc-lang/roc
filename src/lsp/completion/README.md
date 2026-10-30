@@ -325,14 +325,15 @@ pub const Binding = struct {
     pattern_idx: CIR.Pattern.Idx,
     visible_from: u32,
     visible_to: u32,
-    is_parameter: bool,
+    owner: Owner, // .def, .statement, .parameter, or .binder
 };
 ```
 
 `ScopeMap.build(module_env)` traverses all defs, statements, and nested
 expressions to populate a list of `Binding`s sorted by `visible_from`.
 `isVisibleAt(binding, offset)` checks if a binding is in scope at a cursor
-position.
+position. A binding's `owner` names the declaration whose doc comment documents
+it; parameters and `match`/`for` binders have none.
 `BuildEnvHandle.scopeBindings(module_env)` builds a module's map on first use
 and keeps it for as long as the handle's build env lives, so requests against
 the same build share it.

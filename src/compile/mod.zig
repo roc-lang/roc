@@ -68,6 +68,7 @@ test "compile tests" {
         std.testing.refAllDecls(artifacts);
         std.testing.refAllDecls(maintenance);
     }
+    std.testing.refAllDecls(boxy_object_cache);
     std.testing.refAllDecls(@import("cache_config.zig"));
     std.testing.refAllDecls(@import("cache_key.zig"));
     std.testing.refAllDecls(boxy_object_cache);
@@ -218,6 +219,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_12624_test.zig"));
     std.testing.refAllDecls(@import("test/boxy_dictionary_evidence_order_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12617_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12682_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11292_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11295_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11294_test.zig"));

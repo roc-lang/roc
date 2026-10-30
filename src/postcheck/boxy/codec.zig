@@ -737,6 +737,53 @@ pub fn dispatch(b: *Builder, call_plan: static_dispatch.StaticDispatchCallPlan, 
     try b.pushValue(constructor);
 }
 
+/// A stored structural edge read in the module holding it.
+pub const StoredEdge = struct { module: ModuleIndex, callable_ty: checked.CheckedTypeId, id: ?DerivationId };
+
+/// The checked edge a stored function's structural evidence names. A codec
+/// edge reads as the first module of the storing module's reflexive import
+/// closure, in breadth-first direct-import order, that holds a contract with
+/// the edge's content and checked roots with its dispatcher and callable
+/// keys. The stored function was lowered from bodies that closure reaches, so
+/// one of its modules recorded the contract.
+pub fn storedEdge(b: *Builder, source: lower.ConstSource, edge: check.ConstStore.CheckedStructuralEdge) Allocator.Error!StoredEdge {
+    const codec = switch (edge) {
+        .recorded => |recorded| return .{
+            .module = b.program.moduleByKey(.{ .bytes = recorded.view.bytes }).index,
+            .callable_ty = recorded.callable_ty,
+            .id = recorded.generated_codec_derivation,
+        },
+        .codec => |codec| codec,
+    };
+    const store_module = source.module;
+    var reached = std.AutoHashMapUnmanaged([32]u8, void).empty;
+    defer reached.deinit(b.allocator);
+    var pending = std.ArrayList(ModuleIndex).empty;
+    defer pending.deinit(b.allocator);
+    try reached.put(b.allocator, b.program.module(store_module).key.bytes, {});
+    try pending.append(b.allocator, store_module);
+    var next: usize = 0;
+    while (next < pending.items.len) : (next += 1) {
+        const module = pending.items[next];
+        const view = b.program.module(module);
+        if (edgeIn(view, codec)) |found| return .{ .module = module, .callable_ty = found.callable_ty, .id = found.id };
+        for (view.view.direct_import_module_keys) |imported| {
+            if ((try reached.getOrPut(b.allocator, imported.bytes)).found_existing) continue;
+            try pending.append(b.allocator, b.program.modules.by_key.get(imported.bytes) orelse continue);
+        }
+    }
+    invariant("a stored codec edge's contract was not held by its storing module's import closure");
+}
+
+fn edgeIn(view: *const types.ModuleView, codec: check.ConstStore.StoredCodecEdge) ?struct { callable_ty: checked.CheckedTypeId, id: DerivationId } {
+    _ = view.types().rootForKey(codec.dispatcher_key) orelse return null;
+    const callable_ty = view.types().rootForKey(codec.callable_key) orelse return null;
+    for (view.view.static_dispatch_plans.generated_codec_derivations, 0..) |contract, index| {
+        if (std.mem.eql(u8, &contract.content.bytes, &codec.content.bytes)) return .{ .callable_ty = callable_ty, .id = @fromBackingInt(@intCast(index)) };
+    }
+    return null;
+}
+
 /// Restore a stored generated runtime: its family's runtime callable over
 /// the stored encoding and renamed names. Compile-time evaluation numbered
 /// those captures in the family's name order after the encoding.
@@ -764,9 +811,8 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
                 .structural => |index| stored.evidence.structural(index).*,
                 .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => invariant("a stored generated codec runtime's evidence is not a structural derivation"),
             };
-            const recorded = structural.checked orelse invariant("stored structural codec evidence records no checked edge");
-            break :blk .{ program.moduleByKey(.{ .bytes = recorded.view.bytes }).index, recorded.generated_codec_derivation orelse
-                invariant("stored structural codec evidence names no generated derivation") };
+            const edge = try storedEdge(b, source, structural.checked orelse invariant("stored structural codec evidence records no checked edge"));
+            break :blk .{ edge.module, edge.id orelse invariant("stored structural codec evidence names no generated derivation") };
         },
         .direct_pending, .direct_closed, .direct_parametric, .structural, .checked_error, .@"unreachable" => invariant("a stored generated codec runtime's dispatch names no derivation"),
     };
