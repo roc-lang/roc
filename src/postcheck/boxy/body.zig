@@ -1654,6 +1654,20 @@ pub const Builder = struct {
         }
     }
 
+    /// A produced value `value` of its own type `from` at its destination
+    /// type `to` (`retagTarget`): between two closed types, `adaptValue`'s
+    /// static conversion; otherwise a destination at least one of whose
+    /// rows a type variable of the body opens, so the value is rebuilt by
+    /// the descriptor-driven `adapt` in a local of the destination's kind,
+    /// whatever the two types' difference (a closed value's bytes placed in
+    /// dynamic storage, or a row re-tagged by name).
+    pub fn retagValue(self: *Builder, value: LocalId, from: TypeId, to: TypeId) Allocator.Error!LocalId {
+        if (try self.closed(from) and try self.closed(to)) return try self.adaptValue(value, from, to);
+        const target = try self.localOf(to, .frame);
+        try self.emitDyn(target, .{ .adapt = .{ .src = value, .from = try self.descOf(from), .to = try self.descOf(to) } });
+        return target;
+    }
+
     /// `value` of the closed type `from` converted to the closed type `to`,
     /// whose rows widen `from`'s (design.md "Sealed Result Rows"): itself
     /// when the two types commit one layout, otherwise the result of this
@@ -2296,7 +2310,7 @@ pub const Builder = struct {
             .runtime_error => |ty| try self.runtimeErrorValue(ty),
             .retag => |retag| {
                 const value = self.popValue();
-                try self.pushValue(try self.adaptValue(value, retag.from, retag.to));
+                try self.pushValue(try self.retagValue(value, retag.from, retag.to));
             },
             .diverged => |ty| {
                 if (self.hole != null) try self.emitTerminal(.runtime_error);

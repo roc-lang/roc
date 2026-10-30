@@ -14634,17 +14634,30 @@ only an instantiation can. The checked artifact publishes the bound on the
 variable (`CheckedTypeVariable.bounded_row_ext`), and Boxy reads it as the
 one condition under which a scheme variable is SEALED: a flex tag-row tail
 that is bounded, whose row default is the empty row, and whose constraints
-closing the row discharges (`variableSealsToRowDefault`). A sealed variable
-is bound to the empty row when its worker is lowered and takes no hidden
+closing the row discharges (`variableSealsToRowDefault`), and that nothing
+the worker exchanges with code outside it involves. A sealed variable is
+bound to the empty row when its worker is lowered and takes no hidden
 descriptor parameter, so `parse` is a static worker returning
 `Try(U8, [InvalidU8])`. An evidence parameter whose dispatcher is a sealed
-variable is no dictionary parameter either. Polarity withholds per-use
-opening from every position outside the row coercion's reach, so a sealed
-variable sits only at a reached position—the direct result row, a tag
-payload row under it, or the error row of a `Try` result—and a bounded flex
-that unification tied to a rigid or a closed row is not a flex, so genuine
-row polymorphism (`[A, ..r] -> [A, B, ..r]`) and every other quantified
-variable keep their hidden descriptors.
+variable is no dictionary parameter either.
+
+Sealing is sound only where every value typed with the variable crosses the
+worker's boundary at a place that knows both rows, which is its result. So a
+bounded variable keeps its descriptor when it occurs anywhere outside the
+result's coercion reach (the direct result row, a tag payload row under it,
+or the error row of a `Try` result): in an argument, including a callback
+parameter's row that polarity also opens, or under a record, list, box,
+function, or other named type's argument in the result
+(`Converter.occursOutsideResultReach`). It also keeps its descriptor when a
+callable the worker receives from its caller could involve it, since such a
+callable carries the caller's instantiation: a `where` requirement whose
+interface mentions the variable (the dictionary's methods), or any
+parameter holding a nominal over a callable payload, whose callable's
+interface its methods hide from the signature
+(`Converter.argumentsHoldCallablePayload`). A bounded flex that unification
+tied to a rigid or a closed row is not a flex, so genuine row polymorphism
+(`[A, ..r] -> [A, B, ..r]`) and every other quantified variable keep their
+hidden descriptors.
 
 Sealing removes the one dependency a worker's representation had on its
 callers, so widening becomes a CONVERSION at the instantiation that widens:

@@ -677,8 +677,9 @@ pub const Program = struct {
         var checked_slots: std.ArrayList(u32) = .empty;
         var sealed_slots: std.ArrayList(u32) = .empty;
         defer sealed_slots.deinit(self.allocator);
+        const evidence_params = poolSlice(static_dispatch.EvidenceParamRecord, view.view.checked_procedure_templates.evidence_params_pool, template.evidence_params);
         for (checked_scheme_vars, 0..) |variable, slot| {
-            if (self.converter().sealedSchemeVar(module_index, variable)) {
+            if (try self.converter().sealedSchemeVar(module_index, variable, template.checked_fn_root, evidence_params)) {
                 try sealed_slots.append(self.allocator, @intCast(slot));
                 continue;
             }
@@ -686,7 +687,6 @@ pub const Program = struct {
             try checked_slots.append(self.arena.allocator(), @intCast(slot));
         }
         var dictionary_params: std.ArrayList(u32) = .empty;
-        const evidence_params = poolSlice(static_dispatch.EvidenceParamRecord, view.view.checked_procedure_templates.evidence_params_pool, template.evidence_params);
         for (evidence_params, 0..) |param, index| {
             if (!param.runtime_dictionary) continue;
             const sealed_dispatcher = if (param.slot) |slot| std.mem.findScalar(u32, sealed_slots.items, slot) != null else false;
