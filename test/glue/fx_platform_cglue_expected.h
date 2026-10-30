@@ -170,6 +170,8 @@ typedef struct Builder Builder;
 typedef struct HostTree HostTree;
 typedef struct Host Host;
 typedef struct Padded Padded;
+typedef struct ProcHandlePollResult ProcHandlePollResult;
+typedef struct ProcHandleCloseResult ProcHandleCloseResult;
 
 #if UINTPTR_MAX == UINT64_MAX
 struct Builder {
@@ -317,6 +319,127 @@ ROC_STATIC_ASSERT(offsetof(Padded, z) == 0, "Padded.z offset mismatch");
 ROC_STATIC_ASSERT(offsetof(Padded, a) == 8, "Padded.a offset mismatch");
 #endif
 
+typedef uint8_t ProcHandlePollResultTag;
+enum {
+    ProcHandlePollResultTag_Err = 0,
+    ProcHandlePollResultTag_Ok = 1
+};
+typedef union {
+    RocStr err;
+    uint64_t ok;
+} ProcHandlePollResultTagPayloadStorage;
+#if UINTPTR_MAX == UINT64_MAX
+struct ProcHandlePollResult {
+    ProcHandlePollResultTagPayloadStorage payload;
+    ProcHandlePollResultTag tag;
+};
+ROC_STATIC_ASSERT(sizeof(ProcHandlePollResult) == 32, "ProcHandlePollResult size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(ProcHandlePollResult) == 8, "ProcHandlePollResult alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(ProcHandlePollResult, tag) == 24, "ProcHandlePollResult.tag offset mismatch");
+#else
+struct ProcHandlePollResult {
+    ROC_ALIGNAS(8) uint8_t payload[12];
+    ProcHandlePollResultTag tag;
+};
+ROC_STATIC_ASSERT(sizeof(ProcHandlePollResult) == 16, "ProcHandlePollResult size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(ProcHandlePollResult) == 8, "ProcHandlePollResult alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(ProcHandlePollResult, tag) == 12, "ProcHandlePollResult.tag offset mismatch");
+#endif
+static inline ProcHandlePollResult ProcHandlePollResult_make_err(RocStr payload) {
+    ProcHandlePollResult out = {0};
+    out.tag = ProcHandlePollResultTag_Err;
+#if UINTPTR_MAX == UINT64_MAX
+    out.payload.err = payload;
+#else
+    roc_abi_copy_bytes(out.payload, &payload, sizeof(payload));
+#endif
+    return out;
+}
+
+static inline ProcHandlePollResult ProcHandlePollResult_make_ok(uint64_t payload) {
+    ProcHandlePollResult out = {0};
+    out.tag = ProcHandlePollResultTag_Ok;
+#if UINTPTR_MAX == UINT64_MAX
+    out.payload.ok = payload;
+#else
+    roc_abi_copy_bytes(out.payload, &payload, sizeof(payload));
+#endif
+    return out;
+}
+
+static inline RocStr ProcHandlePollResult_payload_err(const ProcHandlePollResult* value) {
+#if UINTPTR_MAX == UINT64_MAX
+    return value->payload.err;
+#else
+    RocStr payload;
+    roc_abi_copy_bytes(&payload, value->payload, sizeof(payload));
+    return payload;
+#endif
+}
+
+static inline uint64_t ProcHandlePollResult_payload_ok(const ProcHandlePollResult* value) {
+#if UINTPTR_MAX == UINT64_MAX
+    return value->payload.ok;
+#else
+    uint64_t payload;
+    roc_abi_copy_bytes(&payload, value->payload, sizeof(payload));
+    return payload;
+#endif
+}
+
+typedef uint8_t ProcHandleCloseResultTag;
+enum {
+    ProcHandleCloseResultTag_Err = 0,
+    ProcHandleCloseResultTag_Ok = 1
+};
+typedef union {
+    RocStr err;
+    uint8_t ok;
+} ProcHandleCloseResultTagPayloadStorage;
+#if UINTPTR_MAX == UINT64_MAX
+struct ProcHandleCloseResult {
+    ProcHandleCloseResultTagPayloadStorage payload;
+    ProcHandleCloseResultTag tag;
+};
+ROC_STATIC_ASSERT(sizeof(ProcHandleCloseResult) == 32, "ProcHandleCloseResult size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(ProcHandleCloseResult) == 8, "ProcHandleCloseResult alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(ProcHandleCloseResult, tag) == 24, "ProcHandleCloseResult.tag offset mismatch");
+#else
+struct ProcHandleCloseResult {
+    ROC_ALIGNAS(4) uint8_t payload[12];
+    ProcHandleCloseResultTag tag;
+};
+ROC_STATIC_ASSERT(sizeof(ProcHandleCloseResult) == 16, "ProcHandleCloseResult size mismatch");
+ROC_STATIC_ASSERT(ROC_ALIGNOF(ProcHandleCloseResult) == 4, "ProcHandleCloseResult alignment mismatch");
+ROC_STATIC_ASSERT(offsetof(ProcHandleCloseResult, tag) == 12, "ProcHandleCloseResult.tag offset mismatch");
+#endif
+static inline ProcHandleCloseResult ProcHandleCloseResult_make_err(RocStr payload) {
+    ProcHandleCloseResult out = {0};
+    out.tag = ProcHandleCloseResultTag_Err;
+#if UINTPTR_MAX == UINT64_MAX
+    out.payload.err = payload;
+#else
+    roc_abi_copy_bytes(out.payload, &payload, sizeof(payload));
+#endif
+    return out;
+}
+
+static inline ProcHandleCloseResult ProcHandleCloseResult_make_ok(void) {
+    ProcHandleCloseResult out = {0};
+    out.tag = ProcHandleCloseResultTag_Ok;
+    return out;
+}
+
+static inline RocStr ProcHandleCloseResult_payload_err(const ProcHandleCloseResult* value) {
+#if UINTPTR_MAX == UINT64_MAX
+    return value->payload.err;
+#else
+    RocStr payload;
+    roc_abi_copy_bytes(&payload, value->payload, sizeof(payload));
+    return payload;
+#endif
+}
+
 
 // Platform Type Aliases
 
@@ -331,7 +454,7 @@ typedef void (*HostedFn)(void);
 
 // Hosted Function Count
 
-#define HOSTED_FUNCTION_COUNT 22
+#define HOSTED_FUNCTION_COUNT 25
 
 
 #define HOSTED_IDX_BUILDER_PRINT_VALUE 0
@@ -352,10 +475,13 @@ typedef void (*HostedFn)(void);
 #define HOSTED_IDX_HOST_TAKE_SEED 15
 #define HOSTED_IDX_HOST_STORED_BOXED_CALL 16
 #define HOSTED_IDX_HOST_SUM_STR_BYTES 17
-#define HOSTED_IDX_PADDED_CHECK 18
-#define HOSTED_IDX_STDERR_LINE 19
-#define HOSTED_IDX_STDIN_LINE 20
-#define HOSTED_IDX_STDOUT_LINE 21
+#define HOSTED_IDX_PROC_HANDLE_NEW 18
+#define HOSTED_IDX_PROC_HANDLE_POLL 19
+#define HOSTED_IDX_PROC_HANDLE_CLOSE 20
+#define HOSTED_IDX_PADDED_CHECK 21
+#define HOSTED_IDX_STDERR_LINE 22
+#define HOSTED_IDX_STDIN_LINE 23
+#define HOSTED_IDX_STDOUT_LINE 24
 
 // Argument Structures
 
@@ -511,6 +637,33 @@ typedef struct {
 } HostSumStrBytesArgs;
 
 /**
+ * Arguments for Proc.handle_new!
+ * Roc signature: U64 => Box(U64)
+ * Refcounted fields are owned by the hosted function.
+ */
+typedef struct {
+    uint64_t arg0;
+} ProcHandleNewArgs;
+
+/**
+ * Arguments for Proc.handle_poll!
+ * Roc signature: Box(U64) => Try(U64, [HostErr(Str)])
+ * Refcounted fields are owned by the hosted function.
+ */
+typedef struct {
+    uint64_t* arg0;
+} ProcHandlePollArgs;
+
+/**
+ * Arguments for Proc.handle_close!
+ * Roc signature: Box(U64) => Try({}, [HostErr(Str)])
+ * Refcounted fields are owned by the hosted function.
+ */
+typedef struct {
+    uint64_t* arg0;
+} ProcHandleCloseArgs;
+
+/**
  * Arguments for Padded.check!
  * Roc signature: Padded => Str
  * Refcounted fields are owned by the hosted function.
@@ -629,6 +782,15 @@ extern int64_t roc_host_stored_boxed_call(int64_t arg0);
 /* Host.sum_str_bytes!: List(Str) => U64 */
 extern uint64_t roc_host_sum_str_bytes(RocList arg0);
 
+/* Proc.handle_new!: U64 => Box(U64) */
+extern uint64_t* roc_proc_handle_new(uint64_t arg0);
+
+/* Proc.handle_poll!: Box(U64) => Try(U64, [HostErr(Str)]) */
+extern ProcHandlePollResult roc_proc_handle_poll(uint64_t* arg0);
+
+/* Proc.handle_close!: Box(U64) => Try({}, [HostErr(Str)]) */
+extern ProcHandleCloseResult roc_proc_handle_close(uint64_t* arg0);
+
 /* Padded.check!: Padded => Str */
 extern RocStr roc_padded_check(Padded arg0);
 
@@ -673,10 +835,13 @@ typedef struct {
     HostedFn host_take_seed_bang;  /* index 15, C name: host_take_seed */
     HostedFn host_stored_boxed_call_bang;  /* index 16, C name: host_stored_boxed_call */
     HostedFn host_sum_str_bytes_bang;  /* index 17, C name: host_sum_str_bytes */
-    HostedFn padded_check_bang;  /* index 18, C name: padded_check */
-    HostedFn stderr_line_bang;  /* index 19, C name: stderr_line */
-    HostedFn stdin_line_bang;  /* index 20, C name: stdin_line */
-    HostedFn stdout_line_bang;  /* index 21, C name: stdout_line */
+    HostedFn proc_handle_new_bang;  /* index 18, C name: proc_handle_new */
+    HostedFn proc_handle_poll_bang;  /* index 19, C name: proc_handle_poll */
+    HostedFn proc_handle_close_bang;  /* index 20, C name: proc_handle_close */
+    HostedFn padded_check_bang;  /* index 21, C name: padded_check */
+    HostedFn stderr_line_bang;  /* index 22, C name: stderr_line */
+    HostedFn stdin_line_bang;  /* index 23, C name: stdin_line */
+    HostedFn stdout_line_bang;  /* index 24, C name: stdout_line */
 } HostedFunctions;
 
 

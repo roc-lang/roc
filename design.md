@@ -21043,7 +21043,17 @@ an ordinary owned call and targets the outcome-specialized variant. The
 matching switch edge places that same unit back in the must-owned state. On
 the variant's callee side, a return carrying the signature's bit omits the
 parameter's terminal release; the base procedure and all other outcomes
-consume or release it normally. These are compile-time ownership-state transitions only. The
+consume or release it normally.
+
+A return carrying the bit hands back the parameter's exact entry unit, every
+field place included, so field-take analysis records each such restitution
+boundary as a whole use of the parameter: no field take of it may run before
+the boundary on any path. The restitution solve counts only consumption of the
+parameter and its same-value aliases, and a field read passed to a consuming
+position retains the field under that count; a take would instead move the
+field's stored unit out of the parameter that the boundary returns. Field-take
+decisions and the uniqueness they settle are shared by every emission of a
+procedure, so the boundary constrains the base procedure's takes too. These are compile-time ownership-state transitions only. The
 post-ARC program contains ordinary calls, switches, `incref`, and `decref`
 statements, and backends continue to follow those statements without knowing
 about conditional ownership.

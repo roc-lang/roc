@@ -29332,8 +29332,12 @@ fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateChe
     for (fields) |field_idx| update_operands.appendAssumeCapacity(self.cir.store.getRecordField(field_idx).value);
     if (try self.retireCallLikeExprWithErroneousOperands(frame.expr_idx, expr_var, update_operands.items)) return .done;
 
-    // Then unify with the actual expression
-    _ = try self.unify(record_being_updated_var, expr_var, env);
+    // The update has its base's type. It joins the base's class as an
+    // occurrence, the way a lookup does, so the base keeps the class's
+    // checked representative: a later mismatch against the update (such as
+    // its definition's annotation) poisons the update alone, never the
+    // binding the base reads.
+    _ = try self.unify(expr_var, record_being_updated_var, env);
     return .done;
 }
 
